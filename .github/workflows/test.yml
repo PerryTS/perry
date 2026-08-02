@@ -205,6 +205,20 @@ jobs:
           python3 scripts/gc_gate_wiring_check.py --self-test
           python3 scripts/gc_gate_wiring_check.py
 
+      # The other half of the same hazard (#7255). `gc_gate_wiring_check.py`
+      # asserts the matrix JOB can run; this asserts the matrix ARMS can fail.
+      # Four of the six PR-gating arms sat at copy-minor 0/50 for five weeks
+      # while the script's header advertised 12/22, because an all-UNVER table
+      # exits 0. Both checks are build-free, so they belong in `lint`:
+      # `--self-test` covers the red/green rule itself, `--check-registry`
+      # covers the known-inert list (names resolve to real arms, every entry
+      # cites an issue, and the matrix still calls the checker at all — a gate
+      # nobody invokes is the same hazard one level up).
+      - name: GC matrix liveness gate
+        run: |
+          python3 scripts/gc_matrix_liveness_check.py --self-test
+          python3 scripts/gc_matrix_liveness_check.py --check-registry
+
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so

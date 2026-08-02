@@ -15,10 +15,11 @@
 #
 # ***LIVENESS IS PART OF THE RESULT.***
 # Setting a GC env var does not prove the GC did anything (#6942, #6946, #6950).
-# Measured on main: the whole representation corpus performs ZERO collections --
-# the first-GC trigger needs ~1M escaping allocations and a gap test allocates a
-# few KB. So every GC arm is INERT against it, and "passes under
-# PERRY_GC_FORCE_EVACUATE=1" asserts nothing.
+# Without the pressure knob a gap test allocates a few KB against a first-GC
+# trigger that needs ~1M escaping allocations, so every GC arm is INERT against
+# it and "passes under PERRY_GC_FORCE_EVACUATE=1" asserts nothing. That is what
+# `--pressure` is for, and it is not sufficient on its own -- see the liveness
+# table every run prints, and the known-inert registry it is checked against.
 #
 # Therefore every run is executed with `PERRY_GC_TRACE=1` (one `[gc] cycle`
 # marker per completed collection -- a sound cycle counter) and `PERRY_GC_DIAG=1`
@@ -37,14 +38,31 @@
 # confidence this gate exists to remove.
 #
 # `test_gap_repsel_gc_stress` is the corpus member deliberately built to be
-# LIVE (measured: 2 collections at default settings, 11 under `--pressure 8`).
-# If a collector change stops it collecting, its cells go UNVER and the arm
-# liveness summary shows 0/N -- that is the signal to re-tune its churn budget.
+# LIVE: it collects even in the shipped configuration with no pressure knob at
+# all, which almost nothing else in the corpus does. If a collector change stops
+# it collecting, its cells go UNVER, the arm liveness summary drops, and the
+# liveness gate fails -- that is the signal to re-tune its churn budget. (Its
+# per-run cycle counts belong in the run's own output, not here.)
 #
 # ADDING A REPRESENTATION: register its gap file in
 # test-parity/gc_repsel_corpus.txt. This script FAILS if a `test_gap_repsel_*`
 # or `test_gap_specabi_*` file exists that is not registered (see
 # docs/representation-selection-rfc.md 5.6).
+#
+# ***AND LIVENESS IS NOW GATED, NOT MERELY REPORTED (#7255).***
+# UNVER was "not green" but it was never red either: the exit status counts only
+# FAIL, so an arm that went inert across the WHOLE corpus produced a yellow table
+# and exit 0. Every run therefore ends in
+# `scripts/gc_matrix_liveness_check.py`, which fails when an arm satisfied its
+# own `requires=` on zero cells — and equally when an arm listed in
+# `test-parity/gc_matrix_inert_arms.txt` starts biting again, so the registry
+# cannot rot in the other direction either.
+#
+# ***DO NOT PUT LIVENESS NUMBERS IN THIS HEADER.*** The last hand-maintained
+# pair (`default: 0/22 -> 12/22` after #7024) read as settled fact for five weeks
+# after #7161 took that same arm back to 0/49, and it is the reason nobody
+# re-derived it (#7255). The per-arm table printed by every run is the only place
+# those numbers are true, and it is derived from the collector's own output.
 #
 # Portable to bash 3.2 (macOS system bash): no associative arrays, no mapfile.
 #
@@ -52,7 +70,7 @@
 #   scripts/gc_repsel_matrix.sh [--arms pr|all|<csv>] [--filter <substr>]
 #                               [--pressure <MB>] [--jobs N] [--no-build]
 #                               [--profile <cargo profile>] [--json <path>]
-#                               [--list-arms]
+#                               [--list-arms] [--liveness-report-only]
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,6 +86,7 @@ JOBS="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
 DO_BUILD=1
 JSON_OUT=""
 PROFILE="release"
+LIVENESS_REPORT_ONLY=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -79,7 +98,11 @@ while [ $# -gt 0 ]; do
         --no-build) DO_BUILD=0; shift ;;
         --json) JSON_OUT="$2"; shift 2 ;;
         --list-arms) ARMS_SEL="__list__"; shift ;;
-        -h|--help) sed -n '1,56p' "$0"; exit 0 ;;
+        # Local exploration only (e.g. a `--filter` narrow enough that an arm
+        # legitimately has nothing to bite). CI never passes this: the whole
+        # point of #7255 is that an inert arm must be able to turn a run red.
+        --liveness-report-only) LIVENESS_REPORT_ONLY=1; shift ;;
+        -h|--help) sed -n '1,70p' "$0"; exit 0 ;;
         *) echo "unknown flag: $1" >&2; exit 2 ;;
     esac
 done
@@ -129,53 +152,53 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 #      what turns the automatic collection into a precise-rooted copying minor
 #      that actually relocates survivors.
 #
-# Measured on this pair (`--pressure 8`, arm `evac_minor`):
-#   test_gap_repsel_canonical_i32     0 cycles -> 1 cycle,  4 579 objects copied
-#   test_gap_repsel_ptr_shape_locals  0 cycles -> 1 cycle,  4 640 objects copied
-#   test_gap_repsel_gc_stress        24 cycles -> 31 cycles, 1 556 543 copied
-# every one with `[gc-copy-minor] eligible=true fallback=none`.
+# Every %E% arm reports `[gc-copy-minor] eligible=true fallback=none`; the
+# per-run liveness table at the bottom of the output says how many cells that
+# was, on the tree you are actually running. (There used to be a hard-coded
+# before/after table here. It was true when written and false a month later --
+# see the DO NOT PUT LIVENESS NUMBERS IN THIS HEADER note above, and #7255.)
 #
 # NOTE this is a MEASUREMENT configuration, not the shipped one. It says the
 # collector's evacuating path is exercised; it does not say the shipped default
 # reaches that path.
 #
-# ***AS OF #7024 THE SHIPPED DEFAULT DOES REACH IT*** -- by the sound route,
-# which is not this one. `default` (pressure knob only, no GC env) now defers
-# the alloc-point trigger to a precise-root safepoint and runs the copying
-# minor there. Measured on this corpus at `--pressure 8`:
+# THE SHIPPED DEFAULT DOES NOT REACH IT TODAY. #7019/#7024 made it reach it by
+# the sound route -- defer the alloc-point trigger to a precise-root safepoint
+# and run the copying minor there -- and #7161 then turned that route off by
+# default, pending #7154. So the WHERE distinction still stands and still
+# matters (a safepoint has an unwound JS stack and roots precise by
+# construction; %E% forces relocation at the register-imprecise allocation
+# point, which is the only place an unrooted runtime-side local is exposed),
+# but the arm that carries the safepoint route is `safepoint_minor`, which opts
+# the polls back in at compile AND run time. `default` is registered known-inert
+# in test-parity/gc_matrix_inert_arms.txt until the stopgap lifts.
 #
-#   arm            copy-minor before #7024   after
-#   default              0/22                12/22
-#   verify_evac          0/22                12/22
-#
-# The difference between `default` and %E% is now WHERE the relocation happens:
-# `default` relocates at a real safepoint (the JS stack has unwound, roots are
-# precise by construction), %E% forces it at the register-imprecise allocation
-# point. Both belong in the matrix; only the first is a configuration anyone
-# ships.
-#
-# ***AND IT IS RED.*** The first `--arms all` run in which anything actually
-# moved failed 14 of the 20 corpus files: 5 crashes and 9 output mismatches
-# (#6981), plus one intermittent SIGSEGV that does not even need precise roots
-# (#6982). The discriminator is NOT relocation -- with the conservative stack
-# scan still on, the same evacuating cycles pass 19/20 while copying thousands
-# of objects. It is precise roots: the values only the conservative scan was
-# keeping alive. That is the finding this gate was built to produce, and the
-# arms stay configured to keep producing it. Do not quiet them down.
+# ***AND WHEN THESE ARMS FIRST MOVED, THEY WERE RED.*** The first `--arms all`
+# run in which anything actually moved failed 14 of the 20 corpus files then in
+# the corpus: 5 crashes and 9 output mismatches (#6981), plus one intermittent
+# SIGSEGV that does not even need precise roots (#6982). The discriminator is
+# NOT relocation -- with the conservative stack scan still on, the same
+# evacuating cycles passed 19/20 while copying thousands of objects. It is
+# precise roots: the values only the conservative scan was keeping alive. That
+# is the finding this gate was built to produce, and the arms stay configured to
+# keep producing it. Do not quiet them down -- and note that "quiet" now has a
+# second, cheaper failure mode than lowering a requires=: letting an arm go
+# inert. The liveness gate exists because that one is invisible on screen.
 # ---------------------------------------------------------------------------
 ARMS=(
-"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. Since #7024 this is a RELOCATING arm with no env override at all beyond the pressure knob: the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise, rewritable roots. requires=scavenge, not collect: before #7024 it collected on 13/22 rows while running ZERO copying minors, so a collect requirement certified the pre-#7019 non-moving path under a name that says otherwise."
-"evac_minor||%P% %E%|move|THE evacuating arm: the automatic alloc-point collection as a precise-rooted COPYING minor that relocates survivors. No stress knob -- this is the collector's own moving path."
+"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. ***INERT AT THE MOMENT, AND REGISTERED AS SUCH*** in test-parity/gc_matrix_inert_arms.txt. #7024 made this a relocating arm (the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise rewritable roots); #7161 then flipped PERRY_GC_MOVING_LOOP_POLLS default-OFF pending #7154, and that one env gates BOTH halves of the route -- perry-codegen's moving_safepoint_polls_enabled decides whether the back-edge polls are emitted at all, and perry-runtime's gc_moving_loop_polls_enabled decides whether the trigger defers to them. A default binary has neither, so the minor runs behind ManualGcScanGuard::force_full_scan and the copying minor is ineligible by construction. requires=scavenge STAYS: it is what the shipped default is FOR, the registry entry names what blocks it, and the liveness gate fails the day it scavenges again so the entry cannot outlive its cause. safepoint_minor carries the relocating claim meanwhile."
+"safepoint_minor|PERRY_GC_MOVING_LOOP_POLLS=1|%P% PERRY_GC_MOVING_LOOP_POLLS=1|scavenge|THE SOUND RELOCATING ARM, and what keeps the #6993 defect class reachable per-PR while #7161's stopgap holds. Sets the poll flag at BOTH compile and run time (same env on both sides -- keyed into the object cache as env_gc_moving_loop_polls, so a warm cache cannot serve poll-free objects). The copying minor then runs at js_gc_loop_safepoint -> gc_safepoint_moving_minor, where the loop body has completed and every live heap value is a named local on the shadow stack: precise, rewritable roots. No %E%, no force -- this is exactly what default was between #7024 and #7161, and what default becomes again when the stopgap lifts. NOT a replacement for the %E% arms: a back-edge poll only fires while user JS runs, so it cannot expose an unrooted local inside runtime code that never re-enters user JS (#7249). evac_minor and force_verify remain in the PR subset for that."
+"evac_minor||%P% %E%|move|THE evacuating arm, and the STRONGER acceptance route (#7249): the automatic alloc-point collection as a COPYING minor that relocates survivors at a register-imprecise point, which is where an unrooted runtime-side local is exposed. No stress knob -- this is the collector's own moving path."
 "force_evac||%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|stress-copy every marked non-pinned nursery object"
-"verify_evac||%P% PERRY_GC_VERIFY_EVACUATION=1|scavenge|panic if a live slot still points at a forwarded object. requires=scavenge: a verifier that runs over zero relocations verifies nothing, which is what it did on all 22 rows before #7024."
+"verify_evac||%P% PERRY_GC_VERIFY_EVACUATION=1|scavenge|panic if a live slot still points at a forwarded object. requires=scavenge: a verifier that runs over zero relocations verifies nothing. REGISTERED KNOWN-INERT (#7161) -- same route as default, same blocker, and the same reason the declaration is not being weakened to hide it."
 "force_verify||%P% %E% PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|move|force + verify"
 "gen_gc_off||%P% PERRY_GEN_GC=0|collect|full mark-sweep only; no nursery => no evacuation by construction"
 "wb_off|PERRY_WRITE_BARRIERS=0|%P% PERRY_WRITE_BARRIERS=0|collect|no codegen write barriers => copying nursery ineligible by construction"
 "gen_off_verify||%P% PERRY_GEN_GC=0 PERRY_GC_VERIFY_EVACUATION=1|collect|full mark-sweep + evacuation verifier"
 "wb_off_force|PERRY_WRITE_BARRIERS=0|%P% PERRY_WRITE_BARRIERS=0 PERRY_GC_FORCE_EVACUATE=1|collect|force-evacuate is a documented no-op without barriers (barriers_inactive)"
 "all_four|PERRY_WRITE_BARRIERS=0|%P% PERRY_GEN_GC=0 PERRY_WRITE_BARRIERS=0 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|collect|every escape hatch at once"
-"cons_scan_off||%P% PERRY_CONSERVATIVE_STACK_SCAN=off|scavenge|PRECISE ROOTS ONLY -- removes the conservative-stack pinning that the alloc-point fallback otherwise forces (ManualGcScanGuard::force_full_scan). An arm that can observe a missing shadow-slot binding."
-"cons_scan_off_force||%P% PERRY_CONSERVATIVE_STACK_SCAN=off PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|scavenge|precise roots + force/verify evacuation"
+"cons_scan_off||%P% PERRY_CONSERVATIVE_STACK_SCAN=off|scavenge|PRECISE ROOTS ONLY -- removes the conservative-stack pinning that the alloc-point fallback otherwise forces (ManualGcScanGuard::force_full_scan). An arm that can observe a missing shadow-slot binding. REGISTERED KNOWN-INERT (#7161): precise roots beat that guard, but with the incremental stepper at its default the nursery trigger never reaches the direct arm in the first place -- registered_root_scanners_block_budgeted_gc() reduces to 'any copy-only scanner' under gc_incremental_enabled(), a compiled program has none, so the trigger goes to the budgeted stepper, which is non-moving by construction. Adding PERRY_GC_INCREMENTAL=0 is what turns it live, and that arm is evac_minor."
+"cons_scan_off_force||%P% PERRY_CONSERVATIVE_STACK_SCAN=off PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|scavenge|precise roots + force/verify evacuation. REGISTERED KNOWN-INERT (#7161), same reason as cons_scan_off: PERRY_GC_FORCE_EVACUATE is read on a minor path this arm never reaches, which is the #6942/#6946 shape exactly."
 "loop_polls|PERRY_GC_MOVING_LOOP_POLLS=1|%P% %E% PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_FORCE_EVACUATE=1|move|defer the alloc-point collection to a loop back-edge precise-root safepoint, where the copying minor may MOVE survivors"
 "rep_i32_off|PERRY_CANONICAL_I32_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 1 OFF x evacuation"
 "rep_str_off|PERRY_CANONICAL_STR_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 3a OFF x evacuation"
@@ -187,41 +210,51 @@ ARMS=(
 "shipped_default||-|none|control: exactly the as-shipped configuration -- no pressure knob, no GC env at all"
 )
 
-# PR-gating subset: the arms with the most detection power per second --
-# as-shipped under pressure, the evacuation verifier, precise-roots-only, and
-# the untouched shipped configuration as a control.
+# PR-gating subset: the arms with the most detection power per second -- the
+# shipped configuration under pressure, the two routes that actually relocate,
+# the evacuation verifier, precise-roots-only, and the untouched shipped
+# configuration as a control.
 #
-# ***THIS SUBSET CAN NOW REPRODUCE THE RELOCATING-MINOR DEFECT CLASS (#6993).***
-# Until #7024 it could not, and that was the hole: `default` and `verify_evac`
-# ran the NON-moving alloc-point minor (the deferral to the precise-root
-# safepoint was unreachable whenever the pressure knob was set, because the
-# deferral cap and the trigger ceiling shared a formula), and `cons_scan_off`
-# relocated only with incremental mode still on. So the whole "raw reference
-# held across a relocating collection" class -- #6951, #6972, #6982, #6991,
-# #6992 -- was invisible per PR and could only go red after merge, on push.
+# WHAT THIS SUBSET MUST BE ABLE TO DO, AND HOW THAT IS ENFORCED
+# ------------------------------------------------------------
+# It must be able to reproduce the relocating-minor defect class (#6993: #6951,
+# #6972, #6982, #6991, #6992 -- "a raw reference held across a relocating
+# collection"). Before #7024 it could not, and the previous revision of this
+# comment recorded the fix in bold, with the measurement that justified it:
+# `default` had gone from copy-minor 0/22 to 12/22.
 #
-# The proof that the hole is closed is a cell that changed colour, not an
-# argument: `default x test_gap_repsel_p4a3_numarray_barriers` was PASS
-# (`cycles=1 scavenged=0` -- it collected, and relocated nothing) and is now
-# FAIL (`exit=139 scavenged=3594`) -- the same SIGSEGV that only `cons_scan_off`
-# and the %E% arms could produce before. #6981's redness now reaches the arm
-# named after the shipped configuration.
+# ***THAT SENTENCE OUTLIVED ITS MEASUREMENT BY FIVE WEEKS (#7255).*** #7161
+# flipped PERRY_GC_MOVING_LOOP_POLLS default-OFF pending #7154, which took
+# `default` -- and `verify_evac`, `cons_scan_off`, `cons_scan_off_force` -- back
+# to copy-minor 0 across the whole corpus. The comment still said 12/22, and
+# because an all-UNVER table exits 0, nothing else said anything. Two open crash
+# reports (#6982, #7018) sat un-judgeable for the duration because both fail
+# INSIDE a copying minor and the arms meant to run one ran none.
 #
-# `evac_minor` AND `force_verify` ARE BACK IN, as the previous revision of this
-# comment instructed. They were held out only while #6981 was red. It is fixed:
-# the memoized `Array.prototype` address is a raw pointer to a MOVABLE object,
-# so a relocation (`js_array_grow` or the copying minor) left the hole-read
-# fallback's `proto != receiver` self-recursion guard comparing a from-space
-# address against a forwarding-resolved one; the guard stopped firing and the
-# mutator recursed until the stack guard page. Measured on the fix,
-# `--arms all --pressure 8`: PASS=339 UNVER=100 XFAIL=1 FAIL=0 over 440 cells,
-# with both arms at copy-minor 21/22 (was PASS=325 … FAIL=14). So "a
-# representation regressed GC correctness under relocation" is now a per-PR
-# signal on the arms that actually relocate, which is the whole reason this
-# matrix exists. The single XFAIL is the pre-existing
-# `repsel_ptr_shape_locals x rep_ptr_shape_off` entry (#6976), not in this
-# subset.
-PR_ARMS="default,evac_minor,verify_evac,force_verify,cons_scan_off,shipped_default"
+# So the property is no longer asserted in prose here. It is enforced, twice:
+#
+#   * scripts/gc_matrix_liveness_check.py --check-registry (from `lint`, no
+#     build) fails unless PR_ARMS contains at least one arm that claims to
+#     relocate AND is not on the known-inert list. Registering every inert arm
+#     is therefore not a way to buy a green subset.
+#   * the same checker, run against every matrix invocation, fails when any arm
+#     satisfied its own requires= on zero cells.
+#
+# WHY THE RELOCATING ARMS ARE THE ONES THEY ARE
+# ---------------------------------------------
+# `safepoint_minor` is the SOUND route (precise roots at a loop back-edge) and
+# is what `default` becomes again when #7161's stopgap lifts. `evac_minor` and
+# `force_verify` are the STRONGER acceptance route (#7249): a back-edge poll
+# only fires while user JS runs, so it cannot expose an unrooted local inside
+# runtime code that never re-enters user JS -- the register-imprecise
+# allocation point can. Both kinds are in, deliberately; neither substitutes for
+# the other.
+#
+# `default`, `verify_evac` and `cons_scan_off` STAY in the subset while they are
+# registered known-inert. They still verify byte-exactness against the oracle
+# under a collecting GC, they cost one run each, and leaving them in is what
+# makes the registry entry visible on every PR instead of quietly true.
+PR_ARMS="default,safepoint_minor,evac_minor,verify_evac,force_verify,cons_scan_off,shipped_default"
 
 arm_field() { # $1 = arm record, $2 = 1..5
     printf '%s' "$1" | cut -d'|' -f"$2"
@@ -381,7 +414,7 @@ triage_reason() { # $1 test, $2 arm
             END { exit(found ? 0 : 1) }'
 }
 
-CELLS=(); EVID=()
+CELLS=(); EVID=(); CYC=(); EVA=(); SCA=()
 n_pass=0; n_unver=0; n_fail=0; n_xfail=0
 ai=0
 while [ "$ai" -lt "$NARMS" ]; do
@@ -392,6 +425,7 @@ while [ "$ai" -lt "$NARMS" ]; do
     ti=0
     while [ "$ti" -lt "${#CORPUS[@]}" ]; do
         b="${CORPUS[$ti]}"; bin="$WORK/bin/$slug/$b"; idx=$((ti*NARMS+ai))
+        cycles=0; evacuated=0; scavenged=0
         if [ ! -x "$bin" ]; then
             result="FAIL"; ev="compile-failed"
         else
@@ -450,6 +484,9 @@ while [ "$ai" -lt "$NARMS" ]; do
             fi
         fi
         CELLS[$idx]="$result"; EVID[$idx]="$ev"
+        # The liveness gate reads these as NUMBERS, not by re-parsing `$ev`:
+        # a triage reason is free text and has already contained `=`.
+        CYC[$idx]="$cycles"; EVA[$idx]="$evacuated"; SCA[$idx]="$scavenged"
         case "$result" in
             PASS)  n_pass=$((n_pass+1)) ;;
             UNVER) n_unver=$((n_unver+1)) ;;
@@ -527,32 +564,64 @@ echo "summary: PASS=$n_pass UNVER=$n_unver XFAIL=$n_xfail FAIL=$n_fail"
 echo "  (pressure=${PRESSURE_MB}MB, node $NODE_V, $PERRY_BIN)"
 echo "  UNVER = output matched but the arm was inert here; see #6942 / #6946 / #6950."
 
-if [ -n "$JSON_OUT" ]; then
-    {
-        printf '{"node":"%s","pressure_mb":"%s","arms":[' "$NODE_V" "$PRESSURE_MB"
+# The report is written UNCONDITIONALLY -- the liveness gate below consumes it,
+# so `--json` only decides whether a copy is kept where the caller asked for it.
+# A gate that runs only when someone remembered a flag is not a gate.
+JSON_REPORT="${JSON_OUT:-$WORK/matrix.json}"
+{
+    printf '{"node":"%s","pressure_mb":"%s","arms":[' "$NODE_V" "$PRESSURE_MB"
+    ai=0
+    while [ "$ai" -lt "$NARMS" ]; do
+        [ "$ai" = 0 ] || printf ','
+        printf '{"id":"%s","requires":"%s"}' "${ARM_IDS[$ai]}" "${ARM_LIVES[$ai]}"
+        ai=$((ai+1))
+    done
+    printf '],"cells":['
+    first=1; ti=0
+    while [ "$ti" -lt "${#CORPUS[@]}" ]; do
         ai=0
         while [ "$ai" -lt "$NARMS" ]; do
-            [ "$ai" = 0 ] || printf ','
-            printf '{"id":"%s","requires":"%s"}' "${ARM_IDS[$ai]}" "${ARM_LIVES[$ai]}"
+            [ "$first" = 1 ] || printf ','; first=0
+            idx=$((ti*NARMS+ai))
+            # Evidence is free text (triage reasons quote code); strip the two
+            # characters that would make this invalid JSON, so a malformed
+            # report can never be the reason the gate fails.
+            ev_json="$(printf '%s' "${EVID[$idx]:-}" | tr '"\\' "''")"
+            printf '{"test":"%s","arm":"%s","result":"%s","cycles":%d,"evacuated":%d,"scavenged":%d,"evidence":"%s"}' \
+                "${CORPUS[$ti]}" "${ARM_IDS[$ai]}" "${CELLS[$idx]:-?}" \
+                "${CYC[$idx]:-0}" "${EVA[$idx]:-0}" "${SCA[$idx]:-0}" "$ev_json"
             ai=$((ai+1))
         done
-        printf '],"cells":['
-        first=1; ti=0
-        while [ "$ti" -lt "${#CORPUS[@]}" ]; do
-            ai=0
-            while [ "$ai" -lt "$NARMS" ]; do
-                [ "$first" = 1 ] || printf ','; first=0
-                printf '{"test":"%s","arm":"%s","result":"%s","evidence":"%s"}' \
-                    "${CORPUS[$ti]}" "${ARM_IDS[$ai]}" "${CELLS[$((ti*NARMS+ai))]:-?}" "${EVID[$((ti*NARMS+ai))]:-}"
-                ai=$((ai+1))
-            done
-            ti=$((ti+1))
-        done
-        printf '],"summary":{"pass":%d,"unverified":%d,"xfail":%d,"fail":%d}}\n' \
-            "$n_pass" "$n_unver" "$n_xfail" "$n_fail"
-    } > "$JSON_OUT"
-    echo "json: $JSON_OUT"
+        ti=$((ti+1))
+    done
+    printf '],"summary":{"pass":%d,"unverified":%d,"xfail":%d,"fail":%d}}\n' \
+        "$n_pass" "$n_unver" "$n_xfail" "$n_fail"
+} > "$JSON_REPORT"
+[ -n "$JSON_OUT" ] && echo "json: $JSON_OUT"
+
+# ---------------------------------------------------------------------------
+# LIVENESS GATE (#7255). Half of this script's exit status.
+#
+# `n_fail` alone cannot express "the arm never bit": an all-UNVER table is
+# yellow on screen and exit 0 in CI, which is how four of the six PR-gating arms
+# sat at copy-minor 0/49 for five weeks while this file's header advertised
+# 12/22. The checker is a separate, self-testable program (it runs `--self-test`
+# and `--check-registry` from `lint`, where no build is needed) so the rule that
+# decides red-vs-green is not 30 lines of untested bash.
+# ---------------------------------------------------------------------------
+echo
+liveness_rc=0
+if command -v python3 > /dev/null 2>&1; then
+    liveness_args=""
+    [ "$LIVENESS_REPORT_ONLY" = 1 ] && liveness_args="--report-only"
+    # shellcheck disable=SC2086
+    python3 "$SCRIPT_DIR/gc_matrix_liveness_check.py" $liveness_args "$JSON_REPORT" || liveness_rc=1
+else
+    echo "${RED}LIVENESS GATE SKIPPED${NC}: python3 not on PATH." >&2
+    echo "  This is a gate, not a report. Refusing to claim a green run without it." >&2
+    liveness_rc=1
 fi
 
 [ "$n_fail" = 0 ] || exit 1
+[ "$liveness_rc" = 0 ] || exit 1
 exit 0

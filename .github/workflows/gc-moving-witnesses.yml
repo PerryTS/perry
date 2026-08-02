@@ -24,12 +24,23 @@ name: GC Moving Witnesses
 #     reproducers.
 #
 # The witnesses themselves reach CI only through `gc-stress`, which runs the
-# matrix's PR arm subset — `default,evac_minor,verify_evac,force_verify,
-# cons_scan_off,shipped_default` — and not one of those arms compiles with the
-# flag. So on every pull request these files were compiled into IR in which
-# their bug is not expressible, then run to completion, green, proving nothing.
-# They were reproductions, not gates — the fourth of CLAUDE.md's "four ways a
-# gate can be unable to fail": the job runs, but its subject never does.
+# matrix's PR arm subset, and when this job was written not one arm in that
+# subset compiled with the flag. So on every pull request these files were
+# compiled into IR in which their bug is not expressible, then run to
+# completion, green, proving nothing. They were reproductions, not gates — the
+# fourth of CLAUDE.md's "four ways a gate can be unable to fail": the job runs,
+# but its subject never does.
+#
+# #7255 CHANGED HALF OF THAT AND DOES NOT REPLACE THIS JOB. The PR subset now
+# carries `safepoint_minor`, which does compile and run with
+# `PERRY_GC_MOVING_LOOP_POLLS=1`, so a witness is at least *expressible* on
+# every PR. That arm is deliberately the UNFORCED route — polls only, no
+# `PERRY_GC_INCREMENTAL=0`, no `PERRY_CONSERVATIVE_STACK_SCAN=off`, no
+# `PERRY_GC_FORCE_EVACUATE=1` — because it is what the shipped default becomes
+# the day #7161's stopgap lifts. `loop_polls` here stacks the evacuating base
+# and forced evacuation on top of the same polls, and rejects `UNVER` per CELL
+# rather than per arm. Strictly stronger, and still the only place the
+# witnesses run that way.
 #
 # #7161 makes this sharper rather than softer. It flipped the evacuating minor
 # default-OFF as a stopgap for #7154, so `PERRY_GC_MOVING_LOOP_POLLS=1` is now

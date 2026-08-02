@@ -221,8 +221,8 @@ one-time arguments:
   GC arm — `PERRY_GC_FORCE_EVACUATE`, `PERRY_GC_VERIFY_EVACUATION`, `PERRY_GEN_GC=0`,
   `PERRY_WRITE_BARRIERS=0`, `PERRY_CONSERVATIVE_STACK_SCAN=off`, `PERRY_GC_MOVING_LOOP_POLLS=1`,
   their combinations, and *each representation flag OFF x evacuation* — byte-exact against the
-  pinned Node oracle. Wired into the `gc-stress` CI job: a fast 4-arm subset gates every PR, the
-  full arm list runs on push.
+  pinned Node oracle. Wired into the `gc-stress` CI job: the `PR_ARMS` subset gates every PR, the
+  full arm list runs on push and on the nightly schedule.
 - **A NEW REPRESENTATION MUST REGISTER ITS GAP FILE** in `test-parity/gc_repsel_corpus.txt`. The
   script fails when a `test_gap_repsel_*` / `test_gap_specabi_*` file exists that is not registered.
   This is the GC-side counterpart of the single-decoder refactor #6910 established for mark/rewrite:
@@ -235,13 +235,25 @@ one-time arguments:
   `test-files/test_gap_repsel_gc_stress.ts` is the corpus member built to be live: it holds each
   representation's local across escaping allocation churn heavy enough to reach the collector. A new
   representation should extend *that* file as well as adding its own, or its GC arms stay inert.
-- **What the matrix cannot verify today.** No reachable configuration in an AOT-compiled program
-  performs an *evacuating minor*: every automatic collection is a full mark-sweep taken under
-  `ManualGcScanGuard::force_full_scan()`, which additionally pins raw locals conservatively (#6950,
-  extending #6946 from the `gc()` path). The rebase-after-safepoint contract in the bullets above —
-  the core GC claim of every pointer representation — is therefore still argued, not tested. #6942
-  tracks making it testable; when that lands, the matrix's evacuating arms flip from UNVERIFIED to
-  green with no change to the harness.
+  **Since #7255 liveness is also a GATE, not only a label**: an arm that satisfied its declared
+  `requires=` on zero cells fails the run (`scripts/gc_matrix_liveness_check.py`), because an
+  all-UNVERIFIED table used to exit 0 — four of the six PR-gating arms were inert for five weeks
+  and nothing said so. Arms that are known-inert for a named reason live in
+  `test-parity/gc_matrix_inert_arms.txt`, and the same checker fails when one of them starts biting
+  again, so that list cannot outlive its cause either.
+- **What the matrix cannot verify today.** This bullet used to say that no reachable configuration
+  performs an *evacuating minor*, so the rebase-after-safepoint contract — the core GC claim of
+  every pointer representation — was argued rather than tested. Two of its three clauses have since
+  moved. #6977 made the allocation-point collection reachable as a real copying minor under
+  `PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off` (the matrix's `evac_minor`), and #7019
+  / #7024 made the precise loop-back-edge safepoint reach it too (`safepoint_minor`), so the
+  contract IS tested on those arms. What remains untested is the **shipped default**: #7161 flipped
+  `PERRY_GC_MOVING_LOOP_POLLS` off pending #7154, and with it off a default binary emits no
+  back-edge polls and its alloc-point minor runs under `ManualGcScanGuard::force_full_scan()`,
+  which pins raw locals conservatively and makes the copying minor ineligible. That is why
+  `default`, `verify_evac`, `cons_scan_off` and `cons_scan_off_force` are listed in
+  `test-parity/gc_matrix_inert_arms.txt` rather than deleted — the claim is still theirs, it is
+  just blocked, and the liveness gate demands the list shrink when the stopgap lifts.
 
 ### 5.7 Typed heap (Phase 4)
 Unboxed storage extends to heap slots where the *container's* shape is proven and stable:

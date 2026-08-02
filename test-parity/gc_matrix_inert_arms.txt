@@ -1,0 +1,42 @@
+# Known-inert arms of scripts/gc_repsel_matrix.sh (#7255).
+#
+# Format:  <arm id> | <#issue> | <reason, and what makes this entry deletable>
+#
+# An arm listed here is allowed to satisfy its `requires=` on ZERO cells without
+# failing the run. Anything NOT listed here that goes inert corpus-wide fails it
+# (scripts/gc_matrix_liveness_check.py). So does an arm listed here that starts
+# biting again: the entry is then stale, and the checker says so. Both directions
+# matter — this file exists because the one-directional version of it (a prose
+# paragraph in the matrix header quoting `default: 0/22 -> 12/22`) stayed
+# authoritative for five weeks after the measurement it quoted became false.
+#
+# ***AN ENTRY HERE IS A LOSS OF COVERAGE, NOT A WAIVER.*** The arms below are
+# the ones that certify the shipped configuration relocates. While they are
+# listed, that property is NOT tested per-PR by them, and only `safepoint_minor`
+# (the sound route) and the %E% arms carry the relocating-minor defect class
+# (#6993: #6951, #6972, #6982, #6991, #6992). Every entry must name an open
+# issue and say what must become true for it to be deleted.
+#
+# DO NOT add an entry to make a table green. An arm that went quiet without
+# anyone deciding it should is the defect this file was created to surface.
+
+# --- #7161's stopgap: the shipped default's minor is NON-MOVING -------------
+#
+# #7019 made the evacuating young-gen minor the default and #7024 made it
+# reachable under the pressure knob; `PERRY_GC_MOVING_LOOP_POLLS` is the gate for
+# BOTH halves of that route — perry-codegen's `moving_safepoint_polls_enabled`
+# decides whether `js_gc_loop_safepoint` back-edge polls are emitted at all, and
+# perry-runtime's `gc_moving_loop_polls_enabled` decides whether the alloc-point
+# nursery trigger defers to them. #7161 flipped it default-OFF pending #7154
+# (a use-after-free that corrupts the heap in the DEFAULT config). #7154 itself
+# is closed, but its last measurement says the stopgap stays until the
+# from-space protector is clean, so a default binary has no back-edge polls and
+# its alloc-point minor runs behind a forced conservative scan, which makes the
+# copying minor ineligible by construction.
+#
+# DELETE ALL FOUR when `PERRY_GC_MOVING_LOOP_POLLS` goes default-ON again. The
+# liveness gate will demand it: the entries go stale the moment the arms bite.
+default             | #7161 | Shipped config + pressure. No back-edge polls are emitted into a default binary and the runtime does not defer to them, so the #7024 route (alloc-point trigger -> js_gc_loop_safepoint -> gc_safepoint_moving_minor) does not exist. It still COLLECTS; it cannot scavenge. `safepoint_minor` carries the relocating claim while this is listed.
+verify_evac         | #7161 | Same route as `default`, plus PERRY_GC_VERIFY_EVACUATION=1. A verifier that runs over zero relocations verifies nothing — which is exactly what it does today.
+cons_scan_off       | #7161 | Precise-roots-only (PERRY_CONSERVATIVE_STACK_SCAN=off) beats the alloc-point `force_full_scan`, but with the incremental stepper at its default the nursery trigger never reaches the direct arm: `registered_root_scanners_block_budgeted_gc()` reduces to "any copy-only scanner" under `gc_incremental_enabled()`, and a compiled program has none, so the trigger is handed to the budgeted stepper, which is non-moving by construction (`low_pause_non_moving = is_budgeted()`). With polls off there is no deferral to a safepoint either. Adding PERRY_GC_INCREMENTAL=0 is what turns it live — that arm is `evac_minor`.
+cons_scan_off_force | #7161 | Same as `cons_scan_off`, plus force/verify. PERRY_GC_FORCE_EVACUATE is read on the minor path the arm never reaches (#6942/#6946), so the force knob does not rescue it.
