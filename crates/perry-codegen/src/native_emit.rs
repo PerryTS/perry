@@ -55,8 +55,31 @@ pub fn native_mode() -> NativeMode {
 fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result<Module<'ctx>> {
     let skeleton = llmod.skeleton_ir();
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
-    let mut instructions = 0usize;
     let funcs = llmod.deduped_function_refs();
+    // Pre-declare every define: calls to functions defined later in the
+    // module (and closure address captures) are module-scope forward
+    // references. Only the one-line header is synthesized here; bodies are
+    // read once, below.
+    for f in &funcs {
+        let param_str = f
+            .params
+            .iter()
+            .map(|(t, n)| format!("{t} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let linkage = if f.linkage.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", f.linkage)
+        };
+        let header = format!(
+            "define {}{} @{}({}) {{",
+            linkage, f.return_type, f.name, param_str
+        );
+        crate::dialect::predeclare_function_from_text(context, &module, &header)
+            .map_err(|e| anyhow!("pre-declaring @{}: {}", f.name, e))?;
+    }
+    let mut instructions = 0usize;
     for f in &funcs {
         let fn_text = f.to_ir();
         instructions += crate::dialect::add_function_from_text(context, &module, &fn_text)
