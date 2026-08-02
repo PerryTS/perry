@@ -482,6 +482,30 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
 /// * **`PERRY_DEBUG_SYMBOLS`**: no effect on any of the above. It was believed
 ///   to put the `.ll`'s absolute path into DWARF; measured, it does not put
 ///   anything there at all. See `TEMP_NONCE_COUNTER`.
+/// exp/llvm-inprocess Phase 2: plan argv for a natively-constructed module,
+/// produced by the SAME decision code as the clang path so opt levels
+/// (incl. the #4880 oversized fallback) and CPU tuning cannot drift. The
+/// byte-size input is the render-free estimate (`estimated_ir_bytes`), since
+/// a native module never renders; the paths in the argv are placeholders the
+/// in-process interpreter skips.
+#[cfg(feature = "llvm-inprocess")]
+pub(crate) fn native_plan_args(
+    target_triple: Option<&str>,
+    est_ll_bytes: usize,
+    ll_fn_count: usize,
+) -> (String, Vec<String>) {
+    let plan = build_clang_compile_plan(
+        PathBuf::from("(in-process)"),
+        PathBuf::from("(native-module)"),
+        PathBuf::from("(native-object)"),
+        target_triple,
+        est_ll_bytes,
+        ll_fn_count,
+        env::var_os("PERRY_DEBUG_SYMBOLS").is_some(),
+    );
+    (plan.effective_target, plan.clang_args)
+}
+
 /// exp/llvm-inprocess: truthy `PERRY_LLVM_INPROCESS` routes `.ll -> .o`
 /// through the LLVM C API inside this process (no clang subprocess, no `.ll`
 /// on disk). The flag participates in both the build cache and the object

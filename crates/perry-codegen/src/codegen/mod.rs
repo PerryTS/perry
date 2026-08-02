@@ -2613,6 +2613,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         return crate::linker::compile_units_to_object(&units, opts.target.as_deref());
     }
 
+    // exp/llvm-inprocess Phase 2: `PERRY_LLVM_INPROCESS=native` constructs
+    // function bodies through the LLVM C API (only the module skeleton is
+    // textual); `=diff` builds both arms and diffs them. Unit-split and
+    // emit_ir_only paths above stay textual (they fall into the in-process
+    // *transport* under these values, so no clang subprocess either way).
+    if let Some(result) = try_native_construction(&llmod, opts.target.as_deref()) {
+        return result;
+    }
+
     let ll_text = llmod.to_ir();
     log::debug!(
         "perry-codegen: emitted {} bytes of LLVM IR for '{}' ({} interned strings)",
@@ -2630,4 +2639,33 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     } else {
         crate::linker::compile_ll_to_object(&ll_text, opts.target.as_deref())
     }
+}
+
+/// exp/llvm-inprocess Phase 2 dispatch. `None` = native construction not
+/// requested (or not compiled in) — continue on the text path. The
+/// feature-off twin returns `None` unconditionally; a build without the
+/// feature still fails loudly downstream in `compile_ll_to_object` when any
+/// in-process mode is requested, so the flag can never silently no-op.
+#[cfg(feature = "llvm-inprocess")]
+fn try_native_construction(
+    llmod: &crate::module::LlModule,
+    target: Option<&str>,
+) -> Option<Result<Vec<u8>>> {
+    match crate::native_emit::native_mode() {
+        crate::native_emit::NativeMode::Off => None,
+        crate::native_emit::NativeMode::Native => {
+            Some(crate::native_emit::compile_module_native(llmod, target))
+        }
+        crate::native_emit::NativeMode::Diff => {
+            Some(crate::native_emit::compile_module_diff(llmod, target))
+        }
+    }
+}
+
+#[cfg(not(feature = "llvm-inprocess"))]
+fn try_native_construction(
+    _llmod: &crate::module::LlModule,
+    _target: Option<&str>,
+) -> Option<Result<Vec<u8>>> {
+    None
 }

@@ -8,6 +8,8 @@ pub mod block;
 pub(crate) mod boxed_vars;
 pub mod codegen;
 pub(crate) mod collectors;
+#[cfg(feature = "llvm-inprocess")]
+pub(crate) mod dialect;
 pub mod expr;
 pub mod ext_registry;
 pub mod function;
@@ -21,6 +23,8 @@ pub(crate) mod lower_conditional;
 pub(crate) mod lower_string_method;
 pub mod module;
 pub mod nanbox;
+#[cfg(feature = "llvm-inprocess")]
+pub mod native_emit;
 pub(crate) mod native_value;
 pub(crate) mod nm_install;
 pub mod opt_report;

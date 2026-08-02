@@ -81,12 +81,29 @@ pub fn compile_ll_to_object_inprocess(
     clang_style_args: &[String],
     module_name: &str,
 ) -> Result<Vec<u8>> {
-    // Interpret the plan argv. Unknown dash-flags are an error on purpose:
-    // silently ignoring a flag clang would have honored is how the two
-    // backends drift apart without anyone noticing.
+    let (opt, mcpu_native, explicit_cpu, mllvm) = interpret_plan_args(clang_style_args)?;
+    let context = Context::create();
+    let module = parse_ir_text(&context, ll_text, module_name)?;
+    optimize_and_emit(
+        &module,
+        effective_target,
+        opt,
+        mcpu_native,
+        explicit_cpu.as_deref(),
+        &mllvm,
+    )
+}
+
+/// Interpret the plan argv. Unknown dash-flags are an error on purpose:
+/// silently ignoring a flag clang would have honored is how the two
+/// backends drift apart without anyone noticing.
+#[allow(clippy::type_complexity)]
+fn interpret_plan_args(
+    clang_style_args: &[String],
+) -> Result<(char, bool, Option<String>, Vec<String>)> {
     let mut opt = '0';
     let mut mcpu_native = false;
-    let mut explicit_cpu: Option<&str> = None;
+    let mut explicit_cpu: Option<String> = None;
     let mut mllvm: Vec<String> = Vec::new();
     let mut it = clang_style_args.iter().peekable();
     while let Some(a) = it.next() {
@@ -103,8 +120,8 @@ pub fn compile_ll_to_object_inprocess(
                 }
             }
             "-mcpu=native" | "-march=native" => mcpu_native = true,
-            s if s.starts_with("-mcpu=") => explicit_cpu = Some(&s["-mcpu=".len()..]),
-            s if s.starts_with("-march=") => explicit_cpu = Some(&s["-march=".len()..]),
+            s if s.starts_with("-mcpu=") => explicit_cpu = Some(s["-mcpu=".len()..].to_string()),
+            s if s.starts_with("-march=") => explicit_cpu = Some(s["-march=".len()..].to_string()),
             s if s.starts_with("-O") => opt = s.chars().nth(2).unwrap_or('0'),
             s if !s.starts_with('-') => {} // input/output paths from the plan
             other => {
@@ -115,20 +132,58 @@ pub fn compile_ll_to_object_inprocess(
             }
         }
     }
+    Ok((opt, mcpu_native, explicit_cpu, mllvm))
+}
 
-    global_init(&mllvm);
-    announce();
-
-    let context = Context::create();
+/// Parse IR text into a module in `context`. Shared by the transport path
+/// (whole-module text) and the native-construction path (the few-KB module
+/// skeleton from `LlModule::skeleton_ir`).
+pub(crate) fn parse_ir_text<'ctx>(
+    context: &'ctx Context,
+    ll_text: &str,
+    module_name: &str,
+) -> Result<inkwell::module::Module<'ctx>> {
     // inkwell 0.9's copy constructor requires (and then strips) a trailing
     // NUL. One extra copy of the IR text; fine for the transport phase.
     let mut ir = Vec::with_capacity(ll_text.len() + 1);
     ir.extend_from_slice(ll_text.as_bytes());
     ir.push(0);
     let buf = MemoryBuffer::create_from_memory_range_copy(&ir, module_name);
-    let module = context
+    context
         .create_module_from_ir(buf)
-        .map_err(|e| anyhow!("LLVM IR parse error:\n{}", e.to_string()))?;
+        .map_err(|e| anyhow!("LLVM IR parse error:\n{}", e.to_string()))
+}
+
+/// Interpret plan argv (same grammar as `compile_ll_to_object_inprocess`) and
+/// run verify -> pass pipeline -> object emission on an already-built module.
+/// The native construction path calls this directly.
+pub(crate) fn optimize_and_emit_module(
+    module: &inkwell::module::Module<'_>,
+    effective_target: &str,
+    clang_style_args: &[String],
+) -> Result<Vec<u8>> {
+    let (opt, mcpu_native, explicit_cpu, mllvm) = interpret_plan_args(clang_style_args)?;
+    optimize_and_emit(
+        module,
+        effective_target,
+        opt,
+        mcpu_native,
+        explicit_cpu.as_deref(),
+        &mllvm,
+    )
+}
+
+fn optimize_and_emit(
+    module: &inkwell::module::Module<'_>,
+    effective_target: &str,
+    opt: char,
+    mcpu_native: bool,
+    explicit_cpu: Option<&str>,
+    mllvm: &[String],
+) -> Result<Vec<u8>> {
+    global_init(mllvm);
+    announce();
+
     module
         .verify()
         .map_err(|e| anyhow!("LLVM verifier rejected module:\n{}", e.to_string()))?;
