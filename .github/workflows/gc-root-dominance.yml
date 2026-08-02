@@ -88,6 +88,22 @@ jobs:
       - name: Checker self-test (can this gate still fail?)
         run: python3 scripts/gc_root_dominance_check.py --self-test
 
+      # The checker only reports a stale register when it recognises what
+      # MATERIALIZED the value, and that recognition is one regex. An
+      # alternative in it that matches no real symbol reads as coverage and is
+      # not -- the gate-can't-fail pattern in regex form. It has shipped nine
+      # times across two rounds: four (`regexp_alloc\w*`, `promise_alloc\w*`,
+      # `bigint_alloc\w*`, `typed_array_alloc\w*`) found only because
+      # `js_regexp_new` cost #7154 a whole investigation round, and five more
+      # introduced by the change that removed those four. A prose audit does not
+      # survive its own next edit, so it is a gate now: every alternative must
+      # match at least one `extern "C" fn js_*` the runtime actually exports.
+      #
+      # Static and instant — no toolchain, no corpus — so it runs before the
+      # build with the self-test.
+      - name: ALLOC_RE alternatives must match real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-alloc-re
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 

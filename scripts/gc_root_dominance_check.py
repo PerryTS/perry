@@ -350,7 +350,7 @@ ALLOC_RE = re.compile(
     r"array_from\w*|array_clone\w*|array_concat\w*|array_slice|array_splice|"
     r"array_to_spliced|array_to_sorted\w*|array_to_reversed|array_with|"
     r"array_flat\w*|array_map|array_filter|array_like_to_array|"
-    r"iterator_to_array|array_of|array_group_by|"
+    r"iterator_to_array|"
     # fresh objects/collections handed back as a whole
     r"object_keys\w*|object_values\w*|object_entries\w*|object_from_entries|"
     r"object_assign\w*|object_group_by|object_coerce|"
@@ -363,11 +363,125 @@ ALLOC_RE = re.compile(
     r"build_class_keys_array|create_namespace|create_native_module_namespace|"
     r"generator_attach_prototype|proxy_revocable|"
     # BigInt: no `_alloc` and no `_new`; the constructors are `_from_*`.
-    r"bigint_from\w*|bigint_\w+_op|"
-    # Buffers / typed arrays that spell it neither way.
-    r"buffer_from\w*|typed_array_from\w*|array_buffer_slice"
+    #
+    # NOT COVERED, AND DELIBERATELY LEFT UNCOVERED HERE: BigInt *arithmetic*
+    # (`js_bigint_add`, `js_bigint_and`, `js_bigint_mul`, ...) allocates a fresh
+    # BigInt and matches none of the three conventions. An alternative spelled
+    # `bigint_\w+_op` used to sit here and matched nothing -- the same
+    # extrapolated-suffix mistake as `regexp_alloc\w*`, in the same list, added
+    # by the change that removed the first four. It is deleted rather than
+    # widened because widening it is a coverage decision with its own false
+    # positives (`js_bigint_equals` returns a bool), and that belongs in a
+    # change that can measure the new hits. Tracked in the PR thread.
+    r"bigint_from\w*|"
+    # Buffers / typed arrays that spell it neither way. `array_buffer_slice`
+    # and `typed_array_from\w*` were removed for the same reason: no such
+    # symbols. The real one, `js_buffer_from_arraybuffer_slice`, is already
+    # matched by `buffer_from\w*`.
+    r"buffer_from\w*"
     r")$"
 )
+
+# --------------------------------------------------------------------- AUDIT
+#
+# A regex alternative that matches nothing is the gate-can't-fail pattern in
+# regex form: it reads as coverage, it costs nothing to keep, and it is
+# indistinguishable from real coverage until a bug slips through the hole it
+# was supposed to close. This has now happened twice in this one pattern:
+#
+#   * `regexp_alloc\w*`, `promise_alloc\w*`, `bigint_alloc\w*`,
+#     `typed_array_alloc\w*` -- four dead alternatives, found only because
+#     `js_regexp_new` cost #7154 a full investigation round;
+#   * `array_of`, `array_group_by`, `bigint_\w+_op`, `typed_array_from\w*`,
+#     `array_buffer_slice` -- five MORE, introduced by the change that removed
+#     the first four, and found by running this auditor against it.
+#
+# The second round is the argument for automating it. A prose audit does not
+# survive its own next edit; the enumeration below is checked by CI instead
+# (`--audit-alloc-re`), so an alternative cannot go dead without going red.
+#
+# Deleting a dead alternative changes NOTHING about what the checker matches --
+# that is what "matches no symbol" means -- so this is not a narrowing.
+
+_EXTERN_C_FN_RE = re.compile(r'extern\s+"C"\s+fn\s+(js_\w+)')
+
+# The runtime crates that export the C-ABI surface perry-codegen calls.
+SYMBOL_ROOTS = ("crates/perry-runtime/src", "crates/perry-stdlib/src")
+
+
+def runtime_symbols(roots=SYMBOL_ROOTS):
+    """Every `extern "C" fn js_*` the runtime actually exports."""
+    syms = set()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirs, files in os.walk(root):
+            for name in files:
+                if not name.endswith(".rs"):
+                    continue
+                with open(os.path.join(dirpath, name),
+                          encoding="utf-8", errors="replace") as fh:
+                    syms.update(_EXTERN_C_FN_RE.findall(fh.read()))
+    return syms
+
+
+def alloc_re_alternatives():
+    """The top-level alternatives inside ALLOC_RE's `js_(...)` group.
+
+    Asserts the pattern's shape rather than assuming it: if ALLOC_RE is ever
+    rewritten into a form this cannot decompose, that must be a loud failure,
+    not an audit that silently checks zero alternatives.
+    """
+    pat = ALLOC_RE.pattern
+    if not (pat.startswith("^js_(") and pat.endswith(")$")):
+        raise MalformedIR(
+            "ALLOC_RE is no longer of the form ^js_(...)$; the alternative "
+            "audit cannot decompose it. Update alloc_re_alternatives() rather "
+            "than leaving the audit silently vacuous.")
+    inner = pat[len("^js_("):-len(")$")]
+    if "(" in inner:
+        raise MalformedIR(
+            "ALLOC_RE now contains a nested group; splitting on '|' would "
+            "produce bogus alternatives. Update alloc_re_alternatives().")
+    return [a for a in inner.split("|") if a]
+
+
+def dead_alloc_alternatives(symbols):
+    """ALLOC_RE alternatives matching none of `symbols`, in pattern order."""
+    dead = []
+    for alt in alloc_re_alternatives():
+        probe = re.compile("^js_(?:%s)$" % alt)
+        if not any(probe.match(s) for s in symbols):
+            dead.append(alt)
+    return dead
+
+
+def audit_alloc_re(roots=SYMBOL_ROOTS):
+    """Exit status for `--audit-alloc-re`. 0 clean, 2 on a dead alternative."""
+    syms = runtime_symbols(roots)
+    # Non-vacuity first: an empty symbol set would report every alternative
+    # dead, and a tiny one would report a plausible-looking few. Either way the
+    # verdict would be about the scan, not about the pattern.
+    if len(syms) < 500:
+        print(f"error: found only {len(syms)} `extern \"C\" fn js_*` symbols "
+              f"under {', '.join(roots)}. The audit is measuring its own scan, "
+              "not ALLOC_RE. Run it from the repository root.", file=sys.stderr)
+        return 2
+    dead = dead_alloc_alternatives(syms)
+    print(f"=== ALLOC_RE: {len(alloc_re_alternatives())} alternatives vs "
+          f"{len(syms)} exported js_* symbols")
+    if dead:
+        print("error: ALLOC_RE alternatives that match no runtime symbol:",
+              file=sys.stderr)
+        for a in dead:
+            print(f"  {a}", file=sys.stderr)
+        print("An alternative that matches nothing reads as coverage and is "
+              "not. Either it is misspelled -- check the real name in the "
+              "runtime -- or the symbol was renamed or removed and the "
+              "alternative should go with it.", file=sys.stderr)
+        return 2
+    print("=== every alternative matches at least one exported symbol")
+    return 0
 
 # Bit-level / identity producers a heap address flows through unchanged.
 TRANSPARENT_OPS = ("or i64", "and i64", "bitcast", "inttoptr", "ptrtoint",
@@ -1908,6 +2022,41 @@ def self_test():
                       "breadth floor. A guard that rejects every corpus is a "
                       "gate that always fails.", file=sys.stderr)
                 ok = False
+        # --- the ALLOC_RE alternative audit, both directions ----------------
+        #
+        # The auditor is itself a gate, so it gets the same treatment as the
+        # rest: prove it reports a planted dead alternative AND clears a live
+        # one. Driven off a synthetic symbol set so the arm does not depend on
+        # the repository's current contents -- an arm that only passes because
+        # today's runtime happens to export the right names would go quiet the
+        # moment someone renamed a symbol, which is the case it exists for.
+        live_alts = [a for a in alloc_re_alternatives()
+                     if re.compile("^js_(?:%s)$" % a).match("js_object_alloc")
+                     or re.compile("^js_(?:%s)$" % a).match("js_regexp_new")]
+        if not live_alts:
+            print("self-test FAIL: neither js_object_alloc nor js_regexp_new "
+                  "matches any ALLOC_RE alternative; the audit arm below would "
+                  "be testing nothing", file=sys.stderr)
+            ok = False
+        if dead_alloc_alternatives({"js_object_alloc", "js_regexp_new"}) == []:
+            print("self-test FAIL: audited against a two-symbol table, almost "
+                  "every ALLOC_RE alternative must be reported dead. An empty "
+                  "result means the auditor cannot detect a dead alternative "
+                  "at all.", file=sys.stderr)
+            ok = False
+        # And it must clear an alternative that IS covered: build a symbol set
+        # from one probe per alternative, and require a clean verdict.
+        synthetic = set()
+        for a in alloc_re_alternatives():
+            # `\w*` -> `x`, `\w+` -> `x`: a concrete name the alternative matches.
+            synthetic.add("js_" + a.replace(r"\w*", "x").replace(r"\w+", "x"))
+        residue = dead_alloc_alternatives(synthetic)
+        if residue:
+            print(f"self-test FAIL: the auditor reported {len(residue)} "
+                  "alternative(s) dead against a symbol set synthesised from "
+                  f"the alternatives themselves: {residue}. That is a bug in "
+                  "the auditor, not in ALLOC_RE.", file=sys.stderr)
+            ok = False
         # A knob that is silently ignored is a disarmed knob -- the same rule
         # `--max-stale` and `--fatal-sinks` already carry, read the other way.
         if _main_probe(["--stale-registers", "--any-def", planted]) != 2:
@@ -2144,7 +2293,18 @@ def main():
                          "real corpus IR and require every one to be reported. "
                          "Proves the checker can still fail against the IR perry "
                          "actually emits, not just against frozen fixtures.")
+    ap.add_argument("--audit-alloc-re", action="store_true",
+                    help="check every ALLOC_RE alternative against the runtime's "
+                         "real `extern \"C\" fn js_*` symbols and fail on any "
+                         "that matches nothing. A dead alternative reads as "
+                         "coverage and is not -- nine of them have shipped in "
+                         "this pattern across two rounds. Takes no corpus.")
     ns = ap.parse_args()
+
+    # Standalone static audit: it reads the crates, not an IR corpus, so it is
+    # checked before the corpus arguments are.
+    if ns.audit_alloc_re:
+        return audit_alloc_re()
 
     # A knob that is silently ignored is a disarmed knob: `--max-stale 0`
     # without `--stale-registers` would run the bind-anchored check and look
