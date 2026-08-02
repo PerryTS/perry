@@ -482,6 +482,7 @@ pub(super) struct BarrierTraceCounters {
     pub(super) dirty_page_mark_attempts: u64,
     pub(super) new_dirty_pages: u64,
     pub(super) conservative_parent_span_marks: u64,
+    pub(super) unarmed_skips: u64,
 }
 
 impl BarrierTraceCounters {
@@ -498,6 +499,7 @@ impl BarrierTraceCounters {
             dirty_page_mark_attempts: 0,
             new_dirty_pages: 0,
             conservative_parent_span_marks: 0,
+            unarmed_skips: 0,
         }
     }
 }
@@ -515,6 +517,11 @@ pub(super) enum BarrierTraceCounter {
     DirtyPageMarkAttempts,
     NewDirtyPages,
     ConservativeParentSpanMarks,
+    /// #7187: a barrier call whose child WAS a heap pointer but which exited
+    /// before any remembered-set work because the barrier is not armed yet.
+    /// This is the count the lazy-arming lever removes; on a program that
+    /// never collects it equals `calls - non_pointer_child_skips`.
+    UnarmedSkips,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -984,6 +991,11 @@ impl GcCycleTrace {
             "retained_forwarded_stub_objects": self.sweep.retained_forwarded_stub_objects,
             "retained_forwarded_stub_bytes": self.sweep.retained_forwarded_stub_bytes,
         });
+        // #7187 census. `armed` / `reconstructs` are what let the lazy-arming
+        // gate observe its own subject: a cycle reporting `unarmed_skips > 0`
+        // with `reconstructs == 0` would mean the reconstruct never ran and
+        // the collection is reading an incomplete log.
+        let reconstruct_census = crate::gc::barrier::remembered_reconstruct_census();
         let write_barrier_json = serde_json::json!({
             "calls": self.write_barrier.calls,
             "non_pointer_parent_skips": self.write_barrier.non_pointer_parent_skips,
@@ -996,6 +1008,11 @@ impl GcCycleTrace {
             "dirty_page_mark_attempts": self.write_barrier.dirty_page_mark_attempts,
             "new_dirty_pages": self.write_barrier.new_dirty_pages,
             "conservative_parent_span_marks": self.write_barrier.conservative_parent_span_marks,
+            "unarmed_skips": self.write_barrier.unarmed_skips,
+            "armed": crate::gc::barrier::barrier_remembering_armed(),
+            "reconstructs": reconstruct_census.reconstructs,
+            "reconstruct_recovered_old_pages": reconstruct_census.recovered_old_pages,
+            "reconstruct_recovered_external_pages": reconstruct_census.recovered_external_pages,
         });
         let trigger_json = serde_json::json!({
             "kind": self.trigger_kind.as_str(),
