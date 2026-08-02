@@ -1,10 +1,67 @@
 # In-process LLVM backend experiment (`exp/llvm-inprocess`)
 
-**Status: Phase 0 complete — feasibility CONFIRMED, with a byte-identical
-parity result.** A feature-gated, flag-gated in-process transport
-(`PERRY_LLVM_INPROCESS=1`) is implemented on this branch. The default path is
-untouched: the default build links no LLVM and compiles `.ll` through
-`clang -c` exactly as before.
+**Status: Phase 0 complete (transport, byte-identical) and Phase 2 landed
+opt-in (native construction — module-scale IR text no longer exists under
+`PERRY_LLVM_INPROCESS=native`).** The default path is untouched: the default
+build links no LLVM and compiles `.ll` through `clang -c` exactly as before.
+
+## Phase 2: native construction (`=native` / `=diff`)
+
+The owner's directive after Phase 0: the lever is not the transport, it is
+making generated `.ll` text *optional*. Two audits drove the design (both
+reproduced below): 96.4% of instruction emission (6,097 call sites) already
+flows through ~40 semantic methods on `LlBlock`; the bypasses are 89
+`emit_raw` sites, the `LlFunction` entry-splice mechanism (136 sites), and
+`to_ir`'s post-render passes (ret rewrites, setjmp volatile promotion). A
+grammar census over two real corpora (9,110+ instructions) bounded the
+dialect: ~30 opcodes, scalar + `[N x T]` types, six operand forms — plus two
+traps a naive builder dies on: **non-phi cross-block forward references**
+(the `idispatch` tower) and phis where 73% of incomings are forward.
+
+Architecture (deliberately different from the brief's instruction-level
+builder-trait): the port point is the **finalized function**, not the emit
+stream. `LlFunction::to_ir()` output — including entry-alloca hoists,
+boundary splices, return-site rewrites, and volatile promotion, so those
+transforms keep exactly one implementation — is consumed per function by a
+bounded dialect reader (`dialect.rs`) that constructs it through the C API:
+typed operand resolution against a per-function `%name` map,
+placeholder-RAUW for forward references (LLParser's own strategy), deferred
+phi incomings, callsite-derived call types (opaque-pointer semantics,
+measured: a direct call's function type is the *callsite's*, not the
+declare's), pre-declaration of all module-internal defines. Only the module
+*skeleton* (globals, declares, attribute groups — a few KB) is still parsed
+as text. Per-function text remains transient scaffolding (dropped
+immediately); the follow-up that removes it is typed `LlInst` variants
+inside `LlBlock` behind the same reader interface, migrating the ~40
+semantic methods opcode-by-opcode with `=diff` as the gate.
+
+Results so far:
+
+- Corpus gate (unit tests `dialect::tests::corpus_*`): every function of
+  both corpora constructs natively and passes the LLVM verifier.
+- `spike.ts`: text-parsed arm and natively-constructed arm emit
+  **byte-identical objects**; the native-mode binary matches the pinned Node
+  oracle.
+- `batch.ts`: all pre-opt divergences are one class — the C-API builder
+  constant-folds at construction (`zext i1 false`, `select i1 false`,
+  constant GEPs) — which is why `=diff`'s verdict is **emitted object
+  bytes**, not pre-opt prints. The arms' objects differ by 336 bytes of
+  *tighter* native-arm code (register-allocation divergence downstream of
+  pre-folded input; same symbols, verified at the disassembly level to be
+  layout/regalloc, not semantics).
+- Behavior: 26-test gap-corpus slice under `=native` (one binary, flag-only
+  A/B, liveness asserted): first pass 25/25 byte-identical outputs with one
+  compile failure — a multi-module test that exposed two reader bugs
+  (explicit `external` linkage keyword; skeleton globals referencing defined
+  wrapper functions, fixed by parsing the skeleton with synthesized declares
+  for every define). After the fix the failing test compiles natively with
+  identical output; the full slice re-run is recorded in the tracking issue.
+
+Modes: `PERRY_LLVM_INPROCESS=1` transport (parse whole text in-process),
+`=native` construction, `=diff` both-arms harness (returns the text arm's
+object; prints `[ir-diff] OK/MISMATCH`; `PERRY_LLVM_DIFF_DIR` dumps both
+arms' pre-opt IR + objects). All values share the env var already keyed into
+both caches. Unit-split and `emit_ir_only` paths fall through to transport.
 
 Companion artifacts:
 
