@@ -108,6 +108,23 @@ jobs:
       - name: ALLOC_RE alternatives must match real runtime symbols
         run: python3 scripts/gc_root_dominance_check.py --audit-alloc-re
 
+      # `--unrooted-allocas` exempts two heap-value sources whose objects can
+      # neither move nor be reclaimed (#7210): the old-arena class-keys array,
+      # and `js_box_alloc*`'s Box, which is not a GC-heap allocation at all.
+      # Each exemption SUPPRESSES reports, and each is only as sound as
+      # premises that live in the runtime crates and can change without anyone
+      # touching this checker — the class-keys array staying `_longlived`,
+      # old-page defrag staying off by default, the keys global staying a
+      # registered root, and boxes staying `std::alloc::alloc` with no free
+      # path.
+      #
+      # An exemption whose premise has quietly lapsed is strictly WORSE than no
+      # exemption: it reads as a triaged false positive and is a live hazard.
+      # So the premises are a gate rather than a paragraph. Static and instant,
+      # like the audit above, so it runs before the build.
+      - name: Immovable-source exemptions must still hold
+        run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
