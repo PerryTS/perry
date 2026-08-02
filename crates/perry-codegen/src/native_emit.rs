@@ -122,99 +122,65 @@ pub fn compile_module_native(llmod: &LlModule, target: Option<&str>) -> Result<V
 }
 
 /// Differential harness: text-parsed arm vs natively-built arm, same LLVM,
-/// same printer. Returns the text arm's object (the trusted reference) so a
-/// diff run is safe to use for real builds while surfacing every divergence.
+/// same plan. The verdict is **emitted object bytes** — the C-API builder
+/// constant-folds at construction (`zext i1 false`, `select i1 false, ...`),
+/// so pre-optimization prints legitimately differ in a way that vanishes
+/// under the pass pipeline; byte-compared objects are the ground truth (the
+/// same methodology that proved the Phase 0 transport byte-identical).
+/// Returns the text arm's object (the trusted reference) so a diff run is
+/// safe for real builds while surfacing every divergence.
 pub fn compile_module_diff(llmod: &LlModule, target: Option<&str>) -> Result<Vec<u8>> {
     let text = llmod.to_ir();
     let ctx_text = Context::create();
     let m_text = crate::inprocess::parse_ir_text(&ctx_text, &text, "perry_diff_text")?;
+    let (effective_target, args) = plan_for(llmod, target);
 
     let ctx_native = Context::create();
     let native = build_native_module(&ctx_native, llmod);
-
     match native {
         Err(e) => {
             eprintln!("perry: [ir-diff] native construction FAILED (text arm still used): {e:#}");
+            crate::inprocess::optimize_and_emit_module(&m_text, &effective_target, &args)
         }
         Ok(m_native) => {
-            let pa = normalize_print(&m_text.print_to_string().to_string());
-            let pb = normalize_print(&m_native.print_to_string().to_string());
-            if pa == pb {
+            // Capture pre-opt prints BEFORE optimization mutates the modules;
+            // they are the localization artifact when bytes mismatch.
+            let dump_dir = std::env::var("PERRY_LLVM_DIFF_DIR").ok();
+            let (pre_text, pre_native) = if dump_dir.is_some() {
+                (
+                    m_text.print_to_string().to_string(),
+                    m_native.print_to_string().to_string(),
+                )
+            } else {
+                (String::new(), String::new())
+            };
+            let bytes_native =
+                crate::inprocess::optimize_and_emit_module(&m_native, &effective_target, &args)?;
+            let bytes_text =
+                crate::inprocess::optimize_and_emit_module(&m_text, &effective_target, &args)?;
+            if bytes_text == bytes_native {
                 eprintln!(
-                    "perry: [ir-diff] OK — native construction matches text parse ({} lines)",
-                    pa.lines().count()
+                    "perry: [ir-diff] OK — native and text arms emit byte-identical objects \
+                     ({} bytes)",
+                    bytes_text.len()
                 );
             } else {
-                report_diff(&pa, &pb);
-                if let Ok(dir) = std::env::var("PERRY_LLVM_DIFF_DIR") {
-                    let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::fs::write(format!("{dir}/text_arm.ll"), &pa);
-                    let _ = std::fs::write(format!("{dir}/native_arm.ll"), &pb);
+                eprintln!(
+                    "perry: [ir-diff] MISMATCH — object bytes differ (text {} vs native {}); \
+                     set PERRY_LLVM_DIFF_DIR to dump both arms' pre-opt IR",
+                    bytes_text.len(),
+                    bytes_native.len()
+                );
+                if let Some(dir) = &dump_dir {
+                    let _ = std::fs::create_dir_all(dir);
+                    let _ = std::fs::write(format!("{dir}/text_arm.ll"), &pre_text);
+                    let _ = std::fs::write(format!("{dir}/native_arm.ll"), &pre_native);
+                    let _ = std::fs::write(format!("{dir}/text_arm.o"), &bytes_text);
+                    let _ = std::fs::write(format!("{dir}/native_arm.o"), &bytes_native);
                     eprintln!("perry: [ir-diff] arms dumped under {dir}");
                 }
             }
+            Ok(bytes_text)
         }
-    }
-
-    let (effective_target, args) = plan_for(llmod, target);
-    crate::inprocess::optimize_and_emit_module(&m_text, &effective_target, &args)
-}
-
-/// Normalization limited to the classes catalogued in
-/// `docs/llvm-inprocess-experiment.md` (attribute-group *numbering* and
-/// header trivia). Everything else must match exactly — both arms come out
-/// of the same LLVM printer.
-fn normalize_print(printed: &str) -> String {
-    let mut out = String::with_capacity(printed.len());
-    for line in printed.lines() {
-        if line.starts_with("; ModuleID") || line.starts_with("source_filename") {
-            continue;
-        }
-        // `#12` group ids may be assigned in a different order by the two
-        // construction orders; the *contents* of the groups still compare
-        // via the `attributes` lines themselves (with ids blanked).
-        let mut norm = String::with_capacity(line.len());
-        let mut chars = line.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '#' && chars.peek().is_some_and(|d| d.is_ascii_digit()) {
-                while chars.peek().is_some_and(|d| d.is_ascii_digit()) {
-                    chars.next();
-                }
-                norm.push_str("#N");
-            } else {
-                norm.push(c);
-            }
-        }
-        out.push_str(&norm);
-        out.push('\n');
-    }
-    out
-}
-
-fn report_diff(pa: &str, pb: &str) {
-    let a: Vec<&str> = pa.lines().collect();
-    let b: Vec<&str> = pb.lines().collect();
-    let mut shown = 0;
-    let mut i = 0;
-    let mut j = 0;
-    eprintln!(
-        "perry: [ir-diff] MISMATCH — native construction diverges from text parse \
-         ({} vs {} lines); first divergences:",
-        a.len(),
-        b.len()
-    );
-    // Naive sync-on-equal walk: enough to *locate* divergence; the dumped
-    // arms (PERRY_LLVM_DIFF_DIR) are the real investigation artifact.
-    while i < a.len() && j < b.len() && shown < 12 {
-        if a[i] == b[j] {
-            i += 1;
-            j += 1;
-            continue;
-        }
-        eprintln!("  text  : {}", a[i]);
-        eprintln!("  native: {}", b[j]);
-        shown += 1;
-        i += 1;
-        j += 1;
     }
 }

@@ -93,6 +93,10 @@ struct FnReader<'ctx, 'm> {
     /// when the real definition arrives — the same strategy LLVM's own
     /// `.ll` parser uses.
     placeholders: HashMap<String, BasicValueEnum<'ctx>>,
+    /// Most recently *entered* (label line) block, used to keep the
+    /// function's block order equal to textual order even when a forward
+    /// branch created the block object earlier.
+    last_entered: Option<BasicBlock<'ctx>>,
     positioned: bool,
     count: usize,
 }
@@ -233,6 +237,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             vals,
             pending_phis: Vec::new(),
             placeholders: HashMap::new(),
+            last_entered: None,
             positioned: false,
             count: 0,
         })
@@ -249,6 +254,14 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
 
     fn enter_block(&mut self, label: &str) -> Result<()> {
         let b = self.block(label);
+        if let Some(prev) = self.last_entered {
+            // A forward branch may have created this block before blocks
+            // that textually precede it; re-anchor to textual order (block
+            // order is semantically free but affects layout and makes the
+            // diff harness exact).
+            let _ = b.move_after(prev);
+        }
+        self.last_entered = Some(b);
         self.builder.position_at_end(b);
         self.positioned = true;
         Ok(())
@@ -612,6 +625,10 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let callee = &after[..paren];
         let close = rmatch_paren(after, paren)?;
         let args_str = &after[paren + 1..close];
+        // Trailing callsite attribute-group ref. Only `#0` (returns_twice,
+        // on setjmp calls) exists in the dialect; the declare carries it too,
+        // so this is fidelity, not correctness.
+        let trailing_attr = after[close + 1..].trim();
 
         let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
         let mut arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
@@ -646,6 +663,19 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .builder
             .build_indirect_call(fn_ty, callee_ptr, &args, name)
             .map_err(be)?;
+        match trailing_attr {
+            "" => {}
+            "#0" => {
+                let kind = inkwell::attributes::Attribute::get_named_enum_kind_id("returns_twice");
+                if kind != 0 {
+                    site.add_attribute(
+                        inkwell::attributes::AttributeLoc::Function,
+                        self.ctx.create_enum_attribute(kind, 0),
+                    );
+                }
+            }
+            other => bail!("unknown callsite attribute `{other}`"),
+        }
         match site.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(v) => Ok(Some(v)),
             _ => Ok(None),

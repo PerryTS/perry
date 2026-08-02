@@ -32,7 +32,7 @@ for t in $(ls "$WT"/test-files/test_gap_*.ts | sort); do
   gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.t" >"$WORK/$name.t.compile" 2>&1
   ct=$?
   if [ "$MODE" = "flag" ]; then
-    PERRY_LLVM_INPROCESS=1 gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
+    PERRY_LLVM_INPROCESS=${INPROCESS_VALUE:-1} gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
     cp=$?
     # Liveness: the arm must have announced the in-process backend.
     if [ $cp -eq 0 ] && ! grep -q "in-process LLVM backend active" "$WORK/$name.p.compile"; then
