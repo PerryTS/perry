@@ -61,11 +61,15 @@ permissions:
   contents: read
 
 concurrency:
-  # Per-event groups, cancelling PR runs only. A shared group with an
-  # unconditional cancel-in-progress starves `main`: on a deep runner queue
-  # every merge cancels the previous main run before it reaches a runner, and a
-  # gate that is always cancelled never fails. Same reasoning as gc-ratchet.yml.
-  group: gc-root-dominance-${{ github.event_name }}-${{ github.ref }}
+  # One group per main COMMIT, cancelling PR runs only. A shared group starves
+  # `main` on a deep runner queue, and a gate that is always cancelled never
+  # fails. `cancel-in-progress: false` is not enough on its own: GitHub allows
+  # at most one PENDING run per group and cancels the previously pending one
+  # when a new run enters, regardless of that setting (#7205 — measured on
+  # gc-ratchet, whose shape this file copied). Keying push runs on the SHA gives
+  # every merged commit a group of its own, so no two main runs can contend.
+  # Same reasoning as gc-ratchet.yml, which carries the full writeup.
+  group: gc-root-dominance-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

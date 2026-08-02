@@ -1,0 +1,339 @@
+name: GC Moving Witnesses
+
+# Runs the stale-root REPRODUCERS against the moving collector, which is the
+# only configuration in which they can fail.
+#
+# WHY THIS EXISTS
+#
+# `test-files/test_gap_gc_*.ts` are not ordinary parity tests. Each one was
+# written to reproduce a specific stale-root defect — #6981, #7114, #7154,
+# #7200/#7201/#7202, #7208/#7209, #7206, #7214, #7216 — and each was verified
+# by its PR author by hand, compiled AND run with `PERRY_GC_MOVING_LOOP_POLLS=1`.
+# Every one of those corpus notes says the same thing in different words: the
+# file is clean on the shipped default and only bites on a `requires=move` arm.
+#
+# No CI job ran THEM with that flag. Two jobs already set it, and neither
+# executes a witness:
+#
+#   * `gc-root-dominance` compiles a corpus with it
+#     (scripts/gc_root_dominance_corpus.sh) because the flag is what puts
+#     `js_gc_loop_safepoint` in the IR — but it is a STATIC pass over that IR
+#     and never runs a program;
+#   * `gc-stress`'s instrument smoke (scripts/gc_instrument_smoke.sh) compiles
+#     and runs with it, but against its own small synthetic fixture, not the
+#     reproducers.
+#
+# The witnesses themselves reach CI only through `gc-stress`, which runs the
+# matrix's PR arm subset — `default,evac_minor,verify_evac,force_verify,
+# cons_scan_off,shipped_default` — and not one of those arms compiles with the
+# flag. So on every pull request these files were compiled into IR in which
+# their bug is not expressible, then run to completion, green, proving nothing.
+# They were reproductions, not gates — the fourth of CLAUDE.md's "four ways a
+# gate can be unable to fail": the job runs, but its subject never does.
+#
+# #7161 makes this sharper rather than softer. It flipped the evacuating minor
+# default-OFF as a stopgap for #7154, so `PERRY_GC_MOVING_LOOP_POLLS=1` is now
+# the ONLY configuration that exercises the moving collector end to end. Under
+# the GC knob kill-policy an unexercised mode is a configuration nobody has
+# verified, and this is the mode the whole #7154 fix campaign is aimed at.
+#
+# WHAT IT DOES
+#
+# One arm, one filter:
+#
+#   scripts/gc_repsel_matrix.sh --arms loop_polls --filter test_gap_gc_
+#
+# `loop_polls` is the existing matrix arm that puts `PERRY_GC_MOVING_LOOP_POLLS=1`
+# in BOTH the compile env and the run env. Both halves are load-bearing and were
+# verified to still be so at this commit: #7161 made the flag a compile-time gate
+# as well as a runtime one (`moving_safepoint_polls_enabled()` in
+# `perry-codegen/src/stmt/loops.rs` decides whether codegen emits the
+# `js_gc_loop_safepoint` back-edge polls at all; `gc_moving_loop_polls_enabled()`
+# in `perry-runtime/src/gc/policy.rs` decides whether the runtime defers to them).
+# Setting it at run time only would defer collections to polls that were never
+# emitted. The object cache keys the flag (`env_gc_moving_loop_polls` in
+# `perry/src/commands/compile/object_cache.rs`), so a warm cache cannot serve
+# objects built without it — see the `PERRY_DISABLE_BUILD_CACHE` note below for
+# the one place that is still true only by accident.
+#
+# THIS JOB IS DESIGNED TO BE ABLE TO FAIL, checked against all four ways a gate
+# can be unable to (CLAUDE.md):
+#
+#   1. no `continue-on-error`, no `|| true`, no pipe between a checker and the
+#      shell's exit status;
+#   2. NOT in branch protection's required contexts yet, deliberately: a new
+#      gate has never been green, so promoting it immediately would block every
+#      open PR. Promotion is a follow-up, and the corollary in CLAUDE.md is that
+#      leaving that second step undone is itself hazard 2 — `gc-root-dominance`
+#      sat red on `main` for weeks because nobody took it. Promote this once it
+#      has a green run on `main`;
+#   3. `concurrency` cancels pull-request runs only, and push runs are keyed on
+#      the commit so `main` runs cannot cancel each other while queued (#7205);
+#   4. the subject is ASSERTED live, not assumed. The matrix reports a cell that
+#      matched the oracle under an inert arm as UNVER, never PASS — but its own
+#      exit status only counts FAIL, so an all-UNVER table exits 0. That is
+#      precisely a green gate over a subject that never ran, so the checker step
+#      below rejects UNVER as hard as it rejects FAIL. A witness that stops
+#      relocating anything is a finding, not a pass.
+#
+# WHAT IT DELIBERATELY DOES NOT COVER
+#
+#   * `--filter test_gap_gc_` excludes the representation corpus, and with it
+#     #7194 — `test_gap_repsel_p4a3_ptr_numarray` is red on `main` across all
+#     ten `requires=move` arms (`evacuated=0`), pre-existing and untriaged. That
+#     red belongs to `gc-stress --arms all`; importing it here would make this
+#     gate unpromotable on day one for a reason that has nothing to do with the
+#     witnesses.
+#   * `--arms loop_polls` is the safepoint route only. #7217 reports
+#     `test_gap_gc_spread_accessor_rooting` still SIGSEGVing on `main` under the
+#     `evac_minor` arm env, which forces the collection at the
+#     register-imprecise ALLOCATION point instead. #7207 measured the same file
+#     clean 5/5 on the polls route and this arm reproduces that. So #7217's
+#     defect is real and out of scope here, not papered over: it needs the
+#     allocation-point arm, which cannot join this gate until it is fixed.
+#
+# Both exclusions are structural — they fall out of the arm and the filter — so
+# there is no allowlist here to rot. A witness that goes red goes red.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per main COMMIT, cancelling PR runs only. `cancel-in-progress:
+  # false` alone does not protect a `main` run: GitHub allows at most one
+  # PENDING run per group and cancels the previously pending one when a new run
+  # enters, regardless of that setting. That is #7205, measured on gc-ratchet —
+  # three consecutive `main` runs cancelled with `jobs: []`, zero executions.
+  # Keying push runs on the SHA gives every merged commit a group of its own.
+  group: gc-moving-witnesses-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # NOTE the absence of `PERRY_NO_AUTO_OPTIMIZE`. gc-ratchet sets it for a
+  # deterministic link; scripts/gc_repsel_matrix.sh deliberately does NOT, and
+  # says why in its own header: the auto-optimizer decides whether the linked
+  # runtime carries the `diagnostics` feature, which changes the GC trace
+  # format the harness parses for its liveness evidence. Setting it here would
+  # override that choice from outside and could silently turn every cell UNVER.
+  #
+  # #7183: `PERRY_GC_MOVING_LOOP_POLLS` became a compile-time gate in #7161 but
+  # is still missing from `build_cache.rs`'s env key list, so the build-level
+  # no-op probe cannot tell a binary built with the flag from one built without
+  # it. Today nothing bites — the per-object cache DOES key it, the build
+  # manifest is keyed on the output path, and the matrix compiles into a fresh
+  # mktemp directory every run — but "safe by three accidents" is not a property
+  # this arm should depend on, since it is the one arm that must not go dark.
+  # Disabling the build cache costs nothing here (each witness is compiled once)
+  # and leaves the object cache, which keys the flag correctly, in place.
+  PERRY_DISABLE_BUILD_CACHE: "1"
+
+jobs:
+  gc-moving-witnesses:
+    # ubuntu-latest, matching `gc-stress` in test.yml: the matrix already runs
+    # there, the queue is shallower than the macOS pool, and the cargo cache is
+    # shared with that job (same `shared-key`) so the build is usually warm.
+    runs-on: ubuntu-latest
+    # 90 to match gc-stress: the witness run itself is minutes, but a cold
+    # cargo cache makes the compiler build the whole cost of this job.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # Read-only listing of the PR's changed files, to decide whether this
+      # change can reach the collector. Same approach `gc-ratchet` uses; it
+      # avoids a `fetch-depth: 0` clone of a large history.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Decide whether this change can affect the moving collector
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the witnesses."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad: anything under crates/ can move the collector —
+          # a codegen change alters which roots are stored, a transform change
+          # alters what escapes, a runtime change alters when a cycle fires.
+          # The filter exists only to spare docs-only PRs a compiler build. If
+          # the listing is empty or the API failed, `set -e` already aborted, so
+          # the job cannot silently fall through to "not relevant".
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|test-files/test_gap_gc_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/gc-moving-witnesses\.yml$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches collector-relevant paths; running the witnesses."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No collector-relevant paths changed."
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          # Same key as `gc-stress`, which builds the identical package set, so
+          # this job usually starts from that job's warm cache instead of paying
+          # for a second cold build of the workspace.
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clang
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Setup Node oracle
+        if: steps.relevance.outputs.run == 'true'
+        uses: actions/setup-node@v7
+        with:
+          # Single source of truth: .node-version. Node is a correctness input,
+          # not a peer benchmark — every witness's stdout is byte-diffed against
+          # it. scripts/gc_repsel_matrix.sh refuses to run when the running node
+          # disagrees with the pin, because a test the oracle cannot run would
+          # drop out of the gate silently.
+          node-version-file: .node-version
+
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          # Match the cargo-test and gc-stress gates' linker workaround (lld
+          # SIGBUS on the shared runner during large links).
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only; libperry_runtime.a and
+          # libperry_stdlib.a come from the -static wrapper crates. Building
+          # without them links a stale archive and makes the whole measurement
+          # vacuous. The package set matches gc-stress exactly so cargo feature
+          # unification — and therefore the cache — is identical.
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      # GATING. No pipe, no `|| true`: this step's exit status is half the gate.
+      # It fails on any untriaged red cell. The other half is the liveness check
+      # below, which the matrix's own exit status does not cover.
+      - name: Run the stale-root witnesses on the moving collector
+        id: matrix
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          ./scripts/gc_repsel_matrix.sh \
+            --no-build \
+            --arms loop_polls \
+            --filter test_gap_gc_ \
+            --json gc-moving-witnesses.json
+
+      # GATING, and the reason this file is a gate rather than a reproduction.
+      #
+      # The matrix exits 0 on an all-UNVER table: UNVER means "output matched
+      # the oracle but the arm was measurably inert here", which is the exact
+      # shape of a green gate whose subject never ran (#6942/#6946/#6950/#7025).
+      # For a `requires=move` arm it means nothing relocated, and a stale-root
+      # witness that never sees a relocation cannot fail no matter how broken
+      # the rooting is. So UNVER is rejected here as hard as FAIL.
+      #
+      # It also closes a registration hole. scripts/gc_repsel_matrix.sh
+      # auto-detects unregistered `test_gap_repsel_*` / `test_gap_specabi_*`
+      # files, but NOT this prefix — test-parity/gc_repsel_corpus.txt's own
+      # header says files outside those two prefixes must be registered by hand,
+      # and #6925 is the precedent for what happens when someone forgets. Every
+      # `test-files/test_gap_gc_*.ts` on disk must therefore appear as a cell.
+      - name: Assert the witnesses actually ran under a moving collector
+        if: always() && steps.relevance.outputs.run == 'true'
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, sys
+
+          REPORT = "gc-moving-witnesses.json"
+          if not os.path.exists(REPORT):
+              sys.exit("::error::%s was not produced — the matrix step never "
+                       "reported; see its log above." % REPORT)
+
+          report = json.load(open(REPORT))
+          arms = report.get("arms", [])
+          if [(a["id"], a["requires"]) for a in arms] != [("loop_polls", "move")]:
+              sys.exit("::error::expected exactly the loop_polls/move arm, got %r"
+                       % (arms,))
+
+          cells = report.get("cells", [])
+          seen = {c["test"] for c in cells}
+          on_disk = {os.path.basename(p)[:-3]
+                     for p in glob.glob("test-files/test_gap_gc_*.ts")}
+
+          problems = []
+
+          unregistered = sorted(on_disk - seen)
+          for name in unregistered:
+              problems.append(
+                  "%s exists but was not run: register it in "
+                  "test-parity/gc_repsel_corpus.txt. The matrix only "
+                  "auto-detects the test_gap_repsel_*/test_gap_specabi_* "
+                  "prefixes, so a test_gap_gc_* witness that is not registered "
+                  "is silently dark (#6925 is the precedent)." % name)
+
+          for c in sorted(cells, key=lambda c: c["test"]):
+              name, result, ev = c["test"], c["result"], c.get("evidence", "")
+              print("%-8s %-46s %s" % (result, name, ev))
+              if result == "PASS":
+                  continue
+              if result == "XFAIL":
+                  # Triaged in test-parity/gc_repsel_triage.txt, which requires
+                  # an issue number and a written reason. Loud, but not fatal.
+                  print("::warning::%s is a triaged expected-red on this arm: %s"
+                        % (name, ev))
+                  continue
+              if result == "UNVER":
+                  problems.append(
+                      "%s matched the oracle but NOTHING MOVED (%s). On a "
+                      "requires=move arm that means the moving collector never "
+                      "relocated anything, so this witness could not have "
+                      "failed however broken its rooting is. Re-tune its churn "
+                      "budget or fix the collector — do not read it as green."
+                      % (name, ev))
+              else:
+                  problems.append("%s: %s (%s)" % (name, result, ev))
+
+          if not cells:
+              problems.append("no cells at all — the filter matched nothing.")
+
+          if problems:
+              for p in problems:
+                  print("::error::%s" % p)
+              sys.exit(1)
+
+          print("\nOK: %d witnesses, every one relocated under "
+                "PERRY_GC_MOVING_LOOP_POLLS=1." % len(cells))
+          PY
+
+      - name: Upload the witness report
+        if: always() && steps.relevance.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gc-moving-witnesses-${{ github.sha }}
+          path: gc-moving-witnesses.json
+          if-no-files-found: ignore
+          retention-days: 30

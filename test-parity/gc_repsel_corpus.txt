@@ -262,3 +262,25 @@ test_gap_gc_index_get_receiver_rooting
 test_gap_gc_closure_call_callee_rooting
 test_gap_gc_closure_call_this_rooting
 test_gap_gc_closure_call_argument_rooting
+
+# --- Two witnesses that were registered nowhere (#7192, #7216) ---------------
+# Both files exist in test-files/, both say in their own headers that they are
+# LIVE BY CONSTRUCTION and bite only on the moving arms, and neither was in this
+# manifest -- so neither ran anywhere, not in `gc-stress --arms pr` and not in
+# `--arms all`. `new_instance_rooting` shipped with #7192 and
+# `assign_string_source_rooting` with #7216; both PRs registered their siblings
+# and missed these.
+#
+# The UNREGISTERED gate in scripts/gc_repsel_matrix.sh cannot catch this: it
+# auto-detects only `test_gap_repsel_*` / `test_gap_specabi_*`, and this file's
+# header rule for every other prefix ("register them explicitly") was enforced
+# by nothing. It is enforced for `test_gap_gc_*` now --
+# .github/workflows/gc-moving-witnesses.yml requires every
+# test-files/test_gap_gc_*.ts on disk to appear as a cell, which is how these
+# two were found.
+#
+# Measured on this commit (7d1dc9ca2), `--arms loop_polls --filter test_gap_gc_`:
+# both PASS with copy-minor > 0, i.e. they relocate and they are byte-exact.
+# Also measured on the `gc-stress` PR arm set: PASS/UNVER only, no new red.
+test_gap_gc_new_instance_rooting
+test_gap_gc_assign_string_source_rooting
