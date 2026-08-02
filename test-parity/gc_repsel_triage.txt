@@ -15,3 +15,40 @@
 # temporary. Do not re-triage it without a new issue number and a reason.
 
 test_gap_repsel_ptr_shape_locals | rep_ptr_shape_off | #6976 -- REGRESSION IN THE REPRESENTATION'S OWN OFF-SWITCH, not a defect in this PR. Bisected: passes at 8327ced52, fails at 1a533a3a8 (#6925, repsel Phase 5a proven `this`). With PERRY_PTR_SHAPE_LOCALS=0 the program dies partway with `TypeError: Cannot read properties of undefined (reading 'area')`, losing its last five output lines. It was invisible until now because #6925 also left test_gap_repsel_proven_this_frozen.ts unregistered, which makes this script exit 3 before it runs anything -- the gate was dark, not green. REMOVE THIS ENTRY when #6976 is fixed; an OFF arm is supposed to be the safest cell in the matrix.
+
+# --- The regexp receiver on the ALLOCATION-POINT arms (#7217 class) ----------
+# `test_gap_gc_regexp_receiver_rooting` is a HARD GATE on `loop_polls`, where the
+# fix it ships with is claimed and verified: `bad 0`, 8/8, byte-exact against the
+# oracle, with the copying minor live. These ten entries cover the arms where no
+# fix is claimed -- the ones that force the collection at the register-imprecise
+# ALLOCATION point (`%E%` without the compile-time PERRY_GC_MOVING_LOOP_POLLS=1)
+# rather than at a loop safepoint.
+#
+# Measured on this branch, release, oracle node 26.5.1 (`bad 0`):
+#   PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off
+#     -> exit=139, no output, 8/8 deterministic
+#   compiled+run PERRY_GC_MOVING_LOOP_POLLS=1  -> `bad 0`, 8/8
+#   shipped default                            -> `bad 0`
+# `--arms all` reports the SAME `exit=139 cycles=1 scavenged=14` on all ten, and
+# PASS on `loop_polls`. The split is the route, not the arm's other knobs.
+#
+# THIS IS THE SECOND FILE WITH EXACTLY THIS SIGNATURE. #7216's
+# `test_gap_gc_assign_string_source_rooting` behaves the same way and is triaged
+# to #7217 for the same reason. Two independent sites where a rooting fix that
+# holds at a safepoint does not hold when the collection is forced inside the
+# allocating helper is a statement about the route, not about either fix -- and
+# it is what #7217 says in words about `object_assign_set_string_key`'s interning
+# and keys-array growth. Whoever closes #7217 should check this file too; if it
+# turns out to need its own fix, split these entries onto their own issue.
+#
+# DELETE ALL TEN when the allocation-point route is fixed.
+test_gap_gc_regexp_receiver_rooting | evac_minor           | #7217 -- allocation-point relocation; the fix is verified on the safepoint route (loop_polls, 8/8) and not claimed here. exit=139, deterministic.
+test_gap_gc_regexp_receiver_rooting | force_evac           | #7217 -- same allocation-point window, with force-evacuate on top.
+test_gap_gc_regexp_receiver_rooting | force_verify         | #7217 -- same allocation-point window, force + verify.
+test_gap_gc_regexp_receiver_rooting | rep_i32_off          | #7217 -- %E% allocation-point window; the repsel knob is not the discriminator (identical evidence on all ten).
+test_gap_gc_regexp_receiver_rooting | rep_str_off          | #7217 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_str_static_off   | #7217 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_ptr_shape_off    | #7217 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_ptr_numarray_off | #7217 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_spec_abi_off     | #7217 -- %E% allocation-point window; see rep_i32_off.
+test_gap_gc_regexp_receiver_rooting | rep_int_valued_off   | #7217 -- %E% allocation-point window; see rep_i32_off.

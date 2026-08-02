@@ -262,3 +262,26 @@ test_gap_gc_index_get_receiver_rooting
 test_gap_gc_closure_call_callee_rooting
 test_gap_gc_closure_call_this_rooting
 test_gap_gc_closure_call_argument_rooting
+
+# --- The regexp receiver across ToString (#7154 residual) --------------------
+# `re.test(s)` / `re.exec(s)` unboxed the receiver to a raw `RegExpHeader*` and
+# only THEN emitted `js_jsvalue_to_string_coerce`, which allocates and can
+# dispatch a user `toString` -- arbitrary JS with its own back-edge polls. #7226
+# measured this residual and named it rather than claiming closure; this file is
+# it, and it is the last thing between `sfw-registry --help` and 30/30 under a
+# genuine polls build.
+#
+# It is also the witness for the CHECKER half of the same bug. `ALLOC_RE` spelled
+# the allocator `regexp_alloc\w*` while the real call is `js_regexp_new`, so the
+# static pass had no recognised heap-value source for the register and reported
+# nothing at all. That hole is gated now (`--audit-alloc-re`, which requires
+# every alternative to match a real exported symbol), but a static gate cannot
+# prove the FIX -- only running the program under a moving collector does, and
+# only the `requires=move` arms do that.
+#
+# Measured on this branch, release, `--arms loop_polls --filter test_gap_gc_`:
+# PASS on `loop_polls` 8/8 (`bad 0`, matching the oracle), and exit=139 on all
+# TEN allocation-point arms, also deterministic. See gc_repsel_triage.txt: the
+# fix in this PR is verified on the safepoint route and is NOT claimed on the
+# allocation-point route, which is #7217's open defect class at a second site.
+test_gap_gc_regexp_receiver_rooting
