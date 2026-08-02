@@ -575,6 +575,25 @@ for workload in roundtrip field_access; do
         }
         END { for (i = 1; i <= n; i++) print order[i], seen[order[i]] }
     ' "$RAW_RESULTS_FILE")
+    # A publishing run REQUIRES all three: the publisher indexes
+    # selected[(workload, runtime)] for perry, node and bun unconditionally, so
+    # a missing row is a hard error there — and "they all agree" is vacuous when
+    # only one runtime reported. A local run without node/bun installed is a
+    # legitimate use of this script, so only enforce presence when publishing.
+    if [[ -n "$PUBLIC_JSON_OUT" ]]; then
+        for required in perry node bun; do
+            if ! grep -q "^$required " <<< "$observed"; then
+                checksum_failed=1
+                {
+                    echo
+                    echo "ERROR: json_polyglot/$workload — no checksum row for '$required'."
+                    echo "       A published artifact compares perry against BOTH node and bun;"
+                    echo "       with a runtime missing there is nothing to compare against."
+                    echo "       Install it (or drop \$PUBLIC_BENCH_JSON_OUT for a local run)."
+                } >&2
+            fi
+        done
+    fi
     [[ -z "$observed" ]] && continue
     distinct=$(awk '{ print $2 }' <<< "$observed" | sort -u | wc -l | tr -d ' ')
     if [[ "$distinct" -ne 1 ]]; then
