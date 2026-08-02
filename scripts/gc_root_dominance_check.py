@@ -1375,6 +1375,56 @@ define double @perry_fn_selftest__nolabel(double %a) {
 # `@perry_global_*` and are registered roots that evacuation rewrites.
 GLOBAL_ROOT_RE = re.compile(r"@perry_global_[\w.$]+")
 
+# Loads whose source is a location the collector REWRITES. A register holding
+# one of these is stale below a collection point even though the value survives
+# — property (2) without property (3), the module-header distinction.
+#
+# ## Why this lives here rather than only next to `--unrooted-allocas`
+#
+# It was defined twice, in effect: `--unrooted-allocas` had this pattern and
+# used it, while `--stale-registers` had `GLOBAL_ROOT_RE` and knew about
+# `@perry_global_*` alone. **The two modes disagreed about what a
+# collector-rewritten load is, and the narrower one was wrong.**
+#
+# The cost of that disagreement is #7240: a string literal lowers to
+# `load double, ptr @…_.str.N.handle`, and the handle global IS a registered
+# root — `js_gc_register_global_root`, `codegen/string_pool.rs` — so the string
+# is never swept, but an evacuating cycle REWRITES the global while a register
+# loaded from it beforehand keeps the pre-move address. Measured at #7240's
+# fault: the handle global held the post-move address, the register held the
+# retired from-space one. `heap_source_kind` classified that load as nothing at
+# all, so the register had no recognised source and no stale use could be
+# attributed to it. Over #7240's own gap test the checker reported 24
+# `--moving-only` stale uses at the offending call and named NEITHER of the two
+# literals that actually faulted; the registry's `alerts.ts` call passes
+# literals in both unprotected positions, so it reported nothing whatsoever.
+#
+# Unlike `js_implicit_this_set` (#7226) and `js_regexp_new` (#7227), this one
+# could NOT be closed by adding a name to `ALLOC_RE` — the source is a `load`,
+# not a `call`. It needs the source SET widened, which is why it waited for its
+# own before/after rather than riding along with a fix.
+#
+# One definition, both modes, so the next reader cannot re-derive half of it.
+REWRITTEN_LOAD_RE = re.compile(
+    r"load\s+\S+,\s*ptr\s+@(?:"
+    r"(?P<strhandle>[\w.$]*_\.str\.\d+\.handle)"   # string-literal handles
+    r"|(?P<global>perry_global_[\w.$]+)"           # module-level variables
+    r"|(?P<classkeys>perry_class_keys_[\w.$]+)"    # class keys (old-gen, C4b movable)
+    r")"
+)
+
+
+def rewritten_load_kind(text):
+    """Which collector-rewritten global does this load read, if any?
+
+    Returns the source kind (`strhandle` / `global` / `classkeys`) so the
+    `--stale-registers` breakdown can be triaged one population at a time —
+    they have genuinely different verdicts, and lumping them under one label
+    would hide that.
+    """
+    m = REWRITTEN_LOAD_RE.search(text)
+    return None if m is None else m.lastgroup
+
 # Calls that READ a collector-rewritten location into a register.
 ROOT_READ_CALLS = {
     "js_closure_get_capture_bits",   # closure/alloc.rs:463 capture cell read
@@ -1431,8 +1481,20 @@ def heap_source_kind(ins, slot_of_alloca):
             return "capture" if "capture" in ins.callee else "rootread"
         return None
     if "= load " in ins.text:
+        # `GLOBAL_ROOT_RE` first, and deliberately: it is the looser of the two
+        # (it matches the name anywhere in the line, so it still catches a load
+        # through a `getelementptr` on the global) and it keeps the `global`
+        # population reporting under exactly the label it reported under
+        # before. This widening is then strictly ADDITIVE — no previously
+        # reported source changes kind, only sources that were invisible start
+        # appearing — which is the property the gate's baselined counts need.
         if GLOBAL_ROOT_RE.search(ins.text):
             return "global"
+        # #7240's third follow-up: a load of a string-literal handle global is
+        # a heap-value source. See `REWRITTEN_LOAD_RE`.
+        kind = rewritten_load_kind(ins.text)
+        if kind is not None:
+            return kind
         m = re.search(r"load\s+(?:i64|double)\s*,\s*ptr %([\w.$]+)", ins.text)
         if m and m.group(1) in slot_of_alloca:
             return "slotload"
@@ -1645,16 +1707,11 @@ def run_stale(parsed, poll_reaching, verbose, moving_only, fatal_only,
 # positive and never a missed bug. It is reported separately from the
 # bind-anchored count because its two populations are disjoint by construction.
 
-# Loads whose source is a location the collector REWRITES. A register holding
-# one of these is stale below a collection point even though the value survives
-# — property (2) without property (3), the module-header distinction.
-REWRITTEN_LOAD_RE = re.compile(
-    r"load\s+\S+,\s*ptr\s+@(?:"
-    r"\w*_\.str\.\d+\.handle"          # string-literal handle globals
-    r"|perry_global_\w+"               # module-level variables
-    r"|perry_class_keys_\w+"           # class keys arrays -- see EXEMPTIONS
-    r")"
-)
+# `REWRITTEN_LOAD_RE` — the loads whose source the collector rewrites — is
+# defined once, up with `GLOBAL_ROOT_RE` and the rest of the heap-value source
+# vocabulary, because `--stale-registers` needs the same answer this mode does.
+# It used to live only here, and the two modes disagreeing about it is exactly
+# what made #7240's string-literal argument invisible; see the comment there.
 
 # Calls that MATERIALIZE a heap value (a superset of ALLOC_RE: anything that
 # hands back an object the collector can move).
@@ -2241,6 +2298,38 @@ entry.0:
 """
 
 
+# #7240's blind spot, both directions. `%lit` is a load of a string-literal
+# handle global — a registered root, so the string is never SWEPT, but an
+# evacuating cycle rewrites the global and leaves this register naming
+# from-space. It is then passed as a call argument below `js_call_function`,
+# which is exactly the registry's `defineApiCall(url, method, …)` shape.
+#
+# Before the widening `heap_source_kind` returned `None` for that load, so the
+# register had no source and the mode reported ZERO over this fixture.
+_SELFTEST_STR_HANDLE = """\
+define double @perry_fn_selftest__strhandle(double %a) {
+entry.0:
+  %lit = load double, ptr @perry_mod_.str.3.handle
+  %ret = call double @js_call_function(double %a)
+  %r = call double @perry_fn_other__callee(double %lit, double %ret)
+  ret double %r
+}
+"""
+
+# The fix's shape: the load is re-emitted BELOW the collection point, so it
+# observes the address evacuation wrote back. No runtime call, no temp root —
+# `OperandProtection::Reload`.
+_SELFTEST_STR_HANDLE_RELOADED = """\
+define double @perry_fn_selftest__reload(double %a) {
+entry.0:
+  %ret = call double @js_call_function(double %a)
+  %lit = load double, ptr @perry_mod_.str.3.handle
+  %r = call double @perry_fn_other__callee(double %lit, double %ret)
+  ret double %r
+}
+"""
+
+
 def _scan_unrooted(paths, moving_only=False, **source_opts):
     """(violations, n_gc_capable_allocas) over `paths`."""
     parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
@@ -2299,6 +2388,22 @@ def _stale_probe(path, max_stale):
         rc = run_stale(parsed, poll_reaching, False, False, False, max_stale)
     m = re.search(r"stale-register uses: (\d+)", buf.getvalue())
     return (int(m.group(1)) if m else -1), rc
+
+
+def _stale_kinds_probe(path, moving_only=False):
+    """{source kind: count} from --stale-registers over one file.
+
+    The breakdown, not just the total: this widening's whole claim is that a
+    specific SOURCE became visible, and a total can move for any reason.
+    """
+    parsed = [(os.path.basename(path), parse_file(path))]
+    poll_reaching, _known = compute_poll_reaching(
+        [f for _m, fs in parsed for f in fs])
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        run_stale(parsed, poll_reaching, False, moving_only, False, None)
+    return {k: int(n)
+            for n, k in re.findall(r"(\d+)\s+source=(\w+)", buf.getvalue())}
 
 
 def _main_probe(argv):
@@ -2487,6 +2592,47 @@ def self_test():
             print("self-test FAIL: --any-def WITHOUT --stale-registers must "
                   "still run the bind-anchored check and report the planted "
                   "violations", file=sys.stderr)
+            ok = False
+
+        # --- the string-literal handle source, both directions --------------
+        #
+        # #7240 shipped a codegen fix its own checker could not see. The load
+        # of a `__perry_init_strings_*` handle global is a heap-value SOURCE —
+        # the global is a registered root that evacuation REWRITES, so a
+        # register loaded from it beforehand names from-space. Asserted as a
+        # named source rather than as a total, because a total moves for any
+        # reason and the claim here is about one specific population.
+        strh = os.path.join(td, "strhandle.ll")
+        strh_fixed = os.path.join(td, "strhandle_reloaded.ll")
+        for p, text in ((strh, _SELFTEST_STR_HANDLE),
+                        (strh_fixed, _SELFTEST_STR_HANDLE_RELOADED)):
+            with open(p, "w") as fh:
+                fh.write(text)
+
+        kinds = _stale_kinds_probe(strh)
+        if kinds.get("strhandle", 0) != 1:
+            print("self-test FAIL: --stale-registers must report the load of a "
+                  "string-literal handle global as source=strhandle. Got "
+                  f"{kinds!r}. That load is a registered root the collector "
+                  "REWRITES; a register holding it is stale below a collection "
+                  "point, and missing it is what made #7240 invisible.",
+                  file=sys.stderr)
+            ok = False
+        # `--moving-only` is the mode `gc-root-dominance.yml` gates on. A source
+        # the gate cannot classify as reaching a moving minor is a source the
+        # gate cannot fail on, so the raw count alone proves nothing.
+        moving_kinds = _stale_kinds_probe(strh, moving_only=True)
+        if moving_kinds.get("strhandle", 0) != 1:
+            print("self-test FAIL: the planted strhandle use reaches a moving "
+                  "minor via js_call_function and must survive --moving-only. "
+                  f"Got {moving_kinds!r}", file=sys.stderr)
+            ok = False
+        if _stale_kinds_probe(strh_fixed).get("strhandle", 0) != 0:
+            print("self-test FAIL: re-loading the handle global BELOW the "
+                  "collection point is the fix (OperandProtection::Reload), so "
+                  "the control fixture must report no strhandle use. The check "
+                  "reports every literal load and cannot tell fixed from "
+                  "broken.", file=sys.stderr)
             ok = False
 
         try:
