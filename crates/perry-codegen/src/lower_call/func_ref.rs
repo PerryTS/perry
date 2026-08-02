@@ -488,12 +488,11 @@ pub fn try_lower_func_ref_call(
     // are lowered BEFORE the reset: `this` inside an argument expression
     // still sees the enclosing binding.
     let resets_this = ctx.funcs_reading_dynamic_this.contains(fid);
+    // #7211: rooted save/restore. The value displaced here is the ENCLOSING
+    // method's receiver, held across the callee body — arbitrary user code.
     let prev_this = if resets_this {
         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        Some(
-            ctx.block()
-                .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &undef)]),
-        )
+        Some(crate::expr::temp_root::implicit_this_save(ctx, &undef))
     } else {
         None
     };
@@ -905,10 +904,8 @@ pub fn try_lower_func_ref_call(
     } else {
         ctx.block().call(DOUBLE, &fname, &arg_slices)
     };
-    if let Some(prev) = &prev_this {
-        let _ = ctx
-            .block()
-            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, prev)]);
+    if let Some(prev) = prev_this {
+        crate::expr::temp_root::implicit_this_restore(ctx, prev);
     }
     if ctx.local_generator_funcs.contains(fid) {
         let wrap_ptr = format!("@__perry_wrap_{}", fname);

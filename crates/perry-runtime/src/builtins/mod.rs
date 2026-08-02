@@ -38,7 +38,10 @@ pub(crate) use println;
 pub(crate) use crate::string::{js_string_from_bytes, js_string_from_wtf8_bytes, StringHeader};
 pub(crate) use crate::JSValue;
 
-mod arithmetic;
+// `pub(crate)` so `gc::mod` can register `scan_typeof_string_roots_mut`
+// (#7211): the interned `typeof` strings are GC roots and the scanner has to
+// be nameable from the registration list.
+pub(crate) mod arithmetic;
 mod console;
 mod formatting;
 mod globals;

@@ -471,10 +471,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // and the block's body could then relocate the object out from under
             // the register the final `nanbox_pointer_inline` reads.
             let block_fns = static_block_fns(ctx, template);
-            let protect_handle = !captured_args.is_empty()
+            // #7211: `!named_statics.is_empty()` is the disjunct the original
+            // predicate was missing, and its absence is the interesting part.
+            //
+            // Every other clause here asks the same question — "can something
+            // the AUTHOR wrote collect?" — about a captured argument, a symbol
+            // static, a `static { … }` body, or an initializer expression.
+            // None of them asks whether the lowering's OWN emitted calls can,
+            // and the loop directly below unconditionally emits one
+            // `js_object_set_field_by_name` per named static. That helper
+            // performs the keys-array transition and allocates. So
+            // `class C { static tag = tag }` — a single inert `LocalGet`
+            // initializer — took `protect_handle == false`, kept the fresh
+            // object in a bare SSA register across a collection point, and
+            // then bound a shadow slot to the pre-move address.
+            //
+            // `js_object_mark_class` does NOT cover this, and it is the
+            // natural reason to wave it off: it files the pointer in
+            // `CLASS_OBJECT_VALUES`, which is a registered root and IS
+            // forwarded (`class_registry/gc_roots.rs:138`). That keeps the
+            // OBJECT alive and the side table's copy correct — and does
+            // nothing for `%obj`, a separate copy the collector cannot see.
+            // Reachability is not the invariant; the invariant is that the
+            // register you are still going to use was rewritten.
+            // The old `any_may_trigger_gc(named_statics)` disjunct is gone
+            // rather than kept alongside: it is now strictly subsumed — it can
+            // only be true when `named_statics` is non-empty, which is the new
+            // clause. Leaving it would read as a second, narrower opinion
+            // about the same operand and invite someone to "restore" the
+            // narrow one.
+            let protect_handle = !named_statics.is_empty()
+                || !captured_args.is_empty()
                 || !symbol_statics.is_empty()
-                || !block_fns.is_empty()
-                || super::temp_root::any_may_trigger_gc(ctx, named_statics.iter().map(|(_, v)| v));
+                || !block_fns.is_empty();
             let rooted = super::temp_root::rooted_handle_begin(ctx, &obj, protect_handle);
             for (name, init) in named_statics {
                 let key_idx = ctx.strings.intern(name);

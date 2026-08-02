@@ -78,13 +78,36 @@ pub(crate) unsafe fn ptr_is_raw_json_wrapper(ptr: *const u8) -> bool {
         && (*obj).class_id == RAW_JSON_CLASS_ID
 }
 
+// #7211: same defect as the `typeof` string cache, found by grepping for the
+// shape once that one was diagnosed — a thread-local holding a raw nursery
+// `StringHeader*` with nothing registering it as a root. Allocated once,
+// referenced by nothing else, so the first minor sweeps or evacuates it and
+// every later `JSON.rawJSON(...)` writes its own property under a from-space
+// key. Hoisted out of the function body so `scan_raw_json_key_root_mut` can
+// reach it.
+thread_local! {
+    static RAW_JSON_KEY: std::cell::Cell<*mut StringHeader> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// GC mutable-root scanner for the cached `"rawJSON"` key (#7211). Marks it so
+/// it is not swept and rewrites it so an evacuating minor cannot leave the cell
+/// naming from-space.
+pub fn scan_raw_json_key_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    RAW_JSON_KEY.with(|cell| {
+        let mut ptr = cell.get() as *const StringHeader;
+        if ptr.is_null() {
+            return;
+        }
+        if visitor.visit_tagged_raw_const_ptr_slot(&mut ptr, crate::value::STRING_TAG) {
+            cell.set(ptr as *mut StringHeader);
+        }
+    });
+}
+
 /// Cached `"rawJSON"` key string used for the wrapper's own property.
 fn raw_json_key() -> *const StringHeader {
-    use std::cell::Cell;
-    thread_local! {
-        static KEY: Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-    }
-    KEY.with(|c| {
+    RAW_JSON_KEY.with(|c| {
         let p = c.get();
         if !p.is_null() {
             return p as *const StringHeader;

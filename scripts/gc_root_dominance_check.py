@@ -272,6 +272,10 @@ NONCOLLECTING = {
     # object/this_binding.rs:160 -- a thread-local cell swap
     "js_implicit_this_set", "js_implicit_this_get",
     "js_gc_note_slot_layout", "js_string_addref_if_heap_string",
+    # `js_get_string_pointer_unified` is deliberately NOT here. Its SSO branch
+    # calls `js_string_materialize_to_heap`, which allocates (value/nanbox.rs:268),
+    # so it is a collection point by this file's one-sided rule even though the
+    # collection it can cause is currently always non-moving. See #7213.
 }
 
 # The single site where an evacuating (moving) minor runs.
@@ -1166,6 +1170,22 @@ ROOT_READ_CALLS = {
     "js_box_get_bits",               # box.rs mutable-capture cell read
     "js_implicit_this_get",          # object/this_binding.rs:160 thread-local
     "js_new_target_get",
+    # object/this_binding.rs:159 -- `js_implicit_this_SET` is a swap, so its
+    # RETURN value is a read of the same scanned mutable cell
+    # (`scan_implicit_this_roots_mut`, this_binding.rs:176) and the swap has
+    # already overwritten the only other copy. Listing the setter as a reader
+    # looks odd, which is exactly why #7214 left `prev_this` unrooted for a
+    # whole PR: the checker saw a call it knew could not collect, never
+    # classified the result as a heap value, and reported nothing at either
+    # end. Being non-collecting is what makes a call a root READ.
+    "js_implicit_this_set",
+    # `js_get_string_pointer_unified` is a candidate and is deliberately left
+    # out for now: its result IS a raw heap address in a bare register, but it
+    # is not in NONCOLLECTING (its SSO branch allocates), so classifying it as
+    # a source would report the whole `unbox_str_handle` family in one go --
+    # roughly forty sites across lower_string_method.rs alone. That is a real
+    # population and it needs its own measured count and its own triage rather
+    # than being folded into this change. #7213.
 }
 
 # Argument positions that make a stale pointer FATAL rather than merely wrong:
@@ -1646,6 +1666,27 @@ def _stale_probe(path, max_stale):
     return (int(m.group(1)) if m else -1), rc
 
 
+def _main_probe(argv):
+    """Exit status of a full `main()` run over `argv` (no `sys.exit`).
+
+    The guards these arms cover live in `main()`'s argument handling rather
+    than in a scannable function, and argparse reports a usage error by
+    raising `SystemExit(2)`. Driving `main()` is the only way to assert them;
+    calling the inner helpers would skip exactly the code under test.
+    """
+    saved = sys.argv
+    buf = io.StringIO()
+    try:
+        sys.argv = ["gc_root_dominance_check.py"] + list(argv)
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            try:
+                return main()
+            except SystemExit as exc:
+                return exc.code if isinstance(exc.code, int) else 1
+    finally:
+        sys.argv = saved
+
+
 def self_test():
     """Assert the checker reports the planted violation and clears the control.
 
@@ -1714,6 +1755,41 @@ def self_test():
         if _stale_probe(clean, 0) != (0, 0):
             print("self-test FAIL: --max-stale 0 over the control fixture must "
                   "report 0 uses and exit 0", file=sys.stderr)
+            ok = False
+
+        # --- the stale mode's own subject-liveness assertion ----------------
+        #
+        # `--stale-registers` classifies a shadow-slot load as a heap-value
+        # source by looking the alloca up in a map built from
+        # `js_shadow_slot_bind`. A corpus with no binds therefore has almost no
+        # sources, reports `total 0`, and is indistinguishable from a corpus
+        # with no stale registers. `--min-binds` is what makes that case an
+        # error, and before #7211 the stale path returned above the guard.
+        # Both directions, so the guard cannot be "always 2".
+        if _main_probe(["--stale-registers", "--min-binds", "50", planted]) != 2:
+            print("self-test FAIL: --stale-registers over a corpus with fewer "
+                  "than --min-binds root stores must exit 2. The scan's "
+                  "shadow-slot sources come from those stores, so a clean "
+                  "verdict over zero of them proves nothing.", file=sys.stderr)
+            ok = False
+        if _main_probe(["--stale-registers", "--min-binds", "2", planted]) != 0:
+            print("self-test FAIL: --stale-registers over a corpus that MEETS "
+                  "--min-binds must still exit 0 (diagnostic). The guard "
+                  "rejects every corpus, which is a gate that always fails.",
+                  file=sys.stderr)
+            ok = False
+        # A knob that is silently ignored is a disarmed knob -- the same rule
+        # `--max-stale` and `--fatal-sinks` already carry, read the other way.
+        if _main_probe(["--stale-registers", "--any-def", planted]) != 2:
+            print("self-test FAIL: --any-def with --stale-registers must be a "
+                  "usage error; the stale scan never consults the anchor, so "
+                  "accepting it promises a widening that never happens",
+                  file=sys.stderr)
+            ok = False
+        if _main_probe(["--any-def", planted]) != 1:
+            print("self-test FAIL: --any-def WITHOUT --stale-registers must "
+                  "still run the bind-anchored check and report the planted "
+                  "violations", file=sys.stderr)
             ok = False
 
         try:
@@ -1948,6 +2024,15 @@ def main():
         ap.error("--max-stale requires --stale-registers")
     if ns.fatal_sinks and not ns.stale_registers:
         ap.error("--fatal-sinks requires --stale-registers")
+    # Same rule read the other way. `--any-def` only selects the bind-anchored
+    # check's ANCHOR (`anchor = "any" if ns.any_def else "alloc"`, below), and
+    # the stale-register path never consults it -- it anchors on every
+    # heap-value source by construction, so there is no narrower or wider
+    # setting for it to pick. Passing both reads like "widen the stale scan"
+    # and does nothing at all.
+    if ns.any_def and ns.stale_registers:
+        ap.error("--any-def has no effect with --stale-registers "
+                 "(the stale scan already anchors on every heap-value source)")
 
     if ns.self_test:
         return self_test()
@@ -1990,9 +2075,6 @@ def main():
         parsed.append((os.path.basename(p), parse_file(p)))
     poll_reaching, _known = compute_poll_reaching(
         [f for _m, fs in parsed for f in fs])
-    if ns.stale_registers:
-        return run_stale(parsed, poll_reaching, verbose, moving_only,
-                         ns.fatal_sinks, ns.max_stale)
     n_binds = sum(
         1
         for _m, fs in parsed
@@ -2001,6 +2083,26 @@ def main():
         for ins in f.insns[b]
         if BIND_RE.search(ins.text)
     )
+
+    if ns.stale_registers:
+        # `--min-binds` is a CORPUS-sanity assertion, not a bind-anchored-check
+        # detail, so it has to be honoured here too. `heap_source_kind` decides
+        # a `slotload` is a heap-value source by looking the pointer up in
+        # `slot_of_alloca`, and that map is built from the same `BIND_RE`
+        # (`stale_uses_in_function`). Compile the corpus with
+        # PERRY_INLINE_SHADOW_SLOT=1 (or with a broken `--trace llvm`) and
+        # every shadow-slot source vanishes: `run_stale` reports `total 0`,
+        # exits 0, and looks exactly like a corpus with no stale registers in
+        # it. That is hazard 4 -- the gate runs but its subject never did.
+        if n_binds < ns.min_binds:
+            print(f"error: {n_binds} root store(s) in the corpus, need at "
+                  f"least {ns.min_binds}. The stale-register scan derives its "
+                  "shadow-slot sources from those stores, so a clean verdict "
+                  "here means the IR was not the IR you think it is "
+                  "(compile with PERRY_INLINE_SHADOW_SLOT=0).", file=sys.stderr)
+            return 2
+        return run_stale(parsed, poll_reaching, verbose, moving_only,
+                         ns.fatal_sinks, ns.max_stale)
 
     if ns.unrooted_allocas:
         total = 0

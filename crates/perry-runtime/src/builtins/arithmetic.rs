@@ -495,43 +495,126 @@ pub extern "C" fn js_ge(a: JSValue, b: JSValue) -> JSValue {
     JSValue::from_bits(js_rel_ge(f64::from_bits(a.bits()), f64::from_bits(b.bits())).to_bits())
 }
 
+// `typeof` returns one of eight strings, so each is allocated once and cached
+// rather than rebuilt per call.
+//
+// #7211: these cells are GC ROOTS and are registered as such
+// (`scan_typeof_string_roots_mut`, wired in `gc/mod.rs`). They are at module
+// scope rather than inside `js_value_typeof` for exactly that reason — a
+// scanner has to be able to reach them.
+//
+// Before that registration this cache was a deterministic use-after-free, and
+// it is the bug that killed `sfw-registry --help` 10/10 under a
+// `PERRY_GC_MOVING_LOOP_POLLS=1` build. `js_string_from_bytes` allocates in the
+// NURSERY; nothing else references the result; so the first minor either swept
+// it or evacuated it, and this raw pointer named the abandoned bytes from then
+// on. Every later `typeof x === "string"` handed `js_string_equals` a from-space
+// address. `PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
+// reported it precisely: `obj_type=3 size=40 retired_by_minor=#0` — a string,
+// 32-byte header plus `"string"`, retired by the very first collection.
+//
+// `retired_by_minor=#0` is the tell for this whole shape, and it is worth
+// recognising: an ordinary #7154-class stale register goes bad at whichever
+// collection lands inside a few-instruction window, so it is timing-dependent.
+// A cache that is never rooted goes bad at the FIRST collection and stays bad,
+// which is why this reproduced 10/10 while the register bugs needed a zod
+// workload and ten rounds.
+//
+// It is invisible to `scripts/gc_root_dominance_check.py` by construction: that
+// tool reads emitted LLVM IR, and this is a runtime-side table. The static
+// checker could never have found it, which is why the runtime instruments had
+// to be pointed at the registry first.
+thread_local! {
+    static TYPEOF_UNDEFINED: std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static TYPEOF_OBJECT:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static TYPEOF_BOOLEAN:   std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static TYPEOF_NUMBER:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static TYPEOF_STRING:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static TYPEOF_FUNCTION:  std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static TYPEOF_BIGINT:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static TYPEOF_SYMBOL:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// Get or initialize a cached `typeof` string.
+fn get_cached(
+    cache: &'static std::thread::LocalKey<std::cell::Cell<*mut StringHeader>>,
+    s: &str,
+) -> *mut StringHeader {
+    cache.with(|cell| {
+        let ptr = cell.get();
+        if !ptr.is_null() {
+            return ptr;
+        }
+        let new_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        cell.set(new_ptr);
+        new_ptr
+    })
+}
+
+/// GC mutable-root scanner for the eight cached `typeof` strings (#7211).
+///
+/// Marks them, so an unreferenced cache entry is never swept, AND rewrites
+/// them, so an evacuating minor that relocates one leaves the cell naming the
+/// new address instead of from-space. Both halves matter: marking alone would
+/// still hand out a pre-move pointer after a copying minor, which is the
+/// distinction `gc-rooting-invariant.md` keeps having to make.
+///
+/// `STRING_TAG` rather than the default `POINTER_TAG` because these are
+/// `StringHeader`s, matching `json::scan_parse_roots_mut`'s interned-key
+/// treatment.
+pub fn scan_typeof_string_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    fn visit(
+        cache: &'static std::thread::LocalKey<std::cell::Cell<*mut StringHeader>>,
+        visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    ) {
+        cache.with(|cell| {
+            let mut ptr = cell.get() as *const StringHeader;
+            if ptr.is_null() {
+                return;
+            }
+            if visitor.visit_tagged_raw_const_ptr_slot(&mut ptr, crate::value::STRING_TAG) {
+                cell.set(ptr as *mut StringHeader);
+            }
+        });
+    }
+    visit(&TYPEOF_UNDEFINED, visitor);
+    visit(&TYPEOF_OBJECT, visitor);
+    visit(&TYPEOF_BOOLEAN, visitor);
+    visit(&TYPEOF_NUMBER, visitor);
+    visit(&TYPEOF_STRING, visitor);
+    visit(&TYPEOF_FUNCTION, visitor);
+    visit(&TYPEOF_BIGINT, visitor);
+    visit(&TYPEOF_SYMBOL, visitor);
+}
+
+/// Drop every cached `typeof` string. Test-only: the unit-test harness resets
+/// arenas between tests while thread-locals persist, so a cache entry from a
+/// previous test names memory the new arena does not own.
+#[cfg(test)]
+pub(crate) fn reset_typeof_string_cache_for_test() {
+    for cache in [
+        &TYPEOF_UNDEFINED,
+        &TYPEOF_OBJECT,
+        &TYPEOF_BOOLEAN,
+        &TYPEOF_NUMBER,
+        &TYPEOF_STRING,
+        &TYPEOF_FUNCTION,
+        &TYPEOF_BIGINT,
+        &TYPEOF_SYMBOL,
+    ] {
+        cache.with(|cell| cell.set(std::ptr::null_mut()));
+    }
+}
+
 /// Return the typeof a value as a string
 /// Takes an f64 that uses NaN-boxing to distinguish types.
 /// Returns a pointer to a string: "undefined", "boolean", "number", "string", "object", "function"
 ///
-/// Optimization: typeof only returns 7 possible strings, so we cache them as
+/// Optimization: typeof only returns 8 possible strings, so we cache them as
 /// pre-allocated StringHeader pointers to avoid heap allocation on every call.
+/// The cache is a registered GC root — see the `thread_local!` above.
 #[no_mangle]
 pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
-    use std::cell::Cell;
-
-    thread_local! {
-        static TYPEOF_UNDEFINED: Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-        static TYPEOF_OBJECT:    Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-        static TYPEOF_BOOLEAN:   Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-        static TYPEOF_NUMBER:    Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-        static TYPEOF_STRING:    Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-        static TYPEOF_FUNCTION:  Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-        static TYPEOF_BIGINT:    Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-        static TYPEOF_SYMBOL:    Cell<*mut StringHeader> = const { Cell::new(std::ptr::null_mut()) };
-    }
-
-    /// Get or initialize a cached typeof string.
-    fn get_cached(
-        cache: &'static std::thread::LocalKey<Cell<*mut StringHeader>>,
-        s: &str,
-    ) -> *mut StringHeader {
-        cache.with(|cell| {
-            let ptr = cell.get();
-            if !ptr.is_null() {
-                return ptr;
-            }
-            let new_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            cell.set(new_ptr);
-            new_ptr
-        })
-    }
-
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_undefined() {

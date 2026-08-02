@@ -18,6 +18,37 @@ pub extern "C" fn js_string_from_bytes(data: *const u8, len: u32) -> *mut String
 /// materialized value, so use sparingly — only as a last-resort
 /// compatibility shim on paths that truly need the heap
 /// representation.
+///
+/// # The SSO branch allocates, and its callers hold raw pointers (#7213)
+///
+/// This branch is a collection point, and `js_get_string_pointer_unified` —
+/// its main caller — hands generated code a **raw** `*mut StringHeader` that
+/// no root describes. Every `unbox_str_handle` site in
+/// `perry-codegen/src/expr/compare.rs`, `lower_string_method.rs` and
+/// `lower_array_method.rs` lowers its operands first and then unboxes them
+/// back-to-back before one consuming call:
+///
+/// ```text
+///   %l = call i64 @js_get_string_pointer_unified(double %lbox)
+///   %r = call i64 @js_get_string_pointer_unified(double %rbox)
+///        call i32 @js_string_equals(i64 %l, i64 %r)
+/// ```
+///
+/// `%l` is live across the second unbox. **It is not exploitable today**, and
+/// the reason is worth writing down rather than rediscovering: an allocation
+/// here reaches the alloc-point arm of `gc_check_trigger`, which takes
+/// `ManualGcScanGuard::force_full_scan`, and a forced conservative stack scan
+/// makes the copying minor ineligible (`CopiedMinorFallbackReason::
+/// ConservativeStack`). So the collection this allocation can cause never
+/// MOVES anything, and the same conservative scan finds `%l` on the stack and
+/// keeps it alive. Both halves of the hazard are closed by accident.
+///
+/// By accident is the operative phrase — it rests on the alloc-point arm
+/// staying non-moving, which is exactly the property the moving-GC work keeps
+/// eroding. Tracked as #7213 rather than pre-emptively fixed here: a
+/// `GcSuppressScope` around this allocation makes the window sound and costs
+/// nothing measurable, but shipping a GC-trigger change with no test that can
+/// fail without it is the thing CLAUDE.md's knob-kill policy exists to stop.
 #[no_mangle]
 pub extern "C" fn js_string_materialize_to_heap(value: f64) -> *mut StringHeader {
     let bits = value.to_bits();

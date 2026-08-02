@@ -20,32 +20,19 @@
     "new violation was introduced.",
     "",
     "Fingerprint format:  <module>.ll::<function>::<alloc>-><first collector>",
-    "Get it from the checker's own output (`-v` prints one per violation)."
+    "Get it from the checker's own output (`-v` prints one per violation).",
+    "",
+    "EMPTY IS THE GOAL AND IT IS CURRENTLY MET. The four #7211 entries that",
+    "lived here -- ClassExprFresh holding its fresh class object across the",
+    "js_object_set_field_by_name calls that install its own statics -- were",
+    "deleted when that predicate was fixed. That is rule 1 working as designed:",
+    "the fix made every one of them match nothing, the gate went red, and the",
+    "red is what says 'now delete the entries'.",
+    "",
+    "An empty list is not a disarmed gate. Rule 3 still fails any violation,",
+    "the --min-files / --min-binds / --min-funcs floors still refuse a corpus",
+    "that did not actually exercise the subject, and --self-test still proves",
+    "the checker reports a planted violation and clears the matching control."
   ],
-  "entries": [
-    {
-      "fingerprint": "test_gap_class_expr_identity__test_gap_class_expr_identity_ts.ll::main::js_object_alloc->js_object_set_field_by_name",
-      "issue": "#7211",
-      "count": 2,
-      "justification": "Expr::ClassExprFresh (expr/static_field_meta.rs:432) holds the fresh class object in an SSA register across the js_object_set_field_by_name calls that install its named statics. Its protect_handle predicate only asks whether the AUTHOR'S initializer expressions can collect, never whether the lowering's own emitted field-store can -- so a class expression with inert statics gets no temp root. Two evaluations in this module, hence count 2. Pre-existing on main and reported red by this same gate since #7198; not fixed here because crates/perry-codegen/src/expr/ is being actively edited under #7206."
-    },
-    {
-      "fingerprint": "test_gap_class_expr_instance_fields__test_gap_class_expr_instance_fields_ts.ll::main::js_object_alloc->js_object_set_field_by_name",
-      "issue": "#7211",
-      "count": 1,
-      "justification": "Same ClassExprFresh predicate gap as the entry above, reached through a class expression carrying instance fields. Tracked as one fix in #7211; listed separately because the fingerprint is per-module and a per-module entry is what keeps a NEW violation in this module from being absorbed."
-    },
-    {
-      "fingerprint": "test_gap_class_expr_new_instanceof__test_gap_class_expr_new_instanceof_ts.ll::main::js_object_alloc->js_object_set_field_by_name",
-      "issue": "#7211",
-      "count": 1,
-      "justification": "Same ClassExprFresh predicate gap as the entries above, reached via `new`/`instanceof` on a class-expression value. Note that js_object_mark_class does put this object in CLASS_OBJECT_VALUES, which is scanned and forwarded -- that keeps the OBJECT alive but does not rewrite the register, so the violation is real rather than a false positive."
-    },
-    {
-      "fingerprint": "test_gap_class_expr_static_this__test_gap_class_expr_static_this_ts.ll::main::js_object_alloc->js_object_set_field_by_name",
-      "issue": "#7211",
-      "count": 1,
-      "justification": "Same ClassExprFresh predicate gap as the entries above, reached through a static method that reads `this`. Same fix in #7211 retires all four entries at once; the checker will then fail on the stale entries, which is the intended prompt to delete them."
-    }
-  ]
+  "entries": []
 }
