@@ -136,6 +136,65 @@ pub(crate) use options::extract_options_fields;
 // API as `lower_call::iter_native_module_table` — keep that path stable.
 pub(crate) use native_table::iter_native_module_table;
 
+/// #7154: lower a direct call's argument list with each already-evaluated
+/// argument protected across the evaluation of the ones that follow it.
+///
+/// An argument list is evaluated left to right, and every value produced so
+/// far lives in a bare SSA register while the later ones are lowered. The
+/// cross-module `perry_fn_<src>__<name>` path lowered the whole list in a
+/// plain `for a in args` loop with no protection at all, so
+/// `f(URL, "GET", {…}, Schema.array(), body => …)` — the `sfw-registry`
+/// reproducer's `defineApiCall(…)` shape — leaves arguments 1 and 2 naming
+/// pre-collection addresses the moment an evacuating minor lands in argument
+/// 3, 4 or 5. It does: argument 3 is an object literal (allocates), argument 4
+/// runs user code with its own loop back-edge polls, argument 5 allocates a
+/// closure.
+///
+/// The two string literals are the case that faulted, and they are the *cheap*
+/// case to fix. A literal lowers to a load of a `__perry_init_strings_*` handle
+/// global, which IS a registered root — so the string is never swept — but an
+/// evacuating cycle REWRITES that global while the register keeps the pre-move
+/// address. [`OperandProtection::Reload`] re-emits the load below the collection
+/// point and costs no runtime call at all. Measured at the fault: the handle
+/// global held the post-move address, the register held the retired from-space
+/// one.
+///
+/// [`temp_root::lower_exprs_rooted`] gates each argument on
+/// `any_later_ref_may_trigger_gc`, so an argument list nothing allocating
+/// follows emits exactly the IR it emitted before.
+///
+/// Returns the values to pass and the guard for [`emit_rooted_call`].
+///
+/// [`OperandProtection::Reload`]: crate::expr::temp_root
+/// [`temp_root::lower_exprs_rooted`]: crate::expr::temp_root::lower_exprs_rooted
+pub(crate) fn lower_call_args_rooted(
+    ctx: &mut FnCtx<'_>,
+    args: &[Expr],
+) -> Result<(Vec<String>, Option<String>)> {
+    let refs: Vec<&Expr> = args.iter().collect();
+    crate::expr::temp_root::lower_exprs_rooted(ctx, &refs)
+}
+
+/// Emit a direct call over an already-lowered argument list, then release the
+/// [`lower_call_args_rooted`] guard.
+///
+/// The release has to sit BELOW the call, not above it: the callee allocates
+/// while reading these arguments, so the slots have to outlive the call itself.
+pub(crate) fn emit_rooted_call(
+    ctx: &mut FnCtx<'_>,
+    fname: &str,
+    lowered: &[String],
+    guard: Option<String>,
+) -> String {
+    let arg_slices: Vec<(crate::types::LlvmType, &str)> = lowered
+        .iter()
+        .map(|s| (crate::types::DOUBLE, s.as_str()))
+        .collect();
+    let result = ctx.block().call(crate::types::DOUBLE, fname, &arg_slices);
+    crate::expr::temp_root::temp_root_release(ctx, guard);
+    result
+}
+
 /// Lower a `Call` expression. Two shapes are supported:
 /// 1. `FuncRef(id)(args...)` — direct call to a user function by HIR id.
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a

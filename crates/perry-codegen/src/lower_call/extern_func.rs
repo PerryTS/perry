@@ -1757,6 +1757,7 @@ pub fn try_lower_extern_func_call(
     ctx.pending_declares
         .push((fname.clone(), DOUBLE, param_types));
     let mut lowered: Vec<String> = Vec::with_capacity(target_arity);
+    let mut arg_guard: Option<String> = None;
     if has_rest {
         // Fixed (non-rest) params: pass through.
         let fixed_count = declared_count.saturating_sub(1);
@@ -1789,16 +1790,16 @@ pub fn try_lower_extern_func_call(
         let rest_box = nanbox_pointer_inline(ctx.block(), &current);
         lowered.push(rest_box);
     } else {
-        for a in args {
-            lowered.push(lower_expr(ctx, a)?);
-        }
+        // #7154: the registry's residual. See `super::lower_call_args_rooted`.
+        let (values, guard) = super::lower_call_args_rooted(ctx, args)?;
+        arg_guard = guard;
+        lowered.extend(values);
         // Pad with TAG_UNDEFINED for the missing trailing args.
         let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         while lowered.len() < target_arity {
             lowered.push(undefined_lit.clone());
         }
     }
-    let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-        lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-    Ok(Some(ctx.block().call(DOUBLE, &fname, &arg_slices)))
+    let call = super::emit_rooted_call(ctx, &fname, &lowered, arg_guard);
+    Ok(Some(call))
 }
