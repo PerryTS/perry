@@ -282,13 +282,90 @@ NONCOLLECTING = {
 MOVING_POLL = "js_gc_loop_safepoint"
 
 # Result-producing calls that materialize a fresh GC object.
+#
+# ------------------------------------------------------------------ THE AUDIT
+# This list is enumerated from the runtime's actual exported entry points, NOT
+# guessed from a naming convention, because guessing a convention is precisely
+# how it has failed twice:
+#
+#   * `js_implicit_this_set` (#7226) -- a root READ that was not modelled, so
+#     `prev_this` survived two PRs that were looking straight at it;
+#   * `js_regexp_new` (#7154, this change) -- the regex carried an alternative
+#     spelled `regexp_alloc\w*`, and **no such symbol has ever existed**. The
+#     `/re/.test(s)` lowering holds `js_regexp_new`'s raw result in a register
+#     across `js_jsvalue_to_string_coerce`, and the checker reported nothing
+#     because the register had no recognised heap-value source.
+#
+# The second one is the instructive one. `regexp_alloc\w*` was not a typo, it
+# was an ASSUMED convention: whoever wrote it knew a RegExp allocates and
+# extrapolated the `_alloc` suffix from its neighbours. Reconciling every
+# alternative below against the real symbol table (`grep -rhoE 'extern "C" fn
+# js_\w+'` over perry-runtime + perry-stdlib, intersected with the names
+# perry-codegen actually declares) found FOUR alternatives in the same state --
+# `regexp_alloc\w*`, `promise_alloc\w*`, `bigint_alloc\w*` and
+# `typed_array_alloc\w*` matched nothing whatsoever. A quarter of the pattern
+# was decorative.
+#
+# The root cause is that the runtime materializes fresh GC objects under THREE
+# naming conventions and the old pattern modelled one:
+#
+#   `_alloc*`   js_object_alloc, js_array_alloc, js_closure_alloc, js_box_alloc,
+#               js_map_alloc, js_set_alloc, js_buffer_alloc, js_uint8array_alloc,
+#               js_arguments_object_alloc, js_inline_arena_slow_alloc, ...
+#   `_new*`     js_regexp_new, js_promise_new, js_symbol_new, js_date_new,
+#               js_error_new, js_typed_array_new, js_weakmap_new, js_weakset_new,
+#               js_url_new, js_boxed_string_new, js_array_buffer_new, ~140 more
+#   `_create*`  js_object_create, js_array_create, js_vm_create_context,
+#               js_crypto_create_hash, js_readline_create_interface, ~40 more
+#
+# So the three conventions are matched as conventions, and the constructors
+# that use none of them are enumerated explicitly below. Widening is SAFE in
+# the checker's one-sided direction: a name that is in fact not an allocation
+# costs a false positive to triage, while a missing one costs a shipped
+# use-after-free plus the investigation round it takes to find it by hand.
+# When in doubt, add it.
 ALLOC_RE = re.compile(
     r"^js_("
-    r"object_alloc\w*|array_alloc\w*|closure_alloc\w*|box_alloc\w*|"
-    r"string_alloc\w*|string_concat\w*|string_coerce|string_from\w*|"
-    r"map_alloc\w*|set_alloc\w*|promise_alloc\w*|bigint_alloc\w*|"
-    r"typed_array_alloc\w*|buffer_alloc\w*|regexp_alloc\w*|"
-    r"object_create\w*|array_from\w*|build_class_keys_array"
+    # -- convention 1: `*_alloc*`, including the arena's own slow path.
+    r"\w*_alloc\w*|"
+    # -- convention 2: `*_new*`. `js_regexp_new` is the #7154 residual.
+    r"\w*_new\w*|"
+    # -- convention 3: `*_create*`.
+    r"\w*_create\w*|create_\w+|"
+    # -- constructors using none of the three conventions -------------------
+    # `new X(...)` / `X(...)` forms folded at HIR into a direct ctor call.
+    r"\w*_construct|\w*_construct_call|\w*_construct_apply|"
+    r"reflect_construct|new_function_construct\w*|super_construct_apply|"
+    # fresh strings. Every one of these returns a *mut StringHeader the
+    # caller holds raw; `string_coerce` and `jsvalue_to_string_coerce` are
+    # the two the `/re/` lowerings feed.
+    r"string_concat\w*|string_coerce|string_from\w*|string_append|"
+    r"jsvalue_to_string\w*|value_to_string\w*|number_to_string\w*|"
+    r"string_repeat|string_slice|string_substring|string_substr|"
+    r"string_pad_\w+|string_trim\w*|string_to_\w+_case|string_replace\w*|"
+    r"string_split|string_normalize|string_at|string_char_at|"
+    r"string_index_get_boxed|boxed_string\w*|"
+    # fresh arrays: the copy-on-read Array.prototype methods, the ES2023
+    # change-by-copy family, and the iterable/array-like converters.
+    r"array_from\w*|array_clone\w*|array_concat\w*|array_slice|array_splice|"
+    r"array_to_spliced|array_to_sorted\w*|array_to_reversed|array_with|"
+    r"array_flat\w*|array_map|array_filter|array_like_to_array|"
+    r"iterator_to_array|array_of|array_group_by|"
+    # fresh objects/collections handed back as a whole
+    r"object_keys\w*|object_values\w*|object_entries\w*|object_from_entries|"
+    r"object_assign\w*|object_group_by|object_coerce|"
+    r"object_get_own_property_descriptor\w*|object_get_own_property_names|"
+    r"object_get_own_property_symbols|"
+    r"map_from_iterable|set_from_iterable|map_group_by|"
+    r"set_union|set_intersection|set_difference|set_symmetric_difference|"
+    r"structured_clone\w*|"
+    # module namespace objects, class-shape side tables, generator plumbing
+    r"build_class_keys_array|create_namespace|create_native_module_namespace|"
+    r"generator_attach_prototype|proxy_revocable|"
+    # BigInt: no `_alloc` and no `_new`; the constructors are `_from_*`.
+    r"bigint_from\w*|bigint_\w+_op|"
+    # Buffers / typed arrays that spell it neither way.
+    r"buffer_from\w*|typed_array_from\w*|array_buffer_slice"
     r")$"
 )
 
@@ -362,6 +439,21 @@ def is_collecting(callee):
 # ------------------------------------------------- interprocedural poll reach
 
 # Runtime helpers that re-enter compiled JS (and therefore its back-edge polls).
+#
+# The COERCION family is the half of this set that is easy to leave out, and
+# leaving it out is what kept `--moving-only` blind to #7154's `/re/.test(s)`
+# residual even once `ALLOC_RE` had been widened to recognise `js_regexp_new`.
+# A coercion does not *look* like a call into user code, but ToPrimitive is
+# exactly that: `js_jsvalue_to_string_coerce` runs `to_string_method_impl(…,
+# skip_to_primitive = false)`, which consults `[Symbol.toPrimitive]`, then
+# `toString`, then `valueOf` — arbitrary JS, with its own loop back-edge polls.
+# `js_string_coerce`'s own doc comment already said so ("a `POINTER_TAG` object
+# routes through `js_jsvalue_to_string`, which can invoke a user `toString` /
+# `valueOf`"); the checker just never read it.
+#
+# This matters more than the raw-count modes suggest, because `--moving-only`
+# is the mode the `gc-root-dominance.yml` gate runs. A source the gate cannot
+# classify as reaching a moving minor is a source the gate cannot fail on.
 POLL_CAPABLE_RUNTIME = {
     "js_call_function", "js_call_closure", "js_invoke_closure",
     "js_call_value", "js_apply_function", "js_function_call",
@@ -370,6 +462,13 @@ POLL_CAPABLE_RUNTIME = {
     "js_array_sort", "js_array_map", "js_array_filter", "js_array_for_each",
     "js_array_reduce", "js_json_stringify", "js_string_replace",
     "js_promise_run_microtasks", "js_gc_loop_safepoint",
+    # ToPrimitive / ToString / ToNumber: every one of these dispatches a user
+    # `[Symbol.toPrimitive]` / `toString` / `valueOf` on an object operand.
+    "js_to_primitive",
+    "js_jsvalue_to_string", "js_jsvalue_to_string_coerce",
+    "js_jsvalue_to_string_method", "js_jsvalue_to_string_radix",
+    "js_string_coerce", "js_string_coerce_method_this",
+    "js_number_coerce", "js_object_coerce",
 }
 
 
@@ -1198,7 +1297,11 @@ RECEIVER_SINKS = re.compile(
     r"object_get_property|object_set_property|put_value_set_dyn_ic|"
     r"get_value_dyn_ic|closure_call\w*|call_closure|call_function|"
     r"call_value|invoke_closure|apply_function|"
-    r"array_\w+|map_\w+|set_\w+|typed_feedback_\w*call\w*"
+    r"array_\w+|map_\w+|set_\w+|typed_feedback_\w*call\w*|"
+    # A stale RegExpHeader* is dereferenced immediately by both of these —
+    # this is #7154's residual, and it faulted rather than merely answering
+    # wrong, so it belongs in the fatal ranking and not just the raw count.
+    r"regexp_test|regexp_exec|regexp_match\w*|regexp_replace\w*"
     r")$"
 )
 
