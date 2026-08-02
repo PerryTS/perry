@@ -123,8 +123,49 @@ def scalar(block: str, key: str, indent: int) -> str:
     first, _, rest = raw.partition("\n")
     first = first.strip()
     if first in (">-", ">", "|", "|-", ""):
-        return " ".join(l.strip() for l in rest.splitlines() if l.strip())
+        return " ".join(ln.strip() for ln in rest.splitlines() if ln.strip())
     return first
+
+
+def job_steps(body: str) -> list[tuple[str, str, bool]]:
+    """[(if-expression, run-script, opted-out-of-gating)] for each step.
+
+    Both step spellings are parsed. `- name: x` / `run: …` puts `run` on its
+    own line at indent 8; `- run: …` puts it on the dash line. Missing the
+    second form would silently skip a step, which in a checker about
+    unfailable gates would be its own joke.
+    """
+    steps = []
+    for chunk in re.split(r"^      - ", body, flags=re.M)[1:]:
+        chunk = "        " + chunk  # normalise the dash line to a plain key
+        coe = bool(re.search(r"^        continue-on-error\s*:\s*true\s*$", chunk, re.M))
+        steps.append((scalar(chunk, "if", 8), _block(chunk, "run", 8), coe))
+    return steps
+
+
+def event_admitted(expr: str, event: str) -> bool:
+    """Does an `if:` expression let `event` through?
+
+    Only `github.event_name` comparisons are interpreted. An `if:` that gates
+    on something else (`github.ref`, a label, an input) is treated as
+    admitting the event: this check exists to catch an event that is
+    provably excluded, and guessing at the rest would produce false reds on
+    correctly-wired gates.
+
+    `!=` is handled explicitly. `github.event_name != 'pull_request'` — the
+    spelling `gc-stress`'s own full-arm step uses — admits `schedule`, and
+    reading it as an enumeration that omits `schedule` would have condemned
+    a gate that works.
+    """
+    if not expr or "github.event_name" not in expr:
+        return True
+    neq = set(re.findall(r"github\.event_name\s*!=\s*'([a-z_]+)'", expr))
+    eq = set(re.findall(r"github\.event_name\s*==\s*'([a-z_]+)'", expr))
+    if event in neq:
+        return False
+    if eq:
+        return event in eq
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +179,17 @@ def check_gate(text: str, job_id: str, wf_name: str) -> list[str]:
 
     triggers = workflow_triggers(text)
     job_if = scalar(body, "if", 4)
+    steps = job_steps(body)
+    # A step that runs a command and has not opted out of gating. `uses:`
+    # setup steps are not gates and a green one proves nothing.
+    gating = [(sif, run) for sif, run, coe in steps if run.strip() and not coe]
 
     # --- 1. main-line reachability -----------------------------------------
+    # Job existence is not reachability, and neither is the job-level `if:`.
+    # The subject is the gating STEP, and a step-level `if:` can exclude the
+    # main-line event while the job around it reports success -- CLAUDE.md
+    # hazard 4, the one this script is named for. `gc-stress` is the live
+    # example: both of its matrix invocations carry their own `if:`.
     reachable = []
     for ev in MAIN_LINE_EVENTS:
         if ev not in triggers:
@@ -151,17 +201,19 @@ def check_gate(text: str, job_id: str, wf_name: str) -> list[str]:
                 continue
             if "branches" in sub and "main" not in sub:
                 continue
-        # a job-level `if:` that enumerates events must include this one
-        if job_if and "github.event_name" in job_if and f"'{ev}'" not in job_if:
+        if not event_admitted(job_if, ev):
+            continue
+        if gating and not any(event_admitted(sif, ev) for sif, _ in gating):
             continue
         reachable.append(ev)
     if not reachable:
         have = ", ".join(sorted(triggers)) or "(none)"
         problems.append(
-            f"{wf_name}: `{job_id}` never runs on main-line code. Workflow triggers: "
-            f"{have}; job if: {job_if or '(none)'}. A gate that only runs pre-merge "
-            f"and at tags cannot say which merge broke it — add `schedule` (or a "
-            f"`push: branches: [main]`) and list it in the job's `if:`."
+            f"{wf_name}: `{job_id}` never runs its gating command on main-line code. "
+            f"Workflow triggers: {have}; job if: {job_if or '(none)'}. A gate that "
+            f"only runs pre-merge and at tags cannot say which merge broke it — add "
+            f"`schedule` (or a `push: branches: [main]`), and make sure both the "
+            f"job's `if:` and at least one gating step's `if:` admit it."
         )
 
     # --- 2. job-level continue-on-error ------------------------------------
@@ -173,11 +225,8 @@ def check_gate(text: str, job_id: str, wf_name: str) -> list[str]:
 
     # --- 3. gating steps must not swallow their exit status -----------------
     # Steps carrying their own `continue-on-error: true` are opted out on
-    # purpose (informational stress runs) and are skipped.
-    for step in re.split(r"^      - ", body, flags=re.M)[1:]:
-        if re.search(r"^        continue-on-error\s*:\s*true\s*$", step, re.M):
-            continue
-        run = _block(step, "run", 8)
+    # purpose (informational stress runs) and are skipped by `gating`.
+    for _sif, run in gating:
         for line in run.splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
@@ -196,15 +245,21 @@ def check_gate(text: str, job_id: str, wf_name: str) -> list[str]:
                 )
 
     # --- 4. concurrency must not cancel main-line runs ----------------------
-    conc = _block(text, "concurrency", 0)
-    if conc:
-        cancel = scalar(conc, "cancel-in-progress", 2)
-        if cancel == "true":
+    # Workflow level and job level both cancel, so both are read.
+    for where, conc, ind in (
+        ("workflow", _block(text, "concurrency", 0), 2),
+        (f"job `{job_id}`", _block(body, "concurrency", 4), 6),
+    ):
+        if not conc:
+            continue
+        cancel = scalar(conc, "cancel-in-progress", ind)
+        # `true` and `${{ true }}` are the same instruction wearing two hats.
+        if re.fullmatch(r"(true|\$\{\{\s*true\s*\}\})", cancel):
             problems.append(
-                f"{wf_name}: `concurrency.cancel-in-progress` is unconditionally "
-                f"true — on a deep runner queue every new merge cancels the "
-                f"previous main run before it reaches a runner (#7205). Scope it "
-                f"to pull_request."
+                f"{wf_name}: {where} `concurrency.cancel-in-progress` is "
+                f"unconditionally true — on a deep runner queue every new merge "
+                f"cancels the previous main run before it reaches a runner "
+                f"(#7205). Scope it to pull_request."
             )
     return problems
 
@@ -238,8 +293,11 @@ jobs:
 
 def _self_test() -> int:
     failures = []
+    cases = 0
 
     def expect(name: str, text: str, want_substr: str | None):
+        nonlocal cases
+        cases += 1
         got = check_gate(text, "gate", "fixture.yml")
         if want_substr is None:
             if got:
@@ -271,7 +329,7 @@ def _self_test() -> int:
             "      github.event_name == 'pull_request' ||\n      github.event_name == 'schedule'",
             "      github.event_name == 'pull_request'",
         ),
-        "never runs on main-line code",
+        "never runs its gating command on main-line code",
     )
 
     # hazard: workflow only pushes on tags, and has no schedule
@@ -281,7 +339,7 @@ def _self_test() -> int:
             "      github.event_name == 'pull_request' ||\n      github.event_name == 'schedule'",
             "      github.event_name == 'pull_request' ||\n      github.event_name == 'push'",
         ),
-        "never runs on main-line code",
+        "never runs its gating command on main-line code",
     )
 
     # hazard: a gating step swallowing its exit status
@@ -291,7 +349,52 @@ def _self_test() -> int:
         "|| true",
     )
 
+    # the same, written in the inline `- run:` spelling. A parser that only
+    # understood `- name:` steps would report this fixture clean.
+    expect(
+        "|| true in an inline step",
+        CLEAN.replace("      - name: run it\n        run: ./scripts/thing.sh", "      - run: ./scripts/thing.sh || true"),
+        "|| true",
+    )
+
+    # ★ hazard 4: the job is reachable on `schedule` and its gating step is
+    # not. This is the shape `gc-stress` actually has -- both matrix
+    # invocations carry their own `if:` -- so a checker that stopped at the
+    # job-level `if:` would bless a job whose subject never runs.
+    expect(
+        "step-level if excludes the main-line event",
+        CLEAN.replace(
+            "      - name: run it\n        run: ./scripts/thing.sh",
+            "      - name: run it\n        if: github.event_name == 'pull_request'\n        run: ./scripts/thing.sh",
+        ),
+        "never runs its gating command on main-line code",
+    )
+
+    # ★ false-positive guard: `!= 'pull_request'` ADMITS schedule. Reading it
+    # as an enumeration that omits `schedule` would condemn a working gate --
+    # and this is the exact spelling of gc-stress's full-arm step.
+    expect(
+        "negated event condition is not an exclusion",
+        CLEAN.replace(
+            "      - name: run it\n        run: ./scripts/thing.sh",
+            "      - name: run it\n        if: github.event_name != 'pull_request'\n        run: ./scripts/thing.sh",
+        ),
+        None,
+    )
+
+    # job-level concurrency cancels just as hard as workflow-level
+    expect(
+        "job-level cancel-in-progress",
+        CLEAN.replace(
+            "    runs-on: ubuntu-latest",
+            "    concurrency:\n      group: g\n      cancel-in-progress: ${{ true }}\n    runs-on: ubuntu-latest",
+            1,
+        ),
+        "cancel-in-progress",
+    )
+
     # a missing job is a hard error, not a silent pass
+    cases += 1
     got = check_gate(CLEAN, "nope", "fixture.yml")
     if not got or "not found" not in got[0]:
         failures.append(f"missing job: expected a not-found problem, got {got}")
@@ -300,7 +403,7 @@ def _self_test() -> int:
         for f in failures:
             print(f"SELF-TEST FAIL: {f}", file=sys.stderr)
         return 1
-    print("gc_gate_wiring_check self-test: OK (7 cases)")
+    print(f"gc_gate_wiring_check self-test: OK ({cases} cases)")
     return 0
 
 
