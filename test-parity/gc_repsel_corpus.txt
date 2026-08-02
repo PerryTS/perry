@@ -394,8 +394,8 @@ test_gap_gc_process_env_cache_rooting
 # --- #7236: a Symbol-typed local had no shadow slot at all ------------------
 # Not a representation file, so registered explicitly per the header rule.
 # `collectors/pointer_locals.rs` classified `Type::Symbol` as a NON-pointer, so
-# `const s = Symbol("w")` got no shadow-stack slot and lived in a plain
-# `alloca` — the last violation `gc_root_dominance_check.py --unrooted-allocas
+# `const s = Symbol()` got no shadow-stack slot and lived in a plain `alloca` —
+# the last violation `gc_root_dominance_check.py --unrooted-allocas
 # --moving-only` reported on the #7235 corpus, and the one thing standing
 # between `gc-root-dominance` and promotion to a required context (#7198).
 #
@@ -417,11 +417,20 @@ test_gap_gc_process_env_cache_rooting
 # makes the malloc-count trigger the one that fires AND makes the freed block
 # the exact size class the next `Symbol()` reuses.
 #
-# Measured at base (`f8f1e7188`), `--release`, oracle node 26.5.1 (`A 0 B 0`):
-# `A 30 B 20` on `loop_polls`, 3/3 identical, and `A 30 B 20` on the SHIPPED
-# DEFAULT with no GC env at all, 2/2. `A 0 B 0` after the fix on both, 3/3.
+# ★ THE PROBE SYMBOL DELIBERATELY HAS NO DESCRIPTION, so this file gates ONE
+# defect. `GC_TYPE_STRING` is `pointer_free: true` / `Leaf`, so a symbol's
+# `description` StringHeader is never traced or rewritten and can be reaped out
+# from under a perfectly rooted symbol — a SEPARATE runtime-side defect (#7246)
+# that #7236 does not touch. With `Symbol("k")` this file stayed red 2/20 on the
+# `PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off` arms AFTER the
+# fix; with `Symbol()` there is no such pointer and what remains is exactly the
+# lifetime of the symbol object. If those two arms ever go red here again,
+# suspect the description defect before suspecting the classification.
 #
-# It therefore does NOT need a `requires=move` arm — the conservative stack
-# scan is what was hiding it, and a malloc-count-driven collection stops it
-# hiding. Expect PASS rather than UNVER wherever the arm collects at all.
+# Measured with `--arms all --pressure 8`, oracle node 26.5.1 (`B 0`):
+#   f8f1e7188 (base)  21/21 cells FAIL, 0/21 byte-exact (5 of them exit=1)
+#   with the fix      0 FAIL, 21/21 byte-exact, PASS=17 UNVER=4
+# It does NOT need a `requires=move` arm: the conservative stack scan is what
+# was hiding it, and a malloc-count-driven collection stops it hiding, so it is
+# red on the SHIPPED DEFAULT at base too.
 test_gap_gc_symbol_local_rooting
