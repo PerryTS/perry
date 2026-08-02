@@ -1015,8 +1015,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // the varargs runtime entry; the no-args form goes through the
         // simpler `js_queue_next_tick` to avoid the alloca cost.
         Expr::ProcessNextTick { callback, args } => {
-            let cb_box = lower_expr(ctx, callback)?;
             if args.is_empty() {
+                let cb_box = lower_expr(ctx, callback)?;
                 let blk = ctx.block();
                 // #3046: validate the callback (non-callable → Node's
                 // `ERR_INVALID_ARG_TYPE` "callback" message) before queueing.
@@ -1031,13 +1031,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.call_void("js_queue_next_tick", &[(I64, &cb_handle)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            // #7210: the callback and every trailing argument go through
+            // `lower_exprs_rooted` together. Two windows closed at once — the
+            // callback register, held across every argument's `lower_expr`, and
+            // the staging buffer, in which argument *i* has no root at all
+            // while argument *i+1* is lowered. See `lower_call/extern_func.rs`'s
+            // `setTimeout` arm for the full argument.
             let n = args.len();
+            let mut arg_refs: Vec<&Expr> = Vec::with_capacity(n + 1);
+            arg_refs.push(callback);
+            arg_refs.extend(args.iter());
+            let (vals, guard) = super::temp_root::lower_exprs_rooted(ctx, &arg_refs)?;
+            let cb_box = vals[0].clone();
             let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-            for (i, a) in args.iter().enumerate() {
-                let v = lower_expr(ctx, a)?;
+            for (i, v) in vals.iter().skip(1).enumerate() {
                 let blk = ctx.block();
                 let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
-                blk.store(DOUBLE, &v, &slot);
+                blk.store(DOUBLE, v, &slot);
             }
             let ptr_reg = ctx.block().next_reg();
             ctx.block().emit_raw(format!(
@@ -1055,6 +1065,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_queue_next_tick_args",
                 &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
             );
+            super::temp_root::temp_root_release(ctx, guard);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 

@@ -42,6 +42,7 @@ mod dataview_intrinsic;
 mod early_branches;
 mod event_target;
 mod extern_func;
+mod extern_timers;
 mod field_init;
 mod func_ref;
 mod jsx;

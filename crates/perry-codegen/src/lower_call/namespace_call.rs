@@ -47,30 +47,41 @@ pub fn try_lower_namespace_member_call(
         .is_some_and(|submod| submod == "timers")
     {
         match property.as_str() {
+            // #7210: the `timers` namespace forms carry the same two unrooted
+            // windows as the global `setTimeout`/`setInterval`/`setImmediate`
+            // lowerings in `extern_func.rs` (see the comment there), plus one
+            // of their own: `cb_handle` is `unbox_to_i64`'d — a RAW heap
+            // address, not even NaN-boxed — before the trailing arguments are
+            // lowered. Lower the whole list through `lower_exprs_rooted` and
+            // unbox below it, so the handle is derived from a post-collection
+            // value.
             "setTimeout" if !args.is_empty() => {
-                let cb_box = lower_expr(ctx, &args[0])?;
+                let arg_refs: Vec<&Expr> = args.iter().collect();
+                let (vals, guard) = crate::expr::temp_root::lower_exprs_rooted(ctx, &arg_refs)?;
+                let cb_box = vals[0].clone();
                 let delay_box = if args.len() >= 2 {
-                    lower_expr(ctx, &args[1])?
+                    vals[1].clone()
                 } else {
                     double_literal(0.0)
                 };
-                let blk = ctx.block();
-                let cb_handle = unbox_to_i64(blk, &cb_box);
                 if args.len() <= 2 {
+                    let blk = ctx.block();
+                    let cb_handle = unbox_to_i64(blk, &cb_box);
                     let id = blk.call(
                         I64,
                         "js_set_timeout_callback",
                         &[(I64, &cb_handle), (DOUBLE, &delay_box)],
                     );
-                    return Ok(Some(nanbox_pointer_inline(blk, &id)));
+                    let boxed = nanbox_pointer_inline(ctx.block(), &id);
+                    crate::expr::temp_root::temp_root_release(ctx, guard);
+                    return Ok(Some(boxed));
                 }
                 let n = args.len() - 2;
                 let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                for (i, a) in args.iter().skip(2).enumerate() {
-                    let v = lower_expr(ctx, a)?;
+                for (i, v) in vals.iter().skip(2).enumerate() {
                     let blk = ctx.block();
                     let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
-                    blk.store(DOUBLE, &v, &slot);
+                    blk.store(DOUBLE, v, &slot);
                 }
                 let ptr_reg = ctx.block().next_reg();
                 ctx.block().emit_raw(format!(
@@ -78,6 +89,7 @@ pub fn try_lower_namespace_member_call(
                     ptr_reg, n, buf
                 ));
                 let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
                 let id = blk.call(
                     I64,
                     "js_set_timeout_callback_args",
@@ -88,28 +100,33 @@ pub fn try_lower_namespace_member_call(
                         (I32, &n.to_string()),
                     ],
                 );
-                return Ok(Some(nanbox_pointer_inline(blk, &id)));
+                let boxed = nanbox_pointer_inline(ctx.block(), &id);
+                crate::expr::temp_root::temp_root_release(ctx, guard);
+                return Ok(Some(boxed));
             }
             "setInterval" if args.len() >= 2 => {
-                let cb_box = lower_expr(ctx, &args[0])?;
-                let delay_box = lower_expr(ctx, &args[1])?;
-                let blk = ctx.block();
-                let cb_handle = unbox_to_i64(blk, &cb_box);
+                let arg_refs: Vec<&Expr> = args.iter().collect();
+                let (vals, guard) = crate::expr::temp_root::lower_exprs_rooted(ctx, &arg_refs)?;
+                let cb_box = vals[0].clone();
+                let delay_box = vals[1].clone();
                 if args.len() == 2 {
+                    let blk = ctx.block();
+                    let cb_handle = unbox_to_i64(blk, &cb_box);
                     let id = blk.call(
                         I64,
                         "setInterval",
                         &[(I64, &cb_handle), (DOUBLE, &delay_box)],
                     );
-                    return Ok(Some(nanbox_pointer_inline(blk, &id)));
+                    let boxed = nanbox_pointer_inline(ctx.block(), &id);
+                    crate::expr::temp_root::temp_root_release(ctx, guard);
+                    return Ok(Some(boxed));
                 }
                 let n = args.len() - 2;
                 let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                for (i, a) in args.iter().skip(2).enumerate() {
-                    let v = lower_expr(ctx, a)?;
+                for (i, v) in vals.iter().skip(2).enumerate() {
                     let blk = ctx.block();
                     let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
-                    blk.store(DOUBLE, &v, &slot);
+                    blk.store(DOUBLE, v, &slot);
                 }
                 let ptr_reg = ctx.block().next_reg();
                 ctx.block().emit_raw(format!(
@@ -117,6 +134,7 @@ pub fn try_lower_namespace_member_call(
                     ptr_reg, n, buf
                 ));
                 let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
                 let id = blk.call(
                     I64,
                     "js_set_interval_callback_args",
@@ -127,23 +145,27 @@ pub fn try_lower_namespace_member_call(
                         (I32, &n.to_string()),
                     ],
                 );
-                return Ok(Some(nanbox_pointer_inline(blk, &id)));
+                let boxed = nanbox_pointer_inline(ctx.block(), &id);
+                crate::expr::temp_root::temp_root_release(ctx, guard);
+                return Ok(Some(boxed));
             }
             "setImmediate" if !args.is_empty() => {
-                let cb_box = lower_expr(ctx, &args[0])?;
-                let blk = ctx.block();
-                let cb_handle = unbox_to_i64(blk, &cb_box);
                 if args.len() == 1 {
+                    let cb_box = lower_expr(ctx, &args[0])?;
+                    let blk = ctx.block();
+                    let cb_handle = unbox_to_i64(blk, &cb_box);
                     let id = blk.call(I64, "js_set_immediate_callback", &[(I64, &cb_handle)]);
                     return Ok(Some(nanbox_pointer_inline(blk, &id)));
                 }
+                let arg_refs: Vec<&Expr> = args.iter().collect();
+                let (vals, guard) = crate::expr::temp_root::lower_exprs_rooted(ctx, &arg_refs)?;
+                let cb_box = vals[0].clone();
                 let n = args.len() - 1;
                 let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                for (i, a) in args.iter().skip(1).enumerate() {
-                    let v = lower_expr(ctx, a)?;
+                for (i, v) in vals.iter().skip(1).enumerate() {
                     let blk = ctx.block();
                     let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
-                    blk.store(DOUBLE, &v, &slot);
+                    blk.store(DOUBLE, v, &slot);
                 }
                 let ptr_reg = ctx.block().next_reg();
                 ctx.block().emit_raw(format!(
@@ -151,12 +173,15 @@ pub fn try_lower_namespace_member_call(
                     ptr_reg, n, buf
                 ));
                 let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
                 let id = blk.call(
                     I64,
                     "js_set_immediate_callback_args",
                     &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
                 );
-                return Ok(Some(nanbox_pointer_inline(blk, &id)));
+                let boxed = nanbox_pointer_inline(ctx.block(), &id);
+                crate::expr::temp_root::temp_root_release(ctx, guard);
+                return Ok(Some(boxed));
             }
             "clearTimeout" | "clearInterval" | "clearImmediate" if !args.is_empty() => {
                 let id_box = lower_expr(ctx, &args[0])?;

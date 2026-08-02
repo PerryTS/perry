@@ -339,3 +339,14 @@ test_gap_gc_closure_call_prev_this_rooting
 # fix in this PR is verified on the safepoint route and is NOT claimed on the
 # allocation-point route, which is #7217's open defect class at a second site.
 test_gap_gc_regexp_receiver_rooting
+# --- #7210: argument staging buffers filled interleaved with lowering -------
+# `setTimeout(cb, 0, {…}, churn())` kept the CALLBACK closure in a bare SSA
+# register across every argument's lowering, and each trailing argument in a
+# bare `alloca_entry_array` the precise root walk never visits, while the next
+# one was lowered. Measured at base (`7d1dc9ca2`), compiled and run under
+# `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_HEAP_LIMIT=8`: 5/5
+# `TypeError: The "callback" argument must be of type function. Received an
+# instance of Object` — deterministic, and identical on the `evac_minor` arm.
+# Clean 5/5 on the shipped default (no polls, no pressure) both before and
+# after, so this is a `requires=move`-only witness like the #7207 trio.
+test_gap_gc_staging_args_rooting
