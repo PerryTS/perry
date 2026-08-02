@@ -1,3 +1,13 @@
+# Registry for the TypeScript feature probes under test-features/probes/.
+#
+# ***A NEW PROBE MUST BE REGISTERED HERE OR IT WILL NOT RUN.***
+# scripts/gen_feature_matrix.py reads this file, not the directory, so a probe
+# with no [[probe]] entry is executed by nothing AND absent from the generated
+# matrix. scripts/check_test_registration.py fails `lint` on an unregistered
+# probe, and on a `path` here that no longer exists. A probe file that is only
+# a helper (a module some other probe imports) belongs in that script's
+# `feature-matrix-probes` exclusions, with a reason.
+
 [settings]
 node_args = ["--experimental-strip-types"]
 

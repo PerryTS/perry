@@ -1,13 +1,27 @@
 # Corpus for the GC x representation-selection stress matrix
 # (scripts/gc_repsel_matrix.sh).
 #
-# ***IF YOU ARE ADDING A REPRESENTATION, ADD ITS GAP FILE HERE.***
-# The matrix script FAILS if a `test_gap_repsel_*` / `test_gap_specabi_*` file
-# exists in test-files/ that is not registered below. That is the enforcement
-# point behind docs/representation-selection-rfc.md 5.6: a new representation
-# must be exercised against every GC arm, not just verified once by hand in its
-# own PR. Files outside those two prefixes (typed-array param reads, int-valued
-# typed-array locals) are not auto-detected, so register them explicitly.
+# ***A NEW TEST FILE MUST BE REGISTERED HERE OR IT WILL NOT RUN.***
+# `test-files/test_gap_{gc,repsel,specabi}_*.ts` is compiled and executed by
+# NOTHING unless its basename appears below. An unregistered witness is not a
+# failing test, it is no test at all: the PR that adds it goes green having run
+# it zero times. That happened four times -- #7192, #7216, #7252 and
+# #7270/#7271 -- before it was gated.
+#
+# Enforcement, cheapest first:
+#   * scripts/check_test_registration.py -- pure text, ~0.2s, runs in `lint`
+#     (a REQUIRED context) on every PR. This is the one that will stop you.
+#   * scripts/gc_repsel_matrix.sh -- auto-detects unregistered
+#     `test_gap_repsel_*` / `test_gap_specabi_*`, but only behind a full
+#     compiler build.
+#   * gc-moving-witnesses.yml -- same, for `test_gap_gc_*`, same cost.
+# Deleting a file without deleting its line here also FAILS (a rotted entry).
+#
+# That is the enforcement point behind docs/representation-selection-rfc.md
+# 5.6: a new representation must be exercised against every GC arm, not just
+# verified once by hand in its own PR. Files outside those three prefixes
+# (typed-array param reads, int-valued typed-array locals) are not
+# auto-detected at all, so register them explicitly.
 #
 # One basename per line, without the .ts extension. `#` starts a comment.
 

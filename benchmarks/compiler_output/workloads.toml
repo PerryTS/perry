@@ -1,3 +1,15 @@
+# Registry for the compiler-output regression workloads.
+#
+# ***A NEW FIXTURE MUST BE REGISTERED HERE OR IT WILL NOT RUN.***
+# scripts/compiler_output_regression.py reads this file, not the fixtures
+# directory, so a .ts under fixtures/ with no `source =` entry has no IR checks
+# and no runtime budgets attached to it — it is compiled by nothing.
+# scripts/check_test_registration.py fails `lint` on an unregistered fixture,
+# and on a `source` here that no longer exists. A fixture driven by a DIFFERENT
+# registry (raw_numeric_layout_smoke.ts is a target-collector workload in
+# scripts/run_memory_stability_tests.sh) belongs in that script's
+# `compiler-output-workloads` exclusions, with a reason.
+
 schema_version = 1
 
 [workloads.image_convolution]

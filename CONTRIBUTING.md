@@ -77,6 +77,7 @@ match the checkout.
 
 - One logical change. Small PRs land faster. If you find yourself writing "also, I fixed …", split.
 - Tests. New behavior needs a test; a bug fix needs a regression test. For compiler changes, drop a `.ts` file under [`test-files/`](test-files/) exercising the path. For runtime/stdlib, `#[test]` in the relevant crate.
+- **A new test file must be registered in its suite's registry, or it will not run.** Most suites glob their inputs, but four read an explicit list — a `test_gap_gc_*` witness needs a line in [`test-parity/gc_repsel_corpus.txt`](test-parity/gc_repsel_corpus.txt), a feature probe needs an entry in `test-features/feature_matrix.toml`, a compiler-output fixture needs an entry in `benchmarks/compiler_output/workloads.toml`, and a Rust test file below a suite root needs a `mod` declaration. An unregistered file is not a failing test, it is *no test at all*: your PR goes green having run nothing. `python3 scripts/check_test_registration.py` catches this in `lint` in under a second; `--list` names every registry. Full page: [`docs/src/testing/test-registration.md`](docs/src/testing/test-registration.md).
 - Docs where user-visible. New CLI flags, new perry.toml fields, new stdlib APIs → update [`docs/src/`](docs/src/).
 
 ### What does NOT go in a PR (maintainer handles these at merge)

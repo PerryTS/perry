@@ -219,6 +219,44 @@ jobs:
           python3 scripts/gc_matrix_liveness_check.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --check-registry
 
+      # Dark-test gate. Four of this repo's suites are driven by an explicit
+      # registry rather than a glob, and a test file added without its registry
+      # line runs NOWHERE while its PR stays green — #7192, #7216, #7252 and
+      # #7270/#7271 all shipped that way against test-parity/gc_repsel_corpus.txt.
+      #
+      # Registration checks already existed for two of those prefixes, but both
+      # live behind a 90-minute compiler build, behind a changed-paths relevance
+      # filter, and in workflows that are NOT in branch protection — so the check
+      # could not run on the pull request that needed it. This is the pure
+      # filesystem-and-text half (~0.2s, no compiler, no Node), placed in `lint`
+      # BECAUSE `lint` is already a required context: hazard 2 is the step people
+      # forget, so this gate is put where that step does not exist.
+      #
+      # The self-test plants an unregistered file into each mechanism and asserts
+      # the gate names it, then removes it and asserts green — over the real
+      # registries, through an in-memory overlay, so the checkout is never
+      # mutated. Each mechanism also floors its candidate set, so a stale glob
+      # fails loudly instead of making every future run vacuously green.
+      #
+      # `!cancelled()` is hazard 4 in a costume nobody has named yet: `lint` is a
+      # SEQUENCE of independent gates, and a step that fails takes every later
+      # step in the job to `skipped`. That is not hypothetical here — `Public
+      # benchmark evidence freshness` has failed on `main` on every run from
+      # 2026-07-29 onward, so `File size limit`, `GC store-site inventory`,
+      # `Address-classification audit`, `Gap snapshot checker self-test` and
+      # `Platform-aware parity allowlist self-test` have all been skipped for
+      # days while the job dutifully reported red for an unrelated reason. A gate
+      # that never executes cannot fail on its own subject. This step costs 0.2s
+      # and shares no state with anything above it, so it always speaks.
+      # (`!cancelled()` rather than `always()`: a cancelled run should stay
+      # cancelled.) The five steps above deserve the same treatment; that is a
+      # separate change from this one.
+      - name: Test registration (dark tests)
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_test_registration.py --self-test
+          python3 scripts/check_test_registration.py
+
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so
