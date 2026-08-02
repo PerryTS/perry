@@ -12,7 +12,7 @@ use perry_api_manifest::{
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
+use crate::expr::{lower_expr, nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     layout_for_manifest_pod, layout_runtime_id, llvm_type_for_native_rep, materialize_js_value,
@@ -1757,38 +1757,31 @@ pub fn try_lower_extern_func_call(
     ctx.pending_declares
         .push((fname.clone(), DOUBLE, param_types));
     let mut lowered: Vec<String> = Vec::with_capacity(target_arity);
-    let mut arg_guard: Option<String> = None;
+    let arg_guard: Option<String>;
     if has_rest {
-        // Fixed (non-rest) params: pass through.
+        // #7154: the rest twin of the arm below. Fixed params were lowered into
+        // bare registers and then held across `js_array_alloc` plus a
+        // `js_array_push_f64` per trailing arg, and the accumulator itself was
+        // a raw array pointer in a bare register holding the only reference to
+        // everything pushed so far. See `super::lower_rest_call_args_rooted`.
+        //
+        // The rest array is materialized ALWAYS — even with zero trailing args,
+        // the callee's rest binding must be `[]`. #1816: for a synthetic
+        // `arguments` param, bundle ALL args (from 0), not just the trailing
+        // ones, so `arguments.length` is correct.
         let fixed_count = declared_count.saturating_sub(1);
-        for a in args.iter().take(fixed_count) {
-            lowered.push(lower_expr(ctx, a)?);
-        }
-        // Pad fixed params if the caller passed too few.
-        let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        while lowered.len() < fixed_count {
-            lowered.push(undefined_lit.clone());
-        }
-        // Materialize the rest array (always — even when zero
-        // trailing args, the callee's rest binding must be `[]`).
-        // #1816: for a synthetic `arguments` param, bundle ALL args (from 0),
-        // not just the trailing ones, so `arguments.length` is correct.
         let bundle_from = if has_synthetic_args { 0 } else { fixed_count };
-        let rest_count = args.len().saturating_sub(bundle_from);
-        let cap = (rest_count as u32).to_string();
-        let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-        for a in args.iter().skip(bundle_from) {
-            let v = lower_expr(ctx, a)?;
-            let blk = ctx.block();
-            current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
-        }
-        if has_synthetic_args {
-            current = ctx
-                .block()
-                .call(I64, "js_array_mark_arguments_object", &[(I64, &current)]);
-        }
-        let rest_box = nanbox_pointer_inline(ctx.block(), &current);
-        lowered.push(rest_box);
+        let (values, guard) = super::lower_rest_call_args_rooted(
+            ctx,
+            args,
+            fixed_count,
+            &[super::RestBundle {
+                from: bundle_from,
+                mark_arguments_object: has_synthetic_args,
+            }],
+        )?;
+        arg_guard = guard;
+        lowered.extend(values);
     } else {
         // #7154: the registry's residual. See `super::lower_call_args_rooted`.
         let (values, guard) = super::lower_call_args_rooted(ctx, args)?;
