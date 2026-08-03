@@ -1287,8 +1287,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let require_numeric_layout =
                     value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, object);
                 let arr_box = lower_expr(ctx, object)?;
+                // #7341: this array path skipped the store-operand guard the
+                // generic object paths below already apply (#7154). `a[i] = v`
+                // evaluates the receiver first and the value last — spec order
+                // — so the receiver sits in an SSA register while an allocating
+                // RHS runs. The *slot* it was loaded from is a registered root
+                // and evacuation rewrites it; the register is not, so the store
+                // lands in retired from-space.
+                //
+                // Reproduced deterministically (6/6) by a module-level array
+                // written in a loop from inside a function:
+                //
+                //     const sink: unknown[] = new Array(1024);
+                //     function churn(n) { for (...) sink[i & 1023] = { a: i }; }
+                //
+                // The same loop at top level is clean, and a *local* array is
+                // clean, which is why this went unnoticed. Both root backends
+                // fault identically — the value was never given a root slot at
+                // all, so neither lowering could have covered it.
+                //
+                // The window is the disjunction over `index` and `value`
+                // (#7201): the receiver is live across both.
+                let recv_collects = super::temp_root::expr_may_trigger_gc(ctx, index)
+                    || super::temp_root::expr_may_trigger_gc(ctx, value);
+                let recv_guard = super::temp_root::guard_store_operand_across(
+                    ctx,
+                    object,
+                    &arr_box,
+                    recv_collects,
+                );
                 let idx_double = lower_expr(ctx, index)?;
                 let val_double = lower_expr(ctx, value)?;
+                let arr_box =
+                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &arr_box)?;
                 let local_id = if let Expr::LocalGet(id) = object.as_ref() {
                     Some(*id)
                 } else {
@@ -1425,6 +1456,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         emit_write_barrier(ctx, &arr_bits, &val_bits);
                     }
                 }
+                // After the store, never before: every branch above ends in a
+                // helper that can itself allocate (element-array growth, the
+                // extend path's realloc).
+                super::temp_root::release_store_operand(ctx, recv_guard);
                 return Ok(val_double);
             }
             if let Expr::String(literal) = index.as_ref() {
