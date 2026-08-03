@@ -582,7 +582,7 @@ pub(super) fn compile_closure(
     // evacuating GC fired mid-body swept values reachable only from the
     // closure's own frame — the referrer then read freed-and-reused memory.
     // Emit the same frame the top-level function path gets (function.rs).
-    let shadow_slot_map = if super::helpers::shadow_stack_enabled() {
+    let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
@@ -701,7 +701,7 @@ pub(super) fn compile_closure(
     // bind — an entry-setup hoist would make the slot active while the alloca
     // still held stack garbage.
     let capture_root_base = shadow_slot_map.len() as u32;
-    let bind_capture_slot = super::helpers::shadow_stack_enabled();
+    let bind_capture_slot = super::helpers::precise_root_analysis_enabled();
     let new_target_stack = if captures_new_target {
         let new_target_cap_idx = auto_captures.len() as u32;
         let blk = lf.block_mut(0).unwrap();

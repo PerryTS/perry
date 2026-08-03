@@ -71,34 +71,38 @@ pub(super) fn shadow_stack_enabled() -> bool {
             std::env::var("PERRY_SHADOW_STACK").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         );
-        // #7326: the statepoint backends are an alternative *lowering* of this
-        // analysis, not an independent mechanism. `reserve_shadow_slot()` is
-        // the single entry point that, under `native_stack_roots_enabled()`,
-        // allocates a stack-map slot instead of a shadow-stack slot — and the
-        // caller of that analysis returns empty maps outright when this is off.
-        //
-        // So switching the shadow stack off switches the statepoint roots off
-        // with it, and the result is a binary with NO precise frame roots that
-        // still runs and prints the right answer: measured, no `__perry_gcmap`
-        // section at all, same size as a plain shadow-off build. Nothing about
-        // the run distinguishes it from a correct one until a collection frees
-        // a live object.
-        //
-        // Refuse, rather than emit it. The bisection knob keeps its meaning on
-        // its own; it simply cannot be combined with a backend that depends on
-        // the analysis it disables.
-        if !on && native_stack_roots_enabled() {
-            panic!(
-                "perry: PERRY_SHADOW_STACK=0 cannot be combined with \
-                 PERRY_STATEPOINTS/PERRY_RS4GC. The statepoint backends reuse the \
-                 shadow stack's root-set analysis to decide what to root, so \
-                 disabling it produces a binary with no precise frame roots at all \
-                 — silently, since such a binary still runs correctly until a \
-                 collection moves something live (#7326). Drop one of the two."
-            );
-        }
         on
     })
+}
+
+/// Whether the precise-root **analysis** runs — i.e. whether
+/// `collect_pointer_typed_locals` assigns slot indices at all.
+///
+/// #7326 is the distinction this function exists to draw. There are two
+/// separable questions and one knob used to answer both:
+///
+/// 1. *Which locals hold GC pointers, and where must each stay live?*
+///    That is the analysis. It is backend-independent.
+/// 2. *How is the answer represented in the emitted code?* — Perry's
+///    heap-backed shadow frame, or a native stack map. That is the lowering,
+///    and it is chosen inside `LlFunction` (`enable_shadow_frame_inner` and
+///    `reserve_shadow_slot` both return the native path first).
+///
+/// Conflating them made `PERRY_SHADOW_STACK=0 + PERRY_STATEPOINTS=1` produce a
+/// binary with **no precise frame roots at all** — the analysis was switched
+/// off, so the statepoint lowering had nothing to lower. No `__perry_gcmap`
+/// section, same size as a plain shadow-off build, correct output. Nothing
+/// distinguished it from a good build until a collection freed a live object.
+/// #7332 made that combination a hard error as a stopgap; splitting the
+/// predicate makes it *expressible* instead, which is the prerequisite for the
+/// shadow stack's lowering ever being removed — a mode nobody can select is a
+/// mode nobody can measure.
+///
+/// Acceptance property, asserted by test: with statepoints on, this returns
+/// true regardless of `PERRY_SHADOW_STACK`, so both spellings must emit
+/// byte-identical code.
+pub(crate) fn precise_root_analysis_enabled() -> bool {
+    shadow_stack_enabled() || native_stack_roots_enabled()
 }
 
 /// Research-only moving-GC backend using LLVM's explicit statepoint
@@ -264,7 +268,7 @@ pub(super) fn enable_module_init_shadow_frame(
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &std::collections::HashSet<u32>,
 ) -> (HashMap<u32, u32>, HashMap<usize, Vec<u32>>) {
-    if !shadow_stack_enabled() {
+    if !precise_root_analysis_enabled() {
         return (HashMap::new(), HashMap::new());
     }
 

@@ -14,7 +14,7 @@ use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
 
-use super::helpers::shadow_stack_enabled;
+use super::helpers::precise_root_analysis_enabled;
 use super::helpers::{inline_hot_small_enabled, inline_hot_small_size_cap, INLINE_HOT_SMALL_MIN};
 use super::opts::CrossModuleCtx;
 use super::spec_abi::{
@@ -394,7 +394,7 @@ pub(super) fn compile_function(
     // populate the frame with live values; today the slots stay
     // zero (the tracer doesn't consume them yet — Phase A ship
     // criterion is "shadow stack is built but not yet consumed").
-    let shadow_slot_map = if shadow_stack_enabled() {
+    let shadow_slot_map = if precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =

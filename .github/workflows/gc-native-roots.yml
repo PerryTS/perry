@@ -154,6 +154,62 @@ jobs:
           grep -l "#gcmetric" $errs >/dev/null \
             || { echo "::error::no probe emitted gc metrics — the collector never ran"; exit 1; }
 
+      # #7326. The shadow stack's root-set analysis and its lowering used to be
+      # one knob, so PERRY_SHADOW_STACK=0 + PERRY_STATEPOINTS=1 switched the
+      # analysis off and left the statepoint lowering with nothing to lower: a
+      # binary with NO precise frame roots, no __perry_gcmap section, correct
+      # output, indistinguishable from a good build until a collection freed
+      # something live. #7332 made the pair a hard error as a stopgap.
+      #
+      # The predicate is now split, so the pair is expressible -- and the
+      # property that says the split is real is that the knob makes NO
+      # difference under statepoints. Assert that on the artifacts rather than
+      # the binary: the build embeds a PID-and-nonce scratch path, so two runs
+      # of the SAME configuration already differ byte-for-byte, and an
+      # end-to-end hash would be a test that can only fail.
+      #
+      # A mode nobody can select is a mode nobody can measure, which is why this
+      # matters for eventually removing the shadow-stack lowering at all.
+      - name: The shadow-stack knob is inert under statepoints (analysis/lowering split)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          probe=benchmarks/gc_ratchet/probes/01_nursery_churn.ts
+
+          PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" -o /tmp/split-on
+          PERRY_STATEPOINTS=1 PERRY_SHADOW_STACK=0 \
+            ./target/perry-dev/perry "$probe" -o /tmp/split-off
+
+          for v in on off; do
+            otool -l "/tmp/split-$v" | grep -q "sectname __perry_gcmap" \
+              || { echo "::error::split-$v has no __perry_gcmap — the analysis did not run"; exit 1; }
+            otool -s __PERRY_GCMAP __perry_gcmap "/tmp/split-$v" | tail -n +3 \
+              | awk '{$1="";print}' > "/tmp/split-$v.gcmap"
+            otool -tV "/tmp/split-$v" | grep -v '^/tmp/' > "/tmp/split-$v.text"
+          done
+
+          cmp /tmp/split-on.gcmap /tmp/split-off.gcmap \
+            || { echo "::error::root maps differ — PERRY_SHADOW_STACK still reaches the statepoint analysis"; exit 1; }
+          cmp /tmp/split-on.text /tmp/split-off.text \
+            || { echo "::error::emitted code differs — the analysis and its lowering are not cleanly split"; exit 1; }
+          echo "analysis/lowering split holds: identical root map and __text across PERRY_SHADOW_STACK"
+
+          # And the knob must keep its OWN meaning: on its own it still means
+          # "no precise roots", which is the whole point of a bisection knob.
+          PERRY_SHADOW_STACK=0 ./target/perry-dev/perry "$probe" -o /tmp/split-alone
+          otool -l /tmp/split-alone | grep -q "sectname __perry_gcmap" \
+            && { echo "::error::PERRY_SHADOW_STACK=0 alone emitted a root map — the knob lost its meaning"; exit 1; }
+
+          # ...and it must still be observable, or it is asserting nothing.
+          ./target/perry-dev/perry "$probe" -o /tmp/split-default
+          otool -tV /tmp/split-default | grep -v '^/tmp/' > /tmp/split-default.text
+          otool -tV /tmp/split-alone   | grep -v '^/tmp/' > /tmp/split-alone.text
+          cmp -s /tmp/split-default.text /tmp/split-alone.text \
+            && { echo "::error::default and PERRY_SHADOW_STACK=0 emit identical code — this probe roots nothing, so the assertions above are vacuous"; exit 1; }
+          echo "shadow-stack knob remains observable on its own"
+
       - name: Root-pressure report fails closed (--statepoint-report)
         if: ${{ !cancelled() }}
         run: |

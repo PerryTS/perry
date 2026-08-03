@@ -305,7 +305,7 @@ pub(super) fn compile_method(
     // exact-roots liveness hole as closures (see compile_closure). One extra
     // slot roots the receiver (`this` is a pointer value reachable from
     // nothing else when the caller holds it only in a register temp).
-    let shadow_slot_map = if super::helpers::shadow_stack_enabled() {
+    let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::collectors::collect_pointer_typed_locals(
@@ -333,7 +333,7 @@ pub(super) fn compile_method(
         let blk = lf.block_mut(0).unwrap();
         let this_slot = blk.alloca(DOUBLE);
         blk.store(DOUBLE, "%this_arg", &this_slot);
-        if super::helpers::shadow_stack_enabled() {
+        if super::helpers::precise_root_analysis_enabled() {
             blk.call_void(
                 "js_shadow_slot_bind",
                 &[(I32, &this_shadow_slot_idx.to_string()), (PTR, &this_slot)],
@@ -1337,7 +1337,7 @@ pub(super) fn compile_static_method(
     // the non-pointer INT32 class-ref, but `js_static_this_resolve` returns a
     // REAL heap receiver for `C.m.call(x)` / `.apply(x)` / inherited `D.m()`
     // dynamic dispatch, and that object may be reachable only from this slot.
-    let shadow_slot_map = if super::helpers::shadow_stack_enabled() {
+    let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =
@@ -1383,7 +1383,7 @@ pub(super) fn compile_static_method(
             &[(DOUBLE, &class_ref_lit)],
         );
         blk.store(DOUBLE, &resolved_this, &this_slot);
-        if super::helpers::shadow_stack_enabled() {
+        if super::helpers::precise_root_analysis_enabled() {
             blk.call_void(
                 "js_shadow_slot_bind",
                 &[(I32, &this_shadow_slot_idx.to_string()), (PTR, &this_slot)],
