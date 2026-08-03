@@ -453,6 +453,8 @@ impl LlFunction {
     /// emitted at the top of the entry block with the other entry setup.
     pub fn entry_setup_call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
         crate::ext_registry::record_ffi_call(func_name);
+        self.reg_counter
+            .note_shadow_slot_bind(func_name, args.get(1).map(|(_, v)| *v));
         let arg_str = args
             .iter()
             .map(|(ty, value)| format!("{} {}", ty, value))
@@ -540,6 +542,58 @@ impl LlFunction {
 
     pub fn blocks(&self) -> &[LlBlock] {
         &self.blocks
+    }
+
+    /// Mutable block list, for the whole-function passes that run after
+    /// lowering. See [`crate::root_reload`].
+    pub(crate) fn blocks_mut(&mut self) -> &mut Vec<LlBlock> {
+        &mut self.blocks
+    }
+
+    pub(crate) fn reg_counter(&self) -> &RegCounter {
+        &self.reg_counter
+    }
+
+    pub(crate) fn reg_counter_rc(&self) -> Rc<RegCounter> {
+        self.reg_counter.clone()
+    }
+
+    /// Index in block 0 where `entry_post_init_setup` is spliced, if this
+    /// function has an init prelude. See [`note_entry_block_insertions`].
+    ///
+    /// [`note_entry_block_insertions`]: LlFunction::note_entry_block_insertions
+    pub(crate) fn entry_init_boundary(&self) -> Option<usize> {
+        self.entry_init_boundary
+    }
+
+    /// Tell the function that `n` instructions were inserted into block 0 **at
+    /// or above** the splice point, so the splice still lands in the same place
+    /// relative to the prelude.
+    ///
+    /// ★ The count must be exactly the insertions at index ≤ the boundary.
+    /// Neither error is cosmetic:
+    ///
+    /// - **under-counting** leaves the splice too early, and the tail of the
+    ///   init prelude ends up below it — a `keys_array` global read hoisted
+    ///   above the `__perry_init_strings_*` call that populates it, i.e. a
+    ///   zero, silently;
+    /// - **over-counting** — bumping by every insertion, including the ones
+    ///   below the boundary — leaves the splice too LATE, and `to_ir` clamps an
+    ///   out-of-range boundary with `.min(instruction_count())`, which moves the
+    ///   whole post-init region to the END of the entry block. For a function
+    ///   built by `enable_post_init_shadow_frame` that region contains the
+    ///   `js_shadow_frame_enter` call itself, so every `js_shadow_slot_bind`
+    ///   in the body then runs with no frame pushed and roots NOTHING. Measured:
+    ///   the allocation-point acceptance arm went 30/30 → 0/30 with
+    ///   `TypeError: value is not a function`, which reads exactly like the
+    ///   rooting bug the pass was written to fix.
+    pub(crate) fn note_entry_block_insertions(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        if let Some(b) = self.entry_init_boundary.as_mut() {
+            *b += n;
+        }
     }
 
     pub fn num_blocks(&self) -> usize {

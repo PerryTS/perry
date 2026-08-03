@@ -9,8 +9,8 @@
 //! sorts out the registers. Explicit `phi` nodes are still emitted for
 //! control-flow merges (if/else value context, short-circuit logical ops).
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::cell::{Cell, Ref, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::codegen::FpContractMode;
@@ -71,6 +71,19 @@ pub struct RegCounter {
     /// catch/finally bodies see the *enclosing* scope, which is exactly
     /// where a throw escaping them lands at runtime.
     eh_unwind_labels: RefCell<Vec<String>>,
+    /// Every alloca this function has published to the precise-root collector
+    /// with `js_shadow_slot_bind(idx, ptr)`.
+    ///
+    /// Recorded at the choke points rather than at the thirteen emit sites,
+    /// because a fourteenth site is exactly the thing that gets added without
+    /// anyone remembering a register list somewhere else.
+    ///
+    /// A shadow slot is the one class of alloca whose contents the collector
+    /// writes behind generated code's back: an evacuating minor rewrites the
+    /// slot to the object's new address. [`crate::root_reload`] reads this set
+    /// to find the loads that rewrite makes stale. See
+    /// `docs/src/internals/gc-rooting-invariant.md`.
+    shadow_slot_allocas: RefCell<HashSet<String>>,
 }
 
 impl RegCounter {
@@ -78,7 +91,37 @@ impl RegCounter {
         Self {
             value: Cell::new(0),
             eh_unwind_labels: RefCell::new(Vec::new()),
+            shadow_slot_allocas: RefCell::new(HashSet::new()),
         }
+    }
+
+    /// Record `ptr` when `callee` is the precise-root bind.
+    ///
+    /// Called from the two choke points every bind form passes through:
+    /// [`LlBlock::call_void`] — which carries the direct call AND the slow arm
+    /// of #7088's inline diamond, since that arm emits the same call — and
+    /// `LlFunction::entry_setup_call_void`, which carries the persistent-slot
+    /// bind hoisted into the entry prelude.
+    pub(crate) fn note_shadow_slot_bind(&self, callee: &str, second_arg: Option<&str>) {
+        if callee != "js_shadow_slot_bind" {
+            return;
+        }
+        // `js_shadow_slot_bind(i32 idx, ptr %slot)`: the slot is argument two.
+        // A non-register operand means the bind was built some other way, and
+        // the conservative answer is to record nothing — a slot this set does
+        // not name is simply never reloaded.
+        if let Some(ptr) = second_arg {
+            if ptr.starts_with('%') {
+                self.shadow_slot_allocas
+                    .borrow_mut()
+                    .insert(ptr.to_string());
+            }
+        }
+    }
+
+    /// The shadow slots bound in this function. See [`crate::root_reload`].
+    pub(crate) fn shadow_slot_allocas(&self) -> Ref<'_, HashSet<String>> {
+        self.shadow_slot_allocas.borrow()
     }
 
     /// Enter an invoke-EH handler scope: calls emitted from here until the
@@ -242,6 +285,14 @@ impl LlBlock {
     /// intermediate `String` per line.
     pub fn insts(&self) -> &[crate::inst::LlInst] {
         &self.instructions
+    }
+
+    /// Mutable instruction list, for the whole-function passes that run after
+    /// lowering. See [`crate::root_reload`]. Not for emitters — they go through
+    /// [`LlBlock::push_inst`] / [`LlBlock::emit`], which keep the terminator
+    /// discipline and the try-region bookkeeping.
+    pub(crate) fn insts_mut(&mut self) -> &mut Vec<crate::inst::LlInst> {
+        &mut self.instructions
     }
 
     // -------- Arithmetic (double) --------
@@ -1136,6 +1187,8 @@ impl LlBlock {
     pub fn call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
+        self.counter
+            .note_shadow_slot_bind(func_name, args.get(1).map(|(_, v)| *v));
         if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
             let arg_str = format_args(args);
             self.emit(format!(

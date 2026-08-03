@@ -2566,6 +2566,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .native_rep_records
         .extend(typed_clone_rejection_records);
 
+    // #7280: re-read every shadow slot below the collection points that can run
+    // under it. Whole-function, so it runs here rather than inside a lowering —
+    // the shape it fixes is spread over dozens of lowerings, fifteen arms of
+    // `index_set.rs` alone. It runs BEFORE any rendering path so the text
+    // renderer and the in-process constructor see the same IR; a pass living in
+    // one of them would silently not apply to the other.
+    // See `crate::root_reload`.
+    crate::root_reload::apply_to_module(&mut llmod);
+
     let verify_native_regions = opts.verify_native_regions
         || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");
     if verify_native_regions {

@@ -379,6 +379,17 @@ impl LlModule {
         self.functions.get_mut(idx)
     }
 
+    /// Every defined function, mutably — for the whole-module passes that run
+    /// after lowering and before any rendering path. See
+    /// [`crate::root_reload`], and note that "before ANY rendering path" is the
+    /// load-bearing part: the text renderer (`to_ir`, `render_codegen_units`)
+    /// and the in-process constructor (`for_each_final_line`) are separate
+    /// consumers, so a pass living inside one of them would silently not apply
+    /// to the other.
+    pub(crate) fn functions_mut(&mut self) -> impl Iterator<Item = &mut LlFunction> {
+        self.functions.iter_mut()
+    }
+
     /// Number of functions defined so far. Used to recover the index of a
     /// just-`define_function`ed function (whose `&mut` borrow must be released
     /// before the index can be read) when emitting a sequence of functions —

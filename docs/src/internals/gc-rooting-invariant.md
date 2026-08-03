@@ -296,13 +296,57 @@ only copy is in a register, there is nothing at that moment for any runtime
 probe to notice. These instruments catch the *consequence*, later. The static
 checker catches the *cause*, now.
 
+## The corpus problem, and the two corpora (#7280)
+
+**A hand-written corpus cannot express this class of bug at dependency scale,
+and for a while nobody could tell, because it was green.**
+
+`scripts/gc_root_dominance_corpus.sh` compiles ~124 `test-files/` sources
+chosen for the lowerings they exercise. It reads **zero** in both modes the CI
+gate runs — and it read zero while twenty lines of stock `zod` faulted
+deterministically under `PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`. #7280 puts it in
+one sentence: *25 curated files pass while 20 lines of stock zod fail.*
+
+That is not a size problem. Both corpora were measured on the same compiler with
+`--stale-registers --moving-only`:
+
+| corpus | stale uses | what dominates |
+|---|---|---|
+| curated, 124 sources / 144 modules | 116 | property-GET helper windows, `js_number_coerce`, `js_closure_callN` |
+| dependency-scale, 81 modules / 62 MB | 370 | `js_object_assign_one` (object spread) 137, `js_new_function_construct` 102, `js_closure_call*` 30 |
+
+The curated corpus produces 12 of the first population and 1 of the second. A
+hand-written test allocates a couple of objects and calls a couple of helpers; a
+library spreads objects into objects, boxes every mutable capture because its
+closures outlive their frames, and builds values field by field out of data.
+**The rooting hazards live in the shapes**, so a corpus without the shapes
+cannot express them however many files it has.
+
+So there is a second corpus, generated from a real npm dependency rather than
+from anything written for the occasion:
+
+```bash
+npm ci --ignore-scripts                       # zod is a package.json devDependency
+./scripts/gc_root_dominance_dep_corpus.sh ir-corpus-dep
+python3 scripts/gc_root_dominance_check.py ir-corpus-dep --moving-only -v
+```
+
+`test-files/gc-dep-corpus/main.ts` is the only entry point; the rest of that
+directory reaches the compiler by being imported from it, and the generator
+**asserts that every `.ts` in the directory produced a module** — which is a
+check a size floor could not be, since ~90 modules of `zod` swamp any count a
+missing 40-line source would cross.
+
+Nothing is sampled away: all 81 modules and all 62 MB are checked. Emitting
+costs ~8s and the two gated arms ~4s, because those are linear in instruction
+count. The `--stale-registers` budget is the expensive one (~5 min): its scan is
+superlinear, and 62 MB is 62 MB.
+
 ## The CI gate
 
-`.github/workflows/gc-root-dominance.yml` runs the checker on every PR over a
-versioned corpus of ~99 `test-files/` sources chosen for the lowerings they
-exercise (class expressions, constructors, object/array literals, computed
-reads, property stores, closures, dynamic dispatch). The whole job is a few
-minutes; the check itself is about three seconds over ~2000 functions.
+`.github/workflows/gc-root-dominance.yml` runs the checker on every PR over both
+corpora. The whole job is a few minutes plus the compiler build; the two gated
+checks are about three seconds each over ~2000 and ~12900 functions.
 
 It is built to be able to fail, against all four hazards in CLAUDE.md:
 

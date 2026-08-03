@@ -372,6 +372,12 @@ GLOB_DRIVEN = (
     ("scripts/gc_root_dominance_corpus.sh", "PATTERNS globs over test-files/; "
      "a pattern that matches nothing is already loud, and MIN_COMPILED floors "
      "the corpus size"),
+    ("scripts/gc_root_dominance_dep_corpus.sh", "ONE fixed entry point; the "
+     "rest of test-files/gc-dep-corpus/ reaches the compiler only by being "
+     "imported from it, so the registry is the import graph. The script "
+     "itself asserts that every .ts in that directory produced a module — "
+     "which is the check a size floor could NOT be, since ~90 modules of "
+     "`zod` swamp any count a missing 40-line source would cross"),
     ("benchmarks/public_baseline.py", "glob list over benchmarks/**"),
     ("cargo test", "crates/<c>/tests/*.rs suite roots are auto-discovered "
      "targets; the deeper files are mechanism `rust-test-modules` above"),

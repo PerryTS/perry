@@ -617,6 +617,21 @@ pub extern "C" fn js_regexp_new(
     pattern: *const StringHeader,
     flags: *const StringHeader,
 ) -> *mut RegExpHeader {
+    // ★ `pattern` is a raw `StringHeader*` in a Rust local, and this function
+    // allocates twice below (`js_string_from_str` for the canonical flags, then
+    // `gc_malloc` for the header). Either can drive an evacuating minor that
+    // relocates the pattern string, after which this argument names retired
+    // from-space — and it is then *stored into the header* as `pattern_ptr`,
+    // so the damage is permanent rather than transient.
+    //
+    // This is the runtime-Rust half of the rooting invariant (#7249), the half
+    // `scripts/gc_root_dominance_check.py` is structurally blind to: it reads
+    // emitted IR and cannot see a Rust local. It was found the way that class
+    // has to be found — `PERRY_GC_PROTECT_FROMSPACE=1
+    // PERRY_GC_PROTECT_FROMSPACE_DEPTH=800` faulted here on a `zod` workload,
+    // in `js_regexp_new` itself, on BOTH sides of an unrelated codegen change.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern_root = scope.root_string_ptr(pattern);
     let pattern_str = if is_valid_ptr(pattern) {
         string_as_str(pattern)
     } else {
@@ -739,6 +754,16 @@ pub extern "C" fn js_regexp_new(
     let arc = get_or_compile_regex(pattern_str, flags_str);
     let regex_ptr = Arc::into_raw(arc) as *mut Regex;
 
+    // ★ Last use of the borrowed pattern text before this function allocates.
+    // `pattern_str` borrows the GC string; the two allocations below can move
+    // it, and everything after this point reads the pattern from `owned_pattern`
+    // (a Rust `String`, which relocation cannot invalidate) or from
+    // `pattern_root` (a runtime handle the collector rewrites). Nothing below
+    // may use `pattern_str` or the incoming `pattern` argument again.
+    let owned_pattern = pattern_str.to_string();
+    #[allow(unused_variables)]
+    let pattern_str: () = ();
+
     // Allocate the header via gc_malloc so it's tracked by the GC and gets
     // freed when no longer referenced. Previously this used raw alloc() and
     // leaked every header, which was a 64-byte-per-call leak on top of the
@@ -759,6 +784,11 @@ pub extern "C" fn js_regexp_new(
         // A previous (collected) RegExp at this address may have left expando
         // properties in the side table; a fresh RegExp must start clean.
         crate::object::exotic_expando::expando_clear_on_alloc(ptr as usize);
+
+        // ★ Re-read the pattern from its root. Both allocations above have run,
+        // so the incoming argument may name from-space; the handle is a mutable
+        // root the collector rewrote.
+        let pattern = pattern_root.get_raw_const_ptr::<StringHeader>();
 
         (*ptr).regex_ptr = regex_ptr;
         (*ptr).pattern_ptr = pattern;
@@ -813,7 +843,7 @@ pub extern "C" fn js_regexp_new(
         (*ptr).fancy_ptr = FANCY_CACHE.with(|fc| {
             match fc
                 .borrow()
-                .get(&(pattern_str.to_string(), flags_str.to_string()))
+                .get(&(owned_pattern.clone(), flags_str.to_string()))
             {
                 Some(arc) => Arc::into_raw(arc.clone()) as *const (),
                 None => std::ptr::null(),
@@ -829,10 +859,8 @@ pub extern "C" fn js_regexp_new(
         // Issue #637: side-table owned copies of pattern + flags so
         // `.source` / `.flags` survive GC of the input StringHeaders.
         REGEX_SOURCE_TABLE.with(|t| {
-            t.borrow_mut().insert(
-                ptr as usize,
-                (pattern_str.to_string(), flags_str.to_string()),
-            );
+            t.borrow_mut()
+                .insert(ptr as usize, (owned_pattern.clone(), flags_str.to_string()));
         });
 
         ptr

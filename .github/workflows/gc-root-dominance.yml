@@ -157,6 +157,19 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # ★ The dependency-scale corpus needs the dependency.
+      #
+      # `zod` is this repo's own package.json devDependency, pinned by
+      # package-lock.json and governed by the same soak window as everything
+      # else in that file -- not a fixture invented for this job.
+      # `--ignore-scripts` because nothing here needs a lifecycle script to
+      # run, and a corpus generator is a bad place to execute one.
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: Install the npm dependencies the dep corpus compiles
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Cache cargo
         uses: actions/cache@v6
         with:
@@ -242,10 +255,95 @@ jobs:
             --allowlist scripts/gc_root_dominance_allowlist.json \
             -v
 
+      # ★★ The DEPENDENCY-SCALE corpus (#7280).
+      #
+      # Everything above this line runs over ~124 hand-written `test-files/`
+      # sources. That corpus read ZERO in both gated modes while twenty lines of
+      # stock `zod` faulted deterministically under the from-space protector,
+      # and #7280 records the gap in one sentence: 25 curated files pass while
+      # 20 lines of stock zod fail.
+      #
+      # It is not a size problem, it is a distribution problem. Measured with
+      # `--stale-registers --moving-only` on the same compiler:
+      #
+      #   curated (124 sources, 144 modules):   116 stale uses, and what
+      #     dominates is property-GET helper windows and js_number_coerce
+      #   dependency-scale (81 modules, 62 MB): 370 stale uses, and what
+      #     dominates is js_object_assign_one (object spread, 137) and
+      #     js_new_function_construct (102) -- populations the curated corpus
+      #     produces 12 and 1 of
+      #
+      # Nothing is sampled away: all 81 modules and all 62 MB are checked. The
+      # cost is ~8s to emit and ~4s for the two gated arms below, because those
+      # arms are linear in instruction count. The `--stale-registers` ratchet is
+      # the expensive one (~5 min) and says so where it runs.
+      - name: Emit the dependency-scale IR corpus
+        run: ./scripts/gc_root_dominance_dep_corpus.sh ir-corpus-dep
+
+      - name: Check root-store dominance (dependency-scale)
+        run: |
+          set -euo pipefail
+          # Floors from the corpus as of this commit (81 modules, ~12900
+          # functions, ~7700 root stores), set below that with room for the
+          # dependency's own churn. `zod` growing is fine; `zod` no longer
+          # compiling natively is the finding, and these are what make it one.
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
+            --moving-only \
+            --min-files 60 --min-binds 4000 --min-funcs 6000 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+
+      - name: Check that every GC value in an alloca has a root store (dependency-scale)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
+            --unrooted-allocas \
+            --moving-only \
+            --min-files 60 --min-binds 4000 --min-funcs 6000 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            -v
+
+      # ★ The stale-register RATCHET, on both corpora.
+      #
+      # `--stale-registers` asks the third question: not "is the root store
+      # late" and not "is there a root store at all", but "is a register holding
+      # a rooted value used below a collection point". It is the mode that found
+      # #7206's two bugs and the mode #7280's zod fault lives in, and until now
+      # it ran only by hand -- so its number could move in either direction
+      # between one investigation and the next with nothing to say so.
+      #
+      # It is a BUDGET rather than an allowlist because the residual is a
+      # population, not a list of triaged sites: the remaining uses are the ones
+      # whose slot the program itself reassigns inside the window, which need a
+      # temp root rather than a re-read (see crate::root_reload). A budget can
+      # only be lowered, and lowering it is the ratchet.
+      #
+      # This step is minutes, not seconds -- the scan is superlinear in
+      # instruction count and the dependency corpus is 62 MB. That is the price
+      # of checking the population that actually breaks.
+      - name: Stale-register budget (curated)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus \
+            --stale-registers --moving-only \
+            --min-files 90 --min-binds 1500 --min-funcs 1200 \
+            --max-stale 39
+
+      - name: Stale-register budget (dependency-scale)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
+            --stale-registers --moving-only \
+            --min-files 60 --min-binds 4000 --min-funcs 6000 \
+            --max-stale 118
+
       - name: Upload the IR corpus on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: gc-root-dominance-ir
-          path: ir-corpus
+          path: |
+            ir-corpus
+            ir-corpus-dep
           retention-days: 7
