@@ -11,6 +11,7 @@ use crate::expr::{lower_expr, lower_expr_value, materialize_js_value, FnCtx};
 use crate::native_value::{LoweredValue, MaterializationReason};
 use crate::types::DOUBLE;
 
+mod counter_range;
 mod if_stmt;
 mod let_buffer_views;
 mod let_stmt;

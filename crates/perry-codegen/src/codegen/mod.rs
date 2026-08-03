@@ -1173,6 +1173,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    // #7286 lever (c): interprocedural integer ranges for numeric function
+    // parameters, computed once per module from the same folded top-level
+    // `const` map the call-site arguments resolve through.
+    let param_int_ranges_summary =
+        crate::collectors::collect_param_int_ranges(hir, &compile_time_constants);
+
     // Issue #235: per-method explicit-param-count map covering BOTH local
     // classes (from `hir.classes`) AND imported classes (from
     // `opts.imported_classes`). Every method-call dispatch site in
@@ -1707,6 +1713,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .filter(|f| crate::collectors::returns_i32_identity_arg(f))
             .map(|f| f.id)
             .collect(),
+        param_int_ranges: param_int_ranges_summary,
         // Phase 2 spec-ABI plans are selected AFTER the i64-specialization
         // pass (mutual exclusion), below; start empty here.
         spec_abi_functions: std::collections::HashMap::new(),
