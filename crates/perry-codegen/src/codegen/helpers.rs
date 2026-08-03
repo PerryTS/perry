@@ -67,10 +67,37 @@ pub(super) fn shadow_stack_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        !matches!(
+        let on = !matches!(
             std::env::var("PERRY_SHADOW_STACK").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
-        )
+        );
+        // #7326: the statepoint backends are an alternative *lowering* of this
+        // analysis, not an independent mechanism. `reserve_shadow_slot()` is
+        // the single entry point that, under `native_stack_roots_enabled()`,
+        // allocates a stack-map slot instead of a shadow-stack slot — and the
+        // caller of that analysis returns empty maps outright when this is off.
+        //
+        // So switching the shadow stack off switches the statepoint roots off
+        // with it, and the result is a binary with NO precise frame roots that
+        // still runs and prints the right answer: measured, no `__perry_gcmap`
+        // section at all, same size as a plain shadow-off build. Nothing about
+        // the run distinguishes it from a correct one until a collection frees
+        // a live object.
+        //
+        // Refuse, rather than emit it. The bisection knob keeps its meaning on
+        // its own; it simply cannot be combined with a backend that depends on
+        // the analysis it disables.
+        if !on && native_stack_roots_enabled() {
+            panic!(
+                "perry: PERRY_SHADOW_STACK=0 cannot be combined with \
+                 PERRY_STATEPOINTS/PERRY_RS4GC. The statepoint backends reuse the \
+                 shadow stack's root-set analysis to decide what to root, so \
+                 disabling it produces a binary with no precise frame roots at all \
+                 — silently, since such a binary still runs correctly until a \
+                 collection moves something live (#7326). Drop one of the two."
+            );
+        }
+        on
     })
 }
 
