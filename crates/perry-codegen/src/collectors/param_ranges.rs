@@ -268,9 +268,20 @@ pub(crate) fn collect_param_int_ranges(
         }
     }
 
+    // `specialize.rs` copies `f.id` verbatim when monomorphizing, so a FuncId
+    // is not guaranteed unique. Two entries sharing an id would meet each
+    // other's call sites against the wrong parameter list.
+    let mut func_id_counts: HashMap<u32, u32> = HashMap::new();
+    for f in &hir.functions {
+        *func_id_counts.entry(f.id).or_default() += 1;
+    }
+
     let mut ranges = ParamIntRanges::new();
     for f in &hir.functions {
-        if scan.poisoned.contains(&f.id) || !function_shape_is_summarizable(f) {
+        if scan.poisoned.contains(&f.id)
+            || func_id_counts.get(&f.id).copied() != Some(1)
+            || !function_shape_is_summarizable(f)
+        {
             continue;
         }
         let Some(sites) = scan.call_sites.get(&f.id) else {
@@ -430,7 +441,10 @@ mod tests {
     fn exported_function_is_not_summarized() {
         let mut f = matmul_fn(Vec::new());
         f.is_exported = true;
-        let hir = module(vec![call(vec![Expr::Integer(0), Expr::Integer(4)])], vec![f]);
+        let hir = module(
+            vec![call(vec![Expr::Integer(0), Expr::Integer(4)])],
+            vec![f],
+        );
         assert!(collect_param_int_ranges(&hir, &constants()).is_empty());
     }
 
@@ -440,7 +454,10 @@ mod tests {
     fn rest_parameter_is_not_summarized() {
         let mut f = matmul_fn(Vec::new());
         f.params[1].is_rest = true;
-        let hir = module(vec![call(vec![Expr::Integer(0), Expr::Integer(4)])], vec![f]);
+        let hir = module(
+            vec![call(vec![Expr::Integer(0), Expr::Integer(4)])],
+            vec![f],
+        );
         assert!(collect_param_int_ranges(&hir, &constants()).is_empty());
     }
 

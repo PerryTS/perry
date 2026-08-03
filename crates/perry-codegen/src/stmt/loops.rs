@@ -4966,16 +4966,14 @@ fn lower_for_after_init_with_i32_bound(
             }
         }
     }
-    if let Some(fact) =
-        super::counter_range::classify_for_counter_range(
-            init,
-            condition,
-            update,
-            body,
-            ctx,
-            loop_proof_scope_id,
-        )
-    {
+    if let Some(fact) = super::counter_range::classify_for_counter_range(
+        init,
+        condition,
+        update,
+        body,
+        ctx,
+        loop_proof_scope_id,
+    ) {
         ctx.int_range_facts.push(fact);
     }
 

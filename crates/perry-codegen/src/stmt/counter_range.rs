@@ -310,10 +310,7 @@ mod tests {
 
     /// `j = j + <stride>`
     fn strided_update(stride: Expr) -> Expr {
-        Expr::LocalSet(
-            COUNTER,
-            Box::new(add(Expr::LocalGet(COUNTER), stride)),
-        )
+        Expr::LocalSet(COUNTER, Box::new(add(Expr::LocalGet(COUNTER), stride)))
     }
 
     fn sieve_facts() -> TestFacts {
