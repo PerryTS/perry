@@ -64,6 +64,63 @@ extern "C" {
     fn _Unwind_GetRegionStart(ctx: *mut UnwindContext) -> usize;
     fn _Unwind_SetGR(ctx: *mut UnwindContext, reg_index: c_int, value: usize);
     fn _Unwind_SetIP(ctx: *mut UnwindContext, value: usize);
+    fn _Unwind_Backtrace(
+        trace: extern "C" fn(*mut UnwindContext, *mut core::ffi::c_void) -> UnwindReasonCode,
+        arg: *mut core::ffi::c_void,
+    ) -> UnwindReasonCode;
+}
+
+// ---------------------------------------------------------------------------
+// Unwind-table self-check.
+// ---------------------------------------------------------------------------
+
+/// The exception transport requires the unwinder to step *through* runtime
+/// Rust frames, which requires those frames to carry unwind tables. The
+/// runtime is built `panic=abort` (no tables by default) plus
+/// `-C force-unwind-tables=yes` — and that flag rides on RUSTFLAGS, which a
+/// stray environment override silently drops. A runtime built that way
+/// strands EVERY throw that crosses a helper frame. This check runs once, on
+/// the first `js_eh_try_push` of the process: `_Unwind_Backtrace` uses the
+/// same CFI the raise path does, so if it cannot see past this module's own
+/// nested Rust frames, the raise path is broken too — abort loudly at the
+/// first `try` instead of stranding the first cross-helper throw.
+pub(crate) fn verify_unwind_tables_once() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let frames = selfcheck_frame_a();
+        // With tables present the backtrace sees at least the two
+        // #[inline(never)] frames plus their callers; without them it stops
+        // after the first frame (or errors out with a count of 0/1).
+        if frames < 3 {
+            eprintln!(
+                "perry: FATAL: unwind tables are missing from this runtime \
+                 build ({frames} frame(s) visible to the unwinder). The \
+                 exception transport cannot cross runtime frames; rebuild \
+                 with RUSTFLAGS=\"-C force-unwind-tables=yes\" (see \
+                 docs/invoke-eh-experiment.md)."
+            );
+            std::process::abort();
+        }
+    });
+}
+
+#[inline(never)]
+fn selfcheck_frame_a() -> usize {
+    std::hint::black_box(selfcheck_frame_b()) + usize::from(std::hint::black_box(false))
+}
+
+#[inline(never)]
+fn selfcheck_frame_b() -> usize {
+    extern "C" fn count(_ctx: *mut UnwindContext, arg: *mut core::ffi::c_void) -> UnwindReasonCode {
+        unsafe { *(arg as *mut usize) += 1 };
+        _URC_CONTINUE_UNWIND
+    }
+    let mut n: usize = 0;
+    unsafe {
+        _Unwind_Backtrace(count, &mut n as *mut usize as *mut core::ffi::c_void);
+    }
+    std::hint::black_box(n)
 }
 
 // DWARF register numbers for the exception-pointer / exception-selector

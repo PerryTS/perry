@@ -164,6 +164,12 @@ pub extern "C" fn js_try_push() -> *mut i32 {
 /// this handler via `_Unwind_RaiseException` and the frame's landing pad.
 #[no_mangle]
 pub extern "C" fn js_eh_try_push() {
+    // First `try` of the process: prove the unwinder can step runtime
+    // frames (a runtime built without forced unwind tables would strand
+    // every cross-helper throw). Windows needs no check — MSVC x64 unwind
+    // tables are mandatory for all functions.
+    #[cfg(not(windows))]
+    crate::eh::verify_unwind_tables_once();
     try_push_with_kind(HandlerKind::Unwind);
 }
 
