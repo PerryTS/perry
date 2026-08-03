@@ -124,14 +124,17 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
+        if: ${{ !cancelled() }}
         run: cargo fmt --all -- --check
 
       - name: Audit workspace architecture
+        if: ${{ !cancelled() }}
         run: |
           python3 scripts/workspace_architecture.py --self-test
           python3 scripts/workspace_architecture.py --check --print-summary
 
       - name: Public benchmark evidence freshness
+        if: ${{ !cancelled() }}
         run: |
           PYTHONPATH=. python3 tests/test_public_baseline.py
           # README embedded table is optional since #6736 (marketing landing
@@ -145,6 +148,7 @@ jobs:
       # cargo-check incrementality, and hide regressions in code review.
       # Allowlist + exclusions live in the script.
       - name: File size limit
+        if: ${{ !cancelled() }}
         run: ./scripts/check_file_size.sh
 
       # Well-known binding provenance pins: every third-party binding in
@@ -154,6 +158,7 @@ jobs:
       # (no network); the weekly update runs `--check --refresh` to surface
       # newly-soaked upstream releases as advisories.
       - name: Binding upstream pins (lock-step)
+        if: ${{ !cancelled() }}
         run: node scripts/binding_pins.mjs --check
 
       # GC write-barrier store-site inventory: every raw heap-slot store in
@@ -162,6 +167,7 @@ jobs:
       # in scripts/gc_store_site_allowlist.txt). Catches new unbarriered
       # old->young store paths before they become nondeterministic segfaults.
       - name: GC store-site inventory
+        if: ${{ !cancelled() }}
         run: |
           python3 scripts/gc_store_site_inventory.py --self-test
           python3 scripts/gc_store_site_inventory.py
@@ -174,6 +180,7 @@ jobs:
       # they become Linux-only segfaults (#1843, #4004, #4665, #4800 class).
       # Allowlist: scripts/addr_class_allowlist.txt.
       - name: Address-classification audit
+        if: ${{ !cancelled() }}
         run: |
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
@@ -182,9 +189,11 @@ jobs:
       # its own logic is unit-checked on the cheap job rather than only being
       # exercised 8 shards deep.
       - name: Gap snapshot checker self-test
+        if: ${{ !cancelled() }}
         run: python3 scripts/gap_snapshot.py --self-test
 
       - name: Platform-aware parity allowlist self-test
+        if: ${{ !cancelled() }}
         run: python3 scripts/parity_known_failures.py --self-test
 
       # Moving-GC gate wiring. The GC gates are the ones this repo has most
@@ -201,6 +210,7 @@ jobs:
       # server-side state, not a file in the tree — and says so; `--list` prints
       # what is and is not covered.
       - name: Moving-GC gate wiring
+        if: ${{ !cancelled() }}
         run: |
           python3 scripts/gc_gate_wiring_check.py --self-test
           python3 scripts/gc_gate_wiring_check.py
@@ -215,6 +225,7 @@ jobs:
       # cites an issue, and the matrix still calls the checker at all — a gate
       # nobody invokes is the same hazard one level up).
       - name: GC matrix liveness gate
+        if: ${{ !cancelled() }}
         run: |
           python3 scripts/gc_matrix_liveness_check.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --check-registry
