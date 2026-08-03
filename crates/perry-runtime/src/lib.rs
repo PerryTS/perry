@@ -69,6 +69,8 @@ pub mod eh;
 #[cfg(windows)]
 #[path = "eh_windows.rs"]
 pub mod eh;
+#[cfg(not(windows))]
+pub(crate) mod eh_walker;
 pub mod embedded;
 pub mod error;
 pub mod event_pump;

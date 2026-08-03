@@ -240,6 +240,9 @@ dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
 thiserror.workspace = true
 anyhow.workspace = true
 libc.workspace = true
+# Owned single-phase unwinder (#7302 follow-up): decodes .eh_frame CFI for
+# the per-PC step cache. Read-only, no_std-capable subset.
+gimli = { version = "0.34", default-features = false, features = ["read"] }
 rand = "0.10"
 regex = { workspace = true, optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
