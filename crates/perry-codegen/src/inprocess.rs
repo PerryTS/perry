@@ -245,3 +245,60 @@ fn optimize_and_emit(
         .map_err(|e| anyhow!("object emission failed:\n{}", e.to_string()))?;
     Ok(obj.as_slice().to_vec())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Layer-2 readiness (#7174, engine-plan layer 0 -> 2): the in-process
+    /// pipeline can schedule `RewriteStatepointsForGC` at the pinned LLVM —
+    /// no `opt` subprocess, no version-skewed toolchain. This is the exact
+    /// mechanism #7108 measured as viable-but-blocked under text-plus-clang.
+    /// A statepoint lands at the may-GC call and the live GC pointer is
+    /// relocated across it — the property that makes the register-held-
+    /// pointer bug class unrepresentable.
+    #[test]
+    fn rs4gc_schedules_in_process() {
+        let context = Context::create();
+        let ir = r#"
+declare ptr addrspace(1) @alloc()
+
+define ptr addrspace(1) @f(ptr addrspace(1) %p) gc "statepoint-example" {
+entry:
+  %q = call ptr addrspace(1) @alloc()
+  ret ptr addrspace(1) %p
+}
+"#;
+        let module = parse_ir_text(&context, ir, "rs4gc_probe").expect("probe parses");
+        global_init(&[]);
+        let triple = TargetMachine::get_default_triple();
+        let target = Target::from_triple(&triple).expect("host target");
+        let tm = target
+            .create_target_machine(
+                &triple,
+                "",
+                "",
+                OptimizationLevel::None,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
+            .expect("target machine");
+        module
+            .run_passes(
+                "rewrite-statepoints-for-gc",
+                &tm,
+                PassBuilderOptions::create(),
+            )
+            .expect("RS4GC pipeline runs in-process");
+        let printed = module.print_to_string().to_string();
+        assert!(
+            printed.contains("gc.statepoint"),
+            "no statepoint emitted:\n{printed}"
+        );
+        assert!(
+            printed.contains("gc.relocate"),
+            "live GC pointer not relocated across the call:\n{printed}"
+        );
+        module.verify().expect("statepoint IR verifies");
+    }
+}
