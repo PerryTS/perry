@@ -368,6 +368,21 @@ From #7196:
 - `PERRY_GC_PROTECT_FROMSPACE=1` — `mprotect` from-space after evacuation so a
   stale read faults immediately instead of reading plausible garbage.
 - `PERRY_GC_FROMSPACE_SCAN_ABORT` — now actually runs.
+- `PERRY_GC_SCHEDULE_SEED=<u64>` (+ `PERRY_GC_SCHEDULE_RATE`, default `0.05`) —
+  collect on a deterministic pseudo-random schedule instead of at every
+  safepoint. Reach for this when zeal is *too* blunt: on a workload whose timing
+  zeal distorts enough to kill it somewhere uninteresting, and — more often —
+  when you need the failure to come back. The schedule is a pure function of
+  `(seed, per-thread safepoint ordinal)`, so a seed that fails is a reproducer,
+  which is what turns "1 run in 60" into something you can bisect against.
+  `scripts/gc_schedule_fuzz.sh <binary> [seeds]` sweeps seeds and prints a
+  reproduce command per failure.
+
+> **A rate is not a substitute for a schedule.** Re-running one binary 60 times
+> re-runs one schedule 60 times; with zero failures in `N` runs the 95% upper
+> bound on the true rate is only ~`3/N`, so 120 clean runs bound a 1.7% bug at
+> 2.5% — no evidence at all. Varying *when* collections fire is the only cheap
+> way to explore the space the bug actually lives in.
 
 > **`PERRY_GC_PROTECT_FROMSPACE_DEPTH` defaults to 4, and that default produces
 > FALSE GREENS.** Four levels of retained from-space is not enough to still be

@@ -147,6 +147,11 @@ mod poll_arm;
 mod zeal;
 pub use poll_arm::PERRY_GC_POLL_ARMED;
 pub(crate) use poll_arm::{arm_poll, disarm_poll, poll_armed, resolve_poll_seed};
+/// #7154 tooling: the middle setting between normal pacing and zeal — collect on
+/// a deterministic pseudo-random schedule derived from a seed, so a failing seed
+/// is a reproducer. Debug-only (`PERRY_GC_SCHEDULE_SEED=<u64>`).
+pub(crate) mod schedule;
+pub use schedule::{gc_schedule_forced_collections, gc_schedule_safepoints};
 pub use verify::*;
 pub use zeal::{
     copying_minor_cycles, loop_polls_reached, moved_objects_total, zeal_forced_collections,
@@ -390,6 +395,7 @@ fn gc_force_evacuate_enabled() -> bool {
     // minor that leaves survivors in place would move nothing, and "an unrooted
     // value moves on its first exposure" is the entire contract of zeal mode.
     gc_zeal_enabled()
+        || schedule::gc_schedule_enabled()
         || matches!(
             std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
             Ok("1") | Ok("on") | Ok("true")
@@ -989,6 +995,13 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     crate::json_tape_store::release_current_thread_lazy_tapes();
     crate::set::release_current_thread_set_side_allocations();
     emit_zeal_liveness_verdict();
+    // Every process-exit path funnels through here — the generated exit
+    // epilogue, `js_process_exit`, and the fatal-path teardown — and perry's own
+    // exits call `_exit`, so `atexit` alone would not see them. Print the seeded
+    // GC-schedule summary here so a *passing* run still reports how many
+    // safepoints the schedule actually saw. Inert (one cached-`Option` load) and
+    // once-only when the mode is off.
+    schedule::report_exit_summary();
 }
 
 /// Print what `PERRY_GC_ZEAL=1` actually did, and **fail the process** when the
@@ -1018,8 +1031,7 @@ fn emit_zeal_liveness_verdict() {
             eprintln!("{complaint}");
             std::process::exit(70);
         }
-    }
-}
+    }}
 
 /// #5093: parse a boolean-ish env var by value (not mere presence): true for
 /// `1`/`true`/`on`/`yes` (case-insensitive), false for unset / `0`/`false`/`off`

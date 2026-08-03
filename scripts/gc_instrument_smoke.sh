@@ -124,6 +124,18 @@ nozeal_retired="$(run_arm protect PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_
 echo "== arm 3: PROTECT_FROMSPACE=1 + ZEAL=1 (the investigation pairing) =="
 zeal_retired="$(run_arm protect+zeal PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
 
+echo "== arm 4: PROTECT_FROMSPACE=1 + SCHEDULE_SEED (the tunable middle) =="
+sched_retired="$(run_arm protect+schedule PERRY_GC_SCHEDULE_SEED=20260803 PERRY_GC_SCHEDULE_RATE=0.25 \
+  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
+
+echo "== arm 5: the same seed again (the reproducer property) =="
+sched_repeat="$(run_arm protect+schedule-repeat PERRY_GC_SCHEDULE_SEED=20260803 PERRY_GC_SCHEDULE_RATE=0.25 \
+  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
+
+echo "== arm 6: a different seed (the sweep must explore something) =="
+sched_other="$(run_arm protect+schedule-other PERRY_GC_SCHEDULE_SEED=20260804 PERRY_GC_SCHEDULE_RATE=0.25 \
+  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
+
 # ---- non-vacuity gate -------------------------------------------------------
 # The subject must have been LIVE. Without this, every arm above could pass
 # having run zero copying minors — the exact failure mode #6942/#7024/#7025
@@ -413,7 +425,42 @@ if [[ $(( scale_forced * 4 )) -ge "$scale_polls" ]]; then
   exit 1
 fi
 echo "  correct output in ${scale_elapsed}s (budget ${ZEAL_BUDGET_S}s), $zeal_line"
+# ---- the seeded schedule's three claims -------------------------------------
+# It is a MIDDLE setting: denser than pressure alone, sparser than zeal. A
+# schedule that landed on either endpoint would be a second name for something
+# that already exists.
+if [[ "$sched_retired" -le "$nozeal_retired" ]]; then
+  echo "FAIL: PERRY_GC_SCHEDULE_SEED forced no additional collection" >&2
+  echo "      (pressure-only=$nozeal_retired, seeded=$sched_retired)." >&2
+  exit 1
+fi
+if [[ "$sched_retired" -ge "$zeal_retired" ]]; then
+  echo "FAIL: the seeded schedule at rate 0.25 collected at least as often as" >&2
+  echo "      zeal (seeded=$sched_retired, zeal=$zeal_retired). The rate knob is" >&2
+  echo "      not gating anything, so the mode is zeal with extra steps." >&2
+  exit 1
+fi
+# It is a REPRODUCER: the same seed must select the same safepoints, so the
+# realised collection count is identical. This is the property the whole mode
+# exists for; if it can drift, a "failing seed" is a rumour.
+if [[ "$sched_retired" -ne "$sched_repeat" ]]; then
+  echo "FAIL: the same seed produced two different schedules" >&2
+  echo "      ($sched_retired vs $sched_repeat retirements). A failing seed" >&2
+  echo "      would not reproduce, which is the entire point of the mode." >&2
+  exit 1
+fi
+# It EXPLORES: a sweep over adjacent seeds must not be one experiment repeated.
+# Equal counts are not proof of an identical schedule, but differing counts ARE
+# proof of a differing one, and that is the direction that can fail usefully.
+if [[ "$sched_other" -eq "$sched_retired" ]]; then
+  echo "WARNING: seeds 20260803 and 20260804 retired the same number of" >&2
+  echo "         page-sets ($sched_retired). Not necessarily the same schedule," >&2
+  echo "         but check gc/tests/schedule.rs if a sweep stops finding things." >&2
+fi
 
+echo
+echo "  [seeded schedule] pressure-only=$nozeal_retired < seeded(0.25)=$sched_retired < zeal=$zeal_retired"
+echo "  [seeded schedule] same seed twice: $sched_retired == $sched_repeat (reproducible)"
 echo
 echo "PASS: instruments inert when off (0 retirements), live when on"
 echo "      (no-zeal=$nozeal_retired, zeal=$zeal_retired retirements), program correct in all arms."

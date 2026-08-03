@@ -686,6 +686,16 @@ fn install_fault_reporter() {
         libc::sigaction(libc::SIGSEGV, &action, std::ptr::null_mut());
         libc::sigaction(libc::SIGBUS, &action, std::ptr::null_mut());
     }
+    // Seeded GC-schedule fuzzing installs its own reporter when the mode
+    // resolves, which is at the first safepoint — always BEFORE the first
+    // page-set retirement gets here. The install above would therefore drop the
+    // seed line from exactly the pairing an investigator reaches for
+    // (`PERRY_GC_SCHEDULE_SEED=… PERRY_GC_PROTECT_FROMSPACE=1`), and a fuzzer
+    // that finds a bug and loses the reproducer is worthless. Re-layer it on
+    // top; it chains back to the handler installed here, so the fault report
+    // below still prints. No-op when the mode is off, so a quarantine-only run
+    // keeps exactly today's signal disposition.
+    crate::gc::schedule::reinstall_signal_reporter();
 }
 
 /// Minimal `write(2)`-based formatter. Deliberately avoids `format!`/`eprintln!`

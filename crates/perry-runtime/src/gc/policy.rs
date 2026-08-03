@@ -2405,6 +2405,16 @@ pub(crate) fn gc_safepoint_moving_minor() {
     }
     // We are handling this safepoint (collect or find nothing due): clear the
     // deferral flag set by the alloc-point arm (Phase 2/3).
+    //
+    // #7154 tooling: this is also the one place the seeded GC-schedule counter
+    // advances — after the entry guards, so a safepoint that could not have
+    // collected never consumes a schedule slot, and once per handled safepoint
+    // whichever arm reached us (loop back-edge poll or microtask-pump boundary).
+    // Inert (one cached-`Option` load) unless `PERRY_GC_SCHEDULE_SEED` is set.
+    let scheduled = super::schedule::schedule_tick();
+    // `set_safepoint_pending`, not a raw `.set(false)`: since #7735 the pending
+    // flag is mirrored into the poll arming word, and clearing it behind the
+    // mirror would leave the back-edge poll armed forever.
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
     let kind = match gc_budgeted_due_trigger() {
@@ -2437,10 +2447,20 @@ pub(crate) fn gc_safepoint_moving_minor() {
             // mode is to collect anyway so an unrooted value moves on its first
             // exposure. `gc_force_evacuate_enabled()` is true under zeal, so
             // this minor MOVES survivors rather than sweeping in place.
-            if !super::gc_zeal_enabled() {
+            //
+            // ...or unless the seeded schedule selected this safepoint, which is
+            // the same bargain at a tunable density instead of all-or-nothing.
+            // `gc_force_evacuate_enabled()` is true in that mode too, for the
+            // same reason. Zeal wins when both are set: it is the strictly
+            // denser schedule, and attributing the collection to the mode that
+            // actually determined it keeps both live-subject counters honest.
+            if super::gc_zeal_enabled() {
+                super::note_zeal_forced_collection();
+            } else if scheduled {
+                super::schedule::note_schedule_forced_collection();
+            } else {
                 return;
             }
-            super::note_zeal_forced_collection();
             GcTriggerKind::ArenaBytes
         }
     };
@@ -2551,6 +2571,18 @@ fn js_gc_loop_safepoint_armed() {
     // it did before, and the deferral-drain path below is untouched.
     if !GC_SAFEPOINT_PENDING.with(Cell::get) {
         if !super::gc_zeal_enabled() {
+            // The seeded schedule (`PERRY_GC_SCHEDULE_SEED`) needs the same
+            // bypass as zeal, and needs it here rather than at the decision
+            // point: a schedule cannot select a safepoint this gate already
+            // returned from. The decision itself — and the counter tick it is
+            // a function of — happens inside `gc_safepoint_moving_minor`, past
+            // the entry guards. Same compile-time caveat as zeal. When both
+            // modes are set, zeal's paced path below runs instead and the
+            // schedule ticks on each collection it forces (zeal wins — it is
+            // the strictly denser schedule).
+            if super::schedule::gc_schedule_enabled() {
+                gc_safepoint_moving_minor();
+            }
             return;
         }
         if !super::zeal::zeal_poll_collection_due(crate::arena::copying_from_space_in_use_bytes()) {
@@ -2562,8 +2594,7 @@ fn js_gc_loop_safepoint_armed() {
         // forced one costs a full stride of new allocation on top of whatever
         // survived — see `gc/zeal.rs` for why this is a high-water mark and not
         // a delta.
-        super::zeal::note_zeal_poll_collection(crate::arena::copying_from_space_in_use_bytes());
-        return;
+        super::zeal::note_zeal_poll_collection(crate::arena::copying_from_space_in_use_bytes());        return;
     }
     gc_safepoint_moving_minor();
 }

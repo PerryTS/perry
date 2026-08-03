@@ -35,6 +35,7 @@ mod root_words;
 mod roots;
 mod runtime_roots;
 mod scan_fallback;
+mod schedule;
 mod shadow_stack_ops;
 mod smoke;
 pub(super) mod support;
