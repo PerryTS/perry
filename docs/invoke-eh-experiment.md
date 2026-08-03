@@ -272,6 +272,15 @@ restored by the unwinder, so a snapshot restore would resurrect try-entry
 values for locals defined after the push, recreating exactly the volatile
 problem this migration deletes.
 
+### Final sweep (merged branch, flipped default, coherent perry-dev build)
+
+95.4% parity, 21 output mismatches, **1 crash** (`test_gap_fetch_instanceof_5433`,
+KNOWN, crashes identically under the setjmp build). The mismatch set is exactly
+the attributed baseline — every entry previously proven mode-independent by
+same-binary A/B. The 8 http-family crashes from the flag-period run are gone
+with coherently-built archives, confirming the ext-archive profile-mixing
+attribution. Zero invoke-attributable regressions, final.
+
 ## Phase 1+ design notes (running)
 
 - Handler bookkeeping: `js_try_push` today returns a jmp_buf and the generated
