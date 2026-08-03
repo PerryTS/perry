@@ -490,8 +490,27 @@ fn zigzag(value: i32) -> u64 {
     ((value << 1) ^ (value >> 31)) as u32 as u64
 }
 
-/// DWARF register number for the stack pointer on aarch64; every other base
-/// this backend emits is the frame pointer.
+/// The two DWARF register numbers the compact format's short base tags stand
+/// for. They are **aarch64** numbers *by definition of the format*, not by
+/// assumption about the target: tag 0 means "DWARF 29" and tag 1 means
+/// "DWARF 31" on every architecture, and the runtime decoder
+/// (`gc/roots/stack_maps.rs`) maps them back to the same two constants.
+///
+/// This was the suspected cause of #7321 — the module names its bases in
+/// aarch64 terms throughout — and it is not. On x86-64 every root comes back
+/// with DWARF 7 (RSP; measured 56 of 56 on `01_nursery_churn`), which matches
+/// neither constant, so it takes the explicit-register tag and round-trips
+/// exactly; `verify_roundtrip` now proves that on every compile. The runtime's
+/// `chain_walkable` test (`reg ∈ {29, 31}`) is correspondingly false there, so
+/// it uses the platform unwinder — which is the correct walker for x86-64,
+/// where no fp-chain walker is compiled in.
+///
+/// The cost of the mismatch is size, not correctness: an x86-64 root spends one
+/// extra byte on its register number (403 compact bytes rather than ~347 on
+/// that probe). Making the tags mean "the target's FP/SP" would recover it, but
+/// it would put the compiler's idea of the target and the runtime's
+/// `target_arch` in a position where disagreeing corrupts every root's base —
+/// a size win is not worth that, so the tags stay literal.
 const DWARF_REG_SP_AARCH64: u16 = 31;
 /// Frame pointer, the other base the single-bit encoding can express.
 const DWARF_REG_FP_AARCH64: u16 = 29;
