@@ -391,6 +391,8 @@ jobs:
           cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
       - name: Toolchain
         run: |
+          uname -m
+          lscpu | head -20 || true
           which clang || true
           clang --version || true
           ls /usr/lib/ | grep -i llvm || true
@@ -399,20 +401,31 @@ jobs:
           set -uo pipefail
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
           export PERRY_NO_AUTO_OPTIMIZE=1
-          probe=benchmarks/gc_ratchet/probes/01_nursery_churn.ts
-          set +e
-          PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" -o /tmp/x86-probe 2>&1 | tee /tmp/x86.log
-          set -e
-          asm=$(grep -o '/tmp/[^ ]*\.o\.s' /tmp/x86.log | head -1)
-          echo "=== assembly: $asm"
-          [ -n "$asm" ] && [ -f "$asm" ] || { echo "no assembly kept"; exit 0; }
-          start=$(grep -n 'llvm_stackmaps' "$asm" | head -1 | cut -d: -f1)
-          echo "=== stackmaps section starts at line $start of $(wc -l < "$asm")"
-          sed -n "${start},$((start+60))p" "$asm"
-          echo "=== distinct directives inside the block:"
-          tail -n "+${start}" "$asm" | awk '{print $1}' | sort | uniq -c | sort -rn | head -40
-          echo "=== last 30 lines of the file:"
-          tail -30 "$asm"
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            name=$(basename "$probe" .ts)
+            set +e
+            PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" -o "/tmp/x86-$name" > "/tmp/x86-$name.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "== $name: COMPILED"
+              readelf -S "/tmp/x86-$name" | grep -E "perry_gcmap|llvm_stackmaps" || echo "   (no gc map section!)"
+              continue
+            fi
+            echo "== $name: FAILED"
+            grep -E "reason:|target:|assembly left at:|cannot yet express" "/tmp/x86-$name.log" | head -5
+            asm=$(grep -o '/tmp/[^ ]*\.o\.s' "/tmp/x86-$name.log" | head -1)
+            [ -n "$asm" ] && [ -f "$asm" ] || continue
+            start=$(grep -n 'llvm_stackmaps' "$asm" | head -1 | cut -d: -f1)
+            [ -n "$start" ] || continue
+            echo "   stackmaps at line $start of $(wc -l < "$asm")"
+            echo "   --- first 40 lines of the block:"
+            sed -n "${start},$((start+40))p" "$asm"
+            echo "   --- directive census from the block onward:"
+            tail -n "+${start}" "$asm" | awk '{print $1}' | sort | uniq -c | sort -rn | head -25
+            echo "   --- last 15 lines of the file:"
+            tail -15 "$asm"
+          done
 
   statepoints-refuse-x86:
     runs-on: ubuntu-latest
