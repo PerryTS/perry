@@ -157,6 +157,13 @@ thread_local! {
         };
 }
 
+/// Address of this thread's `_Unwind_Exception` object — what a landing
+/// pad receives in x0. The owned fast transport passes it explicitly
+/// because it installs the context itself (#7302 follow-up).
+pub(crate) fn exception_object_addr() -> u64 {
+    EXC_OBJECT.with(|c| c.get()) as u64
+}
+
 /// Raise the per-thread Perry exception. Returns ONLY if the unwinder found
 /// no handler (the caller reports the uncaught exception and exits) — with a
 /// handler-stack entry present this indicates lost unwind tables between the

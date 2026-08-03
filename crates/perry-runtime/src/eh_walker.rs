@@ -33,30 +33,43 @@ use gimli::{
     BaseAddresses, CfaRule, EhFrame, NativeEndian, RegisterRule, UnwindContext, UnwindSection,
 };
 
-/// Callee-saved integer registers the walker tracks on aarch64, plus fp,
-/// lr, sp. d8–d15 join in W2 (the install phase); stepping does not need
-/// them (no CFA rule ever routes through a float register).
-pub(crate) const N_TRACKED: usize = 13; // x19..x28, fp(x29), lr(x30), sp
+/// Registers the walker tracks on aarch64: the callee-saved integer set
+/// (x19..x28), fp, lr, sp, and the callee-saved float halves d8..d15.
+///
+/// The float registers are never needed to *step* (no CFA rule routes
+/// through one), but they must be restored when we install a context
+/// ourselves — a handler frame holding a live `f64` in d8..d15 across the
+/// `try` would otherwise resume with a stale value. Silent numeric
+/// corruption, so they are tracked from the start rather than bolted on.
+pub(crate) const N_TRACKED: usize = 21; // x19..x28, fp, lr, sp, d8..d15
 
 /// Register context at a point in the walk. Indices: 0..=9 → x19..x28,
-/// 10 → x29/fp, 11 → x30/lr, 12 → sp.
+/// 10 → fp(x29), 11 → lr(x30), 12 → sp, 13..=20 → d8..d15.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WalkRegs {
     pub regs: [u64; N_TRACKED],
     pub pc: u64,
 }
 
+/// Largest stack span the walk will consider plausible (8 MB is the
+/// default main-thread stack on macOS; perry worker threads are smaller).
+/// Anything beyond this from the starting SP is a misdecode, not a frame.
+const MAX_STACK_SPAN: u64 = 64 * 1024 * 1024;
+
 const FP: usize = 10;
 const LR: usize = 11;
 const SP: usize = 12;
+const D0: usize = 13;
 
 /// Map a DWARF register number (aarch64) to a tracked index.
+/// X0..X30 = 0..30, SP = 31, V0..V31 = 64..95 (so d8 = 72).
 fn dwarf_to_idx(reg: u16) -> Option<usize> {
     match reg {
         19..=28 => Some(reg as usize - 19),
         29 => Some(FP),
         30 => Some(LR),
         31 => Some(SP),
+        72..=79 => Some(D0 + (reg as usize - 72)),
         _ => None,
     }
 }
@@ -67,18 +80,25 @@ fn dwarf_to_idx(reg: u16) -> Option<usize> {
 
 #[cfg(target_arch = "aarch64")]
 mod capture {
-    /// Layout must match the store order in `perry_eh_capture_context`:
-    /// x19..x28, x29, x30, sp — then pc is filled by the caller from lr.
+    /// Layout must match the store order in `perry_eh_capture_context`
+    /// and the load order in `perry_eh_install_context`: x19..x28, fp, lr,
+    /// sp, d8..d15 (21 slots — see `N_TRACKED`).
     #[repr(C)]
     pub struct RawCtx {
-        pub x: [u64; 13],
+        pub x: [u64; 21],
     }
 
     unsafe extern "C" {
-        /// Stores x19..x28, x29(fp), x30(lr), sp into `out`. Returns lr
-        /// (the capture call site's return address) so the walk starts at
-        /// our own caller.
+        /// Stores the tracked register set into `out`. Returns lr (the
+        /// capture call site's return address) so the walk starts at our
+        /// own caller.
         pub fn perry_eh_capture_context(out: *mut RawCtx) -> u64;
+
+        /// Install `ctx` and jump to `pad`: restores the callee-saved
+        /// integer and float registers, sets sp, passes the exception
+        /// object in x0 and a zero selector in x1 (what a `landingpad`
+        /// reads), then branches. Never returns.
+        pub fn perry_eh_install_context(ctx: *const RawCtx, pad: u64, exc: u64) -> !;
     }
 
     core::arch::global_asm!(
@@ -93,8 +113,37 @@ mod capture {
         "stp x29, x30, [x0, #80]",
         "mov x9, sp",
         "str x9, [x0, #96]",
+        "stp d8, d9, [x0, #104]",
+        "stp d10, d11, [x0, #120]",
+        "stp d12, d13, [x0, #136]",
+        "stp d14, d15, [x0, #152]",
         "mov x0, x30",
         "ret",
+        // ---- install ----
+        // x0 = ctx, x1 = pad, x2 = exception object.
+        // Load sp and pad into scratch registers BEFORE clobbering the
+        // callee-saved file, then move sp last: once sp moves, the ctx
+        // pointer must already be in a register we are not restoring.
+        ".p2align 2",
+        ".globl _perry_eh_install_context",
+        "_perry_eh_install_context:",
+        "ldr x9, [x0, #96]", // target sp
+        "mov x10, x1",       // target pad
+        "mov x11, x2",       // exception object
+        "ldp d8, d9,   [x0, #104]",
+        "ldp d10, d11, [x0, #120]",
+        "ldp d12, d13, [x0, #136]",
+        "ldp d14, d15, [x0, #152]",
+        "ldp x19, x20, [x0, #0]",
+        "ldp x21, x22, [x0, #16]",
+        "ldp x23, x24, [x0, #32]",
+        "ldp x25, x26, [x0, #48]",
+        "ldp x27, x28, [x0, #64]",
+        "ldp x29, x30, [x0, #80]",
+        "mov sp, x9",
+        "mov x0, x11", // landingpad's {ptr, _}
+        "mov x1, #0",  // landingpad's {_, i32 selector}
+        "br x10",
     );
 }
 
@@ -104,7 +153,7 @@ mod capture {
 #[cfg(target_arch = "aarch64")]
 #[inline(never)]
 pub(crate) fn capture_here() -> WalkRegs {
-    let mut raw = capture::RawCtx { x: [0; 13] };
+    let mut raw = capture::RawCtx { x: [0; N_TRACKED] };
     let ret_addr = unsafe { capture::perry_eh_capture_context(&mut raw) };
     WalkRegs {
         regs: raw.x,
@@ -147,7 +196,12 @@ const CU_FRAMELESS_STACK_SIZE_MASK: u32 = 0x00FF_F000;
 /// (mask bit, first tracked idx of the pair). d-pairs advance the save
 /// cursor but are not tracked until the W2 install phase.
 const CU_X_PAIRS: [(u32, usize); 5] = [(0x001, 0), (0x002, 2), (0x004, 4), (0x008, 6), (0x010, 8)];
-const CU_D_PAIRS: [u32; 4] = [0x100, 0x200, 0x400, 0x800];
+const CU_D_PAIRS: [(u32, usize); 4] = [
+    (0x100, D0),
+    (0x200, D0 + 2),
+    (0x400, D0 + 4),
+    (0x800, D0 + 6),
+];
 
 /// Parse `__unwind_info` into flat sorted (function, encoding) + LSDA
 /// indexes. Mirrors the layout libunwind's UnwindCursor reads.
@@ -390,9 +444,11 @@ impl Walker {
                             loc -= 16;
                         }
                     }
-                    for bit in CU_D_PAIRS {
+                    for (bit, idx0) in CU_D_PAIRS {
                         if enc & bit != 0 {
-                            loc -= 16; // d-pair slots; tracked in W2
+                            reloads.push((idx0, loc));
+                            reloads.push((idx0 + 1, loc - 8));
+                            loc -= 16;
                         }
                     }
                     Some(StepRow {
@@ -416,8 +472,10 @@ impl Walker {
                             loc -= 16;
                         }
                     }
-                    for bit in CU_D_PAIRS {
+                    for (bit, idx0) in CU_D_PAIRS {
                         if enc & bit != 0 {
+                            reloads.push((idx0, loc));
+                            reloads.push((idx0 + 1, loc - 8));
                             loc -= 16;
                         }
                     }
@@ -487,14 +545,36 @@ impl Walker {
 
     /// Step one frame: given the register state AT `regs.pc`, produce the
     /// caller's state. None = undecodable (caller falls back).
-    pub(crate) fn step(&mut self, regs: &WalkRegs) -> Option<WalkRegs> {
+    pub(crate) fn step(&mut self, regs: &WalkRegs, stack_low: u64) -> Option<WalkRegs> {
         // The stored pc is a return address: the relevant row is the one
         // covering the call instruction.
         let row = self.row_for(regs.pc.wrapping_sub(1))?;
-        let cfa = (regs.regs[row.cfa_reg] as i64 + row.cfa_off) as u64;
+        let base = regs.regs[row.cfa_reg];
+        let cfa = (base as i64).checked_add(row.cfa_off)? as u64;
+
+        // FAIL-SAFE, NOT FAIL-DANGEROUS. A misdecoded row yields a bogus
+        // CFA, and every reload below is a raw dereference — an unchecked
+        // walk turns a decoding gap into a wild read (observed: this walker
+        // segfaulted stepping libtest's frames, whose shapes the compiled-
+        // program path never produces). Declining costs the speedup for one
+        // throw; the system unwinder then carries it with identical
+        // semantics. So: the CFA must move monotonically UP a plausible
+        // stack, and every slot we read must lie inside the region between
+        // the walk's starting SP and that ceiling.
+        if cfa <= regs.regs[SP] || cfa <= stack_low {
+            return None;
+        }
+        let ceiling = stack_low.checked_add(MAX_STACK_SPAN)?;
+        if cfa > ceiling {
+            return None;
+        }
+
         let mut next = *regs;
         for &(idx, off) in &row.reloads {
-            let addr = (cfa as i64 + off) as u64;
+            let addr = (cfa as i64).checked_add(off)? as u64;
+            if addr < stack_low || addr >= ceiling || addr % 8 != 0 {
+                return None;
+            }
             next.regs[idx] = unsafe { core::ptr::read(addr as *const u64) };
         }
         next.regs[SP] = cfa;
@@ -511,10 +591,11 @@ pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
     let w = walker()?;
     let mut guard = w.lock().ok()?;
     let mut regs = capture_here();
+    let stack_low = regs.regs[SP];
     let mut pcs = Vec::with_capacity(max.min(64));
     while pcs.len() < max {
         pcs.push(regs.pc);
-        match guard.step(&regs) {
+        match guard.step(&regs, stack_low) {
             Some(next) => {
                 // Terminate on a non-progressing or clearly-bottom frame.
                 if next.pc == 0 || next.regs[SP] <= regs.regs[SP] && next.pc == regs.pc {
@@ -544,12 +625,15 @@ pub(crate) fn walk_pcs_from_here(_max: usize) -> Option<Vec<u64>> {
 fn diff_mode() -> bool {
     static MODE: OnceLock<bool> = OnceLock::new();
     *MODE.get_or_init(|| {
-        let on = matches!(std::env::var("PERRY_EH_WALKER").as_deref(), Ok("diff"));
-        if on {
-            // Report the tally at exit, so a run that verified nothing says
-            // so out loud instead of looking clean.
+        let mode = std::env::var("PERRY_EH_WALKER");
+        let on = matches!(mode.as_deref(), Ok("diff"));
+        if on || matches!(mode.as_deref(), Ok("stats")) {
+            // Report the tally at exit, so a run that verified nothing —
+            // or that silently stopped taking the fast path — says so out
+            // loud instead of looking clean.
             extern "C" fn at_exit() {
                 report_diff_stats();
+                report_stats();
             }
             unsafe { libc::atexit(at_exit) };
         }
@@ -611,17 +695,22 @@ impl Walker {
     }
 }
 
-/// Walk from the throw site and predict where the raise will land: the
-/// first frame (skipping the throw frame itself) whose LSDA maps its call
-/// site to a landing pad. Returns (pad pc, that frame's CFA-as-seen-at-
-/// the-invoke, i.e. our regs\[SP\] when positioned in that frame).
+/// Walk from `start` and find the throw's landing: the first frame whose
+/// LSDA maps its call site to a landing pad. Returns (pad pc, the register
+/// context to resume that frame with).
+///
+/// The caller passes the starting context so the walk begins at ITS frame
+/// — `capture_here()` must be inlined into the caller's body, not this
+/// one. The walker mutex is released before returning, which matters for
+/// the install path: jumping away while holding it would strand the guard
+/// and deadlock every later throw.
 #[cfg(target_arch = "aarch64")]
-#[inline(never)]
-fn predict_landing() -> Option<(u64, u64)> {
+fn find_handler(start: WalkRegs) -> Option<(u64, WalkRegs)> {
     let w = walker()?;
     let mut guard = w.lock().ok()?;
-    let mut regs = capture_here();
-    for _ in 0..1024 {
+    let stack_low = start.regs[SP];
+    let mut regs = start;
+    for _ in 0..4096 {
         // The stored pc is a return address; the call site is pc-1.
         let site = regs.pc.wrapping_sub(1);
         if let Some((lsda, func_start)) = guard.lsda_for(site) {
@@ -632,27 +721,29 @@ fn predict_landing() -> Option<(u64, u64)> {
                     func_start as usize,
                 )
             } {
-                return Some((pad as u64, regs.regs[SP]));
+                return Some((pad as u64, regs));
             }
         }
-        match guard.step(&regs) {
+        match guard.step(&regs, stack_low) {
             Some(next) => regs = next,
             None => {
-                // Diff-mode diagnosis: name the frame the decoder declined.
-                let mut info: libc::Dl_info = unsafe { core::mem::zeroed() };
-                let name = if unsafe { libc::dladdr(regs.pc as *const _, &mut info) } != 0
-                    && !info.dli_sname.is_null()
-                {
-                    unsafe { core::ffi::CStr::from_ptr(info.dli_sname) }
-                        .to_string_lossy()
-                        .into_owned()
-                } else {
-                    "<unknown>".to_string()
-                };
-                eprintln!(
-                    "perry: eh-walker diff: step declined at pc={:#x} ({name})",
-                    regs.pc
-                );
+                if diff_mode() {
+                    // Name the frame the decoder declined.
+                    let mut info: libc::Dl_info = unsafe { core::mem::zeroed() };
+                    let name = if unsafe { libc::dladdr(regs.pc as *const _, &mut info) } != 0
+                        && !info.dli_sname.is_null()
+                    {
+                        unsafe { core::ffi::CStr::from_ptr(info.dli_sname) }
+                            .to_string_lossy()
+                            .into_owned()
+                    } else {
+                        "<unknown>".to_string()
+                    };
+                    eprintln!(
+                        "perry: eh-walker: step declined at pc={:#x} ({name})",
+                        regs.pc
+                    );
+                }
                 return None;
             }
         }
@@ -663,9 +754,88 @@ fn predict_landing() -> Option<(u64, u64)> {
     None
 }
 
+/// Diff-mode prediction: (pad, CFA) for the throw about to be raised.
+#[cfg(target_arch = "aarch64")]
+#[inline(never)]
+fn predict_landing() -> Option<(u64, u64)> {
+    let start = capture_here();
+    let (pad, regs) = find_handler(start)?;
+    Some((pad, regs.regs[SP]))
+}
+
 #[cfg(not(target_arch = "aarch64"))]
 fn predict_landing() -> Option<(u64, u64)> {
     None
+}
+
+/// Throws carried by the owned walker, and throws that fell back to the
+/// system unwinder. Reported by [`report_stats`]: a fallback rate that
+/// creeps toward 100% would otherwise be invisible — the program stays
+/// correct and merely loses the speedup, which is exactly the kind of
+/// silent regression that makes an optimization look permanent while it
+/// has actually stopped happening.
+pub(crate) static FAST_TRANSPORTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `PERRY_EH_WALKER=off` reverts to the system unwinder for every throw
+/// (bisection escape hatch). Any other value — including unset — uses the
+/// owned transport where it can, falling back per-throw where it cannot.
+fn fast_transport_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_EH_WALKER").as_deref(),
+            Ok("off") | Ok("0") | Ok("system")
+        )
+    })
+}
+
+/// Attempt the owned single-phase transport for the throw in progress.
+///
+/// On success this NEVER RETURNS: it restores the handler frame's
+/// callee-saved registers and stack pointer and branches to its landing
+/// pad — the same state transition `_URC_INSTALL_CONTEXT` performs, minus
+/// the search phase and minus re-decoding every frame.
+///
+/// Returns (normally) when the walk could not carry the throw, in which
+/// case the caller raises through the system unwinder. Correctness is
+/// identical on both paths; only speed differs.
+#[cfg(target_arch = "aarch64")]
+#[inline(never)]
+pub(crate) fn try_fast_transport(exception_object: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    // Diff mode is a VERIFICATION mode: the system unwinder must perform
+    // the transfer so the personality can compare its answer with our
+    // prediction. Installing here would bypass the very check being run.
+    if diff_mode() || !fast_transport_enabled() {
+        FALLBACKS.fetch_add(1, Relaxed);
+        return;
+    }
+    let start = capture_here();
+    // The walker mutex is released inside `find_handler`, before we jump.
+    let Some((pad, regs)) = find_handler(start) else {
+        FALLBACKS.fetch_add(1, Relaxed);
+        return;
+    };
+    FAST_TRANSPORTS.fetch_add(1, Relaxed);
+    let ctx = capture::RawCtx { x: regs.regs };
+    unsafe { capture::perry_eh_install_context(&ctx, pad, exception_object) }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+pub(crate) fn try_fast_transport(_exception_object: u64) {
+    FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Transport tally, printed when `PERRY_EH_WALKER=diff|stats`.
+pub(crate) fn report_stats() {
+    use std::sync::atomic::Ordering::Relaxed;
+    eprintln!(
+        "perry: eh-walker: fast={} fallback={}",
+        FAST_TRANSPORTS.load(Relaxed),
+        FALLBACKS.load(Relaxed)
+    );
 }
 
 /// Throws whose prediction was checked against the system unwinder, and

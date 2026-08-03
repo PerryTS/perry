@@ -337,7 +337,13 @@ pub extern "C" fn js_throw(value: f64) -> ! {
     // and the handler frame (e.g. a runtime rebuilt without
     // -C force-unwind-tables). That is a build/configuration defect, not a
     // JS error — fail loudly instead of masking it as an uncaught throw.
+    // Owned single-phase transport: walks to the handler using cached
+    // CFI and installs its register context directly. Never returns on
+    // success. Declines (undecodable frame, disabled, or verification
+    // mode) fall through to the system unwinder below — same semantics,
+    // slower.
     crate::eh_walker::predict_before_raise();
+    crate::eh_walker::try_fast_transport(crate::eh::exception_object_addr());
     let reason = crate::eh::raise_perry_exception();
     eprintln!(
         "perry: FATAL: exception transport failed (reason={reason}): a try \
