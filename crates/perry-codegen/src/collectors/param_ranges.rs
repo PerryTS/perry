@@ -272,12 +272,29 @@ pub(crate) fn collect_param_int_ranges(
 
     // A Script's top-level `function` declarations become own properties of
     // the global object when the program mentions `globalThis`, at which point
-    // `globalThis.f(…)` is a call site this pass cannot enumerate.
+    // `globalThis.f(…)` is a call site this pass cannot enumerate. Mirrors the
+    // exact condition codegen reflects under (`codegen/entry.rs`).
     if hir.references_global_this {
         for (_, fid) in &hir.script_global_functions {
             scan.poisoned.insert(*fid);
         }
     }
+
+    // `Function::is_exported` is only set by `export function f() {}`. The
+    // `export { f }` alias path records the export in `exported_functions`
+    // WITHOUT flipping that flag, and an exported function is callable from a
+    // module this per-module pass never sees.
+    for (_, fid) in &hir.exported_functions {
+        scan.poisoned.insert(*fid);
+    }
+    let exported_names: HashSet<&str> = hir
+        .exports
+        .iter()
+        .filter_map(|export| match export {
+            perry_hir::Export::Named { local, .. } => Some(local.as_str()),
+            _ => None,
+        })
+        .collect();
 
     // `specialize.rs` copies `f.id` verbatim when monomorphizing, so a FuncId
     // is not guaranteed unique. Two entries sharing an id would meet each
@@ -290,6 +307,7 @@ pub(crate) fn collect_param_int_ranges(
     let mut ranges = ParamIntRanges::new();
     for f in &hir.functions {
         if scan.poisoned.contains(&f.id)
+            || exported_names.contains(f.name.as_str())
             || func_id_counts.get(&f.id).copied() != Some(1)
             || !function_shape_is_summarizable(f)
         {
@@ -522,6 +540,31 @@ mod tests {
     #[test]
     fn uncalled_function_is_not_summarized() {
         let hir = module(Vec::new(), vec![matmul_fn(Vec::new())]);
+        assert!(collect_param_int_ranges(&hir, &constants()).is_empty());
+    }
+
+    /// `export { matmul }` records the export WITHOUT setting `is_exported`.
+    #[test]
+    fn alias_exported_function_is_not_summarized() {
+        let mut hir = module(
+            vec![call(vec![Expr::Integer(0), Expr::Integer(4)])],
+            vec![matmul_fn(Vec::new())],
+        );
+        hir.exported_functions = vec![("matmul".to_string(), MATMUL)];
+        assert!(collect_param_int_ranges(&hir, &constants()).is_empty());
+    }
+
+    /// Same, seen only through the name-based `Export::Named` list.
+    #[test]
+    fn named_export_by_local_name_is_not_summarized() {
+        let mut hir = module(
+            vec![call(vec![Expr::Integer(0), Expr::Integer(4)])],
+            vec![matmul_fn(Vec::new())],
+        );
+        hir.exports = vec![perry_hir::Export::Named {
+            local: "matmul".to_string(),
+            exported: "mm".to_string(),
+        }];
         assert!(collect_param_int_ranges(&hir, &constants()).is_empty());
     }
 
