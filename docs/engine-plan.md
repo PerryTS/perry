@@ -26,9 +26,9 @@ pointer has **three different homes**, each needing a different mechanism.
 
 | Layer | Home | Example bugs | Mechanism | Status |
 |---|---|---|---|---|
-| **0** | *enabler* | — | **in-process LLVM** (#7241) | Phase 0 done |
+| **0** | *enabler* | — | **in-process LLVM** (#7241) | ✅ **landed** (#7301) |
 | 1 | `perry-codegen` lowering code | #7192, #7206, #7211 | `Raw`/`Rooted` borrow discipline | proposed |
-| 2 | emitted code's liveness | #7280, #7271, #7252, #7243 | statepoints (#7108, #7174) | blocked on 0 |
+| 2 | emitted code's liveness | #7280, #7271, #7252, #7243 | statepoints (#7108, #7174) | ✅ **landed opt-in** (#7314) |
 | 3 | `perry-runtime` hand-written Rust | #7249, #7239, #7226, #7231 | `RuntimeHandleScope`, non-optional | not started |
 
 **Order is 0 → 2. Layers 1 and 3 are independent and can proceed now.**
@@ -48,6 +48,69 @@ same 108 MB. **Sequenced last deliberately**: the "20× wall cost" was measured
 while #7255's defect made "minors" fall back to a conservative full scan. Minor-GC
 cost should scale with *survivors*, not collection count, so 20× is a symptom.
 Re-derive after Part 1 lands. See #7056.
+
+## ★ Status 2026-08-03 — the architecture is proven, not yet adopted
+
+**Layers 0 and 2 have landed.** #7301 put the LLVM pipeline in-process; #7305
+replaced setjmp/longjmp with `invoke`/`landingpad`, which is what makes try-
+carrying functions statepoint-able at all; #7314 landed native-frame GC roots via
+`gc.statepoint`, **opt-in behind `PERRY_STATEPOINTS=1`**, with the default path
+byte-for-byte unchanged.
+
+**What #7314 actually establishes:**
+
+- **Every root path fails closed.** The plain `llvm.experimental.stackmap`
+  lowering is *deleted*, not kept as a fallback — it survived in three places
+  that all failed **open**, one of them dead by construction. LLVM may record a
+  root slot as `Register R#N` (caller-saved, unrecoverable): measured **3 of 60
+  locations** on one probe.
+- **The metadata objection is answered.** #7108's headline cost was 4.5–16.6 MB.
+  Re-encoding at assembly time gives **4,214,384 → 224,832 B (18.7×)**. The
+  dominant lever is that **77% of records carry the same live set as the record
+  before them**, so a repeat flag replaces the payload.
+- **Evidence**: 23,301 safepoints → 23,301 statepoints, **0 plain maps, 0 parser
+  fallbacks**, 129,914 relocations, max 53 live roots at one safepoint; all three
+  arms 9/9 against the pinned Node oracle, and the statepoint arms also under
+  `PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1`.
+
+**What it does NOT establish — read before planning on it:**
+
+- **Binary size is a wash, not a win** (+496 B bridge, +50,064 B RS4GC on
+  drizzle). An earlier revision measured a 49–131 KB win; merging main moved the
+  shadow baseline down further. Per the author: *closing that axis needs **fewer
+  roots**, not a tighter encoding — 221 KB for 154k roots is near this format's
+  floor.* Runtime −0.93%, RSS flat. **The case is correctness structure, not
+  headline numbers.**
+- **Statepoints do not cover layer 3.** They describe *emitted* frames. A
+  `*mut ObjectHeader` in hand-written runtime Rust is invisible to LLVM, so
+  #7231/#7249's class is untouched — and #7280's fault has already *moved there*
+  (`js_native_call_method + 580`, a receiver stale in a runtime frame).
+
+### Blocking adoption — concrete, and neither is code
+
+1. **Four of five new knobs have no CI arm.** `PERRY_STATEPOINTS` is exercised by
+   `gc-native-roots.yml`; **`PERRY_RS4GC`, `PERRY_GC_SAFEPOINT_ONLY`,
+   `PERRY_STACKMAP_WALKER` and `PERRY_STATEPOINT_REPORT` appear in no workflow at
+   all.** CLAUDE.md's kill-policy is binding: an arm each, or delete after one
+   release of soak. At most one diagnostic-only knob may exist, labelled untested.
+2. **`gc-native-roots` is not a required status check**, so it reports without
+   blocking — CLAUDE.md hazard 2, the one that let #6925's regression survive
+   three merges. Promote after its first green run on `main`, not before.
+3. **#7314 broke the file-size gate on `main`**: `perry-codegen/src/function.rs`
+   went **847 → 2036** lines and `linker.rs` 1936 → 2082, both over the 2000-line
+   cap. `lint` therefore fails two gates now, not one. (It reports both rather
+   than hiding the second only because #7306 made every gate run independently —
+   before that, one red gate concealed the six below it.)
+
+### The adoption decision itself
+
+Two precise-root mechanisms now exist. The kill-policy says that state is
+temporary by design: **a mode that still exists is a decision that hasn't been
+made.** Flipping the default to statepoints buys a bug class becoming
+*unrepresentable* rather than *tested for*, and costs a knob surface plus parity
+(not a win) on size. That decision is the plan's next real fork, and it is the
+owner's — but it should be made on a schedule, not left to drift, because the
+losing mode should stop compiling rather than linger untested.
 
 ---
 
@@ -96,7 +159,7 @@ representation is dead** (three currently are — `Ptr<NumArray>` emits nothing,
 
 | Benchmark | Perry | Node | With lever | Issue |
 |---|---:|---:|---|---|
-| `matrix_multiply` | 631 ms | 32 ms | **59 ms (10.7×)** | #7286 |
+| `matrix_multiply` | 631 ms | 32 ms | **✅ 70 ms shipped (9.9×) — #7296** | #7286 |
 | `prime_sieve` | 107 ms | 5 ms | **27 ms (4.0×)** | #7286 |
 | `method_calls` | 79 ms | 10 ms | ~9× available | #7287 |
 
