@@ -237,7 +237,19 @@ opt-level = 1
 inherits = "release"
 lto = "thin"
 codegen-units = 1
-panic = "unwind"
+# MUST match [profile.release] (#7302). `dist` is what release-packages.yml
+# builds the SHIPPED libperry_{runtime,stdlib}.a with, and the exception
+# transport requires the unwinder to step runtime Rust frames with
+# longjmp-equivalent semantics. Under panic="unwind" rustc plants RFC-2945
+# abort-on-unwind guards in every `extern "C"` helper that contains an
+# interior Rust call, so a JS throw crossing such a helper — a throwing
+# getter, a JSON.parse error, a throwing map callback — aborts the process
+# instead of being caught. This line said "unwind" and so overrode the
+# inherited value: it made the shipped runtime, and only the shipped
+# runtime, fail that way. Paired with -C force-unwind-tables=yes from
+# .cargo/config.toml; the runtime self-checks for the tables on the first
+# `try` and aborts loudly if they are missing.
+panic = "abort"
 strip = true
 opt-level = 3
 

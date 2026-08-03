@@ -5,6 +5,7 @@
 mod commands;
 mod compat_reports;
 #[cfg(test)]
+mod panic_profile_contract;
 mod shadow_layout_contract;
 mod telemetry;
 #[cfg(test)]
