@@ -235,18 +235,32 @@ pub fn run_with_parse_cache(
     // policy (#7314 review item), leaving the flag as the single entry point.
     // `--opt-report` keeps its env spelling because that one is not a GC knob.
     let statepoint_report_format = args.statepoint_report;
-    if let Some(fmt) = statepoint_report_format {
-        std::env::set_var(
-            "PERRY_STATEPOINT_REPORT",
-            match fmt {
-                StatepointReportFormat::Json => "json",
-                StatepointReportFormat::Text => "text",
-            },
-        );
-        std::env::set_var("PERRY_NO_CACHE", "1");
-        // `perry dev` reuses the process; discard records from its previous
-        // build before starting this one.
-        let _ = perry_codegen::statepoint_report::take_records();
+    // Written unconditionally — set when the flag is present, REMOVED when it is
+    // not. Two reasons, both found in review of #7322:
+    //
+    // 1. `perry dev` reuses the process, so leaving a previous build's value in
+    //    place made the flag sticky: one `--statepoint-report` run turned it on
+    //    for every later compile in that process.
+    // 2. `statepoint_report::enabled()` reads this variable, so a value inherited
+    //    from the user's environment would switch reporting on without the flag —
+    //    i.e. the env spelling would still be a knob, which is exactly what the
+    //    kill-policy deletion was supposed to end. Clearing it makes the flag the
+    //    only entry point in fact and not merely by convention.
+    match statepoint_report_format {
+        Some(fmt) => {
+            std::env::set_var(
+                "PERRY_STATEPOINT_REPORT",
+                match fmt {
+                    StatepointReportFormat::Json => "json",
+                    StatepointReportFormat::Text => "text",
+                },
+            );
+            std::env::set_var("PERRY_NO_CACHE", "1");
+            // `perry dev` reuses the process; discard records from its previous
+            // build before starting this one.
+            let _ = perry_codegen::statepoint_report::take_records();
+        }
+        None => std::env::remove_var("PERRY_STATEPOINT_REPORT"),
     }
 
     // Canonicalize the input path first so its `.parent()` is an absolute directory.
