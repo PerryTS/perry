@@ -337,6 +337,7 @@ pub extern "C" fn js_throw(value: f64) -> ! {
     // and the handler frame (e.g. a runtime rebuilt without
     // -C force-unwind-tables). That is a build/configuration defect, not a
     // JS error — fail loudly instead of masking it as an uncaught throw.
+    crate::eh_walker::predict_before_raise();
     let reason = crate::eh::raise_perry_exception();
     eprintln!(
         "perry: FATAL: exception transport failed (reason={reason}): a try \

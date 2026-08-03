@@ -124,6 +124,95 @@ struct EhFrameImage {
     text_addr: u64,
     /// Sorted (function_start, function_end, fde_offset) index, built once.
     fde_index: Vec<(u64, u64, gimli::EhFrameOffset)>,
+    /// Image load address (mach header) — compact-unwind offsets are
+    /// relative to it.
+    image_base: u64,
+    /// Sorted (function_addr, compact encoding) — one entry per function,
+    /// flattened from `__unwind_info`'s second-level pages. On macOS this
+    /// is the AUTHORITATIVE index: functions expressible compactly have NO
+    /// .eh_frame FDE, and DWARF-mode entries carry their FDE's section
+    /// offset in the low 24 bits.
+    compact_index: Vec<(u64, u32)>,
+    /// Sorted (function_addr, lsda_addr) from the LSDA index arrays.
+    lsda_index: Vec<(u64, u64)>,
+}
+
+// arm64 compact-unwind encoding (mach-o/compact_unwind_encoding.h).
+const CU_MODE_MASK: u32 = 0x0F00_0000;
+const CU_MODE_FRAMELESS: u32 = 0x0200_0000;
+const CU_MODE_DWARF: u32 = 0x0300_0000;
+const CU_MODE_FRAME: u32 = 0x0400_0000;
+const CU_DWARF_SECTION_OFFSET: u32 = 0x00FF_FFFF;
+const CU_FRAMELESS_STACK_SIZE_MASK: u32 = 0x00FF_F000;
+/// (mask bit, first tracked idx of the pair). d-pairs advance the save
+/// cursor but are not tracked until the W2 install phase.
+const CU_X_PAIRS: [(u32, usize); 5] = [(0x001, 0), (0x002, 2), (0x004, 4), (0x008, 6), (0x010, 8)];
+const CU_D_PAIRS: [u32; 4] = [0x100, 0x200, 0x400, 0x800];
+
+/// Parse `__unwind_info` into flat sorted (function, encoding) + LSDA
+/// indexes. Mirrors the layout libunwind's UnwindCursor reads.
+fn parse_unwind_info(ui: &[u8], image_base: u64) -> (Vec<(u64, u32)>, Vec<(u64, u64)>) {
+    let u32at =
+        |off: usize| -> u32 { u32::from_le_bytes(ui[off..off + 4].try_into().unwrap_or([0; 4])) };
+    let u16at =
+        |off: usize| -> u16 { u16::from_le_bytes(ui[off..off + 2].try_into().unwrap_or([0; 2])) };
+    let mut funcs = Vec::new();
+    let mut lsdas = Vec::new();
+    if ui.len() < 28 || u32at(0) != 1 {
+        return (funcs, lsdas);
+    }
+    let common_off = u32at(4) as usize;
+    let common_count = u32at(8) as usize;
+    let index_off = u32at(20) as usize;
+    let index_count = u32at(24) as usize;
+    let common: Vec<u32> = (0..common_count)
+        .map(|i| u32at(common_off + 4 * i))
+        .collect();
+    for i in 0..index_count.saturating_sub(1) {
+        let entry = index_off + 12 * i;
+        let page_off = u32at(entry + 4) as usize;
+        let lsda_start = u32at(entry + 8) as usize;
+        let lsda_end = u32at(index_off + 12 * (i + 1) + 8) as usize;
+        let mut off = lsda_start;
+        while off + 8 <= lsda_end {
+            lsdas.push((
+                image_base + u32at(off) as u64,
+                image_base + u32at(off + 4) as u64,
+            ));
+            off += 8;
+        }
+        if page_off == 0 {
+            continue;
+        }
+        let kind = u32at(page_off);
+        if kind == 2 {
+            let e_off = u16at(page_off + 4) as usize;
+            let count = u16at(page_off + 6) as usize;
+            for e in 0..count {
+                let at = page_off + e_off + 8 * e;
+                funcs.push((image_base + u32at(at) as u64, u32at(at + 4)));
+            }
+        } else if kind == 3 {
+            let fn_base = u32at(entry) as u64;
+            let e_off = u16at(page_off + 4) as usize;
+            let count = u16at(page_off + 6) as usize;
+            let enc_off = u16at(page_off + 8) as usize;
+            let enc_count = u16at(page_off + 10) as usize;
+            for e in 0..count {
+                let raw = u32at(page_off + e_off + 4 * e);
+                let idx = (raw >> 24) as usize;
+                let enc = if idx < common.len() {
+                    common[idx]
+                } else {
+                    u32at(page_off + enc_off + 4 * (idx - common.len()))
+                };
+                funcs.push((image_base + fn_base + (raw & 0x00FF_FFFF) as u64, enc));
+            }
+        }
+    }
+    funcs.sort_unstable_by_key(|e| e.0);
+    lsdas.sort_unstable_by_key(|e| e.0);
+    (funcs, lsdas)
 }
 
 #[cfg(target_os = "macos")]
@@ -161,12 +250,30 @@ fn find_eh_frame_image() -> Option<EhFrameImage> {
         let mut tsize: core::ffi::c_ulong = 0;
         let text =
             unsafe { getsectiondata(hdr, c"__TEXT".as_ptr(), c"__text".as_ptr(), &mut tsize) };
+        let mut usize_: core::ffi::c_ulong = 0;
+        let ui = unsafe {
+            getsectiondata(
+                hdr,
+                c"__TEXT".as_ptr(),
+                c"__unwind_info".as_ptr(),
+                &mut usize_,
+            )
+        };
         let bytes = unsafe { core::slice::from_raw_parts(eh as *const u8, size as usize) };
+        let (compact_index, lsda_index) = if ui.is_null() || usize_ == 0 {
+            (Vec::new(), Vec::new())
+        } else {
+            let ui_bytes = unsafe { core::slice::from_raw_parts(ui as *const u8, usize_ as usize) };
+            parse_unwind_info(ui_bytes, hdr as u64)
+        };
         return Some(EhFrameImage {
             eh_frame_addr: eh as u64,
             bytes,
             text_addr: text as u64,
             fde_index: Vec::new(),
+            image_base: hdr as u64,
+            compact_index,
+            lsda_index,
         });
     }
     None
@@ -193,6 +300,14 @@ pub(crate) struct StepRow {
     cfa_reg: usize,
     cfa_off: i64,
     reloads: Vec<(usize, i64)>,
+}
+
+/// Diff-mode decode diagnostics; always returns None.
+fn diag_decline(pc: u64, why: &str) -> Option<StepRow> {
+    if std::env::var("PERRY_EH_WALKER").as_deref() == Ok("diff") {
+        eprintln!("perry: eh-walker diff: decode declined at {pc:#x}: {why}");
+    }
+    None
 }
 
 pub(crate) struct Walker {
@@ -250,28 +365,107 @@ impl Walker {
     }
 
     fn decode_row(&self, pc: u64) -> Option<StepRow> {
-        // Binary search the FDE index for the function containing pc.
+        // Compact unwind is authoritative on macOS: FRAME/FRAMELESS
+        // functions have no .eh_frame FDE at all, and DWARF-mode entries
+        // carry their FDE's section offset.
+        if !self.image.compact_index.is_empty() {
+            let ci = &self.image.compact_index;
+            let pos = ci.partition_point(|e| e.0 <= pc);
+            if pos == 0 {
+                return diag_decline(pc, "below compact index");
+            }
+            let (_fstart, enc) = ci[pos - 1];
+            return match enc & CU_MODE_MASK {
+                CU_MODE_FRAME => {
+                    // stp fp, lr, [sp, #-16]!; mov fp, sp — CFA = fp+16;
+                    // saved fp at [fp] (cfa-16), lr at [fp+8] (cfa-8); csr
+                    // singles descend from fp-8 (cfa-24) in mask-bit order
+                    // (libunwind CompactUnwinder stepWithCompactEncodingFrame).
+                    let mut reloads = vec![(FP, -16i64), (LR, -8i64)];
+                    let mut loc: i64 = -24;
+                    for (bit, idx0) in CU_X_PAIRS {
+                        if enc & bit != 0 {
+                            reloads.push((idx0, loc));
+                            reloads.push((idx0 + 1, loc - 8));
+                            loc -= 16;
+                        }
+                    }
+                    for bit in CU_D_PAIRS {
+                        if enc & bit != 0 {
+                            loc -= 16; // d-pair slots; tracked in W2
+                        }
+                    }
+                    Some(StepRow {
+                        cfa_reg: FP,
+                        cfa_off: 16,
+                        reloads,
+                    })
+                }
+                CU_MODE_FRAMELESS => {
+                    // CFA = sp + stacksize; csrs at the top of the frame,
+                    // descending; lr is live in the register (a frameless
+                    // function that calls must save lr and would not be
+                    // encoded frameless).
+                    let stack = (((enc & CU_FRAMELESS_STACK_SIZE_MASK) >> 12) as i64) * 16;
+                    let mut reloads = Vec::new();
+                    let mut loc: i64 = -8;
+                    for (bit, idx0) in CU_X_PAIRS {
+                        if enc & bit != 0 {
+                            reloads.push((idx0, loc));
+                            reloads.push((idx0 + 1, loc - 8));
+                            loc -= 16;
+                        }
+                    }
+                    for bit in CU_D_PAIRS {
+                        if enc & bit != 0 {
+                            loc -= 16;
+                        }
+                    }
+                    Some(StepRow {
+                        cfa_reg: SP,
+                        cfa_off: stack,
+                        reloads,
+                    })
+                }
+                CU_MODE_DWARF => {
+                    let off = gimli::EhFrameOffset::from((enc & CU_DWARF_SECTION_OFFSET) as usize);
+                    self.decode_dwarf_row(pc, off)
+                }
+                _ => diag_decline(pc, "compact mode 0 (no unwind info)"),
+            };
+        }
+        // Non-macOS (or no __unwind_info): linear FDE index.
         let idx = &self.image.fde_index;
         let pos = idx.partition_point(|e| e.0 <= pc);
         if pos == 0 {
-            return None;
+            return diag_decline(pc, "below index");
         }
         let (start, end, offset) = idx[pos - 1];
         if pc < start || pc >= end {
-            return None;
+            return diag_decline(pc, "no FDE covers pc");
         }
-        let fde = self
+        self.decode_dwarf_row(pc, offset)
+    }
+
+    fn decode_dwarf_row(&self, pc: u64, offset: gimli::EhFrameOffset) -> Option<StepRow> {
+        let Ok(fde) = self
             .eh_frame
             .fde_from_offset(&self.bases, offset, EhFrame::cie_from_offset)
-            .ok()?;
+        else {
+            return diag_decline(pc, "FDE parse failed");
+        };
         let mut ctx = UnwindContext::new();
-        let row = fde
-            .unwind_info_for_address(&self.eh_frame, &self.bases, &mut ctx, pc)
-            .ok()?;
+        let Ok(row) = fde.unwind_info_for_address(&self.eh_frame, &self.bases, &mut ctx, pc) else {
+            return diag_decline(pc, "no unwind row for pc");
+        };
         let (cfa_reg, cfa_off) = match row.cfa() {
-            CfaRule::RegisterAndOffset { register, offset } => (dwarf_to_idx(register.0)?, *offset),
-            // DWARF expressions in the CFA rule: rare; fall back.
-            CfaRule::Expression(_) => return None,
+            CfaRule::RegisterAndOffset { register, offset } => {
+                let Some(r) = dwarf_to_idx(register.0) else {
+                    return diag_decline(pc, "CFA register untracked");
+                };
+                (r, *offset)
+            }
+            CfaRule::Expression(_) => return diag_decline(pc, "CFA is a DWARF expression"),
         };
         let mut reloads = Vec::new();
         for &(reg, ref rule) in row.registers() {
@@ -281,10 +475,7 @@ impl Walker {
             match rule {
                 RegisterRule::Offset(off) => reloads.push((idx, *off)),
                 RegisterRule::SameValue | RegisterRule::Undefined => {}
-                // ValOffset/Register/Expression etc.: rare on aarch64
-                // frame shapes; decline and let the system unwinder take
-                // this throw.
-                _ => return None,
+                _ => return diag_decline(pc, "unsupported register rule"),
             }
         }
         Some(StepRow {
@@ -340,6 +531,196 @@ pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
 #[cfg(not(target_arch = "aarch64"))]
 pub(crate) fn walk_pcs_from_here(_max: usize) -> Option<Vec<u64>> {
     None
+}
+
+// ---------------------------------------------------------------------------
+// W1: landing prediction, verified against the system unwinder per throw.
+// ---------------------------------------------------------------------------
+
+/// `PERRY_EH_WALKER=diff` — before every raise, run the owned walk to
+/// predict (landing-pad pc, handler CFA) and stash it; the personality's
+/// install branch calls [`verify_prediction`] with the system unwinder's
+/// answer and aborts on mismatch. Zero work when unset (one lazy bool).
+fn diff_mode() -> bool {
+    static MODE: OnceLock<bool> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        let on = matches!(std::env::var("PERRY_EH_WALKER").as_deref(), Ok("diff"));
+        if on {
+            // Report the tally at exit, so a run that verified nothing says
+            // so out loud instead of looking clean.
+            extern "C" fn at_exit() {
+                report_diff_stats();
+            }
+            unsafe { libc::atexit(at_exit) };
+        }
+        on
+    })
+}
+
+thread_local! {
+    /// (predicted pad pc, predicted CFA at the handler frame). Cleared on
+    /// verification so a stale prediction can never carry to a later throw.
+    static PREDICTION: core::cell::Cell<Option<(u64, u64)>> =
+        const { core::cell::Cell::new(None) };
+}
+
+impl Walker {
+    /// LSDA pointer + function start for the FDE covering `pc`, if any.
+    fn lsda_for(&self, pc: u64) -> Option<(u64, u64)> {
+        // On macOS the compact-unwind LSDA index is authoritative: it
+        // covers FRAME/FRAMELESS `try` functions, which have no FDE at all
+        // (89% of our functions are DWARF-mode, but the try-containing
+        // ones are exactly the frame-shaped minority).
+        if !self.image.compact_index.is_empty() {
+            let ci = &self.image.compact_index;
+            let pos = ci.partition_point(|e| e.0 <= pc);
+            if pos == 0 {
+                return None;
+            }
+            let fstart = ci[pos - 1].0;
+            let li = &self.image.lsda_index;
+            let lpos = li.partition_point(|e| e.0 <= fstart);
+            if lpos == 0 {
+                return None;
+            }
+            let (lfunc, lsda) = li[lpos - 1];
+            // The LSDA array is per-function and sparse: an entry only
+            // belongs to this frame if it names this exact function.
+            if lfunc != fstart {
+                return None;
+            }
+            return Some((lsda, fstart));
+        }
+        let idx = &self.image.fde_index;
+        let pos = idx.partition_point(|e| e.0 <= pc);
+        if pos == 0 {
+            return None;
+        }
+        let (start, end, offset) = idx[pos - 1];
+        if pc < start || pc >= end {
+            return None;
+        }
+        let fde = self
+            .eh_frame
+            .fde_from_offset(&self.bases, offset, EhFrame::cie_from_offset)
+            .ok()?;
+        match fde.lsda() {
+            Some(gimli::Pointer::Direct(addr)) => Some((addr, start)),
+            _ => None,
+        }
+    }
+}
+
+/// Walk from the throw site and predict where the raise will land: the
+/// first frame (skipping the throw frame itself) whose LSDA maps its call
+/// site to a landing pad. Returns (pad pc, that frame's CFA-as-seen-at-
+/// the-invoke, i.e. our regs\[SP\] when positioned in that frame).
+#[cfg(target_arch = "aarch64")]
+#[inline(never)]
+fn predict_landing() -> Option<(u64, u64)> {
+    let w = walker()?;
+    let mut guard = w.lock().ok()?;
+    let mut regs = capture_here();
+    for _ in 0..1024 {
+        // The stored pc is a return address; the call site is pc-1.
+        let site = regs.pc.wrapping_sub(1);
+        if let Some((lsda, func_start)) = guard.lsda_for(site) {
+            if let Ok(Some(pad)) = unsafe {
+                crate::eh::find_landing_pad_in_lsda(
+                    lsda as *const u8,
+                    site as usize,
+                    func_start as usize,
+                )
+            } {
+                return Some((pad as u64, regs.regs[SP]));
+            }
+        }
+        match guard.step(&regs) {
+            Some(next) => regs = next,
+            None => {
+                // Diff-mode diagnosis: name the frame the decoder declined.
+                let mut info: libc::Dl_info = unsafe { core::mem::zeroed() };
+                let name = if unsafe { libc::dladdr(regs.pc as *const _, &mut info) } != 0
+                    && !info.dli_sname.is_null()
+                {
+                    unsafe { core::ffi::CStr::from_ptr(info.dli_sname) }
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    "<unknown>".to_string()
+                };
+                eprintln!(
+                    "perry: eh-walker diff: step declined at pc={:#x} ({name})",
+                    regs.pc
+                );
+                return None;
+            }
+        }
+        if regs.pc == 0 {
+            return None;
+        }
+    }
+    None
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn predict_landing() -> Option<(u64, u64)> {
+    None
+}
+
+/// Throws whose prediction was checked against the system unwinder, and
+/// throws where the walk declined. Reported by [`report_diff_stats`] so a
+/// silent run can never be mistaken for a verified one — the same
+/// "assert the subject was live" rule the GC gates learned the hard way
+/// (#7024/#7025).
+pub(crate) static DIFF_VERIFIED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static DIFF_DECLINED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Called by `js_throw` immediately before the raise (diff mode only).
+pub(crate) fn predict_before_raise() {
+    if !diff_mode() {
+        return;
+    }
+    let p = predict_landing();
+    if p.is_none() {
+        DIFF_DECLINED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("perry: eh-walker diff: NO PREDICTION for this throw (walk failed)");
+    }
+    PREDICTION.with(|c| c.set(p));
+}
+
+/// Print the diff-mode tally at process exit. A run that reports
+/// `verified=0` proves nothing, however green it looks.
+pub(crate) fn report_diff_stats() {
+    if !diff_mode() {
+        return;
+    }
+    use std::sync::atomic::Ordering::Relaxed;
+    eprintln!(
+        "perry: eh-walker diff: verified={} declined={}",
+        DIFF_VERIFIED.load(Relaxed),
+        DIFF_DECLINED.load(Relaxed)
+    );
+}
+
+/// Called by the personality's install branch with the system unwinder's
+/// answer. Mismatch = walker bug — abort with both answers in hand.
+pub(crate) fn verify_prediction(actual_pad: u64, actual_cfa: u64) {
+    if !diff_mode() {
+        return;
+    }
+    let Some((pad, cfa)) = PREDICTION.with(|c| c.take()) else {
+        return; // walk declined (already reported); system carries the throw
+    };
+    if pad != actual_pad || cfa != actual_cfa {
+        eprintln!(
+            "perry: FATAL: eh-walker misprediction:\n  pad: ours {pad:#x} vs system {actual_pad:#x}\n  cfa: ours {cfa:#x} vs system {actual_cfa:#x}"
+        );
+        std::process::abort();
+    }
+    DIFF_VERIFIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(all(test, target_arch = "aarch64", target_os = "macos"))]
