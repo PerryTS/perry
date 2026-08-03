@@ -11,3 +11,13 @@ min-publish-age = true
 
 [registry]
 global-min-publish-age = "7 days"
+
+# Invoke-EH (#7302): the exception transport steps runtime Rust frames via
+# the system unwinder, and panic=abort (profile.release) omits unwind tables
+# by default — without this flag every throw crossing a helper frame is
+# stranded. NOTE: a user-set RUSTFLAGS environment variable OVERRIDES this
+# file entirely (cargo uses exactly one rustflags source) — carry the flag
+# in your RUSTFLAGS too. The runtime self-checks on the first `try` and
+# aborts loudly if the tables are missing (perry-runtime/src/eh.rs).
+[build]
+rustflags = ["-C", "force-unwind-tables=yes"]

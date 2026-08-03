@@ -719,37 +719,22 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_unsettled_top_level_await_exit", VOID, &[]);
     module.declare_function("js_throw", VOID, &[DOUBLE]);
 
-    // Exception handling (Phase G): setjmp/longjmp-based try/catch.
-    // js_try_push() returns a ptr to a jmp_buf.
-    // setjmp(ptr) returns i32 (0 on first call, non-0 after longjmp).
+    // Exception handling: invoke/landingpad-based try/catch (#7302).
+    // js_eh_try_push() arms a handler (savepoint recording).
     // js_try_end() pops the try depth (no return value).
     // js_get_exception() returns the thrown NaN-boxed value.
     // js_clear_exception() resets the exception state.
     // js_has_exception() returns i32 (1 if exception is active, 0 otherwise).
     // js_enter_finally() / js_leave_finally() bracket finally blocks.
-    if crate::eh_mode::invoke_eh_enabled() {
-        // Invoke-EH (#7302): handlers are armed by js_eh_try_push (savepoints
-        // only, no jmp_buf) and entered through landing pads (Itanium) or
-        // catchpads (SEH on windows-msvc — same target-triple rule as the
-        // setjmp ABI selection below). No setjmp is declared — which also
-        // keeps the `#0`/`#1` attribute groups out of the module.
-        module.declare_function("js_eh_try_push", VOID, &[]);
-        if module.target_triple.contains("-windows-") {
-            module.declare_seh_machinery();
-        } else {
-            module.declare_personality();
-        }
+    // Invoke-EH (#7302): handlers are armed by js_eh_try_push (savepoints
+    // only, no jmp_buf) and entered through landing pads (Itanium) or
+    // catchpads (SEH on windows-msvc — decided by the TARGET triple, not
+    // host cfg!, so cross-compiles emit the target's EH shape).
+    module.declare_function("js_eh_try_push", VOID, &[]);
+    if module.target_triple.contains("-windows-") {
+        module.declare_seh_machinery();
     } else {
-        module.declare_function("js_try_push", PTR, &[]);
-        // setjmp variant selection: decided by `crate::setjmp_abi` from the
-        // compile target's LLVM triple (`module.target_triple`), NOT host
-        // `cfg!` — cross-compiles must declare the *target's* setjmp ABI
-        // (Windows MSVC 2-arg `_setjmp`, Apple fast 1-arg `_setjmp`, plain
-        // `setjmp` elsewhere; full rationale in `crate::setjmp_abi`). The
-        // same `SetjmpAbi` drives the call sites in `stmt/try_stmt.rs`, so
-        // the declaration and the calls can never disagree on name or arity.
-        let abi = crate::setjmp_abi::setjmp_abi_for_triple(&module.target_triple);
-        module.declare_function(abi.callee(), I32, abi.param_types());
+        module.declare_personality();
     }
     module.declare_function("js_try_end", VOID, &[]);
     module.declare_function("js_get_exception", DOUBLE, &[]);

@@ -228,7 +228,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // settle the caller's promise as rejected — not unwind. Without
             // this, `async function f() { await Promise.reject(e); }`
             // would terminate the process because `js_throw` longjmps
-            // through a non-existent setjmp frame.
+            // through a non-existent handler frame.
             ctx.current_block = reject_idx;
             let promise_handle3 = unbox_to_i64(ctx.block(), &promise_box);
             let reason = ctx

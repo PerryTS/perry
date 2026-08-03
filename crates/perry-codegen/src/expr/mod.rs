@@ -606,7 +606,7 @@ pub(crate) struct FnCtx<'a> {
     /// decremented after. `Stmt::Return` emits `js_try_end()` this many
     /// times before the actual `ret` so the runtime's TRY_DEPTH counter
     /// stays balanced — without this, an early `return` inside a try
-    /// body leaks one slot in the runtime's setjmp jump-buffer table
+    /// body leaks one slot in the runtime's handler stack
     /// per call. Once 128 leaks accumulate the runtime panics with
     /// "Try block nesting too deep".
     pub try_depth: usize,

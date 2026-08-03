@@ -269,7 +269,7 @@ pub(crate) fn emit_module_globals(
                 };
                 // Use default (external) linkage for ALL module globals.
                 // `internal` linkage lets clang -O3 assume the global is
-                // never written by optnone functions (setjmp/try-catch),
+                // never written by optnone functions,
                 // causing it to constant-fold reads to 0.0. With external
                 // linkage, the optimizer can't make cross-TU assumptions.
                 // The module-unique name (perry_global_<prefix>__N)

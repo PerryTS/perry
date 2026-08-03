@@ -97,7 +97,7 @@ fn promote_global_for_units(line: &str) -> String {
 /// * Anything that can allocate or trigger GC gets NO group — the moving
 ///   GC's shadow-stack reload discipline depends on those calls staying
 ///   maximally clobbering.
-/// * Anything that can reach `js_throw` (setjmp/longjmp) gets NO group —
+/// * Anything that can reach `js_throw` (raises through the unwinder) gets NO group —
 ///   `willreturn` would let DCE delete a throwing call whose result is
 ///   unused, silently dropping the exception.
 ///
@@ -166,12 +166,7 @@ fn declare_line_for(f: &LlFunction) -> String {
         .map(|(t, _)| t.to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let attrs = if f.name == "setjmp" || f.name == "_setjmp" {
-        " #0"
-    } else {
-        ""
-    };
-    format!("declare {} @{}({}){}", f.return_type, f.name, params, attrs)
+    format!("declare {} @{}({})", f.return_type, f.name, params)
 }
 
 /// Render a function with external linkage forced, promoting an `internal` /
@@ -256,21 +251,11 @@ impl LlModule {
         }
         self.declared_names.insert(name.to_string());
         let param_str = param_types.join(", ");
-        // setjmp needs the `returns_twice` attribute to prevent
-        // LLVM from promoting alloca slots to SSA registers across
-        // the setjmp boundary. Without it, local variables modified
-        // between setjmp and longjmp are clobbered when the second
-        // return (via longjmp) happens.
-        //
         // Verified-pure runtime helpers get the #2/#3 optimization groups
         // (#6082) — see `helper_decl_attrs` for the audit invariants. The
         // lookup is name-keyed here in the single declaration funnel so
         // every declaration path agrees on the attributes.
-        let attrs = if name == "setjmp" || name == "_setjmp" {
-            " #0"
-        } else {
-            helper_decl_attrs(name)
-        };
+        let attrs = helper_decl_attrs(name);
         self.declarations.push((
             name.to_string(),
             format!("declare {} @{}({}){}", return_type, name, param_str, attrs),
@@ -540,33 +525,6 @@ impl LlModule {
     /// same attributes and metadata (so `#0`/`#1` and `!N` references resolve in
     /// every unit). Over-emitting an unused attribute group is harmless.
     fn push_attrs_and_metadata(&self, ir: &mut String) {
-        // Attribute group for setjmp's `returns_twice` marker. Only emit if
-        // setjmp (any variant) was declared. Apple declares `_setjmp`, Windows
-        // `_setjmp` (2-arg ABI), Linux `setjmp` — all need `returns_twice`.
-        if self.declared_names.contains("setjmp") || self.declared_names.contains("_setjmp") {
-            ir.push_str("\nattributes #0 = { returns_twice }\n");
-            // Functions containing a `try` are marked `#1`.
-            //
-            // This group used to carry `optnone` as well, to stop mem2reg/SROA
-            // from promoting allocas across the setjmp call (a promoted local
-            // lives in a callee-saved register, which `longjmp` restores to its
-            // setjmp-time value — so try-body mutations were invisible to the
-            // catch). That worked, but it deoptimized the ENTIRE function: just
-            // having a `try` cost ~5x on the surrounding loop even when nothing
-            // ever threw (#6385).
-            //
-            // The promotion is now blocked surgically instead, by emitting
-            // `volatile` loads/stores for exactly the allocas the try body
-            // writes (see `crate::volatile_setjmp`) — LLVM refuses to promote
-            // an alloca with any volatile access. Everything else optimizes.
-            //
-            // `noinline` stays. LLVM's `isInlineViable` already refuses to
-            // inline a function that contains a `returns_twice` call, so this
-            // is belt-and-braces rather than load-bearing — but it keeps the
-            // setjmp frame's identity from depending on an internal inliner
-            // policy, at zero cost.
-            ir.push_str("attributes #1 = { noinline }\n");
-        }
         // Verified runtime-helper groups (#6082) — emitted only when a
         // declaration actually references them (mirrors the setjmp gating
         // above). See `helper_decl_attrs` for the audit invariants.

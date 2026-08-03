@@ -83,8 +83,6 @@ fn lower_async_rejecting_stmts_inner(
     // machines still need the ECMAScript async boundary: any abrupt
     // completion before the first await rejects the returned Promise instead
     // of escaping as a host exception.
-    let invoke_eh = crate::eh_mode::invoke_eh_enabled();
-
     let body_idx = ctx.new_block("async.body");
     let catch_idx = ctx.new_block("async.catch");
     let merge_idx = ctx.new_block("async.merge");
@@ -93,39 +91,17 @@ fn lower_async_rejecting_stmts_inner(
     let catch_label = ctx.block_label(catch_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    // Handler dispatch — shared with `lower_try` so the mechanism (invoke
-    // landing pad, or the target-ABI setjmp variant chosen from
-    // `ctx.target_triple` via `crate::setjmp_abi`) is decided in exactly one
-    // place per mode.
-    let eh_scope = if invoke_eh {
-        Some(try_stmt::emit_eh_dispatch(ctx, &catch_label, &body_label))
-    } else {
-        ctx.func.has_try = true;
-        try_stmt::emit_setjmp_dispatch(ctx, &catch_label, &body_label);
-        None
-    };
+    // Handler dispatch — shared with `lower_try` so the per-triple shape
+    // (Itanium landing pad vs SEH funclet) is decided in exactly one place.
+    // The landing pad reads no locals; the unwind edges keep SSA values live
+    // where LLVM's ordinary EH liveness says so.
+    let lpad = try_stmt::emit_eh_dispatch(ctx, &catch_label, &body_label);
 
     ctx.current_block = body_idx;
     ctx.try_depth += 1;
-    // Setjmp mode: the whole async body runs between the setjmp above and a
-    // possible longjmp into `async.catch`. `async.catch` itself only touches
-    // runtime state (get/clear exception, reject the promise) and never reads
-    // a local, so in principle no alloca needs to survive that longjmp — but
-    // we open the region anyway rather than special-case it. The uniform rule
-    // ("every alloca stored inside a setjmp-protected region is volatile") is
-    // the one that is trivially sound, and this is still strictly better than
-    // the `optnone` it replaces. Invoke mode needs none of that: the landing
-    // pad reads no locals, and the unwind edges keep SSA values live where
-    // LLVM's ordinary EH liveness says so.
-    match &eh_scope {
-        Some(lpad) => ctx.func.push_eh_scope(lpad.clone()),
-        None => ctx.func.enter_try_region(),
-    }
+    ctx.func.push_eh_scope(lpad);
     lower_stmts_inner(ctx, stmts, emit_shadow_clears)?;
-    match &eh_scope {
-        Some(_) => ctx.func.pop_eh_scope(),
-        None => ctx.func.exit_try_region(),
-    }
+    ctx.func.pop_eh_scope();
     ctx.try_depth -= 1;
     if !ctx.block().is_terminated() {
         ctx.block().call_void("js_try_end", &[]);
@@ -548,11 +524,11 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             Ok(())
         }
 
-        // Phase G: real setjmp/longjmp-based exception handling.
-        //
         // `throw expr` evaluates the expression, calls js_throw(value)
-        // which longjmps to the most recent try block, and emits an
-        // LLVM `unreachable` terminator (js_throw never returns).
+        // which raises through the unwinder to the innermost handler
+        // (#7302; the call becomes an `invoke` when a handler scope is
+        // active), and emits an LLVM `unreachable` terminator (js_throw
+        // never returns).
         //
         // Spec-corner: inside an async function with no enclosing
         // `try { ... }` frame, a thrown value must reject the returned
@@ -577,36 +553,9 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             Ok(())
         }
 
-        // Phase G: try/catch/finally via setjmp/longjmp.
-        //
-        // CFG shape:
-        //   <current block>:
-        //     %jmpbuf = call ptr @js_try_push()
-        //     %sjr    = call i32 @setjmp(ptr %jmpbuf)
-        //     %is_exc = icmp ne i32 %sjr, 0
-        //     br i1 %is_exc, label %catch_entry, label %try_body
-        //
-        //   try_body:
-        //     <lower try body stmts>
-        //     call void @js_try_end()
-        //     br label %finally_or_merge
-        //
-        //   catch_entry:
-        //     call void @js_try_end()        ; pop try depth before catch body
-        //     %exc = call double @js_get_exception()
-        //     call void @js_clear_exception()
-        //     <bind catch param to %exc if present>
-        //     <lower catch body stmts>
-        //     br label %finally_or_merge
-        //
-        //   finally_or_merge:
-        //     <lower finally stmts if present>
-        //     <continue>
-        //
-        // Local variable safety: all locals are alloca-backed (stack slots),
-        // not SSA registers, so they survive longjmp without explicit
-        // save/restore. This is the key advantage of the alloca+mem2reg
-        // strategy used by our LLVM backend.
+        // try/catch/finally via invoke/landingpad (#7302) — see
+        // `stmt/try_stmt.rs` for the CFG shape and the per-triple
+        // dispatch (Itanium landing pads / SEH funclets).
         Stmt::Try {
             body,
             catch,

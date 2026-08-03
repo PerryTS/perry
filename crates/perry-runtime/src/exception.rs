@@ -1,8 +1,19 @@
-//! Exception handling runtime for Perry
+//! Exception handling runtime for Perry.
 //!
-//! Uses setjmp/longjmp for exception unwinding.
-//! The key insight is that setjmp must be called directly from the generated code,
-//! not from inside a Rust function (because the stack frame would be invalid when longjmp returns).
+//! Two transports behind one handler stack (#7302):
+//!
+//! * **Generated `try`/`catch`** (`js_eh_try_push`, `HandlerKind::Unwind`):
+//!   `js_throw` raises through the system unwinder
+//!   (`_Unwind_RaiseException`; `RaiseException` on Windows) and the
+//!   frame's `landingpad`/`catchpad` receives control — see `crate::eh`.
+//! * **Rust-side boundary traps** (`js_try_push` + `ffi::setjmp`,
+//!   `HandlerKind::Setjmp`): runtime helpers that drive user JS from a
+//!   Rust-owned context (`js_call_catching`, promise combinators, iterator
+//!   trampolines) catch via `longjmp` — Rust cannot catch a foreign
+//!   exception, and this is sound because an open Rust handler is always
+//!   innermost when it is the throw target (handler-stack order mirrors
+//!   stack order), so a raise never crosses one, and the frames a longjmp
+//!   discards are never resumed.
 
 // Platform-specific jmp_buf size (in i32 units)
 // macOS ARM64: _JBLEN = 48 (48 * 4 = 192 bytes)

@@ -24,7 +24,6 @@ pub(crate) mod native_value;
 pub(crate) mod nm_install;
 pub mod opt_report;
 pub mod runtime_decls;
-pub(crate) mod setjmp_abi;
 pub(crate) mod stmt;
 pub mod strings;
 pub mod stubs;
@@ -35,7 +34,6 @@ pub(crate) mod type_analysis_facts;
 pub(crate) mod type_analysis_net;
 pub(crate) mod typed_shape;
 pub mod types;
-pub(crate) mod volatile_setjmp;
 
 pub use codegen::{
     compile_module, resolve_target_triple, AppMetadata, CompileOptions, FpContractMode,

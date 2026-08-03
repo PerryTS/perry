@@ -523,7 +523,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_access_sync", I32, &[DOUBLE]);
     module.declare_function("js_fs_access_sync_mode", I32, &[DOUBLE, DOUBLE]);
     // fs.accessSync(path) — Node-compatible variant that throws on
-    // failure (via js_throw → setjmp longjmp). Returns NaN-boxed undefined.
+    // failure (via js_throw → unwind). Returns NaN-boxed undefined.
     module.declare_function("js_fs_access_sync_throw", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fs_access_sync_throw_mode", DOUBLE, &[DOUBLE, DOUBLE]);
     // fs.realpathSync(path) — returns raw *mut StringHeader i64.

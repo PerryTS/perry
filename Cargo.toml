@@ -92,7 +92,18 @@ default-members = [
 [profile.release]
 lto = "thin"          # Thin LTO for faster builds and fewer duplicate symbols
 codegen-units = 1     # Better optimization, slower compile
-panic = "unwind"      # Allow catch_unwind for graceful error recovery
+# panic=abort (#7302): the invoke/landingpad exception transport requires the
+# unwinder to step THROUGH runtime Rust frames with longjmp-equivalent
+# semantics — no cleanups, and no RFC-2945 abort-on-unwind guards (which
+# panic=unwind plants in every extern "C" helper and which a JS throw
+# crossing a helper frame would trip). Must be paired with
+# `-C force-unwind-tables=yes` (.cargo/config.toml) or the unwinder cannot
+# step the frames at all — js_eh_try_push self-checks this at runtime and
+# fails loudly. Cost: catch_unwind-based panic recovery (spawn workers,
+# worker_threads, UI callbacks) no longer catches — a runtime panic aborts
+# the process. On the main JS→helper path panics already aborted (the
+# RFC-2945 guards); cargo test is unaffected (test builds force unwind).
+panic = "abort"
 strip = true          # Strip symbols automatically
 opt-level = 3         # Maximum optimization
 
@@ -209,18 +220,6 @@ codegen-units = 16
 # edit/build loop stays short. Intended local loop:
 #   cargo check -p perry                       # fastest correctness feedback
 #   cargo build --profile perry-dev -p perry   # optimized local development
-# Invoke-EH development profile (#7302): the runtime/stdlib static archives
-# linked into compiled programs under PERRY_EH=invoke. panic=abort keeps Rust
-# frames cleanup-free so a JS unwind crossing them has exactly longjmp
-# semantics (and no RFC-2945 extern-"C" abort guards fire); it MUST be paired
-# with RUSTFLAGS="-C force-unwind-tables=yes" or the unwinder cannot step
-# those frames at all — js_throw fails loudly if that happens (see
-# perry-runtime/src/eh.rs). Temporary alongside the PERRY_EH flag; the
-# default profiles adopt this configuration when the setjmp path is deleted.
-[profile.eh-abort]
-inherits = "perry-dev"
-panic = "abort"
-
 [profile.perry-dev]
 inherits = "release"
 lto = false
