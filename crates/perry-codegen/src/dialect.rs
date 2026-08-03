@@ -78,7 +78,22 @@ impl<'ctx, 'm> FnStream<'ctx, 'm> {
             .with_context(|| format!("in line: {t}"))
     }
 
-    pub(crate) fn finish(self) -> Result<usize> {
+    /// Consume one finalized item — the native fast path. Typed
+    /// instructions construct directly; only labels, splices, and `Raw`
+    /// payloads go through the line reader.
+    pub(crate) fn item(&mut self, item: &crate::function::FinalItem<'_>) -> Result<()> {
+        use crate::function::FinalItem as FI;
+        match item {
+            FI::Label(l) => self.inner.enter_block(l),
+            FI::Blank => Ok(()),
+            FI::Text(t) => self.line(t),
+            FI::Inst(crate::inst::LlInst::Raw(s)) => self.line(s),
+            FI::Inst(i) => self.inner.typed(i),
+        }
+    }
+
+    /// Returns `(typed, raw)` instruction counts — the migration ratchet.
+    pub(crate) fn finish(self) -> Result<(usize, usize)> {
         self.inner.finish()
     }
 }
@@ -96,7 +111,7 @@ pub(crate) fn add_function_from_text<'ctx>(
     for line in lines {
         stream.line(line)?;
     }
-    stream.finish()
+    stream.finish().map(|(t, r)| t + r)
 }
 
 struct FnReader<'ctx, 'm> {
@@ -129,7 +144,8 @@ struct FnReader<'ctx, 'm> {
     /// branch created the block object earlier.
     last_entered: Option<BasicBlock<'ctx>>,
     positioned: bool,
-    count: usize,
+    raw_count: usize,
+    typed_count: usize,
 }
 
 /// Pieces of a `define [linkage] RET @NAME(T %p, ...) [attrs] {` line.
@@ -277,7 +293,8 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             placeholders: HashMap::new(),
             last_entered: None,
             positioned: false,
-            count: 0,
+            raw_count: 0,
+            typed_count: 0,
         })
     }
 
@@ -353,7 +370,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         if !self.positioned {
             bail!("instruction before first block label");
         }
-        self.count += 1;
+        self.raw_count += 1;
         // `%r = op ...` vs bare op.
         if let Some((lhs, rhs)) = t.split_once(" = ") {
             let (op, rest) = rhs
@@ -524,6 +541,11 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .map_err(be)?;
         if volatile {
             let _ = v.as_instruction_value().map(|i| i.set_volatile(true));
+        }
+        if rest.contains("!invariant.load") {
+            if let Some(i) = v.as_instruction_value() {
+                set_invariant_load(self.ctx, i);
+            }
         }
         if atomic {
             let ord = match ordering {
@@ -988,7 +1010,503 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         Ok(out)
     }
 
-    fn finish(mut self) -> Result<usize> {
+    /// Construct one typed instruction directly — the no-text fast path.
+    /// Each arm mirrors the corresponding string-parser arm exactly; the
+    /// parser remains authoritative for `Raw` lines and the corpus tests.
+    fn typed(&mut self, inst: &crate::inst::LlInst) -> Result<()> {
+        use crate::inst::{LlInst as I, LoadFlavor as LF};
+        if !self.positioned {
+            bail!("instruction before first block label");
+        }
+        self.typed_count += 1;
+        match inst {
+            I::Raw(_) => unreachable!("Raw goes through the line reader"),
+            I::Bin {
+                dst,
+                op,
+                pre,
+                ty,
+                a,
+                b,
+            } => {
+                let t = basic_type(self.ctx, ty)?;
+                let av = self.val(t, a)?;
+                let bv = self.val(t, b)?;
+                let name = dst.trim_start_matches('%');
+                let out: BasicValueEnum = match *op {
+                    "add" => self
+                        .builder
+                        .build_int_add(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "sub" => self
+                        .builder
+                        .build_int_sub(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "mul" => self
+                        .builder
+                        .build_int_mul(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "sdiv" => self
+                        .builder
+                        .build_int_signed_div(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "srem" => self
+                        .builder
+                        .build_int_signed_rem(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "and" => self
+                        .builder
+                        .build_and(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "or" => self
+                        .builder
+                        .build_or(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "xor" => self
+                        .builder
+                        .build_xor(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "shl" => self
+                        .builder
+                        .build_left_shift(av.into_int_value(), bv.into_int_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "lshr" => self
+                        .builder
+                        .build_right_shift(av.into_int_value(), bv.into_int_value(), false, name)
+                        .map_err(be)?
+                        .into(),
+                    "ashr" => self
+                        .builder
+                        .build_right_shift(av.into_int_value(), bv.into_int_value(), true, name)
+                        .map_err(be)?
+                        .into(),
+                    "fadd" => self
+                        .builder
+                        .build_float_add(av.into_float_value(), bv.into_float_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "fsub" => self
+                        .builder
+                        .build_float_sub(av.into_float_value(), bv.into_float_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "fmul" => self
+                        .builder
+                        .build_float_mul(av.into_float_value(), bv.into_float_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "fdiv" => self
+                        .builder
+                        .build_float_div(av.into_float_value(), bv.into_float_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    "frem" => self
+                        .builder
+                        .build_float_rem(av.into_float_value(), bv.into_float_value(), name)
+                        .map_err(be)?
+                        .into(),
+                    other => bail!("typed Bin: unknown op `{other}`"),
+                };
+                if !pre.is_empty() {
+                    let toks: Vec<&str> = pre.split_whitespace().collect();
+                    apply_flags(out.as_instruction_value(), &toks);
+                }
+                self.def(dst, out)
+            }
+            I::FNeg { dst, pre, a } => {
+                let t = basic_type(self.ctx, "double")?;
+                let av = self.val(t, a)?;
+                let out: BasicValueEnum = self
+                    .builder
+                    .build_float_neg(av.into_float_value(), dst.trim_start_matches('%'))
+                    .map_err(be)?
+                    .into();
+                if !pre.is_empty() {
+                    let toks: Vec<&str> = pre.split_whitespace().collect();
+                    apply_flags(out.as_instruction_value(), &toks);
+                }
+                self.def(dst, out)
+            }
+            I::FCmp { dst, pred, a, b } => {
+                let t = basic_type(self.ctx, "double")?;
+                let av = self.val(t, a)?;
+                let bv = self.val(t, b)?;
+                let out: BasicValueEnum = self
+                    .builder
+                    .build_float_compare(
+                        float_pred(pred)?,
+                        av.into_float_value(),
+                        bv.into_float_value(),
+                        dst.trim_start_matches('%'),
+                    )
+                    .map_err(be)?
+                    .into();
+                self.def(dst, out)
+            }
+            I::ICmp {
+                dst,
+                pred,
+                ty,
+                a,
+                b,
+            } => {
+                let t = basic_type(self.ctx, ty)?;
+                let av = self.val(t, a)?;
+                let bv = self.val(t, b)?;
+                let name = dst.trim_start_matches('%');
+                let out: BasicValueEnum = if av.is_pointer_value() {
+                    self.builder
+                        .build_int_compare(
+                            int_pred(pred)?,
+                            av.into_pointer_value(),
+                            bv.into_pointer_value(),
+                            name,
+                        )
+                        .map_err(be)?
+                        .into()
+                } else {
+                    self.builder
+                        .build_int_compare(
+                            int_pred(pred)?,
+                            av.into_int_value(),
+                            bv.into_int_value(),
+                            name,
+                        )
+                        .map_err(be)?
+                        .into()
+                };
+                self.def(dst, out)
+            }
+            I::Alloca { dst, ty } => {
+                let t = basic_type(self.ctx, ty)?;
+                let out = self
+                    .builder
+                    .build_alloca(t, dst.trim_start_matches('%'))
+                    .map_err(be)?;
+                self.def(dst, out.into())
+            }
+            I::Load {
+                dst,
+                ty,
+                ptr,
+                flavor,
+            } => {
+                let t = basic_type(self.ctx, ty)?;
+                let p = self
+                    .val(self.ctx.ptr_type(AddressSpace::default()).into(), ptr)?
+                    .into_pointer_value();
+                let v = self
+                    .builder
+                    .build_load(t, p, dst.trim_start_matches('%'))
+                    .map_err(be)?;
+                match flavor {
+                    LF::Plain => {}
+                    LF::Aligned(n) => {
+                        let _ = v.as_instruction_value().map(|i| i.set_alignment(*n));
+                    }
+                    LF::Volatile => {
+                        let _ = v.as_instruction_value().map(|i| i.set_volatile(true));
+                    }
+                    LF::AtomicSeqCst(n) => {
+                        if let Some(i) = v.as_instruction_value() {
+                            unsafe {
+                                llvm_sys::core::LLVMSetOrdering(
+                                    i.as_value_ref(),
+                                    llvm_sys::LLVMAtomicOrdering::LLVMAtomicOrderingSequentiallyConsistent,
+                                )
+                            };
+                            let _ = i.set_alignment(*n);
+                        }
+                    }
+                    LF::Invariant => {
+                        if let Some(i) = v.as_instruction_value() {
+                            set_invariant_load(self.ctx, i);
+                        }
+                    }
+                }
+                self.def(dst, v)
+            }
+            I::Store {
+                ty,
+                val,
+                ptr,
+                volatile,
+                align,
+            } => {
+                let t = basic_type(self.ctx, ty)?;
+                let v = self.val(t, val)?;
+                let p = self
+                    .val(self.ctx.ptr_type(AddressSpace::default()).into(), ptr)?
+                    .into_pointer_value();
+                let inst = self.builder.build_store(p, v).map_err(be)?;
+                if *volatile {
+                    let _ = inst.set_volatile(true);
+                }
+                if let Some(n) = align {
+                    let _ = inst.set_alignment(*n);
+                }
+                Ok(())
+            }
+            I::Cast {
+                dst,
+                op,
+                from,
+                v,
+                to,
+            } => {
+                let sty = basic_type(self.ctx, from)?;
+                let sv = self.val(sty, v)?;
+                let dty = basic_type(self.ctx, to)?;
+                let name = dst.trim_start_matches('%');
+                let out: BasicValueEnum = match *op {
+                    "bitcast" => self.builder.build_bit_cast(sv, dty, name).map_err(be)?,
+                    "zext" => self
+                        .builder
+                        .build_int_z_extend(sv.into_int_value(), dty.into_int_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    "sext" => self
+                        .builder
+                        .build_int_s_extend(sv.into_int_value(), dty.into_int_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    "trunc" => self
+                        .builder
+                        .build_int_truncate(sv.into_int_value(), dty.into_int_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    "fptosi" => self
+                        .builder
+                        .build_float_to_signed_int(sv.into_float_value(), dty.into_int_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    "fptoui" => self
+                        .builder
+                        .build_float_to_unsigned_int(
+                            sv.into_float_value(),
+                            dty.into_int_type(),
+                            name,
+                        )
+                        .map_err(be)?
+                        .into(),
+                    "sitofp" => self
+                        .builder
+                        .build_signed_int_to_float(sv.into_int_value(), dty.into_float_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    "uitofp" => self
+                        .builder
+                        .build_unsigned_int_to_float(
+                            sv.into_int_value(),
+                            dty.into_float_type(),
+                            name,
+                        )
+                        .map_err(be)?
+                        .into(),
+                    "fpext" => self
+                        .builder
+                        .build_float_ext(sv.into_float_value(), dty.into_float_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    "fptrunc" => self
+                        .builder
+                        .build_float_trunc(sv.into_float_value(), dty.into_float_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    "ptrtoint" => self
+                        .builder
+                        .build_ptr_to_int(sv.into_pointer_value(), dty.into_int_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    "inttoptr" => self
+                        .builder
+                        .build_int_to_ptr(sv.into_int_value(), dty.into_pointer_type(), name)
+                        .map_err(be)?
+                        .into(),
+                    other => bail!("typed Cast: unknown op `{other}`"),
+                };
+                self.def(dst, out)
+            }
+            I::Select {
+                dst,
+                cond_ty,
+                cond,
+                ty,
+                a,
+                b,
+            } => {
+                let ct = basic_type(self.ctx, cond_ty)?;
+                let cv = self.val(ct, cond)?;
+                let t = basic_type(self.ctx, ty)?;
+                let av = self.val(t, a)?;
+                let bv = self.val(t, b)?;
+                let out = self
+                    .builder
+                    .build_select(cv.into_int_value(), av, bv, dst.trim_start_matches('%'))
+                    .map_err(be)?;
+                self.def(dst, out)
+            }
+            I::Call {
+                dst,
+                ret,
+                callee,
+                args,
+            } => {
+                let mut argv: Vec<BasicMetadataValueEnum> = Vec::with_capacity(args.len());
+                let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                    Vec::with_capacity(args.len());
+                for (t, v) in args {
+                    let bt = basic_type(self.ctx, t)?;
+                    argv.push(self.val(bt, v)?.into());
+                    argtys.push(bt.into());
+                }
+                let fn_ty = fn_type_of(self.ctx, ret, &argtys)?;
+                let f = match self.module.get_function(callee) {
+                    Some(f) => f,
+                    None if callee.starts_with("llvm.") => {
+                        self.module.add_function(callee, fn_ty, None)
+                    }
+                    None => bail!("call to undeclared @{callee}"),
+                };
+                let site = self
+                    .builder
+                    .build_indirect_call(
+                        fn_ty,
+                        f.as_global_value().as_pointer_value(),
+                        &argv,
+                        dst.as_deref()
+                            .map(|d| d.trim_start_matches('%'))
+                            .unwrap_or(""),
+                    )
+                    .map_err(be)?;
+                if let Some(d) = dst {
+                    match site.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(v) => self.def(d, v)?,
+                        other => bail!("typed call expected a value, got {other:?}"),
+                    }
+                }
+                Ok(())
+            }
+            I::CallIndirect {
+                dst,
+                ret,
+                fptr,
+                args,
+            } => {
+                let mut argv: Vec<BasicMetadataValueEnum> = Vec::with_capacity(args.len());
+                let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                    Vec::with_capacity(args.len());
+                for (t, v) in args {
+                    let bt = basic_type(self.ctx, t)?;
+                    argv.push(self.val(bt, v)?.into());
+                    argtys.push(bt.into());
+                }
+                let fn_ty = fn_type_of(self.ctx, ret, &argtys)?;
+                let fp = self
+                    .val(self.ctx.ptr_type(AddressSpace::default()).into(), fptr)?
+                    .into_pointer_value();
+                let site = self
+                    .builder
+                    .build_indirect_call(fn_ty, fp, &argv, dst.trim_start_matches('%'))
+                    .map_err(be)?;
+                match site.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => self.def(dst, v),
+                    other => bail!("typed indirect call expected a value, got {other:?}"),
+                }
+            }
+            I::AsmBarrier => {
+                let void_fn = self.ctx.void_type().fn_type(&[], false);
+                let ptr = self.ctx.create_inline_asm(
+                    void_fn,
+                    String::new(),
+                    String::new(),
+                    true,
+                    false,
+                    None,
+                    false,
+                );
+                self.builder
+                    .build_indirect_call(void_fn, ptr, &[], "")
+                    .map_err(be)?;
+                Ok(())
+            }
+            I::Br { label } => {
+                let b = self.block(label);
+                self.builder.build_unconditional_branch(b).map_err(be)?;
+                Ok(())
+            }
+            I::CondBr { cond, t, f } => {
+                let cv = self.val(self.ctx.bool_type().into(), cond)?;
+                let tb = self.block(t);
+                let fb = self.block(f);
+                self.builder
+                    .build_conditional_branch(cv.into_int_value(), tb, fb)
+                    .map_err(be)?;
+                Ok(())
+            }
+            I::Ret { ty, val } => {
+                let t = basic_type(self.ctx, ty)?;
+                let v = self.val(t, val)?;
+                self.builder.build_return(Some(&v)).map_err(be)?;
+                Ok(())
+            }
+            I::RetVoid => {
+                self.builder.build_return(None).map_err(be)?;
+                Ok(())
+            }
+            I::Unreachable => {
+                self.builder.build_unreachable().map_err(be)?;
+                Ok(())
+            }
+            I::Gep {
+                dst,
+                inbounds,
+                ty,
+                ptr,
+                idxs,
+            } => {
+                let pointee = basic_type(self.ctx, ty)?;
+                let p = self
+                    .val(self.ctx.ptr_type(AddressSpace::default()).into(), ptr)?
+                    .into_pointer_value();
+                let mut iv = Vec::with_capacity(idxs.len());
+                for (t, v) in idxs {
+                    iv.push(self.val(basic_type(self.ctx, t)?, v)?.into_int_value());
+                }
+                let name = dst.trim_start_matches('%');
+                let out = unsafe {
+                    if *inbounds {
+                        self.builder.build_in_bounds_gep(pointee, p, &iv, name)
+                    } else {
+                        self.builder.build_gep(pointee, p, &iv, name)
+                    }
+                }
+                .map_err(be)?;
+                self.def(dst, out.into())
+            }
+            I::Phi { dst, ty, pairs } => {
+                let t = basic_type(self.ctx, ty)?;
+                let phi = self
+                    .builder
+                    .build_phi(t, dst.trim_start_matches('%'))
+                    .map_err(be)?;
+                self.def(dst, phi.as_basic_value())?;
+                self.pending_phis.push((phi, t, pairs.clone()));
+                Ok(())
+            }
+        }
+    }
+
+    fn finish(mut self) -> Result<(usize, usize)> {
         // Phi incomings resolve against the COMPLETE value map — no
         // placeholders here; an unknown register at this point is a bug.
         for (phi, ty, incs) in std::mem::take(&mut self.pending_phis) {
@@ -1011,8 +1529,23 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         if let Some(name) = self.placeholders.keys().next() {
             bail!("register {name} was used but never defined");
         }
-        Ok(self.count)
+        Ok((self.typed_count, self.raw_count))
     }
+}
+
+/// Tag a load with `!invariant.load !0` (issue #52 semantics). Kind id via
+/// llvm-sys; the node is the empty MDNode, same as the textual `!0 = !{}`.
+fn set_invariant_load(ctx: &Context, inst: InstructionValue<'_>) {
+    use inkwell::context::AsContextRef;
+    let kind = unsafe {
+        llvm_sys::core::LLVMGetMDKindIDInContext(
+            ctx.as_ctx_ref(),
+            b"invariant.load".as_ptr() as *const std::os::raw::c_char,
+            14,
+        )
+    };
+    let node = ctx.metadata_node(&[]);
+    let _ = inst.set_metadata(node, kind);
 }
 
 /// Replace every use of a placeholder with the real definition. A type

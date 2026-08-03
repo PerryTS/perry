@@ -72,7 +72,8 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
         skeleton.push_str(&format!("declare {} @{}({})\n", f.return_type, f.name, tys));
     }
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
-    let mut instructions = 0usize;
+    let mut typed_insts = 0usize;
+    let mut raw_insts = 0usize;
     for f in &funcs {
         let header = synth_define_header(f);
         let mut stream = crate::dialect::FnStream::begin(context, &module, &header)
@@ -92,19 +93,23 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
                 })?;
             }
         } else {
-            // The common case: finalized lines stream straight into the
-            // C-API builder — no per-function text exists.
-            f.for_each_final_line::<anyhow::Error>(&mut |line| stream.line(line))
+            // The common case: finalized items stream straight into the
+            // C-API builder — typed instructions carry no text at all.
+            f.for_each_final_item::<anyhow::Error>(&mut |item| stream.item(&item))
                 .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
         }
-        instructions += stream
+        let (t, r) = stream
             .finish()
             .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
+        typed_insts += t;
+        raw_insts += r;
     }
     log::debug!(
-        "perry-codegen: native construction built {} functions, {} instructions, skeleton {} bytes",
+        "perry-codegen: native construction built {} functions, {} typed + {} raw instructions \
+         (ratchet: raw -> 0), skeleton {} bytes",
         funcs.len(),
-        instructions,
+        typed_insts,
+        raw_insts,
         skeleton.len()
     );
     Ok(module)

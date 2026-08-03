@@ -656,22 +656,44 @@ impl LlFunction {
         &self,
         sink: &mut dyn FnMut(&str) -> Result<(), E>,
     ) -> Result<(), E> {
+        let mut buf = String::new();
+        self.for_each_final_item::<E>(&mut |item| {
+            buf.clear();
+            match item {
+                FinalItem::Label(l) => {
+                    buf.push_str(l);
+                    buf.push(':');
+                }
+                FinalItem::Blank => {}
+                FinalItem::Text(t) => buf.push_str(t),
+                FinalItem::Inst(i) => i.render_into(&mut buf),
+            }
+            sink(&buf)
+        })
+    }
+
+    /// Item-granular twin of [`for_each_final_line`], and the seam the native
+    /// backend consumes: typed instructions arrive as [`FinalItem::Inst`] and
+    /// are constructed directly, with no per-line text; only labels, entry
+    /// splices, synthesized return-site rewrites, and `Raw` payload splits
+    /// arrive as text. The two visitors cannot drift: the line visitor is a
+    /// rendering adapter over this one.
+    pub fn for_each_final_item<E>(
+        &self,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
         let rewrite_rets =
             self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty();
         let mut seq: u32 = 0;
-        let mut line_buf = String::new();
         for (i, blk) in self.blocks.iter().enumerate() {
             if i > 0 {
-                sink("")?;
+                sink(FinalItem::Blank)?;
             }
-            line_buf.clear();
-            line_buf.push_str(&blk.label);
-            line_buf.push(':');
-            sink(&line_buf)?;
+            sink(FinalItem::Label(&blk.label))?;
             let is_entry = i == 0;
             if is_entry {
                 for alloca in &self.entry_allocas {
-                    self.emit_maybe_ret_rewritten(alloca, rewrite_rets, &mut seq, sink)?;
+                    self.text_item(alloca, rewrite_rets, &mut seq, sink)?;
                 }
             }
             let boundary = if is_entry {
@@ -685,63 +707,111 @@ impl LlFunction {
             for inst in blk.insts() {
                 if idx == boundary {
                     for line in &self.entry_post_init_setup {
-                        self.emit_maybe_ret_rewritten(line, rewrite_rets, &mut seq, sink)?;
+                        self.text_item(line, rewrite_rets, &mut seq, sink)?;
                     }
                 }
-                line_buf.clear();
-                inst.render_into(&mut line_buf);
-                // Split multi-line raw payloads exactly like text rendering
-                // followed by the line-based rewrite pass would.
-                if line_buf.contains('\n') {
-                    let whole = std::mem::take(&mut line_buf);
-                    for l in whole.split('\n') {
-                        self.emit_maybe_ret_rewritten(l, rewrite_rets, &mut seq, sink)?;
-                    }
-                } else {
-                    let whole = std::mem::take(&mut line_buf);
-                    self.emit_maybe_ret_rewritten(&whole, rewrite_rets, &mut seq, sink)?;
-                    line_buf = whole;
-                }
+                self.inst_item(inst, rewrite_rets, &mut seq, sink)?;
                 idx += 1;
             }
             if is_entry && idx == boundary {
                 for line in &self.entry_post_init_setup {
-                    self.emit_maybe_ret_rewritten(line, rewrite_rets, &mut seq, sink)?;
+                    self.text_item(line, rewrite_rets, &mut seq, sink)?;
                 }
             }
         }
         Ok(())
     }
 
+    fn inst_item<E>(
+        &self,
+        inst: &crate::inst::LlInst,
+        rewrite_rets: bool,
+        seq: &mut u32,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        use crate::inst::LlInst;
+        // Multi-line raw payloads split exactly like text rendering followed
+        // by the line-based rewrite pass would.
+        if let LlInst::Raw(s) = inst {
+            if s.contains('\n') {
+                for l in s.split('\n') {
+                    self.text_item(l, rewrite_rets, seq, sink)?;
+                }
+                return Ok(());
+            }
+        }
+        if rewrite_rets {
+            let is_rewritable_ret = match inst {
+                LlInst::Ret { ty, .. } => *ty != "ptr",
+                LlInst::RetVoid => true,
+                LlInst::Raw(s) => {
+                    let t = s.trim_start();
+                    (t.starts_with("ret ") || t == "ret void") && !t.starts_with("ret ptr ")
+                }
+                _ => false,
+            };
+            if is_rewritable_ret {
+                self.yield_ret_prologue(seq, sink)?;
+            }
+        }
+        sink(FinalItem::Inst(inst))
+    }
+
     /// Return-site rewrite, streamed: before every `ret` (except `ret ptr`),
     /// inject the pre-return void calls and the shadow-frame pop. Byte-equal
     /// to the old whole-text line scan.
-    fn emit_maybe_ret_rewritten<E>(
+    fn text_item<E>(
         &self,
         line: &str,
         rewrite_rets: bool,
         seq: &mut u32,
-        sink: &mut dyn FnMut(&str) -> Result<(), E>,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
     ) -> Result<(), E> {
         if rewrite_rets {
             let trimmed = line.trim_start();
             if (trimmed.starts_with("ret ") || trimmed == "ret void")
                 && !trimmed.starts_with("ret ptr ")
             {
-                for func_name in &self.pre_return_void_calls {
-                    sink(&format!("  call void @{}()", func_name))?;
-                }
-                if let Some(handle_slot) = &self.shadow_frame_slot {
-                    let load_reg = format!("%shadow_pop_l_{}", seq);
-                    *seq += 1;
-                    sink(&format!("  {} = load i64, ptr {}", load_reg, handle_slot))?;
-                    sink(&format!(
-                        "  call void @js_shadow_frame_pop(i64 {})",
-                        load_reg
-                    ))?;
-                }
+                self.yield_ret_prologue(seq, sink)?;
             }
         }
-        sink(line)
+        sink(FinalItem::Text(line))
     }
+
+    fn yield_ret_prologue<E>(
+        &self,
+        seq: &mut u32,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        for func_name in &self.pre_return_void_calls {
+            sink(FinalItem::Text(&format!("  call void @{}()", func_name)))?;
+        }
+        if let Some(handle_slot) = &self.shadow_frame_slot {
+            let load_reg = format!("%shadow_pop_l_{}", seq);
+            *seq += 1;
+            sink(FinalItem::Text(&format!(
+                "  {} = load i64, ptr {}",
+                load_reg, handle_slot
+            )))?;
+            sink(FinalItem::Text(&format!(
+                "  call void @js_shadow_frame_pop(i64 {})",
+                load_reg
+            )))?;
+        }
+        Ok(())
+    }
+}
+
+/// One finalized item of a function body. See
+/// [`LlFunction::for_each_final_item`].
+pub enum FinalItem<'a> {
+    /// Block label (no trailing colon).
+    Label(&'a str),
+    /// Blank separator line between blocks.
+    Blank,
+    /// A pre-rendered text line (entry splices, return-site rewrites,
+    /// multi-line raw payload splits).
+    Text(&'a str),
+    /// A typed instruction — the native backend constructs it directly.
+    Inst(&'a crate::inst::LlInst),
 }
