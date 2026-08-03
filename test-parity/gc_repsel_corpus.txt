@@ -480,3 +480,70 @@ test_gap_gc_process_env_cache_rooting
 # was hiding it, and a malloc-count-driven collection stops it hiding, so it is
 # red on the SHIPPED DEFAULT at base too.
 test_gap_gc_symbol_local_rooting
+
+# --- #7280: RUNTIME-DISPATCHED `new` — the instance in a Rust frame ----------
+# The sibling of `test_gap_gc_new_instance_rooting` one layer down. That file
+# covers the CODEGEN route: `new C(n)` with a statically-known `C`, where the
+# caller holds the instance itself. This one covers the four routes where
+# codegen cannot resolve the callee and hands the whole construction to
+# perry-runtime's `js_new_function_construct` family:
+#
+#   1. `new obj.ctor(n)`, `ctor` a declared class     -> construct_registered_class_ref
+#   2. `new obj.ctor(n)`, `ctor` a plain function     -> the closure tail
+#   3. `new obj.ctor(n)`, `ctor` a class EXPRESSION   -> the class-object arm
+#   4. `Reflect.construct(fn, [n], otherFn)`          -> ..._with_new_target
+#
+# Each allocated the instance, called back into user JS to run the constructor
+# body, and returned the pointer it had captured BEFORE that call. A runtime
+# frame is not visited by the precise root walk and the conservative stack scan
+# resolves to SkipDisabled in shipped builds, so the instance moved and the
+# helper returned the pre-move address — a stale receiver produced OUTSIDE the
+# emitted IR, which is why `scripts/gc_root_dominance_check.py` is structurally
+# blind to it (it reads LLVM IR; none of this is in LLVM IR).
+#
+# Measured on this branch, release, `PERRY_GC_MOVING_LOOP_POLLS=1` at compile:
+#   before the fix, POLLS=1 + ZEAL=1     200/200 iterations wrong on EVERY route
+#   after  the fix, POLLS=1 + ZEAL=1     10/10 runs byte-exact with the oracle
+#   control, + PERRY_GEN_GC=0            clean on both sides
+# and under the loop_polls arm env
+# (`HEAP_LIMIT=8 INCREMENTAL=0 CONSERVATIVE_STACK_SCAN=off POLLS=1 FORCE_EVACUATE=1`)
+# red before / clean after, which is the arm `gc-moving-witnesses` runs.
+#
+# ONE FILE, FOUR ROUTES, FOUR SEPARATE console.log LINES. The matrix byte-diffs
+# stdout, so a regression on any single route names itself instead of collapsing
+# into one `bad N`.
+test_gap_gc_dynamic_construct_receiver_rooting
+
+# --- #7280: OPTIONAL PARAMETERS — the residual that held #7161's stopgap -----
+# THE file for #7154's surviving residual. zod `util.ts`'s
+# `clone(inst, def?, params?: { parent: boolean })` gave `params` no shadow slot
+# even though HIR types it `Object(...)` and `type_is_pointer_bearing` says
+# true, so it crossed `new inst._zod.constr(...)` in callee-saved `d8` and
+# `params?.parent` dereferenced retired from-space.
+#
+# The cause is the OPTIONAL MARKER, not the object type. The pointer-locals
+# refinement fixpoint proves a local non-pointer from its WRITES, and a
+# PARAMETER's write list is a strict SUBSET of its definitions — the incoming
+# argument is not a write. The optional-parameter desugaring then donates the
+# one write that completes the false proof, for free, on every optional
+# parameter in the program:
+#
+#     if (p === undefined) { p = undefined; }
+#
+# Two functions because the fixpoint draws TWO conclusions from that subset and
+# both are unsound for a parameter:
+#   `annotated` — the declared-Object shape (zod's). Needs the `all_non_pointer`
+#                 exclusion.
+#   `inferred`  — `p?: any` plus a local aliased from it. Needs the
+#                 `precise_inference` exclusion as well: measured RED 200/200
+#                 with only the first exclusion applied.
+#
+# Measured on this branch, release, `PERRY_GC_MOVING_LOOP_POLLS=1` at compile:
+#   before, POLLS=1 + ZEAL=1            200/200 iterations wrong, both shapes
+#   after,  POLLS=1 + ZEAL=1            byte-exact with the oracle
+#   after,  loop_polls arm env          byte-exact
+#   control, + PERRY_GEN_GC=0           clean on both sides
+# and on the real workload, `sfw-registry --help` under
+# `PROTECT_FROMSPACE=1 DEPTH=800 POLLS=1` (no zeal): 10/10 FAULT before,
+# 40/40 clean after.
+test_gap_gc_optional_param_receiver_rooting

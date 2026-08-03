@@ -923,6 +923,14 @@ pub unsafe extern "C" fn js_new_function_construct(
                 class_cid,
                 crate::object::learned_inline_field_count(class_cid),
             );
+            // #7280: root the instance across the replay — see the long note
+            // in `construct_registered_class_ref`. The replay runs a user
+            // constructor body, so a bare `*mut ObjectHeader` held across it
+            // is an unrooted receiver and this arm returns the pre-move
+            // address. Reproduced by `new C()` where `C = mk()` is a class
+            // EXPRESSION value.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let inst_handle = scope.root_raw_mut_ptr(inst);
             // Replay the class's registered constructor (instance-field
             // initializers + body) on the fresh instance, filling the
             // capture params from the snapshotted `__perry_ctor_caps`. The
@@ -931,6 +939,7 @@ pub unsafe extern "C" fn js_new_function_construct(
             super::super::class_constructors::replay_class_object_constructor(
                 func_value, class_cid, inst, args_ptr, args_len,
             );
+            let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
             // `class X extends Request/Response {}` constructed via the dynamic
             // (class-expression value) path: the replayed ctor's `super()`
             // can't statically route an aliased parent, so attach the native
@@ -943,7 +952,10 @@ pub unsafe extern "C" fn js_new_function_construct(
                     );
                 }
             }
-            return crate::value::js_nanbox_pointer(inst as i64);
+            // Re-read: `attach_fetch_handle_for_construction` allocates.
+            return crate::value::js_nanbox_pointer(
+                inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64
+            );
         }
     }
 
@@ -1055,19 +1067,33 @@ pub unsafe extern "C" fn js_new_function_construct(
         // result is discarded — JS `new` semantics use the receiver,
         // not the returned value (object returns would override, but
         // dayjs and siblings rely on the receiver mutation pattern).
+        // #7280: `nan_boxed` (the implicit `this` this call is building) and
+        // the three DISPLACED cell values are held across a call that runs a
+        // user constructor body — see the long note in
+        // `construct_registered_class_ref`. Unrooted, the evacuating minor
+        // moves the instance and this arm returns the pre-move address;
+        // reproduced by `new inst.ctor(x)` where `inst.ctor` is a plain
+        // function, 200/200 iterations wrong under
+        // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1`.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let inst_handle = scope.root_nanbox_f64(nan_boxed);
         let prev_this = crate::object::js_implicit_this_get();
+        let prev_this_handle = scope.root_nanbox_f64(prev_this);
         let prev_new_target = crate::object::js_new_target_get();
+        let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
         crate::object::js_implicit_this_set(nan_boxed);
         crate::object::js_new_target_set(func_value);
         let prev_current_new_target =
             CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));
+        let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
         let result = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
-        CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target));
-        crate::object::js_new_target_set(prev_new_target);
-        crate::object::js_implicit_this_set(prev_this);
+        CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
+        crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
+        crate::object::js_implicit_this_set(prev_this_handle.get_nanbox_f64());
         if constructor_return_overrides_this(result) {
             return result;
         }
+        return inst_handle.get_nanbox_f64();
     }
     nan_boxed
 }
@@ -1387,15 +1413,40 @@ unsafe fn construct_registered_class_ref(
     // `new_target_stack` slot avoids this for fully-inlined `new`, but the
     // replayed ctor is a separate compiled function that can only read the cell.
     // Fix holistically with the slot mechanism if it ever bites.
+    // #7280: `inst` — and the two DISPLACED cell values the save/restore idiom
+    // parks beside it — must survive the constructor replay as ROOTS, not as
+    // Rust locals. `replay_registered_class_constructor` runs a user
+    // constructor body: arbitrary allocation, loop back-edge polls, and (under
+    // the evacuating minor) a relocation of the very instance being built. A
+    // runtime frame is not covered by the precise scan and the conservative
+    // stack scan resolves to `SkipDisabled` in shipped builds, so a bare
+    // `*mut ObjectHeader` held across that call is the classic unrooted
+    // receiver: the collector never sees it, never rewrites it, and this
+    // function returns the PRE-MOVE address. Every field the constructor wrote
+    // then reads back as garbage through the stale handle — measured on
+    // `new inst.ctor(x)` under
+    // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1`, 200/200 iterations wrong,
+    // and as a `signal 10` on retired from-space under
+    // `PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`.
+    //
+    // This is the `RuntimeHandleScope` routing the `CURRENT_NEW_TARGET`
+    // doc-comment at the top of this file called for. Reading back through the
+    // handles is not bookkeeping: an evacuating cycle rewrites the slot in
+    // place, so the pre-call value is stale by construction.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let inst_handle = scope.root_raw_mut_ptr(inst);
     let prev_new_target = crate::object::js_new_target_get();
+    let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
     crate::object::js_new_target_set(new_target);
     let prev_current_new_target =
         CURRENT_NEW_TARGET.with(|value| value.replace(new_target.to_bits()));
+    let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
     super::super::class_constructors::replay_registered_class_constructor(
         target_cid, inst, args_ptr, args_len,
     );
-    CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target));
-    crate::object::js_new_target_set(prev_new_target);
+    let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
+    CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
+    crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
     // ClassRef `new` of a Request/Response subclass — attach the native fetch
     // handle on the dynamic path (mirrors the class-expression arm above).
     if let Some(kind) = fetch_parent_kind_in_chain(target_cid) {
@@ -1407,7 +1458,9 @@ unsafe fn construct_registered_class_ref(
     // a hidden backing cell (only when the compiled ctor's `super()` didn't
     // already attach one). `NewPromiseCapability(Subclass)` reaches here.
     if promise_parent_in_chain(target_cid) {
-        let inst_val = crate::value::js_nanbox_pointer(inst as i64);
+        // Re-read: `attach_fetch_handle_for_construction` above allocates.
+        let inst_val =
+            crate::value::js_nanbox_pointer(inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64);
         if crate::promise::subclass_backing_promise(inst_val).is_none() {
             let executor = if args_len >= 1 && !args_ptr.is_null() {
                 *args_ptr
@@ -1417,7 +1470,9 @@ unsafe fn construct_registered_class_ref(
             crate::promise::js_promise_subclass_init(inst_val, executor);
         }
     }
-    crate::value::js_nanbox_pointer(inst as i64)
+    // Re-read once more: the executor `js_promise_subclass_init` runs is user
+    // code, so the last two blocks are both collection points.
+    crate::value::js_nanbox_pointer(inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
 
 /// `GetPrototypeFromConstructor(newTarget)` restricted to the "use it only when
@@ -1617,19 +1672,29 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         super::super::prototype_chain::object_set_static_prototype(obj_ptr as usize, proto_bits);
     }
 
+    // #7280: same unrooted-receiver shape as the plain-`new` tail above —
+    // `nan_boxed` and the three displaced cell values cross a user
+    // constructor body. Reproduced by
+    // `Reflect.construct(plainFn, [x], otherFn)`, 200/200 iterations wrong
+    // under `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let inst_handle = scope.root_nanbox_f64(nan_boxed);
     let prev_this = crate::object::js_implicit_this_get();
+    let prev_this_handle = scope.root_nanbox_f64(prev_this);
     let prev_new_target = crate::object::js_new_target_get();
+    let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
     crate::object::js_implicit_this_set(nan_boxed);
     crate::object::js_new_target_set(nt);
     let prev_current_new_target = CURRENT_NEW_TARGET.with(|value| value.replace(nt.to_bits()));
+    let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
     let result = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
-    CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target));
-    crate::object::js_new_target_set(prev_new_target);
-    crate::object::js_implicit_this_set(prev_this);
+    CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
+    crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
+    crate::object::js_implicit_this_set(prev_this_handle.get_nanbox_f64());
     if constructor_return_overrides_this(result) {
         return result;
     }
-    nan_boxed
+    inst_handle.get_nanbox_f64()
 }
 
 fn constructor_return_overrides_this(value: f64) -> bool {

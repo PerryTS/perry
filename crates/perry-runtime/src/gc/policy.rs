@@ -1415,7 +1415,26 @@ pub fn gc_check_trigger() {
     // register-imprecise alloc point. Unlike `gc_scavenge_enabled()` (which skips
     // the conservative scan HERE — sound only if the alloc point is precise), the
     // loop-polls path never reaches the skip: it always defers to a real
-    // safepoint, so it is sound by construction.
+    // safepoint.
+    //
+    // #7280: that used to read "so it is sound by construction". IT IS NOT, and
+    // the overclaim is the kind that stops the next person looking. What
+    // deferring to `js_gc_loop_safepoint` buys is precise *codegen* roots — the
+    // loop body has completed, so every live value the COMPILED frame holds is a
+    // named local on the shadow stack. It buys nothing for a value parked in a
+    // RUNTIME (Rust) frame, which the precise walk does not visit at all: no
+    // shadow slot, no temp root, no registered scanner. A back-edge poll that
+    // fires while `js_new_function_construct` is midway through a user
+    // constructor body relocates the instance that helper is holding in a plain
+    // `let`, and no safepoint's root set covers it. That was measured, not
+    // argued — four reproducers in
+    // `test-files/test_gap_gc_dynamic_construct_receiver_rooting.ts`, 200/200
+    // iterations wrong per route before the `RuntimeHandleScope` routing in
+    // `object/class_registry/construct.rs`. The correct statement is: the
+    // loop-polls route makes the COLLECTION POINT precise; keeping runtime
+    // frames rooted across it is a separate obligation, discharged by
+    // `RuntimeHandleScope`, and every runtime helper that calls back into user
+    // JS owes it.
     if !gc_budgeted_cycle_active()
         && (super::gc_scavenge_enabled()
             || gc_moving_loop_polls_enabled()

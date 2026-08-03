@@ -751,8 +751,14 @@ pub fn collect_pointer_typed_locals(
     let mut local_types: HashMap<u32, Type> = HashMap::new();
     let mut writes: HashMap<u32, Vec<LocalWrite>> = HashMap::new();
     let mut flat_row_alias_ids: HashSet<u32> = HashSet::new();
+    // #7280: the refinement fixpoint below reasons from `writes`, which is
+    // collected by walking the BODY. For a parameter that is a strict subset of
+    // its definitions — the incoming argument is not a write — so parameters
+    // are excluded from both of that loop's conclusions. See the note there.
+    let mut param_ids: HashSet<u32> = HashSet::new();
     for p in params {
         local_types.insert(p.id, pointer_analysis_type(&p.ty));
+        param_ids.insert(p.id);
     }
     collect_facts(stmts, &mut local_types, &mut writes);
     super::integer_locals::collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
@@ -818,8 +824,39 @@ pub fn collect_pointer_typed_locals(
         changed = false;
         for (id, local_writes) in &writes {
             let mut inferred_ty: Option<Type> = None;
-            let mut precise_inference = true;
-            let mut all_non_pointer = !local_writes.is_empty();
+            // #7280: a PARAMETER has one definition this loop cannot see — the
+            // INCOMING ARGUMENT. `writes` is collected by walking the body, so
+            // for a parameter it lists only the reassignments, and both
+            // conclusions below ("every write is non-pointer" and "every write
+            // has this one precise type") are then drawn from a strict SUBSET
+            // of the local's definitions. That is unsound in the direction that
+            // DROPS a shadow slot.
+            //
+            // It is not a corner case: the optional-parameter desugaring emits
+            //
+            //     if (p === undefined) { p = undefined; }
+            //
+            // for EVERY optional parameter, which is a semantic no-op that
+            // nonetheless registers one `LocalSet(p, Undefined)` write. `Void`
+            // is definitely-non-pointer, so `all_non_pointer` stayed true and
+            // the parameter was proven non-pointer — while its declared type
+            // said `Object` and the caller passed a heap object.
+            //
+            // That is the whole of zod `util.ts`'s
+            // `clone(inst, def?, params?: { parent: boolean })`: `params` is
+            // `Object(...)` in HIR, `is_ptr_typed` says true, and it lost its
+            // slot here anyway. It then lived in callee-saved `d8` across
+            // `new inst._zod.constr(...)` — a user constructor with back-edge
+            // polls — and `params?.parent` dereferenced from-space.
+            //
+            // Excluding parameters is one-sided in the SAFE direction: a
+            // parameter that would have been proven non-pointer instead keeps a
+            // root the collector rewrites harmlessly. Body `let`s are
+            // untouched — their `Stmt::Let` init IS in `writes`, so for them
+            // the write list really is every definition.
+            let is_param = param_ids.contains(id);
+            let mut precise_inference = !is_param;
+            let mut all_non_pointer = !local_writes.is_empty() && !is_param;
             for write in local_writes {
                 let write_ty = match write {
                     LocalWrite::NonPointer => Some(Type::Number),
