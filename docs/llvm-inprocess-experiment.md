@@ -310,6 +310,30 @@ LLVM_SYS_221_PREFIX=/opt/homebrew/opt/llvm \
   -p perry-stdlib-static --features perry/llvm-inprocess
 PERRY_LLVM_INPROCESS=1 perry file.ts -o out   # stderr must show the liveness line
 
-# Corpus A/B
+# Corpus A/B (resumable; re-running skips tests already in results.txt)
 experiments/llvm-inprocess-spike/batch_ab.sh /tmp/batch-ab
 ```
+
+### Linux: getting LLVM 22 where the distro has none
+
+The handoff's `apt.llvm.org` recipe covers Debian/Ubuntu. On a distro with no
+LLVM 22 package at all (Fedora 43 stops at `llvm20-devel`; its system libs are
+21), use the upstream release tarball, which ships headers, `llvm-config`, the
+static `libLLVM*.a` set and a matching clang:
+
+```bash
+curl -LO https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz
+tar -xf LLVM-22.1.8-Linux-X64.tar.xz -C ~/opt      # ~12 GB unpacked
+```
+
+One trap: that tarball is built on Ubuntu, so its baked-in
+`llvm-config --system-libs` answer names the *build host's* static zstd by
+absolute path (`/usr/lib/x86_64-linux-gnu/libzstd.a`). llvm-sys panics on any
+`--system-libs` entry that is neither `-lfoo` nor an existing file, so on any
+other distro the build dies before it starts. Point `LLVM_SYS_221_PREFIX` at a
+one-file shim prefix whose `bin/llvm-config` rewrites that path to `-lzstd` and
+forwards everything else (the real binary still answers all path queries
+relative to its own prefix, so nothing else needs redirecting).
+
+Measured cost of the feature build on this host: `perry` 199 MB (vs 53 MB
+default), `cargo build --profile perry-dev` 2m49s warm-registry cold-target.

@@ -1410,12 +1410,12 @@ mod tests {
     /// natively and pass the LLVM verifier. This is the reader's primary
     /// gate: a form it cannot express fails here, not in a user build.
     fn corpus_roundtrip(path: &str) {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            // Corpus artifacts live on the experiment branch; absence is a
-            // skip (other branches), not a failure.
-            eprintln!("corpus file {path} not present; skipping");
-            return;
-        };
+        // The corpora are tracked in-tree alongside this reader, so a missing
+        // file is a broken checkout, not a branch without artifacts. Skipping
+        // would make the reader's primary gate pass vacuously — precisely the
+        // failure mode the Linux bring-up had to rule out by hand.
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("corpus file {path} is not readable: {e}"));
         let (skeleton, fns) = split_corpus(&text);
         let ctx = Context::create();
         let module = crate::inprocess::parse_ir_text(&ctx, &skeleton, "corpus_skel")
