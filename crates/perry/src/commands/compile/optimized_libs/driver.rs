@@ -955,6 +955,13 @@ pub(crate) fn build_optimized_libs(
     // RUSTFLAGS from the parent environment, which is exactly the isolation a
     // pinned-baseline build needs.
     if !rustflags.is_empty() || requested_cpu.is_some() {
+        // #7315: setting RUSTFLAGS here replaces `.cargo/config.toml`'s
+        // `[build] rustflags`, which is where `-C force-unwind-tables=yes`
+        // lives. Without it the rebuilt runtime has no unwind tables and the
+        // first `throw` that crosses a runtime frame aborts.
+        if !panic_immediate {
+            rustflags.push("-C force-unwind-tables=yes".to_string());
+        }
         cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
     }
 
