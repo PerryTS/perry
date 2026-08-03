@@ -88,19 +88,50 @@ byte-for-byte unchanged.
 
 ### Blocking adoption — concrete, and neither is code
 
-1. **Four of five new knobs have no CI arm.** `PERRY_STATEPOINTS` is exercised by
-   `gc-native-roots.yml`; **`PERRY_RS4GC`, `PERRY_GC_SAFEPOINT_ONLY`,
-   `PERRY_STACKMAP_WALKER` and `PERRY_STATEPOINT_REPORT` appear in no workflow at
-   all.** CLAUDE.md's kill-policy is binding: an arm each, or delete after one
-   release of soak. At most one diagnostic-only knob may exist, labelled untested.
-2. **`gc-native-roots` is not a required status check**, so it reports without
+1. ~~**Four of five new knobs have no CI arm.**~~ **Closed by #7319.** Every
+   surviving knob now has an arm that asserts its own subject was live, and the
+   fifth was deleted: `PERRY_STATEPOINT_REPORT` was a second spelling of
+   `--statepoint-report`, so the env spelling is gone and the flag is the only
+   entry point. `PERRY_RS4GC` asserts every function record carries
+   `backend: rs4gc` (it bails per function to the explicit bridge, so a green
+   9/9 matrix proves nothing on its own); `PERRY_GC_SAFEPOINT_ONLY` asserts a
+   codegen differential (statepoints strictly down, skipped calls strictly up);
+   `PERRY_STACKMAP_WALKER` asserts `fp_walks > 0` under `verify` and
+   `fp_walks == 0` under `unwind`, from the GC trace.
+2. ~~**#7314 broke the file-size gate.**~~ **Closed by #7319** — `function.rs`
+   2036 → 952 (statepoint/RS4GC lowering into `function/precise_roots.rs`) and
+   `linker.rs` 2082 → 1618 (unit tests into `linker_tests.rs`, the pattern that
+   file already used for `linker_temp_lifecycle_tests.rs`). Verified by
+   byte-identical emitted IR over 45 modules × 3 modes.
+3. **`gc-native-roots` is not a required status check**, so it reports without
    blocking — CLAUDE.md hazard 2, the one that let #6925's regression survive
-   three merges. Promote after its first green run on `main`, not before.
-3. **#7314 broke the file-size gate on `main`**: `perry-codegen/src/function.rs`
-   went **847 → 2036** lines and `linker.rs` 1936 → 2082, both over the 2000-line
-   cap. `lint` therefore fails two gates now, not one. (It reports both rather
-   than hiding the second only because #7306 made every gate run independently —
-   before that, one red gate concealed the six below it.)
+   three merges. **Still open, and the reason changed**: promotion waits on a
+   green run, and the job had never been green *at all* (see below). Promote the
+   fan-in context `gc-native-roots-complete`, not the individual arms.
+
+### ★ Statepoints are aarch64-only today (#7321)
+
+Found while building those arms, and it is the largest single correction to the
+picture above. **`PERRY_STATEPOINTS=1` cannot compile one module on x86-64
+Linux.** The compact-map rewriter refuses — *"this module emits an LLVM stack
+map that the compact-map rewriter could not parse … Refusing to emit a binary
+that would lose roots silently"* — on the **first** probe, which is why
+`gc-native-roots` had failed every run since it was pointed at `ubuntu-latest`.
+That is the fail-closed path working; the consequence is scope. #7314's evidence
+(drizzle, 23,301 statepoints) is aarch64 evidence. `gc_map.rs` names its base
+registers in aarch64 terms throughout, which is consistent, though not proven to
+be the cause.
+
+The matrix therefore runs on `macos-14`, and `statepoints-refuse-x86` pins the
+refusal *as a refusal* and goes red the day x86-64 starts working.
+
+A second latent defect, now fixed: the workflow set
+`RUSTFLAGS="-Cforce-frame-pointers=yes"`, which **replaces** `.cargo/config.toml`'s
+`[build] rustflags` wholesale and so dropped `-C force-unwind-tables=yes`. A/B'd
+on one tree: without it `09_try_catch_roots` aborts outright and the platform
+unwinder visits **zero** frames — so on any host where the x29 chain walk is
+unavailable the native-root walker finds no roots, and forced evacuation stays
+quiet because it enumerates through that same walker.
 
 ### The adoption decision itself
 
