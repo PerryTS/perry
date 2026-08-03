@@ -1824,9 +1824,15 @@ fn clear_one_dirty_old_page() -> bool {
         let Some(page) = pages.iter().next().copied() else {
             return false;
         };
-        // Also invalidates the Phase B cache, via `old_page_clear_dirty`.
         crate::arena::old_page_clear_dirty(page);
         pages.remove(&page);
+        // DELIBERATELY redundant with `old_page_clear_dirty`, which invalidates
+        // too (#7187 Phase B rule 2). The cache's invariant has two halves and
+        // this line owns the modbuf one: an edit that stops the arena side from
+        // invalidating — or a page whose metadata entry no longer exists, so
+        // `old_page_clear_dirty` finds nothing to clear — must not silently
+        // leave the cache asserting a page this function just removed. The cost
+        // is one thread-local store on the cold clear path.
         super::dirty_page_cache::invalidate();
         true
     })
