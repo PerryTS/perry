@@ -66,6 +66,11 @@ mod trace;
 pub(crate) use trace::*;
 mod barrier;
 pub use barrier::*;
+mod dirty_page_cache;
+// #7187 Phase B: `crate::arena`'s page-metadata module invalidates the
+// barrier's "already dirty" page cache when it un-stamps or discards a page.
+// Re-exported under an unambiguous name — `arena` cannot see `gc`'s privates.
+pub(crate) use dirty_page_cache::invalidate as dirty_page_cache_invalidate;
 mod barrier_arming;
 // #7277: every item in `barrier_arming` is `pub(super)` (i.e. `pub(in gc)`),
 // which is narrower than `pub(crate)` — so the glob re-exported nothing and

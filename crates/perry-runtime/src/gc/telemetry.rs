@@ -480,6 +480,10 @@ pub(super) struct BarrierTraceCounters {
     pub(super) remembered_set_insert_attempts: u64,
     pub(super) new_inserts: u64,
     pub(super) dirty_page_mark_attempts: u64,
+    /// #7187 Phase B: dirty-page mark attempts short-circuited by the
+    /// "already dirty" page cache. Counted INSIDE `dirty_page_mark_attempts`,
+    /// so `attempts - cache_hits` is what still reaches the modbuf.
+    pub(super) dirty_page_cache_hits: u64,
     pub(super) new_dirty_pages: u64,
     pub(super) conservative_parent_span_marks: u64,
     pub(super) unarmed_skips: u64,
@@ -497,6 +501,7 @@ impl BarrierTraceCounters {
             remembered_set_insert_attempts: 0,
             new_inserts: 0,
             dirty_page_mark_attempts: 0,
+            dirty_page_cache_hits: 0,
             new_dirty_pages: 0,
             conservative_parent_span_marks: 0,
             unarmed_skips: 0,
@@ -515,6 +520,11 @@ pub(super) enum BarrierTraceCounter {
     RememberedSetInsertAttempts,
     NewInserts,
     DirtyPageMarkAttempts,
+    /// #7187 Phase B: a `mark_dirty_old_page` call the "already dirty" cache
+    /// answered without touching the modbuf or the arena page metadata. Bumps
+    /// `dirty_page_mark_attempts` as well, so that counter keeps meaning
+    /// "calls" and stays comparable with pre-Phase-B measurements.
+    DirtyPageCacheHits,
     NewDirtyPages,
     ConservativeParentSpanMarks,
     /// #7187: a barrier call whose child WAS a heap pointer but which exited
@@ -1006,6 +1016,7 @@ impl GcCycleTrace {
             "remembered_set_insert_attempts": self.write_barrier.remembered_set_insert_attempts,
             "new_inserts": self.write_barrier.new_inserts,
             "dirty_page_mark_attempts": self.write_barrier.dirty_page_mark_attempts,
+            "dirty_page_cache_hits": self.write_barrier.dirty_page_cache_hits,
             "new_dirty_pages": self.write_barrier.new_dirty_pages,
             "conservative_parent_span_marks": self.write_barrier.conservative_parent_span_marks,
             "unarmed_skips": self.write_barrier.unarmed_skips,

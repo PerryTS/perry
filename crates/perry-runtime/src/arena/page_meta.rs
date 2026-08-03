@@ -319,6 +319,10 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
             index.remove(&page);
         }
     });
+    // #7187 Phase B: the other place a page's dirty stamp stops existing — the
+    // metadata entry itself is gone. A cached page whose metadata was dropped
+    // is no longer a complete recording, so drop the cache.
+    crate::gc::dirty_page_cache_invalidate();
 }
 
 #[inline]
@@ -877,12 +881,18 @@ pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size:
     });
 }
 
-pub(crate) fn old_page_mark_dirty(page: usize) {
+/// Stamp `page`'s metadata dirty. Returns whether a metadata entry existed to
+/// stamp: #7187 Phase B's "already dirty" cache may only remember a page whose
+/// recording is complete in BOTH the modbuf and here, so it has to know.
+pub(crate) fn old_page_mark_dirty(page: usize) -> bool {
     OLD_GEN_PAGE_META.with(|meta| {
         if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
             page_meta.dirty = true;
+            true
+        } else {
+            false
         }
-    });
+    })
 }
 
 pub(crate) fn old_page_clear_dirty(page: usize) {
@@ -891,6 +901,11 @@ pub(crate) fn old_page_clear_dirty(page: usize) {
             page_meta.dirty = false;
         }
     });
+    // #7187 Phase B: one of the two places a page's `dirty` stamp can go false,
+    // so one of the places the barrier's cached page can stop being a complete
+    // recording. Invalidating here rather than at the callers covers the GC's
+    // own clear loop and the tests that reach for this directly.
+    crate::gc::dirty_page_cache_invalidate();
 }
 
 #[cfg(test)]

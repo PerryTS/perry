@@ -10,6 +10,7 @@ mod copying_side_tables;
 mod cycle_state;
 mod dead_owner_side_tables;
 mod debt_pacer;
+mod dirty_page_cache;
 mod error_side_tables;
 mod evacuation;
 mod fromspace_protect;

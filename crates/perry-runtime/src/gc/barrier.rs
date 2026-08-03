@@ -911,6 +911,10 @@ pub(super) fn bump_write_barrier_trace_counter(counter: BarrierTraceCounter) {
             }
             BarrierTraceCounter::NewInserts => counters.new_inserts += 1,
             BarrierTraceCounter::DirtyPageMarkAttempts => counters.dirty_page_mark_attempts += 1,
+            BarrierTraceCounter::DirtyPageCacheHits => {
+                counters.dirty_page_mark_attempts += 1;
+                counters.dirty_page_cache_hits += 1;
+            }
             BarrierTraceCounter::NewDirtyPages => counters.new_dirty_pages += 1,
             BarrierTraceCounter::ConservativeParentSpanMarks => {
                 counters.conservative_parent_span_marks += 1;
@@ -1308,17 +1312,46 @@ pub(super) fn remember_old_to_young_external_slot(parent_addr: usize, slot_addr:
     )
 }
 
+/// #7187 Phase B: record `page` in this thread's modbuf, unless it is already
+/// there. Returns whether the page was NEWLY inserted.
+///
+/// The guard is the whole of Phase B — see [`super::dirty_page_cache`] for the
+/// invariant it rests on and the measurement that picked a one-entry cache.
+/// Armed on `batch.ts` this call fires 1 774 374 times for 517 distinct pages;
+/// the guard turns 99.78% of those into a thread-local load and a compare.
+#[inline]
 pub(super) fn mark_dirty_old_page(page: usize) -> bool {
+    if super::dirty_page_cache::dirty_old_page_already_marked(page) {
+        // Bumps `dirty_page_mark_attempts` too, so that counter keeps meaning
+        // "calls", comparable across the change, and
+        // `attempts - dirty_page_cache_hits` is what still reaches the modbuf.
+        bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageCacheHits);
+        return false;
+    }
+    mark_dirty_old_page_uncached(page)
+}
+
+/// Out of line: the hot path is the guard above, and this body's two
+/// thread-local accesses plus two hash operations are the 6.73% #7170 measured.
+#[inline(never)]
+fn mark_dirty_old_page_uncached(page: usize) -> bool {
     bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageMarkAttempts);
     ever_dirty_note(page);
-    DIRTY_OLD_PAGES.with(|s| {
+    let inserted = DIRTY_OLD_PAGES.with(|s| {
         let inserted = s.borrow_mut().insert(page);
-        crate::arena::old_page_mark_dirty(page);
         if inserted {
             bump_write_barrier_trace_counter(BarrierTraceCounter::NewDirtyPages);
         }
         inserted
-    })
+    });
+    // Cache ONLY when the arena stamp landed as well. `old_page_mark_dirty`
+    // does nothing for a page with no metadata entry, and caching such a page
+    // would let a later `old_page_summary()` under-report `dirty_pages` if the
+    // metadata appeared afterwards. Half a recording is not a recording.
+    if crate::arena::old_page_mark_dirty(page) {
+        super::dirty_page_cache::note_dirty_old_page_marked(page);
+    }
+    inserted
 }
 
 thread_local! {
@@ -1782,14 +1815,19 @@ fn dirty_old_pages_empty() -> bool {
     DIRTY_OLD_PAGES.with(|s| s.borrow().is_empty())
 }
 
+/// The **sole** path that removes a page from `DIRTY_OLD_PAGES`. Every other
+/// touch of that set is an insert, a read, or the snapshot — which is why
+/// #7187 Phase B's cache needs exactly one invalidation point on this side.
 fn clear_one_dirty_old_page() -> bool {
     DIRTY_OLD_PAGES.with(|s| {
         let mut pages = s.borrow_mut();
         let Some(page) = pages.iter().next().copied() else {
             return false;
         };
+        // Also invalidates the Phase B cache, via `old_page_clear_dirty`.
         crate::arena::old_page_clear_dirty(page);
         pages.remove(&page);
+        super::dirty_page_cache::invalidate();
         true
     })
 }
