@@ -1225,8 +1225,8 @@ declare void @js_wait_for_event()
 declare i32 @js_event_loop_host_driven()
 declare void @js_unsettled_top_level_await_exit()
 declare void @js_throw(double)
-declare ptr @js_try_push()
-declare i32 @_setjmp(ptr) #0
+declare void @js_eh_try_push()
+declare i32 @perry_eh_personality(...)
 declare void @js_try_end()
 declare double @js_get_exception()
 declare void @js_clear_exception()
@@ -2985,42 +2985,68 @@ declare i64 @js_node_http_im_resume_self(i64)
 declare i64 @js_commander_args_array(i64)
 declare i64 @js_commander_argument(i64, i64)
 
-define i64 @perry_fn_spike_ts__fib_i64(i64 %arg3) alwaysinline {
+define internal double @perry_fn_spike_ts__fib__spec_i32(i32 %arg3) alwaysinline {
 entry.0:
-  %r1 = alloca i64
-  store i64 %arg3, ptr %r1
-  %r2 = alloca i64
-  %r3 = load i64, ptr %r1
-  %r4 = icmp slt i64 %r3, 2
-  br i1 %r4, label %i64.cond.then.1, label %i64.cond.else.2
+  %r1 = alloca i32
+  store i32 %arg3, ptr %r1
+  %r2 = load i32, ptr %r1
+  %r3 = sitofp i32 %r2 to double
+  %r4 = fcmp olt double %r3, 2.0
+  %r5 = select i1 %r4, i64 9222246136947933188, i64 9222246136947933187
+  %r6 = bitcast i64 %r5 to double
+  %r7 = icmp eq i64 %r5, 9222246136947933188
+  br i1 %r7, label %ternary.then.1, label %ternary.else.2
 
-i64.cond.then.1:
-  %r5 = load i64, ptr %r1
-  store i64 %r5, ptr %r2
-  br label %i64.cond.merge.3
+ternary.then.1:
+  %r8 = load i32, ptr %r1
+  %r9 = sitofp i32 %r8 to double
+  br label %ternary.merge.3
 
-i64.cond.else.2:
-  %r6 = load i64, ptr %r1
-  %r7 = sub i64 %r6, 1
-  %r8 = call i64 @perry_fn_spike_ts__fib_i64(i64 %r7)
-  %r9 = load i64, ptr %r1
-  %r10 = sub i64 %r9, 2
-  %r11 = call i64 @perry_fn_spike_ts__fib_i64(i64 %r10)
-  %r12 = add i64 %r8, %r11
-  store i64 %r12, ptr %r2
-  br label %i64.cond.merge.3
+ternary.else.2:
+  %r10 = load i32, ptr %r1
+  %r11 = sitofp i32 %r10 to double
+  %r12 = fsub double %r11, 1.0
+  %r13 = call double @perry_fn_spike_ts__fib(double %r12)
+  %r14 = load i32, ptr %r1
+  %r15 = sitofp i32 %r14 to double
+  %r16 = fsub double %r15, 2.0
+  %r17 = call double @perry_fn_spike_ts__fib(double %r16)
+  %r18 = fadd double %r13, %r17
+  br label %ternary.merge.3
 
-i64.cond.merge.3:
-  %r13 = load i64, ptr %r2
-  ret i64 %r13
+ternary.merge.3:
+  %r19 = phi double [ %r9, %ternary.then.1 ], [ %r18, %ternary.else.2 ]
+  ret double %r19
 }
 
 define double @perry_fn_spike_ts__fib(double %arg3) alwaysinline {
 entry.0:
-  %r1 = fptosi double %arg3 to i64
-  %r2 = call i64 @perry_fn_spike_ts__fib_i64(i64 %r1)
-  %r3 = sitofp i64 %r2 to double
-  ret double %r3
+  %r1 = alloca double
+  store double %arg3, ptr %r1
+  %r2 = load double, ptr %r1
+  %r3 = fcmp olt double %r2, 2.0
+  %r4 = select i1 %r3, i64 9222246136947933188, i64 9222246136947933187
+  %r5 = bitcast i64 %r4 to double
+  %r6 = icmp eq i64 %r4, 9222246136947933188
+  br i1 %r6, label %ternary.then.1, label %ternary.else.2
+
+ternary.then.1:
+  %r7 = load double, ptr %r1
+  br label %ternary.merge.3
+
+ternary.else.2:
+  %r8 = load double, ptr %r1
+  %r9 = fsub double %r8, 1.0
+  %r10 = call double @perry_fn_spike_ts__fib(double %r9)
+  %r11 = load double, ptr %r1
+  %r12 = fsub double %r11, 2.0
+  %r13 = call double @perry_fn_spike_ts__fib(double %r12)
+  %r14 = fadd double %r10, %r13
+  br label %ternary.merge.3
+
+ternary.merge.3:
+  %r15 = phi double [ %r7, %ternary.then.1 ], [ %r14, %ternary.else.2 ]
+  ret double %r15
 }
 
 define double @perry_closure_spike_ts__1(i64 %this_closure, double %arg4, double %arg5) {
@@ -3345,7 +3371,7 @@ ss.barrier.24:
   br label %ss.done.23
 }
 
-define double @perry_closure_spike_ts__8(i64 %this_closure, double %arg31, double %arg32) #1 {
+define double @perry_closure_spike_ts__8(i64 %this_closure, double %arg31, double %arg32) personality ptr @perry_eh_personality {
 entry.0:
   %r1 = alloca i64
   %r2 = alloca ptr
@@ -3358,9 +3384,9 @@ entry.0:
   store i64 %r6, ptr %r1
   %r11 = alloca double
   store double 0x7FFC000000000001, ptr %r11
-  %r43 = alloca double
-  store volatile double 0x7FFC000000000001, ptr %r43
-  %r156 = alloca double
+  %r42 = alloca double
+  store double 0x7FFC000000000001, ptr %r42
+  %r192 = alloca double
   %r7 = alloca double
   store double %arg31, ptr %r7
   call void @js_shadow_slot_bind(i32 0, ptr %r7)
@@ -3413,358 +3439,398 @@ ss.store.4:
   br i1 %r35, label %ss.barrier.6, label %ss.done.5
 
 ss.done.5:
-  %r36 = call ptr @js_try_push()
-  %r37 = call i32 @_setjmp(ptr %r36) #0
-  %r38 = icmp ne i32 %r37, 0
-  br i1 %r38, label %try.catch.8, label %try.body.7
+  call void @js_eh_try_push()
+  br label %try.body.7
 
 ss.barrier.6:
   call void @js_write_barrier_root_nanbox(i64 %r28)
   br label %ss.done.5
 
 try.body.7:
-  br label %dowhile.body.10
+  br label %dowhile.body.11
 
 try.catch.8:
   call void @js_try_end()
-  %r155 = call double @js_get_exception()
+  %r191 = call double @js_get_exception()
   call void @js_clear_exception()
-  store double %r155, ptr %r156
-  %r157 = load ptr, ptr %r2
-  %r158 = icmp eq ptr %r157, null
-  br i1 %r158, label %ss.slow.39, label %ss.chk_top.40
+  store double %r191, ptr %r192
+  %r193 = load ptr, ptr %r2
+  %r194 = icmp eq ptr %r193, null
+  br i1 %r194, label %ss.slow.40, label %ss.chk_top.41
 
 try.finally.9:
-  %r197 = call double @js_iter_result_get_done()
-  %r198 = call i32 @js_is_truthy(double %r197)
-  %r199 = icmp ne i32 %r198, 0
-  br i1 %r199, label %if.then.48, label %if.else.49
+  %r233 = call double @js_iter_result_get_done()
+  %r234 = call i32 @js_is_truthy(double %r233)
+  %r235 = icmp ne i32 %r234, 0
+  br i1 %r235, label %if.then.49, label %if.else.50
 
-dowhile.body.10:
-  %r39 = load double, ptr %r8
-  %r40 = bitcast double %r39 to i64
-  %r41 = icmp eq i64 %r40, 9222246136947933188
-  br i1 %r41, label %if.then.13, label %if.else.14
+eh.lpad.10:
+  %r36 = landingpad { ptr, i32 } catch ptr null
+  br label %try.catch.8
 
-dowhile.cond.11:
-  %r152 = select i1 false, i64 9222246136947933188, i64 9222246136947933187
-  %r153 = bitcast i64 %r152 to double
-  %r154 = icmp eq i64 %r152, 9222246136947933188
-  br i1 %r154, label %dowhile.body.10, label %dowhile.exit.12
+dowhile.body.11:
+  %r37 = load double, ptr %r8
+  %r38 = bitcast double %r37 to i64
+  %r39 = icmp eq i64 %r38, 9222246136947933188
+  br i1 %r39, label %if.then.14, label %if.else.15
 
-dowhile.exit.12:
+dowhile.cond.12:
+  %r188 = select i1 false, i64 9222246136947933188, i64 9222246136947933187
+  %r189 = bitcast i64 %r188 to double
+  %r190 = icmp eq i64 %r188, 9222246136947933188
+  br i1 %r190, label %dowhile.body.11, label %dowhile.exit.13
+
+dowhile.exit.13:
   call void @js_try_end()
   br label %try.finally.9
 
-if.then.13:
-  %r42 = load double, ptr %r7
-  call void @js_throw(double %r42)
+if.then.14:
+  %r40 = load double, ptr %r7
+  invoke void @js_throw(double %r40) to label %eh.cont41 unwind label %eh.lpad.10
+eh.cont41:
   unreachable
 
-if.else.14:
-  %r44 = load double, ptr %r7
-  store volatile double %r44, ptr %r43
-  %r45 = load ptr, ptr %r2
-  %r46 = icmp eq ptr %r45, null
-  br i1 %r46, label %ss.slow.16, label %ss.chk_top.17
+if.else.15:
+  %r43 = load double, ptr %r7
+  store double %r43, ptr %r42
+  %r44 = load ptr, ptr %r2
+  %r45 = icmp eq ptr %r44, null
+  br i1 %r45, label %ss.slow.17, label %ss.chk_top.18
 
-if.merge.15:
-  %r137 = load ptr, ptr %r2
-  %r138 = icmp eq ptr %r137, null
-  br i1 %r138, label %ss.slow.34, label %ss.chk_top.35
+if.merge.16:
+  %r173 = load ptr, ptr %r2
+  %r174 = icmp eq ptr %r173, null
+  br i1 %r174, label %ss.slow.35, label %ss.chk_top.36
 
-ss.slow.16:
-  call void @js_shadow_slot_bind(i32 2, ptr %r43)
-  br label %ss.done.20
+ss.slow.17:
+  call void @js_shadow_slot_bind(i32 2, ptr %r42)
+  br label %ss.done.21
 
-ss.chk_top.17:
-  %r47 = getelementptr inbounds i8, ptr %r45, i64 24
-  %r48 = load i64, ptr %r47
-  %r49 = icmp eq i64 %r48, -1
-  br i1 %r49, label %ss.done.20, label %ss.chk_len.18
+ss.chk_top.18:
+  %r46 = getelementptr inbounds i8, ptr %r44, i64 24
+  %r47 = load i64, ptr %r46
+  %r48 = icmp eq i64 %r47, -1
+  br i1 %r48, label %ss.done.21, label %ss.chk_len.19
 
-ss.chk_len.18:
-  %r50 = add i64 %r48, 2
-  %r51 = getelementptr inbounds i8, ptr %r45, i64 8
-  %r52 = load i64, ptr %r51
-  %r53 = icmp ult i64 %r50, %r52
-  br i1 %r53, label %ss.store.19, label %ss.done.20
+ss.chk_len.19:
+  %r49 = add i64 %r47, 2
+  %r50 = getelementptr inbounds i8, ptr %r44, i64 8
+  %r51 = load i64, ptr %r50
+  %r52 = icmp ult i64 %r49, %r51
+  br i1 %r52, label %ss.store.20, label %ss.done.21
 
-ss.store.19:
-  %r54 = load ptr, ptr %r45
-  %r55 = shl i64 %r50, 4
-  %r56 = getelementptr inbounds i8, ptr %r54, i64 %r55
-  %r57 = getelementptr inbounds i8, ptr %r56, i64 8
-  %r58 = load volatile i64, ptr %r43
-  %r59 = ptrtoint ptr %r43 to i64
-  %r60 = and i64 %r59, 1
-  %r61 = icmp eq i64 %r60, 0
-  %r62 = select i1 %r61, i64 %r59, i64 0
-  %r63 = or i64 %r62, 1
-  store i64 %r58, ptr %r56
-  store i64 %r63, ptr %r57
-  %r64 = load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst, align 4
-  %r65 = icmp ne i32 %r64, 0
-  br i1 %r65, label %ss.barrier.21, label %ss.done.20
+ss.store.20:
+  %r53 = load ptr, ptr %r44
+  %r54 = shl i64 %r49, 4
+  %r55 = getelementptr inbounds i8, ptr %r53, i64 %r54
+  %r56 = getelementptr inbounds i8, ptr %r55, i64 8
+  %r57 = load i64, ptr %r42
+  %r58 = ptrtoint ptr %r42 to i64
+  %r59 = and i64 %r58, 1
+  %r60 = icmp eq i64 %r59, 0
+  %r61 = select i1 %r60, i64 %r58, i64 0
+  %r62 = or i64 %r61, 1
+  store i64 %r57, ptr %r55
+  store i64 %r62, ptr %r56
+  %r63 = load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst, align 4
+  %r64 = icmp ne i32 %r63, 0
+  br i1 %r64, label %ss.barrier.22, label %ss.done.21
 
-ss.done.20:
-  %r66 = load volatile double, ptr %r43
+ss.done.21:
+  %r66 = load double, ptr %r42
   %r67 = load i64, ptr %r9
   %r68 = and i64 %r67, 281474976710655
-  %r69 = call i64 @js_closure_get_capture_bits(i64 %r68, i32 4)
-  %r70 = bitcast double %r66 to i64
-  call void @js_box_set_bits(i64 %r69, i64 %r70)
-  call void @js_write_barrier(i64 %r69, i64 %r70)
-  %r71 = load i64, ptr %r9
-  %r72 = and i64 %r71, 281474976710655
-  %r73 = call i64 @js_closure_get_capture_bits(i64 %r72, i32 3)
-  %r74 = call i32 @js_bool_box_get(i64 %r73)
-  %r75 = icmp ne i32 %r74, 0
-  br i1 %r75, label %if.then.22, label %if.else.23
+  %r69 = invoke i64 @js_closure_get_capture_bits(i64 %r68, i32 4) to label %eh.cont70 unwind label %eh.lpad.10
+eh.cont70:
+  %r71 = bitcast double %r66 to i64
+  invoke void @js_box_set_bits(i64 %r69, i64 %r71) to label %eh.cont72 unwind label %eh.lpad.10
+eh.cont72:
+  invoke void @js_write_barrier(i64 %r69, i64 %r71) to label %eh.cont73 unwind label %eh.lpad.10
+eh.cont73:
+  %r74 = load i64, ptr %r9
+  %r75 = and i64 %r74, 281474976710655
+  %r76 = invoke i64 @js_closure_get_capture_bits(i64 %r75, i32 3) to label %eh.cont77 unwind label %eh.lpad.10
+eh.cont77:
+  %r78 = invoke i32 @js_bool_box_get(i64 %r76) to label %eh.cont79 unwind label %eh.lpad.10
+eh.cont79:
+  %r80 = icmp ne i32 %r78, 0
+  br i1 %r80, label %if.then.23, label %if.else.24
 
-ss.barrier.21:
-  call void @js_write_barrier_root_nanbox(i64 %r58)
-  br label %ss.done.20
+ss.barrier.22:
+  invoke void @js_write_barrier_root_nanbox(i64 %r57) to label %eh.cont65 unwind label %eh.lpad.10
+eh.cont65:
+  br label %ss.done.21
 
-if.then.22:
-  %r76 = call double @js_iter_result_set(double 0x7FFC000000000001, i32 1)
-  br label %dowhile.exit.12
+if.then.23:
+  %r81 = invoke double @js_iter_result_set(double 0x7FFC000000000001, i32 1) to label %eh.cont82 unwind label %eh.lpad.10
+eh.cont82:
+  br label %dowhile.exit.13
 
-if.else.23:
-  br label %if.merge.24
+if.else.24:
+  br label %if.merge.25
 
-if.merge.24:
-  br label %while.cond.25
+if.merge.25:
+  br label %while.cond.26
 
-while.cond.25:
-  %r77 = select i1 true, i64 9222246136947933188, i64 9222246136947933187
-  %r78 = bitcast i64 %r77 to double
-  %r79 = icmp eq i64 %r77, 9222246136947933188
-  br i1 %r79, label %while.body.26, label %while.exit.27
+while.cond.26:
+  %r83 = select i1 true, i64 9222246136947933188, i64 9222246136947933187
+  %r84 = bitcast i64 %r83 to double
+  %r85 = icmp eq i64 %r83, 9222246136947933188
+  br i1 %r85, label %while.body.27, label %while.exit.28
 
-while.body.26:
-  %r80 = load i64, ptr %r9
-  %r81 = and i64 %r80, 281474976710655
-  %r82 = call i64 @js_closure_get_capture_bits(i64 %r81, i32 2)
-  %r83 = call i32 @js_i32_box_get(i64 %r82)
-  %r84 = icmp eq i32 %r83, 0
-  br i1 %r84, label %if.then.28, label %if.else.29
+while.body.27:
+  %r86 = load i64, ptr %r9
+  %r87 = and i64 %r86, 281474976710655
+  %r88 = invoke i64 @js_closure_get_capture_bits(i64 %r87, i32 2) to label %eh.cont89 unwind label %eh.lpad.10
+eh.cont89:
+  %r90 = invoke i32 @js_i32_box_get(i64 %r88) to label %eh.cont91 unwind label %eh.lpad.10
+eh.cont91:
+  %r92 = icmp eq i32 %r90, 0
+  br i1 %r92, label %if.then.29, label %if.else.30
 
-while.exit.27:
-  br label %if.merge.15
+while.exit.28:
+  br label %if.merge.16
 
-if.then.28:
-  %r85 = call i64 @js_promise_resolved(double 42.0)
-  %r86 = or i64 %r85, 9222527611924643840
-  %r87 = bitcast i64 %r86 to double
-  %r88 = load i64, ptr %r9
-  %r89 = and i64 %r88, 281474976710655
-  %r90 = call i64 @js_closure_get_capture_bits(i64 %r89, i32 1)
-  call void @js_box_set_bits(i64 %r90, i64 %r86)
-  call void @js_write_barrier(i64 %r90, i64 %r86)
-  %r91 = load i64, ptr %r9
-  %r92 = and i64 %r91, 281474976710655
-  %r93 = call i64 @js_closure_get_capture_bits(i64 %r92, i32 2)
-  call void @js_i32_box_set(i64 %r93, i32 1)
-  %r94 = sitofp i32 1 to double
-  %r95 = load i64, ptr %r9
-  %r96 = and i64 %r95, 281474976710655
-  %r97 = call i64 @js_closure_get_capture_bits(i64 %r96, i32 1)
-  %r98 = call i64 @js_box_get_bits(i64 %r97)
-  %r99 = bitcast i64 %r98 to double
-  %r100 = call double @js_iter_result_set(double %r99, i32 0)
-  br label %dowhile.exit.12
+if.then.29:
+  %r93 = invoke i64 @js_promise_resolved(double 42.0) to label %eh.cont94 unwind label %eh.lpad.10
+eh.cont94:
+  %r95 = or i64 %r93, 9222527611924643840
+  %r96 = bitcast i64 %r95 to double
+  %r97 = load i64, ptr %r9
+  %r98 = and i64 %r97, 281474976710655
+  %r99 = invoke i64 @js_closure_get_capture_bits(i64 %r98, i32 1) to label %eh.cont100 unwind label %eh.lpad.10
+eh.cont100:
+  invoke void @js_box_set_bits(i64 %r99, i64 %r95) to label %eh.cont101 unwind label %eh.lpad.10
+eh.cont101:
+  invoke void @js_write_barrier(i64 %r99, i64 %r95) to label %eh.cont102 unwind label %eh.lpad.10
+eh.cont102:
+  %r103 = load i64, ptr %r9
+  %r104 = and i64 %r103, 281474976710655
+  %r105 = invoke i64 @js_closure_get_capture_bits(i64 %r104, i32 2) to label %eh.cont106 unwind label %eh.lpad.10
+eh.cont106:
+  invoke void @js_i32_box_set(i64 %r105, i32 1) to label %eh.cont107 unwind label %eh.lpad.10
+eh.cont107:
+  %r108 = sitofp i32 1 to double
+  %r109 = load i64, ptr %r9
+  %r110 = and i64 %r109, 281474976710655
+  %r111 = invoke i64 @js_closure_get_capture_bits(i64 %r110, i32 1) to label %eh.cont112 unwind label %eh.lpad.10
+eh.cont112:
+  %r113 = invoke i64 @js_box_get_bits(i64 %r111) to label %eh.cont114 unwind label %eh.lpad.10
+eh.cont114:
+  %r115 = bitcast i64 %r113 to double
+  %r116 = invoke double @js_iter_result_set(double %r115, i32 0) to label %eh.cont117 unwind label %eh.lpad.10
+eh.cont117:
+  br label %dowhile.exit.13
 
-if.else.29:
-  br label %if.merge.30
+if.else.30:
+  br label %if.merge.31
 
-if.merge.30:
-  %r101 = load i64, ptr %r9
-  %r102 = and i64 %r101, 281474976710655
-  %r103 = call i64 @js_closure_get_capture_bits(i64 %r102, i32 2)
-  %r104 = call i32 @js_i32_box_get(i64 %r103)
-  %r105 = icmp eq i32 %r104, 1
-  br i1 %r105, label %if.then.31, label %if.else.32
+if.merge.31:
+  %r118 = load i64, ptr %r9
+  %r119 = and i64 %r118, 281474976710655
+  %r120 = invoke i64 @js_closure_get_capture_bits(i64 %r119, i32 2) to label %eh.cont121 unwind label %eh.lpad.10
+eh.cont121:
+  %r122 = invoke i32 @js_i32_box_get(i64 %r120) to label %eh.cont123 unwind label %eh.lpad.10
+eh.cont123:
+  %r124 = icmp eq i32 %r122, 1
+  br i1 %r124, label %if.then.32, label %if.else.33
 
-if.then.31:
-  %r106 = load i64, ptr %r9
-  %r107 = and i64 %r106, 281474976710655
-  %r108 = call i64 @js_closure_get_capture_bits(i64 %r107, i32 4)
-  %r109 = call i64 @js_box_get_bits(i64 %r108)
-  %r110 = bitcast i64 %r109 to double
-  %r111 = load i64, ptr %r9
-  %r112 = and i64 %r111, 281474976710655
-  %r113 = call i64 @js_closure_get_capture_bits(i64 %r112, i32 0)
-  call void @js_box_set_bits(i64 %r113, i64 %r109)
-  call void @js_write_barrier(i64 %r113, i64 %r109)
-  %r114 = call i64 @js_array_alloc(i32 2)
-  %r115 = call i32 @js_gc_temp_root_push(i64 %r114)
-  %r116 = load double, ptr @spike_ts_.str.2.handle
-  call void @js_array_push_f64_temp_rooted(i32 %r115, double %r116)
-  %r117 = load i64, ptr %r9
-  %r118 = and i64 %r117, 281474976710655
-  %r119 = call i64 @js_closure_get_capture_bits(i64 %r118, i32 0)
-  %r120 = call i64 @js_box_get_bits(i64 %r119)
-  %r121 = bitcast i64 %r120 to double
-  call void @js_array_push_f64_temp_rooted(i32 %r115, double %r121)
-  %r122 = call i64 @js_gc_temp_root_get(i32 %r115)
-  call void @js_console_log_spread(i64 %r122)
-  call void @js_gc_temp_root_truncate(i32 %r115)
-  %r123 = load i64, ptr %r9
-  %r124 = and i64 %r123, 281474976710655
-  %r125 = call i64 @js_closure_get_capture_bits(i64 %r124, i32 3)
-  %r126 = zext i1 true to i32
-  call void @js_bool_box_set(i64 %r125, i32 %r126)
-  %r127 = select i1 true, i64 9222246136947933188, i64 9222246136947933187
-  %r128 = bitcast i64 %r127 to double
-  %r129 = call double @js_iter_result_set(double 0x7FFC000000000001, i32 1)
-  br label %dowhile.exit.12
+if.then.32:
+  %r125 = load i64, ptr %r9
+  %r126 = and i64 %r125, 281474976710655
+  %r127 = invoke i64 @js_closure_get_capture_bits(i64 %r126, i32 4) to label %eh.cont128 unwind label %eh.lpad.10
+eh.cont128:
+  %r129 = invoke i64 @js_box_get_bits(i64 %r127) to label %eh.cont130 unwind label %eh.lpad.10
+eh.cont130:
+  %r131 = bitcast i64 %r129 to double
+  %r132 = load i64, ptr %r9
+  %r133 = and i64 %r132, 281474976710655
+  %r134 = invoke i64 @js_closure_get_capture_bits(i64 %r133, i32 0) to label %eh.cont135 unwind label %eh.lpad.10
+eh.cont135:
+  invoke void @js_box_set_bits(i64 %r134, i64 %r129) to label %eh.cont136 unwind label %eh.lpad.10
+eh.cont136:
+  invoke void @js_write_barrier(i64 %r134, i64 %r129) to label %eh.cont137 unwind label %eh.lpad.10
+eh.cont137:
+  %r138 = invoke i64 @js_array_alloc(i32 2) to label %eh.cont139 unwind label %eh.lpad.10
+eh.cont139:
+  %r140 = call i32 @js_gc_temp_root_push(i64 %r138)
+  %r141 = load double, ptr @spike_ts_.str.2.handle
+  invoke void @js_array_push_f64_temp_rooted(i32 %r140, double %r141) to label %eh.cont142 unwind label %eh.lpad.10
+eh.cont142:
+  %r143 = load i64, ptr %r9
+  %r144 = and i64 %r143, 281474976710655
+  %r145 = invoke i64 @js_closure_get_capture_bits(i64 %r144, i32 0) to label %eh.cont146 unwind label %eh.lpad.10
+eh.cont146:
+  %r147 = invoke i64 @js_box_get_bits(i64 %r145) to label %eh.cont148 unwind label %eh.lpad.10
+eh.cont148:
+  %r149 = bitcast i64 %r147 to double
+  invoke void @js_array_push_f64_temp_rooted(i32 %r140, double %r149) to label %eh.cont150 unwind label %eh.lpad.10
+eh.cont150:
+  %r151 = call i64 @js_gc_temp_root_get(i32 %r140)
+  invoke void @js_console_log_spread(i64 %r151) to label %eh.cont152 unwind label %eh.lpad.10
+eh.cont152:
+  call void @js_gc_temp_root_truncate(i32 %r140)
+  %r153 = load i64, ptr %r9
+  %r154 = and i64 %r153, 281474976710655
+  %r155 = invoke i64 @js_closure_get_capture_bits(i64 %r154, i32 3) to label %eh.cont156 unwind label %eh.lpad.10
+eh.cont156:
+  %r157 = zext i1 true to i32
+  invoke void @js_bool_box_set(i64 %r155, i32 %r157) to label %eh.cont158 unwind label %eh.lpad.10
+eh.cont158:
+  %r159 = select i1 true, i64 9222246136947933188, i64 9222246136947933187
+  %r160 = bitcast i64 %r159 to double
+  %r161 = invoke double @js_iter_result_set(double 0x7FFC000000000001, i32 1) to label %eh.cont162 unwind label %eh.lpad.10
+eh.cont162:
+  br label %dowhile.exit.13
 
-if.else.32:
-  br label %if.merge.33
+if.else.33:
+  br label %if.merge.34
 
-if.merge.33:
-  %r130 = load i64, ptr %r9
-  %r131 = and i64 %r130, 281474976710655
-  %r132 = call i64 @js_closure_get_capture_bits(i64 %r131, i32 3)
-  %r133 = zext i1 true to i32
-  call void @js_bool_box_set(i64 %r132, i32 %r133)
-  %r134 = select i1 true, i64 9222246136947933188, i64 9222246136947933187
-  %r135 = bitcast i64 %r134 to double
-  %r136 = call double @js_iter_result_set(double 0x7FFC000000000001, i32 1)
-  br label %dowhile.exit.12
+if.merge.34:
+  %r163 = load i64, ptr %r9
+  %r164 = and i64 %r163, 281474976710655
+  %r165 = invoke i64 @js_closure_get_capture_bits(i64 %r164, i32 3) to label %eh.cont166 unwind label %eh.lpad.10
+eh.cont166:
+  %r167 = zext i1 true to i32
+  invoke void @js_bool_box_set(i64 %r165, i32 %r167) to label %eh.cont168 unwind label %eh.lpad.10
+eh.cont168:
+  %r169 = select i1 true, i64 9222246136947933188, i64 9222246136947933187
+  %r170 = bitcast i64 %r169 to double
+  %r171 = invoke double @js_iter_result_set(double 0x7FFC000000000001, i32 1) to label %eh.cont172 unwind label %eh.lpad.10
+eh.cont172:
+  br label %dowhile.exit.13
 
-ss.slow.34:
+ss.slow.35:
   call void @js_shadow_slot_set(i32 2, i64 0)
-  br label %ss.done.38
+  br label %ss.done.39
 
-ss.chk_top.35:
-  %r139 = getelementptr inbounds i8, ptr %r137, i64 24
-  %r140 = load i64, ptr %r139
-  %r141 = icmp eq i64 %r140, -1
-  br i1 %r141, label %ss.done.38, label %ss.chk_len.36
+ss.chk_top.36:
+  %r175 = getelementptr inbounds i8, ptr %r173, i64 24
+  %r176 = load i64, ptr %r175
+  %r177 = icmp eq i64 %r176, -1
+  br i1 %r177, label %ss.done.39, label %ss.chk_len.37
 
-ss.chk_len.36:
-  %r142 = add i64 %r140, 2
-  %r143 = getelementptr inbounds i8, ptr %r137, i64 8
-  %r144 = load i64, ptr %r143
-  %r145 = icmp ult i64 %r142, %r144
-  br i1 %r145, label %ss.store.37, label %ss.done.38
+ss.chk_len.37:
+  %r178 = add i64 %r176, 2
+  %r179 = getelementptr inbounds i8, ptr %r173, i64 8
+  %r180 = load i64, ptr %r179
+  %r181 = icmp ult i64 %r178, %r180
+  br i1 %r181, label %ss.store.38, label %ss.done.39
 
-ss.store.37:
-  %r146 = load ptr, ptr %r137
-  %r147 = shl i64 %r142, 4
-  %r148 = getelementptr inbounds i8, ptr %r146, i64 %r147
-  %r149 = getelementptr inbounds i8, ptr %r148, i64 8
-  %r150 = load i64, ptr %r149
-  %r151 = and i64 %r150, -2
-  store i64 0, ptr %r148
-  store i64 %r151, ptr %r149
-  br label %ss.done.38
+ss.store.38:
+  %r182 = load ptr, ptr %r173
+  %r183 = shl i64 %r178, 4
+  %r184 = getelementptr inbounds i8, ptr %r182, i64 %r183
+  %r185 = getelementptr inbounds i8, ptr %r184, i64 8
+  %r186 = load i64, ptr %r185
+  %r187 = and i64 %r186, -2
+  store i64 0, ptr %r184
+  store i64 %r187, ptr %r185
+  br label %ss.done.39
 
-ss.done.38:
-  br label %dowhile.cond.11
+ss.done.39:
+  br label %dowhile.cond.12
 
-ss.slow.39:
-  call void @js_shadow_slot_bind(i32 3, ptr %r156)
-  br label %ss.done.43
+ss.slow.40:
+  call void @js_shadow_slot_bind(i32 3, ptr %r192)
+  br label %ss.done.44
 
-ss.chk_top.40:
-  %r159 = getelementptr inbounds i8, ptr %r157, i64 24
-  %r160 = load i64, ptr %r159
-  %r161 = icmp eq i64 %r160, -1
-  br i1 %r161, label %ss.done.43, label %ss.chk_len.41
+ss.chk_top.41:
+  %r195 = getelementptr inbounds i8, ptr %r193, i64 24
+  %r196 = load i64, ptr %r195
+  %r197 = icmp eq i64 %r196, -1
+  br i1 %r197, label %ss.done.44, label %ss.chk_len.42
 
-ss.chk_len.41:
-  %r162 = add i64 %r160, 3
-  %r163 = getelementptr inbounds i8, ptr %r157, i64 8
-  %r164 = load i64, ptr %r163
-  %r165 = icmp ult i64 %r162, %r164
-  br i1 %r165, label %ss.store.42, label %ss.done.43
+ss.chk_len.42:
+  %r198 = add i64 %r196, 3
+  %r199 = getelementptr inbounds i8, ptr %r193, i64 8
+  %r200 = load i64, ptr %r199
+  %r201 = icmp ult i64 %r198, %r200
+  br i1 %r201, label %ss.store.43, label %ss.done.44
 
-ss.store.42:
-  %r166 = load ptr, ptr %r157
-  %r167 = shl i64 %r162, 4
-  %r168 = getelementptr inbounds i8, ptr %r166, i64 %r167
-  %r169 = getelementptr inbounds i8, ptr %r168, i64 8
-  %r170 = load i64, ptr %r156
-  %r171 = ptrtoint ptr %r156 to i64
-  %r172 = and i64 %r171, 1
-  %r173 = icmp eq i64 %r172, 0
-  %r174 = select i1 %r173, i64 %r171, i64 0
-  %r175 = or i64 %r174, 1
-  store i64 %r170, ptr %r168
-  store i64 %r175, ptr %r169
-  %r176 = load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst, align 4
-  %r177 = icmp ne i32 %r176, 0
-  br i1 %r177, label %ss.barrier.44, label %ss.done.43
+ss.store.43:
+  %r202 = load ptr, ptr %r193
+  %r203 = shl i64 %r198, 4
+  %r204 = getelementptr inbounds i8, ptr %r202, i64 %r203
+  %r205 = getelementptr inbounds i8, ptr %r204, i64 8
+  %r206 = load i64, ptr %r192
+  %r207 = ptrtoint ptr %r192 to i64
+  %r208 = and i64 %r207, 1
+  %r209 = icmp eq i64 %r208, 0
+  %r210 = select i1 %r209, i64 %r207, i64 0
+  %r211 = or i64 %r210, 1
+  store i64 %r206, ptr %r204
+  store i64 %r211, ptr %r205
+  %r212 = load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst, align 4
+  %r213 = icmp ne i32 %r212, 0
+  br i1 %r213, label %ss.barrier.45, label %ss.done.44
 
-ss.done.43:
-  %r178 = load double, ptr %r8
-  %r179 = bitcast double %r178 to i64
-  %r180 = icmp eq i64 %r179, 9222246136947933188
-  br i1 %r180, label %if.then.45, label %if.else.46
+ss.done.44:
+  %r214 = load double, ptr %r8
+  %r215 = bitcast double %r214 to i64
+  %r216 = icmp eq i64 %r215, 9222246136947933188
+  br i1 %r216, label %if.then.46, label %if.else.47
 
-ss.barrier.44:
-  call void @js_write_barrier_root_nanbox(i64 %r170)
-  br label %ss.done.43
+ss.barrier.45:
+  call void @js_write_barrier_root_nanbox(i64 %r206)
+  br label %ss.done.44
 
-if.then.45:
-  %r181 = load double, ptr %r156
-  %r182 = call i64 @js_promise_rejected(double %r181)
-  %r183 = or i64 %r182, 9222527611924643840
-  %r184 = bitcast i64 %r183 to double
+if.then.46:
+  %r217 = load double, ptr %r192
+  %r218 = call i64 @js_promise_rejected(double %r217)
+  %r219 = or i64 %r218, 9222527611924643840
+  %r220 = bitcast i64 %r219 to double
   %shadow_pop_l_0 = load i64, ptr %r1
   call void @js_shadow_frame_pop(i64 %shadow_pop_l_0)
-  ret double %r184
+  ret double %r220
 
-if.else.46:
-  br label %if.merge.47
+if.else.47:
+  br label %if.merge.48
 
-if.merge.47:
-  %r185 = load double, ptr %r11
-  %r186 = load double, ptr %r156
-  %r187 = select i1 true, i64 9222246136947933188, i64 9222246136947933187
-  %r188 = bitcast i64 %r187 to double
-  %r189 = call double @js_implicit_this_set(double 0x7FFC000000000001)
-  %r190 = bitcast double %r189 to i64
-  %r191 = call i32 @js_gc_temp_root_push(i64 %r190)
-  %r192 = call i64 @js_closure_unbox_callee_checked(double %r185)
-  %r193 = call double @js_closure_call2(i64 %r192, double %r186, double %r188)
-  %r194 = call i64 @js_gc_temp_root_get(i32 %r191)
-  %r195 = bitcast i64 %r194 to double
-  call void @js_gc_temp_root_truncate(i32 %r191)
-  %r196 = call double @js_implicit_this_set(double %r195)
+if.merge.48:
+  %r221 = load double, ptr %r11
+  %r222 = load double, ptr %r192
+  %r223 = select i1 true, i64 9222246136947933188, i64 9222246136947933187
+  %r224 = bitcast i64 %r223 to double
+  %r225 = call double @js_implicit_this_set(double 0x7FFC000000000001)
+  %r226 = bitcast double %r225 to i64
+  %r227 = call i32 @js_gc_temp_root_push(i64 %r226)
+  %r228 = call i64 @js_closure_unbox_callee_checked(double %r221)
+  %r229 = call double @js_closure_call2(i64 %r228, double %r222, double %r224)
+  %r230 = call i64 @js_gc_temp_root_get(i32 %r227)
+  %r231 = bitcast i64 %r230 to double
+  call void @js_gc_temp_root_truncate(i32 %r227)
+  %r232 = call double @js_implicit_this_set(double %r231)
   %shadow_pop_l_1 = load i64, ptr %r1
   call void @js_shadow_frame_pop(i64 %shadow_pop_l_1)
-  ret double %r193
+  ret double %r229
 
-if.then.48:
-  %r200 = call double @js_iter_result_get_value()
-  %r201 = load double, ptr %r11
-  %r202 = bitcast double %r201 to i64
-  %r203 = and i64 %r202, 281474976710655
-  %r204 = call i64 @js_async_step_done(double %r200, i64 %r203)
-  %r205 = or i64 %r204, 9222527611924643840
-  %r206 = bitcast i64 %r205 to double
+if.then.49:
+  %r236 = call double @js_iter_result_get_value()
+  %r237 = load double, ptr %r11
+  %r238 = bitcast double %r237 to i64
+  %r239 = and i64 %r238, 281474976710655
+  %r240 = call i64 @js_async_step_done(double %r236, i64 %r239)
+  %r241 = or i64 %r240, 9222527611924643840
+  %r242 = bitcast i64 %r241 to double
   %shadow_pop_l_2 = load i64, ptr %r1
   call void @js_shadow_frame_pop(i64 %shadow_pop_l_2)
-  ret double %r206
+  ret double %r242
 
-if.else.49:
-  br label %if.merge.50
+if.else.50:
+  br label %if.merge.51
 
-if.merge.50:
-  %r207 = call double @js_iter_result_get_value()
-  %r208 = load double, ptr %r11
-  %r209 = bitcast double %r208 to i64
-  %r210 = and i64 %r209, 281474976710655
-  %r211 = call i64 @js_async_step_chain(double %r207, i64 %r210)
-  %r212 = or i64 %r211, 9222527611924643840
-  %r213 = bitcast i64 %r212 to double
+if.merge.51:
+  %r243 = call double @js_iter_result_get_value()
+  %r244 = load double, ptr %r11
+  %r245 = bitcast double %r244 to i64
+  %r246 = and i64 %r245, 281474976710655
+  %r247 = call i64 @js_async_step_chain(double %r243, i64 %r246)
+  %r248 = or i64 %r247, 9222527611924643840
+  %r249 = bitcast i64 %r248 to double
   %shadow_pop_l_3 = load i64, ptr %r1
   call void @js_shadow_frame_pop(i64 %shadow_pop_l_3)
-  ret double %r213
+  ret double %r249
 }
 
 define double @perry_method_spike_ts__Point__norm(double %this_arg) {
@@ -4677,7 +4743,7 @@ ss.done.8:
   %r67 = call i32 @js_gc_temp_root_push(i64 %r66)
   %r68 = load double, ptr @spike_ts_.str.5.handle
   call void @js_array_push_f64_temp_rooted(i32 %r67, double %r68)
-  %r69 = call double @perry_fn_spike_ts__fib(double 20.0)
+  %r69 = call double @perry_fn_spike_ts__fib__spec_i32(i32 20)
   call void @js_array_push_f64_temp_rooted(i32 %r67, double %r69)
   %r70 = call i64 @js_gc_temp_root_get(i32 %r67)
   call void @js_console_log_spread(i64 %r70)
@@ -5612,9 +5678,6 @@ entry.0:
   ret void
 }
 
-
-attributes #0 = { returns_twice }
-attributes #1 = { noinline }
 
 attributes #2 = { nounwind willreturn readnone }
 

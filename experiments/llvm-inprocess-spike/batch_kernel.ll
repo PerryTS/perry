@@ -1275,8 +1275,8 @@ declare void @js_wait_for_event()
 declare i32 @js_event_loop_host_driven()
 declare void @js_unsettled_top_level_await_exit()
 declare void @js_throw(double)
-declare ptr @js_try_push()
-declare i32 @_setjmp(ptr) #0
+declare void @js_eh_try_push()
+declare i32 @perry_eh_personality(...)
 declare void @js_try_end()
 declare double @js_get_exception()
 declare void @js_clear_exception()
@@ -10645,9 +10645,6 @@ entry.0:
   ret void
 }
 
-
-attributes #0 = { returns_twice }
-attributes #1 = { noinline }
 
 attributes #2 = { nounwind willreturn readnone }
 

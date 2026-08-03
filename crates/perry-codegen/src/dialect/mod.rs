@@ -292,11 +292,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let attr_str = h.attr_str;
         for a in attr_str.split_whitespace() {
             match a {
-                // Attribute-group references: the only group perry stamps on
-                // defines is #1 (noinline, the setjmp boundary). Group
-                // contents live in the skeleton for *declares*; for defines
-                // we apply the concrete attribute.
-                "#1" => add_enum_attr(ctx, func, "noinline"),
+                // #7302 deleted the setjmp-era groups (#0 returns_twice, #1
+                // noinline); perry no longer stamps an attribute-group ref
+                // on any define. The losing mode stops compiling rather
+                // than lingering as an untested branch (CLAUDE.md kill
+                // policy) — a corpus still carrying one is stale and must
+                // say so loudly.
                 "alwaysinline" | "inlinehint" | "noinline" => add_enum_attr(ctx, func, a),
                 other => bail!("unknown define attribute `{other}`"),
             }
@@ -724,9 +725,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let callee = &after[..paren];
         let close = rmatch_paren(after, paren)?;
         let args_str = &after[paren + 1..close];
-        // Trailing callsite attribute-group ref. Only `#0` (returns_twice,
-        // on setjmp calls) exists in the dialect; the declare carries it too,
-        // so this is fidelity, not correctness.
+        // Trailing callsite attribute-group ref. #7302 removed the only one
+        // perry ever emitted (`#0`, returns_twice on setjmp calls), so any
+        // ref here now means stale input.
         let trailing_attr = after[close + 1..].trim();
 
         let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
@@ -771,15 +772,6 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .map_err(be)?;
         match trailing_attr {
             "" => {}
-            "#0" => {
-                let kind = inkwell::attributes::Attribute::get_named_enum_kind_id("returns_twice");
-                if kind != 0 {
-                    site.add_attribute(
-                        inkwell::attributes::AttributeLoc::Function,
-                        self.ctx.create_enum_attribute(kind, 0),
-                    );
-                }
-            }
             other => bail!("unknown callsite attribute `{other}`"),
         }
         match site.try_as_basic_value() {

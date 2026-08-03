@@ -2654,6 +2654,12 @@ fn try_native_units(
     target: Option<&str>,
     module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
+    // SEH funclets are the one EH shape the in-process reader cannot
+    // construct (see LlModule::needs_eh_funclets). Decline to the textual
+    // path rather than failing the compile.
+    if llmod.needs_eh_funclets() {
+        return None;
+    }
     match crate::native_emit::native_mode() {
         crate::native_emit::NativeMode::Off => None,
         crate::native_emit::NativeMode::Native => Some(
@@ -2686,6 +2692,12 @@ fn try_native_construction(
     target: Option<&str>,
     module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
+    // SEH funclets are the one EH shape the in-process reader cannot
+    // construct (see LlModule::needs_eh_funclets). Decline to the textual
+    // path rather than failing the compile.
+    if llmod.needs_eh_funclets() {
+        return None;
+    }
     match crate::native_emit::native_mode() {
         crate::native_emit::NativeMode::Off => None,
         crate::native_emit::NativeMode::Native => Some(crate::native_emit::compile_module_native(
