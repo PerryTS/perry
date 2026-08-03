@@ -101,10 +101,29 @@ mod capture {
         pub fn perry_eh_install_context(ctx: *const RawCtx, pad: u64, exc: u64) -> !;
     }
 
+    /// Mach-O prefixes every C symbol with an underscore; ELF does not. The
+    /// asm below defines these two symbols by hand, so it has to spell the
+    /// prefix itself — hardcoding Mach-O's built a runtime that cannot LINK on
+    /// aarch64 Linux (`undefined reference to perry_eh_capture_context`, the
+    /// declaration resolving to the unprefixed name while the definition
+    /// carried the prefix).
+    #[cfg(target_vendor = "apple")]
+    macro_rules! eh_sym {
+        ($name:literal) => {
+            concat!("_", $name)
+        };
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    macro_rules! eh_sym {
+        ($name:literal) => {
+            $name
+        };
+    }
+
     core::arch::global_asm!(
         ".p2align 2",
-        ".globl _perry_eh_capture_context",
-        "_perry_eh_capture_context:",
+        concat!(".globl ", eh_sym!("perry_eh_capture_context")),
+        concat!(eh_sym!("perry_eh_capture_context"), ":"),
         "stp x19, x20, [x0, #0]",
         "stp x21, x22, [x0, #16]",
         "stp x23, x24, [x0, #32]",
@@ -125,8 +144,8 @@ mod capture {
         // callee-saved file, then move sp last: once sp moves, the ctx
         // pointer must already be in a register we are not restoring.
         ".p2align 2",
-        ".globl _perry_eh_install_context",
-        "_perry_eh_install_context:",
+        concat!(".globl ", eh_sym!("perry_eh_install_context")),
+        concat!(eh_sym!("perry_eh_install_context"), ":"),
         "ldr x9, [x0, #96]", // target sp
         "mov x10, x1",       // target pad
         "mov x11, x2",       // exception object
