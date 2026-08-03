@@ -112,7 +112,11 @@ struct FunctionMap {
 /// Getting this wrong is not a parse error, it is a *wrong answer*: two bytes
 /// of drift per field silently relocates every root that follows.
 fn word_width_for(target: &str) -> usize {
-    if target.starts_with("x86_64") || target.starts_with("i686") || target.starts_with("i586") {
+    let arch = target.split('-').next().unwrap_or_default();
+    // `x86_64h` (Haswell Mach-O) and the whole i?86 family included.
+    if arch.starts_with("x86_64")
+        || (arch.len() == 4 && arch.starts_with('i') && arch.ends_with("86"))
+    {
         2
     } else {
         4
@@ -986,7 +990,13 @@ mod tests {
     #[test]
     fn word_width_is_load_bearing_not_cosmetic() {
         assert_eq!(word_width_for("aarch64-unknown-linux-gnu"), 4);
+        assert_eq!(word_width_for("arm64-apple-macosx15.0.0"), 4);
         assert_eq!(word_width_for("x86_64-unknown-linux-gnu"), 2);
+        assert_eq!(word_width_for("x86_64h-apple-macosx15.0.0"), 2);
+        assert_eq!(word_width_for("i686-unknown-linux-gnu"), 2);
+        assert_eq!(word_width_for("i386-unknown-linux-gnu"), 2);
+        // Not x86: `aarch64` must not be mistaken for one by a loose match.
+        assert_eq!(word_width_for("riscv64gc-unknown-linux-gnu"), 4);
 
         let asm = aarch64_elf_sample_asm();
         let correct = compact_stack_map_asm(&asm, true, "aarch64-unknown-linux-gnu")
