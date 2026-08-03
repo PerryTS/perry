@@ -281,6 +281,75 @@ same-binary A/B. The 8 http-family crashes from the flag-period run are gone
 with coherently-built archives, confirming the ext-archive profile-mixing
 attribution. Zero invoke-attributable regressions, final.
 
+## Follow-up: the owned single-phase unwinder
+
+The migration left one honest regression: throws got slower, because real
+unwinding replaced `longjmp`'s O(1) register restore. The system unwinder
+walks every frame **twice** (search + cleanup) and re-decodes each frame's
+CFI on **every throw** — measured 512 ns per frame-step on macOS.
+
+Perry does not need either property. The handler stack already *is* the
+search result (we know the target before raising), and throw paths repeat,
+so a decoded frame can be cached. `perry-runtime/src/eh_walker.rs` therefore
+carries throws itself: one phase, a per-PC row cache, and a direct register
+install. `_Unwind_RaiseException` remains the fallback.
+
+| microbenchmark (20k iters, macOS arm64) | system unwinder | owned walker | node/V8 |
+|---|---|---|---|
+| deep unwind, 200 frames | 4096 ms | **287 ms** (14.3×) | 168 ms |
+| shallow throw+catch | 451 ms | **80 ms** (5.6×) | 110 ms |
+
+Deep-unwind throws went from 24× slower than V8 to within 1.7×; shallow
+throws now beat V8. Non-throwing paths are untouched (they were already
+10–20% faster than the setjmp era).
+
+### Why this is safe
+
+Every register reload is a raw dereference of a computed address, so a
+misdecoded unwind row is not a wrong answer — it is a wild read. Three
+layers, each of which had to *prove it ran*:
+
+1. **W0** — the owned walk reproduces `_Unwind_Backtrace`'s frame chain
+   exactly (unit differential).
+2. **W1** — `PERRY_EH_WALKER=diff` predicts (landing pad, CFA) before every
+   raise and asserts it inside the personality against the system unwinder,
+   tallying verified/declined at exit so a silent run cannot pass for a
+   verified one. Result: 20,000 deep unwinds (~4M frame steps), the GC
+   throw-across-collection probe, and the smoke corpus — **zero
+   mispredictions, zero declines**. Liveness of the checker itself was
+   proven by deliberately corrupting a prediction (+4) and confirming the
+   abort fires.
+3. **W2** — fail-safe stepping: the CFA must climb a plausible stack
+   monotonically and every slot address must lie within the walk's stack
+   span, or the walk declines and the system unwinder carries that throw.
+   **This was not theoretical**: unguarded, the walker segfaulted stepping
+   `libtest`'s frame shapes (which compiled programs never produce).
+   Guarded, the differential passes and the program path still reports
+   `fallback=0` across 20k+ throws.
+
+`d8..d15` are tracked and restored, not just the integer set — a handler
+frame holding a live `f64` across the `try` would otherwise resume with a
+stale value, which is silent numeric corruption rather than a crash.
+
+Acceptance: the full gap suite under the owned transport returns **the
+byte-identical failure set** as merged main (95.4%, same 21 mismatches, same
+single known crash), and the GC probe passes under default,
+`PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1`, and
+`PERRY_GEN_GC=0`. `PERRY_EH_WALKER=off` reverts to the system unwinder for
+bisection (measured: b4 returns to 4231 ms, confirming the knob is live).
+
+### Platform status
+
+aarch64/macOS today. Other architectures and Linux keep the system
+unwinder — identical semantics, the old speed — because the walk declines
+when it has no image to decode. Linux needs `dl_iterate_phdr` +
+`PT_GNU_EH_FRAME` discovery; the stepping and cache above it are
+platform-independent. A measured aside for that work: **89% of our
+functions are DWARF-mode escapes** in the compact-unwind table, so the
+gimli path (not the compact steppers) is the one that matters, and forcing
+frame pointers on generated functions would move most of that population
+into the trivially-steppable FRAME encoding.
+
 ## Phase 1+ design notes (running)
 
 - Handler bookkeeping: `js_try_push` today returns a jmp_buf and the generated
