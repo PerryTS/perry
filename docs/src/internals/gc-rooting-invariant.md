@@ -122,7 +122,28 @@ on a real workload. When adding a cache of a heap pointer, register it in
 
 ### 1. The static checker — run this one
 
-It is the only instrument that sees this class before it crashes.
+**Scope: emitted-LLVM rooting hazards only** — a stale register or an unrooted
+alloca in generated code. Within that scope it is the only instrument that sees
+a defect before it crashes, which is why it runs first.
+
+**It is blind to three classes, all found the hard way. A clean report is not
+evidence for any of them:**
+
+- **Runtime tables and interning caches** (#7231) — it reads emitted IR and
+  cannot see a runtime cell. Tell: fails 10/10 rather than intermittently.
+- **Unrooted locals in runtime Rust** (#7249) — same reason. It read
+  `0 violations` on both sides of a real bug whose fix was a one-line
+  `GcSuppressScope` in the `globalThis` bootstrap.
+- **Anything its symbol sets do not name** (#7284) — `POLL_CAPABLE_RUNTIME` is
+  an *exact emitted-symbol* set. It carried `js_object_get_field_by_name`, which
+  codegen never emits, next to `js_object_set_field_by_name`, which it emits
+  verbatim. Property sets classified `MOVING: YES`, property gets `MOVING: no`,
+  and 31 stale uses were dropped by `--moving-only`. **Audit these sets against
+  what codegen actually emits, the way #7227 audits `ALLOC_RE`.**
+
+For the classes above, the instruments that catch them are the zeal/quarantine
+arms below and a *dependency-scale* workload — #7280 records 25 curated corpus
+files passing while 20 lines of stock zod fail.
 
 ```bash
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
