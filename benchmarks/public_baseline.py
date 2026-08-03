@@ -64,6 +64,13 @@ EXPECTED_COMPONENT_BENCHMARKS = {
         "buffer_transcode", "date_format_parse", "json_parse_1mb", "json_stringify_1mb",
         "map_1m", "object_deep_clone", "promise_all_chains", "regex_replace",
         "string_concat_csv", "string_split_map_join", "string_template_interp",
+        # `batch` shipped with #7037 (b5dbf3f63), which added
+        # `app-patterns/kernels/batch.ts` and did not add it here. That commit
+        # both invalidated the artifact (kernels are in SOURCE_PATHS) and made
+        # regenerating it impossible: assembly aborts with `extra=['batch']`
+        # after all five measurement legs have already run. Adding a kernel
+        # must add it here in the same commit.
+        "batch",
     },
     "honest_bench": {"image_convolution", "json_pipeline_small", "json_pipeline_full"},
 }

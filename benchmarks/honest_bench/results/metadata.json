@@ -1,22 +1,88 @@
 {
-  "generated_at": "2026-05-14T07:44:59.755910+00:00",
+  "generated_at": "2026-08-03T05:25:59.733855+00:00",
+  "commit": "defa4d6012fb480fca237ea10509da74bd41624d",
   "host": {
-    "os_version": "26.4",
-    "kernel": "Darwin MacBook-Pro-69.local 25.4.0 Darwin Kernel Version 25.4.0: Thu Mar 19 19:30:44 PDT 2026; root:xnu-12377.101.15~1/RELEASE_ARM64_T6000 arm64",
+    "os_version": "26.5",
+    "kernel": "Darwin MacBookPro.fritz.box 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:38:56 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T6000 arm64",
     "arch": "arm64",
     "cpu": "Apple M1 Max",
     "ncpu": "10",
     "ram_gb": 64.0
   },
   "toolchains": {
-    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
-    "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "zig": "0.15.2",
-    "python": "Python 3.14.4",
-    "perry": "perry 0.5.908"
+    "python": "Python 3.14.6",
+    "node": "v22.23.1",
+    "bun": "1.3.14",
+    "oha": "",
+    "perry": "perry 0.5.1279"
+  },
+  "executables": {
+    "perry": "/Users/amlug/projects/perry/wt-baseline2/target/release/perry",
+    "node": "/Users/amlug/.cache/perry-bench-tools/bin/node",
+    "bun": "/Users/amlug/.cache/perry-bench-tools/bin/bun"
   },
   "harness": {
     "warmup": 5,
-    "measured": 20
+    "measured": 20,
+    "http_duration": "15s",
+    "http_warmup_duration": "5s",
+    "http_concurrency": 10
+  },
+  "commands": {
+    "perry": [
+      "<compiled-workload>"
+    ],
+    "perry_compile": [
+      "/Users/amlug/projects/perry/wt-baseline2/target/release/perry",
+      "<source.ts>",
+      "-o",
+      "<compiled-workload>"
+    ],
+    "node": [
+      "/Users/amlug/.cache/perry-bench-tools/bin/node",
+      "--experimental-strip-types",
+      "<source.ts>"
+    ],
+    "bun": [
+      "/Users/amlug/.cache/perry-bench-tools/bin/bun",
+      "run",
+      "<source.ts>"
+    ],
+    "perry_http": [
+      "<compiled-kernel>"
+    ],
+    "perry_http_compile": [
+      "/Users/amlug/projects/perry/wt-baseline2/target/release/perry",
+      "<kernel.ts>",
+      "-o",
+      "<compiled-kernel>"
+    ],
+    "node_http": [
+      "node",
+      "--import",
+      "tsx",
+      "<kernel.ts>"
+    ],
+    "bun_http": [
+      "bun",
+      "run",
+      "<kernel.ts>"
+    ],
+    "oha": [
+      "/tmp/oha",
+      "-z",
+      "15s",
+      "-c",
+      "10",
+      "-r",
+      "0",
+      "--no-tui",
+      "--output-format",
+      "json",
+      "<url>"
+    ]
   }
 }
