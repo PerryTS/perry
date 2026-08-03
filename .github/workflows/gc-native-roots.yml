@@ -133,6 +133,7 @@ jobs:
             otool -l "/tmp/$name" | grep -q "sectname __llvm_stackmaps" \
               && { echo "::error::$name still carries __llvm_stackmaps — the compact rewrite did not run"; exit 1; }
             PERRY_STATEPOINTS=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+            PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
               "/tmp/$name" > "/tmp/$name.out" 2> "/tmp/$name.err"
             diff "/tmp/$name.oracle" "/tmp/$name.out" \
               || { echo "::error::$name output diverged from the pinned oracle"; exit 1; }
@@ -257,6 +258,7 @@ jobs:
             # holding, not the enforcement being absent.
             PERRY_STATEPOINTS=1 PERRY_GC_SAFEPOINT_ONLY=strict \
               PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
               "/tmp/so-$name" > "/tmp/so-$name.out" 2> "/tmp/so-$name.err"
             diff "/tmp/so-$name.oracle" "/tmp/so-$name.out" \
               || { echo "::error::$name diverged from the oracle under the safepoint-only contract"; exit 1; }
@@ -303,6 +305,7 @@ jobs:
             # cannot see a slot the walker never reached.
             PERRY_STACKMAP_WALKER=verify PERRY_GC_TRACE=1 \
               PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
               "/tmp/w-$name" > "/tmp/w-$name.verify.out" 2> "/tmp/w-$name.verify.err"
             diff "/tmp/w-$name.oracle" "/tmp/w-$name.verify.out" \
               || { echo "::error::$name diverged from the oracle under PERRY_STACKMAP_WALKER=verify"; exit 1; }
@@ -311,6 +314,7 @@ jobs:
             # unwind: the bisection control. Same roots, platform unwinder only.
             PERRY_STACKMAP_WALKER=unwind PERRY_GC_TRACE=1 \
               PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
               "/tmp/w-$name" > "/tmp/w-$name.unwind.out" 2> "/tmp/w-$name.unwind.err"
             diff "/tmp/w-$name.oracle" "/tmp/w-$name.unwind.out" \
               || { echo "::error::$name diverged from the oracle under PERRY_STACKMAP_WALKER=unwind"; exit 1; }
@@ -350,6 +354,34 @@ jobs:
             exit 1
           fi
           echo "bridge refused the try-carrying probe, as expected (#7327)"
+
+      # #7336: the evacuation arm was VACUOUS. The probes drive collection with
+      # `gc()`, which takes `manual_collect` — a full mark-sweep behind a forced
+      # conservative scan — and `PERRY_GC_FORCE_EVACUATE` is read only on the
+      # MINOR path. Measured: `copied_objects` and `moved_objects` were 0 on
+      # every probe, while `--require-fp-walks` passed because it asserts a walk
+      # HAPPENED, not that it FOUND anything. That is #6942/#6946 repeating, the
+      # one CLAUDE.md records as costing months of meaningless green.
+      #
+      # The arms above now drive the minor path. This asserts they actually
+      # moved something, so the gate fails if it ever goes inert again.
+      - name: The evacuation arm must actually evacuate
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          fail=0
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            name=$(basename "$probe" .ts)
+            [ "$name" = "09_try_catch_roots" ] && continue
+            PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" -o "/tmp/ev-$name" >/dev/null 2>&1 || continue
+            PERRY_STATEPOINTS=1 PERRY_GC_FORCE_EVACUATE=1 \
+              PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+              PERRY_GC_DIAG=1 "/tmp/ev-$name" > /dev/null 2> "/tmp/ev-$name.err" || true
+            python3 scripts/gc_evacuation_liveness_assert.py "/tmp/ev-$name.err" --probe "$name" || fail=1
+          done
+          exit $fail
 
   native-roots-rs4gc-aarch64:
     runs-on: macos-14
@@ -406,6 +438,7 @@ jobs:
             otool -l "/tmp/rs4gc-$name" | grep -q "sectname __llvm_stackmaps" \
               && { echo "::error::$name still carries __llvm_stackmaps — the compact rewrite did not run"; exit 1; }
             PERRY_RS4GC=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+            PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
               "/tmp/rs4gc-$name" > "/tmp/rs4gc-$name.out" 2> "/tmp/rs4gc-$name.err"
             diff "/tmp/rs4gc-$name.oracle" "/tmp/rs4gc-$name.out" \
               || { echo "::error::$name diverged from the pinned oracle under RS4GC"; exit 1; }
