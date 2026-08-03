@@ -35,34 +35,67 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .call(I64, "js_array_clone_for_spread", &[(DOUBLE, &src_box)]);
                 return Ok(nanbox_pointer_inline(ctx.block(), &cloned));
             }
+            // #7280: unlike `lower_array_literal` — which lowers every element
+            // FIRST (each into a temp root) and only then allocates — this path
+            // allocates the accumulator UP FRONT and lowers the elements into
+            // it. The half-built array is therefore live across every element
+            // expression, and for a spread literal those are arbitrary user
+            // code: `[a, ...gen(), b]` runs an iterator protocol between two
+            // pushes. It is live across the lowering's OWN calls too —
+            // `js_array_push_f64`, `js_array_push_hole` and
+            // `js_array_spread_append` all allocate.
+            //
+            // Threading `current_arr` through each call's RETURN value already
+            // handles REALLOCATION (`js_array_push_f64` hands back a new
+            // pointer when it grows). It does nothing for RELOCATION: nothing
+            // rooted the accumulator, so a minor between two elements finds an
+            // array reachable from no root at all — it is reclaimed, not merely
+            // moved, and the remaining appends write into recycled memory.
+            // 29 of the 77 fatal moving stale uses on the #7280 reproducer are
+            // this shape.
+            //
+            // `temp_root_set_i64` rather than a fixed `RootedHandle`: the
+            // accumulator's address legitimately CHANGES on every append, so
+            // the slot must be rewritten, not just re-read. Same contract as
+            // the string-concat accumulator (#6971).
             let cap_str = (elements.len() as u32).to_string();
             let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_str)]);
+            let root = super::temp_root::temp_root_push_i64(ctx, &current_arr);
             for elem in elements {
                 match elem {
                     ArrayElement::Expr(e) => {
                         let v = lower_expr(ctx, e)?;
+                        let arr = super::temp_root::temp_root_get_i64(ctx, &root);
                         current_arr = ctx.block().call(
                             I64,
                             "js_array_push_f64",
-                            &[(I64, &current_arr), (DOUBLE, &v)],
+                            &[(I64, &arr), (DOUBLE, &v)],
                         );
                     }
                     ArrayElement::Hole => {
-                        current_arr =
-                            ctx.block()
-                                .call(I64, "js_array_push_hole", &[(I64, &current_arr)]);
+                        let arr = super::temp_root::temp_root_get_i64(ctx, &root);
+                        current_arr = ctx.block().call(I64, "js_array_push_hole", &[(I64, &arr)]);
                     }
                     ArrayElement::Spread(e) => {
                         let src_box = lower_expr(ctx, e)?;
+                        let arr = super::temp_root::temp_root_get_i64(ctx, &root);
                         current_arr = ctx.block().call(
                             I64,
                             "js_array_spread_append",
-                            &[(I64, &current_arr), (DOUBLE, &src_box)],
+                            &[(I64, &arr), (DOUBLE, &src_box)],
                         );
                     }
                 }
+                // The append may have grown the array (a new address) and may
+                // have run a collection that moved it again. The returned
+                // pointer is the live one; republish it before the next
+                // element's lowering can collect.
+                super::temp_root::temp_root_set_i64(ctx, &root, &current_arr);
             }
-            Ok(nanbox_pointer_inline(ctx.block(), &current_arr))
+            let current_arr = super::temp_root::temp_root_get_i64(ctx, &root);
+            let boxed = nanbox_pointer_inline(ctx.block(), &current_arr);
+            super::temp_root::temp_root_truncate(ctx, &root);
+            Ok(boxed)
         }
 
         // `arr[i]` index access. INLINE FAST PATH for typed-Number arrays:
