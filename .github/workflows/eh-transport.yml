@@ -57,7 +57,7 @@ jobs:
           fi
           files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
             --paginate --jq '.[].filename')
-          if echo "$files" | grep -qE '^(crates/perry-runtime/src/(eh|eh_walker|eh_windows|exception)\.rs$|crates/perry-codegen/src/stmt/|test-files/test_gap_7302_|\.cargo/config\.toml$|Cargo\.toml$|\.github/workflows/eh-transport\.yml$)'; then
+          if echo "$files" | grep -qE '^(crates/perry-runtime/src/(eh|eh_walker|eh_windows|exception)\.rs$|crates/perry-codegen/src/stmt/|test-files/test_(gap|issue)_7302_|\.cargo/config\.toml$|Cargo\.toml$|\.github/workflows/eh-transport\.yml$)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -139,6 +139,36 @@ jobs:
             PERRY_EH_WALKER=off "/tmp/$NAME" > "/tmp/$NAME.off"
             diff "/tmp/$NAME.node" "/tmp/$NAME.off"
           done
+
+      - name: Throws on perry/thread workers
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          # Each worker walks ITS OWN stack while the row cache and image
+          # index are process-global behind a mutex. node cannot run
+          # perry/thread, so the oracle here is the system unwinder itself:
+          # walker-on must equal walker-off, and diff mode must agree on
+          # every worker throw.
+          SRC=test-files/test_issue_7302_thread_throws.ts
+          target/perry-dev/perry "$SRC" -o /tmp/eh_threads
+          /tmp/eh_threads > /tmp/eh_threads.on
+          PERRY_EH_WALKER=off /tmp/eh_threads > /tmp/eh_threads.off
+          diff /tmp/eh_threads.on /tmp/eh_threads.off
+
+          stats=$(PERRY_EH_WALKER=stats /tmp/eh_threads 2>&1 >/dev/null | grep "eh-walker: fast=")
+          echo "threads: $stats"
+          fast=$(echo "$stats" | sed -E 's/.*fast=([0-9]+).*/\1/')
+          fb=$(echo "$stats" | sed -E 's/.*fallback=([0-9]+).*/\1/')
+          [ "$fast" -gt 0 ] || { echo "walker never took the fast path on workers"; exit 1; }
+          [ "$fb" -eq 0 ] || { echo "walker fell back $fb time(s) on workers"; exit 1; }
+
+          diffout=$(PERRY_EH_WALKER=diff /tmp/eh_threads 2>&1 >/dev/null | grep "eh-walker diff:")
+          echo "threads: $diffout"
+          dec=$(echo "$diffout" | sed -E 's/.*declined=([0-9]+).*/\1/')
+          ver=$(echo "$diffout" | sed -E 's/.*verified=([0-9]+).*/\1/')
+          [ "$ver" -gt 0 ] || { echo "diff mode verified nothing on workers"; exit 1; }
+          [ "$dec" -eq 0 ] || { echo "walk declined $dec worker throw(s)"; exit 1; }
 
       - name: Cross-helper throws + unwind-table self-check
         run: |
