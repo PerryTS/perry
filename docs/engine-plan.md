@@ -125,6 +125,25 @@ be the cause.
 The matrix therefore runs on `macos-14`, and `statepoints-refuse-x86` pins the
 refusal *as a refusal* and goes red the day x86-64 starts working.
 
+**The blocker behind it is now measured (#7333).** Even once the map parses, the
+walker cannot run: x86-64 roots are all `Indirect [RSP + off]` (DWARF 7), and
+`_Unwind_GetGR(ctx, 7)` **segfaults** — not "returns something unreliable", which
+is what this was previously assumed to be. On x86-64 Linux (glibc 2.39, gcc
+13.3.0), RBX/RBP/RIP return correctly while RAX and RSP both SIGSEGV: libgcc
+tracks only the columns CFI restores, and RSP is derived from the CFA rather than
+tracked. So reg 7 is the one lookup guaranteed to fault, and it is the only one
+x86-64 roots use.
+
+The recoverable bases do exist — `_Unwind_GetCFA` works, RBP works, and every
+generated function already carries `"frame-pointer"="non-leaf"` under native
+roots. What is missing is the per-function delta to the body RSP the map's
+offsets are relative to. The cheapest place to close it is the compact-map
+rewriter (#7314), which already parses the emitted **assembly**, where the
+prologue is visible — the same technique #7329 just corrected for the aarch64
+fast walker, whose missing trailing `sub sp, sp, #imm` is the exact analogue of
+x86-64's `sub rsp, N`. Doing it there keeps a second architecture-specific
+prologue decoder out of the runtime.
+
 A second latent defect, now fixed: the workflow set
 `RUSTFLAGS="-Cforce-frame-pointers=yes"`, which **replaces** `.cargo/config.toml`'s
 `[build] rustflags` wholesale and so dropped `-C force-unwind-tables=yes`. A/B'd
@@ -132,6 +151,69 @@ on one tree: without it `09_try_catch_roots` aborts outright and the platform
 unwinder visits **zero** frames — so on any host where the x29 chain walk is
 unavailable the native-root walker finds no roots, and forced evacuation stays
 quiet because it enumerates through that same walker.
+
+### ★ Update, later on 2026-08-03 — the two structural blockers are gone
+
+Both were structural rather than numeric, and both are now closed. What remains
+blocking adoption is scope (x86-64) and process (a required check), not design.
+
+**1. There was no working statepoint path for `try` on a default toolchain
+(#7339).** The explicit bridge cannot root an `invoke`, and since #7305 every
+call inside a `try` *is* an invoke — so the bridge refuses those functions
+outright (#7330). RS4GC handles them, but it ran as an external `opt` subprocess
+whose output an older `clang` could not parse (`error: unterminated attribute
+group`), making it reachable only on a hand-pinned LLVM 22. **128 of 479 gap
+tests (26%) contain `try {}`**, so a quarter of the suite had no statepoint path
+at all. Routing RS4GC through layer 0's in-process pipeline removes the external
+boundary entirely: all nine probes now compile with no `PERRY_LLVM_*` pinning,
+byte-identical to the shadow-stack control, copying 5,946–90,271 objects, with
+`backend rs4gc` on every function record.
+
+**2. "Delete the shadow stack, keep statepoints" was not expressible (#7340).**
+The root-set *analysis* and its *lowering* were one knob, so
+`PERRY_SHADOW_STACK=0 + PERRY_STATEPOINTS=1` disabled the analysis and left the
+statepoint lowering with nothing to lower — a rootless binary that ran correctly
+until a collection freed something live. #7332 made the pair a hard error; #7340
+splits the predicate so the pair is *selectable*, with the knob proven inert
+under statepoints (identical root map, identical `__text`).
+
+That second one matters more than its diff suggests. **A mode nobody can select
+is a mode nobody can measure**, and the reason the adoption question kept
+stalling is that its central configuration could not be run.
+
+**What this changes about the decision below:** the earlier soak's verdict —
+13 gap regressions, "do not flip" — was measured against the *bridge*, before
+#7329/#7330, and against a backend that structurally cannot compile a quarter of
+the suite. **It should not be carried forward.**
+
+Re-measured 2026-08-03 against RS4GC in-process, full gap suite, two arms per
+test (shadow-stack control + RS4GC), 479/479:
+
+```
+pass -> pass              447
+diff -> diff               19   pre-existing, unchanged by the backend
+node_fail -> node_fail     13   oracle cannot run the test
+────────────────────────────
+NEW REGRESSIONS             0
+RS4GC refusals              0
+RS4GC compile failures      0
+```
+
+Zero refusals is the load-bearing number, not zero regressions: **128 of the 479
+tests contain `try {}`**, and the bridge cannot compile any of them. RS4GC
+compiled every test in the suite.
+
+**⇒ On aarch64, RS4GC-in-process is now a viable default.** Two things still gate
+flipping it globally, and neither is correctness:
+
+1. **`llvm-inprocess` is a non-default cargo feature.** RS4GC-as-default requires
+   layer 0's feature becoming default first (#7301's scope, not this work's).
+2. **x86-64 remains blocked on #7333** — see the measured `_Unwind_GetGR(ctx, 7)`
+   segfault above. A default that only works on one architecture is not a
+   default.
+
+So the honest state is: *aarch64-viable, globally blocked on two pieces of scope
+that are both already identified.*
 
 ### The adoption decision itself
 

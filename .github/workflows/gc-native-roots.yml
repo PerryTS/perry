@@ -35,10 +35,22 @@
 #
 # The defect is one layer down, at collection time. `chain_walkable` admits only
 # aarch64's DWARF 29/31, so on x86-64 every frame falls back to the platform
-# unwinder, which resolves the base with `_Unwind_GetGR(ctx, 7)` — and that does
-# not reliably return the stack pointer (`_Unwind_GetCFA` is the supported way).
-# Wild addresses, then a segfault when the collector writes through them. The
-# compiler now refuses that target outright (#7324) rather than emitting a
+# unwinder, which resolves the base with `_Unwind_GetGR(ctx, 7)`.
+#
+# MEASURED 2026-08-03 (#7333), and it is worse than the "unreliable value" this
+# comment used to claim: that call SEGFAULTS. Probed on x86-64 Linux (glibc 2.39,
+# gcc 13.3.0), one register per run from an `_Unwind_Backtrace` callback — RBX
+# (3), RBP (6) and RIP (16) return correctly; RAX (0) and RSP (7) both SIGSEGV.
+# The split is callee-saved versus not: libgcc tracks only the columns CFI
+# restores, and RSP is not one of them (it is *derived* from the CFA), so reg 7
+# is the single lookup guaranteed to fault — and it is the only register x86-64
+# roots use.
+#
+# So the fault is IN the `_Unwind_GetGR` call, not in a later write through a
+# wild address, and no address validation after it can help. The wording here
+# before was a guess, and it pointed at the wrong fix.
+#
+# The compiler now refuses that target outright (#7324) rather than emitting a
 # binary that crashes under collection, so an x86-64 run of this matrix would
 # test nothing but the refusal — which is what `statepoints-refuse-x86` is for.
 #
