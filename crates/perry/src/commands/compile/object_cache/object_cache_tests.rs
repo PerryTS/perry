@@ -603,7 +603,6 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_ENTRY_SYMBOL",
         "PERRY_CODEGEN_UNITS",
         "PERRY_CODEGEN_UNIT_SIZE",
-        "PERRY_SETJMP_VOLATILE",
         "PERRY_GC_MOVING_LOOP_POLLS",
         // Inline-hot-small (#6850 follow-up).
         "PERRY_INLINE_HOT_SMALL",

@@ -907,10 +907,6 @@ fn compute_object_cache_key_with_env(
         env_var("PERRY_CODEGEN_UNIT_SIZE").as_deref().unwrap_or(""),
     );
     h.field(
-        "env_setjmp_volatile",
-        env_var("PERRY_SETJMP_VOLATILE").as_deref().unwrap_or(""),
-    );
-    h.field(
         "env_gc_moving_loop_polls",
         env_var("PERRY_GC_MOVING_LOOP_POLLS")
             .as_deref()

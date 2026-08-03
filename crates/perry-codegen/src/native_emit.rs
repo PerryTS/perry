@@ -25,8 +25,10 @@
 //! per-line stream including entry-alloca hoists, boundary splices and
 //! return-site rewrites, shared with `to_ir` so those transforms have
 //! exactly one implementation. No per-function text is materialized on this
-//! path; the exception is `has_try` functions, whose setjmp volatile pass
-//! needs whole-function analysis and therefore still renders text. What
+//! path. (Until #7302 `has_try` functions were an exception, because the
+//! setjmp volatile pass needed whole-function analysis and forced a text
+//! render; invoke/landingpad deleted that pass, so no such exception
+//! remains.) What
 //! stops existing everywhere is the module-scale concatenation and the
 //! full-grammar LLVM parse. The follow-up (typed `LlInst` variants) removes
 //! the remaining per-LINE formatting; the `instructions=` counter logged per
