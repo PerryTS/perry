@@ -483,6 +483,14 @@ fn maybe_rs4gc_preprocess(ll_text: &str) -> Result<Option<String>> {
     if !crate::codegen::helpers::rs4gc_enabled() {
         return Ok(None);
     }
+    // The in-process backend runs RS4GC itself, against the same LLVM that
+    // emits the object (see `inprocess::optimize_and_emit`). Shelling out to a
+    // separate `opt` here as well would both duplicate the rewrite and
+    // reintroduce the version skew the in-process path exists to remove.
+    #[cfg(feature = "llvm-inprocess")]
+    if inprocess_requested() {
+        return Ok(None);
+    }
     let opt = std::env::var("PERRY_LLVM_OPT")
         .map(PathBuf::from)
         .ok()
@@ -648,6 +656,46 @@ fn compile_ll_inprocess_in(
         &plan.clang_args,
         &module_name,
     ) {
+        // The statepoint backends ask for `-S`, because #7314's compact-map
+        // rewriter rewrites `.llvm_stackmaps` at ASSEMBLY time — that is where
+        // LLVM prints function addresses as symbol names, so one text parser
+        // replaces Mach-O and ELF relocation parsing plus a second link pass.
+        //
+        // So what came back is assembly, not an object. Write it where the
+        // clang path would have, run the same rewrite-and-assemble step, and
+        // return the resulting object. Skipping this wrote assembly text into a
+        // `.o` and the link died with `ld: unknown file type`.
+        Ok(bytes) if plan.asm_path.is_some() => {
+            let asm_path = plan.asm_path.as_ref().expect("checked");
+            if let Some(parent) = asm_path.parent() {
+                fs::create_dir_all(parent).ok();
+            }
+            fs::write(asm_path, &bytes)
+                .with_context(|| format!("Failed to write {}", asm_path.display()))?;
+            // `plan.clang` is the literal `(in-process)` placeholder here, so
+            // resolve a real assembler. Using the system clang for this step is
+            // sound: the version skew that motivated the in-process backend was
+            // an *IR* parse failure (`unterminated attribute group`), and by
+            // this point the IR is gone — what is being assembled is text this
+            // LLVM just printed, which any contemporary assembler accepts.
+            let assembler = find_clang().context(
+                "the statepoint compact-map rewrite needs an assembler to turn \
+                 the emitted assembly into an object, and no clang was found",
+            )?;
+            crate::gc_map::compact_and_assemble(
+                &assembler,
+                &plan.effective_target,
+                asm_path,
+                &plan.obj_path,
+            )?;
+            let obj = fs::read(&plan.obj_path)
+                .with_context(|| format!("Failed to read assembled {}", plan.obj_path.display()))?;
+            if !policy.keep {
+                let _ = fs::remove_file(asm_path);
+                let _ = fs::remove_file(&plan.obj_path);
+            }
+            Ok(obj)
+        }
         Ok(bytes) => Ok(bytes),
         Err(e) => {
             // Same contract as a failed clang compile: the IR that produced

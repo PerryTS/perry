@@ -81,7 +81,7 @@ pub fn compile_ll_to_object_inprocess(
     clang_style_args: &[String],
     module_name: &str,
 ) -> Result<Vec<u8>> {
-    let (opt, mcpu_native, explicit_cpu, mllvm) = interpret_plan_args(clang_style_args)?;
+    let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     let context = Context::create();
     let module = parse_ir_text(&context, ll_text, module_name)?;
     optimize_and_emit(
@@ -91,6 +91,7 @@ pub fn compile_ll_to_object_inprocess(
         mcpu_native,
         explicit_cpu.as_deref(),
         &mllvm,
+        emit_asm,
     )
 }
 
@@ -100,8 +101,14 @@ pub fn compile_ll_to_object_inprocess(
 #[allow(clippy::type_complexity)]
 fn interpret_plan_args(
     clang_style_args: &[String],
-) -> Result<(char, bool, Option<String>, Vec<String>)> {
+) -> Result<(char, bool, Option<String>, Vec<String>, bool)> {
     let mut opt = '0';
+    // `-S` asks for assembly rather than an object. The statepoint backends
+    // need it: #7314's compact-map rewriter rewrites `.llvm_stackmaps` at
+    // ASSEMBLY time, where LLVM prints function addresses as symbol names, so
+    // one text parser replaces Mach-O and ELF relocation parsing plus a second
+    // link pass. Emitting an object here would skip that rewrite entirely.
+    let mut emit_asm = false;
     let mut mcpu_native = false;
     let mut explicit_cpu: Option<String> = None;
     let mut mllvm: Vec<String> = Vec::new();
@@ -111,6 +118,7 @@ fn interpret_plan_args(
             // `-g` is a measured no-op on Perry IR (no DI metadata; see the
             // TEMP_NONCE_COUNTER doc block in linker.rs), matching clang.
             "-c" | "-fno-math-errno" | "-g" => {}
+            "-S" => emit_asm = true,
             "-o" | "-target" => {
                 it.next();
             }
@@ -132,7 +140,7 @@ fn interpret_plan_args(
             }
         }
     }
-    Ok((opt, mcpu_native, explicit_cpu, mllvm))
+    Ok((opt, mcpu_native, explicit_cpu, mllvm, emit_asm))
 }
 
 /// Parse IR text into a module in `context`. Shared by the transport path
@@ -162,7 +170,7 @@ pub(crate) fn optimize_and_emit_module(
     effective_target: &str,
     clang_style_args: &[String],
 ) -> Result<Vec<u8>> {
-    let (opt, mcpu_native, explicit_cpu, mllvm) = interpret_plan_args(clang_style_args)?;
+    let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     optimize_and_emit(
         module,
         effective_target,
@@ -170,6 +178,7 @@ pub(crate) fn optimize_and_emit_module(
         mcpu_native,
         explicit_cpu.as_deref(),
         &mllvm,
+        emit_asm,
     )
 }
 
@@ -180,6 +189,7 @@ fn optimize_and_emit(
     mcpu_native: bool,
     explicit_cpu: Option<&str>,
     mllvm: &[String],
+    emit_asm: bool,
 ) -> Result<Vec<u8>> {
     global_init(mllvm);
     announce();
@@ -228,6 +238,37 @@ fn optimize_and_emit(
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
 
+    // RS4GC must run BEFORE the optimization pipeline, and — critically — in
+    // this process, against this LLVM.
+    //
+    // The external path shells `rewrite-statepoints-for-gc` out to an `opt`
+    // binary and then hands the rewritten IR to `clang -c`. When those are
+    // different LLVM versions (Homebrew 22 and Apple clang 21 is the ordinary
+    // macOS case) the emitted IR uses constructs the older parser rejects, and
+    // the compile dies with `error: unterminated attribute group`. That is why
+    // RS4GC needed `PERRY_LLVM_CLANG` pointed at a version-matched toolchain,
+    // and why it did not work on a stock install at all.
+    //
+    // Here the same `TargetMachine` runs the pass and emits the object, so the
+    // skew cannot exist. This matters beyond convenience: RS4GC is the only
+    // backend that can root an `invoke`, and since #7302 every call inside a
+    // `try` is one — 26% of the gap suite (128 of 479 files) contains a `try`,
+    // which the explicit bridge refuses outright (#7327/#7330).
+    if crate::codegen::helpers::rs4gc_enabled() {
+        module
+            .run_passes(
+                "function(mem2reg),rewrite-statepoints-for-gc",
+                &tm,
+                PassBuilderOptions::create(),
+            )
+            .map_err(|e| {
+                anyhow!(
+                    "in-process rewrite-statepoints-for-gc failed:\n{}",
+                    e.to_string()
+                )
+            })?;
+    }
+
     let pipeline = match opt {
         '0' => "default<O0>",
         '1' => "default<O1>",
@@ -240,9 +281,14 @@ fn optimize_and_emit(
         .run_passes(pipeline, &tm, PassBuilderOptions::create())
         .map_err(|e| anyhow!("pass pipeline `{pipeline}` failed:\n{}", e.to_string()))?;
 
+    let kind = if emit_asm {
+        FileType::Assembly
+    } else {
+        FileType::Object
+    };
     let obj = tm
-        .write_to_memory_buffer(&module, FileType::Object)
-        .map_err(|e| anyhow!("object emission failed:\n{}", e.to_string()))?;
+        .write_to_memory_buffer(&module, kind)
+        .map_err(|e| anyhow!("{kind:?} emission failed:\n{}", e.to_string()))?;
     Ok(obj.as_slice().to_vec())
 }
 
