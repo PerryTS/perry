@@ -385,7 +385,9 @@ jobs:
 
   native-roots-rs4gc-aarch64:
     runs-on: macos-14
-    timeout-minutes: 90
+    # 120, not 90: the in-process step below builds a second time with the
+    # llvm-inprocess feature, which cargo cannot share with the build above.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -462,6 +464,61 @@ jobs:
             benchmarks/gc_ratchet/probes/09_try_catch_roots.ts \
             -o /tmp/rs4gc-report-probe --statepoint-report=json 2> /tmp/rs4gc-report.json
           python3 scripts/statepoint_report_assert.py /tmp/rs4gc-report.json \
+            --only-backend rs4gc
+
+      # #7327. Everything above pins PERRY_LLVM_OPT + PERRY_LLVM_CLANG to one
+      # brew install, because RS4GC piped IR through an external `opt` and a
+      # newer `opt` emits attributes an older `clang` cannot parse. That made
+      # RS4GC reachable only on a hand-pinned toolchain -- and RS4GC is the only
+      # backend that can root an `invoke`, i.e. every call inside a `try`.
+      #
+      # The in-process backend runs the pass at the pinned LLVM with no IR
+      # crossing a toolchain boundary, so the pinning is no longer needed. This
+      # step asserts exactly that, and it is the one arm that must run with the
+      # PERRY_LLVM_* variables UNSET -- otherwise it proves nothing the steps
+      # above have not already proven.
+      - name: RS4GC works on a stock toolchain via the in-process backend
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          unset PERRY_LLVM_OPT PERRY_LLVM_CLANG
+          export LLVM_SYS_221_PREFIX="$(brew --prefix llvm)"
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo build --profile perry-dev -p perry -p perry-runtime-static \
+            -p perry-stdlib-static --features perry-codegen/llvm-inprocess
+
+          # Probe 09 is the whole point: it carries `try`, so every call in it
+          # is an `invoke`, which the explicit bridge refuses outright (#7330).
+          probe=benchmarks/gc_ratchet/probes/09_try_catch_roots.ts
+          PERRY_RS4GC=1 PERRY_LLVM_INPROCESS=1 \
+            ./target/perry-dev/perry "$probe" -o /tmp/inproc-09
+
+          otool -l /tmp/inproc-09 | grep -q "sectname __perry_gcmap" \
+            || { echo "::error::no __perry_gcmap — the in-process route produced no native root map"; exit 1; }
+          otool -l /tmp/inproc-09 | grep -q "sectname __llvm_stackmaps" \
+            && { echo "::error::__llvm_stackmaps survived — the compact rewrite did not run on the in-process path"; exit 1; }
+
+          # Same answer as the shadow stack, and a collection that actually
+          # moved something. Without the movement assert this passes with the
+          # conservative scan doing all the rooting (#7336, #7338).
+          ./target/perry-dev/perry "$probe" -o /tmp/inproc-09-control
+          PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+            /tmp/inproc-09-control > /tmp/inproc-09.control.out 2>/dev/null
+          PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+          PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+            /tmp/inproc-09 > /tmp/inproc-09.out 2> /tmp/inproc-09.err
+          diff /tmp/inproc-09.control.out /tmp/inproc-09.out \
+            || { echo "::error::in-process RS4GC diverged from the shadow-stack control"; exit 1; }
+          python3 scripts/gc_evacuation_liveness_assert.py /tmp/inproc-09.err
+
+          # And it must be RS4GC doing the lowering, not a per-function bail to
+          # the bridge -- which would make this arm green while testing the
+          # backend it is not named after.
+          PERRY_RS4GC=1 PERRY_LLVM_INPROCESS=1 ./target/perry-dev/perry "$probe" \
+            -o /tmp/inproc-09-report --statepoint-report=json 2> /tmp/inproc-09-report.json
+          python3 scripts/statepoint_report_assert.py /tmp/inproc-09-report.json \
             --only-backend rs4gc
 
   # The x86-64 gap, asserted rather than left as folklore. Statepoints do not
