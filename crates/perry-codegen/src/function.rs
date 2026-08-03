@@ -757,6 +757,13 @@ impl LlFunction {
             }
         }
 
+        // Invoke-EH (#7302): inline invoke splits move a block's true CFG
+        // tail behind `eh.contN:` labels; phi incoming-edge labels captured
+        // at emit time must follow. Runs last so it sees the spliced text.
+        if self.needs_personality && ir.contains("eh.cont") {
+            return crate::eh_mode::rewrite_phi_predecessors(&ir);
+        }
+
         ir
     }
 }
