@@ -100,8 +100,19 @@ fn visit_expr(expr: &Expr, module_constants: &HashMap<u32, f64>, scan: &mut Scan
             scan.poisoned.insert(*fid);
             return;
         }
-        Expr::Closure { func_id, .. } => {
+        Expr::Closure {
+            func_id,
+            params,
+            body,
+            ..
+        } => {
             scan.poisoned.insert(*func_id);
+            // `hir.functions` also carries nested closures, so this body is
+            // normally walked twice — but do not depend on that flattening
+            // invariant for a soundness property. A write to a captured
+            // parameter through a closure has to reach `scan.writes`.
+            visit_params(params, module_constants, scan);
+            visit_stmts(body, module_constants, scan);
         }
         Expr::LocalSet(id, _) | Expr::GlobalSet(id, _) | Expr::Update { id, .. } => {
             scan.writes.insert(*id);
