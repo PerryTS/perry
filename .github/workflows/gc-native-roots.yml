@@ -373,6 +373,47 @@ jobs:
   # REFUSAL (never a silently rootless binary), and goes red the day x86-64
   # starts working, which is the prompt to widen the aarch64 matrix above (#7321).
   # Deliberately cheap: one probe, no runtime, no oracle.
+  # TEMPORARY (#7321 investigation): dump the stack-map block the x86-64
+  # rewriter refuses, so the cause is read off a log instead of guessed. Removed
+  # once the fix lands.
+  x86-diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gc-native-roots-x86
+      - name: Build compiler and static runtime (perry-dev profile)
+        run: |
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+      - name: Toolchain
+        run: |
+          which clang || true
+          clang --version || true
+          ls /usr/lib/ | grep -i llvm || true
+      - name: Compile and dump the block
+        run: |
+          set -uo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          probe=benchmarks/gc_ratchet/probes/01_nursery_churn.ts
+          set +e
+          PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" -o /tmp/x86-probe 2>&1 | tee /tmp/x86.log
+          set -e
+          asm=$(grep -o '/tmp/[^ ]*\.o\.s' /tmp/x86.log | head -1)
+          echo "=== assembly: $asm"
+          [ -n "$asm" ] && [ -f "$asm" ] || { echo "no assembly kept"; exit 0; }
+          start=$(grep -n 'llvm_stackmaps' "$asm" | head -1 | cut -d: -f1)
+          echo "=== stackmaps section starts at line $start of $(wc -l < "$asm")"
+          sed -n "${start},$((start+60))p" "$asm"
+          echo "=== distinct directives inside the block:"
+          tail -n "+${start}" "$asm" | awk '{print $1}' | sort | uniq -c | sort -rn | head -40
+          echo "=== last 30 lines of the file:"
+          tail -30 "$asm"
+
   statepoints-refuse-x86:
     runs-on: ubuntu-latest
     timeout-minutes: 45

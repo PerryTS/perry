@@ -99,14 +99,60 @@ struct FunctionMap {
 }
 
 /// Byte width contributed by each data directive LLVM emits in the block.
+///
+/// Every spelling any LLVM `MCAsmInfo` can choose for a fixed-width integer is
+/// listed, not just the ones the host happens to emit. `Data32bitsDirective`
+/// and friends are per-target strings: Mach-O/AArch64 prints `.long`, ELF
+/// targets can print `.long` or `.4byte`, and `.word` is **2 bytes on x86 GNU
+/// as but 4 on AArch64** — which is precisely the class of difference that
+/// makes a parser written against one host silently desynchronise on another.
+///
+/// `.word` is deliberately absent: its width is target-dependent, so guessing
+/// it is how a map decodes to the wrong offsets rather than to an error. If a
+/// target ever emits it, `unsupported_directive` rejects the module by name and
+/// this table gains a target-aware entry — a refusal, never a wrong root.
 fn directive_width(directive: &str) -> Option<usize> {
     match directive {
-        ".byte" => Some(1),
-        ".short" | ".value" | ".hword" => Some(2),
-        ".long" | ".word" => Some(4),
-        ".quad" | ".xword" => Some(8),
+        ".byte" | ".1byte" | ".dc.b" => Some(1),
+        ".short" | ".2byte" | ".value" | ".hword" | ".dc.w" => Some(2),
+        ".long" | ".4byte" | ".dc.l" => Some(4),
+        ".quad" | ".8byte" | ".xword" | ".dc.a" => Some(8),
         _ => None,
     }
+}
+
+/// Directives that legitimately appear inside the stack-map block and
+/// contribute **zero** bytes to it.
+///
+/// This exists because the alternative — skipping anything unrecognised — is
+/// unsound in a way that cannot be noticed. The block is a byte stream decoded
+/// by structural offset, so one ignored directive that *does* emit bytes shifts
+/// everything after it; the decode then either fails somewhere unrelated or,
+/// worse, succeeds against garbage. Anything not on this list and not in
+/// `directive_width` is a refusal that names the directive.
+fn is_zero_width_directive(directive: &str) -> bool {
+    matches!(
+        directive,
+        ".globl"
+            | ".global"
+            | ".local"
+            | ".weak"
+            | ".hidden"
+            | ".protected"
+            | ".internal"
+            | ".type"
+            | ".size"
+            | ".set"
+            | ".equ"
+            | ".file"
+            | ".ident"
+            | ".loc"
+            | ".no_dead_strip"
+            | ".private_extern"
+            | ".addrsig"
+            | ".addrsig_sym"
+            | ".end"
+    ) || directive.starts_with(".cfi_")
 }
 
 /// The assembled bytes of the stack-map block, plus the byte offsets at which
@@ -118,12 +164,16 @@ struct RawBlock {
     symbols: HashMap<usize, String>,
 }
 
-fn parse_block(lines: &[&str]) -> Option<RawBlock> {
-    let start_line = lines.iter().position(|line| {
+fn find_block_start(lines: &[&str]) -> Option<usize> {
+    lines.iter().position(|line| {
         let t = line.trim_start();
         t.starts_with(".section")
             && (t.contains("__LLVM_STACKMAPS") || t.contains(".llvm_stackmaps"))
-    })?;
+    })
+}
+
+fn parse_block(lines: &[&str]) -> Result<RawBlock, String> {
+    let start_line = find_block_start(lines).ok_or_else(|| "no stack-map section".to_string())?;
 
     let mut bytes: Vec<u8> = Vec::new();
     let mut symbols: HashMap<usize, String> = HashMap::new();
@@ -154,9 +204,11 @@ fn parse_block(lines: &[&str]) -> Option<RawBlock> {
 
         // Alignment is real content: LLVM aligns every record, and skipping
         // the padding desynchronises every offset that follows it.
-        if directive == ".p2align" || directive == ".align" {
+        if directive == ".p2align" || directive == ".align" || directive == ".balign" {
             let first = operand.split(',').next().unwrap_or_default().trim();
-            let value: u32 = first.parse().ok()?;
+            let value: u32 = first.parse().map_err(|_| {
+                format!("line {}: unparseable alignment operand in `{line}`", index + 1)
+            })?;
             let align = if directive == ".p2align" {
                 1usize << value
             } else {
@@ -168,23 +220,47 @@ fn parse_block(lines: &[&str]) -> Option<RawBlock> {
             continue;
         }
 
-        let Some(width) = directive_width(directive) else {
+        // `.zero`/`.space`/`.skip` are pure padding, but they are padding that
+        // OCCUPIES BYTES — the one shape where "skip what we don't model" turns
+        // a decode into silent garbage rather than an error.
+        if directive == ".zero" || directive == ".space" || directive == ".skip" {
+            let first = operand.split(',').next().unwrap_or_default().trim();
+            let count: usize = first.parse().map_err(|_| {
+                format!("line {}: unparseable fill count in `{line}`", index + 1)
+            })?;
+            bytes.resize(bytes.len() + count, 0);
             continue;
-        };
-        match parse_int(operand) {
-            Some(value) => bytes.extend_from_slice(&value.to_le_bytes()[..width]),
-            None => {
-                // A symbolic operand. Two kinds appear: the `.quad` function
-                // address, and — at `-O3` — the `.long` instruction offset as
-                // a label difference. Remember the expression and reserve the
-                // slot so every later structural offset stays correct.
-                symbols.insert(bytes.len(), operand.to_string());
-                bytes.extend_from_slice(&0u64.to_le_bytes()[..width]);
+        }
+
+        if let Some(width) = directive_width(directive) {
+            match parse_int(operand) {
+                Some(value) => bytes.extend_from_slice(&value.to_le_bytes()[..width]),
+                None => {
+                    // A symbolic operand. Two kinds appear: the `.quad`
+                    // function address, and — at `-O3` — the `.long`
+                    // instruction offset as a label difference. Remember the
+                    // expression and reserve the slot so every later
+                    // structural offset stays correct.
+                    symbols.insert(bytes.len(), operand.to_string());
+                    bytes.extend_from_slice(&0u64.to_le_bytes()[..width]);
+                }
             }
+            continue;
+        }
+
+        if !is_zero_width_directive(directive) {
+            return Err(format!(
+                "line {}: unrecognised directive `{directive}` inside the stack-map block \
+                 (`{line}`). Its byte width is unknown, and guessing it would shift every \
+                 offset after it — decoding a root list from the wrong bytes rather than \
+                 failing. Add it to `directive_width` (with its width) or to \
+                 `is_zero_width_directive`.",
+                index + 1
+            ));
         }
     }
 
-    Some(RawBlock {
+    Ok(RawBlock {
         start_line,
         end_line,
         bytes,
@@ -227,10 +303,18 @@ fn align_up(value: usize, alignment: usize) -> usize {
 /// The section is a *sequence* of maps, one per object the linker saw — a
 /// decoder that reads only the first header silently drops the rest, so this
 /// walks until the bytes are consumed.
-fn decode_v3(block: &RawBlock) -> Option<Vec<FunctionMap>> {
+fn decode_v3(block: &RawBlock) -> Result<Vec<FunctionMap>, String> {
     let bytes = &block.bytes;
     let mut out: Vec<FunctionMap> = Vec::new();
     let mut pos = 0usize;
+    let mut maps = 0usize;
+
+    let truncated = |what: &str, at: usize| {
+        format!(
+            "{what} runs past the end of the {} byte block (offset {at})",
+            bytes.len()
+        )
+    };
 
     while pos + 16 <= bytes.len() {
         if bytes[pos] != 3 {
@@ -238,44 +322,81 @@ fn decode_v3(block: &RawBlock) -> Option<Vec<FunctionMap>> {
             pos += 1;
             continue;
         }
-        let function_count = read_u32(bytes, pos + 4)? as usize;
-        let constant_count = read_u32(bytes, pos + 8)? as usize;
-        let record_count = read_u32(bytes, pos + 12)? as usize;
+        maps += 1;
+        let function_count =
+            read_u32(bytes, pos + 4).ok_or_else(|| truncated("map header", pos))? as usize;
+        let constant_count =
+            read_u32(bytes, pos + 8).ok_or_else(|| truncated("map header", pos))? as usize;
+        let record_count =
+            read_u32(bytes, pos + 12).ok_or_else(|| truncated("map header", pos))? as usize;
         pos += 16;
 
         let mut heads = Vec::with_capacity(function_count);
         let mut expected = 0usize;
-        for _ in 0..function_count {
-            let symbol = block.symbols.get(&pos)?.clone();
-            let stack_size = read_u64(bytes, pos + 8)?;
-            let records = read_u64(bytes, pos + 16)? as usize;
-            expected = expected.checked_add(records)?;
+        for index in 0..function_count {
+            let symbol = block.symbols.get(&pos).cloned().ok_or_else(|| {
+                format!(
+                    "map {maps} function[{index}]: the 8-byte function address at block offset \
+                     {pos} is a literal ({:#x}), not a symbol reference. The rewriter re-emits \
+                     that address as `.quad <symbol>` and has no way to name a function it was \
+                     given only as a number.",
+                    read_u64(bytes, pos).unwrap_or(0)
+                )
+            })?;
+            let stack_size = read_u64(bytes, pos + 8)
+                .ok_or_else(|| truncated("function record", pos))?;
+            let records =
+                read_u64(bytes, pos + 16).ok_or_else(|| truncated("function record", pos))? as usize;
+            expected = expected
+                .checked_add(records)
+                .ok_or_else(|| "record count overflow".to_string())?;
             heads.push((symbol, stack_size, records));
             pos += 24;
         }
         if expected != record_count {
-            return None;
+            return Err(format!(
+                "map {maps}: the per-function record counts sum to {expected} but the map header \
+                 declares {record_count}. The byte stream and the assembly directives that \
+                 produced it have desynchronised — usually a directive inside the block whose \
+                 width the rewriter models incorrectly."
+            ));
         }
-        pos = pos.checked_add(constant_count.checked_mul(8)?)?;
+        pos = pos
+            .checked_add(
+                constant_count
+                    .checked_mul(8)
+                    .ok_or_else(|| "constant pool overflow".to_string())?,
+            )
+            .ok_or_else(|| "constant pool overflow".to_string())?;
 
         for (symbol, stack_size, count) in heads {
             let mut records = Vec::with_capacity(count);
-            for _ in 0..count {
+            for index in 0..count {
                 let record_start = pos;
                 let instruction_offset = block
                     .symbols
                     .get(&(pos + 8))
                     .cloned()
                     .unwrap_or_else(|| read_u32(bytes, pos + 8).unwrap_or(0).to_string());
-                let location_count = read_u16(bytes, pos + 14)? as usize;
+                let location_count = read_u16(bytes, pos + 14)
+                    .ok_or_else(|| truncated(&format!("{symbol} record {index}"), pos))?
+                    as usize;
                 pos += 16;
 
                 let mut roots: Vec<(u16, i32)> = Vec::new();
-                for _ in 0..location_count {
-                    let kind = *bytes.get(pos)?;
-                    let size = read_u16(bytes, pos + 2)?;
-                    let dwarf_reg = read_u16(bytes, pos + 4)?;
-                    let offset = read_u32(bytes, pos + 8)? as i32;
+                for location in 0..location_count {
+                    let kind = *bytes.get(pos).ok_or_else(|| {
+                        truncated(&format!("{symbol} record {index} location {location}"), pos)
+                    })?;
+                    let size = read_u16(bytes, pos + 2).ok_or_else(|| {
+                        truncated(&format!("{symbol} record {index} location {location}"), pos)
+                    })?;
+                    let dwarf_reg = read_u16(bytes, pos + 4).ok_or_else(|| {
+                        truncated(&format!("{symbol} record {index} location {location}"), pos)
+                    })?;
+                    let offset = read_u32(bytes, pos + 8).ok_or_else(|| {
+                        truncated(&format!("{symbol} record {index} location {location}"), pos)
+                    })? as i32;
                     // Keep exactly what the collector keeps: 8-byte frame
                     // slots, with the base/derived pair collapsed to one.
                     if matches!(kind, LOCATION_DIRECT | LOCATION_INDIRECT) && size == 8 {
@@ -287,13 +408,16 @@ fn decode_v3(block: &RawBlock) -> Option<Vec<FunctionMap>> {
                 }
 
                 pos = align_up(pos - record_start, 8) + record_start;
-                let live_out_count = read_u16(bytes, pos + 2)? as usize;
+                let live_out_count = read_u16(bytes, pos + 2)
+                    .ok_or_else(|| truncated(&format!("{symbol} record {index} live-outs"), pos))?
+                    as usize;
                 pos = pos
-                    .checked_add(4)?
-                    .checked_add(live_out_count.checked_mul(4)?)?;
+                    .checked_add(4)
+                    .and_then(|p| p.checked_add(live_out_count.checked_mul(4)?))
+                    .ok_or_else(|| truncated(&format!("{symbol} record {index} live-outs"), pos))?;
                 pos = align_up(pos - record_start, 8) + record_start;
                 if pos > bytes.len() {
-                    return None;
+                    return Err(truncated(&format!("{symbol} record {index}"), pos));
                 }
 
                 roots.sort_unstable_by_key(|(_, offset)| *offset);
@@ -311,10 +435,12 @@ fn decode_v3(block: &RawBlock) -> Option<Vec<FunctionMap>> {
     }
 
     if out.is_empty() {
-        None
-    } else {
-        Some(out)
+        return Err(format!(
+            "walked {} bytes and found {maps} map header(s) but no function records",
+            bytes.len()
+        ));
     }
+    Ok(out)
 }
 
 fn push_varint(out: &mut Vec<u8>, mut value: u64) {
@@ -462,8 +588,11 @@ struct GcMapStats {
 /// that fails to parse is a hard error in `compact_and_assemble`. Keeping
 /// LLVM's section in that case would look conservative and would in fact lose
 /// the module's roots, because the runtime reads only the compact section.
-fn compact_stack_map_asm(asm: &str, elf: bool) -> Option<(String, GcMapStats)> {
+fn compact_stack_map_asm(asm: &str, elf: bool) -> Result<Option<(String, GcMapStats)>, String> {
     let lines: Vec<&str> = asm.lines().collect();
+    if find_block_start(&lines).is_none() {
+        return Ok(None);
+    }
     let block = parse_block(&lines)?;
     let functions = decode_v3(&block)?;
     let stream = encode_stream(&functions);
@@ -505,7 +634,7 @@ fn compact_stack_map_asm(asm: &str, elf: bool) -> Option<(String, GcMapStats)> {
         out.push_str(line);
         out.push('\n');
     }
-    Some((out, stats))
+    Ok(Some((out, stats)))
 }
 
 /// Rewrite the stack map in `asm_path` into Perry's compact form, then
@@ -550,22 +679,19 @@ pub fn compact_and_assemble(
         ));
     }
 
-    let has_block = asm.lines().any(|l| {
-        let t = l.trim_start();
-        t.starts_with(".section")
-            && (t.contains("__LLVM_STACKMAPS") || t.contains(".llvm_stackmaps"))
-    });
-    let compacted = compact_stack_map_asm(&asm, elf);
-    if has_block && compacted.is_none() {
-        return Err(anyhow!(
+    let compacted = compact_stack_map_asm(&asm, elf).map_err(|reason| {
+        anyhow!(
             "perry: this module emits an LLVM stack map that the compact-map \
              rewriter could not parse, so its GC roots would be invisible to \
              the collector (the runtime reads only the compact section). \
-             Refusing to emit a binary that would lose roots silently. \
-             Assembly left at: {}",
+             Refusing to emit a binary that would lose roots silently.\n\
+             \n\
+             reason: {reason}\n\
+             target: {target}\n\
+             assembly left at: {}",
             asm_path.display()
-        ));
-    }
+        )
+    })?;
     if let Some((rewritten, stats)) = compacted {
         fs::write(asm_path, rewritten).with_context(|| {
             format!(
@@ -652,7 +778,9 @@ mod tests {
 
     #[test]
     fn compacts_and_keeps_only_real_roots() {
-        let (out, stats) = compact_stack_map_asm(&sample_asm(), false).expect("block rewritten");
+        let (out, stats) = compact_stack_map_asm(&sample_asm(), false)
+            .expect("block parses")
+            .expect("block rewritten");
         assert_eq!(stats.functions, 1);
         assert_eq!(stats.records, 1);
         // Four locations in, one root out: three constants dropped.
@@ -717,22 +845,32 @@ mod tests {
             "\t.byte\t3\n\t.byte\t0\n\t.short\t8\n\t.short\t29\n",
             "\t.byte\t3\n\t.byte\t0\n\t.short\t8\n\t.short\t19\n",
         );
-        let (out, stats) =
-            compact_stack_map_asm(&asm, true).expect("a foreign base must still encode");
+        let (out, stats) = compact_stack_map_asm(&asm, true)
+            .expect("block parses")
+            .expect("a foreign base must still encode");
         assert_eq!(stats.roots, 1);
         assert!(out.contains("_perry_gc_map:"));
     }
 
     #[test]
     fn no_stack_map_block_is_left_alone() {
-        assert!(compact_stack_map_asm("\t.section\t__TEXT,__text\n\tret\n", false).is_none());
+        // No block at all is `Ok(None)` — nothing to compact, not a failure.
+        assert!(compact_stack_map_asm("\t.section\t__TEXT,__text\n\tret\n", false)
+            .expect("no block is not an error")
+            .is_none());
     }
 
     #[test]
-    fn unparsable_block_keeps_llvm_section() {
-        // Truncated header: better to ship LLVM's section than a map that may
-        // be missing roots.
+    fn unparsable_block_is_an_error_not_a_silent_skip() {
+        // Truncated header. This must be `Err`, never `Ok(None)`: the caller
+        // turns `Err` into a refusal and `Ok(None)` into "assemble unchanged",
+        // and assembling unchanged here ships a binary whose roots the
+        // collector cannot see.
         let asm = "\t.section\t__LLVM_STACKMAPS,__llvm_stackmaps\n\t.byte\t3\n";
-        assert!(compact_stack_map_asm(asm, false).is_none());
+        let error = compact_stack_map_asm(asm, false).expect_err("truncated block must error");
+        assert!(
+            error.contains("no function records") || error.contains("past the end"),
+            "unhelpful reason: {error}"
+        );
     }
 }
