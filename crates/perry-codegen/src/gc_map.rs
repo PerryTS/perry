@@ -62,13 +62,18 @@ const GC_MAP_VERSION: u8 = 3;
 /// Section the compact map is emitted into, and the label it is given.
 const GC_MAP_LABEL: &str = "_perry_gc_map";
 const MACHO_SECTION: &str = "__PERRY_GCMAP,__perry_gcmap";
+/// `w` because the section holds **relocated function addresses**: without
+/// SHF_WRITE the linker reports `relocation against \`main\` in read-only
+/// section \`.perry_gcmap\`` and creates a DT_TEXTREL in a PIE, which is both
+/// a hardening regression and a portability hazard.
+///
 /// `R` is SHF_GNU_RETAIN, the ELF analogue of Mach-O's `.no_dead_strip`.
 /// Perry links with `-Wl,--gc-sections`, and nothing in the program
 /// references this section — the collector finds it by name at runtime — so
 /// without RETAIN the linker discards it and the binary ships with no GC map
 /// at all. Measured: the section is present in the object (PROGBITS, SHF_ALLOC,
 /// with relocations) and absent from the linked binary.
-const ELF_SECTION: &str = ".perry_gcmap,\"aR\",@progbits";
+const ELF_SECTION: &str = ".perry_gcmap,\"awR\",@progbits";
 
 /// LLVM stack-map v3 location kinds. Only these two describe a frame slot;
 /// `Constant`/`ConstIndex` carry the statepoint preamble and `Register` cannot
@@ -834,6 +839,24 @@ pub fn compact_and_assemble(
     // the collector finds no native roots at all — the exact outcome the hard
     // error below exists to prevent, reached with no diagnostic. The mode is
     // opt-in, so refusing loudly costs nothing.
+    // The runtime can only resolve aarch64 frame bases. Measured on x86-64:
+    // every root is `Indirect [RSP + off]` (DWARF register 7), so
+    // `chain_walkable` is false — it admits only aarch64's FP/SP, 29 and 31 —
+    // and every frame falls back to `_Unwind_GetGR(ctx, 7)`. That call does not
+    // reliably return the stack pointer (`_Unwind_GetCFA` is the supported way
+    // to obtain it), so the walker computes wild addresses and the collector
+    // segfaults writing through them. Observed exactly that on the Linux gate.
+    //
+    // The mode is opt-in, so refusing here is free; emitting a binary that
+    // crashes under collection is not.
+    if !target.starts_with("aarch64") && !target.starts_with("arm64") {
+        return Err(anyhow!(
+            "perry: native GC roots (PERRY_STATEPOINTS / PERRY_RS4GC) are \
+             aarch64-only — target `{target}` records roots against frame \
+             bases this runtime cannot resolve, and the collector would \
+             segfault rather than report anything. Tracked for #7173."
+        ));
+    }
     let macho = target.contains("apple") || target.contains("darwin");
     let elf = !macho && !target.contains("windows") && !target.contains("msvc");
     if !macho && !elf {

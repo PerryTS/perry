@@ -1,5 +1,15 @@
 # #7173: native-frame GC root verification.
 #
+# Runs on an ARM64 runner deliberately. The backend is aarch64-only: on x86-64
+# every root is `Indirect [RSP + off]` (DWARF register 7), which the runtime
+# cannot resolve — `_Unwind_GetGR` does not reliably return the stack pointer —
+# so the collector segfaults. The compiler now refuses that combination
+# outright, which would make an x86-64 run of this gate test nothing but the
+# refusal. ARM64 exercises the configuration that is actually supported, and
+# still answers the question this gate exists for: whether the compact map
+# survives ELF linking.
+#
+#
 # Runs the gc-ratchet probe matrix in every native-root mode under forced
 # evacuation + evacuation verification, byte-diffed against the pinned Node
 # oracle. Each arm carries a liveness assert, because CLAUDE.md's fourth way a
