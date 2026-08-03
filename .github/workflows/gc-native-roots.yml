@@ -21,21 +21,29 @@
 # ── Why the matrix runs on macos-14 (aarch64) and not ubuntu-latest ─────────
 #
 # It used to say ubuntu-latest, and it had never once gone green there. The
-# compact-map rewriter refuses the FIRST probe on x86-64 Linux:
+# first explanation written here — that the compact-map rewriter cannot parse an
+# x86-64 stack map, with `gc_map.rs`'s aarch64 register names as the suspect —
+# was WRONG, and is recorded as wrong because it survived into an issue (#7321)
+# and a job name before anyone measured it.
 #
-#   perry: this module emits an LLVM stack map that the compact-map rewriter
-#   could not parse, so its GC roots would be invisible to the collector
-#   (the runtime reads only the compact section). Refusing to emit a binary
-#   that would lose roots silently.
+# What is actually true, measured both by cross-compiling a probe to
+# x86_64-unknown-linux-gnu and decoding the emitted map (#7324) and by five
+# clang versions x twelve `-march` settings x all nine probes from two hosts
+# (#7331): **x86-64 stack maps parse fine.** Every root is
+# `Indirect [RSP + off]`, DWARF register 7, which round-trips through the
+# compact format's explicit-register tag exactly.
 #
-# That is the fail-closed path working exactly as designed — but it means the
-# native-root mechanism does not compile on x86-64 today, so a matrix pointed
-# there gates nothing while looking like it gates everything. gc_map.rs encodes
-# its base registers in aarch64 terms throughout (`DWARF_REG_{FP,SP}_AARCH64`,
-# "x19 on aarch64"), which is consistent with that, though this workflow does
-# not prove the cause. The gap is asserted, not hidden: `statepoints-refuse-x86`
-# below fails the day x86-64 starts working, so nobody has to remember to come
-# back and widen the matrix. Tracked as #7321.
+# The defect is one layer down, at collection time. `chain_walkable` admits only
+# aarch64's DWARF 29/31, so on x86-64 every frame falls back to the platform
+# unwinder, which resolves the base with `_Unwind_GetGR(ctx, 7)` — and that does
+# not reliably return the stack pointer (`_Unwind_GetCFA` is the supported way).
+# Wild addresses, then a segfault when the collector writes through them. The
+# compiler now refuses that target outright (#7324) rather than emitting a
+# binary that crashes under collection, so an x86-64 run of this matrix would
+# test nothing but the refusal — which is what `statepoints-refuse-x86` is for.
+#
+# The same walk is unsound on aarch64 **Linux** too, where it is merely the
+# non-default path: #7333.
 #
 # ── RUSTFLAGS ───────────────────────────────────────────────────────────────
 #
@@ -383,60 +391,6 @@ jobs:
   # REFUSAL (never a silently rootless binary), and goes red the day x86-64
   # starts working, which is the prompt to widen the aarch64 matrix above (#7321).
   # Deliberately cheap: one probe, no runtime, no oracle.
-  # TEMPORARY (#7321 investigation): dump the stack-map block the x86-64
-  # rewriter refuses, so the cause is read off a log instead of guessed. Removed
-  # once the fix lands.
-  x86-diagnose:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: gc-native-roots-x86
-      - name: Build compiler and static runtime (perry-dev profile)
-        run: |
-          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
-          cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
-      - name: Toolchain
-        run: |
-          uname -m
-          lscpu | head -20 || true
-          which clang || true
-          clang --version || true
-          ls /usr/lib/ | grep -i llvm || true
-      - name: Compile and dump the block
-        run: |
-          set -uo pipefail
-          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
-          export PERRY_NO_AUTO_OPTIMIZE=1
-          for probe in benchmarks/gc_ratchet/probes/*.ts; do
-            name=$(basename "$probe" .ts)
-            set +e
-            PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" -o "/tmp/x86-$name" > "/tmp/x86-$name.log" 2>&1
-            rc=$?
-            set -e
-            if [ "$rc" -eq 0 ]; then
-              echo "== $name: COMPILED"
-              readelf -S "/tmp/x86-$name" | grep -E "perry_gcmap|llvm_stackmaps" || echo "   (no gc map section!)"
-              continue
-            fi
-            echo "== $name: FAILED"
-            grep -E "reason:|target:|assembly left at:|cannot yet express" "/tmp/x86-$name.log" | head -5
-            asm=$(grep -o '/tmp/[^ ]*\.o\.s' "/tmp/x86-$name.log" | head -1)
-            [ -n "$asm" ] && [ -f "$asm" ] || continue
-            start=$(grep -n 'llvm_stackmaps' "$asm" | head -1 | cut -d: -f1)
-            [ -n "$start" ] || continue
-            echo "   stackmaps at line $start of $(wc -l < "$asm")"
-            echo "   --- first 40 lines of the block:"
-            sed -n "${start},$((start+40))p" "$asm"
-            echo "   --- directive census from the block onward:"
-            tail -n "+${start}" "$asm" | awk '{print $1}' | sort | uniq -c | sort -rn | head -25
-            echo "   --- last 15 lines of the file:"
-            tail -15 "$asm"
-          done
-
   statepoints-refuse-x86:
     runs-on: ubuntu-latest
     timeout-minutes: 45

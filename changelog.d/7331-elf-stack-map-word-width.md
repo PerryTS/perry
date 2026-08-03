@@ -42,8 +42,26 @@ with Mach-O's leading underscore unconditionally under
 `extern "C"` declarations were different symbols and `perry-runtime` could not
 link at all.
 
-This does **not** yet close #7321. The defect is an ELF defect but specifically
-an AArch64-ELF one; x86 ELF spells these fields `.byte`/`.short`/`.long`/`.quad`,
-which the old table already handled, and the x86-64 refusal could not be
-reproduced under Apple clang 21, Homebrew clang 19/20/22 or Ubuntu clang 18,
-across twelve `-march` settings, from either host, over all nine probes.
+Measured on `aarch64-unknown-linux-gnu`, which could not compile a single module
+under `PERRY_STATEPOINTS=1` before this and now runs the probe matrix **8/8**
+against the pinned Node oracle under
+`PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1`, with `.perry_gcmap`
+present and `.llvm_stackmaps` absent asserted per probe. (`09_try_catch_roots`
+is excluded because the explicit bridge refuses invokes since #7330, on every
+target.) Census over those eight: **478 statepoints, 0 plain stack maps, 0
+parser fallbacks**, 648 relocations, 605 non-safepoint calls skipped, max 3 live
+roots at one safepoint.
+
+This does **not** close #7321, and the suspicion recorded there — that
+`gc_map.rs`'s aarch64 register naming was the cause — is now measured to be
+wrong. x86-64 stack maps parse: every root is `Indirect [RSP + off]`, DWARF
+register 7, which round-trips through the compact format's explicit-register tag
+exactly, and no configuration reproduced a parse failure (Apple clang 21,
+Homebrew clang 19/20/22, Ubuntu clang 16/17/18, twelve `-march` settings, both
+hosts, all nine probes). The x86-64 defect is one layer down, at collection time,
+and #7324 refuses that target for it.
+
+Filed while measuring this: **#7333** — `PERRY_STACKMAP_WALKER=unwind` segfaults
+on Linux/ELF for 3 of the 8 probes, on a build whose default walker runs all 8
+clean. It matters beyond a bisection control, because on x86-64 the fp-chain
+walker is not compiled in and the unwinder *is* the walker.
