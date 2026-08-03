@@ -107,6 +107,11 @@ jobs:
           total=0
           errs=""
           for probe in benchmarks/gc_ratchet/probes/*.ts; do
+          # #7335: the explicit bridge cannot root an `invoke`, so since #7330 it
+          # REFUSES a try-carrying probe rather than emitting a frame with no
+          # roots (#7327). Skip 09 here; the RS4GC job covers it, and the step
+          # below asserts the refusal actually happens.
+          [ "$(basename "$probe")" = "09_try_catch_roots.ts" ] && continue
             total=$((total+1))
             name=$(basename "$probe" .ts)
             node --expose-gc --experimental-strip-types "$probe" > "/tmp/$name.oracle"
@@ -155,7 +160,9 @@ jobs:
           # zero: LLVM's plain stackmap can record a root as `Register R#N`
           # (caller-saved, unrecoverable at collection time), so a nonzero count
           # here is silently lost roots, not a degraded-but-safe mode.
-          probe=benchmarks/gc_ratchet/probes/09_try_catch_roots.ts
+          # #7335: was 09_try_catch_roots, which the bridge now refuses (#7330).
+          # Any non-try probe exercises the same report assertions.
+          probe=benchmarks/gc_ratchet/probes/01_nursery_churn.ts
           PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" \
             -o /tmp/report-probe --statepoint-report=json 2> /tmp/statepoint-report.json
           python3 scripts/statepoint_report_assert.py /tmp/statepoint-report.json \
@@ -189,6 +196,11 @@ jobs:
           # be a coin flip on which probe the author happened to pick.
           off_sp=0; off_sk=0; on_sp=0; on_sk=0
           for probe in benchmarks/gc_ratchet/probes/*.ts; do
+          # #7335: the explicit bridge cannot root an `invoke`, so since #7330 it
+          # REFUSES a try-carrying probe rather than emitting a frame with no
+          # roots (#7327). Skip 09 here; the RS4GC job covers it, and the step
+          # below asserts the refusal actually happens.
+          [ "$(basename "$probe")" = "09_try_catch_roots.ts" ] && continue
             name=$(basename "$probe" .ts)
             PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" \
               -o /dev/null --statepoint-report=json 2> "/tmp/off-$name.json"
@@ -220,6 +232,11 @@ jobs:
           total=0
           errs=""
           for probe in benchmarks/gc_ratchet/probes/*.ts; do
+          # #7335: the explicit bridge cannot root an `invoke`, so since #7330 it
+          # REFUSES a try-carrying probe rather than emitting a frame with no
+          # roots (#7327). Skip 09 here; the RS4GC job covers it, and the step
+          # below asserts the refusal actually happens.
+          [ "$(basename "$probe")" = "09_try_catch_roots.ts" ] && continue
             total=$((total+1))
             name=$(basename "$probe" .ts)
             node --expose-gc --experimental-strip-types "$probe" > "/tmp/so-$name.oracle"
@@ -260,6 +277,11 @@ jobs:
           pass=0
           total=0
           for probe in benchmarks/gc_ratchet/probes/*.ts; do
+          # #7335: the explicit bridge cannot root an `invoke`, so since #7330 it
+          # REFUSES a try-carrying probe rather than emitting a frame with no
+          # roots (#7327). Skip 09 here; the RS4GC job covers it, and the step
+          # below asserts the refusal actually happens.
+          [ "$(basename "$probe")" = "09_try_catch_roots.ts" ] && continue
             total=$((total+1))
             name=$(basename "$probe" .ts)
             node --expose-gc --experimental-strip-types "$probe" > "/tmp/w-$name.oracle"
@@ -297,6 +319,30 @@ jobs:
   # instead of Perry's explicit bridge. Split from the job above because it is
   # the one arm with an external-tool dependency (`opt`), so a Homebrew hiccup
   # cannot take the core arms down with it.
+      # #7335 / #7327: the bridge cannot express a statepoint on an `invoke`, so
+      # since #7330 it refuses a try-carrying module rather than emitting a frame
+      # whose roots the collector cannot see. Assert the refusal HAPPENS — a skip
+      # that is not also checked is just missing coverage, and this is the one
+      # construct where the bridge is known to be unable to root anything.
+      - name: The bridge must refuse a try-carrying probe, not silently skip it
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          probe=benchmarks/gc_ratchet/probes/09_try_catch_roots.ts
+          if PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" \
+               -o /tmp/should-not-exist > /tmp/refuse.log 2>&1; then
+            echo "::error::the bridge COMPILED a try-carrying probe. Either it learned"
+            echo "::error::invokes (delete this step and re-enable 09 above) or it is"
+            echo "::error::emitting unrooted frames again (#7327)."
+            exit 1
+          fi
+          if ! grep -q "7327" /tmp/refuse.log; then
+            echo "::error::the bridge failed on $probe, but not with the #7327 refusal:"
+            tail -20 /tmp/refuse.log
+            exit 1
+          fi
+          echo "bridge refused the try-carrying probe, as expected (#7327)"
+
   native-roots-rs4gc-aarch64:
     runs-on: macos-14
     timeout-minutes: 90
