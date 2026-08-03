@@ -1,10 +1,23 @@
 # In-process LLVM backend experiment (`exp/llvm-inprocess`)
 
-**Status: Phase 0 complete (transport, byte-identical) and Phase 2 landed
-opt-in (native construction — module-scale IR text no longer exists under
-`PERRY_LLVM_INPROCESS=native`), validated on macOS/arm64 and Linux/x86_64.**
-The default path is untouched: the default build links no LLVM and compiles
-`.ll` through `clang -c` exactly as before.
+**Status: native construction COMPLETE, opt-in, validated on macOS/arm64
+and Linux/x86_64.** Under
+`PERRY_LLVM_INPROCESS=native` (with the `llvm-inprocess` cargo feature),
+every construction path is native: all 68 `LlBlock` semantic methods emit
+typed instructions that build straight through the C API (no per-line text),
+codegen-unit splits build per-unit native modules and partial-link, and the
+debug knobs (`PERRY_SAVE_LL` / `--trace llvm` / `PERRY_LLVM_KEEP_IR`) print
+the constructed module. `Raw` text remains only for the 89 `emit_raw`
+bespoke sites and the `LlFunction` entry-splice strings (streamed through
+the bounded line reader; the `(typed, raw)` counts are the ratchet), plus
+`has_try` functions whose setjmp volatile pass needs whole-function text.
+`rewrite-statepoints-for-gc` scheduling in-process is pinned by test
+(`rs4gc_schedules_in_process`) — the #7174 / engine-plan layer-2 unblock.
+The default path is untouched: the default build links no LLVM, and emitted
+IR is byte-identical to the merge-base over a 12-file proof corpus (the
+only divergence class is a PRE-EXISTING run-to-run coin in closure-name
+registration order — it flips between two runs of a single binary; a
+side-finding for the #7131 determinism work, not a branch effect).
 
 ## Phase 2: native construction (`=native` / `=diff`)
 
