@@ -15,6 +15,15 @@ WORK=${1:?usage: batch_ab.sh <workdir> [shim|flag] [stride] [offset]}
 MODE=${2:-shim}
 STRIDE=${3:-6}
 OFFSET=${4:-0}
+# Portability: "$TIMEOUT" is coreutils' name on macOS (brew), timeout on Linux.
+TIMEOUT=$(command -v "$TIMEOUT" || command -v timeout)
+free_gb_now() {
+  if [ "$(uname)" = "Darwin" ]; then
+    df -g /System/Volumes/Data | awk 'NR==2{print $4}'
+  else
+    df -BG --output=avail / | awk 'NR==2{gsub("G","",$1); print $1}'
+  fi
+}
 mkdir -p "$WORK"
 export PERRY_RUNTIME_DIR=$WT/target/perry-dev
 export PERRY_NO_AUTO_OPTIMIZE=1
@@ -26,20 +35,20 @@ for t in $(ls "$WT"/test-files/test_gap_*.ts | sort); do
   i=$((i+1))
   [ $((i % STRIDE)) -ne $OFFSET ] && continue
   name=$(basename "$t" .ts)
-  free_gb=$(df -g /System/Volumes/Data | awk 'NR==2{print $4}')
+  free_gb=$(free_gb_now)
   if [ "$free_gb" -lt 6 ]; then echo "ABORT: only ${free_gb}GB free" | tee -a "$WORK/summary.txt"; exit 2; fi
 
-  gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.t" >"$WORK/$name.t.compile" 2>&1
+  "$TIMEOUT" 180 "$PERRY" "$t" -o "$WORK/$name.t" >"$WORK/$name.t.compile" 2>&1
   ct=$?
   if [ "$MODE" = "flag" ]; then
-    PERRY_LLVM_INPROCESS=${INPROCESS_VALUE:-1} gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
+    PERRY_LLVM_INPROCESS=${INPROCESS_VALUE:-1} "$TIMEOUT" 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
     cp=$?
     # Liveness: the arm must have announced the in-process backend.
     if [ $cp -eq 0 ] && ! grep -q "in-process LLVM backend active" "$WORK/$name.p.compile"; then
       echo "NOT_LIVE $name" >> "$WORK/results.txt"; cp=97
     fi
   else
-    PERRY_LLVM_CLANG=$SPIKE gtimeout 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
+    PERRY_LLVM_CLANG=$SPIKE "$TIMEOUT" 180 "$PERRY" "$t" -o "$WORK/$name.p" >"$WORK/$name.p.compile" 2>&1
     cp=$?
   fi
 
@@ -47,8 +56,8 @@ for t in $(ls "$WT"/test-files/test_gap_*.ts | sort); do
   if [ $ct -ne 0 ]; then cfail_t=$((cfail_t+1)); echo "CFAIL_T $name" >> "$WORK/results.txt"; rm -f "$WORK/$name".[tp]; continue; fi
   if [ $cp -ne 0 ]; then cfail_p=$((cfail_p+1)); echo "CFAIL_P $name" >> "$WORK/results.txt"; rm -f "$WORK/$name".[tp]; continue; fi
 
-  gtimeout 20 "$WORK/$name.t" >"$WORK/$name.t.out" 2>"$WORK/$name.t.err"; rt=$?
-  gtimeout 20 "$WORK/$name.p" >"$WORK/$name.p.out" 2>"$WORK/$name.p.err"; rp=$?
+  "$TIMEOUT" 20 "$WORK/$name.t" >"$WORK/$name.t.out" 2>"$WORK/$name.t.err"; rt=$?
+  "$TIMEOUT" 20 "$WORK/$name.p" >"$WORK/$name.p.out" 2>"$WORK/$name.p.err"; rp=$?
   if [ $rt -eq $rp ] && cmp -s "$WORK/$name.t.out" "$WORK/$name.p.out" && cmp -s "$WORK/$name.t.err" "$WORK/$name.p.err"; then
     same=$((same+1)); echo "SAME $name (exit=$rt)" >> "$WORK/results.txt"
   else

@@ -6,6 +6,5 @@ demo-out/
 *.log
 spike_text
 spike_inproc
-spike_text.ll
 spike_roundtrip.ll
 roundtrip.diff
