@@ -2589,6 +2589,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         decide_codegen_units(module_callable_count(hir))
     };
     if n_units > 1 {
+        if let Some(result) =
+            try_native_units(&llmod, n_units, opts.target.as_deref(), &module_prefix)
+        {
+            return result;
+        }
         let units = llmod.render_codegen_units(n_units);
         log::debug!(
             "perry-codegen: split '{}' into {} codegen units",
@@ -2639,6 +2644,35 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     } else {
         crate::linker::compile_ll_to_object(&ll_text, opts.target.as_deref())
     }
+}
+
+/// exp/llvm-inprocess: unit-split twin of [`try_native_construction`].
+#[cfg(feature = "llvm-inprocess")]
+fn try_native_units(
+    llmod: &crate::module::LlModule,
+    n_units: usize,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Option<Result<Vec<u8>>> {
+    match crate::native_emit::native_mode() {
+        crate::native_emit::NativeMode::Off => None,
+        crate::native_emit::NativeMode::Native => Some(
+            crate::native_emit::compile_module_units_native(llmod, n_units, target, module_prefix),
+        ),
+        crate::native_emit::NativeMode::Diff => Some(
+            crate::native_emit::compile_module_units_diff(llmod, n_units, target, module_prefix),
+        ),
+    }
+}
+
+#[cfg(not(feature = "llvm-inprocess"))]
+fn try_native_units(
+    _llmod: &crate::module::LlModule,
+    _n_units: usize,
+    _target: Option<&str>,
+    _module_prefix: &str,
+) -> Option<Result<Vec<u8>>> {
+    None
 }
 
 /// exp/llvm-inprocess Phase 2 dispatch. `None` = native construction not

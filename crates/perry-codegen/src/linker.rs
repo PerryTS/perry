@@ -780,16 +780,27 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
         _ => {}
     }
 
+    let mut objs: Vec<Vec<u8>> = Vec::with_capacity(units.len());
+    for (i, unit) in units.iter().enumerate() {
+        objs.push(compile_ll_to_object(unit, target_triple).with_context(|| {
+            format!("codegen unit {}/{} failed to compile", i + 1, units.len())
+        })?);
+    }
+    merge_unit_objects(&objs)
+}
+
+/// Partial-link (`ld -r`) already-compiled codegen-unit objects into one
+/// object. Shared by the text path above and the native construction path
+/// (`native_emit::compile_module_units_native`).
+pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     let tmp_dir = env::temp_dir();
     let pid = std::process::id();
     let nonce = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(units.len());
-    for (i, unit) in units.iter().enumerate() {
-        let bytes = compile_ll_to_object(unit, target_triple)
-            .with_context(|| format!("codegen unit {}/{} failed to compile", i + 1, units.len()))?;
+    let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(objs.len());
+    for (i, bytes) in objs.iter().enumerate() {
         let p = tmp_dir.join(format!("perry_cgu_{}_{}_{}.o", pid, nonce, i));
-        fs::write(&p, &bytes)
+        fs::write(&p, bytes)
             .with_context(|| format!("failed to write codegen-unit object {}", p.display()))?;
         obj_paths.push(p);
     }
@@ -811,7 +822,7 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
         Err(anyhow!(
             "partial link `{} -r` of {} codegen units failed (status={}).\nstderr:\n{}",
             ld,
-            units.len(),
+            objs.len(),
             out.status,
             String::from_utf8_lossy(&out.stderr)
         ))

@@ -15,9 +15,11 @@
 //!   the text-parsed arm's object. Any non-cosmetic difference is a
 //!   construction bug — report it, never normalize it away silently.
 //!
-//! Paths not yet ported (codegen-unit splitting, `emit_ir_only`) fall through
-//! to the text pipeline, where `native`/`diff` still select the in-process
-//! *transport*, so no clang subprocess appears in any in-process mode.
+//! Codegen-unit splitting is ported (`compile_module_units_native`): each
+//! unit is its own context+module, functions stream with external linkage
+//! forced, and unit objects partial-link exactly like the text path. The
+//! only remaining text fallthrough is `emit_ir_only` (bitcode-link mode),
+//! which by definition WANTS the whole-module text.
 //!
 //! Construction consumes `LlFunction::for_each_final_line` — the finalized
 //! per-line stream including entry-alloca hoists, boundary splices and
@@ -72,11 +74,31 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
         skeleton.push_str(&format!("declare {} @{}({})\n", f.return_type, f.name, tys));
     }
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
+    let (typed_insts, raw_insts) = stream_functions(context, &module, &funcs, false)?;
+    log::debug!(
+        "perry-codegen: native construction built {} functions, {} typed + {} raw instructions \
+         (ratchet: raw -> 0), skeleton {} bytes",
+        funcs.len(),
+        typed_insts,
+        raw_insts,
+        skeleton.len()
+    );
+    Ok(module)
+}
+
+/// Stream every function's finalized items into the module. Returns
+/// `(typed, raw)` instruction totals — the migration ratchet.
+fn stream_functions<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+    funcs: &[&crate::function::LlFunction],
+    force_external: bool,
+) -> Result<(usize, usize)> {
     let mut typed_insts = 0usize;
     let mut raw_insts = 0usize;
-    for f in &funcs {
-        let header = synth_define_header(f);
-        let mut stream = crate::dialect::FnStream::begin(context, &module, &header)
+    for f in funcs {
+        let header = synth_define_header(f, force_external);
+        let mut stream = crate::dialect::FnStream::begin(context, module, &header)
             .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
         if f.has_try {
             // The setjmp volatile pass needs whole-function analysis; keep
@@ -104,15 +126,90 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
         typed_insts += t;
         raw_insts += r;
     }
-    log::debug!(
-        "perry-codegen: native construction built {} functions, {} typed + {} raw instructions \
-         (ratchet: raw -> 0), skeleton {} bytes",
-        funcs.len(),
-        typed_insts,
-        raw_insts,
-        skeleton.len()
-    );
-    Ok(module)
+    Ok((typed_insts, raw_insts))
+}
+
+/// Native construction for a module large enough to split into codegen
+/// units (#5391): each unit is its own context+module (peak RSS stays
+/// ~whole/n, same bound as the per-unit clang model), functions stream with
+/// external linkage forced (mirror of `render_fn_external`), and the unit
+/// objects partial-link exactly like the text path.
+pub fn compile_module_units_native(
+    llmod: &LlModule,
+    n: usize,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Result<Vec<u8>> {
+    let parts = llmod.codegen_unit_parts(n);
+    if parts.len() == 1 {
+        return compile_module_native(llmod, target, module_prefix);
+    }
+    let mut objs = Vec::with_capacity(parts.len());
+    for (i, part) in parts.iter().enumerate() {
+        let context = Context::create();
+        let mut skeleton = format!("{}{}", part.pre, part.post);
+        for f in &part.funcs {
+            skeleton.push_str(&crate::module::declare_line_for(f));
+            skeleton.push('\n');
+        }
+        let module = crate::inprocess::parse_ir_text(&context, &skeleton, "perry_native_module")
+            .map_err(|e| anyhow!("unit {i} skeleton: {e:#}"))?;
+        let (t, r) = stream_functions(&context, &module, &part.funcs, true)
+            .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
+        debug_dump(&module, &format!("{module_prefix}.unit{i}"));
+        let est: usize = part
+            .funcs
+            .iter()
+            .map(|f| f.estimated_ir_bytes())
+            .sum::<usize>()
+            + skeleton.len();
+        let (effective_target, args) =
+            crate::linker::native_plan_args(target, est, part.funcs.len());
+        objs.push(
+            crate::inprocess::optimize_and_emit_module(&module, &effective_target, &args)
+                .map_err(|e| anyhow!("unit {i}: {e:#}"))?,
+        );
+        log::debug!(
+            "perry-codegen: native unit {i}: {} fns, {t} typed + {r} raw insts",
+            part.funcs.len()
+        );
+    }
+    crate::linker::merge_unit_objects(&objs)
+}
+
+/// Unit-split differential harness: text-rendered units through the
+/// in-process transport vs natively-constructed units, merged objects
+/// byte-compared. Returns the text arm (the trusted reference).
+pub fn compile_module_units_diff(
+    llmod: &LlModule,
+    n: usize,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Result<Vec<u8>> {
+    let units = llmod.render_codegen_units(n);
+    let bytes_text = crate::linker::compile_units_to_object(&units, target)?;
+    match compile_module_units_native(llmod, n, target, module_prefix) {
+        Err(e) => {
+            eprintln!("perry: [ir-diff] native unit construction FAILED (text arm used): {e:#}");
+        }
+        Ok(bytes_native) => {
+            if bytes_text == bytes_native {
+                eprintln!(
+                    "perry: [ir-diff] OK — native and text unit arms emit byte-identical merged \
+                     objects ({} bytes, {} units)",
+                    bytes_text.len(),
+                    units.len()
+                );
+            } else {
+                eprintln!(
+                    "perry: [ir-diff] MISMATCH — merged unit objects differ (text {} vs native {})",
+                    bytes_text.len(),
+                    bytes_native.len()
+                );
+            }
+        }
+    }
+    Ok(bytes_text)
 }
 
 /// The plan argv for a natively-built module. Same decision code as the text
@@ -247,14 +344,16 @@ pub fn compile_module_diff(
 /// The one-line define header for `f`, matching `LlFunction::to_ir`'s
 /// rendering (linkage, return type, params, inline/try attributes) so the
 /// reader applies identical linkage and function attributes.
-fn synth_define_header(f: &crate::function::LlFunction) -> String {
+fn synth_define_header(f: &crate::function::LlFunction, force_external: bool) -> String {
     let params = f
         .params
         .iter()
         .map(|(t, n)| format!("{t} {n}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let linkage = if f.linkage.is_empty() {
+    // Codegen units promote internal/private definitions so cross-unit
+    // calls bind — mirror of `render_fn_external`.
+    let linkage = if f.linkage.is_empty() || force_external {
         String::new()
     } else {
         format!("{} ", f.linkage)
