@@ -384,17 +384,40 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
     };
     {
         let blocks = func.blocks_mut();
-        for r in rewrites {
-            let fresh = format!("%r{}", counter.next());
-            let reload = LlInst::Load {
-                dst: fresh.clone(),
-                ty: r.ty,
-                ptr: format!("%{}", r.slot),
-                flavor: LoadFlavor::Plain,
-            };
-            let insts = blocks[r.blk].insts_mut();
-            rename_operand(&mut insts[r.insn], &r.from, fresh.trim_start_matches('%'));
-            insts.insert(r.insn, reload);
+        // One instruction can carry TWO stale operands — `js_object_assign_one`
+        // takes a receiver and a value, and `index_set.rs` lowers `object`
+        // before `value`, so both can be loads out of their own slots. Renaming
+        // then inserting one at a time is wrong for that shape: the insert
+        // shifts the target down, so the next `rename_operand` addresses the
+        // reload just inserted, silently matches nothing, and leaves the second
+        // operand stale while emitting a dead load. Rename EVERY operand of an
+        // instruction first, then insert that instruction's reloads.
+        let mut i = 0;
+        while i < rewrites.len() {
+            let (blk, insn) = (rewrites[i].blk, rewrites[i].insn);
+            let mut j = i;
+            while j < rewrites.len() && rewrites[j].blk == blk && rewrites[j].insn == insn {
+                j += 1;
+            }
+            let insts = blocks[blk].insts_mut();
+            let mut reloads = Vec::with_capacity(j - i);
+            for r in &rewrites[i..j] {
+                let fresh = format!("%r{}", counter.next());
+                rename_operand(&mut insts[insn], &r.from, fresh.trim_start_matches('%'));
+                reloads.push(LlInst::Load {
+                    dst: fresh,
+                    ty: r.ty,
+                    ptr: format!("%{}", r.slot),
+                    flavor: LoadFlavor::Plain,
+                });
+            }
+            // Insert after renaming, so every operand was addressed against the
+            // original instruction. Order among the reloads is immaterial: each
+            // defines a distinct register and they are independent loads.
+            for reload in reloads.into_iter().rev() {
+                insts.insert(insn, reload);
+            }
+            i = j;
         }
     }
     func.note_entry_block_insertions(entry_inserts);
@@ -1167,5 +1190,99 @@ mod tests {
         b.ret(DOUBLE, "0.0");
         assert_eq!(apply_to_function(&mut f), 1);
         assert!(body(&f).contains("= load i64, ptr %r1"), "{}", body(&f));
+    }
+
+    /// A fixture where ONE instruction reads two registers loaded from two
+    /// different shadow slots — `js_object_assign_one(receiver, value)`, which
+    /// `index_set.rs` lowers `object`-before-`value`, so both really can be
+    /// slot loads.
+    fn two_slots_one_consumer() -> LlFunction {
+        let mut f = LlFunction::new(
+            "t",
+            DOUBLE,
+            vec![(DOUBLE, "%obj".into()), (DOUBLE, "%val".into())],
+        );
+        let b = f.create_block("entry");
+        let s0 = b.alloca(DOUBLE);
+        let s1 = b.alloca(DOUBLE);
+        b.store(DOUBLE, "%obj", &s0);
+        b.store(DOUBLE, "%val", &s1);
+        b.call_void(
+            "js_shadow_slot_bind",
+            &[(crate::types::I32, "0"), (PTR, &s0)],
+        );
+        b.call_void(
+            "js_shadow_slot_bind",
+            &[(crate::types::I32, "1"), (PTR, &s1)],
+        );
+        let a = b.load(DOUBLE, &s0);
+        let c = b.load(DOUBLE, &s1);
+        b.call(DOUBLE, "js_object_alloc", &[]);
+        let r = b.call(
+            DOUBLE,
+            "js_object_assign_one",
+            &[(DOUBLE, &a), (DOUBLE, &c)],
+        );
+        b.ret(DOUBLE, &r);
+        f
+    }
+
+    /// #7311 follow-up: BOTH stale operands of one instruction must be
+    /// reloaded. The original apply loop renamed-then-inserted per rewrite, so
+    /// the first insert shifted the consumer down and the second rename
+    /// addressed the freshly-inserted reload instead — leaving one operand
+    /// stale (the exact defect this pass exists to close) and emitting a load
+    /// nothing consumes.
+    #[test]
+    fn both_stale_operands_of_one_instruction_are_reloaded() {
+        let mut f = two_slots_one_consumer();
+        assert_eq!(
+            apply_to_function(&mut f),
+            2,
+            "two stale operands on one instruction, not one"
+        );
+        let ir = body(&f);
+        let lines: Vec<&str> = ir.lines().map(str::trim).collect();
+        let use_idx = lines
+            .iter()
+            .position(|l| l.contains("@js_object_assign_one"))
+            .expect("the consumer survived");
+        let consumer = lines[use_idx];
+
+        // The two instructions above the consumer must both be slot reloads,
+        // and the consumer must read BOTH of their registers.
+        let r1 = lines[use_idx - 1];
+        let r2 = lines[use_idx - 2];
+        for r in [r1, r2] {
+            assert!(
+                r.contains("= load double, ptr %r"),
+                "expected a slot reload above the consumer, got {r:?}\n{ir}"
+            );
+        }
+        for r in [r1, r2] {
+            let fresh = r.split_whitespace().next().unwrap();
+            assert!(
+                consumer.contains(fresh),
+                "reload {fresh} is dead — the consumer does not read it: {consumer:?}\n{ir}"
+            );
+        }
+        // And neither PRE-call load may survive in the consumer. Derive those
+        // registers rather than hard-coding them: they are the loads that sit
+        // above the collecting call, not the reloads inserted below it.
+        let call_idx = lines
+            .iter()
+            .position(|l| l.contains("@js_object_alloc"))
+            .expect("the collecting call survived");
+        for l in &lines[..call_idx] {
+            if let Some(dst) = l.split_whitespace().next() {
+                if l.contains("= load double, ptr %r") {
+                    assert!(
+                        !consumer.contains(&format!("double {dst},"))
+                            && !consumer.contains(&format!("double {dst})")),
+                        "stale operand {dst} survived in {consumer:?}\n{ir}"
+                    );
+                }
+            }
+        }
     }
 }
