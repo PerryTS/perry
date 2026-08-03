@@ -1,9 +1,10 @@
 # Exception lowering: setjmp/longjmp → LLVM `invoke`/`landingpad`
 
-Status: **in progress** — Phase 0 (spike) complete, Phase 1 (codegen) underway.
-Branch: `exp/invoke-eh`. Development flag: `PERRY_EH=invoke|setjmp` (temporary —
-deleted when the default flips; a permanent hybrid is the failure mode this
-work exists to remove).
+Status: **complete** — landed via PR #7305. The setjmp path and the temporary
+`PERRY_EH` development flag are deleted; invoke/landingpad (SEH funclets on
+windows-msvc) is Perry's only exception lowering. This document is the
+campaign record: design decisions, the measurement matrices behind them, and
+the acceptance evidence.
 
 ## Why
 
