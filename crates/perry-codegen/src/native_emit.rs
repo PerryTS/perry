@@ -141,7 +141,7 @@ pub fn compile_module_native(llmod: &LlModule, target: Option<&str>) -> Result<V
 pub fn compile_module_diff(llmod: &LlModule, target: Option<&str>) -> Result<Vec<u8>> {
     let text = llmod.to_ir();
     let ctx_text = Context::create();
-    let m_text = crate::inprocess::parse_ir_text(&ctx_text, &text, "perry_diff_text")?;
+    let m_text = crate::inprocess::parse_ir_text(&ctx_text, &text, "perry_native_module")?;
     let (effective_target, args) = plan_for(llmod, target);
 
     let ctx_native = Context::create();
