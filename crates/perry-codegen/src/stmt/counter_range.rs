@@ -212,6 +212,13 @@ pub(crate) fn classify_for_counter_range<F: CounterRangeFacts + ?Sized>(
 
     // Upper bound from the guard. Only an exactly-known bound is admitted, so
     // the value the guard compares against is the same one the fact quotes.
+    //
+    // No `is_closure_writable` check is needed here: an exact `int_range`
+    // for a binding can only come from a top-level `const`
+    // (`compile_time_constants`), a non-`mutable` `Let` alias, or a
+    // degenerate enclosing-loop fact — and the first two are unassignable by
+    // ECMAScript, while the third is itself produced by this function, whose
+    // counter guard above already rejects closure-writable counters.
     if let Expr::LocalGet(bound_id) = right.as_ref() {
         if expr_mutates_local(cond, *bound_id)
             || update.is_some_and(|expr| expr_mutates_local(expr, *bound_id))
