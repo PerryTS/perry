@@ -235,6 +235,42 @@ cross-helper throws incl. throwing getter/toString/JSON.parse/map-callback +
 interplay): byte-for-byte vs Node 26.5.1 under invoke mode; uncaught-throw
 output byte-identical to the setjmp build.
 
+### Performance (macOS arm64, perry-dev compiler, 3-run medians)
+
+Both directions, as promised. Reference: the pinned Node oracle on the same
+files (V8's own EH machinery).
+
+| microbenchmark | setjmp | invoke | node/V8 |
+|---|---|---|---|
+| b1: hot `try` that never throws (200×1M iters) | 5.6 s | **5.0 s** | 0.26 s* |
+| b3: small try-containing fn in a hot loop (80M calls) | 2.31 s | **1.95 s** | 0.07 s* |
+| b2: throw+catch every iteration (300k shallow throws) | **62 ms** | 451 ms | 110 ms |
+| b4: 20k throws × 200-frame unwind | **19 ms** | 4.10 s | 168 ms |
+
+\* b1/b3's node column reflects V8's integer-loop JIT advantage (the known
+AOT-vs-V8 integer-math gap), not EH — the EH-relevant comparison there is
+perry-vs-perry.
+
+Reading: the non-throwing path — the case zero-cost EH exists for, and the
+overwhelmingly common one — gets 10–20% faster (no `_setjmp` per entry, no
+volatile-pinned locals, inlining unlocked). The throw path pays the
+industry-standard price of real unwinding: ~1.5 µs per shallow throw
+(2-phase walk; C++/Swift/Rust are in the same band; V8 pays ~0.37 µs) and
+~1 µs per frame stepped on deep unwinds, vs `longjmp`'s O(1) register
+restore. The b4 shape (exception-as-control-flow across 200 frames in a hot
+loop) is the pathological case at ~24× V8; no gap/parity test moved
+measurably. Optimization avenues if a real workload ever hits this:
+per-frame step cost is macOS-libunwind-specific (Linux `.eh_frame_hdr`
+stepping is cheaper — measure in CI), and generated frames without handlers
+carry no personality, so the walk is pure CFI decode.
+
+A register-snapshot "fast transport" (save callee-saveds at try entry, jump
+straight to the pad) was considered and rejected: it is `setjmp` by another
+name — LLVM's EH model expects each unwound frame's callee-saved registers
+restored by the unwinder, so a snapshot restore would resurrect try-entry
+values for locals defined after the push, recreating exactly the volatile
+problem this migration deletes.
+
 ## Phase 1+ design notes (running)
 
 - Handler bookkeeping: `js_try_push` today returns a jmp_buf and the generated
