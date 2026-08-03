@@ -2,6 +2,8 @@
 
 **Goal (owner):** best performance, best RSS footprint, minimal binary size.
 
+**Tracker:** #7294 (routing only — this document is authoritative).
+
 This is the single entry point. It replaces five overlapping documents and a
 55 KB uncommitted working file. Detail lives in linked RFCs; **sequencing and
 rationale live here**.
