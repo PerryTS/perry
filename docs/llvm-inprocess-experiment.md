@@ -2,8 +2,9 @@
 
 **Status: Phase 0 complete (transport, byte-identical) and Phase 2 landed
 opt-in (native construction — module-scale IR text no longer exists under
-`PERRY_LLVM_INPROCESS=native`).** The default path is untouched: the default
-build links no LLVM and compiles `.ll` through `clang -c` exactly as before.
+`PERRY_LLVM_INPROCESS=native`), validated on macOS/arm64 and Linux/x86_64.**
+The default path is untouched: the default build links no LLVM and compiles
+`.ll` through `clang -c` exactly as before.
 
 ## Phase 2: native construction (`=native` / `=diff`)
 
@@ -210,9 +211,54 @@ must account for.
 
 **`-fno-math-errno`:** the C API has no equivalent knob, so it was measured
 instead of assumed: on macOS/arm64 the flag produces a byte-identical object
-on Perry IR (Darwin already defaults to errno-free math). **Re-measure on
-Linux before trusting the in-process backend there** — glibc targets default
-the other way.
+on Perry IR (Darwin already defaults to errno-free math). Now also measured on
+Linux/glibc and **closed** — see below.
+
+## Linux results (Fedora 43, x86_64, glibc, LLVM 22.1.8, ELF)
+
+The macOS conclusions reproduce on a second OS, architecture and object format.
+Measured at `89b7dd191` — i.e. *before* the typed-`LlInst` migration, the
+unit-split native path and in-process RS4GC landed. Those five commits change
+what the native path covers, so the sweep below is evidence about the
+construction reader as it stood, not about branch HEAD; re-running it on
+Linux is the first item in "still open".
+
+- **Unit gate**: 528/528 `perry-codegen --features llvm-inprocess`, both
+  corpus gates confirmed constructing (not skipping — that branch is now a
+  hard error).
+- **`=diff` byte verdict**: `[ir-diff] OK` on `spike.ts` (31,929 B) and
+  `batch.ts` (84,345 B). The two construction paths are byte-identical on
+  ELF/x86-64, not only Mach-O/arm64.
+- **Full 466-test gap A/B under `=native`** (one binary, flag-only arm
+  difference): **459 SAME, 7 DIFF, 0 compile failures on either arm, 466/466
+  compiles carrying the liveness line, 0 NOT_LIVE.** 71 min wall.
+- **The 7 residuals are the same three families as macOS, and each was proven
+  by re-running one arm's binary twice**: all 7 differ against *themselves*.
+  5× `perry-ext-http` `server.rs:911` SIGABRT and 1× tokio `listener.rs:304`
+  panic (stderr embeds the OS thread id), 1× `console.time()` wall-clock
+  jitter. None is backend-attributable.
+- **Peak RSS per compile**: 244 MB text arm, 273 MB native arm — the
+  in-process context costs ~29 MB at gap-test scale. The bundle-scale RSS
+  question is untouched by this.
+
+**`-fno-math-errno` on Linux: measured no-op, question closed.** The flag only
+governs whether LLVM may treat a call to a *named* libm function as
+errno-free, and Perry never emits one. Math lowers either to `llvm.*`
+intrinsics (errno-free by definition) or to `js_math_*` runtime helpers, whose
+libm behavior lives inside `libperry_runtime.a` and is not produced by this
+compile at all. Verified on a 431 KB real module and on a purpose-built probe
+exercising every `Math.*` entry point plus `frem`: 10 intrinsic call sites, 6
+`frem`s, **zero** named libm callees; objects byte-identical with and without
+the flag under both clang 22.1.8 and clang 19. The in-process backend needs no
+equivalent knob on glibc. (The property that makes this true is "no named libm
+callee in emitted IR" — if the emitter ever gains one, this must be re-measured.)
+
+Scope limits of the Linux run, stated plainly: `PERRY_NO_AUTO_OPTIMIZE=1` on
+both arms; the box's node is v22.22.2 against a 26.5.1 pin, which does not
+affect a perry-vs-perry A/B but means this run makes no oracle-parity claim;
+at `89b7dd191` codegen-unit-split modules still fell through to transport, so
+the sweep did not exercise native construction on them (`e370f5554` has since
+ported that path — unvalidated on Linux).
 
 ## Measurements (honest scope)
 
@@ -273,7 +319,8 @@ this transport, not assumed.
   everything, and `-target` handling mirrors the clang path, but COFF and the
   MSVC/MinGW distinction (see `probe_clang_default_triple`) need their own
   A/B before any claim.
-- **`-fno-math-errno` on Linux**: measure before enabling there (see above).
+- ~~**`-fno-math-errno` on Linux**~~: **closed — measured, no-op.** See the
+  Linux results section.
 
 ## Recommendation, with its price
 
