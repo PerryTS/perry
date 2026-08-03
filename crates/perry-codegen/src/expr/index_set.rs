@@ -228,6 +228,13 @@ fn lower_array_index_set_via_runtime_key(
     source_label: &str,
 ) -> Result<String> {
     let arr_box = lower_expr(ctx, object)?;
+    // #7341, same hazard as the packed path: the receiver is live across both
+    // `index` and `value` lowering, and an allocating RHS is a collection
+    // point. Without this the store writes through a pre-evacuation address.
+    let recv_collects = super::temp_root::expr_may_trigger_gc(ctx, index)
+        || super::temp_root::expr_may_trigger_gc(ctx, value);
+    let recv_guard =
+        super::temp_root::guard_store_operand_across(ctx, object, &arr_box, recv_collects);
     let idx_double = lower_expr(ctx, index)?;
     let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
     let (val_double, val_bits) = lower_value_for_dynamic_index_set(
@@ -236,6 +243,7 @@ fn lower_array_index_set_via_runtime_key(
         "index_set.array_runtime_key_value_bits",
         "array_runtime_key_set_helper_edge",
     )?;
+    let arr_box = super::temp_root::reread_store_operand(ctx, &recv_guard, object, &arr_box)?;
     let arr_handle = {
         let blk = ctx.block();
         unbox_to_i64(blk, &arr_box)
@@ -270,6 +278,8 @@ fn lower_array_index_set_via_runtime_key(
         let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
         emit_write_barrier(ctx, &arr_bits, &val_bits);
     }
+    // After the store: the helper itself can grow the element array.
+    super::temp_root::release_store_operand(ctx, recv_guard);
     Ok(val_double)
 }
 
@@ -979,9 +989,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // dispatch overhead).
             if is_array_expr(ctx, object) && !is_numeric_expr(ctx, index) {
                 let arr_box = lower_expr(ctx, object)?;
+                // #7341: receiver live across `index` and `value` lowering.
+                let recv_collects = super::temp_root::expr_may_trigger_gc(ctx, index)
+                    || super::temp_root::expr_may_trigger_gc(ctx, value);
+                let recv_guard = super::temp_root::guard_store_operand_across(
+                    ctx,
+                    object,
+                    &arr_box,
+                    recv_collects,
+                );
                 let idx_double = lower_expr(ctx, index)?;
                 let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
                 let val_double = lower_expr(ctx, value)?;
+                let arr_box =
+                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &arr_box)?;
                 let arr_handle = {
                     let blk = ctx.block();
                     unbox_to_i64(blk, &arr_box)
@@ -1007,6 +1028,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
                     emit_write_barrier(ctx, &arr_bits, &val_bits);
                 }
+                super::temp_root::release_store_operand(ctx, recv_guard);
                 return Ok(val_double);
             }
             if is_array_expr(ctx, object)
