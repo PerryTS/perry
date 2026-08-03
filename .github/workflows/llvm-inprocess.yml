@@ -1,0 +1,86 @@
+# CI arm for the in-process LLVM backend (#7241, merged in #7301).
+#
+# The GC knob kill-policy (CLAUDE.md) demands every shipped mode be exercised
+# by CI or deleted; this job is the exercise for `PERRY_LLVM_INPROCESS`.
+# Each step asserts its subject was LIVE (liveness line, diff verdict) rather
+# than merely that nothing threw — see "Four ways a gate can be unable to
+# fail". NON-REQUIRED until it has run green once; promote afterwards
+# (a new gate has never been green, so promoting first blocks every PR).
+name: llvm-inprocess
+
+on:
+  pull_request:
+    paths:
+      - "crates/perry-codegen/**"
+      - "crates/perry/src/commands/compile/**"
+      - "experiments/llvm-inprocess-spike/**"
+      - ".github/workflows/llvm-inprocess.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/perry-codegen/**"
+      - "crates/perry/src/commands/compile/**"
+      - "experiments/llvm-inprocess-spike/**"
+      - ".github/workflows/llvm-inprocess.yml"
+
+concurrency:
+  group: llvm-inprocess-${{ github.ref }}
+  # Gate-trap 3: cancel superseded PR runs, but NEVER cancel main runs — a
+  # busy merge day would otherwise starve the gate to zero executions.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native-backend:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 22 (pinned major — fail loudly on drift)
+        run: |
+          set -euo pipefail
+          brew install llvm@22 2>/dev/null || brew install llvm
+          PREFIX="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
+          # llvm-sys 221 requires major 22. If the runner's formula moves on,
+          # this must go red, not quietly build something else.
+          "$PREFIX/bin/llvm-config" --version | grep -q '^22\.'
+          echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+
+      - name: Build with the llvm-inprocess feature
+        run: |
+          cargo build --profile perry-dev -p perry -p perry-runtime-static \
+            -p perry-stdlib-static --features perry/llvm-inprocess
+
+      - name: Unit gates (528 incl. corpus construction + RS4GC pin)
+        run: |
+          set -euo pipefail
+          out=$(cargo test --profile perry-dev -p perry-codegen \
+            --features llvm-inprocess --lib 2>&1) || { echo "$out"; exit 1; }
+          # The corpus gates must have RUN, not skipped: a checkout missing
+          # the tracked .ll corpora would otherwise green vacuously.
+          echo "$out" | grep -q "dialect::tests::corpus_spike ... ok"
+          echo "$out" | grep -q "dialect::tests::corpus_batch_kernel ... ok"
+          echo "$out" | grep -q "inprocess::tests::rs4gc_schedules_in_process ... ok"
+
+      - name: Native-mode smoke — liveness, behavior parity, object-byte verdicts
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          BIN=target/perry-dev/perry
+          SRC=experiments/llvm-inprocess-spike/spike.ts
+
+          "$BIN" "$SRC" -o /tmp/spike_text
+          /tmp/spike_text > /tmp/text.out
+
+          PERRY_LLVM_INPROCESS=native "$BIN" "$SRC" -o /tmp/spike_native 2> /tmp/native.err
+          grep -q "in-process LLVM backend active" /tmp/native.err
+          /tmp/spike_native > /tmp/native.out
+          cmp /tmp/text.out /tmp/native.out
+
+          PERRY_LLVM_INPROCESS=diff "$BIN" "$SRC" -o /tmp/spike_diff 2> /tmp/diff.err
+          grep -q "ir-diff. OK" /tmp/diff.err
+
+          PERRY_LLVM_INPROCESS=diff PERRY_CODEGEN_UNITS=3 "$BIN" \
+            benchmarks/app-patterns/kernels/batch.ts -o /tmp/batch_diff 2> /tmp/diffu.err
+          grep -q "ir-diff. OK.*3 units" /tmp/diffu.err
