@@ -374,13 +374,29 @@ tar -xf LLVM-22.1.8-Linux-X64.tar.xz -C ~/opt      # ~12 GB unpacked
 ```
 
 One trap: that tarball is built on Ubuntu, so its baked-in
-`llvm-config --system-libs` answer names the *build host's* static zstd by
-absolute path (`/usr/lib/x86_64-linux-gnu/libzstd.a`). llvm-sys panics on any
-`--system-libs` entry that is neither `-lfoo` nor an existing file, so on any
-other distro the build dies before it starts. Point `LLVM_SYS_221_PREFIX` at a
-one-file shim prefix whose `bin/llvm-config` rewrites that path to `-lzstd` and
-forwards everything else (the real binary still answers all path queries
-relative to its own prefix, so nothing else needs redirecting).
+`llvm-config --system-libs` answer names the *build host's* static system libs
+by absolute path (`/usr/lib/x86_64-linux-gnu/libzstd.a`). llvm-sys panics on
+any `--system-libs` entry that is neither `-lfoo` nor an existing file, so on
+any other distro the build dies before it compiles anything:
+
+```
+Unable to parse result of llvm-config --system-libs: /usr/.../libzstd.a
+```
+
+`mk_llvm_sys_shim.sh` generates the prefix that fixes it — a single wrapper
+`llvm-config` that rewrites *dangling* absolute paths to plain `-lname` and
+forwards everything else, including every path query (the real binary answers
+those relative to its own prefix, so the shim needs no `lib/` or `include/`):
+
+```bash
+experiments/llvm-inprocess-spike/mk_llvm_sys_shim.sh \
+  ~/opt/LLVM-22.1.8-Linux-X64 ~/opt/llvm22-shim
+export LLVM_SYS_221_PREFIX=~/opt/llvm22-shim
+```
+
+Entries that *do* exist are left alone: llvm-sys handles a real absolute path
+fine, and quietly turning a deliberate static link into a dynamic one would be
+a change nobody asked for.
 
 Measured cost of the feature build on this host: `perry` 199 MB (vs 53 MB
 default), `cargo build --profile perry-dev` 2m49s warm-registry cold-target.
