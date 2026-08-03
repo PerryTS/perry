@@ -679,6 +679,60 @@ pub(super) fn lower_precise_roots_to_native_stack(
             || trimmed.contains(" = call ")
             || trimmed.starts_with("tail call ")
             || trimmed.contains(" = tail call ");
+        // #7327: an `invoke` is a call with two successors. Since #7302 moved
+        // exception lowering to `invoke`/`landingpad`, EVERY call inside a
+        // `try` is one — and none matched `is_call`, so they skipped both the
+        // statepoint conversion and the fail-closed panic below, passing
+        // through as ordinary lines. Measured on one program: 58 invokes, 0
+        // carrying `gc.statepoint`, with allocating callees among them
+        // (`js_object_alloc_class_inline_keys`, `js_array_push_f64`,
+        // `js_native_call_method_by_id`). Those frames had no roots at all,
+        // and `--statepoint-report` was silent because it only counts lines it
+        // recognises — "0 parser fallbacks" said nothing about any call inside
+        // a `try`.
+        //
+        // Forming a statepoint FROM an invoke is real work: the statepoint must
+        // itself become an invoke, with `gc.result` and the relocates in the
+        // normal successor. RS4GC already does it correctly. Until the bridge
+        // does, refuse — same fail-closed rule the plain-stackmap fallback was
+        // deleted for (#7314).
+        let is_invoke = trimmed.starts_with("invoke ") || trimmed.contains(" = invoke ");
+        if is_invoke && backend == PreciseRootBackend::Statepoint {
+            let active = active_slots.get(line_idx).and_then(Option::as_ref);
+            let live_here: Vec<&String> = slot_roots
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| active.is_some_and(|slots| slots.contains(idx)))
+                .filter_map(|(_, ptr)| ptr.as_ref())
+                .filter(|ptr| available.contains(*ptr) && initialized.contains(*ptr))
+                .collect();
+            let callee = direct_callee_name(line);
+            let compiler_only = callee.is_some_and(|c| c.starts_with("llvm."));
+            let cannot_collect = callee.is_some_and(|c| {
+                matches!(
+                    crate::gc_call_effects::classify_direct_callee(c),
+                    crate::gc_call_effects::GcCallEffect::CannotCollect
+                        | crate::gc_call_effects::GcCallEffect::NeverReturns
+                )
+            });
+            if let Some(report) = report.as_mut() {
+                report.note_call(live_here.len());
+            }
+            if !live_here.is_empty() && !compiler_only && !cannot_collect {
+                panic!(
+                    "perry: native-root lowering cannot yet express a safepoint on an \
+                     `invoke` — `{}` in @{} has {} live root(s) across it. Since #7302 \
+                     every call inside a `try` is an invoke, so emitting it unchanged \
+                     would leave those roots invisible to the collector (#7327). \
+                     PERRY_RS4GC=1 handles invokes, but needs PERRY_LLVM_CLANG pointing \
+                     at a version-matched LLVM 22 (Apple clang rejects the IR it emits). \
+                     Otherwise compile this module without PERRY_STATEPOINTS.",
+                    callee.unwrap_or("<indirect-or-unsupported>"),
+                    function_name,
+                    live_here.len(),
+                );
+            }
+        }
         if !is_call || trimmed.contains("@llvm.experimental.stackmap") {
             continue;
         }
