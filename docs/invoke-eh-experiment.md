@@ -194,6 +194,47 @@ force-unwind-tables analogue there.
   invoke-mode testing without flipping the workspace default during the flag
   period.
 
+## Acceptance evidence (running)
+
+**Gap suite under `PERRY_EH=invoke`** (2026-08-03, macOS arm64, perry-dev
+compiler + eh-abort runtime archives, `PERRY_SKIP_BUILD=1` harness run):
+93.9% parity, 20 output mismatches, 9 crashes. Attribution:
+
+- **All 20 output mismatches are mode-independent** — byte-identical output
+  and exit codes when recompiled with the same binary/runtime under setjmp
+  mode. 8 are in `known_failures.json`; the other 12 are oracle-environment
+  (node cannot resolve npm fixtures — `package_json_reader:301`; enum tests
+  where `--experimental-strip-types` node errors — `run_main:107`) or
+  pre-existing at this main commit under the perry-dev profile (verified for
+  `test_gap_6301_event_target_subclass` and `test_gap_4510_enum_forward_ref`
+  against the unwind runtime + setjmp transport, i.e. main's exact
+  configuration). **Zero invoke-attributable output regressions.**
+- The **9 crashes are all in the http/net/fetch family** and are a build-
+  coherence artifact of the ad-hoc environment, not a lowering bug: those
+  tests link prebuilt `perry-ext-*` archives whose *bundled* runtime was
+  compiled `panic=unwind` from older source. A JS unwind crossing an
+  ext-archive Rust frame hits the RFC-2945 abort guard — the crash output
+  says `panic in a function that cannot unwind` verbatim (probe scenario s4).
+  One of the three probed also segfaults identically under setjmp mode
+  (`fetch_instanceof_5433`, KNOWN), and `net_connect_bound_value` dies with
+  the same tokio no-reactor panic under both modes. Fix: coherent archives
+  (rebuilding the http-family ext crates under the eh-abort profile) — which
+  the final flip provides globally by putting `panic=abort` on the release
+  profile itself.
+- The three new #7302 tests pass under invoke mode, **including the GC
+  throw-across-collection probe** (200 iterations of allocate-in-try →
+  throw across churn → verify caught value, error payload, and the catching
+  frame's locals).
+- Subject-live check: the traced module IR for the structural-path test
+  contains 106 `invoke`/`landingpad`/`personality` lines and zero setjmp /
+  `returns_twice` / volatile machinery.
+
+**Smoke corpus** (structural paths incl. the #6385 volatile-hazard shape,
+cross-helper throws incl. throwing getter/toString/JSON.parse/map-callback +
+500-frame deep unwind, async boundary + generators + Promise.all combinator
+interplay): byte-for-byte vs Node 26.5.1 under invoke mode; uncaught-throw
+output byte-identical to the setjmp build.
+
 ## Phase 1+ design notes (running)
 
 - Handler bookkeeping: `js_try_push` today returns a jmp_buf and the generated

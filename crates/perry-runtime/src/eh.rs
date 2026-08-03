@@ -114,7 +114,9 @@ fn selfcheck_frame_a() -> usize {
 fn selfcheck_frame_b() -> usize {
     extern "C" fn count(_ctx: *mut UnwindContext, arg: *mut core::ffi::c_void) -> UnwindReasonCode {
         unsafe { *(arg as *mut usize) += 1 };
-        _URC_CONTINUE_UNWIND
+        // _URC_NO_REASON: the ONLY value that lets _Unwind_Backtrace keep
+        // walking — any other reason code stops the trace after one frame.
+        0
     }
     let mut n: usize = 0;
     unsafe {
