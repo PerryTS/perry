@@ -57,12 +57,27 @@ impl Drop for ProtoAddrCacheGuard {
 }
 
 /// Allocate a nursery object to stand in for the intrinsic.
+///
+/// Not exposed on its own: nothing is live in this function before the
+/// allocation, so there is no raw pointer for an in-flight trigger to move
+/// out from under. Callers that keep the returned pointer live across a
+/// FURTHER allocation (`forwarded_pair`, the multi-hop test, the collector
+/// rewrite test) carry their own guard.
 fn nursery_stand_in() -> *mut u8 {
     crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY)
 }
 
 /// Evacuate `from`: allocate an old-gen destination and forward `from` → `to`.
+///
+/// `from` is a raw pointer to a movable nursery object that stays live across
+/// the allocation below. If that allocation lands on the block-full slow
+/// path, `arena_cell_alloc` calls `gc_check_trigger()`, and — absent
+/// suppression — an automatic collection could relocate/free `from` before
+/// the forwarding address is installed, corrupting the synthetic setup this
+/// test file relies on (#6981's tests never intend to exercise a *real*
+/// concurrent collection here, only the hand-driven forwarding chain).
 fn evacuate(from: *mut u8) -> usize {
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let to = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY);
     unsafe {
         set_forwarding_address(header_from_user_ptr(from) as *mut GcHeader, to);
@@ -71,7 +86,13 @@ fn evacuate(from: *mut u8) -> usize {
 }
 
 /// Allocate `from` and `to`, forward `from` → `to`, and return the pair.
+///
+/// `from` is also live in THIS frame across the call to `evacuate` (which
+/// performs the allocation). Guarded here too, in addition to `evacuate`'s
+/// own guard, so the suppression holds for as long as `from` is live in any
+/// frame on this call chain, independent of `evacuate`'s internals.
 fn forwarded_pair() -> (usize, usize) {
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let from = nursery_stand_in();
     let to = evacuate(from);
     (from as usize, to)
@@ -104,6 +125,9 @@ fn read_addr(which: &str) -> usize {
 #[test]
 fn prototype_addr_reads_through_a_forwarding_stub() {
     let _guard = ProtoAddrCacheGuard::new();
+    // Not exposed at this level: `from`/`to` come back as plain `usize`s from
+    // `forwarded_pair`, which carries its own trigger guard, and nothing else
+    // in this loop body allocates.
 
     for which in ["array", "object"] {
         let (from, to) = forwarded_pair();
@@ -132,6 +156,10 @@ fn prototype_addr_reads_through_a_forwarding_stub() {
 #[test]
 fn prototype_addr_reads_through_a_multi_hop_forwarding_chain() {
     let _guard = ProtoAddrCacheGuard::new();
+    // `first` is live across `second`'s allocation, and both `first` and
+    // `second` are live across `final_user`'s allocation — any of the three
+    // could reach the block-full slow path's `gc_check_trigger()`.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let first = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY);
     let second = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY);
@@ -156,6 +184,10 @@ fn prototype_addr_reads_through_a_multi_hop_forwarding_chain() {
 #[test]
 fn prototype_addr_cache_is_rewritten_by_the_collector() {
     let _guard = ProtoAddrCacheGuard::new();
+    // `array_from` is live across the second `nursery_stand_in` call below
+    // (its own allocation, unguarded on its own), and both from-pointers stay
+    // live across the `evacuate` calls that follow.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     // The from-space objects must exist before the valid-pointer set is built —
     // that set is what tells the rewrite visitor an address is a real heap

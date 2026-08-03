@@ -10,6 +10,11 @@ fn test_implicit_this_root_scanner_marks_and_rewrites() {
     // when the cell is its only root, and (b) REWRITE the cell to the moved
     // copy so the body's next `this`-derived dispatch derefs live memory
     // instead of the stale slot (the reported SIGSEGV in js_native_call_method).
+    // `nursery_user` is live across the `arena_alloc_gc_old` call below (used
+    // afterwards to build `nursery_hdr`); the block-full slow path in that
+    // allocation can reach `gc_check_trigger()`, so suppress automatic
+    // triggers for the setup below.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_marks();
     clear_mark_seeds();
     let prev_this = crate::object::js_implicit_this_get();
@@ -59,6 +64,12 @@ fn test_implicit_this_root_scanner_marks_and_rewrites() {
 #[test]
 fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     let _guard = GcTestIsolationGuard::new();
+    // `dynamic_value`/`prototype_value`/`cached_value`/`prototype_object` are
+    // all live across the two `arena_alloc_gc` calls below (`parent_closure`,
+    // `function_key`), and `parent_closure` is live across `function_key`'s —
+    // any of those allocations can reach the block-full slow path's
+    // `gc_check_trigger()`.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_marks();
     clear_mark_seeds();
     crate::object::test_clear_class_side_table_roots();
@@ -115,6 +126,10 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
 #[test]
 fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() {
     let _guard = GcTestIsolationGuard::new();
+    // `value_user` is live across `key_user`'s `arena_alloc_gc` call, and both
+    // `value_user`/`key_user` (plus `value_old` once allocated) are live
+    // across the remaining `arena_alloc_gc`/`arena_alloc_gc_old` calls below.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::object::test_clear_class_side_table_roots();
     gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
 
@@ -191,6 +206,10 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
 
 #[test]
 fn test_symbol_side_table_scanner_marks_keys_and_values_without_marking_owner() {
+    // Not exposed: every allocation here goes through opaque helpers
+    // (`js_object_alloc`, `alloc_nursery_test_symbol`, `young_leaf`) with no
+    // direct `arena_alloc_gc`/`arena_alloc_gc_old` call written in this file,
+    // so there is no in-file call site to guard.
     let _guard = GcTestIsolationGuard::new();
     clear_marks();
     clear_mark_seeds();
@@ -226,6 +245,10 @@ fn test_symbol_side_table_scanner_marks_keys_and_values_without_marking_owner() 
 #[test]
 fn test_symbol_side_table_registered_scanner_rewrites_roots_and_metadata() {
     let _guard = GcTestIsolationGuard::new();
+    // `owner`/`sym_key`/`value`/`static_sym_key`/`static_value` (and the
+    // `_old` addresses as they're allocated) are all live across the three
+    // `arena_alloc_gc_old` calls below.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::symbol::test_clear_symbol_side_table_roots();
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
 
@@ -307,6 +330,8 @@ fn test_symbol_side_table_registered_scanner_rewrites_roots_and_metadata() {
 
 #[test]
 fn test_runtime_root_visitor_rewrites_raw_pointer_slots() {
+    // `nursery_user` is live across the `arena_alloc_gc_old` call below.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let valid_ptrs = build_valid_pointer_set();
     let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
@@ -353,6 +378,10 @@ fn test_class_inheritance_side_table_roots_mark_and_rewrite() {
     const PROTO_CID: u32 = 0xDEAD_0001;
     const CLOSURE_CID: u32 = 0xDEAD_0002;
 
+    // `proto_user`/`decl_proto_user`/`closure_user` (and the `_old` addresses
+    // as they're allocated) are all live across the later `arena_alloc_gc`/
+    // `arena_alloc_gc_old` calls below.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_marks();
     clear_mark_seeds();
 
@@ -432,6 +461,8 @@ fn test_class_inheritance_side_table_roots_mark_and_rewrite() {
 
 #[test]
 fn test_runtime_root_visitor_rewrites_cell_and_atomic_slots() {
+    // `nursery_user` is live across the `arena_alloc_gc_old` call below.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let valid_ptrs = build_valid_pointer_set();
     let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
@@ -485,6 +516,8 @@ fn test_runtime_root_visitor_rewrites_cell_and_atomic_slots() {
 
 #[test]
 fn test_runtime_root_visitor_rewrites_metadata_without_marking() {
+    // `nursery_user` is live across the `arena_alloc_gc_old` call below.
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let valid_ptrs = build_valid_pointer_set();
     let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
