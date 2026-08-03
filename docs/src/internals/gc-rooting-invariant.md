@@ -50,7 +50,7 @@ wrong:
 Four instances shipped in a single day. The detection lag, not the fix, was the
 cost every time.
 
-## The four ways it has actually broken
+## The five ways it has actually broken
 
 ### 1. Slot index past the frame (#7184)
 
@@ -95,36 +95,28 @@ collection point** instead of caching the load.
 
 *Tell:* two operands where one is evaluated first and used last.
 
-### And the one that is still open (#7211)
+### 5. Runtime-cache class (#7226, #7239)
 
-`Expr::ClassExprFresh` roots its class object only when it believes the static
-*initializers* can collect:
+A thread-local or static cell holding a GC pointer that no registered scanner
+rewrites. Unlike the register-class bugs above (which go bad intermittently when a
+collection lands in a narrow window), a runtime cache goes bad at collection #0
+and stays bad.
 
-```rust
-let protect_handle = !captured_args.is_empty()
-    || !symbol_statics.is_empty()
-    || !block_fns.is_empty()
-    || any_may_trigger_gc(ctx, named_statics.iter().map(|(_, v)| v));
-```
+Real instances: `js_value_typeof` interned its eight result strings in
+thread-local `Cell<*mut StringHeader>`s with no registered scanner (#7226);
+`json/raw_json.rs`'s cached `"rawJSON"` key (#7226); and the ten runtime caches
+in #7239 — `CACHED_ENV`, `CACHED_PERMISSION`, `CACHED_REPORT`, `ERROR_CONSTRUCTOR_PTR`,
+`INPUT_HANDLER`, `RESIZE_CALLBACK`, `FRAME_CALLBACKS`, `CURRENT_NEW_TARGET`,
+`ACCESSOR_RECEIVER_OVERRIDE`, and `PENDING_FETCH_SIGNAL`.
 
-Every disjunct asks about code the *author* supplied. None asks whether the
-lowering's **own emitted calls** collect — and the loop below unconditionally
-emits one `js_object_set_field_by_name` per static, which does. So
-`class C { static tag = tag }`, whose only initializer is an inert `LocalGet`,
-takes `protect_handle == false` and goes stale.
+*Tell:* a thread-local or static cell holding a GC pointer. A test that fails 10/10,
+not intermittently, suggests this class rather than a stale register.
 
-This one is worth internalising, because it is the sophisticated version of the
-mistake: the author *did* think about rooting, wrote a predicate for it, and the
-predicate asked the wrong question.
-
-> **`js_object_mark_class` does not save it.** That helper puts the object in
-> `CLASS_OBJECT_VALUES`, which is a registered root and *is* forwarded. The
-> object stays alive and the side table's copy stays correct — and the register
-> is still stale, because the collector rewrote a different copy.
->
-> **Reachability is not the invariant.** The invariant is that the register you
-> are still going to use was rewritten. A side table roots *its* pointer, not
-> yours.
+**`scripts/gc_root_dominance_check.py` is structurally blind to this class** — it
+reads emitted LLVM IR and cannot see a runtime table. The instruments that catch it
+are `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
+on a real workload. When adding a cache of a heap pointer, register it in
+`gc_register_mutable_root_scanner` in `gc/mod.rs` in the same commit.
 
 ## How to check your work
 
@@ -270,13 +262,13 @@ the exact thing this file exists to prevent.
 ### Promoting this gate
 
 **As of this writing the job is NOT in branch protection's required contexts**,
-which means it cannot turn a merge red — hazard 2, and the reason the #7211 hits
-sat unread on `main` from #7198 onward while the job was visibly failing.
+which means it cannot turn a merge red — hazard 2.
 
 Both of the conditions #7198 named are now met:
 
 - the bind-anchored dominance check is green on `main` with an **empty**
-  allowlist (the #7211 entries were deleted when that predicate was fixed);
+  allowlist (the #7211 entries were deleted when that predicate was fixed in
+  #7226);
 - `--unrooted-allocas --moving-only` reads **0** and is a step in the job
   (#7236). That was the outstanding one: it was 98 before #7235, 2 after, and 0
   once `Type::Symbol` stopped being classified as an immediate.
@@ -299,7 +291,9 @@ becomes required.
 
 - **Root before you call, not after.** If a value must survive a call, its root
   store belongs above the call, unconditionally. Do not predicate it on a
-  cleverness about which callees collect — that is bug #5.
+  cleverness about which callees collect — #7211's `ClassExprFresh` tried that and
+  only asked about author-supplied initializers, never about the lowering's own
+  emitted `js_object_set_field_by_name` calls.
 - **Re-read the root after every collection point.** Never cache a load out of a
   root slot across a call. `rooted_handle_get` exists for this.
 - **Evaluate-then-allocate is the hazard.** Any lowering with two or more
