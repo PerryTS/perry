@@ -236,17 +236,54 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
     if function_address == 0 || function_address & 0x3 != 0 {
         return None;
     }
+    // SUB (immediate, 64-bit, shift 0) with Rn = Rd = 31 (sp):
+    // `word & 0xFFC0_03FF == 0xD100_03FF`, immediate in bits [21:10].
+    const SUB_SP_SP_MASK: u32 = 0xFFC0_03FF;
+    const SUB_SP_SP_PATTERN: u32 = 0xD100_03FF;
+
+    let mut fp_offset = None;
     for i in 0..PROLOGUE_WINDOW_INSNS {
         let word = unsafe { std::ptr::read((function_address + i * 4) as *const u32) };
-        if word & ADD_FP_SP_MASK == ADD_FP_SP_PATTERN {
-            return Some(((word >> 10) & 0xFFF) as usize);
+        match fp_offset {
+            None => {
+                if word & ADD_FP_SP_MASK == ADD_FP_SP_PATTERN {
+                    fp_offset = Some(((word >> 10) & 0xFFF) as usize);
+                }
+            }
+            // #7328: `add x29, sp, #imm` is NOT always the last stack
+            // adjustment. LLVM emits a second allocation *after* establishing
+            // the frame pointer when a function has a large or separately-laid-
+            // out local area:
+            //
+            //     stp x29, x30, [sp, #0x90]
+            //     add x29, sp, #0x90        <- fp established here
+            //     sub sp, sp, #0x170        <- body SP drops a further 368
+            //
+            // Reading only the `add` left the fast walker 368 bytes high on
+            // every slot in such a frame, so it enumerated the wrong addresses
+            // and the collector missed live roots. That is a silent wrong
+            // answer, visible only under `PERRY_STACKMAP_WALKER=verify`, which
+            // is not the default. Accumulate every trailing `sub sp, sp, #imm`.
+            Some(offset) => {
+                if word & SUB_SP_SP_MASK == SUB_SP_SP_PATTERN {
+                    let imm = ((word >> 10) & 0xFFF) as usize;
+                    fp_offset = Some(offset + imm);
+                    continue;
+                }
+                // The prologue's stack adjustments are contiguous; the first
+                // instruction after them that is not a `sub sp` ends the run.
+                // Anything later that touches sp is a body operation (a dynamic
+                // alloca, a call-argument area) which the stack map's own
+                // offsets already account for.
+                break;
+            }
         }
         // `ret` ends the prologue window for a leaf that never sets up fp.
         if word == 0xD65F_03C0 {
             break;
         }
     }
-    None
+    fp_offset
 }
 
 #[cfg(not(target_arch = "aarch64"))]
@@ -1352,5 +1389,64 @@ mod tests {
         assert_eq!(closest_record_pc(&maps, 0x1004), Some(0x1000));
         assert_eq!(closest_record_pc(&maps, 0x101c), Some(0x1020));
         assert_eq!(closest_record_pc(&maps, 0x1020), Some(0x1020));
+    }
+}
+
+#[cfg(all(test, target_arch = "aarch64"))]
+mod fp_offset_trailing_sub_tests {
+    use super::fp_to_sp_offset;
+
+    /// Assemble a prologue into executable-ish memory and decode it. The
+    /// decoder only reads words, so a plain aligned buffer is enough.
+    fn decode(words: &[u32]) -> Option<usize> {
+        let buf = words.to_vec().into_boxed_slice();
+        let addr = buf.as_ptr() as usize;
+        let out = fp_to_sp_offset(addr);
+        drop(buf);
+        out
+    }
+
+    const ADD_X29_SP_0X90: u32 = 0x9102_43FD; // add x29, sp, #0x90
+    const SUB_SP_SP_0X170: u32 = 0xD105_C3FF; // sub sp, sp, #0x170
+    const RET: u32 = 0xD65F_03C0;
+    const NOP: u32 = 0xD503_201F;
+
+    /// #7328: `add x29, sp, #imm` is not always the last stack adjustment.
+    /// LLVM emits a further `sub sp, sp, #N` after establishing the frame
+    /// pointer, and reading only the `add` left the fast walker N bytes high
+    /// on every slot in that frame — a silent wrong answer, since the walker
+    /// then enumerated addresses the collector treated as roots.
+    #[test]
+    fn a_sub_after_the_fp_setup_is_included() {
+        assert_eq!(
+            decode(&[ADD_X29_SP_0X90, SUB_SP_SP_0X170, NOP, RET]),
+            Some(0x90 + 0x170),
+            "the trailing `sub sp, sp, #0x170` must be added to the fp offset"
+        );
+    }
+
+    /// The common shape — fp established last — must be unchanged.
+    #[test]
+    fn a_prologue_with_no_trailing_sub_is_unchanged() {
+        assert_eq!(decode(&[ADD_X29_SP_0X90, NOP, RET]), Some(0x90));
+    }
+
+    /// Only a contiguous run of `sub sp` immediately after the `add` counts.
+    /// A later `sub sp` is a body operation (dynamic alloca, call-argument
+    /// area) already accounted for by the stack map's own slot offsets.
+    #[test]
+    fn a_sub_after_the_prologue_run_is_not_counted() {
+        assert_eq!(
+            decode(&[ADD_X29_SP_0X90, NOP, SUB_SP_SP_0X170, RET]),
+            Some(0x90),
+            "a `sub sp` separated from the prologue run must not be folded in"
+        );
+    }
+
+    /// A leaf that never sets up fp still fails closed, so the caller falls
+    /// back to the platform unwinder rather than inventing an offset.
+    #[test]
+    fn a_leaf_without_fp_setup_still_fails_closed() {
+        assert_eq!(decode(&[NOP, RET]), None);
     }
 }
