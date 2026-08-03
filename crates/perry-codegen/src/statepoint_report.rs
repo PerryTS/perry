@@ -1,9 +1,15 @@
 //! Observational root-pressure report for the native-stack GC experiments.
 //!
-//! `PERRY_STATEPOINT_REPORT=1|text|json` records how many textual calls see
-//! live roots, which ones can be omitted after the GC-effect audit, and how
-//! much statepoint/stack-map metadata remains. Codegen never reads the data
-//! back, so enabling the report cannot affect emitted IR.
+//! `perry compile --statepoint-report[=text|json]` records how many textual
+//! calls see live roots, which ones can be omitted after the GC-effect audit,
+//! and how much statepoint/stack-map metadata remains. Codegen never reads the
+//! data back, so enabling the report cannot affect emitted IR.
+//!
+//! `PERRY_STATEPOINT_REPORT` is how the driver carries that flag across to the
+//! rayon module workers — the driver sets it, nothing else should. It is not a
+//! user-facing knob: accepting it from the environment made it a fifth GC env
+//! knob with no CI arm, so that spelling was deleted under CLAUDE.md's GC knob
+//! kill policy. `gc-native-roots.yml` exercises the report through the flag.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

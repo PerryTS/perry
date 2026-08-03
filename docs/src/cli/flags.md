@@ -229,7 +229,12 @@ shrink less, proportionally.
 | `CI=true` | Auto-skip update checks (set by most CI systems) |
 | `RUST_LOG` | Debug logging level (`debug`, `info`, `trace`) |
 | `PERRY_OPT_REPORT` | `1`/`text` or `json` — same as `--opt-report[=json]`, for driving the report from an environment where adding a flag is awkward |
-| `PERRY_STATEPOINT_REPORT` | `1`/`text` or `json` — same as `--statepoint-report[=json]`; observational root-pressure reporting for the native-stack GC experiments |
+
+The native-stack GC root-pressure report has **no** environment spelling: use
+`--statepoint-report[=json]`. The `PERRY_STATEPOINT_REPORT` variable is set by
+the driver to carry that flag to the codegen workers and is not read as user
+input — it was a fifth GC env knob with no CI arm, and was deleted under
+CLAUDE.md's GC knob kill policy.
 
 ## Configuration Files
 

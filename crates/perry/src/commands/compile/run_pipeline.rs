@@ -227,13 +227,14 @@ pub fn run_with_parse_cache(
     // observational and must be enabled before rayon starts module codegen.
     // Cache reuse is disabled because cached objects bypass the lowering that
     // records each function.
-    let statepoint_report_format = args.statepoint_report.or_else(|| {
-        match std::env::var("PERRY_STATEPOINT_REPORT").as_deref() {
-            Ok("json") => Some(StatepointReportFormat::Json),
-            Ok("1") | Ok("text") => Some(StatepointReportFormat::Text),
-            _ => None,
-        }
-    });
+    //
+    // `PERRY_STATEPOINT_REPORT` is written here and read by the rayon module
+    // workers; it is NOT a user-facing knob. It used to be accepted from the
+    // environment as a second spelling of `--statepoint-report`, which made it
+    // a fifth GC env knob with no CI arm — deleted under CLAUDE.md's kill
+    // policy (#7314 review item), leaving the flag as the single entry point.
+    // `--opt-report` keeps its env spelling because that one is not a GC knob.
+    let statepoint_report_format = args.statepoint_report;
     if let Some(fmt) = statepoint_report_format {
         std::env::set_var(
             "PERRY_STATEPOINT_REPORT",

@@ -1,13 +1,58 @@
-# #7173: native-root (statepoint) GC verification on Linux.
+# #7173: native-frame GC root verification.
 #
-# Runs the gc-ratchet probe matrix in statepoint mode under forced
+# Runs the gc-ratchet probe matrix in every native-root mode under forced
 # evacuation + evacuation verification, byte-diffed against the pinned Node
-# oracle, natively on the Linux runner — the same matrix the branch runs on
-# macOS, webserver-class x86-64, and the Pi 5. Two liveness asserts keep
-# this from being a gate that cannot fail (CLAUDE.md's four ways):
-# the binary must carry a .perry_gcmap section (and no .llvm_stackmaps,
-# proving the compact rewrite ran), and at least
-# one probe must report a copying collection.
+# oracle. Each arm carries a liveness assert, because CLAUDE.md's fourth way a
+# gate cannot fail is the one that looks green: the job runs, but its subject
+# never did. `PERRY_GC_FORCE_EVACUATE` was inert for every `gc()`-driven test
+# for months (#6942/#6946) and the matrix's `--pressure` knob disabled the very
+# path it was measuring (#7024) — both were green the whole time.
+#
+# ── Why the matrix runs on macos-14 (aarch64) and not ubuntu-latest ─────────
+#
+# It used to say ubuntu-latest, and it had never once gone green there. The
+# compact-map rewriter refuses the FIRST probe on x86-64 Linux:
+#
+#   perry: this module emits an LLVM stack map that the compact-map rewriter
+#   could not parse, so its GC roots would be invisible to the collector
+#   (the runtime reads only the compact section). Refusing to emit a binary
+#   that would lose roots silently.
+#
+# That is the fail-closed path working exactly as designed — but it means the
+# native-root mechanism does not compile on x86-64 today, so a matrix pointed
+# there gates nothing while looking like it gates everything. gc_map.rs encodes
+# its base registers in aarch64 terms throughout (`DWARF_REG_{FP,SP}_AARCH64`,
+# "x19 on aarch64"), which is consistent with that, though this workflow does
+# not prove the cause. The gap is asserted, not hidden: `statepoints-refuse-x86`
+# below fails the day x86-64 starts working, so nobody has to remember to come
+# back and widen the matrix. Tracked as #7321.
+#
+# ── RUSTFLAGS ───────────────────────────────────────────────────────────────
+#
+# `-C force-unwind-tables=yes` is NOT optional and is NOT redundant with
+# .cargo/config.toml. Cargo takes rustflags from exactly one source, so setting
+# the RUSTFLAGS env var here REPLACES the config file's `[build] rustflags`
+# wholesale — the config file says so in a comment, and this workflow used to
+# set only `-Cforce-frame-pointers=yes` and lose it. Measured consequence, A/B'd
+# locally on the same tree: `09_try_catch_roots` aborts with "unwind tables are
+# missing from this runtime build (0 frame(s) visible to the unwinder)", and the
+# platform unwinder visits ZERO frames — so on any host where the x29 chain walk
+# is unavailable the native-root walker finds no roots at all, while forced
+# evacuation stays quiet because it enumerates roots through that same walker.
+#
+# ── The knobs this workflow exists to keep honest ───────────────────────────
+#
+# CLAUDE.md's GC knob kill-policy: an arm exercising the non-default state, or
+# delete the mode.
+#
+#   PERRY_STATEPOINTS        -> native-roots-aarch64, "statepoint mode" step
+#   PERRY_GC_SAFEPOINT_ONLY  -> native-roots-aarch64, "safepoint-only" steps
+#   PERRY_STACKMAP_WALKER    -> native-roots-aarch64, "both non-default walkers"
+#   PERRY_RS4GC              -> native-roots-rs4gc-aarch64
+#   PERRY_STATEPOINT_REPORT  -> deleted. It was a second spelling of
+#                               `--statepoint-report`; the flag is now the only
+#                               entry point and the "fails closed" step is its
+#                               arm.
 name: gc-native-roots
 on:
   # Must run where it can actually gate something. Branch-scoped triggers were
@@ -21,9 +66,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  statepoint-linux:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  native-roots-aarch64:
+    runs-on: macos-14
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,12 +77,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: gc-native-roots
+          shared-key: gc-native-roots
       - name: Build compiler and static runtime (perry-dev profile)
         run: |
-          export RUSTFLAGS="-Cforce-frame-pointers=yes"
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
           cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+
+      # Every arm below carries `if: ${{ !cancelled() }}`. A job is a SEQUENCE
+      # of independent gates and a failed step takes every later step to
+      # `skipped`, so without this one red arm silently stops the other three
+      # from ever speaking — the same hazard `lint` documents at length.
       - name: Probe matrix, statepoint mode, forced evacuation
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
@@ -54,10 +105,10 @@ jobs:
             # replaced LLVM's section, so assert BOTH facts — the new section
             # is present AND the old one is gone. Checking only the former
             # would still pass if compaction silently stopped running.
-            readelf -S "/tmp/$name" | grep -q "\.perry_gcmap" \
-              || { echo "::error::$name has no .perry_gcmap section — statepoint mode was not live"; exit 1; }
-            readelf -S "/tmp/$name" | grep -q "\.llvm_stackmaps" \
-              && { echo "::error::$name still carries .llvm_stackmaps — the compact rewrite did not run"; exit 1; }
+            otool -l "/tmp/$name" | grep -q "sectname __perry_gcmap" \
+              || { echo "::error::$name has no __perry_gcmap section — statepoint mode was not live"; exit 1; }
+            otool -l "/tmp/$name" | grep -q "sectname __llvm_stackmaps" \
+              && { echo "::error::$name still carries __llvm_stackmaps — the compact rewrite did not run"; exit 1; }
             PERRY_STATEPOINTS=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
               "/tmp/$name" > "/tmp/$name.out" 2> "/tmp/$name.err"
             diff "/tmp/$name.oracle" "/tmp/$name.out" \
@@ -78,3 +129,313 @@ jobs:
           # with a zero.
           grep -l "#gcmetric" $errs >/dev/null \
             || { echo "::error::no probe emitted gc metrics — the collector never ran"; exit 1; }
+
+      - name: Root-pressure report fails closed (--statepoint-report)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          # The arm for the report itself. `PERRY_STATEPOINT_REPORT` was deleted
+          # as a user-facing knob (a second spelling of this flag, with no arm),
+          # so the flag is the only entry point and it needs one.
+          #
+          # It also asserts #7314's headline claim — that every root path fails
+          # CLOSED. `plain_stack_maps` and `statepoint_fallbacks` must both be
+          # zero: LLVM's plain stackmap can record a root as `Register R#N`
+          # (caller-saved, unrecoverable at collection time), so a nonzero count
+          # here is silently lost roots, not a degraded-but-safe mode.
+          probe=benchmarks/gc_ratchet/probes/09_try_catch_roots.ts
+          PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" \
+            -o /tmp/report-probe --statepoint-report=json 2> /tmp/statepoint-report.json
+          python3 scripts/statepoint_report_assert.py /tmp/statepoint-report.json \
+            --only-backend statepoint \
+            --require-positive statepoints \
+            --require-positive relocations \
+            --require-zero plain_stack_maps \
+            --require-zero statepoint_fallbacks
+
+      # PERRY_GC_SAFEPOINT_ONLY: the explicit-safepoint collection contract.
+      # Under it, audited allocate-but-never-reenter helpers need no statepoint
+      # so codegen emits fewer, and the runtime enforces that a precise-root
+      # collection only ever begins at a declared safepoint. `strict` is the
+      # mode that panics rather than heals — by the contract's own docs, the
+      # mode that proves enforcement is live — so that is the mode run here.
+      - name: Safepoint-only contract changes codegen (differential)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          # A `strict` run that never trips the panic proves the enforcement was
+          # armed but NOT that the contract did anything, because a build where
+          # it changed no code would be equally quiet. The differential is the
+          # assert with teeth: with the contract on, codegen must skip strictly
+          # MORE calls and emit strictly FEWER statepoints.
+          #
+          # Aggregated over the whole glob on purpose. Some individual probes
+          # contain no AllocNoReentry callee at all and show a zero delta
+          # (09_try_catch_roots is one, measured), so a per-probe assert would
+          # be a coin flip on which probe the author happened to pick.
+          off_sp=0; off_sk=0; on_sp=0; on_sk=0
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            name=$(basename "$probe" .ts)
+            PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" \
+              -o /dev/null --statepoint-report=json 2> "/tmp/off-$name.json"
+            PERRY_STATEPOINTS=1 PERRY_GC_SAFEPOINT_ONLY=strict ./target/perry-dev/perry "$probe" \
+              -o /dev/null --statepoint-report=json 2> "/tmp/on-$name.json"
+            off_sp=$((off_sp + $(python3 scripts/statepoint_report_assert.py "/tmp/off-$name.json" --print statepoints)))
+            off_sk=$((off_sk + $(python3 scripts/statepoint_report_assert.py "/tmp/off-$name.json" --print skipped_non_safepoints)))
+            on_sp=$((on_sp + $(python3 scripts/statepoint_report_assert.py "/tmp/on-$name.json" --print statepoints)))
+            on_sk=$((on_sk + $(python3 scripts/statepoint_report_assert.py "/tmp/on-$name.json" --print skipped_non_safepoints)))
+          done
+          echo "contract off: statepoints=$off_sp skipped_non_safepoints=$off_sk"
+          echo "contract on : statepoints=$on_sp skipped_non_safepoints=$on_sk"
+          if [ "$on_sk" -le "$off_sk" ]; then
+            echo "::error::PERRY_GC_SAFEPOINT_ONLY skipped no additional calls ($on_sk <= $off_sk) — the contract never reached codegen and this arm asserted nothing"
+            exit 1
+          fi
+          if [ "$on_sp" -ge "$off_sp" ]; then
+            echo "::error::PERRY_GC_SAFEPOINT_ONLY removed no statepoints ($on_sp >= $off_sp) — the contract never reached codegen"
+            exit 1
+          fi
+
+      - name: Probe matrix, safepoint-only contract in strict mode
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          pass=0
+          total=0
+          errs=""
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            total=$((total+1))
+            name=$(basename "$probe" .ts)
+            node --expose-gc --experimental-strip-types "$probe" > "/tmp/so-$name.oracle"
+            PERRY_STATEPOINTS=1 PERRY_GC_SAFEPOINT_ONLY=strict \
+              ./target/perry-dev/perry "$probe" -o "/tmp/so-$name"
+            otool -l "/tmp/so-$name" | grep -q "sectname __perry_gcmap" \
+              || { echo "::error::$name has no __perry_gcmap section — statepoint mode was not live"; exit 1; }
+            # strict PANICS if a precise-root collection ever begins outside a
+            # declared safepoint, so a clean exit here is the enforcement
+            # holding, not the enforcement being absent.
+            PERRY_STATEPOINTS=1 PERRY_GC_SAFEPOINT_ONLY=strict \
+              PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              "/tmp/so-$name" > "/tmp/so-$name.out" 2> "/tmp/so-$name.err"
+            diff "/tmp/so-$name.oracle" "/tmp/so-$name.out" \
+              || { echo "::error::$name diverged from the oracle under the safepoint-only contract"; exit 1; }
+            errs="$errs /tmp/so-$name.err"
+            pass=$((pass+1))
+          done
+          echo "safepoint-only strict matrix: $pass/$total"
+          [ "$total" -gt 0 ] \
+            || { echo "::error::no probes matched — the matrix ran on nothing"; exit 1; }
+          [ "$pass" -eq "$total" ]
+          grep -l "#gcmetric" $errs >/dev/null \
+            || { echo "::error::no probe emitted gc metrics — the collector never ran"; exit 1; }
+
+      # PERRY_STACKMAP_WALKER. This arm is aarch64-only for a second, unrelated
+      # reason: the x29 chain walk is compiled in for `any(macos, linux) +
+      # aarch64` and stubbed to `None` everywhere else, so on x86-64 `fast`
+      # silently degrades to the unwinder and `verify` panics outright on "fast
+      # walk unavailable". An arm for this knob on an x86-64 runner would assert
+      # the opposite of what it appears to.
+      - name: Probe matrix under both non-default walkers
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          pass=0
+          total=0
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            total=$((total+1))
+            name=$(basename "$probe" .ts)
+            node --expose-gc --experimental-strip-types "$probe" > "/tmp/w-$name.oracle"
+            # The walker is a RUNTIME knob — one binary, two walks over it.
+            PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" -o "/tmp/w-$name"
+
+            # verify: runs the chain walk AND the unwinder and panics unless
+            # they visit the identical slot set. It is the only check that can
+            # catch a fast walk silently skipping frames — forced-evacuation
+            # verification enumerates roots through the same walker, so it
+            # cannot see a slot the walker never reached.
+            PERRY_STACKMAP_WALKER=verify PERRY_GC_TRACE=1 \
+              PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              "/tmp/w-$name" > "/tmp/w-$name.verify.out" 2> "/tmp/w-$name.verify.err"
+            diff "/tmp/w-$name.oracle" "/tmp/w-$name.verify.out" \
+              || { echo "::error::$name diverged from the oracle under PERRY_STACKMAP_WALKER=verify"; exit 1; }
+            python3 scripts/gc_walker_trace_assert.py "/tmp/w-$name.verify.err" --require-fp-walks
+
+            # unwind: the bisection control. Same roots, platform unwinder only.
+            PERRY_STACKMAP_WALKER=unwind PERRY_GC_TRACE=1 \
+              PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              "/tmp/w-$name" > "/tmp/w-$name.unwind.out" 2> "/tmp/w-$name.unwind.err"
+            diff "/tmp/w-$name.oracle" "/tmp/w-$name.unwind.out" \
+              || { echo "::error::$name diverged from the oracle under PERRY_STACKMAP_WALKER=unwind"; exit 1; }
+            python3 scripts/gc_walker_trace_assert.py "/tmp/w-$name.unwind.err" --forbid-fp-walks
+
+            pass=$((pass+1))
+          done
+          echo "stackmap-walker verify+unwind matrix: $pass/$total"
+          [ "$total" -gt 0 ] \
+            || { echo "::error::no probes matched — the matrix ran on nothing"; exit 1; }
+          [ "$pass" -eq "$total" ]
+
+  # PERRY_RS4GC=1: LLVM's own RewriteStatepointsForGC inserts the statepoints
+  # instead of Perry's explicit bridge. Split from the job above because it is
+  # the one arm with an external-tool dependency (`opt`), so a Homebrew hiccup
+  # cannot take the core arms down with it.
+  native-roots-rs4gc-aarch64:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gc-native-roots
+      - name: Build compiler and static runtime (perry-dev profile)
+        run: |
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+      - name: Probe matrix, RS4GC mode, forced evacuation
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+
+          # `opt` and `clang` MUST come from the same LLVM install. RS4GC pipes
+          # each module through `opt` and hands the result to `clang`, so a
+          # newer `opt` emits attributes an older `clang` rejects — measured
+          # locally as `error: unterminated attribute group` on
+          # `nocreateundeforpoison`, Homebrew opt 22 feeding Apple clang, which
+          # is the pairing Perry's own independent discovery picks by default on
+          # a Mac. Anyone enabling this knob hits that; pin both here.
+          brew list llvm >/dev/null 2>&1 || brew install llvm
+          llvm_bin="$(brew --prefix llvm)/bin"
+          if [ ! -x "$llvm_bin/opt" ] || [ ! -x "$llvm_bin/clang" ]; then
+            echo "::error::no matched opt+clang pair under $llvm_bin — RS4GC cannot run, and silently skipping it is exactly the gate that cannot fail"
+            exit 1
+          fi
+          export PERRY_LLVM_OPT="$llvm_bin/opt"
+          export PERRY_LLVM_CLANG="$llvm_bin/clang"
+          echo "RS4GC toolchain: $llvm_bin"
+          "$PERRY_LLVM_OPT" --version | head -2
+          "$PERRY_LLVM_CLANG" --version | head -2
+
+          pass=0
+          total=0
+          errs=""
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            total=$((total+1))
+            name=$(basename "$probe" .ts)
+            node --expose-gc --experimental-strip-types "$probe" > "/tmp/rs4gc-$name.oracle"
+            PERRY_RS4GC=1 ./target/perry-dev/perry "$probe" -o "/tmp/rs4gc-$name"
+            otool -l "/tmp/rs4gc-$name" | grep -q "sectname __perry_gcmap" \
+              || { echo "::error::$name has no __perry_gcmap section — RS4GC produced no native root map"; exit 1; }
+            otool -l "/tmp/rs4gc-$name" | grep -q "sectname __llvm_stackmaps" \
+              && { echo "::error::$name still carries __llvm_stackmaps — the compact rewrite did not run"; exit 1; }
+            PERRY_RS4GC=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              "/tmp/rs4gc-$name" > "/tmp/rs4gc-$name.out" 2> "/tmp/rs4gc-$name.err"
+            diff "/tmp/rs4gc-$name.oracle" "/tmp/rs4gc-$name.out" \
+              || { echo "::error::$name diverged from the pinned oracle under RS4GC"; exit 1; }
+            errs="$errs /tmp/rs4gc-$name.err"
+            pass=$((pass+1))
+          done
+          echo "RS4GC forced-evacuation matrix: $pass/$total"
+          [ "$total" -gt 0 ] \
+            || { echo "::error::no probes matched — the matrix ran on nothing"; exit 1; }
+          [ "$pass" -eq "$total" ]
+          grep -l "#gcmetric" $errs >/dev/null \
+            || { echo "::error::no probe emitted gc metrics — the collector never ran"; exit 1; }
+
+          # Liveness assert: RS4GC bails PER FUNCTION to the explicit statepoint
+          # bridge on any unrecognised root-alloca shape. The matrix above could
+          # therefore be 9/9 green with RS4GC having rewritten nothing at all —
+          # every function quietly lowered by the other backend, the arm
+          # measuring the mode it was not testing. `--only-backend rs4gc`
+          # rejects a single such fallback.
+          PERRY_RS4GC=1 ./target/perry-dev/perry \
+            benchmarks/gc_ratchet/probes/09_try_catch_roots.ts \
+            -o /tmp/rs4gc-report-probe --statepoint-report=json 2> /tmp/rs4gc-report.json
+          python3 scripts/statepoint_report_assert.py /tmp/rs4gc-report.json \
+            --only-backend rs4gc
+
+  # The x86-64 gap, asserted rather than left as folklore. Statepoints do not
+  # compile on x86-64 Linux today — the compact-map rewriter refuses, which is
+  # the fail-closed path doing its job. This job pins that refusal so it stays a
+  # REFUSAL (never a silently rootless binary), and goes red the day x86-64
+  # starts working, which is the prompt to widen the aarch64 matrix above (#7321).
+  # Deliberately cheap: one probe, no runtime, no oracle.
+  statepoints-refuse-x86:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gc-native-roots-x86
+      - name: Build compiler and static runtime (perry-dev profile)
+        run: |
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+      - name: Statepoints must refuse, not silently drop roots
+        run: |
+          set -uo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          probe=benchmarks/gc_ratchet/probes/01_nursery_churn.ts
+          set +e
+          PERRY_STATEPOINTS=1 ./target/perry-dev/perry "$probe" -o /tmp/x86-probe \
+            > /tmp/x86.out 2> /tmp/x86.err
+          rc=$?
+          set -e
+          tail -40 /tmp/x86.out /tmp/x86.err || true
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::PERRY_STATEPOINTS now compiles on x86-64. That is good news and this job is the wrong shape for it: move the x86-64 host into native-roots-aarch64's matrix (rename it) and delete this job."
+            exit 1
+          fi
+          # Non-zero for the RIGHT reason. Any old failure (missing clang, a
+          # broken checkout) would also be non-zero, and a job green on an
+          # unrelated error is the hazard this whole workflow is about.
+          if ! grep -qiE "stack map|compact-map|gc roots would be invisible" /tmp/x86.out /tmp/x86.err; then
+            echo "::error::statepoint compilation failed on x86-64, but not with the compact-map refusal this job asserts. Read the output above: either the refusal message changed, or something unrelated is broken."
+            exit 1
+          fi
+          echo "x86-64: statepoint compilation refuses, as expected, with the compact-map message."
+
+  # Fan-in, mirroring `conformance-smoke-complete` in test.yml: ONE context for
+  # branch protection to require, so adding an arm never needs a protection edit
+  # and a red arm cannot hide behind a green sibling.
+  gc-native-roots-complete:
+    needs: [native-roots-aarch64, native-roots-rs4gc-aarch64, statepoints-refuse-x86]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every native-root arm to pass
+        run: |
+          set -euo pipefail
+          failed=0
+          for arm in \
+            "native-roots-aarch64=${{ needs.native-roots-aarch64.result }}" \
+            "native-roots-rs4gc-aarch64=${{ needs.native-roots-rs4gc-aarch64.result }}" \
+            "statepoints-refuse-x86=${{ needs.statepoints-refuse-x86.result }}"; do
+            echo "$arm"
+            case "$arm" in
+              *=success) ;;
+              *) failed=1 ;;
+            esac
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::a native-root arm failed, was cancelled, or was skipped"
+            exit 1
+          fi
+          echo "All native-root arms passed."
