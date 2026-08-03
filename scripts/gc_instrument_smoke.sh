@@ -135,6 +135,60 @@ if [[ "$zeal_retired" -le "$nozeal_retired" ]]; then
   exit 1
 fi
 
+# ---- arm 4: the quarantine, aimed at real programs --------------------------
+#
+# #7341. Everything above drives the instrument with PERRY_GC_MOVING_LOOP_POLLS
+# over ONE synthetic fixture. Back-edge polls fire only while user JS runs, so
+# that configuration structurally CANNOT expose an unrooted pointer in runtime
+# code that does not re-enter user JS -- which is most of the runtime. The gate
+# was well built and pointed at the wrong workload; aiming it at the gc_ratchet
+# probes by the ALLOCATION-POINT route instead found 55 stale from-space
+# dereferences across the gap suite, 44 of them in programs that exit cleanly
+# and print the right answer.
+#
+# It has to be a fault-based check, not an output check: evacuation copies
+# rather than zeroes, so a stale address still reads the correct old bytes.
+# Only unmapping retired from-space turns the latent access into a signal.
+PROBES="$(dirname "$0")/../benchmarks/gc_ratchet/probes"
+if [[ -d "$PROBES" ]]; then
+  echo
+  echo "== arm 4: quarantine over the gc_ratchet probes (allocation-point route) =="
+  probe_count=0
+  probe_failed=0
+  for probe in "$PROBES"/*.ts; do
+    [[ -e "$probe" ]] || continue
+    name="$(basename "$probe" .ts)"
+    probe_count=$((probe_count + 1))
+    "$PERRY_BIN" compile "$probe" -o "$WORK/$name" >/dev/null
+    set +e
+    PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 \
+    PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+      "$WORK/$name" > "$WORK/$name.out" 2> "$WORK/$name.err"
+    rc=$?
+    set -e
+    if [[ $rc -ge 128 ]]; then
+      echo "FAIL [$name]: signalled $rc under from-space quarantine." >&2
+      echo "      A live value still pointed into retired from-space after an" >&2
+      echo "      evacuating minor. The handler's diagnosis:" >&2
+      grep -A6 'gc-fromspace-protect. FAULT' "$WORK/$name.err" >&2 || true
+      probe_failed=$((probe_failed + 1))
+    fi
+  done
+  # Non-vacuity: the arm must have had a subject. A probe set that silently
+  # stopped matching would otherwise report a clean sweep of nothing -- the
+  # exact shape of #6942 / #7024 / #7336.
+  if [[ "$probe_count" -eq 0 ]]; then
+    echo "FAIL: no probes matched $PROBES -- arm 4 ran on nothing." >&2
+    exit 1
+  fi
+  if [[ "$probe_failed" -ne 0 ]]; then
+    echo "FAIL: $probe_failed/$probe_count probes faulted under the quarantine." >&2
+    exit 1
+  fi
+  echo "  $probe_count/$probe_count probes clean under from-space quarantine"
+fi
+
 echo
 echo "PASS: instruments inert when off (0 retirements), live when on"
 echo "      (no-zeal=$nozeal_retired, zeal=$zeal_retired retirements), program correct in all arms."
+echo "      Quarantine clean over $probe_count real probes (allocation-point route)."
