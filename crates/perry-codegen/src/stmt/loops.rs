@@ -4,7 +4,7 @@ use super::*;
 
 use crate::expr::{
     array_kind_fact, effect_fact, emit_typed_feedback_register_site, nanbox_pointer_inline,
-    raw_f64_layout_fact, BoundedIndexPair, IntRangeFact, PackedF64LoopFact, PackedNumericLoopKind,
+    raw_f64_layout_fact, BoundedIndexPair, PackedF64LoopFact, PackedNumericLoopKind,
     TypedFeedbackContract, TypedFeedbackKind,
 };
 use crate::loop_purity::body_needs_asm_barrier;
@@ -4966,9 +4966,14 @@ fn lower_for_after_init_with_i32_bound(
             }
         }
     }
-    if let Some(fact) =
-        classify_for_counter_range(init, condition, update, body, ctx, loop_proof_scope_id)
-    {
+    if let Some(fact) = super::counter_range::classify_for_counter_range(
+        init,
+        condition,
+        update,
+        body,
+        ctx,
+        loop_proof_scope_id,
+    ) {
         ctx.int_range_facts.push(fact);
     }
 
@@ -5912,7 +5917,7 @@ fn update_is_absent_or_counter_increment(
     })
 }
 
-fn stmts_mutate_local(stmts: &[perry_hir::Stmt], local_id: u32) -> bool {
+pub(super) fn stmts_mutate_local(stmts: &[perry_hir::Stmt], local_id: u32) -> bool {
     stmts.iter().any(|stmt| stmt_mutates_local(stmt, local_id))
 }
 
@@ -5994,7 +5999,7 @@ fn stmt_mutates_local(stmt: &perry_hir::Stmt, local_id: u32) -> bool {
     }
 }
 
-fn expr_mutates_local(expr: &perry_hir::Expr, local_id: u32) -> bool {
+pub(super) fn expr_mutates_local(expr: &perry_hir::Expr, local_id: u32) -> bool {
     use perry_hir::Expr;
     match expr {
         Expr::LocalSet(id, value) => *id == local_id || expr_mutates_local(value, local_id),
@@ -6016,68 +6021,6 @@ fn expr_mutates_local(expr: &perry_hir::Expr, local_id: u32) -> bool {
             });
             found
         }
-    }
-}
-
-fn classify_for_counter_range(
-    init: Option<&perry_hir::Stmt>,
-    cond: Option<&perry_hir::Expr>,
-    update: Option<&perry_hir::Expr>,
-    body: &[perry_hir::Stmt],
-    ctx: &crate::expr::FnCtx<'_>,
-    scope_id: u32,
-) -> Option<IntRangeFact> {
-    use perry_hir::{CompareOp, Expr, Stmt, UpdateOp};
-    let (counter_id, start) = match init? {
-        Stmt::Let {
-            id,
-            init: Some(Expr::Integer(start)),
-            ..
-        } => (*id, *start),
-        _ => return None,
-    };
-    let Expr::Compare { op, left, right } = cond? else {
-        return None;
-    };
-    if !matches!(op, CompareOp::Lt | CompareOp::Le) {
-        return None;
-    }
-    if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) {
-        return None;
-    }
-    if !matches!(
-        update?,
-        Expr::Update {
-            id,
-            op: UpdateOp::Increment,
-            ..
-        } if *id == counter_id
-    ) {
-        return None;
-    }
-    if let Expr::LocalGet(bound_id) = right.as_ref() {
-        if !local_bound_is_loop_invariant(cond?, update, body, *bound_id) {
-            return None;
-        }
-    }
-    let bound_range = crate::expr::int_range_expr(ctx, right)?;
-    if bound_range.min != bound_range.max {
-        return None;
-    }
-    let upper = bound_range
-        .max
-        .checked_sub(if matches!(op, CompareOp::Lt) { 1 } else { 0 })?;
-    if start <= upper {
-        Some(IntRangeFact {
-            local_id: counter_id,
-            scope_id,
-            range: crate::expr::IntRange {
-                min: start,
-                max: upper,
-            },
-        })
-    } else {
-        None
     }
 }
 

@@ -105,7 +105,7 @@ impl RegCounter {
 
 pub struct LlBlock {
     pub label: String,
-    instructions: Vec<String>,
+    instructions: Vec<crate::inst::LlInst>,
     terminated: bool,
     counter: Rc<RegCounter>,
     fp_flags: FpFlags,
@@ -165,16 +165,7 @@ impl LlBlock {
     /// check cannot be invalidated mid-loop). Intrinsic/libm-style calls
     /// never enter the perry runtime, so they cannot trigger a collection.
     pub fn contains_gc_unsafe_call(&self) -> bool {
-        self.instructions.iter().any(|line| {
-            // Invoke-EH (#7302): an `invoke` is a call with an unwind edge —
-            // it must count here too, or a runtime call inside a `try` would
-            // silently pass the call-free verification.
-            let Some(pos) = line.find("call ").or_else(|| line.find("invoke ")) else {
-                return false;
-            };
-            let callee = &line[pos..];
-            !callee.contains("@llvm.") && !callee.contains(" asm ")
-        })
+        self.instructions.iter().any(|i| i.is_gc_unsafe_call())
     }
 
     /// Allocate a fresh SSA register name in the enclosing function's
@@ -187,6 +178,15 @@ impl LlBlock {
         self.reg()
     }
 
+    /// Typed twin of [`emit`]: same terminator discipline, no line
+    /// formatting.
+    fn push_inst(&mut self, inst: crate::inst::LlInst) {
+        if self.terminated {
+            return;
+        }
+        self.instructions.push(inst);
+    }
+
     fn emit(&mut self, line: impl Into<String>) {
         // Never emit instructions after a terminator — LLVM rejects them and
         // the symptom is a confusing `clang` parse error many lines later.
@@ -197,7 +197,8 @@ impl LlBlock {
             return;
         }
         let line = line.into();
-        self.instructions.push(format!("  {}", line));
+        self.instructions
+            .push(crate::inst::LlInst::Raw(format!("  {}", line)));
     }
 
     fn reg(&self) -> String {
@@ -221,7 +222,8 @@ impl LlBlock {
         if self.terminated {
             return;
         }
-        self.instructions.push(format!("{}:", label));
+        self.instructions
+            .push(crate::inst::LlInst::Raw(format!("{}:", label)));
     }
 
     /// Number of instructions currently in this block. Used by
@@ -234,12 +236,12 @@ impl LlBlock {
         self.instructions.len()
     }
 
-    /// Iterate over the raw instruction strings (each already prefixed
-    /// with two leading spaces, no trailing newline). Used by
-    /// `LlFunction::to_ir` when it needs to splice hoisted setup into
-    /// the entry block at a specific boundary.
-    pub fn instructions_iter(&self) -> impl Iterator<Item = &str> {
-        self.instructions.iter().map(|s| s.as_str())
+    /// The block's instructions. Used by `LlFunction::to_ir` (entry-block
+    /// boundary splice) and `estimated_ir_bytes`; renders happen through
+    /// [`crate::inst::LlInst::render_into`] so typed variants need no
+    /// intermediate `String` per line.
+    pub fn insts(&self) -> &[crate::inst::LlInst] {
+        &self.instructions
     }
 
     // -------- Arithmetic (double) --------
@@ -287,72 +289,76 @@ impl LlBlock {
 
     pub fn fadd(&mut self, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = fadd {}double {}, {}",
-            r,
-            self.fp_flags.fmf_prefix(),
-            a,
-            b
-        ));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "fadd",
+            pre: self.fp_flags.fmf_prefix(),
+            ty: "double",
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn fsub(&mut self, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = fsub {}double {}, {}",
-            r,
-            self.fp_flags.fmf_prefix(),
-            a,
-            b
-        ));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "fsub",
+            pre: self.fp_flags.fmf_prefix(),
+            ty: "double",
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn fmul(&mut self, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = fmul {}double {}, {}",
-            r,
-            self.fp_flags.fmf_prefix(),
-            a,
-            b
-        ));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "fmul",
+            pre: self.fp_flags.fmf_prefix(),
+            ty: "double",
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn fdiv(&mut self, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = fdiv {}double {}, {}",
-            r,
-            self.fp_flags.fmf_prefix(),
-            a,
-            b
-        ));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "fdiv",
+            pre: self.fp_flags.fmf_prefix(),
+            ty: "double",
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn frem(&mut self, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = frem {}double {}, {}",
-            r,
-            self.fp_flags.fmf_prefix(),
-            a,
-            b
-        ));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "frem",
+            pre: self.fp_flags.fmf_prefix(),
+            ty: "double",
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn fneg(&mut self, a: &str) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = fneg {}double {}",
-            r,
-            self.fp_flags.fmf_prefix(),
-            a
-        ));
+        self.push_inst(crate::inst::LlInst::FNeg {
+            dst: r.clone(),
+            pre: self.fp_flags.fmf_prefix(),
+            a: a.to_string(),
+        });
         r
     }
 
@@ -362,61 +368,120 @@ impl LlBlock {
     /// `ogt`, `oge`, `oeq`, `one`, `ord`, `uno`, …
     pub fn fcmp(&mut self, cond: &str, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = fcmp {} double {}, {}", r, cond, a, b));
+        self.push_inst(crate::inst::LlInst::FCmp {
+            dst: r.clone(),
+            pred: cond.to_string(),
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_eq(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp eq {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "eq",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_ne(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp ne {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "ne",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_slt(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp slt {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "slt",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_sgt(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp sgt {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "sgt",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_sle(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp sle {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "sle",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_ult(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp ult {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "ult",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_ule(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp ule {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "ule",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_ugt(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp ugt {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "ugt",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn icmp_sge(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = icmp sge {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "sge",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
@@ -424,22 +489,29 @@ impl LlBlock {
 
     pub fn alloca(&mut self, ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = alloca {}", r, ty));
+        self.push_inst(crate::inst::LlInst::Alloca { dst: r.clone(), ty });
         r
     }
 
     pub fn load(&mut self, ty: LlvmType, ptr: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = load {}, ptr {}", r, ty, ptr));
+        self.push_inst(crate::inst::LlInst::Load {
+            dst: r.clone(),
+            ty,
+            ptr: ptr.to_string(),
+            flavor: crate::inst::LoadFlavor::Plain,
+        });
         r
     }
 
     pub fn load_aligned(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = load {}, ptr {}, align {}",
-            r, ty, ptr, alignment
-        ));
+        self.push_inst(crate::inst::LlInst::Load {
+            dst: r.clone(),
+            ty,
+            ptr: ptr.to_string(),
+            flavor: crate::inst::LoadFlavor::Aligned(alignment),
+        });
         r
     }
 
@@ -448,7 +520,12 @@ impl LlBlock {
     /// that may be written by `optnone` functions.
     pub fn load_volatile(&mut self, ty: LlvmType, ptr: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = load volatile {}, ptr {}", r, ty, ptr));
+        self.push_inst(crate::inst::LlInst::Load {
+            dst: r.clone(),
+            ty,
+            ptr: ptr.to_string(),
+            flavor: crate::inst::LoadFlavor::Volatile,
+        });
         r
     }
 
@@ -456,10 +533,12 @@ impl LlBlock {
     /// atomics. The explicit alignment is required by LLVM atomic loads.
     pub fn load_atomic_seq_cst(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = load atomic {}, ptr {} seq_cst, align {}",
-            r, ty, ptr, alignment
-        ));
+        self.push_inst(crate::inst::LlInst::Load {
+            dst: r.clone(),
+            ty,
+            ptr: ptr.to_string(),
+            flavor: crate::inst::LoadFlavor::AtomicSeqCst(alignment),
+        });
         r
     }
 
@@ -476,28 +555,45 @@ impl LlBlock {
     /// memory changes.
     pub fn load_invariant(&mut self, ty: LlvmType, ptr: &str) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = load {}, ptr {}, !invariant.load !0",
-            r, ty, ptr
-        ));
+        self.push_inst(crate::inst::LlInst::Load {
+            dst: r.clone(),
+            ty,
+            ptr: ptr.to_string(),
+            flavor: crate::inst::LoadFlavor::Invariant,
+        });
         r
     }
 
     pub fn store(&mut self, ty: LlvmType, val: &str, ptr: &str) {
-        self.emit(format!("store {} {}, ptr {}", ty, val, ptr));
+        self.push_inst(crate::inst::LlInst::Store {
+            ty,
+            val: val.to_string(),
+            ptr: ptr.to_string(),
+            volatile: false,
+            align: None,
+        });
     }
 
     pub fn store_aligned(&mut self, ty: LlvmType, val: &str, ptr: &str, alignment: u32) {
-        self.emit(format!(
-            "store {} {}, ptr {}, align {}",
-            ty, val, ptr, alignment
-        ));
+        self.push_inst(crate::inst::LlInst::Store {
+            ty,
+            val: val.to_string(),
+            ptr: ptr.to_string(),
+            volatile: false,
+            align: Some(alignment),
+        });
     }
 
     /// Store with `volatile` — prevents optimizer from eliminating or
     /// reordering. Used for module globals.
     pub fn store_volatile(&mut self, ty: LlvmType, val: &str, ptr: &str) {
-        self.emit(format!("store volatile {} {}, ptr {}", ty, val, ptr));
+        self.push_inst(crate::inst::LlInst::Store {
+            ty,
+            val: val.to_string(),
+            ptr: ptr.to_string(),
+            volatile: true,
+            align: None,
+        });
     }
 
     // -------- Conversions / bitcasts --------
@@ -510,7 +606,13 @@ impl LlBlock {
             return src.clone();
         }
         let r = self.reg();
-        self.emit(format!("{} = bitcast i64 {} to double", r, val));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "bitcast",
+            from: "i64",
+            v: val.to_string(),
+            to: "double",
+        });
         if !self.terminated {
             self.double_from_i64.insert(r.clone(), val.to_string());
         }
@@ -524,7 +626,13 @@ impl LlBlock {
             return src.clone();
         }
         let r = self.reg();
-        self.emit(format!("{} = bitcast double {} to i64", r, val));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "bitcast",
+            from: "double",
+            v: val.to_string(),
+            to: "i64",
+        });
         if !self.terminated {
             self.i64_from_double.insert(r.clone(), val.to_string());
         }
@@ -533,37 +641,73 @@ impl LlBlock {
 
     pub fn sitofp(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = sitofp {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "sitofp",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
     pub fn uitofp(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = uitofp {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "uitofp",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
     pub fn fpext(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = fpext {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "fpext",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
     pub fn fptrunc(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = fptrunc {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "fptrunc",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
     pub fn fptosi(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = fptosi {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "fptosi",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
     pub fn fptoui(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = fptoui {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "fptoui",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
@@ -611,10 +755,12 @@ impl LlBlock {
         // have it (all Apple Silicon); the tower remains the portable path.
         if crate::codegen::helpers::jscvt_enabled() {
             let r = self.reg();
-            self.emit(format!(
-                "{} = call i32 @llvm.aarch64.fjcvtzs(double {})",
-                r, val
-            ));
+            self.push_inst(crate::inst::LlInst::Call {
+                dst: Some(r.clone()),
+                ret: "i32",
+                callee: "llvm.aarch64.fjcvtzs".to_string(),
+                args: vec![("double", val.to_string())],
+            });
             return r;
         }
         let bits = self.bitcast_double_to_i64(val);
@@ -659,25 +805,49 @@ impl LlBlock {
 
     pub fn trunc(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = trunc {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "trunc",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
     pub fn zext(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = zext {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "zext",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
     pub fn sext(&mut self, from_ty: LlvmType, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = sext {} {} to {}", r, from_ty, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "sext",
+            from: from_ty,
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
     pub fn inttoptr(&mut self, from_ty: LlvmType, val: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = inttoptr {} {} to ptr", r, from_ty, val));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "inttoptr",
+            from: from_ty,
+            v: val.to_string(),
+            to: "ptr",
+        });
         r
     }
 
@@ -707,10 +877,14 @@ impl LlBlock {
         // Map bad pointers to a known-safe global that contains 0.
         let safe_ptr = {
             let r = self.reg();
-            self.emit(format!(
-                "{} = select i1 {}, ptr @perry_null_guard_zero, ptr {}",
-                r, is_bad, handle_ptr
-            ));
+            self.push_inst(crate::inst::LlInst::Select {
+                dst: r.clone(),
+                cond_ty: "i1",
+                cond: is_bad.clone(),
+                ty: "ptr",
+                a: "@perry_null_guard_zero".to_string(),
+                b: handle_ptr.clone(),
+            });
             r
         };
         // NOTE: must NOT use `!invariant.load` here. This helper is the
@@ -729,7 +903,13 @@ impl LlBlock {
 
     pub fn ptrtoint(&mut self, val: &str, to_ty: LlvmType) -> String {
         let r = self.reg();
-        self.emit(format!("{} = ptrtoint ptr {} to {}", r, val, to_ty));
+        self.push_inst(crate::inst::LlInst::Cast {
+            dst: r.clone(),
+            op: "ptrtoint",
+            from: "ptr",
+            v: val.to_string(),
+            to: to_ty,
+        });
         r
     }
 
@@ -737,19 +917,40 @@ impl LlBlock {
 
     pub fn add(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = add {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "add",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn sub(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = sub {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "sub",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn mul(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = mul {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "mul",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
@@ -758,7 +959,14 @@ impl LlBlock {
     /// `frem double` lowers to on ARM.
     pub fn srem(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = srem {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "srem",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
@@ -766,43 +974,92 @@ impl LlBlock {
     /// division paths; JS `/` currently lowers through double division.
     pub fn sdiv(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = sdiv {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "sdiv",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn and(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = and {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "and",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn or(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = or {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "or",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn xor(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = xor {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "xor",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn shl(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = shl {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "shl",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn ashr(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = ashr {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "ashr",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
     pub fn lshr(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
-        self.emit(format!("{} = lshr {} {}, {}", r, ty, a, b));
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "lshr",
+            pre: "",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
         r
     }
 
@@ -817,10 +1074,14 @@ impl LlBlock {
         false_val: &str,
     ) -> String {
         let r = self.reg();
-        self.emit(format!(
-            "{} = select {} {}, {} {}, {} {}",
-            r, cond_ty, cond, ty, true_val, ty, false_val
-        ));
+        self.push_inst(crate::inst::LlInst::Select {
+            dst: r.clone(),
+            cond_ty,
+            cond: cond.to_string(),
+            ty,
+            a: true_val.to_string(),
+            b: false_val.to_string(),
+        });
         r
     }
 
@@ -849,18 +1110,25 @@ impl LlBlock {
         // codegen finishes to auto-link the providing crate.
         crate::ext_registry::record_ffi_call(func_name);
         let r = self.reg();
-        let arg_str = format_args(args);
+        // Invoke-EH (#7302): inside a handler scope, throw-capable calls
+        // carry the unwind edge. The invoke + inline continuation label ride
+        // the Raw escape hatch; the native-construction backend bails on
+        // personality-carrying modules (see codegen/mod.rs) until its line
+        // reader learns invoke.
         if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
+            let arg_str = format_args(args);
             self.emit(format!(
                 "{} = invoke {} @{}({}) to label %{} unwind label %{}",
                 r, ret_ty, func_name, arg_str, cont, lpad
             ));
             self.emit_inline_label(&cont);
         } else {
-            self.emit(format!(
-                "{} = call {} @{}({})",
-                r, ret_ty, func_name, arg_str
-            ));
+            self.push_inst(crate::inst::LlInst::Call {
+                dst: Some(r.clone()),
+                ret: ret_ty,
+                callee: func_name.to_string(),
+                args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
+            });
         }
         r
     }
@@ -868,15 +1136,20 @@ impl LlBlock {
     pub fn call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
-        let arg_str = format_args(args);
         if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
+            let arg_str = format_args(args);
             self.emit(format!(
                 "invoke void @{}({}) to label %{} unwind label %{}",
                 func_name, arg_str, cont, lpad
             ));
             self.emit_inline_label(&cont);
         } else {
-            self.emit(format!("call void @{}({})", func_name, arg_str));
+            self.push_inst(crate::inst::LlInst::Call {
+                dst: None,
+                ret: "void",
+                callee: func_name.to_string(),
+                args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
+            });
         }
     }
 
@@ -889,7 +1162,7 @@ impl LlBlock {
     /// `for (let i=0;i<N;i++) sum+=1;` between two `Date.now()` calls —
     /// issue #74).
     pub fn asm_sideeffect_barrier(&mut self) {
-        self.emit("call void asm sideeffect \"\", \"\"()".to_string());
+        self.push_inst(crate::inst::LlInst::AsmBarrier);
     }
 
     pub fn call_indirect(
@@ -899,10 +1172,10 @@ impl LlBlock {
         args: &[(LlvmType, &str)],
     ) -> String {
         let r = self.reg();
-        let arg_str = format_args(args);
-        let param_types: Vec<&str> = args.iter().map(|(t, _)| *t).collect();
         // Indirect targets (closures, method pointers) can always throw.
         if let Some(lpad) = self.counter.current_eh_unwind_label() {
+            let arg_str = format_args(args);
+            let param_types: Vec<&str> = args.iter().map(|(t, _)| *t).collect();
             let cont = format!("eh.cont{}", self.counter.next());
             self.emit(format!(
                 "{} = invoke {} ({})* {}({}) to label %{} unwind label %{}",
@@ -916,14 +1189,12 @@ impl LlBlock {
             ));
             self.emit_inline_label(&cont);
         } else {
-            self.emit(format!(
-                "{} = call {} ({})* {}({})",
-                r,
-                ret_ty,
-                param_types.join(", "),
-                fn_ptr,
-                arg_str
-            ));
+            self.push_inst(crate::inst::LlInst::CallIndirect {
+                dst: r.clone(),
+                ret: ret_ty,
+                fptr: fn_ptr.to_string(),
+                args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
+            });
         }
         r
     }
@@ -931,30 +1202,36 @@ impl LlBlock {
     // -------- Control flow --------
 
     pub fn br(&mut self, target: &str) {
-        self.emit(format!("br label %{}", target));
+        self.push_inst(crate::inst::LlInst::Br {
+            label: target.to_string(),
+        });
         self.terminated = true;
     }
 
     pub fn cond_br(&mut self, cond: &str, true_label: &str, false_label: &str) {
-        self.emit(format!(
-            "br i1 {}, label %{}, label %{}",
-            cond, true_label, false_label
-        ));
+        self.push_inst(crate::inst::LlInst::CondBr {
+            cond: cond.to_string(),
+            t: true_label.to_string(),
+            f: false_label.to_string(),
+        });
         self.terminated = true;
     }
 
     pub fn ret(&mut self, ty: LlvmType, val: &str) {
-        self.emit(format!("ret {} {}", ty, val));
+        self.push_inst(crate::inst::LlInst::Ret {
+            ty,
+            val: val.to_string(),
+        });
         self.terminated = true;
     }
 
     pub fn ret_void(&mut self) {
-        self.emit("ret void");
+        self.push_inst(crate::inst::LlInst::RetVoid);
         self.terminated = true;
     }
 
     pub fn unreachable(&mut self) {
-        self.emit("unreachable");
+        self.push_inst(crate::inst::LlInst::Unreachable);
         self.terminated = true;
     }
 
@@ -962,15 +1239,13 @@ impl LlBlock {
 
     pub fn gep(&mut self, base_ty: LlvmType, ptr: &str, indices: &[(LlvmType, &str)]) -> String {
         let r = self.reg();
-        let idx_str = indices
-            .iter()
-            .map(|(t, v)| format!("{} {}", t, v))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.emit(format!(
-            "{} = getelementptr {}, ptr {}, {}",
-            r, base_ty, ptr, idx_str
-        ));
+        self.push_inst(crate::inst::LlInst::Gep {
+            dst: r.clone(),
+            inbounds: false,
+            ty: base_ty,
+            ptr: ptr.to_string(),
+            idxs: indices.iter().map(|(t, v)| (*t, v.to_string())).collect(),
+        });
         r
     }
 
@@ -986,36 +1261,46 @@ impl LlBlock {
         indices: &[(LlvmType, &str)],
     ) -> String {
         let r = self.reg();
-        let idx_str = indices
-            .iter()
-            .map(|(t, v)| format!("{} {}", t, v))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.emit(format!(
-            "{} = getelementptr inbounds {}, ptr {}, {}",
-            r, base_ty, ptr, idx_str
-        ));
+        self.push_inst(crate::inst::LlInst::Gep {
+            dst: r.clone(),
+            inbounds: true,
+            ty: base_ty,
+            ptr: ptr.to_string(),
+            idxs: indices.iter().map(|(t, v)| (*t, v.to_string())).collect(),
+        });
         r
     }
 
     pub fn phi(&mut self, ty: LlvmType, incoming: &[(&str, &str)]) -> String {
         let r = self.reg();
-        let pairs = incoming
-            .iter()
-            .map(|(val, label)| format!("[ {}, %{} ]", val, label))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.emit(format!("{} = phi {} {}", r, ty, pairs));
+        self.push_inst(crate::inst::LlInst::Phi {
+            dst: r.clone(),
+            ty,
+            pairs: incoming
+                .iter()
+                .map(|(v, l)| (v.to_string(), l.to_string()))
+                .collect(),
+        });
         r
     }
 
     pub fn to_ir(&self) -> String {
         let mut out = String::with_capacity(
-            self.instructions.iter().map(|l| l.len() + 1).sum::<usize>() + self.label.len() + 2,
+            self.instructions
+                .iter()
+                .map(|l| l.text_len() + 1)
+                .sum::<usize>()
+                + self.label.len()
+                + 2,
         );
         out.push_str(&self.label);
         out.push_str(":\n");
-        out.push_str(&self.instructions.join("\n"));
+        for (i, inst) in self.instructions.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            inst.render_into(&mut out);
+        }
         out
     }
 }

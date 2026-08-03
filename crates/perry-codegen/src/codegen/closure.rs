@@ -1039,6 +1039,7 @@ pub(super) fn compile_closure(
         clamp_u8_functions: &cross_module.clamp_u8_functions,
         integer_returning_functions: &cross_module.returns_int_functions,
         i32_identity_functions: &cross_module.i32_identity_functions,
+        param_int_ranges: &cross_module.param_int_ranges,
         typed_f64_functions: &cross_module.typed_f64_functions,
         typed_i32_functions: &cross_module.typed_i32_functions,
         typed_string_functions: &cross_module.typed_string_functions,

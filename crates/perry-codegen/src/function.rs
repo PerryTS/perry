@@ -561,7 +561,7 @@ impl LlFunction {
         let body: usize = self
             .blocks
             .iter()
-            .map(|b| b.instructions_iter().map(|i| i.len() + 1).sum::<usize>() + b.label.len() + 4)
+            .map(|b| b.insts().iter().map(|i| i.text_len() + 1).sum::<usize>() + b.label.len() + 4)
             .sum();
         let allocas: usize = self.entry_allocas.iter().map(|a| a.len() + 1).sum();
         body + allocas + self.name.len() + 64
@@ -599,111 +599,195 @@ impl LlFunction {
             "define {}{} @{}({}){}{} {{\n",
             linkage, self.return_type, self.name, param_str, attrs, personality
         );
-
-        for (i, blk) in self.blocks.iter().enumerate() {
-            if i > 0 {
-                ir.push('\n');
-            }
-            // Block 0 (entry) gets two splices in its body:
-            //   1. `entry_allocas`: hoisted allocas + a few simple init
-            //      sequences. These go at the very top, between the
-            //      label line and any block instructions, so they
-            //      dominate every reachable use in the function.
-            //   2. `entry_post_init_setup`: hoisted setup that must
-            //      run AFTER the init prelude (gc_init / init_strings
-            //      calls) so it sees the up-to-date module state. The
-            //      splice point is `entry_init_boundary`, which the
-            //      codegen marks immediately after emitting the
-            //      prelude.
-            // Both splices are textual: we re-render the block label,
-            // the prefix instructions (up to the boundary), the
-            // post-init setup, and then the rest of the block body.
-            if i == 0 && (!self.entry_allocas.is_empty() || !self.entry_post_init_setup.is_empty())
-            {
-                ir.push_str(&blk.label);
-                ir.push_str(":\n");
-                // 1. Allocas + simple inits at the very top.
-                for alloca in &self.entry_allocas {
-                    ir.push_str(alloca);
-                    ir.push('\n');
-                }
-                // 2. Render the block instructions, with the post-init
-                //    splice at the boundary index.
-                let boundary = self
-                    .entry_init_boundary
-                    .unwrap_or(0)
-                    .min(blk.instruction_count());
-                let mut idx = 0;
-                for inst in blk.instructions_iter() {
-                    if idx == boundary {
-                        for line in &self.entry_post_init_setup {
-                            ir.push_str(line);
-                            ir.push('\n');
-                        }
-                    }
-                    ir.push_str(inst);
-                    ir.push('\n');
-                    idx += 1;
-                }
-                // Boundary at end-of-block (or empty block).
-                if idx == boundary {
-                    for line in &self.entry_post_init_setup {
-                        ir.push_str(line);
-                        ir.push('\n');
-                    }
-                }
-            } else {
-                ir.push_str(&blk.to_ir());
-                ir.push('\n');
-            }
-        }
-
+        self.for_each_final_line::<std::convert::Infallible>(&mut |line| {
+            ir.push_str(line);
+            ir.push('\n');
+            Ok(())
+        })
+        .unwrap_or_else(|e| match e {});
         ir.push_str("}\n");
-
-        // Return-site rewrite hooks.
-        //
-        // Shadow-stack pop (gen-GC Phase A sub-phase 2) and entry
-        // diagnostics both need to run before every normal return,
-        // regardless of which lowering path emitted it. Textual rewrite
-        // on the full IR catches implicit returns, Stmt::Return, and any
-        // hand-emitted `ret`.
-        let ir = if self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty() {
-            let mut out = String::with_capacity(ir.len() + 512);
-            let mut seq: u32 = 0;
-            for line in ir.lines() {
-                let trimmed = line.trim_start();
-                if (trimmed.starts_with("ret ") || trimmed == "ret void")
-                    && !trimmed.starts_with("ret ptr ")
-                // skip rare ptr rets
-                {
-                    for func_name in &self.pre_return_void_calls {
-                        out.push_str(&format!("  call void @{}()\n", func_name));
-                    }
-                    if let Some(handle_slot) = &self.shadow_frame_slot {
-                        let load_reg = format!("%shadow_pop_l_{}", seq);
-                        seq += 1;
-                        out.push_str(&format!("  {} = load i64, ptr {}\n", load_reg, handle_slot));
-                        out.push_str(&format!(
-                            "  call void @js_shadow_frame_pop(i64 {})\n",
-                            load_reg
-                        ));
-                    }
-                }
-                out.push_str(line);
-                out.push('\n');
-            }
-            out
-        } else {
-            ir
-        };
 
         // Invoke-EH (#7302): inline invoke splits move a block's true CFG
         // tail behind `eh.contN:` labels; phi incoming-edge labels captured
-        // at emit time must follow. Runs last so it sees the spliced text.
+        // at emit time must follow. Runs last so it sees the streamed text.
         if self.personality.is_some() && ir.contains("eh.cont") {
             return crate::eh_mode::rewrite_phi_predecessors(&ir);
         }
 
         ir
     }
+
+    /// Stream every finalized BODY line of this function (block labels,
+    /// entry-alloca and post-init splices, instructions, return-site
+    /// rewrites; blank separator lines between blocks) in exactly the order
+    /// [`to_ir`] renders them — `to_ir` IS this visitor plus the define
+    /// header, closing brace, and the invoke-EH phi-predecessor rewrite
+    /// (which needs whole-function analysis and therefore text; native
+    /// construction bails on personality-carrying functions and takes the
+    /// textual path — see codegen/mod.rs).
+    ///
+    /// This is the seam the native backend consumes: per finalized line,
+    /// no per-function text materialization.
+    pub fn for_each_final_line<E>(
+        &self,
+        sink: &mut dyn FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut buf = String::new();
+        self.for_each_final_item::<E>(&mut |item| {
+            buf.clear();
+            match item {
+                FinalItem::Label(l) => {
+                    buf.push_str(l);
+                    buf.push(':');
+                }
+                FinalItem::Blank => {}
+                FinalItem::Text(t) => buf.push_str(t),
+                FinalItem::Inst(i) => i.render_into(&mut buf),
+            }
+            sink(&buf)
+        })
+    }
+
+    /// Item-granular twin of [`for_each_final_line`], and the seam the native
+    /// backend consumes: typed instructions arrive as [`FinalItem::Inst`] and
+    /// are constructed directly, with no per-line text; only labels, entry
+    /// splices, synthesized return-site rewrites, and `Raw` payload splits
+    /// arrive as text. The two visitors cannot drift: the line visitor is a
+    /// rendering adapter over this one.
+    pub fn for_each_final_item<E>(
+        &self,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let rewrite_rets =
+            self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty();
+        let mut seq: u32 = 0;
+        for (i, blk) in self.blocks.iter().enumerate() {
+            if i > 0 {
+                sink(FinalItem::Blank)?;
+            }
+            sink(FinalItem::Label(&blk.label))?;
+            let is_entry = i == 0;
+            if is_entry {
+                for alloca in &self.entry_allocas {
+                    self.text_item(alloca, rewrite_rets, &mut seq, sink)?;
+                }
+            }
+            let boundary = if is_entry {
+                self.entry_init_boundary
+                    .unwrap_or(0)
+                    .min(blk.instruction_count())
+            } else {
+                usize::MAX
+            };
+            let mut idx = 0usize;
+            for inst in blk.insts() {
+                if idx == boundary {
+                    for line in &self.entry_post_init_setup {
+                        self.text_item(line, rewrite_rets, &mut seq, sink)?;
+                    }
+                }
+                self.inst_item(inst, rewrite_rets, &mut seq, sink)?;
+                idx += 1;
+            }
+            if is_entry && idx == boundary {
+                for line in &self.entry_post_init_setup {
+                    self.text_item(line, rewrite_rets, &mut seq, sink)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn inst_item<E>(
+        &self,
+        inst: &crate::inst::LlInst,
+        rewrite_rets: bool,
+        seq: &mut u32,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        use crate::inst::LlInst;
+        // Multi-line raw payloads split exactly like text rendering followed
+        // by the line-based rewrite pass would.
+        if let LlInst::Raw(s) = inst {
+            if s.contains('\n') {
+                for l in s.split('\n') {
+                    self.text_item(l, rewrite_rets, seq, sink)?;
+                }
+                return Ok(());
+            }
+        }
+        if rewrite_rets {
+            let is_rewritable_ret = match inst {
+                LlInst::Ret { ty, .. } => *ty != "ptr",
+                LlInst::RetVoid => true,
+                LlInst::Raw(s) => {
+                    let t = s.trim_start();
+                    (t.starts_with("ret ") || t == "ret void") && !t.starts_with("ret ptr ")
+                }
+                _ => false,
+            };
+            if is_rewritable_ret {
+                self.yield_ret_prologue(seq, sink)?;
+            }
+        }
+        sink(FinalItem::Inst(inst))
+    }
+
+    /// Return-site rewrite, streamed: before every `ret` (except `ret ptr`),
+    /// inject the pre-return void calls and the shadow-frame pop. Byte-equal
+    /// to the old whole-text line scan.
+    fn text_item<E>(
+        &self,
+        line: &str,
+        rewrite_rets: bool,
+        seq: &mut u32,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if rewrite_rets {
+            let trimmed = line.trim_start();
+            if (trimmed.starts_with("ret ") || trimmed == "ret void")
+                && !trimmed.starts_with("ret ptr ")
+            {
+                self.yield_ret_prologue(seq, sink)?;
+            }
+        }
+        sink(FinalItem::Text(line))
+    }
+
+    fn yield_ret_prologue<E>(
+        &self,
+        seq: &mut u32,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        for func_name in &self.pre_return_void_calls {
+            sink(FinalItem::Text(&format!("  call void @{}()", func_name)))?;
+        }
+        if let Some(handle_slot) = &self.shadow_frame_slot {
+            let load_reg = format!("%shadow_pop_l_{}", seq);
+            *seq += 1;
+            sink(FinalItem::Text(&format!(
+                "  {} = load i64, ptr {}",
+                load_reg, handle_slot
+            )))?;
+            sink(FinalItem::Text(&format!(
+                "  call void @js_shadow_frame_pop(i64 {})",
+                load_reg
+            )))?;
+        }
+        Ok(())
+    }
+}
+
+/// One finalized item of a function body. See
+/// [`LlFunction::for_each_final_item`].
+pub enum FinalItem<'a> {
+    /// Block label (no trailing colon).
+    Label(&'a str),
+    /// Blank separator line between blocks.
+    Blank,
+    /// A pre-rendered text line (entry splices, return-site rewrites,
+    /// multi-line raw payload splits).
+    Text(&'a str),
+    /// A typed instruction — the native backend constructs it directly.
+    Inst(&'a crate::inst::LlInst),
 }

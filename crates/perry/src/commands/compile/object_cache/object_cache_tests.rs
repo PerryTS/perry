@@ -581,6 +581,7 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_DEBUG_INIT",
         "PERRY_DEBUG_SYMBOLS",
         "PERRY_LLVM_CLANG",
+        "PERRY_LLVM_INPROCESS",
         "PERRY_WRITE_BARRIERS",
         "PERRY_SHADOW_STACK",
         "PERRY_DISABLE_BUFFER_FAST_PATH",

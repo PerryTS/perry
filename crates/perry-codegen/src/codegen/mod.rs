@@ -1173,6 +1173,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    // #7286 lever (c): interprocedural integer ranges for numeric function
+    // parameters, computed once per module from the same folded top-level
+    // `const` map the call-site arguments resolve through.
+    let param_int_ranges_summary =
+        crate::collectors::collect_param_int_ranges(hir, &compile_time_constants);
+
     // Issue #235: per-method explicit-param-count map covering BOTH local
     // classes (from `hir.classes`) AND imported classes (from
     // `opts.imported_classes`). Every method-call dispatch site in
@@ -1707,6 +1713,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .filter(|f| crate::collectors::returns_i32_identity_arg(f))
             .map(|f| f.id)
             .collect(),
+        param_int_ranges: param_int_ranges_summary,
         // Phase 2 spec-ABI plans are selected AFTER the i64-specialization
         // pass (mutual exclusion), below; start empty here.
         spec_abi_functions: std::collections::HashMap::new(),
@@ -2582,6 +2589,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         decide_codegen_units(module_callable_count(hir))
     };
     if n_units > 1 {
+        if let Some(result) =
+            try_native_units(&llmod, n_units, opts.target.as_deref(), &module_prefix)
+        {
+            return result;
+        }
         let units = llmod.render_codegen_units(n_units);
         log::debug!(
             "perry-codegen: split '{}' into {} codegen units",
@@ -2606,6 +2618,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         return crate::linker::compile_units_to_object(&units, opts.target.as_deref());
     }
 
+    // exp/llvm-inprocess Phase 2: `PERRY_LLVM_INPROCESS=native` constructs
+    // function bodies through the LLVM C API (only the module skeleton is
+    // textual); `=diff` builds both arms and diffs them. Unit-split and
+    // emit_ir_only paths above stay textual (they fall into the in-process
+    // *transport* under these values, so no clang subprocess either way).
+    if let Some(result) = try_native_construction(&llmod, opts.target.as_deref(), &module_prefix) {
+        return result;
+    }
+
     let ll_text = llmod.to_ir();
     log::debug!(
         "perry-codegen: emitted {} bytes of LLVM IR for '{}' ({} interned strings)",
@@ -2623,4 +2644,79 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     } else {
         crate::linker::compile_ll_to_object(&ll_text, opts.target.as_deref())
     }
+}
+
+/// exp/llvm-inprocess: unit-split twin of [`try_native_construction`].
+#[cfg(feature = "llvm-inprocess")]
+fn try_native_units(
+    llmod: &crate::module::LlModule,
+    n_units: usize,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Option<Result<Vec<u8>>> {
+    // Invoke-EH (#7302): see try_native_construction — textual path for
+    // try/catch modules until the native reader learns invoke.
+    if llmod.has_eh_personality() {
+        return None;
+    }
+    match crate::native_emit::native_mode() {
+        crate::native_emit::NativeMode::Off => None,
+        crate::native_emit::NativeMode::Native => Some(
+            crate::native_emit::compile_module_units_native(llmod, n_units, target, module_prefix),
+        ),
+        crate::native_emit::NativeMode::Diff => Some(
+            crate::native_emit::compile_module_units_diff(llmod, n_units, target, module_prefix),
+        ),
+    }
+}
+
+#[cfg(not(feature = "llvm-inprocess"))]
+fn try_native_units(
+    _llmod: &crate::module::LlModule,
+    _n_units: usize,
+    _target: Option<&str>,
+    _module_prefix: &str,
+) -> Option<Result<Vec<u8>>> {
+    None
+}
+
+/// exp/llvm-inprocess Phase 2 dispatch. `None` = native construction not
+/// requested (or not compiled in) — continue on the text path. The
+/// feature-off twin returns `None` unconditionally; a build without the
+/// feature still fails loudly downstream in `compile_ll_to_object` when any
+/// in-process mode is requested, so the flag can never silently no-op.
+#[cfg(feature = "llvm-inprocess")]
+fn try_native_construction(
+    llmod: &crate::module::LlModule,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Option<Result<Vec<u8>>> {
+    // Invoke-EH (#7302): the native line reader does not know
+    // `invoke`/`landingpad`/`catchswitch` yet — modules with try/catch take
+    // the textual path. Follow-up tracked on #7301.
+    if llmod.has_eh_personality() {
+        return None;
+    }
+    match crate::native_emit::native_mode() {
+        crate::native_emit::NativeMode::Off => None,
+        crate::native_emit::NativeMode::Native => Some(crate::native_emit::compile_module_native(
+            llmod,
+            target,
+            module_prefix,
+        )),
+        crate::native_emit::NativeMode::Diff => Some(crate::native_emit::compile_module_diff(
+            llmod,
+            target,
+            module_prefix,
+        )),
+    }
+}
+
+#[cfg(not(feature = "llvm-inprocess"))]
+fn try_native_construction(
+    _llmod: &crate::module::LlModule,
+    _target: Option<&str>,
+    _module_prefix: &str,
+) -> Option<Result<Vec<u8>>> {
+    None
 }

@@ -8,6 +8,15 @@ description = "LLVM code generation backend for Perry"
 [lints]
 workspace = true
 
+[features]
+# exp/llvm-inprocess: compile `.ll -> .o` through the LLVM C API inside this
+# process instead of shelling out to a user-supplied `clang -c`. Off by
+# default — the default build has no LLVM link dependency and the text path
+# is byte-for-byte untouched. Building with this feature requires LLVM 22
+# (`brew install llvm`; set LLVM_SYS_221_PREFIX if llvm-config is not on
+# PATH). The backend still only runs when PERRY_LLVM_INPROCESS=1 at runtime.
+llvm-inprocess = ["dep:inkwell", "dep:llvm-sys"]
+
 [dependencies]
 perry-hir.workspace = true
 perry-dispatch.workspace = true
@@ -18,3 +27,6 @@ thiserror.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+inkwell = { version = "0.9.0", features = ["llvm22-1"], optional = true }
+llvm-sys = { version = "221", optional = true }

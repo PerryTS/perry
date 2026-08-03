@@ -1,0 +1,17 @@
+[package]
+name = "perry-llvmc-spike"
+version = "0.1.0"
+edition = "2021"
+
+# Deliberately its own workspace: Phase 0 must not touch the Perry workspace
+# build graph. Integration (Phase 1+) will add a feature-gated crate instead.
+[workspace]
+
+[dependencies]
+inkwell = { version = "0.9.0", features = ["llvm22-1"] }
+# Same LLVM major as inkwell's feature; used for the handful of C-API calls
+# inkwell does not wrap (LLVMSetGC, LLVMParseCommandLineOptions).
+llvm-sys = "221"
+
+[profile.release]
+opt-level = 1

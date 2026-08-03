@@ -319,6 +319,10 @@ fn int_range_for_local(
             .and_then(|value| f64_to_i64_constant(*value))
             .map(IntRange::exact)
     };
+    // #7286 lever (c): last resort — an interprocedural summary for a numeric
+    // parameter. Without it one unbounded parameter leaf poisons the whole
+    // index expression and demotes EVERY array access in the function.
+    let result = result.or_else(|| ctx.param_int_ranges.get(&id).copied());
     seen.remove(&id);
     result
 }

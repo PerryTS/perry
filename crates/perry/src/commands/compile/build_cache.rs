@@ -33,6 +33,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_DEBUG_INIT",
     "PERRY_DEBUG_SYMBOLS",
     "PERRY_LLVM_CLANG",
+    // exp/llvm-inprocess: selects the in-process LLVM backend for .ll -> .o;
+    // a different backend means different object bytes.
+    "PERRY_LLVM_INPROCESS",
     "PERRY_WRITE_BARRIERS",
     "PERRY_SHADOW_STACK",
     "PERRY_INLINE_SHADOW_SLOT",

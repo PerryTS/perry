@@ -1144,6 +1144,11 @@ pub(crate) struct FnCtx<'a> {
     pub clamp_u8_functions: &'a std::collections::HashSet<u32>,
     pub integer_returning_functions: &'a std::collections::HashSet<u32>,
     pub i32_identity_functions: &'a std::collections::HashSet<u32>,
+    /// #7286 lever (c): parameter LocalId → interprocedural integer range,
+    /// consulted by `int_range_for_local` as the last resort. Entries exist
+    /// only for parameters proven never to be written or rebound anywhere in
+    /// the module, so no per-statement invalidation is needed.
+    pub param_int_ranges: &'a crate::collectors::ParamIntRanges,
     pub typed_f64_functions: &'a std::collections::HashSet<u32>,
     pub typed_i32_functions: &'a std::collections::HashSet<u32>,
     pub typed_string_functions: &'a std::collections::HashSet<u32>,

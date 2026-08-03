@@ -482,12 +482,134 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
 /// * **`PERRY_DEBUG_SYMBOLS`**: no effect on any of the above. It was believed
 ///   to put the `.ll`'s absolute path into DWARF; measured, it does not put
 ///   anything there at all. See `TEMP_NONCE_COUNTER`.
+/// exp/llvm-inprocess Phase 2: plan argv for a natively-constructed module,
+/// produced by the SAME decision code as the clang path so opt levels
+/// (incl. the #4880 oversized fallback) and CPU tuning cannot drift. The
+/// byte-size input is the render-free estimate (`estimated_ir_bytes`), since
+/// a native module never renders; the paths in the argv are placeholders the
+/// in-process interpreter skips.
+#[cfg(feature = "llvm-inprocess")]
+pub(crate) fn native_plan_args(
+    target_triple: Option<&str>,
+    est_ll_bytes: usize,
+    ll_fn_count: usize,
+) -> (String, Vec<String>) {
+    let plan = build_clang_compile_plan(
+        PathBuf::from("(in-process)"),
+        PathBuf::from("(native-module)"),
+        PathBuf::from("(native-object)"),
+        target_triple,
+        est_ll_bytes,
+        ll_fn_count,
+        env::var_os("PERRY_DEBUG_SYMBOLS").is_some(),
+    );
+    (plan.effective_target, plan.clang_args)
+}
+
+/// exp/llvm-inprocess: truthy `PERRY_LLVM_INPROCESS` routes `.ll -> .o`
+/// through the LLVM C API inside this process (no clang subprocess, no `.ll`
+/// on disk). The flag participates in both the build cache and the object
+/// cache keys, so the two backends can never share a cached object.
+fn inprocess_requested() -> bool {
+    match env::var("PERRY_LLVM_INPROCESS").as_deref() {
+        Ok("") | Ok("0") | Ok("off") | Ok("false") | Err(_) => false,
+        Ok(_) => true,
+    }
+}
+
+#[cfg(feature = "llvm-inprocess")]
+fn compile_ll_inprocess_in(
+    tmp_dir: &Path,
+    ll_text: &str,
+    target_triple: Option<&str>,
+    policy: TempFilePolicy,
+) -> Result<Vec<u8>> {
+    let (paths, _pid, _nonce) = llvm_temp_paths(tmp_dir, ll_text);
+    // Same decision inputs as the clang path — opt level (#4880 fallback
+    // included), CPU tuning, inlinehint threshold — via the same plan
+    // constructor, so the backends cannot drift on a decision independently.
+    let plan = build_clang_compile_plan(
+        PathBuf::from("(in-process)"),
+        paths.ll_path.clone(),
+        paths.obj_path.clone(),
+        target_triple,
+        ll_text.len(),
+        count_ll_functions(ll_text),
+        policy.debug_symbols,
+    );
+    // #7131 parity: the module identifier is the content-addressed basename,
+    // the only name that can reach the object bytes.
+    let module_name = paths
+        .ll_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "perry_module.ll".to_string());
+    if policy.keep {
+        fs::create_dir_all(&paths.scratch_dir)
+            .with_context(|| format!("Failed to create {}", paths.scratch_dir.display()))?;
+        fs::write(&paths.ll_path, ll_text)
+            .with_context(|| format!("Failed to write {}", paths.ll_path.display()))?;
+        let metadata_path = PathBuf::from(format!("{}.compile-plan.json", plan.obj_path.display()));
+        write_compile_plan_metadata(&plan, &metadata_path)?;
+        eprintln!("[perry-codegen] kept LLVM IR: {}", paths.ll_path.display());
+        eprintln!(
+            "[perry-codegen] kept compile metadata: {}",
+            metadata_path.display()
+        );
+    }
+    match crate::inprocess::compile_ll_to_object_inprocess(
+        ll_text,
+        &plan.effective_target,
+        &plan.clang_args,
+        &module_name,
+    ) {
+        Ok(bytes) => Ok(bytes),
+        Err(e) => {
+            // Same contract as a failed clang compile: the IR that produced
+            // the failure is left on disk and named in the error.
+            let _ = fs::create_dir_all(&paths.scratch_dir);
+            let _ = fs::write(&paths.ll_path, ll_text);
+            Err(anyhow!(
+                "in-process LLVM compile failed (PERRY_LLVM_INPROCESS).\n\
+                 requested -target: {}\n\
+                 LLVM IR left at: {}\n\
+                 \n\
+                 {}",
+                plan.effective_target,
+                paths.ll_path.display(),
+                e
+            ))
+        }
+    }
+}
+
+#[cfg(not(feature = "llvm-inprocess"))]
+fn compile_ll_inprocess_in(
+    _tmp_dir: &Path,
+    _ll_text: &str,
+    _target_triple: Option<&str>,
+    _policy: TempFilePolicy,
+) -> Result<Vec<u8>> {
+    // Fail loudly rather than silently falling back: an A/B arm that asked
+    // for the in-process backend must never be served the text path.
+    bail!(
+        "PERRY_LLVM_INPROCESS is set, but this perry was built without the \
+         `llvm-inprocess` cargo feature. Rebuild with \
+         `cargo build -p perry --features llvm-inprocess` (needs LLVM 22: \
+         `brew install llvm`, and LLVM_SYS_221_PREFIX if llvm-config is not \
+         on PATH), or unset PERRY_LLVM_INPROCESS."
+    )
+}
+
 fn compile_ll_to_object_in(
     tmp_dir: &Path,
     ll_text: &str,
     target_triple: Option<&str>,
     policy: TempFilePolicy,
 ) -> Result<Vec<u8>> {
+    if inprocess_requested() {
+        return compile_ll_inprocess_in(tmp_dir, ll_text, target_triple, policy);
+    }
     // Validate the toolchain before creating the potentially large `.ll`
     // scratch file. Unsupported clang releases should fail without leaving
     // an artifact that was never passed to the compiler.
@@ -658,16 +780,27 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
         _ => {}
     }
 
+    let mut objs: Vec<Vec<u8>> = Vec::with_capacity(units.len());
+    for (i, unit) in units.iter().enumerate() {
+        objs.push(compile_ll_to_object(unit, target_triple).with_context(|| {
+            format!("codegen unit {}/{} failed to compile", i + 1, units.len())
+        })?);
+    }
+    merge_unit_objects(&objs)
+}
+
+/// Partial-link (`ld -r`) already-compiled codegen-unit objects into one
+/// object. Shared by the text path above and the native construction path
+/// (`native_emit::compile_module_units_native`).
+pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     let tmp_dir = env::temp_dir();
     let pid = std::process::id();
     let nonce = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(units.len());
-    for (i, unit) in units.iter().enumerate() {
-        let bytes = compile_ll_to_object(unit, target_triple)
-            .with_context(|| format!("codegen unit {}/{} failed to compile", i + 1, units.len()))?;
+    let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(objs.len());
+    for (i, bytes) in objs.iter().enumerate() {
         let p = tmp_dir.join(format!("perry_cgu_{}_{}_{}.o", pid, nonce, i));
-        fs::write(&p, &bytes)
+        fs::write(&p, bytes)
             .with_context(|| format!("failed to write codegen-unit object {}", p.display()))?;
         obj_paths.push(p);
     }
@@ -689,7 +822,7 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
         Err(anyhow!(
             "partial link `{} -r` of {} codegen units failed (status={}).\nstderr:\n{}",
             ld,
-            units.len(),
+            objs.len(),
             out.status,
             String::from_utf8_lossy(&out.stderr)
         ))
