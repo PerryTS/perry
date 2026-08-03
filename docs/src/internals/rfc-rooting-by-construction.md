@@ -247,6 +247,86 @@ than one known to be partial:
   conservative answer — but it means some code that is arguably fine today will
   be forced to add a slot.
 
+## Where this sits in the one GC correctness plan
+
+**This RFC is one of three layers. It is not the whole answer, and on its own it
+cannot be.** Written 2026-08-03, after 40 GC/rooting commits landed in three days
+and the blocking bug (#7280) still measured red 0/30. Every one of those fixes
+was correct; none of them ended the class. That is the signature of fixing
+instances rather than the shape.
+
+**The shape, stated once:**
+
+> A GC-managed pointer exists somewhere the collector does not know about,
+> across a point where the collector can run.
+
+"Somewhere it does not know about" has had **three different homes**, and each
+needs a different mechanism. Conflating them is why the effort felt endless:
+
+| # | Home | Example bugs | Mechanism | Status |
+|---|---|---|---|---|
+| 1 | **`perry-codegen`'s lowering code** (Rust that emits IR) | #7192, #7206, #7211 | **This RFC** — `Raw`/`Rooted` borrow discipline | proposed |
+| 2 | **The emitted machine code's liveness** (registers at a safepoint) | #7280, #7271, #7252, #7243 | **Statepoints / stack maps** (#7108, #7174) | experiment done, blocked on layer 0 |
+| 3 | **`perry-runtime`'s hand-written Rust** (`*mut ObjectHeader` locals, caches) | #7249, #7239, #7226, #7231 | `RuntimeHandleScope`, made non-optional | not started |
+
+**Layer 0 — the enabler: in-process LLVM (#7241).** #7108 measured statepoints as
+viable but concluded *"the text-IR-plus-stock-clang architecture is what rules the
+cheapest design out"*: Perry emits textual `.ll` and shells out to a user-supplied
+`clang`, so it controls neither the pass pipeline nor the stackmap emission.
+#7241's Phase 0 removes exactly that constraint — it builds the pipeline via the
+LLVM C API and independently verified that **`gc "statepoint-example"` constructs,
+verifies and emits**. It also pins LLVM 22 (killing the Apple-clang-21-vs-22 parse
+skew) and is opt-in behind a cargo feature, so the default build is byte-for-byte
+unchanged.
+
+**⇒ The dependency order is 0 → 2, with 1 and 3 independent of both.**
+
+### What statepoints do to this RFC
+
+Adopting layer 2 **deletes several of this document's "what it cannot catch"
+entries rather than mitigating them**, because the shadow frame stops existing:
+
+- *"Correctness of the shadow frame itself — that `enter(n)` matches the slots
+  used, that the frame is popped on every path including unwinds"* — moot.
+- *"Values rooted in a side table rather than a slot"* — moot; LLVM records the
+  actual live location.
+- The `SlotIdx`-from-`alloc_slot` companion change (#7184's shape) — moot.
+
+What survives untouched is the part this RFC is uniquely good at: **catching the
+mistake at the moment it is made, in the author's editor, rather than five GC
+cycles later in someone else's program.** #7211 remains the decisive argument —
+an author actively thinking about rooting, who wrote a four-clause predicate,
+still got it wrong.
+
+So layers 1 and 2 are **complements, not alternatives**: layer 2 makes the
+emitted code correct by construction; layer 1 makes the *compiler's own code*
+hard to write incorrectly. Neither touches layer 3.
+
+### The costs, stated so they are decided rather than discovered
+
+- **Stack maps** (#7108, measured): **438,848 B** of hot `__text` saved against
+  **4.5–16.6 MB** of cold `.llvm_stackmaps` — 10–38× more metadata than text,
+  exceeding the app's entire generated code section. It is *cold*, so the RSS
+  cost is far below the file-size cost. The size model is
+  `24 B × (safepoint, root) pairs` over 62,731 candidate safepoints, so
+  **safepoint density is a direct lever** — but only once layer 0 gives us
+  control of emission. **That lever is expected, not measured. It is the first
+  thing layer 2 must prove.**
+- **In-process LLVM** (#7241): ~171 MB added to a static-linked build when the
+  feature is enabled; LLVM 22 dev libs for contributors who enable it; zero cost
+  by default.
+- **Open weakness**: #7108's prototype has a known gap in the deep-stack walker.
+
+### Interaction with the RSS goal
+
+The evacuating minor is off by default (#7161) because #7154's use-after-free is
+still live (#7280). The measured **-65% RSS** (320 MB → 111 MB) turns out to come
+from the *16 MB nursery cap*, which is gated on the same flag — **not** from the
+copying itself. So there is a route to the memory win that does not require the
+risky path. It is deliberately sequenced last: measuring it against a collector
+whose "minors" fall back to a conservative full scan (#7255) would bake that cost
+in and make it look inherent. See #7056.
+
 ## Recommendation
 
 Adopt, incrementally, starting with step 1 and one family. The decisive argument
