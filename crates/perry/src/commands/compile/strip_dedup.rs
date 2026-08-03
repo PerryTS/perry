@@ -55,6 +55,88 @@ const RUST_PANIC_UNWIND_SYMBOL_PARTS: &[&str] = &[
 /// Panic/unwind personality shims (incl. the compiler-emitted
 /// `DW.ref.rust_eh_personality`, which substring-matches `rust_eh_personality`).
 /// These must not be `--localize-symbol`'d on ELF — it breaks PIE relocations.
+/// The one temp directory this process uses for archive stripping, created on
+/// first use and swept of *other* processes' leftovers at the same time.
+///
+/// #7261: the eight callers below each did
+/// `create_dir_all(temp_dir()/perry_strip_<pid>)` and never removed it. The
+/// `_extract` subdirectories were cleaned; the parent — holding every
+/// `_<lib>_trimmed.lib` — was not, so one directory leaked per `perry compile`.
+/// They accumulated at roughly 64 per two hours of ordinary activity and twice
+/// took a development machine to **zero bytes free**, which surfaces as
+/// unrelated build failures in every concurrent process rather than as a disk
+/// error here.
+///
+/// Cleanup is a *startup sweep of dead PIDs* rather than an exit hook on
+/// purpose: it also heals crashes, `SIGKILL` and `process::exit`, none of which
+/// run destructors. A live process's directory is never touched, so concurrent
+/// `perry` invocations are safe.
+pub(crate) fn strip_tmp_base() -> &'static Path {
+    static BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        let base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
+        std::fs::create_dir_all(&base).ok();
+        sweep_dead_strip_dirs();
+        base
+    })
+    .as_path()
+}
+
+/// Remove `perry_strip_<pid>` directories whose PID is no longer live.
+/// Best-effort throughout; never removes this process's own directory.
+fn sweep_dead_strip_dirs() {
+    let tmp = std::env::temp_dir();
+    let me = std::process::id();
+    let Ok(entries) = std::fs::read_dir(&tmp) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(pid) = name.strip_prefix("perry_strip_") else {
+            continue;
+        };
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        if pid == me || pid_is_live(pid) {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(entry.path());
+    }
+}
+
+/// Is `pid` a live process? Errs toward "live" so an unexpected errno never
+/// deletes a directory in use.
+#[cfg(unix)]
+fn pid_is_live(pid: u32) -> bool {
+    // `kill()` gives special meaning to non-positive pids: 0 is our own process
+    // group, -1 is *every process we may signal*, < -1 is a process group.
+    // `u32::MAX as pid_t` is -1, so a naive cast turns this probe into "signal
+    // everything" — which succeeds, and would report a dead directory as live.
+    // A value that cannot fit a positive `pid_t` is not a pid we created.
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 performs error checking only; it delivers nothing.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    // ESRCH is the only errno meaning "no such process"; EPERM means it exists
+    // and is not ours. Read it via `std::io::Error` rather than a
+    // platform-specific errno symbol (`__error` vs `__errno_location`).
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+#[cfg(not(unix))]
+fn pid_is_live(_pid: u32) -> bool {
+    // No cheap portable probe; err toward "live" and leave the directory.
+    true
+}
+
 fn is_panic_unwind_symbol(symbol: &str) -> bool {
     RUST_PANIC_UNWIND_SYMBOL_PARTS
         .iter()
@@ -674,8 +756,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         ui_only_deps.len(), staticlib_members.len(), excluded_by_subset, excluded_by_pattern);
 
     // Write trimmed lib to a temp directory — the source lib may be on a read-only mount (e.g. Docker)
-    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_base).ok();
+    let tmp_base = strip_tmp_base();
     let trimmed_lib = tmp_base.join(format!("_{lib_name}_trimmed.lib"));
     let extract_dir = tmp_base.join(format!("_{lib_name}_extract"));
     let _ = std::fs::remove_dir_all(&extract_dir);
@@ -893,8 +974,7 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
         .map(|line| line.to_string())
         .collect();
 
-    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_base).ok();
+    let tmp_base = strip_tmp_base();
     let extract_dir = tmp_base.join(format!("_{lib_name}_well_known_extract"));
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
@@ -1086,8 +1166,7 @@ pub(super) fn strip_bundled_runtime_from_well_known_lib(
         return Ok(lib_path.clone());
     }
 
-    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_base).ok();
+    let tmp_base = strip_tmp_base();
     let extract_dir = tmp_base.join(format!("_{lib_name}_noruntime_extract"));
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
@@ -1228,8 +1307,7 @@ pub(super) fn dedup_ui_lib_against_linked_libs(
         to_localize_by_member.len()
     );
 
-    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_base).ok();
+    let tmp_base = strip_tmp_base();
     let extract_dir = tmp_base.join(format!("_{lib_name}_uiruntime_extract"));
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
@@ -1435,8 +1513,7 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
         }
     }
 
-    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_base).ok();
+    let tmp_base = strip_tmp_base();
     let extract_dir = tmp_base.join(format!("_{lib_name}_nosharedeps_extract"));
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
@@ -1771,5 +1848,51 @@ empty_marker.o:
         let symbols = collect_archive_symbols_flat(&llvm_nm, &trimmed);
         assert!(symbols.contains("ui_only_symbol"));
         assert!(!symbols.contains("runtime_canonical"));
+    }
+}
+
+#[cfg(test)]
+mod strip_tmp_base_tests {
+    use super::*;
+
+    /// #7261: a `perry_strip_<pid>` directory whose PID is dead must be swept.
+    /// PID 1 is the control — it is always live, so it proves the sweep
+    /// discriminates rather than deleting everything it finds.
+    #[test]
+    fn sweep_removes_dead_pid_dirs_and_keeps_live_ones() {
+        let tmp = std::env::temp_dir();
+        let dead = tmp.join(format!("perry_strip_{}", u32::MAX));
+        let live = tmp.join("perry_strip_1");
+        let mine = strip_tmp_base().to_path_buf();
+
+        std::fs::create_dir_all(&dead).unwrap();
+        std::fs::create_dir_all(&live).ok();
+        std::fs::write(dead.join("_x_trimmed.lib"), b"leaked").unwrap();
+
+        sweep_dead_strip_dirs();
+
+        assert!(!dead.exists(), "dead-PID dir must be swept (#7261)");
+        assert!(live.exists(), "a LIVE pid's dir must never be touched");
+        assert!(mine.exists(), "this process's own dir must never be swept");
+
+        std::fs::remove_dir_all(&live).ok();
+    }
+
+    /// The eight call sites must share one directory, not create eight.
+    #[test]
+    fn base_is_created_once_and_stable() {
+        let a = strip_tmp_base();
+        assert_eq!(a, strip_tmp_base());
+        assert!(a.exists());
+        assert!(a.ends_with(format!("perry_strip_{}", std::process::id())));
+    }
+
+    /// `u32::MAX as pid_t` is -1, which `kill()` reads as "every process".
+    #[test]
+    fn live_pid_probe_is_correct_at_the_boundaries() {
+        assert!(pid_is_live(std::process::id()), "self must read live");
+        assert!(pid_is_live(1), "pid 1 must read live");
+        assert!(!pid_is_live(u32::MAX), "an unassignable pid must read dead");
+        assert!(!pid_is_live(0), "pid 0 is a process group, not a process");
     }
 }

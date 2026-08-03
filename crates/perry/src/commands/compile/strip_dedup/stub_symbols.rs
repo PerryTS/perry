@@ -167,8 +167,7 @@ fn try_localize_stdlib_stub_symbols(runtime_lib: &Path, stdlib_lib: &Path) -> Re
         return Ok(runtime_lib.to_path_buf());
     }
 
-    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_base).ok();
+    let tmp_base = super::strip_tmp_base();
     let extract_dir = tmp_base.join(format!("_{lib_name}_stub_strip_extract"));
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
@@ -343,8 +342,7 @@ fn try_localize_stdlib_stub_symbols_unix(runtime_lib: &Path, stdlib_lib: &Path) 
         return Ok(runtime_lib.to_path_buf());
     }
 
-    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_base).ok();
+    let tmp_base = super::strip_tmp_base();
     let extract_dir = tmp_base.join(format!("_{lib_name}_stub_localize_extract"));
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
@@ -470,8 +468,7 @@ pub(super) fn strip_members_present_in_reference(
         return Ok(lib_path.to_path_buf());
     }
 
-    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_base).ok();
+    let tmp_base = super::strip_tmp_base();
     let extract_dir = tmp_base.join(format!("_{lib_name}_refdiff_extract"));
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
