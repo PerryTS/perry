@@ -108,13 +108,22 @@ LABEL_RE = re.compile(r"^([\w.$][\w.$]*):\s*(?:;.*)?$")
 # strict form above declines it, that is a parser gap and must be loud.
 LABEL_SHAPED_RE = re.compile(r"^[^\s=]+:\s*(?:;.*)?$")
 ASSIGN_RE = re.compile(r"^\s*%([\w.$]+)\s*=\s*(.*)$")
-CALL_RE = re.compile(r"\bcall\s+[^@]*@([\w.$]+)\(")
+# `invoke` (#7302) is a call with an unwind edge — it must be seen as a call
+# here or every collecting call inside a `try` body would be invisible to the
+# dominance analysis (a silent false-green for exactly the functions where
+# rooting is hardest).
+CALL_RE = re.compile(r"\b(?:call|invoke)\s+[^@]*@([\w.$]+)\(")
 BIND_RE = re.compile(r"call void @js_shadow_slot_bind\(i32 (\d+), ptr %([\w.$]+)\)")
 CLEAR_RE = re.compile(r"call void @js_shadow_slot_set\(i32 (\d+), i64 0\)")
 STORE_RE = re.compile(r"^\s*store\s+([\w\[\]x* ]+?)\s+([^,]+),\s*ptr %([\w.$]+)")
 BR_UNCOND_RE = re.compile(r"^\s*br label %([\w.$]+)")
 BR_COND_RE = re.compile(r"^\s*br i1 [^,]+, label %([\w.$]+), label %([\w.$]+)")
 SWITCH_LABEL_RE = re.compile(r"label %([\w.$]+)")
+# Invoke edges (#7302): normal destination + unwind destination. The invoke
+# terminates its block; the continuation label follows immediately in the
+# emitted text and both successors must appear in the CFG or the landing pad
+# (and everything reached through it) would be dropped as unreachable.
+INVOKE_EDGE_RE = re.compile(r"\binvoke\b.*\bto label %([\w.$]+) unwind label %([\w.$]+)")
 
 
 class Insn:
@@ -219,6 +228,11 @@ def build_cfg(f):
             if t.strip().startswith("switch"):
                 for lbl in SWITCH_LABEL_RE.findall(t):
                     f.succs[b].add(lbl)
+                continue
+            m = INVOKE_EDGE_RE.search(t)
+            if m:
+                f.succs[b].add(m.group(1))
+                f.succs[b].add(m.group(2))
     for b, ss in list(f.succs.items()):
         for s in ss:
             f.preds[s].add(b)

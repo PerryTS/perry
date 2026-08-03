@@ -47,12 +47,50 @@ pub(super) fn emit_setjmp_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_
     blk.cond_br(&is_exc, exc_label, normal_label);
 }
 
+/// Invoke-EH (#7302) counterpart of [`emit_setjmp_dispatch`]: arm the
+/// handler (`js_eh_try_push` — savepoints only, no jmp_buf), branch into
+/// the protected body, and materialize the landing-pad block that funnels
+/// the unwinder into `exc_label`. Returns the landing pad's label; the
+/// caller pushes it as the EH scope around the protected body so every
+/// potentially-throwing call inside carries the unwind edge.
+///
+/// The landing pad ignores the `{ ptr, i32 }` pair — the thrown value is
+/// read back from the runtime's rooted TLS slot via `js_get_exception`,
+/// exactly as the setjmp path does. Savepoint restores already ran at
+/// throw time (`js_throw`), which is sound because the unwinder skips
+/// Rust cleanups just like `longjmp` did (runtime built panic=abort; see
+/// `perry-runtime/src/eh.rs`).
+pub(super) fn emit_eh_dispatch(
+    ctx: &mut FnCtx<'_>,
+    exc_label: &str,
+    normal_label: &str,
+) -> String {
+    ctx.func.needs_personality = true;
+    let lpad_idx = ctx.new_block("eh.lpad");
+    let lpad_label = ctx.block_label(lpad_idx);
+
+    ctx.block().call_void("js_eh_try_push", &[]);
+    ctx.block().br(normal_label);
+
+    let saved = ctx.current_block;
+    ctx.current_block = lpad_idx;
+    let lp = ctx.block().next_reg();
+    ctx.block()
+        .emit_raw(format!("{} = landingpad {{ ptr, i32 }} catch ptr null", lp));
+    ctx.block().br(exc_label);
+    ctx.current_block = saved;
+    lpad_label
+}
+
 pub(crate) fn lower_try(
     ctx: &mut FnCtx<'_>,
     body: &[perry_hir::Stmt],
     catch: Option<&perry_hir::CatchClause>,
     finally: Option<&[perry_hir::Stmt]>,
 ) -> Result<()> {
+    if crate::eh_mode::invoke_eh_enabled() {
+        return lower_try_invoke(ctx, body, catch, finally);
+    }
     // Mark the enclosing function so IR emission adds `#1` (noinline) and
     // runs the setjmp volatile-promotion pass.
     //
@@ -200,6 +238,130 @@ pub(crate) fn lower_try(
         // js_throw — unless the finally itself completed abruptly (a
         // `return`/`throw` inside finally overrides the pending
         // exception, per spec), in which case its own terminator stands.
+        let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+        if let Some(f) = finally {
+            lower_stmts(ctx, f)?;
+        }
+        if !ctx.block().is_terminated() {
+            ctx.block().call_void("js_throw", &[(DOUBLE, &exc)]);
+            ctx.block().unreachable();
+        }
+    }
+
+    // --- finally / merge (normal-completion path) ---
+    ctx.current_block = finally_idx;
+    if let Some(f) = finally {
+        lower_stmts(ctx, f)?;
+    }
+    Ok(())
+}
+
+/// Invoke-EH lowering of `Stmt::Try` (#7302). Structurally the same CFG as
+/// the setjmp version — the differences are the transport, not the shape:
+///
+///   1. `js_eh_try_push()` arms the handler (savepoints, no jmp_buf) and the
+///      body is entered by a plain branch — no setjmp, no `returns_twice`,
+///      no volatile promotion, no `noinline`.
+///   2. While the body lowers, its landing-pad label is the active EH scope:
+///      every potentially-throwing call becomes an `invoke` unwinding there.
+///   3. The landing pad funnels into the same catch-entry sequence the
+///      setjmp path used (`js_try_end` → `js_get_exception` →
+///      `js_clear_exception`).
+///   4. Catch/finally bodies lower under the *enclosing* scope (the inner
+///      scope is popped first), so a throw escaping them wires to the outer
+///      handler — or leaves the function entirely when there is none. The
+///      re-raise sites (`js_throw` after a finally copy) go through the same
+///      chokepoint and pick up the correct edge automatically.
+pub(crate) fn lower_try_invoke(
+    ctx: &mut FnCtx<'_>,
+    body: &[perry_hir::Stmt],
+    catch: Option<&perry_hir::CatchClause>,
+    finally: Option<&[perry_hir::Stmt]>,
+) -> Result<()> {
+    let try_body_idx = ctx.new_block("try.body");
+    let catch_idx = ctx.new_block("try.catch");
+    let finally_idx = ctx.new_block("try.finally");
+
+    let try_body_label = ctx.block_label(try_body_idx);
+    let catch_label = ctx.block_label(catch_idx);
+    let finally_label = ctx.block_label(finally_idx);
+
+    // --- current block: arm handler, enter body; landing pad → catch ---
+    let lpad_label = emit_eh_dispatch(ctx, &catch_label, &try_body_label);
+
+    // --- try body (scope active) ---
+    ctx.current_block = try_body_idx;
+    // Return/break/continue inside the body pop the handler via js_try_end
+    // before leaving — same bookkeeping as the setjmp path.
+    ctx.try_depth += 1;
+    ctx.func.push_eh_scope(lpad_label);
+    lower_stmts(ctx, body)?;
+    ctx.func.pop_eh_scope();
+    ctx.try_depth -= 1;
+    if !ctx.block().is_terminated() {
+        ctx.block().call_void("js_try_end", &[]);
+        ctx.block().br(&finally_label);
+    }
+
+    // --- catch (reached only through the landing pad) ---
+    ctx.current_block = catch_idx;
+    ctx.block().call_void("js_try_end", &[]);
+    if let Some(clause) = catch {
+        let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+        ctx.block().call_void("js_clear_exception", &[]);
+        if let Some((id, _name)) = &clause.param {
+            // Entry-block slot + shadow-slot bind: identical to the setjmp
+            // path (#7209 — after js_clear_exception this alloca is the only
+            // root keeping the exception alive, and the bind must follow the
+            // store so the root-word decoder never sees uninitialized bytes).
+            let slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.locals.insert(*id, slot.clone());
+            ctx.block().store(DOUBLE, &exc, &slot);
+            crate::expr::emit_shadow_slot_bind_for_local(ctx, *id);
+        }
+        if let Some(f) = finally {
+            // Spec: a throw escaping the CATCH body must still run the
+            // finally, whose own abrupt completion replaces the pending one.
+            // Protect the catch body with its own handler; its landing pad
+            // runs a dedicated finally copy and re-raises.
+            // Refs test262 S12.14_A7_T2/T3, S12.14_A13_T3.
+            let cbody_idx = ctx.new_block("try.catch.body");
+            let cfail_idx = ctx.new_block("try.catch.fail");
+            let cbody_label = ctx.block_label(cbody_idx);
+            let cfail_label = ctx.block_label(cfail_idx);
+            let cfail_lpad = emit_eh_dispatch(ctx, &cfail_label, &cbody_label);
+
+            ctx.current_block = cbody_idx;
+            ctx.try_depth += 1;
+            ctx.func.push_eh_scope(cfail_lpad);
+            lower_stmts(ctx, &clause.body)?;
+            ctx.func.pop_eh_scope();
+            ctx.try_depth -= 1;
+            if !ctx.block().is_terminated() {
+                ctx.block().call_void("js_try_end", &[]);
+                ctx.block().br(&finally_label);
+            }
+
+            ctx.current_block = cfail_idx;
+            ctx.block().call_void("js_try_end", &[]);
+            let exc2 = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+            lower_stmts(ctx, f)?;
+            if !ctx.block().is_terminated() {
+                ctx.block().call_void("js_throw", &[(DOUBLE, &exc2)]);
+                ctx.block().unreachable();
+            }
+        } else {
+            lower_stmts(ctx, &clause.body)?;
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&finally_label);
+            }
+        }
+    } else {
+        // try/finally with no catch: run the finally copy on the exception
+        // path, then RE-RAISE the original exception (it must not be
+        // swallowed — issue #37). Capture before the finally body, which may
+        // touch exception state; a `return`/`throw` inside the finally
+        // overrides the pending exception per spec (its terminator stands).
         let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
         if let Some(f) = finally {
             lower_stmts(ctx, f)?;

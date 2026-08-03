@@ -76,6 +76,15 @@ pub struct RegCounter {
     /// them into registers that `longjmp` would revert. See
     /// `crate::volatile_setjmp` for the full argument (#6385).
     try_region_stores: RefCell<HashSet<String>>,
+    /// Invoke-EH mode (#7302): stack of landing-pad labels for the active
+    /// handler scopes, innermost last. While non-empty, every emitted call
+    /// that can reach `js_throw` becomes an `invoke` unwinding to the top
+    /// label (followed by an inline continuation label, so the emitting
+    /// code keeps appending transparently). Lexical scoping matches the
+    /// dynamic handler stack: `lower_try` pushes around the try body only —
+    /// catch/finally bodies see the *enclosing* scope, which is exactly
+    /// where a throw escaping them lands at runtime.
+    eh_unwind_labels: RefCell<Vec<String>>,
 }
 
 impl RegCounter {
@@ -84,7 +93,23 @@ impl RegCounter {
             value: Cell::new(0),
             try_region_depth: Cell::new(0),
             try_region_stores: RefCell::new(HashSet::new()),
+            eh_unwind_labels: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Enter an invoke-EH handler scope: calls emitted from here until the
+    /// matching pop unwind to `lpad_label`.
+    pub fn push_eh_scope(&self, lpad_label: String) {
+        self.eh_unwind_labels.borrow_mut().push(lpad_label);
+    }
+
+    pub fn pop_eh_scope(&self) {
+        self.eh_unwind_labels.borrow_mut().pop();
+    }
+
+    /// Landing pad of the innermost active handler scope, if any.
+    pub fn current_eh_unwind_label(&self) -> Option<String> {
+        self.eh_unwind_labels.borrow().last().cloned()
     }
 
     pub fn next(&self) -> u32 {
@@ -179,7 +204,10 @@ impl LlBlock {
     /// never enter the perry runtime, so they cannot trigger a collection.
     pub fn contains_gc_unsafe_call(&self) -> bool {
         self.instructions.iter().any(|line| {
-            let Some(pos) = line.find("call ") else {
+            // Invoke-EH (#7302): an `invoke` is a call with an unwind edge —
+            // it must count here too, or a runtime call inside a `try` would
+            // silently pass the call-free verification.
+            let Some(pos) = line.find("call ").or_else(|| line.find("invoke ")) else {
                 return false;
             };
             let callee = &line[pos..];
@@ -223,6 +251,18 @@ impl LlBlock {
 
     pub fn emit_raw(&mut self, line: impl Into<String>) {
         self.emit(line);
+    }
+
+    /// Invoke-EH (#7302): emit the continuation label that follows an
+    /// `invoke` inline in this block's instruction stream. Flush-left (no
+    /// two-space instruction indent) so IR-consuming tools that anchor
+    /// labels at column 0 (`scripts/gc_root_dominance_check.py`'s LABEL_RE)
+    /// keep parsing the block structure correctly.
+    fn emit_inline_label(&mut self, label: &str) {
+        if self.terminated {
+            return;
+        }
+        self.instructions.push(format!("{}:", label));
     }
 
     /// Number of instructions currently in this block. Used by
@@ -827,6 +867,23 @@ impl LlBlock {
 
     // -------- Function calls --------
 
+    /// Invoke-EH (#7302): if a handler scope is active and this callee can
+    /// reach `js_throw`, the call must carry the scope's unwind edge —
+    /// otherwise a throw beneath it sails PAST this function's handlers (the
+    /// IP would sit outside every LSDA call-site range). Returns the
+    /// `to`/`unwind` suffix and emits nothing; `None` means "emit a plain
+    /// call". The continuation label is emitted by the caller right after
+    /// the invoke line — LLVM accepts labels mid-"block" textually, and the
+    /// LlBlock keeps appending into the continuation transparently.
+    fn eh_invoke_suffix(&mut self, func_name: &str) -> Option<(String, String)> {
+        let lpad = self.counter.current_eh_unwind_label()?;
+        if crate::eh_mode::callee_is_nothrow(func_name) {
+            return None;
+        }
+        let cont = format!("eh.cont{}", self.counter.next());
+        Some((cont, lpad))
+    }
+
     pub fn call(&mut self, ret_ty: LlvmType, func_name: &str, args: &[(LlvmType, &str)]) -> String {
         // #835 + #846: record this emission against the FFI provenance
         // registry. The driver consults the registry after all per-module
@@ -834,10 +891,18 @@ impl LlBlock {
         crate::ext_registry::record_ffi_call(func_name);
         let r = self.reg();
         let arg_str = format_args(args);
-        self.emit(format!(
-            "{} = call {} @{}({})",
-            r, ret_ty, func_name, arg_str
-        ));
+        if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
+            self.emit(format!(
+                "{} = invoke {} @{}({}) to label %{} unwind label %{}",
+                r, ret_ty, func_name, arg_str, cont, lpad
+            ));
+            self.emit_inline_label(&cont);
+        } else {
+            self.emit(format!(
+                "{} = call {} @{}({})",
+                r, ret_ty, func_name, arg_str
+            ));
+        }
         r
     }
 
@@ -845,7 +910,15 @@ impl LlBlock {
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
         let arg_str = format_args(args);
-        self.emit(format!("call void @{}({})", func_name, arg_str));
+        if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
+            self.emit(format!(
+                "invoke void @{}({}) to label %{} unwind label %{}",
+                func_name, arg_str, cont, lpad
+            ));
+            self.emit_inline_label(&cont);
+        } else {
+            self.emit(format!("call void @{}({})", func_name, arg_str));
+        }
     }
 
     /// Empty inline-asm barrier (`call void asm sideeffect "", ""()`).
@@ -869,14 +942,30 @@ impl LlBlock {
         let r = self.reg();
         let arg_str = format_args(args);
         let param_types: Vec<&str> = args.iter().map(|(t, _)| *t).collect();
-        self.emit(format!(
-            "{} = call {} ({})* {}({})",
-            r,
-            ret_ty,
-            param_types.join(", "),
-            fn_ptr,
-            arg_str
-        ));
+        // Indirect targets (closures, method pointers) can always throw.
+        if let Some(lpad) = self.counter.current_eh_unwind_label() {
+            let cont = format!("eh.cont{}", self.counter.next());
+            self.emit(format!(
+                "{} = invoke {} ({})* {}({}) to label %{} unwind label %{}",
+                r,
+                ret_ty,
+                param_types.join(", "),
+                fn_ptr,
+                arg_str,
+                cont,
+                lpad
+            ));
+            self.emit_inline_label(&cont);
+        } else {
+            self.emit(format!(
+                "{} = call {} ({})* {}({})",
+                r,
+                ret_ty,
+                param_types.join(", "),
+                fn_ptr,
+                arg_str
+            ));
+        }
         r
     }
 

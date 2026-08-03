@@ -48,6 +48,13 @@ pub struct LlFunction {
     /// already implies the hint, so the two are never emitted together, and
     /// `has_try` (noinline) still wins over both in `to_ir`.
     pub inline_hint: bool,
+    /// Invoke-EH (#7302): this function contains `landingpad` instructions,
+    /// so its `define` line must carry
+    /// `personality ptr @perry_eh_personality`. Set by the invoke-mode
+    /// try/async-boundary lowering; orthogonal to `has_try` (which drives
+    /// the setjmp-era noinline/volatile machinery and stays false in invoke
+    /// mode).
+    pub needs_personality: bool,
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
@@ -214,6 +221,7 @@ impl LlFunction {
             has_try: false,
             force_inline: false,
             inline_hint: false,
+            needs_personality: false,
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
@@ -410,6 +418,17 @@ impl LlFunction {
 
     pub fn exit_try_region(&self) {
         self.reg_counter.exit_try_region();
+    }
+
+    /// Invoke-EH (#7302): enter/leave a handler scope. While a scope is
+    /// active, every potentially-throwing call any block of this function
+    /// emits carries an unwind edge to the scope's landing-pad label.
+    pub fn push_eh_scope(&self, lpad_label: String) {
+        self.reg_counter.push_eh_scope(lpad_label);
+    }
+
+    pub fn pop_eh_scope(&self) {
+        self.reg_counter.pop_eh_scope();
     }
 
     /// Allocate a fresh stack slot in the function entry block. Returns
@@ -612,9 +631,17 @@ impl LlFunction {
         } else {
             ""
         };
+        // Invoke-EH (#7302): functions containing landing pads name their
+        // personality on the define line (LLVM: `define ... [fn attrs]
+        // [personality] { ... }`).
+        let personality = if self.needs_personality {
+            " personality ptr @perry_eh_personality"
+        } else {
+            ""
+        };
         let mut ir = format!(
-            "define {}{} @{}({}){} {{\n",
-            linkage, self.return_type, self.name, param_str, attrs
+            "define {}{} @{}({}){}{} {{\n",
+            linkage, self.return_type, self.name, param_str, attrs, personality
         );
 
         for (i, blk) in self.blocks.iter().enumerate() {

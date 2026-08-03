@@ -64,6 +64,7 @@ pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
 pub mod dns_resolver;
+pub mod eh;
 pub mod embedded;
 pub mod error;
 pub mod event_pump;

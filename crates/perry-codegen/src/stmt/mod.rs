@@ -83,7 +83,7 @@ fn lower_async_rejecting_stmts_inner(
     // machines still need the ECMAScript async boundary: any abrupt
     // completion before the first await rejects the returned Promise instead
     // of escaping as a host exception.
-    ctx.func.has_try = true;
+    let invoke_eh = crate::eh_mode::invoke_eh_enabled();
 
     let body_idx = ctx.new_block("async.body");
     let catch_idx = ctx.new_block("async.catch");
@@ -93,25 +93,39 @@ fn lower_async_rejecting_stmts_inner(
     let catch_label = ctx.block_label(catch_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    // js_try_push + target-ABI setjmp + branch — shared with `lower_try` so
-    // the setjmp variant (chosen from `ctx.target_triple`, see
-    // `crate::setjmp_abi`) is decided in exactly one place.
-    try_stmt::emit_setjmp_dispatch(ctx, &catch_label, &body_label);
+    // Handler dispatch — shared with `lower_try` so the mechanism (invoke
+    // landing pad, or the target-ABI setjmp variant chosen from
+    // `ctx.target_triple` via `crate::setjmp_abi`) is decided in exactly one
+    // place per mode.
+    let eh_scope = if invoke_eh {
+        Some(try_stmt::emit_eh_dispatch(ctx, &catch_label, &body_label))
+    } else {
+        ctx.func.has_try = true;
+        try_stmt::emit_setjmp_dispatch(ctx, &catch_label, &body_label);
+        None
+    };
 
     ctx.current_block = body_idx;
     ctx.try_depth += 1;
-    // The whole async body runs between the setjmp above and a possible
-    // longjmp into `async.catch`. `async.catch` itself only touches runtime
-    // state (get/clear exception, reject the promise) and never reads a
-    // local, so in principle no alloca needs to survive that longjmp — but we
-    // open the region anyway rather than special-case it. The uniform rule
+    // Setjmp mode: the whole async body runs between the setjmp above and a
+    // possible longjmp into `async.catch`. `async.catch` itself only touches
+    // runtime state (get/clear exception, reject the promise) and never reads
+    // a local, so in principle no alloca needs to survive that longjmp — but
+    // we open the region anyway rather than special-case it. The uniform rule
     // ("every alloca stored inside a setjmp-protected region is volatile") is
     // the one that is trivially sound, and this is still strictly better than
-    // the `optnone` it replaces: the arithmetic, compares and branches in an
-    // async body now optimize even though its locals stay frame-resident.
-    ctx.func.enter_try_region();
+    // the `optnone` it replaces. Invoke mode needs none of that: the landing
+    // pad reads no locals, and the unwind edges keep SSA values live where
+    // LLVM's ordinary EH liveness says so.
+    match &eh_scope {
+        Some(lpad) => ctx.func.push_eh_scope(lpad.clone()),
+        None => ctx.func.enter_try_region(),
+    }
     lower_stmts_inner(ctx, stmts, emit_shadow_clears)?;
-    ctx.func.exit_try_region();
+    match &eh_scope {
+        Some(_) => ctx.func.pop_eh_scope(),
+        None => ctx.func.exit_try_region(),
+    }
     ctx.try_depth -= 1;
     if !ctx.block().is_terminated() {
         ctx.block().call_void("js_try_end", &[]);

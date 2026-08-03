@@ -109,7 +109,7 @@ fn promote_global_for_units(line: &str) -> String {
 /// string/object paths read+parse and reach ToPrimitive),
 /// `js_value_length_f64` (Buffer/TypedArray registry lookups take locks —
 /// a lock acquisition writes memory).
-fn helper_decl_attrs(name: &str) -> &'static str {
+pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
     match name {
         // PURE — each verified: pure bit tests/masking on the f64/i64 args,
         // total over arbitrary bits, no memory access anywhere in the body.
@@ -274,6 +274,21 @@ impl LlModule {
         self.declarations.push((
             name.to_string(),
             format!("declare {} @{}({}){}", return_type, name, param_str, attrs),
+        ));
+    }
+
+    /// Invoke-EH (#7302): declare the personality routine referenced by
+    /// every `define ... personality ptr @perry_eh_personality`. Declared
+    /// varargs — the symbol is only ever *named* on define lines and in the
+    /// unwind tables; generated code never calls it.
+    pub fn declare_personality(&mut self) {
+        if self.declared_names.contains("perry_eh_personality") {
+            return;
+        }
+        self.declared_names.insert("perry_eh_personality".to_string());
+        self.declarations.push((
+            "perry_eh_personality".to_string(),
+            "declare i32 @perry_eh_personality(...)".to_string(),
         ));
     }
 

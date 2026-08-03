@@ -823,6 +823,12 @@ fn compute_object_cache_key_with_env(
         "env_target_cpu",
         env_var("PERRY_TARGET_CPU").as_deref().unwrap_or(""),
     );
+    // #7302: PERRY_EH=invoke flips try/catch lowering from setjmp/longjmp to
+    // invoke/landingpad — structurally different IR for every try-containing
+    // function. Serving a cached object from the other mode would silently
+    // mix exception transports within one binary. (Temporary flag; deleted
+    // with the setjmp path when the default flips.)
+    h.field("env_eh", env_var("PERRY_EH").as_deref().unwrap_or(""));
     // Codegen tuning/emission toggles (#6394). Each is read by perry-codegen
     // at compile time and changes the emitted IR / .o bytes, so a warm cache
     // must not serve an object built under a different setting. These are

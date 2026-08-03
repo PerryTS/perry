@@ -727,15 +727,22 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // js_clear_exception() resets the exception state.
     // js_has_exception() returns i32 (1 if exception is active, 0 otherwise).
     // js_enter_finally() / js_leave_finally() bracket finally blocks.
-    module.declare_function("js_try_push", PTR, &[]);
-    // setjmp variant selection: decided by `crate::setjmp_abi` from the
-    // compile target's LLVM triple (`module.target_triple`), NOT host
-    // `cfg!` — cross-compiles must declare the *target's* setjmp ABI
-    // (Windows MSVC 2-arg `_setjmp`, Apple fast 1-arg `_setjmp`, plain
-    // `setjmp` elsewhere; full rationale in `crate::setjmp_abi`). The
-    // same `SetjmpAbi` drives the call sites in `stmt/try_stmt.rs`, so
-    // the declaration and the calls can never disagree on name or arity.
-    {
+    if crate::eh_mode::invoke_eh_enabled() {
+        // Invoke-EH (#7302): handlers are armed by js_eh_try_push (savepoints
+        // only, no jmp_buf) and entered through landing pads; the personality
+        // is named on every try-containing define line. No setjmp is declared
+        // — which also keeps the `#0`/`#1` attribute groups out of the module.
+        module.declare_function("js_eh_try_push", VOID, &[]);
+        module.declare_personality();
+    } else {
+        module.declare_function("js_try_push", PTR, &[]);
+        // setjmp variant selection: decided by `crate::setjmp_abi` from the
+        // compile target's LLVM triple (`module.target_triple`), NOT host
+        // `cfg!` — cross-compiles must declare the *target's* setjmp ABI
+        // (Windows MSVC 2-arg `_setjmp`, Apple fast 1-arg `_setjmp`, plain
+        // `setjmp` elsewhere; full rationale in `crate::setjmp_abi`). The
+        // same `SetjmpAbi` drives the call sites in `stmt/try_stmt.rs`, so
+        // the declaration and the calls can never disagree on name or arity.
         let abi = crate::setjmp_abi::setjmp_abi_for_triple(&module.target_triple);
         module.declare_function(abi.callee(), I32, abi.param_types());
     }

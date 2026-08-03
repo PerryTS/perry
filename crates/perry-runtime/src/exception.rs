@@ -63,8 +63,30 @@ const MAX_TRY_DEPTH: usize = 1024;
 // TLS; the arrays live on the heap. `[T]` indexing on `Box<[T]>` is
 // unchanged, so the accessors below need no edits. (Mirrors the
 // TRANSITION_CACHE / VTABLE_IC / INTERN_TABLE boxing.)
+/// How a handler-stack entry catches (#7302).
+///
+/// `Setjmp`: the handler frame armed a `jmp_buf` (generated setjmp-based
+/// `try` while the old lowering exists, plus the Rust-side
+/// `js_call_catching` boundary trap, which keeps setjmp forever — Rust
+/// cannot catch a foreign unwind). `js_throw` reaches these via `longjmp`.
+///
+/// `Unwind`: an invoke/landingpad `try` in generated code (pushed by
+/// `js_eh_try_push`). `js_throw` reaches these via
+/// `_Unwind_RaiseException`; the unwinder finds the landing pad of the
+/// innermost `try`-containing generated frame, which is exactly this entry
+/// (handler-stack order mirrors stack order, and an entry above it would
+/// have been popped or would itself be the throw target).
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum HandlerKind {
+    Setjmp,
+    Unwind,
+}
+
 struct ExceptionState {
     jump_buffers: Box<[JmpBuf]>,
+    /// Catch mechanism per open handler, in lockstep with `jump_buffers`
+    /// (whose slot is simply unused for `Unwind` entries).
+    handler_kinds: Box<[HandlerKind]>,
     /// Shadow-stack depth captured when each `try` block was pushed, so the
     /// unwind path can drop the orphaned frames `longjmp` leaves behind (see
     /// `js_throw` / issue #1830). Indexed by try-depth, in lockstep with
@@ -105,6 +127,7 @@ impl ExceptionState {
     fn new() -> Self {
         ExceptionState {
             jump_buffers: vec![JmpBuf::new(); MAX_TRY_DEPTH].into_boxed_slice(),
+            handler_kinds: vec![HandlerKind::Setjmp; MAX_TRY_DEPTH].into_boxed_slice(),
             shadow_savepoints: vec![ShadowSavepoint::EMPTY; MAX_TRY_DEPTH].into_boxed_slice(),
             runtime_handle_savepoints: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             call_method_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
@@ -133,11 +156,24 @@ fn with_exception_state<R>(f: impl FnOnce(*mut ExceptionState) -> R) -> R {
 /// The generated code must call setjmp() directly with this pointer.
 #[no_mangle]
 pub extern "C" fn js_try_push() -> *mut i32 {
+    try_push_with_kind(HandlerKind::Setjmp)
+}
+
+/// Push a handler for an invoke/landingpad `try` (#7302). Same savepoint
+/// recording as `js_try_push`, but no jmp_buf is armed — `js_throw` reaches
+/// this handler via `_Unwind_RaiseException` and the frame's landing pad.
+#[no_mangle]
+pub extern "C" fn js_eh_try_push() {
+    try_push_with_kind(HandlerKind::Unwind);
+}
+
+fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
     with_exception_state(|s| unsafe {
         if (*s).try_depth >= MAX_TRY_DEPTH {
             panic!("Try block nesting too deep");
         }
         let depth = (*s).try_depth;
+        (*s).handler_kinds[depth] = kind;
         // Capture the shadow-stack depth now, before the protected region
         // can push any callee frames, so the unwind path can restore to
         // exactly this point and drop the frames `longjmp` orphans (#1830).
@@ -206,11 +242,11 @@ pub fn js_call_catching(f: impl FnOnce() -> f64) -> Result<f64, f64> {
 /// Throw an exception with the given value
 #[no_mangle]
 pub extern "C" fn js_throw(value: f64) -> ! {
-    // Pull the jmp_buf pointer out under the TLS borrow, then drop the
-    // borrow before calling longjmp (longjmp doesn't return, so leaving
-    // the TLS access "open" would leave the cell permanently borrowed
-    // on this thread; in practice UnsafeCell tolerates it but the
-    // shorter scope keeps things tidy).
+    // Pull the transport decision out under the TLS borrow, then act after
+    // dropping it (neither longjmp nor a raise returns here, so leaving the
+    // TLS access "open" would leave the cell permanently borrowed on this
+    // thread; in practice UnsafeCell tolerates it but the shorter scope
+    // keeps things tidy).
     let jb_ptr: *mut i32 = with_exception_state(|s| unsafe {
         crate::gc::runtime_store_root_nanbox_f64_raw_slot(&raw mut (*s).current_exception, value);
         (*s).has_exception = true;
@@ -265,9 +301,33 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         // truncate/decrement epilogues).
         #[cfg(feature = "dyn-eval")]
         crate::dyn_eval::interp_restore((*s).dyn_eval_savepoints[depth]);
-        (*s).jump_buffers[depth].as_mut_ptr()
+        // The savepoint restores above are transport-independent: the unwind
+        // path skips Rust cleanups exactly like longjmp does (the runtime is
+        // built panic=abort; see crate::eh), so restoring at throw time is
+        // correct for both.
+        match (*s).handler_kinds[depth] {
+            HandlerKind::Setjmp => (*s).jump_buffers[depth].as_mut_ptr(),
+            HandlerKind::Unwind => std::ptr::null_mut(),
+        }
     });
-    unsafe { longjmp(jb_ptr, 1) }
+    if !jb_ptr.is_null() {
+        unsafe { longjmp(jb_ptr, 1) }
+    }
+    // Invoke/landingpad handler: raise. The unwinder transfers control to
+    // the innermost try-containing generated frame's landing pad — the
+    // handler this entry describes. Returning here means the walk failed
+    // DESPITE an armed handler: lost unwind tables between the throw point
+    // and the handler frame (e.g. a runtime rebuilt without
+    // -C force-unwind-tables). That is a build/configuration defect, not a
+    // JS error — fail loudly instead of masking it as an uncaught throw.
+    let reason = crate::eh::raise_perry_exception();
+    eprintln!(
+        "perry: FATAL: exception transport failed (reason={reason}): a try \
+         handler is armed but the unwinder found no landing pad. The runtime \
+         or an intermediate object was built without unwind tables."
+    );
+    print_uncaught(value);
+    std::process::abort();
 }
 
 /// Get the current exception value
