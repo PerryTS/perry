@@ -347,4 +347,72 @@ entry:
         );
         module.verify().expect("statepoint IR verifies");
     }
+
+    /// `-S` used to be swallowed by the catch-all that ignores `-c`, so the
+    /// statepoint backends asked for assembly and were handed an object. The
+    /// failure was invisible here and surfaced two steps later as
+    /// `ld: unknown file type`, because #7314's compact-map rewriter rewrites
+    /// `.llvm_stackmaps` in assembly *text* and had nothing to rewrite.
+    #[test]
+    fn dash_s_requests_assembly_and_dash_c_does_not() {
+        let (_, _, _, _, emit_asm) =
+            interpret_plan_args(&["-O2".into(), "-S".into()]).expect("args parse");
+        assert!(emit_asm, "-S must request assembly");
+
+        let (_, _, _, _, emit_asm) =
+            interpret_plan_args(&["-O2".into(), "-c".into()]).expect("args parse");
+        assert!(!emit_asm, "-c must still request an object");
+    }
+
+    /// The property the wiring depends on: the same module emitted with
+    /// `FileType::Assembly` is assembler text carrying a stack-map section,
+    /// not an object. If this ever silently produced an object again, the
+    /// compact-map rewrite would find no `.llvm_stackmaps` to shrink and the
+    /// GC would be reading an empty map — the #7332 shape, a binary that
+    /// looks correct until a collection frees something live.
+    #[test]
+    fn assembly_emission_is_text_not_an_object() {
+        let context = Context::create();
+        let ir = r#"
+define i32 @f(i32 %x) {
+entry:
+  %y = add i32 %x, 1
+  ret i32 %y
+}
+"#;
+        let module = parse_ir_text(&context, ir, "asm_probe").expect("probe parses");
+        global_init(&[]);
+        let triple = TargetMachine::get_default_triple();
+        let target = Target::from_triple(&triple).expect("host target");
+        let tm = target
+            .create_target_machine(
+                &triple,
+                "",
+                "",
+                OptimizationLevel::None,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
+            .expect("target machine");
+
+        let asm = tm
+            .write_to_memory_buffer(&module, FileType::Assembly)
+            .expect("assembly emission");
+        let text = String::from_utf8_lossy(asm.as_slice()).to_string();
+        assert!(
+            text.contains(".globl") || text.contains(".global"),
+            "expected assembler directives, got:\n{}",
+            &text[..text.len().min(200)]
+        );
+
+        let obj = tm
+            .write_to_memory_buffer(&module, FileType::Object)
+            .expect("object emission");
+        assert_ne!(
+            asm.as_slice(),
+            obj.as_slice(),
+            "assembly and object emission returned identical bytes — `-S` is \
+             being ignored somewhere in the emission path"
+        );
+    }
 }
