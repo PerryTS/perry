@@ -209,6 +209,18 @@ codegen-units = 16
 # edit/build loop stays short. Intended local loop:
 #   cargo check -p perry                       # fastest correctness feedback
 #   cargo build --profile perry-dev -p perry   # optimized local development
+# Invoke-EH development profile (#7302): the runtime/stdlib static archives
+# linked into compiled programs under PERRY_EH=invoke. panic=abort keeps Rust
+# frames cleanup-free so a JS unwind crossing them has exactly longjmp
+# semantics (and no RFC-2945 extern-"C" abort guards fire); it MUST be paired
+# with RUSTFLAGS="-C force-unwind-tables=yes" or the unwinder cannot step
+# those frames at all — js_throw fails loudly if that happens (see
+# perry-runtime/src/eh.rs). Temporary alongside the PERRY_EH flag; the
+# default profiles adopt this configuration when the setjmp path is deleted.
+[profile.eh-abort]
+inherits = "perry-dev"
+panic = "abort"
+
 [profile.perry-dev]
 inherits = "release"
 lto = false

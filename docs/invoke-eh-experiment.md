@@ -155,6 +155,45 @@ codegen is shared; only the dispatch/landing shape is per-triple (exactly how
 mandatory for all functions, so the cross-Rust-frame story has no
 force-unwind-tables analogue there.
 
+## Phase 1 — implementation (landed on the branch behind `PERRY_EH=invoke`)
+
+- **Runtime** (`perry-runtime/src/eh.rs` + `exception.rs`): `perry_eh_personality`
+  (ported Itanium LSDA walk, catch-all — Rust std's personality trimmed of
+  type-table/filter logic, MIT/Apache-2.0), per-thread `PERRYJS\0` exception
+  object, `js_eh_try_push()` (same savepoint recording as `js_try_push`, no
+  jmp_buf), and a `HandlerKind` per handler-stack entry: `Setjmp` entries
+  (old lowering + every Rust-side boundary trap — `js_call_catching`,
+  combinators, iterator/timer/promisify traps, all of which pair
+  `js_try_push` with `ffi::setjmp`) are reached by `longjmp`; `Unwind`
+  entries by `_Unwind_RaiseException`. A raise that returns despite an armed
+  handler aborts loudly naming lost unwind tables (the RUSTFLAGS foot-gun).
+- **Codegen**: EH scope stack on the shared `RegCounter`;
+  `call`/`call_void`/`call_indirect` emit
+  `invoke … to label %eh.contN unwind label %lpad` plus a flush-left inline
+  continuation label whenever a scope is active and the callee can throw
+  (`llvm.*`, `js_shadow_*`/`js_gc_*`, the EH bookkeeping five, and
+  `#2/#3/#4`-audited helpers stay plain calls). `lower_try_invoke` mirrors
+  the setjmp CFG exactly — same catch-entry sequence, same catch-param
+  binding (#7209), same finally duplication — with `emit_eh_dispatch`
+  replacing the setjmp dispatch and scope push/pop replacing
+  `enter/exit_try_region`. Async rejection boundary converted the same way.
+  Invoke-mode functions get `personality ptr @perry_eh_personality` and no
+  `#0`/`#1` groups, no volatile pass, no noinline.
+- **Return/break/continue inside `try`**: unchanged — finally inlining is a
+  HIR-level transform (`perry-transform/src/finally_inline.rs`) whose clones
+  sit inside the try body, and its documented limitation (a throwing clone
+  routes to the same try's handler) is transport-independent, so behavior is
+  bit-identical to the setjmp path.
+- **Tooling**: `scripts/gc_root_dominance_check.py` learned `invoke` (CALL_RE
+  + CFG edges for both destinations) — otherwise every collecting call inside
+  a `try` would be invisible to the dominance analysis, a silent false-green.
+  `LlBlock::contains_gc_unsafe_call` (#5093) matches `invoke` too.
+  `PERRY_EH` participates in the object-cache key (#6394 rule).
+- **Dev profile**: `[profile.eh-abort]` (inherits perry-dev, `panic=abort`)
+  + `RUSTFLAGS="-C force-unwind-tables=yes"` builds the runtime archives for
+  invoke-mode testing without flipping the workspace default during the flag
+  period.
+
 ## Phase 1+ design notes (running)
 
 - Handler bookkeeping: `js_try_push` today returns a jmp_buf and the generated
