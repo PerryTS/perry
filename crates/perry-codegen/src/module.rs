@@ -285,7 +285,8 @@ impl LlModule {
         if self.declared_names.contains("perry_eh_personality") {
             return;
         }
-        self.declared_names.insert("perry_eh_personality".to_string());
+        self.declared_names
+            .insert("perry_eh_personality".to_string());
         self.declarations.push((
             "perry_eh_personality".to_string(),
             "declare i32 @perry_eh_personality(...)".to_string(),

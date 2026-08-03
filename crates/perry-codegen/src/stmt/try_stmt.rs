@@ -70,11 +70,7 @@ pub(super) fn emit_setjmp_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_
 /// Savepoint restores already ran at throw time (`js_throw`), which is
 /// sound because the unwinder skips Rust cleanups just like `longjmp` did
 /// (runtime built panic=abort; see `perry-runtime/src/eh.rs`).
-pub(super) fn emit_eh_dispatch(
-    ctx: &mut FnCtx<'_>,
-    exc_label: &str,
-    normal_label: &str,
-) -> String {
+pub(super) fn emit_eh_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_label: &str) -> String {
     let msvc = ctx.target_triple.contains("-windows-");
     ctx.func.personality = Some(if msvc {
         "__C_specific_handler"
