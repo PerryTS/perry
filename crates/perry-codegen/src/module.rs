@@ -262,15 +262,6 @@ impl LlModule {
         ));
     }
 
-    /// Invoke-EH (#7302): true when any function in this module carries a
-    /// personality (i.e. contains try/catch landing pads or SEH funclets).
-    /// The native-construction backend (exp/llvm-inprocess) bails to the
-    /// textual path for these modules until its line reader learns
-    /// `invoke`/`landingpad`/`catchswitch`.
-    pub fn has_eh_personality(&self) -> bool {
-        self.functions.iter().any(|f| f.personality.is_some())
-    }
-
     /// Invoke-EH (#7302): declare the personality routine referenced by
     /// every `define ... personality ptr @perry_eh_personality`. Declared
     /// varargs — the symbol is only ever *named* on define lines and in the

@@ -85,6 +85,7 @@ jobs:
           # the tracked .ll corpora would otherwise green vacuously.
           echo "$out" | grep -q "dialect::tests::corpus_spike ... ok"
           echo "$out" | grep -q "dialect::tests::corpus_batch_kernel ... ok"
+          echo "$out" | grep -q "dialect::tests::corpus_exception_handling ... ok"
           echo "$out" | grep -q "inprocess::tests::rs4gc_schedules_in_process ... ok"
 
       - name: Native-mode smoke — liveness, behavior parity, object-byte verdicts
@@ -109,3 +110,19 @@ jobs:
           PERRY_LLVM_INPROCESS=diff PERRY_CODEGEN_UNITS=3 "$BIN" \
             benchmarks/app-patterns/kernels/batch.ts -o /tmp/batch_diff 2> /tmp/diffu.err
           grep -q "ir-diff. OK.*3 units" /tmp/diffu.err
+
+          # #7302: exception handling. try/catch lowers to invoke/landingpad
+          # with a personality on the define, so a reader that cannot build
+          # those forms silently loses every try-containing module to the
+          # textual path — which is exactly how this arm went red once the
+          # EH migration landed. Assert the EH program takes the native path
+          # AND behaves identically.
+          EH=test-files/test_gap_7302_invoke_eh_paths.ts
+          "$BIN" "$EH" -o /tmp/eh_text
+          /tmp/eh_text > /tmp/eh_text.out
+          PERRY_LLVM_INPROCESS=native "$BIN" "$EH" -o /tmp/eh_native 2> /tmp/eh_native.err
+          grep -q "in-process LLVM backend active" /tmp/eh_native.err
+          /tmp/eh_native > /tmp/eh_native.out
+          cmp /tmp/eh_text.out /tmp/eh_native.out
+          PERRY_LLVM_INPROCESS=diff "$BIN" "$EH" -o /tmp/eh_diff 2> /tmp/eh_diff.err
+          grep -q "ir-diff. OK" /tmp/eh_diff.err

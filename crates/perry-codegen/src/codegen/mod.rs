@@ -2654,11 +2654,6 @@ fn try_native_units(
     target: Option<&str>,
     module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
-    // Invoke-EH (#7302): see try_native_construction — textual path for
-    // try/catch modules until the native reader learns invoke.
-    if llmod.has_eh_personality() {
-        return None;
-    }
     match crate::native_emit::native_mode() {
         crate::native_emit::NativeMode::Off => None,
         crate::native_emit::NativeMode::Native => Some(
@@ -2691,12 +2686,6 @@ fn try_native_construction(
     target: Option<&str>,
     module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
-    // Invoke-EH (#7302): the native line reader does not know
-    // `invoke`/`landingpad`/`catchswitch` yet — modules with try/catch take
-    // the textual path. Follow-up tracked on #7301.
-    if llmod.has_eh_personality() {
-        return None;
-    }
     match crate::native_emit::native_mode() {
         crate::native_emit::NativeMode::Off => None,
         crate::native_emit::NativeMode::Native => Some(crate::native_emit::compile_module_native(

@@ -156,6 +156,9 @@ struct ParsedHeader {
     /// (type token, `%name`) per parameter.
     params: Vec<(String, String)>,
     attr_str: String,
+    /// `personality ptr @NAME` clause, if the define carries one (#7302:
+    /// every function containing try/catch does).
+    personality: Option<String>,
 }
 
 fn parse_header(header: &str) -> Result<ParsedHeader> {
@@ -201,7 +204,25 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
     let name = unquote(&after[..paren]);
     let close = rmatch_paren(after, paren)?;
     let params_str = &after[paren + 1..close];
-    let attr_str = after[close + 1..].trim().to_string();
+    let mut attr_str = after[close + 1..].trim().to_string();
+    // `personality ptr @NAME` sits with the fn attributes on the define
+    // line; lift it out so the attribute loop only sees real attributes.
+    let mut personality = None;
+    if let Some(pos) = attr_str.find("personality ") {
+        let tail = attr_str[pos..].to_string();
+        attr_str = attr_str[..pos].trim_end().to_string();
+        let pname = tail
+            .trim_start_matches("personality ")
+            .trim()
+            .trim_start_matches("ptr ")
+            .trim()
+            .trim_start_matches('@')
+            .trim();
+        if pname.is_empty() {
+            bail!("malformed personality clause: {tail}");
+        }
+        personality = Some(unquote(pname));
+    }
 
     let mut params = Vec::new();
     for p in split_top_level(params_str) {
@@ -220,6 +241,7 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
         name,
         params,
         attr_str,
+        personality,
     })
 }
 
@@ -257,6 +279,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             bail!("duplicate define of @{}", h.name);
         }
         let param_names: Vec<String> = h.params.iter().map(|(_, n)| n.clone()).collect();
+        if let Some(pname) = &h.personality {
+            let pf = module
+                .get_function(pname)
+                .ok_or_else(|| anyhow!("personality @{pname} not declared"))?;
+            func.set_personality_function(pf);
+        }
         let attr_str = h.attr_str;
         for a in attr_str.split_whitespace() {
             match a {
@@ -425,6 +453,8 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             "call" | "tail call" => self
                 .call(Some(dst), rest)?
                 .ok_or_else(|| anyhow!("call with result had void type"))?,
+            "invoke" => return self.invoke(Some(dst), rest).map(|_| ()),
+            "landingpad" => return self.landingpad(dst, rest),
             "getelementptr" => self.gep(dst, rest)?,
             "select" => {
                 // `select i1 C, T A, T B`
@@ -506,6 +536,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 Ok(())
             }
             "call" | "tail call" => self.call(None, rest).map(|_| ()),
+            "invoke" => self.invoke(None, rest).map(|_| ()),
             "switch" => self.switch(rest),
             "unreachable" => {
                 self.builder.build_unreachable().map_err(be)?;
@@ -751,6 +782,114 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             inkwell::values::ValueKind::Basic(v) => Ok(Some(v)),
             _ => Ok(None),
         }
+    }
+
+    /// `[%r =] invoke TY @callee(ARGS) to label %CONT unwind label %PAD`
+    /// (#7302). Shares the callsite-typed, call-through-pointer semantics
+    /// of [`call`]; the only additions are the two edges.
+    fn invoke(&mut self, dst: Option<&str>, rest: &str) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let to_pos = rest
+            .rfind(" to label %")
+            .ok_or_else(|| anyhow!("invoke without `to label`"))?;
+        let head = &rest[..to_pos];
+        let edges = &rest[to_pos + " to label %".len()..];
+        let (cont_label, unwind_label) = edges
+            .split_once(" unwind label %")
+            .ok_or_else(|| anyhow!("invoke without `unwind label`"))?;
+        let cont = self.block(cont_label.trim());
+        let pad = self.block(unwind_label.trim());
+
+        let callee_pos = head
+            .find(['@', '%'])
+            .ok_or_else(|| anyhow!("invoke without callee"))?;
+        let sig_str = head[..callee_pos].trim().trim_end_matches('*').trim();
+        let after = &head[callee_pos..];
+        let paren = after
+            .find('(')
+            .ok_or_else(|| anyhow!("invoke missing arg list"))?;
+        let callee = &after[..paren];
+        let close = rmatch_paren(after, paren)?;
+        let args_str = &after[paren + 1..close];
+
+        // `build_indirect_invoke` takes basic values (not metadata enums
+        // like the call path), so collect both shapes once.
+        let mut args: Vec<BasicValueEnum> = Vec::new();
+        let mut arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
+        for a in split_top_level(args_str) {
+            let (aty, atok) = ty_and_val(&a)?;
+            let ty = basic_type(self.ctx, aty)?;
+            args.push(self.val(ty, atok)?);
+            arg_types.push(ty.into());
+        }
+
+        let name = dst.map(|d| d.trim_start_matches('%')).unwrap_or("");
+        let fn_ty = indirect_fn_type(self.ctx, sig_str, &arg_types)?;
+        let callee_ptr = if let Some(fname) = callee.strip_prefix('@') {
+            let n = unquote(fname);
+            let f = match self.module.get_function(&n) {
+                Some(f) => f,
+                None if n.starts_with("llvm.") => self.module.add_function(&n, fn_ty, None),
+                None => bail!("invoke of undeclared @{n}"),
+            };
+            f.as_global_value().as_pointer_value()
+        } else {
+            self.val(self.ctx.ptr_type(AddressSpace::default()).into(), callee)?
+                .into_pointer_value()
+        };
+        let site = self
+            .builder
+            .build_indirect_invoke(fn_ty, callee_ptr, &args, cont, pad, name)
+            .map_err(be)?;
+        // An invoke terminates its block; the emitted text continues in
+        // the inline continuation label, which arrives as the next line.
+        match site.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => {
+                if let Some(d) = dst {
+                    self.vals.insert(d.trim().to_string(), v);
+                }
+                Ok(Some(v))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// `%r = landingpad { ptr, i32 } catch ptr null` (#7302). Perry emits
+    /// exactly one shape — a catch-all pad whose `{ptr, i32}` result is
+    /// unused (the thrown value comes from the runtime's rooted TLS slot),
+    /// so anything else is a dialect drift and bails loudly.
+    fn landingpad(&mut self, dst: &str, rest: &str) -> Result<()> {
+        let body = rest.trim();
+        let clause_pos = body
+            .find("catch")
+            .ok_or_else(|| anyhow!("landingpad without a catch clause: {body}"))?;
+        let ty_tok = body[..clause_pos].trim();
+        if ty_tok.replace(' ', "") != "{ptr,i32}" {
+            bail!("unexpected landingpad type `{ty_tok}`");
+        }
+        if body[clause_pos..].replace(' ', "") != "catchptrnull" {
+            bail!("unexpected landingpad clauses `{}`", &body[clause_pos..]);
+        }
+        let pf = self
+            .func
+            .get_personality_function()
+            .ok_or_else(|| anyhow!("landingpad in a function with no personality"))?;
+        let ptr_ty = self.ctx.ptr_type(AddressSpace::default());
+        let exc_ty = self
+            .ctx
+            .struct_type(&[ptr_ty.into(), self.ctx.i32_type().into()], false);
+        let null = ptr_ty.const_null();
+        let v = self
+            .builder
+            .build_landing_pad(
+                exc_ty,
+                pf,
+                &[null.into()],
+                false,
+                dst.trim_start_matches('%'),
+            )
+            .map_err(be)?;
+        self.vals.insert(dst.trim().to_string(), v);
+        Ok(())
     }
 
     fn call_asm(&mut self, rest: &str) -> Result<()> {
@@ -1976,6 +2115,32 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../experiments/llvm-inprocess-spike/spike_text.ll"
         ));
+    }
+
+    /// #7302: a try/catch/finally corpus — invoke edges, landing pads,
+    /// the personality clause on the define, and the inline continuation
+    /// labels an invoke split leaves behind. Without this the reader's EH
+    /// support would be exercised only by the async spike, which has one
+    /// shape (the async rejection boundary) and no nesting.
+    #[test]
+    fn corpus_exception_handling() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../experiments/llvm-inprocess-spike/eh_text.ll"
+        );
+        // Assert the subject is LIVE: a corpus that lost its EH forms would
+        // still round-trip, and would silently stop testing invoke.
+        let text = std::fs::read_to_string(path).expect("eh corpus readable");
+        assert!(
+            text.matches("invoke ").count() >= 20,
+            "eh corpus has no invoke edges left"
+        );
+        assert!(text.contains("landingpad"), "eh corpus has no landing pad");
+        assert!(
+            text.contains("personality ptr @perry_eh_personality"),
+            "eh corpus lost its personality clause"
+        );
+        corpus_roundtrip(path);
     }
 
     #[test]

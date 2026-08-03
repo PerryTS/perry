@@ -101,11 +101,11 @@ fn stream_functions<'ctx>(
         let mut stream = crate::dialect::FnStream::begin(context, module, &header)
             .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
         if f.personality.is_some() {
-            // The invoke-EH phi-predecessor rewrite needs whole-function
-            // analysis, and the line reader does not know
-            // invoke/landingpad; keep the materialized-text path for
-            // try-containing functions (#7302 — module-level dispatch bails
-            // even earlier, this is belt-and-braces for direct callers).
+            // The invoke-EH phi-predecessor rewrite (#7302) needs
+            // whole-function analysis and therefore text; the line reader
+            // DOES understand invoke/landingpad, so this path constructs
+            // natively from the rewritten text rather than falling back to
+            // clang.
             let fn_text = f.to_ir();
             for line in fn_text.lines().skip(1) {
                 stream.line(line).map_err(|e| {
