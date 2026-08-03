@@ -908,6 +908,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_alloc",
                         &[(I32, &zero_str), (I32, &n_str)],
                     );
+                    // #7280: root the half-built namespace object.
+                    //
+                    // Every other lowering that allocates an object and then
+                    // fills it in carries this contract — `Expr::Object` since
+                    // #6951, `Expr::ObjectSpread`, the class-object lowering
+                    // since #7211. This one was added for a different reason
+                    // (#629, Drizzle/Stripe namespace enumeration) and never
+                    // got it, and it builds by far the LARGEST object in a
+                    // dependency-scale program: one property per export of the
+                    // imported module, materialized at every use site.
+                    //
+                    // Both halves of the loop are collection points, on every
+                    // iteration:
+                    //
+                    //   * `lower_expr(member_get)` is a full `ns.member`
+                    //     PropertyGet. For a const export that is a CALL into
+                    //     the exporting module's accessor — arbitrary user
+                    //     code; for a function it allocates a closure
+                    //     singleton; for a class it resolves a class ref.
+                    //   * `js_object_set_field_by_name` performs the keys-array
+                    //     transition, which allocates.
+                    //
+                    // With `handle` in a bare SSA register the object is
+                    // reachable from NO root for the whole build, so a minor
+                    // does not merely relocate it — it reclaims it, and the
+                    // remaining stores land in recycled memory. The caller then
+                    // receives a namespace whose members read back as garbage,
+                    // which surfaces as `TypeError: <x> is not a function` at
+                    // the first member call, arbitrarily far away.
+                    //
+                    // Measured on #7280's stock-zod reproducer: `import * as
+                    // core` materializes 269 members here, and the emitted IR
+                    // carried ZERO `js_gc_temp_root_*` calls beside its 269
+                    // allocating stores.
+                    let rooted = super::temp_root::rooted_handle_begin(ctx, &handle, true);
                     for member in &members {
                         let member_get = Expr::PropertyGet {
                             byte_offset: 0,
@@ -922,6 +957,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let key_idx = ctx.strings.intern(member);
                         let key_handle_global =
                             format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        // Re-read AFTER the member resolution: that is the
+                        // collection point, so a register captured before it is
+                        // the stale one.
+                        let handle = super::temp_root::rooted_handle_get(ctx, &rooted);
                         let blk = ctx.block();
                         let key_box = blk.load(DOUBLE, &key_handle_global);
                         let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -931,8 +970,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(I64, &handle), (I64, &key_raw), (DOUBLE, &v_box)],
                         );
                     }
-                    let blk = ctx.block();
-                    return Ok(nanbox_pointer_inline(blk, &handle));
+                    let handle = super::temp_root::rooted_handle_get(ctx, &rooted);
+                    let boxed = nanbox_pointer_inline(ctx.block(), &handle);
+                    super::temp_root::rooted_handle_release(ctx, rooted);
+                    return Ok(boxed);
                 }
                 return Ok(ctx
                     .block()
