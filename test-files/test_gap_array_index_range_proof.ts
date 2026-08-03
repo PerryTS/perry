@@ -96,17 +96,34 @@ for (let j = 0; j < 10; j = j + 2) {
 }
 console.log("I:" + iOut);
 
-// --- J. a stride the body rewrites (to a negative value) must not be trusted
+// --- J. a stride the body rewrites to a NEGATIVE value must not be trusted:
+// the counter walks back past zero and every further read is the "-N" property.
 const j1 = [0, 1, 2, 3, 4, 5, 6, 7, 8];
 let jStride = 3;
+let jSteps = 0;
 let jOut = "";
 for (let j = 0; j < 9; j = j + jStride) {
   jOut = jOut + j + ":" + j1[j] + ";";
-  if (j >= 6) {
-    jStride = 100;
+  jSteps = jSteps + 1;
+  if (jSteps === 3) {
+    jStride = -4;
+  }
+  if (jSteps >= 7) {
+    break;
   }
 }
 console.log("J:" + jOut);
+
+// --- J2. a stride rewritten upward only shortens the loop
+let j2Stride = 2;
+let j2Out = "";
+for (let j = 0; j < 9; j = j + j2Stride) {
+  j2Out = j2Out + j + ":" + j1[j] + ";";
+  if (j >= 4) {
+    j2Stride = 100;
+  }
+}
+console.log("J2:" + j2Out);
 
 // --- K. the callee escapes as a value, so its parameter has unseen call sites
 function escaping(arr: number[], n: number): number {

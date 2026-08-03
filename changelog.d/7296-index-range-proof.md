@@ -34,9 +34,11 @@
   what lets the *existing* affine `a * b + c` composition in `int_range_expr` finally fire:
   `i * size + k` proves `[0, 65535]` once `size` is pinned to 256.
 
-  Measured on an M1 Max (release, quiet host, `PERRY_NO_AUTO_OPTIMIZE=1`), with byte-identical
-  checksums: `16_matrix_multiply` **686 → 70 ms (9.8×)** and `11_prime_sieve`
-  **117 → 30 ms (3.9×)`**. `15_mandelbrot` (22 ms) and `05_fibonacci` (406 ms) are unchanged,
+  Measured on an M1 Max (release build both arms, identical runtime archives,
+  `PERRY_NO_AUTO_OPTIMIZE=1`), with byte-identical checksums: `16_matrix_multiply`
+  **693 → 70 ms (9.9×)** and `11_prime_sieve` **118 → 31 ms (3.8×)**, taking
+  `16_matrix_multiply` from 17.3× behind Node to 1.8×. `15_mandelbrot` (22 ms) and
+  `05_fibonacci` (407 ms) are unchanged,
   and all 30 suite benchmarks produce identical output. In the IR, `matmul`'s innermost block
   goes from two `js_array_get_index_or_string` + two `js_number_coerce` calls to **zero `js_*`
   calls** — every remaining helper sits on a cold guard/fallback edge — and `prime_sieve`'s

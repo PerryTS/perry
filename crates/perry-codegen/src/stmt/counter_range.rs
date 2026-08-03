@@ -39,11 +39,21 @@ pub(crate) trait CounterRangeFacts {
     /// True when `id` is known to hold a non-negative *integral* Number at
     /// this program point (`ctx.nonnegative_integer_locals`).
     fn is_nonnegative_integer_local(&self, id: u32) -> bool;
-    /// True when `id` is captured by some closure. A captured local can be
-    /// written by a closure that was *declared outside* the loop body and
-    /// merely *called* inside it, which the syntactic mutation walk cannot
-    /// see — so a captured local is never accepted as a loop-invariant stride.
-    fn is_closure_captured(&self, id: u32) -> bool;
+    /// True when SOME closure can write `id`.
+    ///
+    /// The syntactic `stmts_mutate_local` walk only sees closures *declared
+    /// inside* the loop. A closure declared **outside** the loop and merely
+    /// *called* inside it writes the local without appearing anywhere in the
+    /// loop's statements, so neither the counter nor the stride may be trusted
+    /// when that is possible.
+    ///
+    /// `ctx.boxed_vars` is exactly that set: `collect_module_boxed_vars`
+    /// unions "captured by a closure AND mutated" over every body in the
+    /// module *before* any lowering starts, and HIR LocalIds are globally
+    /// unique within a module. (`closure_captures` is NOT — it is populated
+    /// only while lowering INSIDE a closure; every ordinary-body `FnCtx`
+    /// constructs it empty, so a guard built on it alone is inert.)
+    fn is_closure_writable(&self, id: u32) -> bool;
 }
 
 impl CounterRangeFacts for crate::expr::FnCtx<'_> {
@@ -55,8 +65,10 @@ impl CounterRangeFacts for crate::expr::FnCtx<'_> {
         self.nonnegative_integer_locals.contains(&id)
     }
 
-    fn is_closure_captured(&self, id: u32) -> bool {
-        self.closure_captures.contains_key(&id)
+    fn is_closure_writable(&self, id: u32) -> bool {
+        self.boxed_vars.contains(&id)
+            || self.prealloc_boxes.contains(&id)
+            || self.closure_captures.contains_key(&id)
     }
 }
 
@@ -143,7 +155,7 @@ fn operands_are_loop_invariant<F: CounterRangeFacts + ?Sized>(
     let mut ids = Vec::new();
     collect_local_gets(expr, &mut ids);
     ids.iter().all(|id| {
-        !facts.is_closure_captured(*id)
+        !facts.is_closure_writable(*id)
             && !expr_mutates_local(cond, *id)
             && update.is_none_or(|expr| !expr_mutates_local(expr, *id))
             && !stmts_mutate_local(body, *id)
@@ -186,7 +198,15 @@ pub(crate) fn classify_for_counter_range<F: CounterRangeFacts + ?Sized>(
     // to the whole body, so a body write invalidates it from the second
     // iteration on: `for (let i = 0; i < 10; i++) { a[i]; i = -5; }` re-enters
     // the body with `i == -4` while the fact still claims `[0, 9]`.
-    if expr_mutates_local(cond, counter_id) || stmts_mutate_local(body, counter_id) {
+    //
+    // `is_closure_writable` covers the writer the syntactic walk cannot see: a
+    // closure over the counter declared OUTSIDE the loop (a `var` counter is
+    // function-scoped, and a captured+mutated `let` counter is boxed too) and
+    // merely called from inside it.
+    if facts.is_closure_writable(counter_id)
+        || expr_mutates_local(cond, counter_id)
+        || stmts_mutate_local(body, counter_id)
+    {
         return None;
     }
 
@@ -265,7 +285,7 @@ mod tests {
             self.nonnegative.contains(&id)
         }
 
-        fn is_closure_captured(&self, id: u32) -> bool {
+        fn is_closure_writable(&self, id: u32) -> bool {
             self.captured.contains(&id)
         }
     }
@@ -396,6 +416,30 @@ mod tests {
         let update = strided_update(Expr::LocalGet(STRIDE));
         let mut facts = sieve_facts();
         facts.captured.insert(STRIDE);
+        assert!(classify_for_counter_range(
+            Some(&init),
+            Some(&cond),
+            Some(&update),
+            &[],
+            &facts,
+            0
+        )
+        .is_none());
+    }
+
+    /// Same for the COUNTER: a closure that can write it is a writer the
+    /// loop's own statements never mention.
+    #[test]
+    fn closure_writable_counter_is_rejected() {
+        let init = let_stmt(COUNTER, Expr::Integer(0));
+        let cond = lt(Expr::LocalGet(COUNTER), Expr::Integer(10));
+        let update = Expr::Update {
+            id: COUNTER,
+            op: UpdateOp::Increment,
+            prefix: false,
+        };
+        let mut facts = TestFacts::default();
+        facts.captured.insert(COUNTER);
         assert!(classify_for_counter_range(
             Some(&init),
             Some(&cond),
