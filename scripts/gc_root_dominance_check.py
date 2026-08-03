@@ -483,6 +483,59 @@ def audit_alloc_re(roots=SYMBOL_ROOTS):
     print("=== every alternative matches at least one exported symbol")
     return 0
 
+
+def dead_poll_capable(symbols):
+    """`POLL_CAPABLE_RUNTIME` entries that name no exported symbol, sorted.
+
+    No exceptions, deliberately — `MOVING_POLL` itself is a real export
+    (`gc/policy.rs:1766`), so carving one out would be an unearned hole in the
+    very audit that exists because unearned holes are the recurring bug here.
+    """
+    return sorted(n for n in POLL_CAPABLE_RUNTIME if n not in symbols)
+
+
+def audit_poll_capable(roots=SYMBOL_ROOTS):
+    """Exit status for `--audit-poll-capable`. 0 clean, 2 on a phantom entry.
+
+    Same hazard as `--audit-alloc-re`, in the other direction. `ALLOC_RE`
+    decides whether a register HAS a heap-value source; `POLL_CAPABLE_RUNTIME`
+    decides whether the window around it is MOVING, which is what
+    `gc-root-dominance.yml`'s `--moving-only` arms gate on. An entry that names
+    nothing reads as coverage and suppresses nothing, and unlike a dead
+    ALLOC_RE alternative it is invisible even to a careful reader, because the
+    misspelling is usually a *plausible* name for a real operation.
+
+    Measured when this auditor was written: TEN of twenty-eight entries were
+    phantoms, including four separate spellings of "call a JS closure", none of
+    which existed. See the block comment on `POLL_CAPABLE_RUNTIME`.
+    """
+    syms = runtime_symbols(roots)
+    # Non-vacuity first, for the same reason `audit_alloc_re` does it: an empty
+    # or tiny symbol table would report every entry dead and the verdict would
+    # be about the scan.
+    if len(syms) < 500:
+        print(f"error: found only {len(syms)} `extern \"C\" fn js_*` symbols "
+              f"under {', '.join(roots)}. The audit is measuring its own scan, "
+              "not POLL_CAPABLE_RUNTIME. Run it from the repository root.",
+              file=sys.stderr)
+        return 2
+    dead = dead_poll_capable(syms)
+    print(f"=== POLL_CAPABLE_RUNTIME: {len(POLL_CAPABLE_RUNTIME)} entries vs "
+          f"{len(syms)} exported js_* symbols")
+    if dead:
+        print("error: POLL_CAPABLE_RUNTIME entries that name no runtime symbol:",
+              file=sys.stderr)
+        for n in dead:
+            print(f"  {n}", file=sys.stderr)
+        print("An entry that matches nothing cannot classify any window as "
+              "MOVING, so it reads as coverage of an operation the "
+              "`--moving-only` gate is in fact blind to. Replace it with the "
+              "symbol codegen actually emits -- do not just delete it, or the "
+              "audit goes green and the hole stays.", file=sys.stderr)
+        return 2
+    print("=== every entry names an exported runtime symbol")
+    return 0
+
 # Bit-level / identity producers a heap address flows through unchanged.
 TRANSPARENT_OPS = ("or i64", "and i64", "bitcast", "inttoptr", "ptrtoint",
                    "select", "phi", "add i64", "sub i64")
@@ -568,13 +621,118 @@ def is_collecting(callee):
 # This matters more than the raw-count modes suggest, because `--moving-only`
 # is the mode the `gc-root-dominance.yml` gate runs. A source the gate cannot
 # classify as reaching a moving minor is a source the gate cannot fail on.
+#
+# ## The property-GET hole (#7154 follow-up)
+#
+# Membership here is by EXACT emitted symbol, and that is the trap. The set
+# carried `js_object_get_field_by_name` and `js_object_set_field_by_name` as a
+# matched pair, which reads like symmetric coverage of property access. It is
+# not. Codegen emits `js_object_set_field_by_name` verbatim (27 call sites in
+# perry-codegen, 205 in the gate's own corpus) but never emits
+# `js_object_get_field_by_name` at all — the GET side lowers to
+# `js_object_get_field_by_name_f64`, `js_object_get_field_ic_miss` and
+# `js_typed_feedback_object_get_field_by_name_f64` (1324 / 532 / 556 calls in
+# the same corpus), and not one of those three was in this set. So every
+# property SET classified `MOVING: YES` and every property GET classified
+# `MOVING: no`, which is the asymmetry that put "as of this writing all five
+# violations the gate reports are `MOVING: YES via js_object_set_field_by_name`"
+# in docs/src/internals/gc-rooting-invariant.md and left the GET half unread.
+#
+# Measured on the gate corpus at the commit that added these six names: 55
+# `--stale-registers` uses have an emitted property-GET helper in their window
+# and 31 of them classified `MOVING: no`, so `--moving-only` dropped all 31 —
+# including the shape that faults deterministically under
+# `PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800` at zod's
+# `clone`. The protector and the checker disagreed and the checker was wrong.
+#
+# The premise for each addition is the SAME premise the set already grants
+# `js_object_get_field_by_name`: it runs a user getter through a transmuted
+# function pointer (`get_field_by_name.rs:1064-1067`) and routes a registered
+# Proxy to `js_proxy_get` (`get_field_by_name.rs:84`) — arbitrary JS, with its
+# own back-edge polls. Each name below is an entry point that reaches it:
+#
+#   js_object_get_field_by_name_f64             ic_miss.rs:29  -> _by_name
+#   js_object_get_field_by_name_boxed           ic_miss.rs:81,86 -> _f64
+#   js_object_get_field_by_property_id_f64      ic_miss.rs:123 -> _f64
+#   js_object_get_field_ic_miss                 ic_miss.rs:228,275 -> _by_name
+#                                               ic_miss.rs:252 -> js_proxy_get
+#   js_object_get_field_ic                      ic_miss.rs:526,561 -> _f64,
+#                                               ic_miss.rs:544 -> _ic_miss
+#   js_typed_feedback_object_get_field_by_name_f64
+#                                               typed_feedback.rs:992 -> _f64
+#
+# `js_object_get_field_by_name` STAYS. It is a real exported symbol
+# (`--audit-poll-capable` checks that), the runtime calls it internally, and a
+# future lowering may emit it directly; removing it would be a narrowing bought
+# for nothing. The bug was never that it was listed — it was that listing it
+# read as covering the GET side when nothing in the corpus matched it.
+#
+# ## The ten names that were not symbols at all
+#
+# Auditing the set the way `--audit-alloc-re` audits ALLOC_RE found that TEN of
+# its twenty-eight entries matched no `extern "C" fn js_*` anywhere in
+# perry-runtime or perry-stdlib: `js_apply_function`, `js_array_for_each`,
+# `js_array_sort`, `js_call_closure`, `js_call_value`, `js_function_call`,
+# `js_invoke_closure`, `js_object_get_property`, `js_object_set_property`,
+# `js_string_replace`. Extrapolated spellings, exactly like `regexp_alloc\w*`
+# and the eight other dead ALLOC_RE alternatives, and with the same effect: the
+# set LOOKED like it covered "call a JS closure" behind four separate entries
+# and covered it zero times. The real closure-call entry points
+# (`js_closure_callN`, 186 call sites in the gate corpus) were never in it, so
+# a value held live across a plain JS function call classified `MOVING: no` —
+# the most obviously poll-capable operation there is. `RECEIVER_SINKS` in this
+# same file already spelled it `closure_call\w*`, so the correct name was three
+# hundred lines away the whole time.
+#
+# Each phantom is replaced by the emitted symbol that carries the premise the
+# phantom asserted, never deleted outright — dropping the fake name without the
+# real one would keep the audit green and leave the hole:
+#
+#   js_call_closure / js_invoke_closure / js_function_call / js_apply_function
+#       -> js_closure_call0..16, js_closure_call_array,
+#          js_closure_call_apply_with_spread   (closure/dispatch/calln.rs:33 —
+#          invokes a JS closure; nothing is more poll-capable than this)
+#   js_call_value  -> js_native_call_value     (closure/dispatch/value_call.rs:17
+#          — calls a value as a function, incl. the Proxy `apply` trap)
+#   js_array_sort  -> js_array_sort_default, js_array_sort_with_comparator
+#          (array/sort.rs:542,635 — the comparator is user JS)
+#   js_array_for_each -> js_typed_array_for_each  (typedarray/iterate.rs:137)
+#   js_object_get_property / js_object_set_property
+#       -> js_object_get_property_key, js_object_set_property_key,
+#          js_object_set_property_key_method  (object/property_key.rs:154,210,257
+#          — ToPropertyKey coercion, then `js_object_get_field_by_name`)
+#   js_string_replace -> the four `_fn` variants, which take a user replacer
+#          callback (regex/replace_expand.rs:277 and siblings). The `_dyn` and
+#          plain variants are a separate coverage decision with their own hit
+#          count and are deliberately NOT folded in here — same reasoning as
+#          ALLOC_RE's deleted `bigint_\w+_op`.
 POLL_CAPABLE_RUNTIME = {
-    "js_call_function", "js_call_closure", "js_invoke_closure",
-    "js_call_value", "js_apply_function", "js_function_call",
-    "js_object_get_property", "js_object_set_property",
+    "js_call_function",
+    # Calling a JS closure. The four names this replaces
+    # (`js_call_closure`, `js_invoke_closure`, `js_function_call`,
+    # `js_apply_function`) were not symbols; these are.
+    "js_closure_call0", "js_closure_call1", "js_closure_call2",
+    "js_closure_call3", "js_closure_call4", "js_closure_call5",
+    "js_closure_call6", "js_closure_call7", "js_closure_call8",
+    "js_closure_call9", "js_closure_call10", "js_closure_call11",
+    "js_closure_call12", "js_closure_call13", "js_closure_call14",
+    "js_closure_call15", "js_closure_call16",
+    "js_closure_call_array", "js_closure_call_apply_with_spread",
+    "js_native_call_value",
+    "js_object_get_property_key", "js_object_set_property_key",
+    "js_object_set_property_key_method",
     "js_object_get_field_by_name", "js_object_set_field_by_name",
-    "js_array_sort", "js_array_map", "js_array_filter", "js_array_for_each",
-    "js_array_reduce", "js_json_stringify", "js_string_replace",
+    # The property-GET dispatch codegen ACTUALLY emits. See the block comment
+    # above for the reach proof behind each one.
+    "js_object_get_field_by_name_f64", "js_object_get_field_by_name_boxed",
+    "js_object_get_field_by_property_id_f64",
+    "js_object_get_field_ic", "js_object_get_field_ic_miss",
+    "js_typed_feedback_object_get_field_by_name_f64",
+    "js_array_sort_default", "js_array_sort_with_comparator",
+    "js_array_map", "js_array_filter", "js_typed_array_for_each",
+    "js_array_reduce", "js_json_stringify",
+    "js_string_replace_regex_fn", "js_string_replace_string_fn",
+    "js_string_replace_all_regex_fn", "js_string_replace_all_string_fn",
     "js_promise_run_microtasks", "js_gc_loop_safepoint",
     # ToPrimitive / ToString / ToNumber: every one of these dispatches a user
     # `[Symbol.toPrimitive]` / `toString` / `valueOf` on an object operand.
@@ -2330,6 +2488,77 @@ entry.0:
 """
 
 
+# The property-GET window, both directions.
+#
+# This is the shape at which `--stale-registers` and
+# `PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
+# disagreed at zod's `clone(schema, def, params)`: the protector faulted
+# deterministically, the checker classified the window `MOVING: no`, and
+# `--moving-only` — the arm `gc-root-dominance.yml` gates on — dropped it. The
+# checker was the wrong one. `POLL_CAPABLE_RUNTIME` held
+# `js_object_get_field_by_name`, which codegen never emits, and none of the
+# three GET entry points it DOES emit.
+#
+# Reduced from the real emitted IR (perry-codegen `property_get/
+# generic_dispatch.rs`'s `pget.recv_ok` block, and the full-outline
+# `js_object_get_field_ic` in `object/field_get_set/ic_miss.rs:544`):
+# parameter #1 is spilled and bound, loaded into a bare register, and then a
+# property read on the RECEIVER runs the generic GET dispatch — which resolves
+# a user getter through a transmuted function pointer and can therefore run an
+# evacuating minor — before that register is dereferenced.
+#
+# The bind is what makes this a `slotload` source rather than an invisible one:
+# the slot IS rewritten by evacuation, so re-reading it is the fix and holding
+# the pre-call register is the bug. Nothing in the fixture is an allocation, so
+# the whole verdict rests on the window classification.
+#
+# The receiver and the key arrive as bare function PARAMETERS on purpose. That
+# keeps the fixture to exactly one recognised source — `%def` — so the arms
+# below assert one number about one register rather than a total that moves for
+# any reason. It also records a second, separate gap honestly: `heap_source_kind`
+# has no "incoming pointer parameter" kind, so `%a1` and `%a3` are invisible
+# here and would be invisible in a real callee too. That gap is REAL but it is
+# not what the zod adjudication turned on — measured over the gate corpus, only
+# 4 unspilled parameters are used below a collecting call and all 4 are
+# `double`/`i64` arithmetic in typed-f64 specialisations, none a pointer. It
+# needs its own change with its own measured hit count.
+_SELFTEST_PROPERTY_GET_WINDOW = """\
+define double @perry_fn_selftest__clone(double %a1, double %a2, i64 %a3) {
+entry.0:
+  %d = alloca double
+  store double %a2, ptr %d
+  call void @js_shadow_slot_bind(i32 1, ptr %d)
+  %def = load double, ptr %d
+  %rb = bitcast double %a1 to i64
+  %rh = and i64 %rb, 281474976710655
+  call void @js_typed_feedback_observe_property_get(i64 4242, i64 %rh, i64 %a3)
+  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %out = call double @perry_fn_other__callee(double %def, double %inner)
+  ret double %out
+}
+"""
+
+# The fix's shape: `%def` is re-read from its shadow slot BELOW the GET
+# dispatch, so it observes the address evacuation wrote back. Identical in
+# every other respect — if the control reports anything, the check is firing on
+# the code shape rather than on the staleness.
+_SELFTEST_PROPERTY_GET_RELOADED = """\
+define double @perry_fn_selftest__clone_reloaded(double %a1, double %a2, i64 %a3) {
+entry.0:
+  %d = alloca double
+  store double %a2, ptr %d
+  call void @js_shadow_slot_bind(i32 1, ptr %d)
+  %rb = bitcast double %a1 to i64
+  %rh = and i64 %rb, 281474976710655
+  call void @js_typed_feedback_observe_property_get(i64 4242, i64 %rh, i64 %a3)
+  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %def = load double, ptr %d
+  %out = call double @perry_fn_other__callee(double %def, double %inner)
+  ret double %out
+}
+"""
+
+
 def _scan_unrooted(paths, moving_only=False, **source_opts):
     """(violations, n_gc_capable_allocas) over `paths`."""
     parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
@@ -2580,6 +2809,47 @@ def self_test():
                   f"the alternatives themselves: {residue}. That is a bug in "
                   "the auditor, not in ALLOC_RE.", file=sys.stderr)
             ok = False
+        # --- the POLL_CAPABLE_RUNTIME audit, both directions -----------------
+        #
+        # Same treatment as the ALLOC_RE auditor above, and for a sharper
+        # reason: this set decides the MOVING classification, so a phantom
+        # entry is a hole in the arm the CI gate actually runs. Ten of
+        # twenty-eight entries were phantoms when the auditor was written, and
+        # four of those ten were four different misspellings of "call a JS
+        # closure". Driven off synthetic symbol tables so the arm does not pass
+        # merely because today's runtime happens to export the right names.
+        if dead_poll_capable({"js_gc_loop_safepoint"}) == []:
+            print("self-test FAIL: audited against a one-symbol table, almost "
+                  "every POLL_CAPABLE_RUNTIME entry must be reported dead. An "
+                  "empty result means the auditor cannot detect a phantom "
+                  "entry at all.", file=sys.stderr)
+            ok = False
+        if dead_poll_capable(set(POLL_CAPABLE_RUNTIME)) != []:
+            print("self-test FAIL: the auditor reported entries dead against a "
+                  "symbol table that is POLL_CAPABLE_RUNTIME itself. That is a "
+                  "bug in the auditor, not in the set.", file=sys.stderr)
+            ok = False
+        if dead_poll_capable(set(POLL_CAPABLE_RUNTIME) |
+                             {"js_extra"}) != []:
+            print("self-test FAIL: a symbol table that is a strict SUPERSET of "
+                  "the set must also come back clean; the auditor is asking "
+                  "the wrong containment question.", file=sys.stderr)
+            ok = False
+        # And the property-GET family specifically: the entries this whole
+        # change is about must be in the set, or the fixture arms below are
+        # asserting something the classification no longer does.
+        _pget_family = {"js_object_get_field_by_name_f64",
+                        "js_object_get_field_ic_miss",
+                        "js_typed_feedback_object_get_field_by_name_f64"}
+        if not _pget_family <= POLL_CAPABLE_RUNTIME:
+            print("self-test FAIL: the emitted property-GET dispatch "
+                  f"{sorted(_pget_family - POLL_CAPABLE_RUNTIME)} must stay in "
+                  "POLL_CAPABLE_RUNTIME. Codegen emits these and never emits "
+                  "js_object_get_field_by_name, so dropping them puts the GET "
+                  "half of property access back outside --moving-only.",
+                  file=sys.stderr)
+            ok = False
+
         # A knob that is silently ignored is a disarmed knob -- the same rule
         # `--max-stale` and `--fatal-sinks` already carry, read the other way.
         if _main_probe(["--stale-registers", "--any-def", planted]) != 2:
@@ -2633,6 +2903,49 @@ def self_test():
                   "the control fixture must report no strhandle use. The check "
                   "reports every literal load and cannot tell fixed from "
                   "broken.", file=sys.stderr)
+            ok = False
+
+        # --- the property-GET window, both directions -----------------------
+        #
+        # The zod `clone` adjudication. `--stale-registers` said `MOVING: no`
+        # and the from-space protector faulted deterministically on the same
+        # site; the checker was wrong, because `POLL_CAPABLE_RUNTIME` named the
+        # one GET symbol codegen never emits and none of the three it does.
+        #
+        # The RAW arm is not the interesting one and never was — the window
+        # already reported, it just reported as non-moving, and `--moving-only`
+        # is the arm `gc-root-dominance.yml` gates on. So both are asserted,
+        # and the second is the one that was red.
+        pget = os.path.join(td, "property_get_window.ll")
+        pget_fixed = os.path.join(td, "property_get_reloaded.ll")
+        for p, text in ((pget, _SELFTEST_PROPERTY_GET_WINDOW),
+                        (pget_fixed, _SELFTEST_PROPERTY_GET_RELOADED)):
+            with open(p, "w") as fh:
+                fh.write(text)
+
+        if _stale_kinds_probe(pget).get("slotload", 0) != 1:
+            print("self-test FAIL: --stale-registers must report the shadow-slot "
+                  "load held across the generic property-GET dispatch as "
+                  f"source=slotload. Got {_stale_kinds_probe(pget)!r}.",
+                  file=sys.stderr)
+            ok = False
+        pget_moving = _stale_kinds_probe(pget, moving_only=True)
+        if pget_moving.get("slotload", 0) != 1:
+            print("self-test FAIL: the generic property-GET dispatch resolves a "
+                  "user getter (object/field_get_set/get_field_by_name.rs:1064) "
+                  "and routes a Proxy to js_proxy_get (:84), so a register held "
+                  "across it MUST classify MOVING and survive --moving-only. "
+                  f"Got {pget_moving!r}. This is the shape that faults under "
+                  "PERRY_GC_PROTECT_FROMSPACE_DEPTH=800 at zod's `clone` while "
+                  "the checker called the window non-moving; a gate that cannot "
+                  "see a live bug is the failure mode this whole file exists "
+                  "to avoid.", file=sys.stderr)
+            ok = False
+        if _stale_kinds_probe(pget_fixed).get("slotload", 0) != 0:
+            print("self-test FAIL: re-reading the shadow slot BELOW the GET "
+                  "dispatch is the fix, so the control fixture must report no "
+                  "slotload use. A non-zero count means the check fires on the "
+                  "code shape rather than on the staleness.", file=sys.stderr)
             ok = False
 
         try:
@@ -2980,6 +3293,14 @@ def main():
                          "that matches nothing. A dead alternative reads as "
                          "coverage and is not -- nine of them have shipped in "
                          "this pattern across two rounds. Takes no corpus.")
+    ap.add_argument("--audit-poll-capable", action="store_true",
+                    help="check every POLL_CAPABLE_RUNTIME entry against the "
+                         "runtime's real `extern \"C\" fn js_*` symbols and "
+                         "fail on any that names nothing. This set decides the "
+                         "MOVING classification the --moving-only gate runs on, "
+                         "so a phantom entry is a hole the gate cannot fail "
+                         "through -- ten of twenty-eight were phantoms when "
+                         "this was added. Takes no corpus.")
     ap.add_argument("--audit-immovable-sources", action="store_true",
                     help="re-check the PREMISES of every --unrooted-allocas "
                          "exemption against the runtime source (#7210): the "
@@ -3005,6 +3326,8 @@ def main():
     # are checked before the corpus arguments are.
     if ns.audit_alloc_re:
         return audit_alloc_re()
+    if ns.audit_poll_capable:
+        return audit_poll_capable()
     if ns.audit_immovable_sources:
         return audit_immovable_sources()
 

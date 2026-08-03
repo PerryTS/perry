@@ -116,6 +116,27 @@ jobs:
       - name: ALLOC_RE alternatives must match real runtime symbols
         run: python3 scripts/gc_root_dominance_check.py --audit-alloc-re
 
+      # The same hazard on the other axis, and a sharper one. `ALLOC_RE`
+      # decides whether a register has a heap-value source; `POLL_CAPABLE_RUNTIME`
+      # decides whether the window around it is MOVING -- which is the arm the
+      # two `--moving-only` steps below actually gate on. An entry naming a
+      # symbol that does not exist can never classify a window, so it reads as
+      # coverage of an operation the gate is in fact blind to, and unlike a dead
+      # regex alternative it survives review because the misspelling is a
+      # PLAUSIBLE name for a real operation.
+      #
+      # Ten of twenty-eight entries were phantoms when this step was added,
+      # including four separate spellings of "call a JS closure" (`js_call_closure`,
+      # `js_invoke_closure`, `js_function_call`, `js_apply_function`) where the
+      # real symbols are `js_closure_callN`. The consequence was measured at
+      # zod's `clone`: the from-space protector faulted deterministically on a
+      # window that `--stale-registers` classified `MOVING: no`, so the
+      # `--moving-only` arm could not see it.
+      #
+      # Static and instant, like the audit above, so it runs before the build.
+      - name: POLL_CAPABLE_RUNTIME entries must name real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-capable
+
       # `--unrooted-allocas` exempts two heap-value sources whose objects can
       # neither move nor be reclaimed (#7210): the old-arena class-keys array,
       # and `js_box_alloc*`'s Box, which is not a GC-heap allocation at all.

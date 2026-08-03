@@ -168,15 +168,56 @@ otherwise inert loop body cannot appear in the corpus without it.
 It is **not** what makes the `MOVING` classification work, and it is not the
 only collection point that can run inside a loop — a `POLL_CAPABLE_RUNTIME`
 helper called from a loop body is in-loop too. `movers`
-(`gc_root_dominance_check.py:576-579`) counts `js_gc_loop_safepoint`, anything
-in `poll_reaching`, **and** anything in `POLL_CAPABLE_RUNTIME` — the runtime
+(`gc_root_dominance_check.py`, the `movers` property on `Violation`, `StaleUse`
+and `UnrootedAlloca`) counts `js_gc_loop_safepoint`, anything in
+`poll_reaching`, **and** anything in `POLL_CAPABLE_RUNTIME` — the runtime
 helpers that can re-enter JS, such as `js_object_set_field_by_name`,
-`js_object_get_property` and `js_call_function`. Those are moving with no poll
-anywhere near them. As of this writing all five violations the gate reports are
-`MOVING: YES via js_object_set_field_by_name`; not one of them needs a poll.
+`js_object_get_field_ic_miss` and `js_closure_call1`. Those are moving with no
+poll anywhere near them.
 
 So: turn the knob on, because it widens what the corpus can express, but do not
 read a poll-free function as safe.
+
+### `POLL_CAPABLE_RUNTIME` is by EXACT emitted symbol, and that has bitten twice
+
+`movers` is a set-membership test on the callee name, so an entry that names a
+symbol codegen does not emit classifies nothing, forever, and looks exactly
+like coverage while doing it. Two rounds of this have now been measured:
+
+1. **A real symbol codegen never emits.** The set carried
+   `js_object_get_field_by_name` next to `js_object_set_field_by_name`, which
+   reads as symmetric coverage of property access. It is not: codegen emits the
+   SET verbatim but lowers every GET to `js_object_get_field_by_name_f64`,
+   `js_object_get_field_ic_miss` or
+   `js_typed_feedback_object_get_field_by_name_f64`, none of which were in the
+   set. Property sets classified `MOVING: YES`, property gets classified
+   `MOVING: no`, and 31 `--stale-registers` hits on the gate corpus were dropped
+   by `--moving-only` as a result — including the shape that faults
+   deterministically under `PERRY_GC_PROTECT_FROMSPACE=1
+   PERRY_GC_PROTECT_FROMSPACE_DEPTH=800` at zod's `clone`. The protector and the
+   checker disagreed; the checker was wrong.
+2. **Ten names that were not symbols at all.** `js_apply_function`,
+   `js_array_for_each`, `js_array_sort`, `js_call_closure`, `js_call_value`,
+   `js_function_call`, `js_invoke_closure`, `js_object_get_property`,
+   `js_object_set_property`, `js_string_replace` — extrapolated spellings, none
+   of them an `extern "C" fn` anywhere in the runtime. Four of the ten were four
+   different ways of saying "call a JS closure", so the single most obviously
+   poll-capable operation in the language was covered zero times; the real
+   entry points are `js_closure_callN`, which `RECEIVER_SINKS` in the same file
+   already spelled correctly.
+
+`--audit-poll-capable` is the gate for this, and `gc-root-dominance.yml` runs it
+alongside `--audit-alloc-re` before the build. It fails on any entry that names
+no exported `extern "C" fn js_*`. When it goes red, **replace** the phantom with
+the symbol codegen actually emits rather than deleting it — deleting turns the
+audit green and leaves the hole.
+
+Checking a *plausible* name is not enough. Confirm against emitted IR:
+
+```bash
+grep -ho 'call [^@]*@js_[A-Za-z0-9_.$]*(' ir-corpus/*.ll \
+  | sed -E 's/.*@([A-Za-z0-9_.$]+)\($/\1/' | sort | uniq -c | sort -rn
+```
 
 `PERRY_INLINE_SHADOW_SLOT=0` makes every root store the `js_shadow_slot_bind`
 call form the checker anchors on.
@@ -220,6 +261,23 @@ From #7196:
 > holding the block your stale pointer is in by the time it is dereferenced.
 > **Use 800.** A clean run at the default depth means nothing.
 
+Depth is a **detection-window** knob, not a sensitivity knob, and the
+difference matters when the two instruments disagree. A page-set enters the
+quarantine only because an evacuating minor actually retired it as from-space
+(`arena/quarantine.rs`, and the knob gates only
+`copying_reset_from_spaces_and_flip`), so *any* fault on a quarantined address
+is a genuine stale read no matter how deep the ring is. Raising the depth
+removes false NEGATIVES — evicting a set hands its blocks back to Eden, where
+the same read silently succeeds — and cannot manufacture a false positive. So
+"the protector faulted, but only at DEPTH=800" is never grounds to doubt the
+protector; when it disagrees with the static checker, look at the checker first.
+That is how the zod `clone` disagreement was settled.
+
+And when a fault does fire, **walk UP the stack**. The reporter names the frame
+that DEREFERENCED the stale value, which is usually not the frame that owns the
+register — the value commonly arrives as an argument from a caller that let it
+go stale.
+
 And remember the ceiling on all of these: if the collection happens while the
 only copy is in a register, there is nothing at that moment for any runtime
 probe to notice. These instruments catch the *consequence*, later. The static
@@ -243,7 +301,13 @@ It is built to be able to fail, against all four hazards in CLAUDE.md:
 - `--self-test` proves it still fires on planted fixtures, and
   `--seeded-violations 40` splices collection points into the **real** corpus IR
   and requires all 40 to be reported — that is the arm that catches the checker
-  silently losing the ability to read perry's output.
+  silently losing the ability to read perry's output;
+- `--audit-alloc-re` and `--audit-poll-capable` refuse a name that matches no
+  exported runtime symbol, in the two tables that decide *whether a register has
+  a heap-value source* and *whether the window around it is moving*. Both run
+  before the build, because both are static and instant and both have shipped
+  dead entries: nine in `ALLOC_RE` across two rounds, ten in
+  `POLL_CAPABLE_RUNTIME`.
 
 ### The allowlist, and why it is not a number
 
