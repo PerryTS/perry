@@ -125,7 +125,24 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
     }
 }
 
+/// The back-edge poll is gated behind `PERRY_GC_MOVING_LOOP_POLLS`, which
+/// defaults OFF. Every assertion in this file is about WHICH loops keep the
+/// poll, so with the knob unset the emitter returns before the purity analysis
+/// runs and six of these tests fail for a reason that has nothing to do with
+/// what they test.
+///
+/// That is how they went red: the knob arrived with the moving-GC work and
+/// nothing here turned it on, while integration suites under `crates/*/tests/`
+/// do not run per-PR, so nobody saw it. `moving_safepoint_polls_enabled`
+/// caches in a `OnceLock`, so this must run before the first codegen call —
+/// every helper that produces IR goes through here.
+fn enable_back_edge_polls() {
+    // Safe on edition 2021, and every test in this binary wants the same value.
+    std::env::set_var("PERRY_GC_MOVING_LOOP_POLLS", "1");
+}
+
 fn ir_for(name: &str, init: Vec<Stmt>) -> String {
+    enable_back_edge_polls();
     String::from_utf8(compile_module(&module_with_init(name, init), entry_opts()).unwrap())
         .expect("LLVM IR should be UTF-8")
 }
@@ -133,6 +150,7 @@ fn ir_for(name: &str, init: Vec<Stmt>) -> String {
 /// Same, but `exported` names are exported module variables — which is what
 /// promotes a module-level `let` to a `@perry_global_*` slot.
 fn ir_for_with_exported_vars(name: &str, init: Vec<Stmt>, exported: &[&str]) -> String {
+    enable_back_edge_polls();
     let mut m = module_with_init(name, init);
     m.exported_objects = exported.iter().map(|s| s.to_string()).collect();
     String::from_utf8(compile_module(&m, entry_opts()).unwrap()).expect("LLVM IR should be UTF-8")
