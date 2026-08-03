@@ -2618,7 +2618,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // textual); `=diff` builds both arms and diffs them. Unit-split and
     // emit_ir_only paths above stay textual (they fall into the in-process
     // *transport* under these values, so no clang subprocess either way).
-    if let Some(result) = try_native_construction(&llmod, opts.target.as_deref()) {
+    if let Some(result) = try_native_construction(&llmod, opts.target.as_deref(), &module_prefix) {
         return result;
     }
 
@@ -2650,15 +2650,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 fn try_native_construction(
     llmod: &crate::module::LlModule,
     target: Option<&str>,
+    module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
     match crate::native_emit::native_mode() {
         crate::native_emit::NativeMode::Off => None,
-        crate::native_emit::NativeMode::Native => {
-            Some(crate::native_emit::compile_module_native(llmod, target))
-        }
-        crate::native_emit::NativeMode::Diff => {
-            Some(crate::native_emit::compile_module_diff(llmod, target))
-        }
+        crate::native_emit::NativeMode::Native => Some(crate::native_emit::compile_module_native(
+            llmod,
+            target,
+            module_prefix,
+        )),
+        crate::native_emit::NativeMode::Diff => Some(crate::native_emit::compile_module_diff(
+            llmod,
+            target,
+            module_prefix,
+        )),
     }
 }
 
@@ -2666,6 +2671,7 @@ fn try_native_construction(
 fn try_native_construction(
     _llmod: &crate::module::LlModule,
     _target: Option<&str>,
+    _module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
     None
 }

@@ -128,11 +128,51 @@ fn plan_for(llmod: &LlModule, target: Option<&str>) -> (String, Vec<String>) {
     crate::linker::native_plan_args(target, est_bytes, fn_count)
 }
 
-pub fn compile_module_native(llmod: &LlModule, target: Option<&str>) -> Result<Vec<u8>> {
+pub fn compile_module_native(
+    llmod: &LlModule,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Result<Vec<u8>> {
     let context = Context::create();
     let module = build_native_module(&context, llmod)?;
+    debug_dump(&module, module_prefix);
     let (effective_target, args) = plan_for(llmod, target);
     crate::inprocess::optimize_and_emit_module(&module, &effective_target, &args)
+}
+
+/// The debug view under native construction: `PERRY_SAVE_LL=<dir>` (which
+/// `--trace llvm` sets, #7154) and `PERRY_LLVM_KEEP_IR` both print the
+/// CONSTRUCTED module — exactly what LLVM will verify and optimize,
+/// including construction-time constant folds — rather than re-rendering
+/// the emitter's text. Filenames mirror the text path's so tooling that
+/// greps the trace dir keeps working; the `.native` infix says which
+/// pipeline produced them.
+fn debug_dump(module: &Module<'_>, module_prefix: &str) {
+    let keep = std::env::var_os("PERRY_LLVM_KEEP_IR").is_some();
+    let save_dir = std::env::var("PERRY_SAVE_LL").ok();
+    if !keep && save_dir.is_none() {
+        return;
+    }
+    let printed = module.print_to_string().to_string();
+    if let Some(dir) = save_dir {
+        let path = format!("{}/{}.native.ll", dir, module_prefix);
+        if std::fs::write(&path, &printed).is_ok() {
+            eprintln!("[perry-codegen] saved native-construction IR: {path}");
+        }
+    }
+    if keep {
+        let path = std::env::temp_dir().join(format!(
+            "perry_native_{}_{}.ll",
+            module_prefix,
+            std::process::id()
+        ));
+        if std::fs::write(&path, &printed).is_ok() {
+            eprintln!(
+                "[perry-codegen] kept LLVM IR (native construction): {}",
+                path.display()
+            );
+        }
+    }
 }
 
 /// Differential harness: text-parsed arm vs natively-built arm, same LLVM,
@@ -143,7 +183,11 @@ pub fn compile_module_native(llmod: &LlModule, target: Option<&str>) -> Result<V
 /// same methodology that proved the Phase 0 transport byte-identical).
 /// Returns the text arm's object (the trusted reference) so a diff run is
 /// safe for real builds while surfacing every divergence.
-pub fn compile_module_diff(llmod: &LlModule, target: Option<&str>) -> Result<Vec<u8>> {
+pub fn compile_module_diff(
+    llmod: &LlModule,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Result<Vec<u8>> {
     let text = llmod.to_ir();
     let ctx_text = Context::create();
     let m_text = crate::inprocess::parse_ir_text(&ctx_text, &text, "perry_native_module")?;
@@ -157,6 +201,7 @@ pub fn compile_module_diff(llmod: &LlModule, target: Option<&str>) -> Result<Vec
             crate::inprocess::optimize_and_emit_module(&m_text, &effective_target, &args)
         }
         Ok(m_native) => {
+            debug_dump(&m_native, module_prefix);
             // Capture pre-opt prints BEFORE optimization mutates the modules;
             // they are the localization artifact when bytes mismatch.
             let dump_dir = std::env::var("PERRY_LLVM_DIFF_DIR").ok();
