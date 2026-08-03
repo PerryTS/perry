@@ -292,6 +292,40 @@ impl LlModule {
         ));
     }
 
+    /// Invoke-EH on windows-msvc (#7302): the SEH personality plus the
+    /// module-local `__except` filter every catchpad names. The filter
+    /// accepts exactly Perry's `RaiseException` code 0xE0504A53 ("PJS" |
+    /// 0xE0000000, `perry-runtime/src/eh.rs`), so foreign SEH exceptions
+    /// (access violations etc.) keep unwinding past JS handlers — the
+    /// setjmp path never caught those either. Rendered among the
+    /// declarations; LLVM accepts interleaved declares/defines.
+    pub fn declare_seh_machinery(&mut self) {
+        if self.declared_names.contains("__C_specific_handler") {
+            return;
+        }
+        self.declared_names
+            .insert("__C_specific_handler".to_string());
+        self.declarations.push((
+            "__C_specific_handler".to_string(),
+            "declare i32 @__C_specific_handler(...)".to_string(),
+        ));
+        self.declared_names.insert("perry_seh_filter".to_string());
+        self.declarations.push((
+            "perry_seh_filter".to_string(),
+            concat!(
+                "define internal i32 @perry_seh_filter(ptr %eptrs, ptr %frame) {\n",
+                "entry:\n",
+                "  %rec = load ptr, ptr %eptrs\n",
+                "  %code = load i32, ptr %rec\n",
+                "  %ok = icmp eq i32 %code, -531609005\n",
+                "  %r = zext i1 %ok to i32\n",
+                "  ret i32 %r\n",
+                "}"
+            )
+            .to_string(),
+        ));
+    }
+
     /// [`Self::declare_function`] with LLVM *return* parameter attributes
     /// (`nonnull`, `noalias`, …), which sit before the return type and so
     /// cannot be expressed through the trailing attribute-group string.

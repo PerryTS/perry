@@ -195,6 +195,14 @@ impl LlBlock {
         self.terminated
     }
 
+    /// Mark the block terminated after emitting a terminator through
+    /// `emit_raw` (e.g. `catchswitch`/`catchret` in the SEH dispatch, which
+    /// have no dedicated builder methods). Without this the block would
+    /// silently accept further instructions after its terminator.
+    pub fn mark_terminated(&mut self) {
+        self.terminated = true;
+    }
+
     /// #5093: true if this block contains a `call` to anything other than an
     /// `@llvm.*` intrinsic or an inline-asm marker. The class-field versioned
     /// loop uses this to verify AT COMPILE TIME that its fast clone came out

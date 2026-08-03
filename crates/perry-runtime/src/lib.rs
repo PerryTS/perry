@@ -64,6 +64,10 @@ pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
 pub mod dns_resolver;
+#[cfg(not(windows))]
+pub mod eh;
+#[cfg(windows)]
+#[path = "eh_windows.rs"]
 pub mod eh;
 pub mod embedded;
 pub mod error;

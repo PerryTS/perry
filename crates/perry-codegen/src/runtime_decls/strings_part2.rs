@@ -729,11 +729,16 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // js_enter_finally() / js_leave_finally() bracket finally blocks.
     if crate::eh_mode::invoke_eh_enabled() {
         // Invoke-EH (#7302): handlers are armed by js_eh_try_push (savepoints
-        // only, no jmp_buf) and entered through landing pads; the personality
-        // is named on every try-containing define line. No setjmp is declared
-        // — which also keeps the `#0`/`#1` attribute groups out of the module.
+        // only, no jmp_buf) and entered through landing pads (Itanium) or
+        // catchpads (SEH on windows-msvc — same target-triple rule as the
+        // setjmp ABI selection below). No setjmp is declared — which also
+        // keeps the `#0`/`#1` attribute groups out of the module.
         module.declare_function("js_eh_try_push", VOID, &[]);
-        module.declare_personality();
+        if module.target_triple.contains("-windows-") {
+            module.declare_seh_machinery();
+        } else {
+            module.declare_personality();
+        }
     } else {
         module.declare_function("js_try_push", PTR, &[]);
         // setjmp variant selection: decided by `crate::setjmp_abi` from the

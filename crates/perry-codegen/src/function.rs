@@ -48,13 +48,14 @@ pub struct LlFunction {
     /// already implies the hint, so the two are never emitted together, and
     /// `has_try` (noinline) still wins over both in `to_ir`.
     pub inline_hint: bool,
-    /// Invoke-EH (#7302): this function contains `landingpad` instructions,
-    /// so its `define` line must carry
-    /// `personality ptr @perry_eh_personality`. Set by the invoke-mode
-    /// try/async-boundary lowering; orthogonal to `has_try` (which drives
-    /// the setjmp-era noinline/volatile machinery and stays false in invoke
-    /// mode).
-    pub needs_personality: bool,
+    /// Invoke-EH (#7302): this function contains landing pads (Itanium) or
+    /// funclet pads (SEH), so its `define` line must carry
+    /// `personality ptr @<name>` — `perry_eh_personality` on Mach-O/ELF,
+    /// `__C_specific_handler` on windows-msvc. Set by the invoke-mode
+    /// try/async-boundary dispatch (which knows the target triple);
+    /// orthogonal to `has_try` (the setjmp-era noinline/volatile machinery,
+    /// which stays false in invoke mode).
+    pub personality: Option<&'static str>,
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
@@ -221,7 +222,7 @@ impl LlFunction {
             has_try: false,
             force_inline: false,
             inline_hint: false,
-            needs_personality: false,
+            personality: None,
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
@@ -631,13 +632,12 @@ impl LlFunction {
         } else {
             ""
         };
-        // Invoke-EH (#7302): functions containing landing pads name their
-        // personality on the define line (LLVM: `define ... [fn attrs]
+        // Invoke-EH (#7302): functions containing landing/funclet pads name
+        // their personality on the define line (LLVM: `define ... [fn attrs]
         // [personality] { ... }`).
-        let personality = if self.needs_personality {
-            " personality ptr @perry_eh_personality"
-        } else {
-            ""
+        let personality = match self.personality {
+            Some(p) => format!(" personality ptr @{}", p),
+            None => String::new(),
         };
         let mut ir = format!(
             "define {}{} @{}({}){}{} {{\n",
@@ -760,7 +760,7 @@ impl LlFunction {
         // Invoke-EH (#7302): inline invoke splits move a block's true CFG
         // tail behind `eh.contN:` labels; phi incoming-edge labels captured
         // at emit time must follow. Runs last so it sees the spliced text.
-        if self.needs_personality && ir.contains("eh.cont") {
+        if self.personality.is_some() && ir.contains("eh.cont") {
             return crate::eh_mode::rewrite_phi_predecessors(&ir);
         }
 

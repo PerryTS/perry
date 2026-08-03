@@ -49,37 +49,84 @@ pub(super) fn emit_setjmp_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_
 
 /// Invoke-EH (#7302) counterpart of [`emit_setjmp_dispatch`]: arm the
 /// handler (`js_eh_try_push` — savepoints only, no jmp_buf), branch into
-/// the protected body, and materialize the landing-pad block that funnels
-/// the unwinder into `exc_label`. Returns the landing pad's label; the
+/// the protected body, and materialize the unwind-target block(s) that
+/// funnel the exception into `exc_label`. Returns the unwind label; the
 /// caller pushes it as the EH scope around the protected body so every
 /// potentially-throwing call inside carries the unwind edge.
 ///
-/// The landing pad ignores the `{ ptr, i32 }` pair — the thrown value is
-/// read back from the runtime's rooted TLS slot via `js_get_exception`,
-/// exactly as the setjmp path does. Savepoint restores already ran at
-/// throw time (`js_throw`), which is sound because the unwinder skips
-/// Rust cleanups just like `longjmp` did (runtime built panic=abort; see
-/// `perry-runtime/src/eh.rs`).
+/// Two per-triple shapes (same rule as `crate::setjmp_abi`: decided by the
+/// TARGET triple, not host `cfg!`):
+///
+/// - Itanium (Mach-O/ELF): one landing-pad block —
+///   `landingpad {ptr,i32} catch ptr null` → `br %exc_label`. The pair is
+///   ignored; the thrown value is read back from the runtime's rooted TLS
+///   slot via `js_get_exception`, exactly as the setjmp path did.
+/// - SEH (windows-msvc): `catchswitch within none [pad] unwind to caller` →
+///   `catchpad [ptr @perry_seh_filter]` → `catchret to %exc_label`. The
+///   filter matches Perry's `RaiseException` code; foreign SEH exceptions
+///   (access violations etc.) keep unwinding past JS handlers, matching the
+///   setjmp path (which never caught them either).
+///
+/// Savepoint restores already ran at throw time (`js_throw`), which is
+/// sound because the unwinder skips Rust cleanups just like `longjmp` did
+/// (runtime built panic=abort; see `perry-runtime/src/eh.rs`).
 pub(super) fn emit_eh_dispatch(
     ctx: &mut FnCtx<'_>,
     exc_label: &str,
     normal_label: &str,
 ) -> String {
-    ctx.func.needs_personality = true;
-    let lpad_idx = ctx.new_block("eh.lpad");
-    let lpad_label = ctx.block_label(lpad_idx);
+    let msvc = ctx.target_triple.contains("-windows-");
+    ctx.func.personality = Some(if msvc {
+        "__C_specific_handler"
+    } else {
+        "perry_eh_personality"
+    });
 
     ctx.block().call_void("js_eh_try_push", &[]);
-    ctx.block().br(normal_label);
 
-    let saved = ctx.current_block;
-    ctx.current_block = lpad_idx;
-    let lp = ctx.block().next_reg();
-    ctx.block()
-        .emit_raw(format!("{} = landingpad {{ ptr, i32 }} catch ptr null", lp));
-    ctx.block().br(exc_label);
-    ctx.current_block = saved;
-    lpad_label
+    if msvc {
+        let cs_idx = ctx.new_block("eh.cs");
+        let pad_idx = ctx.new_block("eh.pad");
+        let cs_label = ctx.block_label(cs_idx);
+        let pad_label = ctx.block_label(pad_idx);
+
+        ctx.block().br(normal_label);
+
+        let saved = ctx.current_block;
+        ctx.current_block = cs_idx;
+        let cs = ctx.block().next_reg();
+        ctx.block().emit_raw(format!(
+            "{} = catchswitch within none [label %{}] unwind to caller",
+            cs, pad_label
+        ));
+        ctx.block().mark_terminated();
+
+        ctx.current_block = pad_idx;
+        let pad = ctx.block().next_reg();
+        ctx.block().emit_raw(format!(
+            "{} = catchpad within {} [ptr @perry_seh_filter]",
+            pad, cs
+        ));
+        ctx.block()
+            .emit_raw(format!("catchret from {} to label %{}", pad, exc_label));
+        ctx.block().mark_terminated();
+        ctx.current_block = saved;
+        cs_label
+    } else {
+        let lpad_idx = ctx.new_block("eh.lpad");
+        let lpad_label = ctx.block_label(lpad_idx);
+
+        ctx.block().br(normal_label);
+
+        let saved = ctx.current_block;
+        ctx.current_block = lpad_idx;
+        let lp = ctx.block().next_reg();
+        ctx.block()
+            .emit_raw(format!("{} = landingpad {{ ptr, i32 }} catch ptr null", lp));
+        ctx.block().br(exc_label);
+        ctx.current_block = saved;
+        lpad_label
+    }
 }
 
 pub(crate) fn lower_try(
