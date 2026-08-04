@@ -37,7 +37,7 @@
   decoder unit tests cover the shifted `sub`, the shifted `add`, and the
   measured two-`sub` prologue that motivated the fix.
 
-  Not fixed here, and filed separately: the `PERRY_STACKMAP_WALKER=unwind`
+  Not fixed here, and filed as #7399: the `PERRY_STACKMAP_WALKER=unwind`
   fallback derives its SP-relative base from `_Unwind_GetCFA` minus the
   recorded stack size and disagrees with the (now correct) fast walk by exactly
   one frame size, so `PERRY_STACKMAP_WALKER=verify` still trips.
