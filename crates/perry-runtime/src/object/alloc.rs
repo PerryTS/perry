@@ -1468,6 +1468,29 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     };
     let source_is_array = source_obj_type == crate::gc::GC_TYPE_ARRAY;
 
+    // #7341: a RegExp source must be skipped here, and the exotic guard above
+    // cannot do it. That guard classifies by GC type, and a RegExp is literally
+    // `gc_malloc(GC_TYPE_OBJECT)` (see `regex.rs`) — so unlike Map/Set/Date it
+    // passes `== GC_TYPE_OBJECT` and falls into the plain-object arm, where
+    // `(*src).keys_array` reads a `RegExpHeader` at `ObjectHeader`'s field
+    // offset. That is a type confusion: the slot it lands on is not a keys
+    // array, and `js_array_length` then reads a GcHeader at `garbage - 8`.
+    // Under from-space quarantine that address is a retired protected page and
+    // the process dies; unprotected it silently walks unrelated memory.
+    //
+    // Per CopyDataProperties a RegExp exposes no own enumerable string keys
+    // through this path (`source`/`flags`/`lastIndex` are prototype accessors
+    // or non-enumerable), so skipping contributes nothing and matches Node:
+    // `Object.assign({}, /x/g)` is `{}`. Any own expandos a user attached live
+    // in the exotic-expando side table, which this raw walk never read anyway.
+    //
+    // `is_regex_pointer` is the bounds-checked magic probe, safe on arbitrary
+    // payloads. Repro: `Object.assign({}, /x/g)` under
+    // PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_HEAP_LIMIT=8.
+    if crate::regex::is_regex_pointer(src_raw as *const u8) {
+        return target_f64;
+    }
+
     // #7200: EVERYTHING BELOW RUNS WITH USER CODE IN THE WINDOW.
     //
     // Both copy loops reach a `[[Get]]` that short-circuits into
