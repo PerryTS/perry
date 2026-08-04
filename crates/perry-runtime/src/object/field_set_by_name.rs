@@ -1574,6 +1574,12 @@ pub extern "C" fn js_object_set_field_by_name(
                     };
                     overflow_set(obj as usize, i, vbits);
                 }
+                // #7341: same as the two own-data-write arms -- the write above can
+                // reach an allocator and the mirror's first instruction dereferences
+                // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
+                // handles are taken, so republishing all four is a no-op except for
+                // the relocation it repairs.
+                refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 return;
             }
@@ -1644,6 +1650,12 @@ pub extern "C" fn js_object_set_field_by_name(
                     super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
                 }
                 overflow_set(obj as usize, new_index, vbits);
+                // #7341: same as the two own-data-write arms -- the write above can
+                // reach an allocator and the mirror's first instruction dereferences
+                // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
+                // handles are taken, so republishing all four is a no-op except for
+                // the relocation it repairs.
+                refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 transition_cache_insert(
                     prev_keys_usize,
@@ -1685,6 +1697,12 @@ pub extern "C" fn js_object_set_field_by_name(
                 (*obj).field_count = new_index as u32 + 1;
             }
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
+            // #7341: same as the two own-data-write arms -- the write above can
+            // reach an allocator and the mirror's first instruction dereferences
+            // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
+            // handles are taken, so republishing all four is a no-op except for
+            // the relocation it repairs.
+            refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             transition_cache_insert(
                 prev_keys_usize,
@@ -1755,6 +1773,12 @@ pub extern "C" fn js_object_set_field_by_name(
                     };
                     overflow_set(obj as usize, i, vbits);
                 }
+                // #7341: same as the two own-data-write arms -- the write above can
+                // reach an allocator and the mirror's first instruction dereferences
+                // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
+                // handles are taken, so republishing all four is a no-op except for
+                // the relocation it repairs.
+                refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 return;
             }
@@ -1843,6 +1867,12 @@ pub extern "C" fn js_object_set_field_by_name(
                 super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
             }
             overflow_set(obj as usize, new_index, vbits);
+            // #7341: same as the two own-data-write arms -- the write above can
+            // reach an allocator and the mirror's first instruction dereferences
+            // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
+            // handles are taken, so republishing all four is a no-op except for
+            // the relocation it repairs.
+            refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             // Record the shape transition so the next object sharing
             // `prev_keys` that adds the same key hits the fast path.
@@ -1886,6 +1916,12 @@ pub extern "C" fn js_object_set_field_by_name(
             (*obj).field_count = new_index as u32 + 1;
         }
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
+        // #7341: same as the two own-data-write arms -- the write above can
+        // reach an allocator and the mirror's first instruction dereferences
+        // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
+        // handles are taken, so republishing all four is a no-op except for
+        // the relocation it repairs.
+        refresh_roots_after_alloc!();
         mirror_class_object_static_write(obj, key, value);
         // Record the shape transition — see above for semantics.
         transition_cache_insert(
