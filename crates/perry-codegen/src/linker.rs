@@ -275,6 +275,24 @@ fn cpu_tuning_arg_for(
         }
     };
     match requested.map(str::trim).filter(|s| !s.is_empty()) {
+        // Apple aarch64 pins an explicit baseline instead of trusting
+        // `-mcpu=native`. Codegen decides whether to emit
+        // `llvm.aarch64.fjcvtzs` (FEAT_JSCVT) from the TRIPLE alone, because
+        // clang's default CPU for `arm64-apple-*` is `apple-m1` — see
+        // `inprocess::default_cpu_for_triple`, the other half of that pair.
+        // `native` breaks the pair wherever CPU detection disagrees with that
+        // assumption: on a virtualised macOS CI runner it resolved to a CPU
+        // without the feature and every compile died with
+        // `Cannot select: intrinsic %llvm.aarch64.fjcvtzs`, while the same
+        // command worked on a physical Mac. Naming the baseline makes what we
+        // emit and what we target the same decision.
+        None if target_triple.is_none()
+            && (effective_target.starts_with("arm64")
+                || effective_target.starts_with("aarch64"))
+            && effective_target.contains("apple") =>
+        {
+            Some(arch_flag("apple-m1"))
+        }
         None => target_triple
             .is_none()
             .then(|| native_tuning_arg_for_host().to_string()),

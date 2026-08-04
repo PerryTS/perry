@@ -172,10 +172,16 @@ fn compile_plan_records_effective_target_and_native_tuning() {
     assert!(plan.clang_args.contains(&"-O3".to_string()));
     assert!(plan.clang_args.contains(&"-target".to_string()));
     assert!(plan.analysis_clang_args.contains(&"-target".to_string()));
-    assert_eq!(
-        plan.native_tuning_arg.as_deref(),
-        Some(native_tuning_arg_for_host())
-    );
+    // Apple aarch64 pins `apple-m1` rather than `native`: the decision to emit
+    // `llvm.aarch64.fjcvtzs` is made from the triple, and `native` broke that
+    // pair on a virtualised CI runner where detection disagreed. Every other
+    // host keeps native tuning.
+    let expected = if cfg!(all(target_vendor = "apple", target_arch = "aarch64")) {
+        "-mcpu=apple-m1"
+    } else {
+        native_tuning_arg_for_host()
+    };
+    assert_eq!(plan.native_tuning_arg.as_deref(), Some(expected));
     assert!(!plan.effective_target.is_empty());
 }
 
