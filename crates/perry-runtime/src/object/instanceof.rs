@@ -71,6 +71,15 @@ fn value_addr(value: f64) -> usize {
     }
 }
 
+fn recorded_prototype_instanceof_builtin(value: f64, name: &str) -> Option<bool> {
+    let addr = value_addr(value);
+    if addr == 0 || super::prototype_chain::object_static_prototype(addr).is_none() {
+        return None;
+    }
+    let constructor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    Some(ordinary_has_instance_prototype_walk(value, constructor))
+}
+
 fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
@@ -1341,6 +1350,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
     if class_id == CLASS_ID_PROMISE {
+        if let Some(matches) = recorded_prototype_instanceof_builtin(value, "Promise") {
+            return if matches { true_val } else { false_val };
+        }
         return if crate::promise::js_value_is_promise(value) != 0 {
             true_val
         } else {
@@ -1472,6 +1484,22 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 } else {
                     false_val
                 };
+            }
+            let builtin_name = match class_id {
+                crate::error::CLASS_ID_ERROR => Some("Error"),
+                crate::error::CLASS_ID_TYPE_ERROR => Some("TypeError"),
+                crate::error::CLASS_ID_RANGE_ERROR => Some("RangeError"),
+                crate::error::CLASS_ID_REFERENCE_ERROR => Some("ReferenceError"),
+                crate::error::CLASS_ID_SYNTAX_ERROR => Some("SyntaxError"),
+                crate::error::CLASS_ID_EVAL_ERROR => Some("EvalError"),
+                crate::error::CLASS_ID_URI_ERROR => Some("URIError"),
+                crate::error::CLASS_ID_AGGREGATE_ERROR => Some("AggregateError"),
+                _ => None,
+            };
+            if let Some(name) = builtin_name {
+                if let Some(matches) = recorded_prototype_instanceof_builtin(value, name) {
+                    return if matches { true_val } else { false_val };
+                }
             }
             return match class_id {
                 crate::error::CLASS_ID_ERROR => true_val,

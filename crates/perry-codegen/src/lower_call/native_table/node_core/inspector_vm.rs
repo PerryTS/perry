@@ -310,7 +310,7 @@ pub(crate) const NODE_CORE_INSPECTOR_VM_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "createScript",
         class_filter: None,
-        runtime: "js_vm_create_script",
+        runtime: "js_vm_create_script_branded",
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },

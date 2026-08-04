@@ -6,7 +6,7 @@ use crate::types::{DOUBLE, I32, I64, VOID};
 
 pub(crate) fn declare_net_http(module: &mut LlModule) {
     // ========== node:vm ==========
-    module.declare_function("js_vm_create_context", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_vm_create_context", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_vm_module_call", DOUBLE, &[]);
     module.declare_function("js_vm_module_constructor_error", DOUBLE, &[]);
 

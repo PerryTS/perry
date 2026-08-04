@@ -28,6 +28,12 @@ pub(crate) struct Ctx {
     pub this_idx: usize,
     /// Root index the frame's return value is written to.
     pub ret_idx: usize,
+    /// Root index of the global object used for identifier/globalThis lookup.
+    pub global_idx: usize,
+    /// Root index of the realm global that owns intrinsic constructors.
+    pub intrinsics_idx: usize,
+    /// Current ECMAScript strict-mode state.
+    pub strict: bool,
 }
 
 /// Statement completion. Thrown exceptions never appear here — they longjmp
@@ -61,16 +67,34 @@ fn fn_id_for_node(addr: usize, build: impl FnOnce() -> InterpFn) -> u32 {
 
 // ── construction ───────────────────────────────────────────────────────────
 
-pub(crate) fn build_interp_fn(params: Vec<ast::Pat>, body: InterpBody) -> InterpFn {
+pub(crate) fn build_interp_fn(
+    params: Vec<ast::Pat>,
+    body: InterpBody,
+    inherited_strict: bool,
+) -> InterpFn {
     let mut hoisted_vars = Vec::new();
     if let InterpBody::Block(stmts) = &body {
         collect_var_names(stmts, &mut hoisted_vars);
     }
+    let strict = inherited_strict
+        || matches!(&body, InterpBody::Block(stmts) if has_use_strict_directive(stmts));
     InterpFn {
         params,
         body,
         hoisted_vars,
+        strict,
     }
+}
+
+pub(crate) fn has_use_strict_directive(stmts: &[ast::Stmt]) -> bool {
+    stmts
+        .iter()
+        .take_while(|stmt| {
+            matches!(stmt, ast::Stmt::Expr(expr) if matches!(expr.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(_))))
+        })
+        .any(|stmt| {
+            matches!(stmt, ast::Stmt::Expr(expr) if matches!(expr.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(value)) if value.value.to_string_lossy() == "use strict"))
+        })
 }
 
 /// Eager construction-time rejection of constructs that can never run.
@@ -200,12 +224,21 @@ const NO_LEXICAL_THIS: u64 = crate::value::TAG_HOLE;
 
 /// Allocate the first-class runtime closure for an interpreted function.
 /// Captures: [0] fn id (number), [1] defining environment (traced pointer),
-/// [2] lexical `this` for arrows (or the hole sentinel).
-pub(crate) fn alloc_interp_closure(fn_id: u32, def_env: f64, lexical_this: Option<f64>) -> f64 {
+/// [2] lexical `this` for arrows (or the hole sentinel), [3] target global,
+/// [4] intrinsic-global fallback.
+pub(crate) fn alloc_interp_closure(
+    fn_id: u32,
+    def_env: f64,
+    lexical_this: Option<f64>,
+    global: f64,
+    intrinsics: f64,
+) -> f64 {
     ensure_thunk_registered();
     let env_idx = root_push(def_env);
     let this_idx = root_push(lexical_this.unwrap_or(f64::from_bits(NO_LEXICAL_THIS)));
-    let closure = crate::closure::js_closure_alloc(interp_thunk as *const u8, 3);
+    let global_idx = root_push(global);
+    let intrinsics_idx = root_push(intrinsics);
+    let closure = crate::closure::js_closure_alloc(interp_thunk as *const u8, 5);
     if closure.is_null() {
         roots_truncate(env_idx);
         bridge::throw_range_error("out of memory allocating dynamic function");
@@ -213,50 +246,32 @@ pub(crate) fn alloc_interp_closure(fn_id: u32, def_env: f64, lexical_this: Optio
     crate::closure::js_closure_set_capture_f64(closure, 0, fn_id as f64);
     crate::closure::js_closure_set_capture_bits(closure, 1, root_get(env_idx).to_bits());
     crate::closure::js_closure_set_capture_bits(closure, 2, root_get(this_idx).to_bits());
+    crate::closure::js_closure_set_capture_bits(closure, 3, root_get(global_idx).to_bits());
+    crate::closure::js_closure_set_capture_bits(closure, 4, root_get(intrinsics_idx).to_bits());
     // Record the capture layout + fire write barriers so the GC traces the
     // environment / lexical-this slots (they are heap pointers).
     unsafe {
-        crate::closure::rebuild_closure_layout_and_barriers(closure, 3);
+        crate::closure::rebuild_closure_layout_and_barriers(closure, 5);
     }
     roots_truncate(env_idx);
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-/// Highest argument count deliverable to the shared thunk. The dispatcher
-/// pads/truncates to the registered arity, so every interpreted function
-/// receives exactly this many (missing args read `undefined` — exactly what
-/// default-parameter binding needs).
-const THUNK_ARITY: usize = 16;
-
 fn ensure_thunk_registered() {
-    use std::sync::Once;
-    static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| {
-        crate::closure::js_register_closure_arity(interp_thunk as *const u8, THUNK_ARITY as u32);
+    thread_local! {
+        static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    REGISTERED.with(|registered| {
+        if registered.replace(true) {
+            return;
+        }
+        crate::closure::js_register_closure_rest(interp_thunk as *const u8, 0);
     });
 }
 
 /// The single native entry every interpreted closure shares. Reads its
 /// identity + environment from capture slots and runs the tree-walker.
-extern "C" fn interp_thunk(
-    closure: *const crate::closure::ClosureHeader,
-    a0: f64,
-    a1: f64,
-    a2: f64,
-    a3: f64,
-    a4: f64,
-    a5: f64,
-    a6: f64,
-    a7: f64,
-    a8: f64,
-    a9: f64,
-    a10: f64,
-    a11: f64,
-    a12: f64,
-    a13: f64,
-    a14: f64,
-    a15: f64,
-) -> f64 {
+extern "C" fn interp_thunk(closure: *const crate::closure::ClosureHeader, raw_args: f64) -> f64 {
     let fn_id = crate::closure::js_closure_get_capture_f64(closure, 0) as u32;
     let def_env = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 1));
     let this_bits = crate::closure::js_closure_get_capture_bits(closure, 2);
@@ -265,16 +280,31 @@ extern "C" fn interp_thunk(
     } else {
         f64::from_bits(this_bits)
     };
-    let args = [
-        a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15,
-    ];
-    invoke_interp_fn(fn_id, def_env, this, &args)
+    let global = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 3));
+    let intrinsics = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 4));
+    let raw_args =
+        (raw_args.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    let args = if raw_args.is_null() {
+        Vec::new()
+    } else {
+        (0..crate::array::js_array_length(raw_args))
+            .map(|index| crate::array::js_array_get_f64(raw_args, index))
+            .collect()
+    };
+    invoke_interp_fn(fn_id, def_env, this, global, intrinsics, &args)
 }
 
 /// Run one interpreted call: fresh scope chained to the defining env, params
 /// bound (destructuring + defaults), vars hoisted, function declarations
 /// hoisted, body executed.
-pub(crate) fn invoke_interp_fn(fn_id: u32, def_env: f64, this: f64, args: &[f64]) -> f64 {
+pub(crate) fn invoke_interp_fn(
+    fn_id: u32,
+    def_env: f64,
+    this: f64,
+    global: f64,
+    intrinsics: f64,
+    args: &[f64],
+) -> f64 {
     let fun = match lookup_fn(fn_id) {
         Some(f) => f,
         None => bridge::throw_type_error(
@@ -285,25 +315,46 @@ pub(crate) fn invoke_interp_fn(fn_id: u32, def_env: f64, this: f64, args: &[f64]
     if call_depth_enter().is_err() {
         bridge::throw_range_error("Maximum call stack size exceeded (interpreted)");
     }
+    let this = if !fun.strict && bridge::is_nullish(this) {
+        global
+    } else {
+        this
+    };
     let base = roots_len();
     // Root the incoming this + every argument: default-value evaluation and
     // destructuring allocate, which can move any of them.
     let this_idx = root_push(this);
     let ret_idx = root_push(bridge::undefined());
+    let global_idx = root_push(global);
+    let intrinsics_idx = root_push(intrinsics);
     let def_env_idx = root_push(def_env);
-    // Root only the arguments a parameter will actually bind. The thunk always
-    // delivers THUNK_ARITY slots, but a validator declaring one or two params
-    // (the overwhelming case) needn't pay 16 `root_push`es per call — there is
-    // no `arguments` object, so surplus args are unobservable (#6693).
-    let nargs = fun.params.len().min(args.len()).min(THUNK_ARITY);
-    let mut arg_idxs = [0usize; THUNK_ARITY];
-    for (i, slot) in arg_idxs.iter_mut().enumerate().take(nargs) {
-        *slot = root_push(args[i]);
-    }
+    let arg_idxs = args.iter().copied().map(root_push).collect::<Vec<_>>();
+    let nargs = fun.params.len().min(arg_idxs.len());
     let call_env = env::env_new(root_get(def_env_idx));
     let env_idx = root_push(call_env);
 
-    let ctx = Ctx { this_idx, ret_idx };
+    let arguments_idx = root_push(bridge::object_new());
+    bridge::set_member(
+        root_get(arguments_idx),
+        "length",
+        bridge::make_number(arg_idxs.len() as f64),
+    );
+    for (index, &arg_idx) in arg_idxs.iter().enumerate() {
+        bridge::set_member(
+            root_get(arguments_idx),
+            &index.to_string(),
+            root_get(arg_idx),
+        );
+    }
+    env::define(root_get(env_idx), "arguments", root_get(arguments_idx));
+
+    let ctx = Ctx {
+        this_idx,
+        ret_idx,
+        global_idx,
+        intrinsics_idx,
+        strict: fun.strict,
+    };
 
     // Parameters.
     for (i, pat) in fun.params.iter().enumerate() {
@@ -327,7 +378,7 @@ pub(crate) fn invoke_interp_fn(fn_id: u32, def_env: f64, this: f64, args: &[f64]
             root_set(ret_idx, v);
         }
         InterpBody::Block(stmts) => {
-            hoist_fn_decls(&ctx, stmts, env_idx);
+            hoist_fn_decls(&ctx, stmts, env_idx, true);
             let _ = exec_stmts(&ctx, stmts, env_idx);
         }
     }
@@ -349,7 +400,7 @@ pub(crate) fn make_function_value(
     node_addr: usize,
     env_idx: usize,
 ) -> f64 {
-    let fn_id = fn_id_for_node(node_addr, || build_interp_fn(params, body));
+    let fn_id = fn_id_for_node(node_addr, || build_interp_fn(params, body, ctx.strict));
     let lexical_this = if is_arrow {
         Some(root_get(ctx.this_idx))
     } else {
@@ -360,21 +411,33 @@ pub(crate) fn make_function_value(
         // one-binding scope between the defining env and the body env.
         let name_env = env::env_new(root_get(env_idx));
         let name_env_idx = root_push(name_env);
-        let closure = alloc_interp_closure(fn_id, root_get(name_env_idx), lexical_this);
+        let closure = alloc_interp_closure(
+            fn_id,
+            root_get(name_env_idx),
+            lexical_this,
+            root_get(ctx.global_idx),
+            root_get(ctx.intrinsics_idx),
+        );
         let closure_idx = root_push(closure);
         env::define(root_get(name_env_idx), &fn_name, root_get(closure_idx));
         let closure = root_get(closure_idx);
         roots_truncate(name_env_idx);
         closure
     } else {
-        alloc_interp_closure(fn_id, root_get(env_idx), lexical_this)
+        alloc_interp_closure(
+            fn_id,
+            root_get(env_idx),
+            lexical_this,
+            root_get(ctx.global_idx),
+            root_get(ctx.intrinsics_idx),
+        )
     }
 }
 
 /// Hoist `function f(...) {}` declarations of a statement list into the
 /// current scope (evaluated before any statement runs — ajv's serializers
 /// call later-declared helpers).
-fn hoist_fn_decls(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) {
+fn hoist_fn_decls(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize, declare: bool) {
     for stmt in stmts {
         if let ast::Stmt::Decl(ast::Decl::Fn(f)) = stmt {
             if f.function.is_generator || f.function.is_async {
@@ -397,7 +460,11 @@ fn hoist_fn_decls(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) {
                 env_idx,
             );
             let value_idx = root_push(value);
-            env::define(root_get(env_idx), &name, root_get(value_idx));
+            if declare {
+                env::define(root_get(env_idx), &name, root_get(value_idx));
+            } else {
+                env::assign(root_get(env_idx), &name, root_get(value_idx), ctx.strict);
+            }
             roots_truncate(value_idx);
         }
     }
@@ -415,10 +482,40 @@ pub(crate) fn exec_stmts(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) -> Flow
     Flow::Normal
 }
 
+/// Execute script/global code in a persistent lexical environment. Top-level
+/// `var` and function declarations route through the object-environment root;
+/// `let`/`const` stay on `env_idx`, so repeated VM evaluations share lexicals
+/// without exposing them as sandbox properties.
+pub(crate) fn exec_script_stmts(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) -> Flow {
+    let mut vars = Vec::new();
+    collect_var_names(stmts, &mut vars);
+    vars.sort_unstable();
+    vars.dedup();
+    for name in vars {
+        if !env::is_bound(root_get(env_idx), &name) {
+            env::assign(root_get(env_idx), &name, bridge::undefined(), ctx.strict);
+        }
+    }
+    hoist_fn_decls(ctx, stmts, env_idx, false);
+    for stmt in stmts {
+        let flow = if let ast::Stmt::Expr(expr) = stmt {
+            let value = eval_expr(ctx, &expr.expr, env_idx);
+            root_set(ctx.ret_idx, value);
+            Flow::Normal
+        } else {
+            exec_stmt(ctx, stmt, env_idx)
+        };
+        if !matches!(flow, Flow::Normal) {
+            return flow;
+        }
+    }
+    Flow::Normal
+}
+
 fn exec_block_scope(ctx: &Ctx, block: &ast::BlockStmt, env_idx: usize) -> Flow {
     let child = env::env_new(root_get(env_idx));
     let child_idx = root_push(child);
-    hoist_fn_decls(ctx, &block.stmts, child_idx);
+    hoist_fn_decls(ctx, &block.stmts, child_idx, true);
     let flow = exec_stmts(ctx, &block.stmts, child_idx);
     roots_truncate(child_idx);
     flow
@@ -517,7 +614,7 @@ pub(crate) fn bind_pattern(ctx: &Ctx, pat: &ast::Pat, value: f64, env_idx: usize
                 env::define(root_get(env_idx), name, root_get(value_idx));
                 roots_truncate(value_idx);
             } else {
-                env::assign(root_get(env_idx), name, value);
+                env::assign(root_get(env_idx), name, value, ctx.strict);
             }
         }
         ast::Pat::Assign(a) => {
@@ -551,7 +648,7 @@ pub(crate) fn bind_pattern(ctx: &Ctx, pat: &ast::Pat, value: f64, env_idx: usize
                         if declare {
                             env::define(root_get(env_idx), name, root_get(sub_idx));
                         } else {
-                            env::assign(root_get(env_idx), name, root_get(sub_idx));
+                            env::assign(root_get(env_idx), name, root_get(sub_idx), ctx.strict);
                         }
                         roots_truncate(sub_idx);
                     }
@@ -901,7 +998,7 @@ fn exec_try_catch(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
     if let Some(param) = &handler.param {
         bind_pattern(ctx, param, root_get(exc_idx), catch_env_idx, true);
     }
-    hoist_fn_decls(ctx, &handler.body.stmts, catch_env_idx);
+    hoist_fn_decls(ctx, &handler.body.stmts, catch_env_idx, true);
     let flow = exec_stmts(ctx, &handler.body.stmts, catch_env_idx);
     roots_truncate(exc_idx);
     flow

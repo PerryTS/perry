@@ -214,15 +214,15 @@ pub(crate) fn get_index(base: f64, key: f64) -> f64 {
 }
 
 /// `base[key] = value` (also used for `base.name = value` with a string key).
-pub(crate) fn set_index(base: f64, key: f64, value: f64) {
-    crate::value::js_dyn_index_set(base, key, value);
+pub(crate) fn set_index(base: f64, key: f64, value: f64, strict: bool) {
+    crate::proxy::js_put_value_set(base, key, value, base, strict as i32);
 }
 
 pub(crate) fn set_member(base: f64, name: &str, value: f64) {
     let base_idx = root_push(base);
     let value_idx = root_push(value);
     let key = make_string(name);
-    set_index(root_get(base_idx), key, root_get(value_idx));
+    set_index(root_get(base_idx), key, root_get(value_idx), false);
     roots_truncate(base_idx);
 }
 
@@ -272,9 +272,70 @@ pub(crate) fn construct(callee: f64, args: &[f64]) -> f64 {
 
 // ── globals ────────────────────────────────────────────────────────────────
 
-/// Look `name` up on the real `globalThis` (Math, JSON, Array, isNaN, …).
-pub(crate) fn global_lookup(name: &str) -> f64 {
-    crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+/// Whether the selected global (including its prototype chain) binds `name`.
+pub(crate) fn global_has_property(global: f64, name: &str) -> bool {
+    let global = if crate::proxy::js_proxy_is_proxy(global) != 0 {
+        crate::proxy::js_proxy_target(global)
+    } else {
+        global
+    };
+    let global_idx = root_push(global);
+    let key = make_string(name);
+    let present = crate::object::js_object_has_property(root_get(global_idx), key);
+    roots_truncate(global_idx);
+    truthy(present)
+}
+
+/// Look `name` up on the selected global receiver, then on the selected realm's
+/// intrinsic-global backing. VM contexts pass distinct values; ordinary
+/// dynamic Function calls pass the process global for both.
+pub(crate) fn global_lookup(global_this: f64, intrinsics: f64, name: &str) -> f64 {
+    let lookup_target = if crate::proxy::js_proxy_is_proxy(global_this) != 0 {
+        crate::proxy::js_proxy_target(global_this)
+    } else {
+        global_this
+    };
+    if global_has_property(lookup_target, name) {
+        return get_member(lookup_target, name);
+    }
+    let builtin = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS.contains(&name)
+        || crate::object::GLOBAL_THIS_BUILTIN_NAMESPACES.contains(&name)
+        || crate::object::GLOBAL_THIS_BUILTIN_FUNCTIONS.contains(&name);
+    if builtin {
+        get_member(intrinsics, name)
+    } else {
+        undefined()
+    }
+}
+
+/// The selected realm's `<Constructor>.prototype` value.
+pub(crate) fn intrinsic_prototype(intrinsics: f64, name: &str) -> f64 {
+    let intrinsics_idx = root_push(intrinsics);
+    let constructor = get_member(root_get(intrinsics_idx), name);
+    let constructor_idx = root_push(constructor);
+    let prototype = get_member(root_get(constructor_idx), "prototype");
+    roots_truncate(intrinsics_idx);
+    prototype
+}
+
+/// Link a freshly-created value to the actual prototype of its creation realm.
+/// The value is returned through a handle because creating object metadata may
+/// collect and move it.
+pub(crate) fn attach_intrinsic_prototype(value: f64, intrinsics: f64, name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let prototype = intrinsic_prototype(intrinsics, name);
+    let prototype_handle = scope.root_nanbox_f64(prototype);
+    let prototype = prototype_handle.get_nanbox_f64();
+    if !crate::value::JSValue::from_bits(prototype.to_bits()).is_pointer() {
+        return value_handle.get_nanbox_f64();
+    }
+    let value = value_handle.get_nanbox_f64();
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    if raw != 0 {
+        crate::object::prototype_chain::object_set_static_prototype(raw, prototype.to_bits());
+    }
+    value_handle.get_nanbox_f64()
 }
 
 // ── operators ──────────────────────────────────────────────────────────────

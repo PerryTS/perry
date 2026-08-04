@@ -157,7 +157,14 @@ pub(crate) unsafe fn nm_dispatch_vm(ctx: &NmCtx, module_name: &str, method_name:
         typed_kind
     );
     match (module_name, method_name) {
-        ("vm", m) => crate::node_vm::dispatch_vm_method(m, arg(0), arg(1), arg(2)),
+        ("vm", m) => {
+            let value = crate::node_vm::dispatch_vm_method(m, arg(0), arg(1), arg(2));
+            if m == "createScript" {
+                crate::object::class_registry::brand_vm_script_instance(value)
+            } else {
+                value
+            }
+        }
         // ── tty module ──
         _ => f64::from_bits(JSValue::undefined().bits()),
     }

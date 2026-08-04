@@ -100,6 +100,14 @@ thread_local! {
     /// a `--debug-symbols` build).
     static CURRENT_CALL_LOCATION: std::cell::Cell<Option<(usize, usize, u32)>> =
         const { std::cell::Cell::new(None) };
+    static RUNTIME_SOURCE_LOCATION: std::cell::RefCell<Option<(String, u32, u32)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn replace_runtime_source_location(
+    location: Option<(String, u32, u32)>,
+) -> Option<(String, u32, u32)> {
+    RUNTIME_SOURCE_LOCATION.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), location))
 }
 
 /// #5247: record the source location of the call about to be dispatched.
@@ -129,6 +137,9 @@ static KEEP_JS_SET_CALL_LOCATION: unsafe extern "C" fn(*const u8, usize, u32) =
 /// #5247: render the current call-location frame, or `<anonymous>` when no
 /// location was recorded (default builds, or a synthesized/offset-less site).
 fn current_stack_frame() -> String {
+    if let Some((file, line, column)) = RUNTIME_SOURCE_LOCATION.with(|slot| slot.borrow().clone()) {
+        return format!("    at {file}:{line}:{column}");
+    }
     CURRENT_CALL_LOCATION.with(|c| match c.get() {
         Some((file_ptr, file_len, line)) => {
             let bytes = unsafe { std::slice::from_raw_parts(file_ptr as *const u8, file_len) };

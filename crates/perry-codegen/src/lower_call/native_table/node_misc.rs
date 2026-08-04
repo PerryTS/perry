@@ -185,7 +185,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         method: "createContext",
         class_filter: None,
         runtime: "js_vm_create_context",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     // ========== node:repl ==========

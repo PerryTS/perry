@@ -793,3 +793,220 @@ fn get_first_lookup_resolves_declared_undefined_binding() {
     let g = dyn_fn(&["p", "return typeof p"]);
     assert_eq!(as_str(call(g, &[bridge::undefined()])), "undefined");
 }
+
+// ── VM target-global / object-environment adapter ─────────────────────────
+
+fn object_with(fields: &[(&str, f64)]) -> f64 {
+    let value = bridge::object_new();
+    for (name, field) in fields {
+        bridge::set_member(value, name, *field);
+    }
+    value
+}
+
+#[test]
+fn script_adapter_mutates_target_and_persists_lexicals() {
+    let global = object_with(&[("seed", num(2.0))]);
+    let lexical = script_environment(global, &[]);
+
+    let first = eval_script_in(
+        "seed += 5; let lexicalValue = 3; const fixed = 4; lexicalValue + fixed",
+        global,
+        global,
+        lexical,
+    );
+    assert_eq!(as_num(first), 7.0);
+    assert_eq!(as_num(bridge::get_member(global, "seed")), 7.0);
+    assert!(!bridge::global_has_property(global, "lexicalValue"));
+
+    let second = eval_script_in(
+        "lexicalValue += 2; created = lexicalValue + fixed; created",
+        global,
+        global,
+        lexical,
+    );
+    assert_eq!(as_num(second), 9.0);
+    assert_eq!(as_num(bridge::get_member(global, "created")), 9.0);
+}
+
+#[test]
+fn script_adapter_uses_target_global_for_nested_functions() {
+    let global = object_with(&[("marker", num(7.0))]);
+    let lexical = script_environment(global, &[]);
+    let result = eval_script_in(
+        "function readMarker() { return globalThis.marker; } readMarker()",
+        global,
+        global,
+        lexical,
+    );
+    assert_eq!(as_num(result), 7.0);
+    assert_eq!(
+        as_num(call(bridge::get_member(global, "readMarker"), &[])),
+        7.0
+    );
+}
+
+#[test]
+fn function_adapter_reads_live_object_environments_in_precedence_order() {
+    let global = object_with(&[("fallback", string("context"))]);
+    let first = object_with(&[("left", string("left")), ("shared", string("first"))]);
+    let second = object_with(&[("right", string("right")), ("shared", string("second"))]);
+    let args = vec![
+        "arg".to_string(),
+        "return left + ':' + shared + ':' + right + ':' + fallback + ':' + arg".to_string(),
+    ];
+    let function = function_from_strings_in(&args, global, global, &[first, second]);
+
+    assert_eq!(
+        as_str(call(function, &[string("one")])),
+        "left:second:right:context:one"
+    );
+    bridge::set_member(second, "shared", string("changed"));
+    assert_eq!(
+        as_str(call(function, &[string("two")])),
+        "left:changed:right:context:two"
+    );
+}
+
+fn intrinsic_constructor(prototype: f64, fields: &[(&str, f64)]) -> f64 {
+    let constructor = object_with(fields);
+    bridge::set_member(constructor, "prototype", prototype);
+    constructor
+}
+
+fn test_intrinsics() -> (f64, f64, f64, f64) {
+    let object_prototype = bridge::object_new();
+    let array_prototype = bridge::object_new();
+    let type_error_prototype = bridge::object_new();
+    let intrinsics = object_with(&[
+        (
+            "Object",
+            intrinsic_constructor(object_prototype, &[("marker", string("intrinsic"))]),
+        ),
+        ("Array", intrinsic_constructor(array_prototype, &[])),
+        (
+            "TypeError",
+            intrinsic_constructor(type_error_prototype, &[]),
+        ),
+    ]);
+    (
+        intrinsics,
+        object_prototype,
+        array_prototype,
+        type_error_prototype,
+    )
+}
+
+fn recorded_prototype(value: f64) -> f64 {
+    let owner = crate::value::js_nanbox_get_pointer(value) as usize;
+    f64::from_bits(
+        crate::object::prototype_chain::object_static_prototype(owner)
+            .expect("value should retain its creation-realm prototype"),
+    )
+}
+
+#[test]
+fn script_adapter_separates_global_this_from_intrinsic_lookup() {
+    let global_this = object_with(&[("marker", string("receiver"))]);
+    let (intrinsics, _, _, _) = test_intrinsics();
+    let lexical = script_environment(global_this, &[]);
+
+    let result = eval_script_in(
+        "globalThis.marker + ':' + Object.marker",
+        global_this,
+        intrinsics,
+        lexical,
+    );
+    assert_eq!(as_str(result), "receiver:intrinsic");
+}
+
+#[test]
+fn script_literals_and_errors_retain_intrinsic_prototypes() {
+    let global_this = object_with(&[]);
+    let (intrinsics, object_prototype, array_prototype, type_error_prototype) = test_intrinsics();
+    let lexical = script_environment(global_this, &[]);
+
+    let object = eval_script_in("({ value: 1 })", global_this, intrinsics, lexical);
+    let array = eval_script_in("[1, 2]", global_this, intrinsics, lexical);
+    let error = eval_script_in("new TypeError('boom')", global_this, intrinsics, lexical);
+
+    assert_eq!(
+        recorded_prototype(object).to_bits(),
+        object_prototype.to_bits()
+    );
+    assert_eq!(
+        recorded_prototype(array).to_bits(),
+        array_prototype.to_bits()
+    );
+    assert_eq!(
+        recorded_prototype(error).to_bits(),
+        type_error_prototype.to_bits()
+    );
+}
+
+#[test]
+fn script_literals_use_fresh_populated_realm_prototypes() {
+    let _ = crate::object::js_get_global_this();
+    let outer_object_constructor =
+        crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), "Object".len());
+    let outer_object_prototype = crate::object::builtin_prototype_value("Object");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let intrinsics = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    crate::object::populate_global_this_builtins(
+        intrinsics.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+    );
+    let intrinsics = crate::value::js_nanbox_pointer(
+        intrinsics.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
+    );
+    let realm_object_prototype = bridge::intrinsic_prototype(intrinsics, "Object");
+    assert_ne!(
+        realm_object_prototype.to_bits(),
+        outer_object_prototype.to_bits()
+    );
+
+    let global = bridge::object_new();
+    let lexical = script_environment(global, &[]);
+    let value = eval_script_in("({ value: 1 })", global, intrinsics, lexical);
+    assert_eq!(
+        crate::object::js_object_get_prototype_of(value).to_bits(),
+        realm_object_prototype.to_bits(),
+    );
+    let descriptor = eval_script_in(
+        "Object.getOwnPropertyDescriptor({ value: 1 }, 'value')",
+        global,
+        intrinsics,
+        lexical,
+    );
+    assert_eq!(
+        crate::object::js_object_get_prototype_of(descriptor).to_bits(),
+        realm_object_prototype.to_bits(),
+    );
+    assert_ne!(
+        bridge::call_method(outer_object_constructor, "getPrototypeOf", &[descriptor]).to_bits(),
+        bridge::get_member(outer_object_constructor, "prototype").to_bits(),
+    );
+    let error = eval_script_in("new TypeError('boom')", global, intrinsics, lexical);
+    assert_eq!(
+        crate::object::js_instanceof(error, crate::error::CLASS_ID_TYPE_ERROR).to_bits(),
+        crate::value::TAG_FALSE,
+    );
+    let promise = eval_script_in("Promise.resolve(1)", global, intrinsics, lexical);
+    assert_eq!(
+        crate::object::js_instanceof(promise, 0xFFFF_0027).to_bits(),
+        crate::value::TAG_FALSE,
+    );
+}
+
+#[test]
+fn promise_static_result_retains_intrinsic_prototype() {
+    let global_this = object_with(&[]);
+    let intrinsics = crate::object::js_get_global_this();
+    let lexical = script_environment(global_this, &[]);
+    let promise = eval_script_in("Promise.resolve(7)", global_this, intrinsics, lexical);
+
+    assert_ne!(crate::promise::js_value_is_promise(promise), 0);
+    assert_eq!(
+        recorded_prototype(promise).to_bits(),
+        bridge::intrinsic_prototype(intrinsics, "Promise").to_bits()
+    );
+}
