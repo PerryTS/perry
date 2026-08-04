@@ -10,15 +10,21 @@ rather than merely that nothing threw (CLAUDE.md, "four ways a gate can be
 unable to fail", #4). Each mode has a signature in this report that the other
 modes cannot produce:
 
-  * explicit statepoint bridge -> every record `"backend": "statepoint"`,
-    `statepoints > 0`, `plain_stack_maps == 0`, `statepoint_fallbacks == 0`
-  * RS4GC (`PERRY_RS4GC=1`)   -> every record `"backend": "rs4gc"`.  RS4GC
-    bails per function to the explicit bridge on any unrecognised root-alloca
-    shape, so "did it run" and "did it run everywhere" are different
-    questions and only `--only-backend` answers the second.
-  * safepoint-only contract   -> `skipped_non_safepoints` strictly up and
-    `statepoints` strictly down against the same build without it, which is
+  * RS4GC (`PERRY_RS4GC=1`)   -> every record `"backend": "rs4gc"`, and
+    `gc_map.records > 0`. The explicit bridge is deleted, so there is no
+    second backend to fall back to; `--only-backend` still answers "did it
+    run *everywhere*", which is a different question from "did it run".
+  * safepoint density        -> `gc_map.records` and `gc_map.roots`, which is
     what `--print` is for.
+
+**Fields are looked up in `totals` first, then `gc_map`.** That split is not
+cosmetic. `totals` is counted at IR-emission time; `gc_map` comes from the
+compact-map rewrite parsing the assembly LLVM actually emitted. Since RS4GC —
+not Perry — decides which calls become safepoints, `gc_map` is the only honest
+source for safepoint counts. #7348 deleted the emission-time writers along with
+the bridge and the report went on printing `0 statepoints emitted` for every
+compile; `gc_map.modules == 0` now means "not measured" and is distinguishable
+from a real zero.
 
 Usage:
     statepoint_report_assert.py REPORT [--only-backend NAME]
@@ -85,28 +91,50 @@ def main() -> int:
             else:
                 print(f"backend {args.only_backend}: {counts[args.only_backend]} function(s)")
 
+    gc_map = report.get("gc_map", {})
+
+    def lookup(field: str):
+        """`totals` first, then `gc_map` — see the module docstring."""
+        if field in totals:
+            return totals[field]
+        return gc_map.get(field)
+
+    def where(field: str) -> str:
+        """Which section answered, so the printed line is not misleading."""
+        return "totals" if field in totals else "gc_map"
+
+    # A report whose map never reported cannot answer any safepoint question,
+    # and must not be allowed to satisfy a --require-zero by absence.
+    if (args.require_positive or args.require_zero or args.print_field) and not gc_map.get(
+        "modules"
+    ):
+        failures.append(
+            "gc_map.modules == 0: the compact-map rewrite never reported, so "
+            "safepoint counts are NOT MEASURED rather than zero"
+        )
+
     for field in args.require_positive:
-        value = totals.get(field)
+        value = lookup(field)
         if not isinstance(value, int):
-            failures.append(f"totals.{field} missing from the report")
+            failures.append(f"{field} missing from the report (checked totals and gc_map)")
         elif value <= 0:
-            failures.append(f"totals.{field} == {value}, expected > 0 (the mode did nothing)")
+            failures.append(f"{where(field)}.{field} == {value}, expected > 0 (the mode did nothing)")
         else:
-            print(f"totals.{field} = {value}")
+            print(f"{where(field)}.{field} = {value}")
 
     for field in args.require_zero:
-        value = totals.get(field)
+        value = lookup(field)
         if not isinstance(value, int):
-            failures.append(f"totals.{field} missing from the report")
+            failures.append(f"{field} missing from the report (checked totals and gc_map)")
         elif value != 0:
-            failures.append(f"totals.{field} == {value}, expected 0")
+            failures.append(f"{where(field)}.{field} == {value}, expected 0")
         else:
-            print(f"totals.{field} = 0")
+            print(f"{where(field)}.{field} = 0")
 
     if args.print_field:
-        value = totals.get(args.print_field)
+        value = lookup(args.print_field)
         if not isinstance(value, int):
-            sys.exit(f"::error::totals.{args.print_field} missing from the report")
+            sys.exit(f"::error::{args.print_field} missing from the report (checked totals and gc_map)")
         print(value)
 
     for message in failures:

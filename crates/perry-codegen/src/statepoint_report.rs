@@ -24,13 +24,6 @@ pub struct FunctionRecord {
     textual_calls: u64,
     calls_without_live_roots: u64,
     calls_with_live_roots: u64,
-    skipped_non_safepoints: u64,
-    statepoints: u64,
-    relocations: u64,
-    max_live_roots: usize,
-    live_roots_histogram: BTreeMap<usize, u64>,
-    statepoints_by_callee: BTreeMap<String, u64>,
-    skipped_by_callee: BTreeMap<String, u64>,
 }
 
 impl FunctionRecord {
@@ -57,28 +50,52 @@ impl FunctionRecord {
             self.calls_with_live_roots += 1;
         }
     }
+}
 
-    pub(crate) fn note_skipped(&mut self, callee: &str) {
-        self.skipped_non_safepoints += 1;
-        *self
-            .skipped_by_callee
-            .entry(callee.to_string())
-            .or_default() += 1;
+/// What the compact-map rewrite actually found in the emitted assembly.
+///
+/// This is the ONLY honest post-RS4GC source for these numbers. Perry no
+/// longer chooses which calls become safepoints — `RewriteStatepointsForGC`
+/// does, inside LLVM — so counting at IR-emission time cannot work, and the
+/// counters that tried were silently zero (see `note_gc_map`'s callers and
+/// the regression note on `render_text`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct GcMapTotals {
+    /// Functions carrying at least one safepoint with a live root.
+    pub functions: u64,
+    /// Safepoints, i.e. stack-map records.
+    pub records: u64,
+    /// (safepoint, root) pairs — the relocations LLVM emitted.
+    pub roots: u64,
+    /// Modules whose stack map was compacted. Zero here with non-zero
+    /// function records is the "instrument not wired" case.
+    pub modules: u64,
+}
+
+static GC_MAP: Mutex<GcMapTotals> = Mutex::new(GcMapTotals {
+    functions: 0,
+    records: 0,
+    roots: 0,
+    modules: 0,
+});
+
+/// Record one module's compact-map result. Called from `gc_map::compact_and_assemble`.
+pub(crate) fn note_gc_map(functions: usize, records: usize, roots: usize) {
+    if !enabled() {
+        return;
     }
-
-    fn note_emitted_roots(&mut self, live_roots: usize) {
-        self.max_live_roots = self.max_live_roots.max(live_roots);
-        *self.live_roots_histogram.entry(live_roots).or_default() += 1;
+    if let Ok(mut totals) = GC_MAP.lock() {
+        totals.functions += functions as u64;
+        totals.records += records as u64;
+        totals.roots += roots as u64;
+        totals.modules += 1;
     }
+}
 
-    pub(crate) fn note_statepoint(&mut self, callee: &str, live_roots: usize) {
-        self.statepoints += 1;
-        self.relocations += live_roots as u64;
-        self.note_emitted_roots(live_roots);
-        *self
-            .statepoints_by_callee
-            .entry(callee.to_string())
-            .or_default() += 1;
+fn take_gc_map() -> GcMapTotals {
+    match GC_MAP.lock() {
+        Ok(mut totals) => std::mem::take(&mut *totals),
+        Err(_) => GcMapTotals::default(),
     }
 }
 
@@ -130,13 +147,6 @@ struct Totals {
     textual_calls: u64,
     calls_without_live_roots: u64,
     calls_with_live_roots: u64,
-    skipped_non_safepoints: u64,
-    statepoints: u64,
-    relocations: u64,
-    max_live_roots: usize,
-    live_roots_histogram: BTreeMap<usize, u64>,
-    statepoints_by_callee: BTreeMap<String, u64>,
-    skipped_by_callee: BTreeMap<String, u64>,
 }
 
 fn totals(records: &[FunctionRecord]) -> Totals {
@@ -150,19 +160,6 @@ fn totals(records: &[FunctionRecord]) -> Totals {
         out.textual_calls += record.textual_calls;
         out.calls_without_live_roots += record.calls_without_live_roots;
         out.calls_with_live_roots += record.calls_with_live_roots;
-        out.skipped_non_safepoints += record.skipped_non_safepoints;
-        out.statepoints += record.statepoints;
-        out.relocations += record.relocations;
-        out.max_live_roots = out.max_live_roots.max(record.max_live_roots);
-        for (width, count) in &record.live_roots_histogram {
-            *out.live_roots_histogram.entry(*width).or_default() += count;
-        }
-        for (callee, count) in &record.statepoints_by_callee {
-            *out.statepoints_by_callee.entry(callee.clone()).or_default() += count;
-        }
-        for (callee, count) in &record.skipped_by_callee {
-            *out.skipped_by_callee.entry(callee.clone()).or_default() += count;
-        }
     }
     out
 }
@@ -183,6 +180,10 @@ fn render_ranked_map(out: &mut String, heading: &str, values: &BTreeMap<String, 
 }
 
 pub fn render_text(records: &[FunctionRecord]) -> String {
+    render_text_with(records, take_gc_map())
+}
+
+fn render_text_with(records: &[FunctionRecord], gc_map: GcMapTotals) -> String {
     let totals = totals(records);
     let mut out = String::from(
         "Perry native-stack GC report (--statepoint-report)\n\
@@ -207,33 +208,37 @@ pub fn render_text(records: &[FunctionRecord]) -> String {
         "{} textual calls: {} with live roots, {} without",
         totals.textual_calls, totals.calls_with_live_roots, totals.calls_without_live_roots
     );
-    let _ = writeln!(
-        out,
-        "{} statepoints emitted; {} non-collecting calls skipped",
-        totals.statepoints, totals.skipped_non_safepoints
-    );
-    let _ = writeln!(
-        out,
-        "{} relocations; maximum {} live roots at one safepoint\n",
-        totals.relocations, totals.max_live_roots
-    );
-
-    if !totals.live_roots_histogram.is_empty() {
-        out.push_str("Live roots per emitted safepoint\n");
-        for (width, count) in &totals.live_roots_histogram {
-            let _ = writeln!(out, "  {width:>4} root(s): {count:>6} safepoint(s)");
-        }
-        out.push('\n');
+    // Everything above is counted at IR-emission time. Everything below comes
+    // from the compact-map rewrite, which parses the assembly LLVM actually
+    // emitted — the only honest source now that RS4GC, not Perry, decides
+    // which calls become safepoints.
+    if gc_map.modules == 0 {
+        out.push_str(
+            "\nSafepoint counts UNAVAILABLE: the compact-map rewrite never reported.\n\
+             The report was rendered anyway rather than printing zeros, because a\n\
+             confident `0 statepoints emitted` is indistinguishable from a real\n\
+             zero and that is exactly how these counts silently died once before\n\
+             (#7348 removed their only writers with the bridge, and nothing\n\
+             noticed). Compile with PERRY_RS4GC=1 on a target whose map is\n\
+             rewritten, and without a cached .o.\n",
+        );
+        return out;
     }
-    render_ranked_map(
-        &mut out,
-        "Most frequent explicit statepoint callees",
-        &totals.statepoints_by_callee,
+
+    let _ = writeln!(
+        out,
+        "{} safepoints across {} function(s) in {} module(s)",
+        gc_map.records, gc_map.functions, gc_map.modules
     );
-    render_ranked_map(
-        &mut out,
-        "Calls omitted by the GC-effect audit",
-        &totals.skipped_by_callee,
+    let mean = if gc_map.records == 0 {
+        0.0
+    } else {
+        gc_map.roots as f64 / gc_map.records as f64
+    };
+    let _ = writeln!(
+        out,
+        "{} live roots recorded, {mean:.2} per safepoint\n",
+        gc_map.roots
     );
     out
 }
@@ -242,13 +247,23 @@ pub fn render_text(records: &[FunctionRecord]) -> String {
 struct JsonReport<'a> {
     schema_version: u32,
     totals: Totals,
+    /// Safepoint counts from the compact-map rewrite. `modules: 0` means the
+    /// rewrite never reported, so `records`/`roots` are absent rather than
+    /// zero — a consumer must be able to tell "no safepoints" from "not
+    /// measured", which is the distinction that went missing in #7348.
+    gc_map: GcMapTotals,
     functions: &'a [FunctionRecord],
 }
 
 pub fn render_json(records: &[FunctionRecord]) -> String {
+    render_json_with(records, take_gc_map())
+}
+
+fn render_json_with(records: &[FunctionRecord], gc_map: GcMapTotals) -> String {
     serde_json::to_string_pretty(&JsonReport {
-        schema_version: 1,
+        schema_version: 2,
         totals: totals(records),
+        gc_map,
         functions: records,
     })
     .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
@@ -258,70 +273,117 @@ pub fn render_json(records: &[FunctionRecord]) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn text_and_json_expose_root_pressure_and_fallbacks() {
-        let mut record = FunctionRecord::new("probe", "statepoint", 3, 2);
+    fn probe_record() -> FunctionRecord {
+        let mut record = FunctionRecord::new("probe", "rs4gc", 3, 2);
+        // Both call shapes: `calls_without_live_roots` only moves for a call
+        // with an empty live set, so a fixture of all-live calls would accuse
+        // a perfectly live field of having no writer.
         record.note_call(2);
-        record.note_statepoint("@may_collect", 2);
-        record.note_call(1);
-        record.note_skipped("@js_gc_temp_root_get");
-        record.note_call(1);
+        record.note_call(0);
+        record
+    }
 
-        let text = render_text(std::slice::from_ref(&record));
+    #[test]
+    fn text_and_json_expose_root_pressure() {
+        let record = probe_record();
+        let map = GcMapTotals {
+            functions: 1,
+            records: 4,
+            roots: 9,
+            modules: 1,
+        };
+
+        let text = render_text_with(std::slice::from_ref(&record), map);
         assert!(text.contains("2 bound native root slots"));
-        assert!(text.contains("1 non-collecting calls skipped"));
-        assert!(text.contains("@js_gc_temp_root_get"));
+        assert!(text.contains("4 safepoints across 1 function(s) in 1 module(s)"));
+        // 9 / 4 — the mean must come out of the real counts, not a placeholder.
+        assert!(
+            text.contains("9 live roots recorded, 2.25 per safepoint"),
+            "{text}"
+        );
 
-        let json = render_json(&[record]);
+        let json = render_json_with(&[record], map);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["schema_version"], 1);
-        assert_eq!(parsed["totals"]["relocations"], 2);
+        assert_eq!(parsed["schema_version"], 2);
+        assert_eq!(parsed["gc_map"]["records"], 4);
+        assert_eq!(parsed["gc_map"]["roots"], 9);
     }
 
     /// Every counter this report prints must have a writer.
     ///
-    /// It did not. `plain_stack_maps`, `stack_map_operands`,
+    /// Two rounds of this have now been needed, and the second is the reason
+    /// the first was not enough.
+    ///
+    /// **Round one.** `plain_stack_maps`, `stack_map_operands`,
     /// `statepoint_fallbacks` and `fallbacks_by_callee` were declared, summed
-    /// and rendered, and **no mutator ever wrote them** — `git log -S
-    /// note_fallback` finds nothing, so they were never populated, not even
-    /// before the plain-map bridge was deleted. The report printed
-    /// "0 statepoint parser fallback(s)" as reassurance, a test asserted that
-    /// zero, and the comment above that assert said the structural zero "is
-    /// the point". A counter that cannot be non-zero is not evidence; it is
-    /// CLAUDE.md's fourth failure mode with the subject removed entirely.
+    /// and rendered with no mutator writing them, ever. The report printed
+    /// "0 statepoint parser fallback(s)" as reassurance and a test asserted
+    /// that zero, above a comment saying the structural zero "is the point".
     ///
-    /// The real fail-closed guarantee is in `gc_map.rs`, which returns `Err`
-    /// on an unparseable or uncompactable map, so a fallback fails the BUILD
-    /// rather than incrementing a number nobody reads.
+    /// **Round two, which this test originally missed.** `statepoints`,
+    /// `relocations`, `max_live_roots` and the skip counters *did* have
+    /// mutators — and #7348 deleted their only production callers along with
+    /// the explicit bridge. The methods survived, so the invariant below still
+    /// passed: the test called them itself. Meanwhile every real compile
+    /// printed `0 statepoints emitted` while its binary carried thousands.
     ///
-    /// This test pins the invariant that let the dead fields hide: a totals
-    /// field that is always zero for a record with real activity is either
-    /// unwritten or misrendered.
+    /// The lesson is that "has a writer" is weaker than "is written". The
+    /// structural fix is not a bigger assertion here — it is that the numbers
+    /// now come from exactly one place (`note_gc_map`, fed by the compact-map
+    /// rewrite) and that their absence renders as an explicit UNAVAILABLE
+    /// notice rather than a zero. See `absent_map_counts_say_so_instead_of_zero`.
     #[test]
     fn every_rendered_counter_has_a_writer() {
-        let mut record = FunctionRecord::new("f", "rs4gc", 2, 2);
-        // Both call shapes: `calls_without_live_roots` only moves for a call
-        // with an empty live set, so a fixture of all-live calls would accuse
-        // a perfectly live field of having no writer.
-        record.note_call(1);
-        record.note_call(0);
-        record.note_statepoint("@js_alloc", 1);
-        record.note_skipped("@js_gc_temp_root_get");
-
-        let json = render_json(&[record]);
+        let json = render_json_with(
+            &[probe_record()],
+            GcMapTotals {
+                functions: 1,
+                records: 1,
+                roots: 1,
+                modules: 1,
+            },
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let totals = parsed["totals"].as_object().expect("totals is an object");
 
-        for (name, value) in totals {
-            // Maps and histograms carry their own emptiness; scalars are the
-            // ones that silently read as "checked, and fine".
-            let Some(n) = value.as_u64() else { continue };
-            assert_ne!(
-                n, 0,
-                "totals.{name} is zero for a record with a call, a statepoint \
-                 and a skip — it has no writer, or nothing reaches it. Give it \
-                 one or delete the field; do not print a number that cannot move."
-            );
+        for section in ["totals", "gc_map"] {
+            let obj = parsed[section]
+                .as_object()
+                .unwrap_or_else(|| panic!("{section} is an object"));
+            for (name, value) in obj {
+                let Some(n) = value.as_u64() else { continue };
+                assert_ne!(
+                    n, 0,
+                    "{section}.{name} is zero for a record with real activity — \
+                     it has no writer, or nothing reaches it. Give it one or \
+                     delete the field; do not print a number that cannot move."
+                );
+            }
         }
+    }
+
+    /// A missing measurement must not render as a measured zero.
+    ///
+    /// This is the guard that would have caught #7348 the day it landed.
+    /// `--statepoint-report` kept printing `0 statepoints emitted; 0
+    /// non-collecting calls skipped` after its writers were deleted, and
+    /// nothing distinguished that from a program with genuinely no safepoints.
+    #[test]
+    fn absent_map_counts_say_so_instead_of_zero() {
+        let text = render_text_with(&[probe_record()], GcMapTotals::default());
+        assert!(
+            text.contains("Safepoint counts UNAVAILABLE"),
+            "an unreported map must say so:\n{text}"
+        );
+        assert!(
+            !text.contains("0 safepoints"),
+            "a confident zero is the bug this test exists for:\n{text}"
+        );
+
+        let json = render_json_with(&[probe_record()], GcMapTotals::default());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed["gc_map"]["modules"], 0,
+            "a JSON consumer must be able to tell not-measured from zero"
+        );
     }
 }

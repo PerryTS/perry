@@ -299,8 +299,18 @@ jobs:
             -o /tmp/rs4gc-report-probe --statepoint-report=json 2> /tmp/rs4gc-report.json
           # windows-latest exposes the toolcache python as `python`, not python3.
           py=python3; command -v python3 >/dev/null 2>&1 || py=python
+          # --only-backend proves the lowering ran on every function; the two
+          # --require-positive checks prove it PRODUCED something. Those counts
+          # come from the compact-map rewrite parsing the assembly LLVM
+          # emitted, which is the only honest source now that RS4GC decides
+          # what becomes a safepoint. Until #7368 the report counted at
+          # IR-emission time, #7348 deleted those writers with the bridge, and
+          # every compile printed `0 statepoints emitted` while its binary
+          # carried hundreds. A label check could not see that; these can.
           "$py" scripts/statepoint_report_assert.py /tmp/rs4gc-report.json \
-            --only-backend rs4gc
+            --only-backend rs4gc \
+            --require-positive records \
+            --require-positive roots
 
           # Walker liveness, on EVERY arm. A walker that visits zero frames
           # still lets most probes print the right answer, because other root

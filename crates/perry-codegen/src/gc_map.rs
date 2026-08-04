@@ -960,6 +960,11 @@ pub fn compact_and_assemble(
             stats.records,
             stats.roots,
         );
+        // The statepoint report's safepoint counts come from here and nowhere
+        // else. Perry does not choose which calls become safepoints — RS4GC
+        // does, inside LLVM — so this parse of the emitted assembly is the
+        // only place the real numbers exist.
+        crate::statepoint_report::note_gc_map(stats.functions, stats.records, stats.roots);
     }
 
     assemble(clang, target, asm_path, obj_path)
