@@ -1312,6 +1312,9 @@ mod tests {
     /// assertion below fails.
     #[test]
     fn closure_body_roots_its_own_closure_pointer_and_reads_captures_through_it() {
+        // This test asserts on the SHADOW-STACK lowering. Native roots are the
+        // default now, so it has to say which lowering it is testing.
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let ir = one_capture_closure_ir();
         // The public `perry_closure_*` symbol can be a typed trampoline over a
         // straight-line `__typed_f64` clone; the real body is the one that
@@ -1432,6 +1435,9 @@ mod tests {
     /// mode if that boxing rule ever narrows, which is what this pins.
     #[test]
     fn unboxed_capture_write_reloads_the_closure_pointer_after_the_coercion() {
+        // This test asserts on the SHADOW-STACK lowering. Native roots are the
+        // default now, so it has to say which lowering it is testing.
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let ir = unboxed_capture_update_ir();
         let body = ir
             .split("define ")

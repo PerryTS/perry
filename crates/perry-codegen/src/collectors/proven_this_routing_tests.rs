@@ -517,6 +517,9 @@ fn ptr_shape_local_typed_fallback_routes_to_proven_this_clone() {
 /// remains true, so assert it at the callee rather than trusting the comment.
 #[test]
 fn proven_this_clone_binds_its_receiver_slot() {
+    // This test asserts on the SHADOW-STACK lowering. Native roots are the
+    // default now, so it has to say which lowering it is testing.
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let mut ir = emit(&guarded_site_module(), false);
     ir.push('\n');
     ir.push_str(&emit(&ptr_shape_local_module(), false));

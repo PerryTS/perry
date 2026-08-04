@@ -191,6 +191,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // FEAT_JSCVT decision is per-target (apple-arm64 only) — same
     // set-per-module discipline as the outline gate above.
     helpers::set_jscvt_for_target(&triple);
+    // Native roots are the default lowering wherever the runtime can walk the
+    // frames, and the shadow stack elsewhere. Same per-module discipline.
+    helpers::set_native_roots_for_target(&triple);
 
     // `--opt-report` (#6952): mark the closures that are iterating-builtin
     // callbacks before any region is lowered, so their denials carry the

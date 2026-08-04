@@ -415,6 +415,9 @@ mod tests {
     /// `sub` in `shadow_frame_handle_lines` and the last one does.
     #[test]
     fn frame_push_uses_frame_enter_and_derives_the_handle() {
+        // This test asserts on the SHADOW-STACK lowering. Native roots are the
+        // default now, so it has to say which lowering it is testing.
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let body = roots_body(&rooted_local_ir());
         assert!(
             body.contains("call ptr @js_shadow_frame_enter(i32 "),
@@ -444,6 +447,9 @@ mod tests {
     /// no `ss.store` block at all.
     #[test]
     fn pointer_store_roots_inline_with_the_runtime_entry_layout() {
+        // This test asserts on the SHADOW-STACK lowering. Native roots are the
+        // default now, so it has to say which lowering it is testing.
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let body = roots_body(&rooted_local_ir());
         let blk = bind_block(&body);
         assert!(
@@ -487,6 +493,9 @@ mod tests {
     /// Sabotage check: delete either guard from `emit_inline_slot_write`.
     #[test]
     fn inline_store_keeps_the_sentinel_and_bounds_guards() {
+        // This test asserts on the SHADOW-STACK lowering. Native roots are the
+        // default now, so it has to say which lowering it is testing.
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let body = roots_body(&rooted_local_ir());
         assert!(
             body.contains("ss.chk_top") && body.contains("ss.chk_len"),
@@ -520,6 +529,9 @@ mod tests {
     /// never shaded, and an in-flight incremental cycle frees a live object.
     #[test]
     fn inline_bind_keeps_the_gated_root_shading_barrier() {
+        // This test asserts on the SHADOW-STACK lowering. Native roots are the
+        // default now, so it has to say which lowering it is testing.
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let body = roots_body(&rooted_local_ir());
         assert!(
             body.contains(
@@ -542,6 +554,9 @@ mod tests {
     /// `-2` constant disappears.
     #[test]
     fn dead_local_clear_is_inline_and_preserves_the_binding() {
+        // This test asserts on the SHADOW-STACK lowering. Native roots are the
+        // default now, so it has to say which lowering it is testing.
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let body = roots_body(&rooted_local_ir());
         let blk = clear_block(&body);
         let mask = !(SHADOW_SLOT_ACTIVE_BIT as i64);
