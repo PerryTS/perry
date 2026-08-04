@@ -89,6 +89,23 @@ static STACK_MAPS: OnceLock<StackMapIndex> = OnceLock::new();
 const DWARF_REG_FP_AARCH64: u16 = 29;
 const DWARF_REG_SP_AARCH64: u16 = 31;
 
+// How far below the CFA this frame's return address sits, if it sits on the
+// stack at all. This is NOT a constant across architectures and getting it
+// wrong shifts every SP-relative root by a word:
+//
+//   x86-64: `call` PUSHES the return address, so CFA is the caller's SP before
+//           the call and the callee's SP starts one slot lower.
+//   aarch64: `bl` writes the return address to x30. Nothing is pushed, so the
+//           frame's SP is simply CFA - stack_size.
+//
+// The aarch64 case is easy to miss because `chain_walkable` is true there, so
+// the fast x29 walker normally runs and this path is only the fallback — an
+// eight-byte error would stay latent until the fast walk bailed.
+#[cfg(target_arch = "x86_64")]
+const CFA_RETURN_ADDRESS_BYTES: usize = std::mem::size_of::<usize>();
+#[cfg(not(target_arch = "x86_64"))]
+const CFA_RETURN_ADDRESS_BYTES: usize = 0;
+
 // Which DWARF register is the stack pointer on the machine this runtime was
 // built for. Distinct from the format constants above and used only to choose
 // how a base is resolved: `_Unwind_GetGR` is not a supported query for the SP
@@ -465,17 +482,27 @@ fn parse_gc_map(bytes: &[u8]) -> Option<(Vec<StackMapRecord>, Vec<StackMapLocati
         }
         let function_count = read_u32(bytes, base + 8)? as usize;
         let total_len = read_u32(bytes, base + 12)? as usize;
+        // Header flags, bit 0: the function-address field is 8 bytes wide. The
+        // emitter writes the TARGET's pointer width (watchOS `arm64_32` is
+        // ILP32), and compile target and run target are the same machine — so
+        // a mismatch here means the binary's map was produced for a different
+        // width and every function address would be misread. Fail closed.
+        let flags = read_u16(bytes, base + 6)?;
+        if (flags & 1 == 1) != (std::mem::size_of::<usize>() == 8) {
+            return None;
+        }
+        let entry = if flags & 1 == 1 { 16 } else { 12 };
         // A blob must at least cover its header and function table. Without
         // this, a `total_len` of 0 leaves `base` unchanged — and because the
         // magic still matches at that offset the resynchronisation path below
         // is never reached, so the loop spins forever. This runs inside
         // `OnceLock::get_or_init`, so that is a process hang at the first
         // collection rather than the fail-closed panic in `stack_maps`.
-        if total_len < 16 + function_count.checked_mul(16)? {
+        if total_len < 16 + function_count.checked_mul(entry)? {
             return None;
         }
         let table = base.checked_add(16)?;
-        let stream_start = table.checked_add(function_count.checked_mul(16)?)?;
+        let stream_start = table.checked_add(function_count.checked_mul(entry)?)?;
         let blob_end = base.checked_add(total_len)?;
         if blob_end > bytes.len() || stream_start > blob_end {
             return None;
@@ -502,10 +529,17 @@ fn parse_gc_map(bytes: &[u8]) -> Option<(Vec<StackMapRecord>, Vec<StackMapLocati
         let mut record_index = 0usize;
 
         for index in 0..function_count {
-            let entry = table + index * 16;
-            let function_address = read_u64(bytes, entry)? as usize;
-            let stack_size = u64::from(read_u32(bytes, entry + 8)?);
-            let record_count = read_u32(bytes, entry + 12)? as usize;
+            // Address width follows the header flag checked above, so the
+            // stack-size and record-count offsets move with it.
+            let base_off = table + index * entry;
+            let addr_bytes = entry - 8;
+            let function_address = if addr_bytes == 8 {
+                read_u64(bytes, base_off)? as usize
+            } else {
+                read_u32(bytes, base_off)? as usize
+            };
+            let stack_size = u64::from(read_u32(bytes, base_off + addr_bytes)?);
+            let record_count = read_u32(bytes, base_off + addr_bytes + 4)? as usize;
 
             let mut previous: Option<(u32, u32)> = None;
             for _ in 0..record_count {
@@ -602,11 +636,9 @@ fn read_u8(bytes: &[u8], offset: usize) -> Option<u8> {
     bytes.get(offset).copied()
 }
 
-/// ELF section headers store their counts and offsets as 16-bit fields, so
-/// this is used only by `elf_section_vaddr`. Gated to Linux because the
-/// compact GC map itself needs no 16-bit reads — deleting it as "orphaned"
-/// after a macOS-only `cargo check` is what broke the Linux build.
-#[cfg(target_os = "linux")]
+/// Used by the map header's flags field and by ELF section headers. It was
+/// briefly Linux-gated, which broke the Linux build the moment the map itself
+/// needed a 16-bit read — keep it unconditional.
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes(
         bytes.get(offset..offset + 2)?.try_into().ok()?,
@@ -635,7 +667,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
 /// 64-bit only: watchOS's `arm64_32` has 32-bit pointers, while the map stores
 /// function addresses as `u64` and this code does `usize` arithmetic on them.
 /// The compiler refuses that target for the same reason.
-#[cfg(all(target_vendor = "apple", target_pointer_width = "64"))]
+#[cfg(target_vendor = "apple")]
 fn loaded_stack_map_section() -> Option<&'static [u8]> {
     use mach2::dyld::{_dyld_get_image_header, _dyld_get_image_vmaddr_slide};
 
@@ -816,20 +848,14 @@ fn main_object_load_bias() -> Option<usize> {
     (bias != usize::MAX).then_some(bias)
 }
 
-#[cfg(not(any(
-    all(target_vendor = "apple", target_pointer_width = "64"),
-    target_os = "linux"
-)))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn loaded_stack_map_section() -> Option<&'static [u8]> {
     None
 }
 
 // Same platform set as the loader above: the Itanium unwinder personality and
 // `_Unwind_*` API are present on every Apple platform, not just macOS.
-#[cfg(any(
-    all(target_vendor = "apple", target_pointer_width = "64"),
-    target_os = "linux"
-))]
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 mod unwind {
     use super::*;
 
@@ -902,7 +928,7 @@ mod unwind {
                 let base = if location.dwarf_reg == ARCH_DWARF_SP {
                     let cfa = _Unwind_GetCFA(context);
                     match cfa
-                        .checked_sub(std::mem::size_of::<usize>())
+                        .checked_sub(CFA_RETURN_ADDRESS_BYTES)
                         .and_then(|v| v.checked_sub(record.stack_size as usize))
                     {
                         Some(sp) => sp,
@@ -932,10 +958,7 @@ mod unwind {
     }
 }
 
-#[cfg(not(any(
-    all(target_vendor = "apple", target_pointer_width = "64"),
-    target_os = "linux"
-)))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 mod unwind {
     use super::*;
 
@@ -962,10 +985,7 @@ mod unwind {
 /// (a rewritten slot no longer points at a forwarded object), so a partial
 /// fast walk followed by a full unwinder walk is safe.
 #[cfg(all(
-    any(
-        all(target_vendor = "apple", target_pointer_width = "64"),
-        target_os = "linux"
-    ),
+    any(target_vendor = "apple", target_os = "linux"),
     target_arch = "aarch64"
 ))]
 mod fp_chain {
@@ -1126,10 +1146,7 @@ mod fp_chain {
 }
 
 #[cfg(not(all(
-    any(
-        all(target_vendor = "apple", target_pointer_width = "64"),
-        target_os = "linux"
-    ),
+    any(target_vendor = "apple", target_os = "linux"),
     target_arch = "aarch64"
 )))]
 mod fp_chain {
@@ -1191,14 +1208,23 @@ mod tests {
             }
         }
 
-        let total_len = 16 + 16 + offsets.len() + stream.len();
+        // Build for THIS host's pointer width, mirroring the emitter: the
+        // decoder rejects a blob whose recorded width disagrees with its own.
+        let ptr64 = std::mem::size_of::<usize>() == 8;
+        let entry = if ptr64 { 16 } else { 12 };
+        let total_len = 16 + entry + offsets.len() + stream.len();
         let mut bytes = Vec::new();
         bytes.extend_from_slice(GC_MAP_MAGIC);
         bytes.push(GC_MAP_VERSION);
-        bytes.extend_from_slice(&[0, 0, 0]);
+        bytes.push(0);
+        bytes.extend_from_slice(&u16::from(ptr64).to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(total_len as u32).to_le_bytes());
-        bytes.extend_from_slice(&function.to_le_bytes());
+        if ptr64 {
+            bytes.extend_from_slice(&function.to_le_bytes());
+        } else {
+            bytes.extend_from_slice(&(function as u32).to_le_bytes());
+        }
         bytes.extend_from_slice(&32u32.to_le_bytes());
         bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&offsets);
@@ -1325,6 +1351,21 @@ mod tests {
             }],
         );
         assert!(!index.chain_walkable);
+    }
+
+    #[test]
+    fn rejects_a_blob_built_for_the_other_pointer_width() {
+        // The header records the width the emitter used. A blob claiming the
+        // other width would have every function address misread, so it must be
+        // refused rather than decoded — watchOS `arm64_32` is ILP32 while every
+        // other supported target is LP64.
+        let mut bytes = simple(0x1000, 0x10, -8);
+        let flags = u16::from_le_bytes([bytes[6], bytes[7]]);
+        bytes[6..8].copy_from_slice(&(flags ^ 1).to_le_bytes());
+        assert!(
+            parse_gc_map(&bytes).is_none(),
+            "a map built for the other pointer width must be refused"
+        );
     }
 
     #[test]

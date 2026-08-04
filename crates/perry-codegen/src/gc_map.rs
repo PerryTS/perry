@@ -697,9 +697,17 @@ fn verify_roundtrip(functions: &[FunctionMap], stream: &[u8]) -> Result<(), Stri
 /// That costs ~4 bytes per record — 18.7x compaction instead of 31.8x — and
 /// buys not having to assemble twice just to learn numbers the assembler is
 /// about to compute anyway.
-fn emit_asm(functions: &[FunctionMap], stream: &[u8], elf: bool) -> String {
+/// `ptr64` selects the width of the relocated function-address field. It is the
+/// target's pointer width, not a constant: `arm64_32` (watchOS) is ILP32, so an
+/// 8-byte address slot there would need a relocation ld64 has no reason to
+/// produce, and the runtime would be reading two pointers as one. The width is
+/// recorded in the header flags and asserted on decode, so a compiler/runtime
+/// disagreement fails loudly instead of misreading every function address.
+fn emit_asm(functions: &[FunctionMap], stream: &[u8], elf: bool, ptr64: bool) -> String {
     let record_total: usize = functions.iter().map(|f| f.records.len()).sum();
-    let total_len = 16 + functions.len() * 16 + record_total * 4 + stream.len();
+    let addr_bytes = if ptr64 { 8 } else { 4 };
+    let entry_bytes = addr_bytes + 8; // address + u32 stack_size + u32 records
+    let total_len = 16 + functions.len() * entry_bytes + record_total * 4 + stream.len();
     let mut out = String::new();
     if elf {
         out.push_str(&format!("\t.section\t{ELF_SECTION}\n"));
@@ -714,11 +722,16 @@ fn emit_asm(functions: &[FunctionMap], stream: &[u8], elf: bool) -> String {
     ));
     out.push_str(&format!("\t.byte\t{GC_MAP_VERSION}\n"));
     out.push_str("\t.byte\t0\n");
-    out.push_str("\t.short\t0\n");
+    // Header flags, bit 0: the function-address field is 8 bytes wide.
+    out.push_str(&format!("\t.short\t{}\n", u16::from(ptr64)));
     out.push_str(&format!("\t.long\t{}\n", functions.len()));
     out.push_str(&format!("\t.long\t{total_len}\n"));
     for function in functions {
-        out.push_str(&format!("\t.quad\t{}\n", function.symbol));
+        out.push_str(&format!(
+            "\t{}\t{}\n",
+            if ptr64 { ".quad" } else { ".long" },
+            function.symbol
+        ));
         out.push_str(&format!("\t.long\t{}\n", function.stack_size as u32));
         out.push_str(&format!("\t.long\t{}\n", function.records.len()));
     }
@@ -763,6 +776,9 @@ fn compact_stack_map_asm(
     if find_block_start(&lines).is_none() {
         return Ok(None);
     }
+    // watchOS is ILP32: the relocated function-address field follows the
+    // target's pointer width rather than assuming 8 bytes.
+    let ptr64 = !target.starts_with("arm64_32");
     let block = parse_block(&lines, word_width_for(target))?;
     let functions = decode_v3(&block)?;
     let stream = encode_stream(&functions);
@@ -771,7 +787,7 @@ fn compact_stack_map_asm(
     let stats = GcMapStats {
         original_bytes: block.bytes.len(),
         compact_bytes: 16
-            + functions.len() * 16
+            + functions.len() * (if ptr64 { 16 } else { 12 })
             + functions.iter().map(|f| f.records.len()).sum::<usize>() * 4
             + stream.len(),
         functions: functions.len(),
@@ -783,7 +799,7 @@ fn compact_stack_map_asm(
             .sum(),
     };
 
-    let replacement = emit_asm(&functions, &stream, elf);
+    let replacement = emit_asm(&functions, &stream, elf, ptr64);
     let mut out = String::with_capacity(asm.len());
     for line in &lines[..block.start_line] {
         // `.no_dead_strip` names the block's label from outside it. It is also
@@ -853,10 +869,13 @@ pub fn compact_and_assemble(
     // runtime does `usize` arithmetic on them. The runtime's loader is gated to
     // 64-bit Apple for the same reason, so admitting it here would emit a map
     // nothing reads — roots lost silently on the platform hardest to debug.
-    let arch_supported = !target.starts_with("arm64_32")
-        && (target.starts_with("aarch64")
-            || target.starts_with("arm64")
-            || target.starts_with("x86_64"));
+    let arch_supported = target.starts_with("aarch64")
+        || target.starts_with("arm64")
+        || target.starts_with("x86_64");
+    // watchOS is ILP32. The map's function-address field follows the target's
+    // pointer width rather than assuming 8 bytes, so `arm64_32` is a supported
+    // width here, not an excluded target.
+    let ptr64 = !target.starts_with("arm64_32");
     if !arch_supported {
         return Err(anyhow!(
             "perry: native GC roots (PERRY_RS4GC) are not supported for target \
@@ -981,6 +1000,46 @@ mod tests {
     /// One function, one record, and — critically — a `.word` **instruction
     /// offset** and a `.word` **32-bit `Offset` field per location**, which is
     /// what makes the width of `.word` load-bearing rather than cosmetic.
+    #[test]
+    fn ilp32_targets_emit_a_pointer_sized_address_field() {
+        // watchOS `arm64_32` is ILP32. An 8-byte address slot there would need
+        // a relocation ld64 has no reason to emit, and the runtime would read
+        // two pointers as one — so the field follows the target's width and
+        // the header records which width was used.
+        let (out, stats) = compact_stack_map_asm(&sample_asm(), false, "arm64_32-apple-watchos")
+            .expect("an ILP32 stack map must parse")
+            .expect("an ILP32 stack map must be rewritten");
+        assert!(
+            out.contains("\t.long\t_probe_fn"),
+            "the function address must be pointer-sized on ILP32:\n{out}"
+        );
+        assert!(
+            !out.contains("\t.quad\t_probe_fn"),
+            "an 8-byte address slot on ILP32 is the bug this guards:\n{out}"
+        );
+        assert!(
+            out.contains("\t.short\t0\n"),
+            "the header must record a 32-bit address width:\n{out}"
+        );
+        // 16-byte header + one 12-byte function entry (4-byte address on
+        // ILP32) + one 4-byte instruction offset + a 3-byte root stream. The
+        // LP64 form of the same map is 4 bytes larger, which is the whole
+        // point of the field being pointer-sized.
+        assert_eq!(stats.compact_bytes, 16 + 12 + 4 + 3);
+    }
+
+    #[test]
+    fn lp64_targets_keep_the_eight_byte_address_field() {
+        let (out, _) = compact_stack_map_asm(&sample_asm(), false, "arm64-apple-ios")
+            .expect("an LP64 stack map must parse")
+            .expect("an LP64 stack map must be rewritten");
+        assert!(out.contains("\t.quad\t_probe_fn"), "{out}");
+        assert!(
+            out.contains("\t.short\t1\n"),
+            "the header must record a 64-bit address width:\n{out}"
+        );
+    }
+
     fn aarch64_elf_sample_asm() -> String {
         let mut asm = String::new();
         asm.push_str("\t.section\t.llvm_stackmaps,\"a\",@progbits\n");

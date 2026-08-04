@@ -52,7 +52,7 @@
 #
 # x86-64 was refused outright until #7349 taught the runtime to derive an
 # SP-relative base from the CFA; it is a first-class arm of the matrix now. The
-# old note said (#7324) that a run there would
+# old note said (#7324) that a run there would only
 # binary that crashes under collection, so an x86-64 run of this matrix would
 # test nothing but the refusal — no longer true, and that job is gone.
 #

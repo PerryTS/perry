@@ -10,11 +10,19 @@ path resolved bases with `_Unwind_GetGR(context, reg)`, and **`_Unwind_GetGR`
 is not a supported query for the stack-pointer column** — it returned garbage
 that the collector then wrote through. `_Unwind_GetCFA` is the supported way.
 
-SP-relative roots now derive their base from the CFA: by the SysV/AAPCS
-definition it is the caller's stack pointer immediately before the call, so the
-body stack pointer sits one return-address slot plus this function's own frame
-below it, and `stack_size` is exactly that frame, already recorded per function
-in the map. The architecture's SP register number is a **runtime-local**
+SP-relative roots now derive their base from the CFA, and the arithmetic is
+**architecture-specific** rather than shared:
+
+* **x86-64** — `call` pushes the return address, so the CFA is the caller's
+  stack pointer before the call and the body stack pointer is
+  `CFA - 8 - stack_size`.
+* **aarch64** — `bl` writes the return address to `x30`; nothing is pushed, so
+  the body stack pointer is `CFA - stack_size`.
+
+Subtracting a return-address slot on aarch64 shifts every SP-relative root by a
+word. It would have stayed latent there because `chain_walkable` is true on
+aarch64, so the fast x29 walker runs and this path is only the fallback — the
+error would surface only once the fast walk bailed. The architecture's SP register number is a **runtime-local**
 constant, deliberately separate from the format's base tags — those stay
 aarch64-literal so the compiler's idea of the target and the runtime's
 `target_arch` can never disagree (see `gc_map.rs`).
