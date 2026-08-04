@@ -50,11 +50,31 @@ runs:
         echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-22 main" \
           | sudo tee /etc/apt/sources.list.d/llvm22.list >/dev/null
         sudo apt-get update -qq
+        # `clang-22` is NOT implied by `llvm-22-dev`: apt ships opt and clang as
+        # separate packages, so installing only the dev libraries leaves
+        # /usr/lib/llvm-22/bin/opt with no clang beside it. That is exactly what
+        # ubuntu-24.04-arm hits. Anything needing a MATCHED opt+clang pair — the
+        # RS4GC arm in gc-native-roots.yml — then finds a half-populated bin dir
+        # and either fails outright or falls back to hand-rolled discovery and
+        # picks up the distro's LLVM 18. Install the pair here, once, so every
+        # workflow gets a version-matched toolchain from one place.
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-          llvm-22-dev libpolly-22-dev libzstd-dev
+          llvm-22-dev libpolly-22-dev libzstd-dev clang-22
         llvm-config-22 --version | grep -q '^22\.' \
           || { echo "::error::apt LLVM is not 22.x"; exit 1; }
-        echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
+        PREFIX="$(llvm-config-22 --prefix)"
+        # Co-locate clang with opt. apt installs the versioned binary at
+        # /usr/bin/clang-22, but consumers resolve a toolchain by DIRECTORY —
+        # PERRY_LLVM_OPT and PERRY_LLVM_CLANG must come from the same bin dir or
+        # opt and clang can skew across majors — so it has to sit under $PREFIX.
+        if [ ! -x "$PREFIX/bin/clang" ] && [ -x /usr/bin/clang-22 ]; then
+          sudo ln -sf /usr/bin/clang-22 "$PREFIX/bin/clang"
+        fi
+        # Assert the pair, not just llvm-config. A green setup step that leaves
+        # a mismatched clang is the failure this whole action exists to prevent.
+        "$PREFIX/bin/clang" --version | grep -q 'version 22\.' \
+          || { echo "::error::clang under $PREFIX is not 22.x"; exit 1; }
+        echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
 
     - name: LLVM 22 (Windows, official MSVC tarball)
       if: runner.os == 'Windows'
