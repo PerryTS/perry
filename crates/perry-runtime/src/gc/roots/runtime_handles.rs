@@ -178,6 +178,68 @@ impl<'scope> RuntimeHandle<'scope> {
         })
     }
 
+    /// Run `f` — which may allocate, and therefore may MOVE the object this
+    /// handle roots — and return its result together with the object's
+    /// **post-collection** address.
+    ///
+    /// # Why this exists
+    ///
+    /// `docs/src/internals/gc-rooting-invariant.md` states the rule, and the
+    /// second half is the half that keeps getting dropped:
+    ///
+    /// > A value read out of a root and held in a register across a call is not
+    /// > rooted. It is a copy, and the collector cannot see copies.
+    ///
+    /// A `RuntimeHandleScope` gives an object *liveness*: the collector marks it
+    /// and rewrites the slot. It does nothing about a raw pointer already read
+    /// out of that slot. Every bug in the #7341 quarantine sweep that was fixed
+    /// by rooting had rooting **already** — what was missing was ordering the
+    /// re-read relative to the collection point:
+    ///
+    /// ```ignore
+    /// let obj = obj_h.get_raw_mut_ptr::<ObjectHeader>();
+    /// let found = class_instance_has_member(class_id, "size");  // ALLOCATES
+    /// (*obj).field_count                                        // from-space
+    /// ```
+    ///
+    /// The defect is not a missing root. It is that `obj` is still *nameable*
+    /// after the call. This combinator removes that: the pre-call address is
+    /// never bound, so there is nothing stale to reach for.
+    ///
+    /// ```ignore
+    /// let (found, obj) = obj_h.across_mut::<ObjectHeader, _>(
+    ///     || class_instance_has_member(class_id, "size"),
+    /// );
+    /// (*obj).field_count                                        // post-collection
+    /// ```
+    ///
+    /// # What it does NOT do
+    ///
+    /// It is not a proof. It cannot stop you reading the pointer *before* the
+    /// call and holding that copy yourself — Rust has no effect system to mark
+    /// "this call may allocate", so no signature can reject that. What it does
+    /// is make the correct shape shorter than the incorrect one and give the
+    /// ratchet in `scripts/raw_handle_debt.py` something to count down.
+    #[inline]
+    pub fn across_mut<T, R>(&self, f: impl FnOnce() -> R) -> (R, *mut T) {
+        let result = f();
+        (result, self.get_raw_mut_ptr::<T>())
+    }
+
+    /// `across_mut` for a `*const` receiver. See its docs.
+    #[inline]
+    pub fn across_const<T, R>(&self, f: impl FnOnce() -> R) -> (R, *const T) {
+        let result = f();
+        (result, self.get_raw_const_ptr::<T>())
+    }
+
+    /// `across_mut` for a NaN-boxed value.
+    #[inline]
+    pub fn across_nanbox<R>(&self, f: impl FnOnce() -> R) -> (R, f64) {
+        let result = f();
+        (result, self.get_nanbox_f64())
+    }
+
     pub fn get_nanbox_f64(&self) -> f64 {
         f64::from_bits(self.get_nanbox_u64())
     }

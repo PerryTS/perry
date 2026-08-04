@@ -253,8 +253,14 @@ pub extern "C" fn js_object_get_field_by_name(
             if is_size_key {
                 let size_arm_scope = crate::gc::RuntimeHandleScope::new();
                 let size_arm_obj = size_arm_scope.root_raw_const_ptr(obj as *const u8);
-                let has_own_size = super::super::own_key_present(obj as *mut ObjectHeader, key);
-                obj = size_arm_obj.get_raw_const_ptr::<ObjectHeader>();
+                // #7341 layer 3: `across_const` runs the allocating call and hands
+                // back the POST-collection address in one step, so the pre-call
+                // pointer is never bound and cannot be reached for by mistake.
+                // This is the shape every fix in the sweep converged on.
+                let (has_own_size, fresh) = size_arm_obj.across_const::<ObjectHeader, _>(|| {
+                    super::super::own_key_present(obj as *mut ObjectHeader, key)
+                });
+                obj = fresh;
                 if !has_own_size {
                     // A subclass may also OVERRIDE `size` on its prototype
                     // (`class M extends Map { get size() { return 42 } }`). Such an
@@ -293,11 +299,12 @@ pub extern "C" fn js_object_get_field_by_name(
                             None => {}
                         }
                     }
-                    // #7341: republish before falling through — the helpers
-                    // above may have moved it, and every arm below
-                    // dereferences `obj`.
-                    obj = obj_h.get_raw_const_ptr::<ObjectHeader>();
                 }
+                // #7341: republish before falling through — the helpers above
+                // may have moved it, and every arm below dereferences `obj`.
+                // One republish at the end of the arm covers both branches;
+                // #7385 also wrote one inside the `if`, which this supersedes
+                // (rustc flagged it as assigned-never-read).
                 obj = size_arm_obj.get_raw_const_ptr::<ObjectHeader>();
             }
         }

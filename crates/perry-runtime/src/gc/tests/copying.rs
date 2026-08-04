@@ -1034,6 +1034,65 @@ fn root_source_runtime_handle_rewrite_is_attributed_to_runtime_handles() {
 }
 
 #[test]
+fn across_mut_hands_back_the_post_collection_address() {
+    // #7341 layer 3: the whole point of `across_mut` is that the pre-call
+    // address is never nameable. This asserts it is not decoration -- the
+    // pointer it returns must differ from the one read BEFORE the closure ran,
+    // because the closure evacuated the object.
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        MutableRootScannerSource::RuntimeHandles,
+    );
+    let child = young_leaf();
+    let scope = RuntimeHandleScope::new();
+    let handle = scope.root_raw_mut_ptr(child as *mut u8);
+
+    let stale = handle.get_raw_mut_ptr::<u8>() as usize;
+    assert_eq!(
+        stale, child,
+        "pre-collection read should be the original address"
+    );
+
+    let (trace, fresh) = handle.across_mut::<u8, _>(|| collect_minor_trace(GcTriggerKind::Direct));
+
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_ne!(
+        fresh as usize, stale,
+        "across_mut returned the stale address -- the combinator is not re-reading"
+    );
+    assert_eq!(
+        fresh as usize,
+        handle.get_raw_mut_ptr::<u8>() as usize,
+        "across_mut must agree with a fresh read of the same handle"
+    );
+}
+
+#[test]
+fn across_nanbox_hands_back_the_post_collection_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        MutableRootScannerSource::RuntimeHandles,
+    );
+    let child = young_leaf();
+    let scope = RuntimeHandleScope::new();
+    let handle = scope.root_nanbox_u64(ptr_bits(child));
+
+    let stale = handle.get_nanbox_u64();
+    let (trace, fresh) = handle.across_nanbox(|| collect_minor_trace(GcTriggerKind::Direct));
+
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_ne!(
+        fresh.to_bits(),
+        stale,
+        "across_nanbox returned the stale value -- the combinator is not re-reading"
+    );
+}
+
+#[test]
 fn root_source_runtime_and_ffi_mutable_scanners_are_attributed_separately() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

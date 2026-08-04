@@ -186,6 +186,19 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
+      # nothing for a raw pointer already read out of the slot. Every rooting bug
+      # in the quarantine sweep had rooting ALREADY -- what was missing was
+      # ordering the re-read against the collection point.
+      # `RuntimeHandle::across_{mut,const,nanbox}` expresses that ordering and
+      # never binds the pre-call address. This counts the sites that still don't,
+      # and only lets the number fall. Baseline: scripts/raw_handle_debt_baseline.txt.
+      - name: Raw-handle debt ratchet
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/raw_handle_debt.py --self-test
+          python3 scripts/raw_handle_debt.py
+
       # The gap-suite ratchet decides whether conformance-smoke goes red, so
       # its own logic is unit-checked on the cheap job rather than only being
       # exercised 8 shards deep.
