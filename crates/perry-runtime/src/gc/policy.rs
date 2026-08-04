@@ -85,20 +85,53 @@ pub(super) fn effective_next_arena_trigger() -> usize {
             .with(|c| c.get())
             .min(gc_trigger_absolute_ceiling_bytes())
     };
-    // PERRY_GC_SCAVENGE (Phase-1 de-risking, OFF by default): with the
-    // evacuating young-gen scavenge, a minor is O(live) — copying ~1k live
-    // objects out of millions allocated — so the 128 MB-and-doubling adaptive
-    // trigger (tuned for the OLD world where a minor was an expensive O(heap)
-    // sweep, hence "collect rarely") is exactly backwards. Cap the nursery
-    // small so scavenges fire often and the young arena's high-water mark
-    // stays near the cap instead of ballooning to 128-260 MB between the ~8
-    // collections the adaptive trigger otherwise allows. Env-tunable via
-    // PERRY_GC_SCAVENGE_NURSERY_MB for measurement.
-    if super::gc_scavenge_enabled() || gc_moving_loop_polls_enabled() {
-        base.min(gc_scavenge_nursery_cap_bytes())
-    } else {
-        base
+    // A minor is O(live) — it copies ~1k live objects out of millions
+    // allocated — so the 128 MB-and-doubling adaptive trigger, tuned for the
+    // OLD world where a minor was an expensive O(heap) sweep and the advice was
+    // "collect rarely", is exactly backwards. Capping the nursery small makes
+    // collections fire often and keeps the young arena's high-water mark near
+    // the cap instead of ballooning to 128–260 MB between the ~8 collections
+    // the adaptive trigger otherwise allows.
+    //
+    // APPLIED UNCONDITIONALLY (#7056). This used to be gated behind
+    // `PERRY_GC_SCAVENGE` / `PERRY_GC_MOVING_LOOP_POLLS`, both of which default
+    // OFF — so the cap was never active in a shipped build, and shipped Perry
+    // paid the full adaptive-trigger footprint. #7056 measured that the cap is
+    // the entire RSS win and recommended decoupling it from those gates; this
+    // is that decoupling.
+    //
+    // Re-derived on the statepoint-default collector, 8 gc_ratchet probes,
+    // as a full 2x2 rather than a single comparison — because the one-armed
+    // version of this measurement says something false:
+    //
+    //                    no scavenge        scavenge
+    //     no cap        799,604,736      799,604,736   (+0%)
+    //     cap 16 MB     537,165,824      245,006,336
+    //                        (-33%)           (-69%)
+    //
+    // Read the row and the column, not one cell. Scavenge ON ITS OWN buys
+    // exactly nothing — the top row is identical to the byte — which is why an
+    // isolation that only varies the cap *within* the scavenge-on world
+    // concludes "the cap is the whole effect". It is not. The two INTERACT: the
+    // cap makes collections fire often, and scavenge makes those collections
+    // evacuating (O(live) copying) so the nursery is actually reclaimed rather
+    // than merely swept.
+    //
+    // Both halves ship together, because either alone is a bad trade: the cap
+    // alone costs +23% wall for -33% RSS, and scavenge alone moves nothing.
+    // See `gc::gc_scavenge_enabled` for the full 2x2 and why they interact.
+    //
+    // Wall time was flat in aggregate across the same probes (2052 ms ->
+    // 2032 ms) and every probe stayed byte-identical to the pinned Node
+    // oracle.
+    //
+    // `PERRY_GC_SCAVENGE_NURSERY_MB` still tunes the value; it is a
+    // measurement dial, not an on/off mode, so it needs no kill-policy arm.
+    #[cfg(test)]
+    if GC_NURSERY_CAP_TEST_SUPPRESSED.with(Cell::get) {
+        return base;
     }
+    base.min(gc_scavenge_nursery_cap_bytes())
 }
 
 /// Nursery high-water cap used only when `PERRY_GC_SCAVENGE` is on (default
@@ -115,6 +148,19 @@ pub(super) fn gc_scavenge_nursery_cap_bytes() -> usize {
             .unwrap_or(16)
             .saturating_mul(1024 * 1024)
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only suppression of the nursery cap, so `force_legacy_gc_pacing`
+    /// can restore genuinely legacy pacing.
+    ///
+    /// The cap used to hang off `gc_moving_loop_polls_enabled()`, so pinning
+    /// that flag off was enough to un-cap the trigger. It is unconditional now
+    /// (#7056), which silently broke that escape hatch: 22 `gc::tests` that
+    /// legitimately assert raw-cell trigger arithmetic started failing against
+    /// the capped value. The guard has to suppress the cap directly.
+    static GC_NURSERY_CAP_TEST_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
 }
 
 thread_local! {
@@ -428,12 +474,14 @@ thread_local! {
 #[cfg(test)]
 pub(super) struct LegacyGcPacingGuard {
     previous: Option<bool>,
+    cap_previous: bool,
 }
 
 #[cfg(test)]
 impl Drop for LegacyGcPacingGuard {
     fn drop(&mut self) {
         GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| cell.set(self.previous));
+        GC_NURSERY_CAP_TEST_SUPPRESSED.with(|cell| cell.set(self.cap_previous));
     }
 }
 
@@ -446,7 +494,13 @@ pub(super) fn force_legacy_gc_pacing() -> LegacyGcPacingGuard {
         cell.set(Some(false));
         previous
     });
-    LegacyGcPacingGuard { previous }
+    // The nursery cap is unconditional now (#7056), so pinning the polls flag
+    // no longer un-caps the trigger on its own. Legacy pacing means BOTH.
+    let cap_previous = GC_NURSERY_CAP_TEST_SUPPRESSED.with(|cell| cell.replace(true));
+    LegacyGcPacingGuard {
+        previous,
+        cap_previous,
+    }
 }
 
 /// Pin moving GC pacing (moving-loop polls ON) for the duration of the returned
@@ -462,7 +516,11 @@ pub(super) fn force_moving_gc_pacing() -> LegacyGcPacingGuard {
         cell.set(Some(true));
         previous
     });
-    LegacyGcPacingGuard { previous }
+    let cap_previous = GC_NURSERY_CAP_TEST_SUPPRESSED.with(|cell| cell.replace(false));
+    LegacyGcPacingGuard {
+        previous,
+        cap_previous,
+    }
 }
 
 pub(super) fn gc_trace_enabled() -> bool {

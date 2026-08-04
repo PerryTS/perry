@@ -300,9 +300,31 @@ pub(super) fn gc_scavenge_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
+        // ON BY DEFAULT (#7056). `PERRY_GC_SCAVENGE=0`/`off`/`false` reverts.
+        //
+        // This pairs with the nursery cap in `policy::effective_next_arena_trigger`
+        // and the two are only worth anything TOGETHER. Measured as a 2x2 over
+        // the 8 gc_ratchet probes, RSS and wall:
+        //
+        //     arm                        RSS      wall
+        //     no cap, no scavenge     (base)    (base)
+        //     cap only                 -33%      +23%
+        //     CAP + SCAVENGE           -69%       +3%
+        //     scavenge only             +0%       +2%
+        //
+        // Scavenge alone moves nothing, and the cap alone trades a third of the
+        // footprint for a quarter of the wall time. Together they are -69% RSS
+        // for +3%, because the cap makes collections frequent and scavenge makes
+        // them evacuating (O(live) copying) rather than O(heap) sweeps — so the
+        // frequency is cheap instead of expensive.
+        //
+        // Enabling this also defers alloc-point collections to a precise
+        // safepoint rather than collecting behind a forced conservative scan.
+        // That is newly reasonable: native roots became the default in #7370, so
+        // a precise safepoint is what the shipped configuration now has.
+        !matches!(
             std::env::var("PERRY_GC_SCAVENGE").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }
