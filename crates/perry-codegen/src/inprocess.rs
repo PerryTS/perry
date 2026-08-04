@@ -95,6 +95,37 @@ pub fn compile_ll_to_object_inprocess(
     )
 }
 
+/// The CPU an empty `-mcpu` means for this triple.
+///
+/// LLVM's `create_target_machine` with an empty CPU selects `generic`, which on
+/// aarch64 is **ARMv8.0**. Clang does not do that: for an Apple arm64 triple it
+/// defaults to `apple-m1` (ARMv8.5). The gap is not academic — codegen decides
+/// whether to emit `llvm.aarch64.fjcvtzs` (FEAT_JSCVT, ARMv8.3+, the
+/// single-instruction ECMAScript `ToInt32`) from the TRIPLE ALONE, in
+/// `codegen::helpers::set_jscvt_for_target`, precisely because clang's default
+/// for that triple has the feature. Handing the same IR to a `generic`
+/// TargetMachine gives `LLVM ERROR: Cannot select: intrinsic
+/// %llvm.aarch64.fjcvtzs` and aborts the compile.
+///
+/// So this is the second half of a pair: `set_jscvt_for_target` decides what to
+/// EMIT from the triple, and this decides what the target can EXECUTE from the
+/// same triple. They must agree. If a triple is added to one, add it to the
+/// other — a mismatch is a hard abort at `-O`-time, not a silent miscompile,
+/// which is the one mercy here.
+fn default_cpu_for_triple(triple: &str) -> &'static str {
+    let is_aarch64 = triple.starts_with("arm64") || triple.starts_with("aarch64");
+    let is_apple = triple.contains("apple");
+    if is_aarch64 && is_apple {
+        // Matches clang's default for arm64-apple-*, and is the assumption
+        // `set_jscvt_for_target` already bakes in for macOS/darwin.
+        "apple-m1"
+    } else {
+        // Every other triple keeps LLVM's portable baseline, which is what the
+        // clang path gets too when no tuning flag is passed.
+        ""
+    }
+}
+
 /// Interpret the plan argv. Unknown dash-flags are an error on purpose:
 /// silently ignoring a flag clang would have honored is how the two
 /// backends drift apart without anyone noticing.
@@ -213,7 +244,10 @@ fn optimize_and_emit(
     } else if let Some(cpu) = explicit_cpu {
         (cpu.to_string(), String::new())
     } else {
-        (String::new(), String::new())
+        (
+            default_cpu_for_triple(effective_target).to_string(),
+            String::new(),
+        )
     };
     let opt_level = match opt {
         '0' => OptimizationLevel::None,
@@ -346,6 +380,38 @@ entry:
             "live GC pointer not relocated across the call:\n{printed}"
         );
         module.verify().expect("statepoint IR verifies");
+    }
+
+    /// #7327 CI regression: an empty CPU string makes LLVM pick `generic`,
+    /// which on aarch64 is ARMv8.0 and has no FEAT_JSCVT — so the
+    /// `llvm.aarch64.fjcvtzs` that codegen emits for any Apple arm64 triple
+    /// cannot be selected and the compile aborts. Clang defaults that triple to
+    /// `apple-m1`, which is the assumption `set_jscvt_for_target` already makes.
+    /// Reproduced with `PERRY_TARGET_CPU=generic`, which is the path CI took.
+    #[test]
+    fn apple_aarch64_defaults_to_a_cpu_with_feat_jscvt() {
+        for triple in [
+            "arm64-apple-macosx",
+            "arm64-apple-darwin",
+            "aarch64-apple-darwin",
+            "arm64-apple-ios",
+        ] {
+            assert_eq!(
+                default_cpu_for_triple(triple),
+                "apple-m1",
+                "{triple} must not fall back to LLVM's ARMv8.0 `generic`: codegen \
+                 emits llvm.aarch64.fjcvtzs for Apple arm64 triples"
+            );
+        }
+        // Everything else keeps LLVM's portable baseline, matching the clang
+        // path when no tuning flag is passed.
+        for triple in [
+            "x86_64-apple-darwin",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+        ] {
+            assert_eq!(default_cpu_for_triple(triple), "", "{triple}");
+        }
     }
 
     /// `-S` used to be swallowed by the catch-all that ignores `-c`, so the
