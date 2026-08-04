@@ -273,22 +273,45 @@ fn index_records(records: Vec<StackMapRecord>, roots: Vec<StackMapLocation>) -> 
 /// there and the fast chain previously fell back to the DWARF unwinder for
 /// every collection (~22% of samples on a Pi 5).
 ///
-/// Instruction encoding: ADD (immediate, 64-bit, shift 0) with Rn = 31 (sp)
-/// and Rd = 29 (fp) — `word & 0xFFC0_03FF == 0x9100_03FD`, immediate in bits
-/// [21:10]. Scans a bounded prologue window and fails closed (`None`) if the
-/// pattern is absent, in which case the caller uses the platform unwinder.
+/// Instruction encoding: ADD (immediate, 64-bit) with Rn = 31 (sp) and
+/// Rd = 29 (fp) — `word & 0xFF80_03FF == 0x9100_03FD`, immediate in bits
+/// [21:10] and its `lsl #12` flag in bit 22. Scans a bounded prologue window
+/// and fails closed (`None`) if the pattern is absent, in which case the
+/// caller uses the platform unwinder.
 #[cfg(target_arch = "aarch64")]
 fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
-    const ADD_FP_SP_MASK: u32 = 0xFFC0_03FF;
+    // The `sh` bit (22) selects `lsl #12` on the immediate and is therefore
+    // NOT part of the opcode match — masking it in (`0xFFC0_….`) restricts the
+    // decoder to frames smaller than 4 KiB. See `immediate_of` below.
+    const ADD_FP_SP_MASK: u32 = 0xFF80_03FF;
     const ADD_FP_SP_PATTERN: u32 = 0x9100_03FD;
     const PROLOGUE_WINDOW_INSNS: usize = 24;
     if function_address == 0 || function_address & 0x3 != 0 {
         return None;
     }
-    // SUB (immediate, 64-bit, shift 0) with Rn = Rd = 31 (sp):
-    // `word & 0xFFC0_03FF == 0xD100_03FF`, immediate in bits [21:10].
-    const SUB_SP_SP_MASK: u32 = 0xFFC0_03FF;
+    // SUB (immediate, 64-bit) with Rn = Rd = 31 (sp):
+    // `word & 0xFF80_03FF == 0xD100_03FF`, immediate in bits [21:10].
+    const SUB_SP_SP_MASK: u32 = 0xFF80_03FF;
     const SUB_SP_SP_PATTERN: u32 = 0xD100_03FF;
+
+    /// Decode an ADD/SUB (immediate) operand: `imm12` in bits [21:10], scaled
+    /// by 4096 when the `sh` bit (22) is set.
+    ///
+    /// #7394: LLVM switches to `lsl #12` the moment a frame needs 4 KiB or
+    /// more, and a generated function that spills several `[32 x double]`
+    /// concat buffers crosses that line routinely — 80 of them in one gap-test
+    /// binary. Ignoring `sh` did not merely lose the shifted term: the
+    /// shifted `sub` failed the opcode match, which *ended the accumulation
+    /// run*, so every later `sub sp` in the same prologue was dropped too.
+    fn immediate_of(word: u32) -> usize {
+        const SHIFT_12_BIT: u32 = 1 << 22;
+        let imm12 = ((word >> 10) & 0xFFF) as usize;
+        if word & SHIFT_12_BIT != 0 {
+            imm12 << 12
+        } else {
+            imm12
+        }
+    }
 
     let mut fp_offset = None;
     for i in 0..PROLOGUE_WINDOW_INSNS {
@@ -296,7 +319,7 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
         match fp_offset {
             None => {
                 if word & ADD_FP_SP_MASK == ADD_FP_SP_PATTERN {
-                    fp_offset = Some(((word >> 10) & 0xFFF) as usize);
+                    fp_offset = Some(immediate_of(word));
                 }
             }
             // #7328: `add x29, sp, #imm` is NOT always the last stack
@@ -315,8 +338,7 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
             // is not the default. Accumulate every trailing `sub sp, sp, #imm`.
             Some(offset) => {
                 if word & SUB_SP_SP_MASK == SUB_SP_SP_PATTERN {
-                    let imm = ((word >> 10) & 0xFFF) as usize;
-                    fp_offset = Some(offset + imm);
+                    fp_offset = Some(offset + immediate_of(word));
                     continue;
                 }
                 // The prologue's stack adjustments are contiguous; the first
@@ -1828,6 +1850,17 @@ mod fp_offset_trailing_sub_tests {
     const RET: u32 = 0xD65F_03C0;
     const NOP: u32 = 0xD503_201F;
 
+    // The three prologue words #7394 was measured on, read out of
+    // `perry_fn_test_gap_gc_call_argument_rooting_ts__run` at +0x20:
+    //
+    //     9101c3fd   add x29, sp, #0x70
+    //     d14007ff   sub sp, sp, #0x1, lsl #12
+    //     d12103ff   sub sp, sp, #0x840
+    const ADD_X29_SP_0X70: u32 = 0x9101_C3FD;
+    const SUB_SP_SP_1_LSL12: u32 = 0xD140_07FF;
+    const SUB_SP_SP_0X840: u32 = 0xD121_03FF;
+    const ADD_X29_SP_2_LSL12: u32 = 0x9140_0BFD; // add x29, sp, #0x2, lsl #12
+
     /// #7328: `add x29, sp, #imm` is not always the last stack adjustment.
     /// LLVM emits a further `sub sp, sp, #N` after establishing the frame
     /// pointer, and reading only the `add` left the fast walker N bytes high
@@ -1865,5 +1898,52 @@ mod fp_offset_trailing_sub_tests {
     #[test]
     fn a_leaf_without_fp_setup_still_fails_closed() {
         assert_eq!(decode(&[NOP, RET]), None);
+    }
+
+    /// #7394: a trailing `sub sp, sp, #imm, lsl #12` must contribute
+    /// `imm << 12`. #7328's decoder masked the `sh` bit into the opcode
+    /// comparison, so a shifted `sub` did not match at all.
+    #[test]
+    fn a_shifted_trailing_sub_is_included() {
+        assert_eq!(
+            decode(&[ADD_X29_SP_0X70, SUB_SP_SP_1_LSL12, NOP, RET]),
+            Some(0x70 + 0x1000),
+            "`sub sp, sp, #0x1, lsl #12` must contribute 4096, not 1"
+        );
+    }
+
+    /// The measured shape. The shifted `sub` is not the last one, so failing
+    /// to match it also **ended the accumulation run** and dropped the
+    /// `sub sp, sp, #0x840` behind it: the decoder reported 0x70 for a frame
+    /// whose body SP is 0x18B0 below the frame pointer, and the walker
+    /// enumerated — and the collector wrote through — addresses 6208 bytes
+    /// off. That is CLAUDE.md's fourth gate-failure mode: a live walker
+    /// visiting the wrong stack.
+    #[test]
+    fn a_shifted_sub_does_not_end_the_accumulation_run() {
+        assert_eq!(
+            decode(&[
+                ADD_X29_SP_0X70,
+                SUB_SP_SP_1_LSL12,
+                SUB_SP_SP_0X840,
+                NOP,
+                RET
+            ]),
+            Some(0x70 + 0x1000 + 0x840),
+            "every `sub sp` in the contiguous prologue run must be folded in"
+        );
+    }
+
+    /// The `sh` bit is decoded on the `add` that establishes the frame
+    /// pointer too — the same masking bug applied there, where it would have
+    /// made the decoder skip the fp setup entirely and report a later
+    /// instruction's offset (or `None`).
+    #[test]
+    fn a_shifted_fp_setup_is_decoded() {
+        assert_eq!(
+            decode(&[ADD_X29_SP_2_LSL12, NOP, RET]),
+            Some(0x2000),
+            "`add x29, sp, #0x2, lsl #12` establishes fp 8192 above sp"
+        );
     }
 }
