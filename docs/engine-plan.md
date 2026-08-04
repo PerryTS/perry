@@ -215,6 +215,65 @@ flipping it globally, and neither is correctness:
 So the honest state is: *aarch64-viable, globally blocked on two pieces of scope
 that are both already identified.*
 
+### ★ Update 2026-08-04 — both adoption gates are closed; statepoints run everywhere
+
+The section above closes with *"aarch64-viable, globally blocked on two pieces
+of scope."* Both pieces are now done, so that sentence should not be carried
+forward either.
+
+**1. x86-64 is no longer blocked (#7333 → #7349).** The `_Unwind_GetGR(ctx, 7)`
+segfault is real and unfixable as stated — libgcc tracks only the columns CFI
+restores, and RSP is derived from the CFA rather than tracked. The fix was to
+stop asking for it: #7349 derives the SP-relative base from `_Unwind_GetCFA`,
+which does work, with a per-architecture return-address adjustment (x86-64's
+`call` pushes a return address, aarch64's `bl` does not — 8 bytes vs 0).
+x86-64 Linux is a first-class arm of `gc-native-roots`, not a pinned refusal;
+`statepoints-refuse-x86` is deleted along with the job that hosted it.
+
+**2. Windows works (#7354 → #7355).** `RtlVirtualUnwind` steps a `CONTEXT`
+outward and yields `Rip`/`Rsp`/`Rbp` directly, so the CFA derivation above is
+not needed there. It is the one walker with no Itanium unwinder beneath it.
+
+**Platform status, measured rather than assumed:**
+
+| shape | map | walker | state |
+|---|---|---|---|
+| aarch64 + Mach-O (macOS/iOS/iPadOS/tvOS) | `__PERRY_GCMAP` | x29 chain, unwinder fallback | ✅ CI arm |
+| x86-64 + ELF | `.perry_gcmap` | unwinder + CFA-derived SP | ✅ CI arm |
+| x86-64 + PE | `.pgcmap` | `RtlVirtualUnwind` | ✅ CI arm |
+| aarch64 + ELF | `.perry_gcmap` | x29 chain | ✅ CI arm (#7360) |
+| watchOS / visionOS | ready | ready | compiler-side ✅; see below |
+| ARM64 Windows | refused | none | open |
+
+watchOS and visionOS are **not** blocked by Perry. `cargo check -p perry-runtime`
+succeeds on stable for both with any feature set excluding `dyn-eval`; with it,
+they fail three crates away in `psm`, whose Mach-O guard enumerates
+`darwin/macos/ios/tvos` and omits `watchos`/`visionos`, so both fall to the ELF
+branch and emit `.type`/`.size`. Verified by patching that one line: both then
+build with full default features. They regressed on 2026-07-18 when `dyn-eval`
+joined `default` (#6584) — nothing about the platforms changed. #7364 pins the
+whole Apple target set compiler-side.
+
+**One mechanism, not two.** `PERRY_STATEPOINTS` is deleted and the plain-map
+bridge with it; `PERRY_RS4GC` is the only spelling, and the last stale references
+went in #7362. The kill-policy line above — *"a mode that still exists is a
+decision that hasn't been made"* — no longer applies to this pair, because the
+losing mode stopped compiling.
+
+**What the gate now proves.** Until 2026-08-04 the Unix arms reported
+`frames_visited: 7, locations_visited: 0` — they would have passed with a walker
+that visited nothing, since other root sources covered the probes. Windows
+walked deep only by accident of heap sizing. `11_collect_at_depth` collects at
+maximum recursion depth with one live root per frame (macOS 228/221, x86-64
+Linux 231/221, both byte-matching the oracle), so `--require-locations` now
+gates every arm (#7359).
+
+**⇒ The remaining gate on adoption is `llvm-inprocess` becoming a default cargo
+feature**, since RS4GC is the only invoke-capable backend. That is #7301's
+scope and is in flight. Correctness and platform scope are no longer the
+blockers; sequencing step 2 below (root density) is, because adopting today
+would regress binary size on root-dense code.
+
 ### ★ Binary size, measured 2026-08-04 — it is a ROOT-DENSITY problem, not a metadata one
 
 The note above says *"closing that axis needs **fewer roots**, not a tighter
@@ -361,7 +420,8 @@ landed (#7314) and became *reachable* (#7339) and *selectable* (#7340). The spin
    signature is a stale `GC_TYPE_STRING` at minor #0.
 4. **Then the adoption fork.** Flipping statepoints on by default additionally
    needs `llvm-inprocess` to become a default cargo feature (#7301's scope, since
-   RS4GC is the only invoke-capable backend) and x86-64 to work (#7333).
+   RS4GC is the only invoke-capable backend). ~~and x86-64 to work (#7333)~~ —
+   x86-64 landed in #7349 and Windows in #7355; see the 2026-08-04 update above.
 5. **After the collector is trustworthy:** re-derive the RSS numbers (#7056).
 6. **Do not** re-measure GC pacing, or update the README's performance table,
    mid-cycle.
