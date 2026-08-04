@@ -982,7 +982,22 @@ pub unsafe extern "C" fn js_new_function_construct(
     // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
     // Learned inline sizing: a class that overflowed once pre-sizes every
     // later instance so all its fields land inline (object/mod.rs).
+    // #7341: `func_value` is a heap pointer (the closure) and every use of it
+    // below happens AFTER this allocation. `js_object_alloc` can drive an
+    // evacuating minor, which moves the closure; the decode at `let fp = ...`
+    // then names from-space and `is_closure_ptr` reads `CLOSURE_MAGIC` off it
+    // -- `ldr w8, [x23, #0xc]` at `js_new_function_construct + 5304`, the fault
+    // in `test_gap_learned_inline_sizing` under from-space quarantine.
+    //
+    // A stale read here is quiet rather than fatal without the quarantine: the
+    // magic check simply fails, the user-prototype link is skipped, and the
+    // instance silently gets the wrong [[Prototype]].
+    let func_scope = crate::gc::RuntimeHandleScope::new();
+    let func_handle = func_scope.root_nanbox_f64(func_value);
     let obj_ptr = js_object_alloc(cid, crate::object::learned_inline_field_count(cid));
+    // Republish IMMEDIATELY: `fp` below is derived from this value, and the
+    // derivation is what must see the post-collection address.
+    let func_value = func_handle.get_nanbox_f64();
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
     // A user-assigned `foo.prototype = <obj/array>` lives as the closure's
     // "prototype" dynamic prop; the instance's [[Prototype]] must be THAT
@@ -1666,7 +1681,17 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     let cid = new_target_class_id(nt).unwrap_or_else(|| synthetic_class_id_for_function(nt));
     // Learned inline sizing: a class that overflowed once pre-sizes every
     // later instance so all its fields land inline (object/mod.rs).
+    // #7341: same shape as the sibling below -- `nt` is a heap pointer and
+    // `constructor_prototype_bits(nt)` on the next line runs AFTER this
+    // allocation, which can evacuate it. Not independently reproduced (the
+    // measured fault is in the plain-`new` entry point), fixed because it is
+    // the identical defect one call away.
+    let nt_scope = crate::gc::RuntimeHandleScope::new();
+    let nt_handle = nt_scope.root_nanbox_f64(nt);
     let obj_ptr = js_object_alloc(cid, crate::object::learned_inline_field_count(cid));
+    // Republish IMMEDIATELY -- `constructor_prototype_bits(nt)` on the next
+    // line is the use that must see the post-collection address.
+    let nt = nt_handle.get_nanbox_f64();
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
     if let Some(proto_bits) = constructor_prototype_bits(nt) {
         super::super::prototype_chain::object_set_static_prototype(obj_ptr as usize, proto_bits);
