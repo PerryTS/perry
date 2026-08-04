@@ -88,7 +88,8 @@ pub(super) fn shadow_stack_enabled() -> bool {
 ///    and it is chosen inside `LlFunction` (`enable_shadow_frame_inner` and
 ///    `reserve_shadow_slot` both return the native path first).
 ///
-/// Conflating them made `PERRY_SHADOW_STACK=0 + PERRY_STATEPOINTS=1` produce a
+/// Conflating them made `PERRY_SHADOW_STACK=0` plus native-root lowering (then
+/// spelled `PERRY_STATEPOINTS=1`, since deleted; `PERRY_RS4GC=1` today) produce a
 /// binary with **no precise frame roots at all** — the analysis was switched
 /// off, so the statepoint lowering had nothing to lower. No `__perry_gcmap`
 /// section, same size as a plain shadow-off build, correct output. Nothing

@@ -78,9 +78,9 @@ GATES = [
     (
         ".github/workflows/gc-native-roots.yml",
         "gc-native-roots-complete",
-        "the native-frame root arms (PERRY_STATEPOINTS / PERRY_RS4GC / "
+        "the native-frame root arms (PERRY_RS4GC / "
         "PERRY_GC_SAFEPOINT_ONLY / PERRY_STACKMAP_WALKER) — the fan-in that "
-        "makes one context speak for all four, so adding an arm later never "
+        "makes one context speak for all three, so adding an arm later never "
         "needs a branch-protection edit",
     ),
 ]

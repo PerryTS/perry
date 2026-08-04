@@ -511,19 +511,23 @@ fn build_clang_compile_plan(
 /// Matched on the ` within ` instruction syntax rather than the bare opcode
 /// names so a user string literal containing "catchpad" cannot trip it.
 pub(crate) fn rs4gc_funclet_refusal(ll_text: &str) -> Option<String> {
-    ["catchswitch within ", "catchpad within ", "cleanuppad within "]
-        .iter()
-        .any(|needle| ll_text.contains(needle))
-        .then(|| {
-            "PERRY_RS4GC: this module contains a `try`/`catch` that lowered to \
+    [
+        "catchswitch within ",
+        "catchpad within ",
+        "cleanuppad within ",
+    ]
+    .iter()
+    .any(|needle| ll_text.contains(needle))
+    .then(|| {
+        "PERRY_RS4GC: this module contains a `try`/`catch` that lowered to \
              WinEH funclet pads (catchswitch/catchpad — the windows-msvc EH \
              shape), and LLVM's rewrite-statepoints-for-gc pass does not \
              support funclet EH: it crashes with an access violation rather \
              than reporting anything. Refusing before the pass runs. \
              Compile without PERRY_RS4GC, or keep `try` out of RS4GC-compiled \
              modules on Windows. Tracked in #7354."
-                .to_string()
-        })
+            .to_string()
+    })
 }
 
 fn maybe_rs4gc_preprocess(ll_text: &str) -> Result<Option<String>> {
@@ -584,10 +588,7 @@ fn maybe_rs4gc_preprocess(ll_text: &str) -> Result<Option<String>> {
         // left only a symbol-less stack dump. Write the exact input next to
         // the other failure artifacts and name it, so the crash is
         // reproducible with one command.
-        let ir_path = env::temp_dir().join(format!(
-            "perry_rs4gc_failed_{}.ll",
-            std::process::id()
-        ));
+        let ir_path = env::temp_dir().join(format!("perry_rs4gc_failed_{}.ll", std::process::id()));
         let ir_note = match fs::write(&ir_path, ll_text) {
             Ok(()) => format!("input IR left at: {}", ir_path.display()),
             Err(error) => format!("(could not write input IR: {error})"),

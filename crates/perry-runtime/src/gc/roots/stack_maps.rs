@@ -1,17 +1,25 @@
-//! Research precise-root backend for LLVM stack maps.
+//! Precise GC roots read from native frames, via LLVM statepoints.
 //!
-//! The plain-map prototype places `llvm.experimental.stackmap` immediately
-//! before mapped calls and records the address of each native root alloca.
-//! The statepoint prototype instead records LLVM-owned spill slots for
-//! `gc.relocate` values. Both are writable frame-register-relative locations
-//! in the emitted stack-map section.
+//! Under `PERRY_RS4GC=1` the compiler runs `RewriteStatepointsForGC`, which
+//! records each live root as an LLVM-owned spill slot for a `gc.relocate`
+//! value: a writable, frame-register-relative location in the emitted
+//! stack-map section. This module finds that section in the running image,
+//! walks the native frames, and hands each live slot to the collector as a
+//! `MutableRootSlot` — mutable because evacuation rewrites through it.
 //!
-//! This first implementation deliberately targets macOS, where the experiment
-//! is being measured. It discovers the concatenated `__PERRY_GCMAP` section
-//! in the main Mach-O image and uses the platform unwinder to recover the
-//! frame-register value for each active generated frame. Unsupported targets
-//! return no roots; neither native-stack experiment may be used for correctness
-//! there.
+//! A second lowering used to exist, placing `llvm.experimental.stackmap`
+//! before mapped calls and recording alloca addresses directly. It was
+//! unsound and is deleted; only the statepoint path remains, so there is no
+//! backend selection here and no fallback between them.
+//!
+//! Platform support is per-shape, not one target: Apple (macOS/iOS/iPadOS/
+//! tvOS/watchOS) reads a concatenated `__PERRY_GCMAP` Mach-O section, Linux
+//! reads `.perry_gcmap` from ELF, and Windows reads `.pgcmap` from the PE
+//! image. Frame walking is per-platform too — an x29 chain walk where the
+//! map proves every frame is chain-walkable, the Itanium unwinder elsewhere
+//! on Unix, and `RtlVirtualUnwind` on Windows. Targets outside that set
+//! return no roots, and the compiler refuses to emit a map for them rather
+//! than producing a binary whose collector would silently free live objects.
 
 use super::{MutableRootSlot, MutableRootSlotKind};
 use crate::gc::telemetry::RootSourcesTraceStats;

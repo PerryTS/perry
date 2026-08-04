@@ -759,10 +759,11 @@ fn compute_object_cache_key_with_env(
     //     calls at heap-store sites (codegen.rs / expr.rs).
     //   - PERRY_SHADOW_STACK=0/off/false suppresses generated frame/slot
     //     roots at function entry and pointer local stores.
-    //   - (historical) PERRY_STACK_MAPS lowered precise roots to plain LLVM stackmap records; deleted, statepoint fallback keeps the lowering internal. PERRY_STATEPOINTS=1 lowers roots to native-frame
-    //     stack maps instead of the runtime shadow stack.
-    //   - PERRY_STATEPOINTS=1 replaces supported calls with LLVM statepoint
-    //     relocation sequences and uses native stack maps for the remainder.
+    //   - (historical) PERRY_STACK_MAPS lowered precise roots to plain LLVM
+    //     stackmap records, and PERRY_STATEPOINTS selected native-frame roots.
+    //     Both are deleted; PERRY_RS4GC is the only spelling now, and it is
+    //     listed above. Left here because a cache key that silently stops
+    //     covering a knob is indistinguishable from one that never did.
     //   - PERRY_DISABLE_BUFFER_FAST_PATH=1 overrides CompileOptions and
     //     changes Buffer/Uint8Array lowering.
     //   - PERRY_VERIFY_NATIVE_REGIONS=1 overrides CompileOptions and must

@@ -27,14 +27,10 @@ pub struct FunctionRecord {
     skipped_non_safepoints: u64,
     statepoints: u64,
     relocations: u64,
-    plain_stack_maps: u64,
-    stack_map_operands: u64,
-    statepoint_fallbacks: u64,
     max_live_roots: usize,
     live_roots_histogram: BTreeMap<usize, u64>,
     statepoints_by_callee: BTreeMap<String, u64>,
     skipped_by_callee: BTreeMap<String, u64>,
-    fallbacks_by_callee: BTreeMap<String, u64>,
 }
 
 impl FunctionRecord {
@@ -137,14 +133,10 @@ struct Totals {
     skipped_non_safepoints: u64,
     statepoints: u64,
     relocations: u64,
-    plain_stack_maps: u64,
-    stack_map_operands: u64,
-    statepoint_fallbacks: u64,
     max_live_roots: usize,
     live_roots_histogram: BTreeMap<usize, u64>,
     statepoints_by_callee: BTreeMap<String, u64>,
     skipped_by_callee: BTreeMap<String, u64>,
-    fallbacks_by_callee: BTreeMap<String, u64>,
 }
 
 fn totals(records: &[FunctionRecord]) -> Totals {
@@ -161,9 +153,6 @@ fn totals(records: &[FunctionRecord]) -> Totals {
         out.skipped_non_safepoints += record.skipped_non_safepoints;
         out.statepoints += record.statepoints;
         out.relocations += record.relocations;
-        out.plain_stack_maps += record.plain_stack_maps;
-        out.stack_map_operands += record.stack_map_operands;
-        out.statepoint_fallbacks += record.statepoint_fallbacks;
         out.max_live_roots = out.max_live_roots.max(record.max_live_roots);
         for (width, count) in &record.live_roots_histogram {
             *out.live_roots_histogram.entry(*width).or_default() += count;
@@ -173,9 +162,6 @@ fn totals(records: &[FunctionRecord]) -> Totals {
         }
         for (callee, count) in &record.skipped_by_callee {
             *out.skipped_by_callee.entry(callee.clone()).or_default() += count;
-        }
-        for (callee, count) in &record.fallbacks_by_callee {
-            *out.fallbacks_by_callee.entry(callee.clone()).or_default() += count;
         }
     }
     out
@@ -204,13 +190,13 @@ pub fn render_text(records: &[FunctionRecord]) -> String {
     );
     if records.is_empty() {
         out.push_str(
-            "No native-stack lowering records were emitted. Enable PERRY_STATEPOINTS=1\n\
-             or PERRY_RS4GC=1 and ensure codegen is not served from cache.\n",
+            "No native-stack lowering records were emitted. Set PERRY_RS4GC=1 and\n\
+             ensure codegen is not served from cache (PERRY_NO_AUTO_OPTIMIZE=1, or\n\
+             clear the object cache) — a cached .o emits no records.\n",
         );
         return out;
     }
 
-    let emitted = totals.statepoints + totals.plain_stack_maps;
     let _ = writeln!(
         out,
         "{} function(s), {} bound native root slots ({} logical slots reserved)",
@@ -223,18 +209,13 @@ pub fn render_text(records: &[FunctionRecord]) -> String {
     );
     let _ = writeln!(
         out,
-        "{} safepoints emitted: {} statepoints, {} plain stack maps",
-        emitted, totals.statepoints, totals.plain_stack_maps
+        "{} statepoints emitted; {} non-collecting calls skipped",
+        totals.statepoints, totals.skipped_non_safepoints
     );
     let _ = writeln!(
         out,
-        "{} non-collecting calls skipped; {} statepoint parser fallback(s)",
-        totals.skipped_non_safepoints, totals.statepoint_fallbacks
-    );
-    let _ = writeln!(
-        out,
-        "{} relocations, {} plain-map operands; maximum {} live roots at one safepoint\n",
-        totals.relocations, totals.stack_map_operands, totals.max_live_roots
+        "{} relocations; maximum {} live roots at one safepoint\n",
+        totals.relocations, totals.max_live_roots
     );
 
     if !totals.live_roots_histogram.is_empty() {
@@ -253,11 +234,6 @@ pub fn render_text(records: &[FunctionRecord]) -> String {
         &mut out,
         "Calls omitted by the GC-effect audit",
         &totals.skipped_by_callee,
-    );
-    render_ranked_map(
-        &mut out,
-        "Plain-map fallbacks in statepoint mode",
-        &totals.fallbacks_by_callee,
     );
     out
 }
@@ -294,16 +270,58 @@ mod tests {
         let text = render_text(std::slice::from_ref(&record));
         assert!(text.contains("2 bound native root slots"));
         assert!(text.contains("1 non-collecting calls skipped"));
-        // The plain-map fallback is gone, so this can only ever report zero —
-        // which is the point: it is the report's evidence that no root was
-        // recorded in an unrecoverable location.
-        assert!(text.contains("0 statepoint parser fallback(s)"));
         assert!(text.contains("@js_gc_temp_root_get"));
 
         let json = render_json(&[record]);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["schema_version"], 1);
         assert_eq!(parsed["totals"]["relocations"], 2);
-        assert_eq!(parsed["totals"]["statepoint_fallbacks"], 0);
+    }
+
+    /// Every counter this report prints must have a writer.
+    ///
+    /// It did not. `plain_stack_maps`, `stack_map_operands`,
+    /// `statepoint_fallbacks` and `fallbacks_by_callee` were declared, summed
+    /// and rendered, and **no mutator ever wrote them** — `git log -S
+    /// note_fallback` finds nothing, so they were never populated, not even
+    /// before the plain-map bridge was deleted. The report printed
+    /// "0 statepoint parser fallback(s)" as reassurance, a test asserted that
+    /// zero, and the comment above that assert said the structural zero "is
+    /// the point". A counter that cannot be non-zero is not evidence; it is
+    /// CLAUDE.md's fourth failure mode with the subject removed entirely.
+    ///
+    /// The real fail-closed guarantee is in `gc_map.rs`, which returns `Err`
+    /// on an unparseable or uncompactable map, so a fallback fails the BUILD
+    /// rather than incrementing a number nobody reads.
+    ///
+    /// This test pins the invariant that let the dead fields hide: a totals
+    /// field that is always zero for a record with real activity is either
+    /// unwritten or misrendered.
+    #[test]
+    fn every_rendered_counter_has_a_writer() {
+        let mut record = FunctionRecord::new("f", "rs4gc", 2, 2);
+        // Both call shapes: `calls_without_live_roots` only moves for a call
+        // with an empty live set, so a fixture of all-live calls would accuse
+        // a perfectly live field of having no writer.
+        record.note_call(1);
+        record.note_call(0);
+        record.note_statepoint("@js_alloc", 1);
+        record.note_skipped("@js_gc_temp_root_get");
+
+        let json = render_json(&[record]);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let totals = parsed["totals"].as_object().expect("totals is an object");
+
+        for (name, value) in totals {
+            // Maps and histograms carry their own emptiness; scalars are the
+            // ones that silently read as "checked, and fine".
+            let Some(n) = value.as_u64() else { continue };
+            assert_ne!(
+                n, 0,
+                "totals.{name} is zero for a record with a call, a statepoint \
+                 and a skip — it has no writer, or nothing reaches it. Give it \
+                 one or delete the field; do not print a number that cannot move."
+            );
+        }
     }
 }

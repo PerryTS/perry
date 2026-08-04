@@ -897,10 +897,12 @@ pub fn compact_and_assemble(
     let arch_supported = target.starts_with("aarch64")
         || target.starts_with("arm64")
         || target.starts_with("x86_64");
-    // watchOS is ILP32. The map's function-address field follows the target's
-    // pointer width rather than assuming 8 bytes, so `arm64_32` is a supported
-    // width here, not an excluded target.
-    let ptr64 = !target.starts_with("arm64_32");
+    // No pointer-width refusal here on purpose. watchOS `arm64_32` is ILP32,
+    // and the emitter handles that by following the target's width for the
+    // function-address field (see `ptr64` in `compact_stack_map_asm`) rather
+    // than assuming 8 bytes — so a narrow pointer is a supported width, not an
+    // excluded target. This spot used to recompute that predicate and never
+    // read it, which read like a guard that had been defeated.
     if !arch_supported {
         return Err(anyhow!(
             "perry: native GC roots (PERRY_RS4GC) are not supported for target \
