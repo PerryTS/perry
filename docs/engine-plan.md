@@ -28,8 +28,8 @@ pointer has **three different homes**, each needing a different mechanism.
 |---|---|---|---|---|
 | **0** | *enabler* | — | **in-process LLVM** (#7241) | ✅ **landed** (#7301) |
 | 1 | `perry-codegen` lowering code | #7192, #7206, #7211 | `Raw`/`Rooted` borrow discipline | proposed |
-| 2 | emitted code's liveness | #7280, #7271, #7252, #7243 | statepoints (#7108, #7174) | ✅ **landed opt-in** (#7314), **usable** (#7339, #7340) |
-| 3 | `perry-runtime` hand-written Rust | #7249, #7239, #7226, #7231 | `RuntimeHandleScope`, non-optional | mechanism exists (675 uses), **still optional**; 54 open catches (#7341) |
+| 2 | emitted code's liveness | #7280, #7271, #7252, #7243 | statepoints (#7108, #7174) | ✅ **THE DEFAULT** (#7370); landed #7314, made usable by #7339/#7340 |
+| 3 | `perry-runtime` hand-written Rust | #7249, #7239, #7226, #7231 | `RuntimeHandleScope`, non-optional | mechanism exists (675 uses), **still optional**; **41** open catches (#7341) |
 
 **Order is 0 → 2. Layers 1 and 3 are independent and can proceed now.**
 #7108 measured statepoints viable but blocked: *"the text-IR-plus-stock-clang
@@ -49,7 +49,7 @@ while #7255's defect made "minors" fall back to a conservative full scan. Minor-
 cost should scale with *survivors*, not collection count, so 20× is a symptom.
 Re-derive after Part 1 lands. See #7056.
 
-## ★ Status 2026-08-03 — the architecture is proven, not yet adopted
+## ★ Status 2026-08-03 — the architecture is proven (ADOPTED 2026-08-04, #7370)
 
 **Layers 0 and 2 have landed.** #7301 put the LLVM pipeline in-process; #7305
 replaced setjmp/longjmp with `invoke`/`landingpad`, which is what makes try-
@@ -285,7 +285,24 @@ the shadow-stack default:
 | workload | total delta | `__text` | `__perry_gcmap` |
 |---|---:|---:|---:|
 | 2000 **root-free** functions (scalar only) | **+0 B** | +12 B | not emitted |
-| 2000 **root-dense** functions (3 heap values live across an alloc) | **+4,330,592 B (+18.95%)** | +4,203,608 B | 902,124 B |
+| 2000 **root-dense** functions (3 heap values live across an alloc) | +4,330,592 B (+18.95%) | +4,203,608 B | 902,124 B |
+
+**The operative number is +1.86%, not +18.95%.** Measured on a real dependency —
+`zod` from source, 81 native modules, a 29 MB binary — RS4GC in-process vs the
+shadow-stack default:
+
+| section | shadow | RS4GC | delta |
+|---|---:|---:|---:|
+| total | 28,955,656 | 29,495,048 | **+539,392 (+1.86%)** |
+| `__text` | 20,989,544 | 21,508,556 | +519,012 |
+| `__perry_gcmap` | 0 | 362,487 | new section |
+
+**Do not quote the +18.95%.** It is a worst case constructed to isolate the
+mechanism — three heap values live across an allocation in *every* function —
+and it overstates real exposure by an order of magnitude. An earlier revision of
+this section led with it and concluded root density was a prerequisite for
+adoption; the dependency-scale measurement says otherwise, and adoption shipped
+in #7370 without it.
 
 Two things follow, and both matter for planning:
 
@@ -406,22 +423,34 @@ landed (#7314) and became *reachable* (#7339) and *selectable* (#7340). The spin
 `0 → 2` is done, so the ordering that remains is:
 
 1. ~~**Next:** in-process LLVM (#7241) → statepoints (#7108/#7174).~~ **Done.**
-2. **Reduce root density — now a PREREQUISITE, not a nice-to-have.** Statepoints
-   cost **+18.95% binary size on root-dense code and +0% on root-free code**
-   (measured, see Part 1), and 97% of that is `__text`. Adopting them as the
-   default today therefore *regresses* the owner's stated goal of minimal binary
-   size. Fewer roots fixes that, and it is the same lever #7296 already proved
-   worth 9.9× on `matmul`, so speed and size pull together here rather than
-   trading off. The plan predicted this lever but flagged it "expected, not
-   measured. Layer 2 must prove it first" — layer 2 has now landed, so it can be
-   measured.
+2. **Reduce root density — worth doing, NOT a prerequisite.** Measured at
+   dependency scale, statepoints cost **+1.86% binary size** against **−1–2%
+   runtime**: a trade worth taking, and adoption shipped in #7370 without this.
+   Statepoints carry **zero fixed cost** — a function with nothing live across a
+   safepoint pays nothing at all — so a program's exposure is exactly its root
+   density, and 97% of the growth is `__text` (the per-root relocation
+   sequence), not metadata. #7314's compact map closed the metadata objection
+   completely; metadata was never the dominant term. Fewer roots is still the
+   same lever #7296 proved worth 9.9× on `matmul`, so size and speed pull
+   together rather than trading off.
 3. **Layers 1 and 3, independent of the above.** Layer 3's instrument is now
    aimed (#7342 arm 4) and has a 54-item worklist (#7341) whose dominant
    signature is a stale `GC_TYPE_STRING` at minor #0.
-4. **Then the adoption fork.** Flipping statepoints on by default additionally
-   needs `llvm-inprocess` to become a default cargo feature (#7301's scope, since
-   RS4GC is the only invoke-capable backend). ~~and x86-64 to work (#7333)~~ —
-   x86-64 landed in #7349 and Windows in #7355; see the 2026-08-04 update above.
+4. ~~**Then the adoption fork.**~~ **CLOSED — statepoints are the default as of
+   #7370.** Every gate it listed is shut: `llvm-inprocess` became a default
+   cargo feature (#7353), x86-64 landed (#7349), Windows landed (#7355), the
+   bridge was deleted leaving one backend (#7348), and the full 479-test gap
+   suite with no env set matches the shadow baseline exactly — 447 pass / 19
+   diff / 13 node_fail, zero regressions, zero compile failures, all 128
+   try-carrying tests included.
+
+   The default is **target-aware**, which is the part worth carrying forward:
+   native roots where the runtime can walk the frames, shadow stack where it
+   cannot. `gc_map` refuses to emit a map for a target whose bases the runtime
+   cannot resolve, so a blanket flip would hard-fail every watchOS `arm64_32`
+   and ARM64-Windows compile. Falling back is not "no roots" — it is the other
+   lowering of the same analysis, which #7340 split apart precisely so this
+   choice could be per-target.
 5. **After the collector is trustworthy:** re-derive the RSS numbers (#7056).
 6. **Do not** re-measure GC pacing, or update the README's performance table,
    mid-cycle.
