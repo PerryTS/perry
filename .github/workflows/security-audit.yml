@@ -12,8 +12,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: security-audit-${{ github.ref }}
-  cancel-in-progress: true
+  # One group per main COMMIT, cancelling PR runs only. Two separate problems
+  # were live here, and this is a REQUIRED status check: it had NINE cancelled
+  # `main` runs and zero executions.
+  #
+  # `cancel-in-progress: true` cancels main runs outright, and even `false`
+  # would not have been enough — GitHub allows at most one PENDING run per
+  # group and cancels the previously pending one when a new run enters,
+  # regardless of that setting (#7205). Keying push runs on the SHA gives every
+  # merged commit a group of its own.
+  group: security-audit-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   security-audit:

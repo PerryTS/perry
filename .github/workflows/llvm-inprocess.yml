@@ -20,9 +20,13 @@ on:
     branches: [main]
 
 concurrency:
-  group: llvm-inprocess-${{ github.ref }}
-  # Gate-trap 3: cancel superseded PR runs, but NEVER cancel main runs — a
-  # busy merge day would otherwise starve the gate to zero executions.
+  group: llvm-inprocess-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  # One group per main COMMIT, cancelling PR runs only. `cancel-in-progress:
+  # false` alone does not protect a `main` run: GitHub allows at most one
+  # PENDING run per group and cancels the previously pending one when a new run
+  # enters, regardless of that setting. That is #7205 — measured here as EIGHT
+  # consecutive `main` runs cancelled, zero executions. Keying push runs on the
+  # SHA gives every merged commit a group of its own.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
