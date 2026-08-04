@@ -140,10 +140,10 @@ audit-cli = []
 updater-cli = ["dep:ed25519-dalek", "dep:rand"]
 native-cli = []
 
-# exp/llvm-inprocess: compile .ll -> .o through the LLVM C API in-process
-# instead of a `clang -c` subprocess. Off by default (no LLVM link dependency);
-# even when built in, it only runs under PERRY_LLVM_INPROCESS=1. Requires
-# LLVM 22 at build time (LLVM_SYS_221_PREFIX or llvm-config on PATH).
+# Compile .ll -> .o through the LLVM C API in-process instead of a `clang -c`
+# subprocess. ON BY DEFAULT via perry-codegen's own default feature — Perry
+# links LLVM 22 statically and ships self-contained. See that crate's manifest
+# for why this is load-bearing rather than an optimization.
 llvm-inprocess = ["perry-codegen/llvm-inprocess"]
 
 # Codegen backends for non-native targets. Each enables one backend crate;

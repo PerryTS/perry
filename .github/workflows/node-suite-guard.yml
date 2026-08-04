@@ -45,6 +45,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Start sccache
         uses: mozilla-actions/sccache-action@v0.0.10

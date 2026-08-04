@@ -197,6 +197,7 @@ jobs:
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         if: steps.relevance.outputs.run == 'true'

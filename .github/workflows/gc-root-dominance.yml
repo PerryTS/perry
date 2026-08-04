@@ -156,6 +156,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       # ★ The dependency-scale corpus needs the dependency.
       #

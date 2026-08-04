@@ -315,6 +315,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: ./.github/actions/setup-llvm22
 
       # Cache cargo registry + target/ per (matrix.target, Cargo.lock).
       # First run on a target is still a cold build, but every subsequent
@@ -1030,6 +1031,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install Rust nightly + rust-src (Tier-3 only)
         if: matrix.tier3

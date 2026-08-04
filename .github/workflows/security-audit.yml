@@ -23,6 +23,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: security-audit
@@ -155,6 +156,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: security-audit

@@ -598,14 +598,37 @@ pub(crate) fn native_plan_args(
     (plan.effective_target, plan.clang_args)
 }
 
-/// exp/llvm-inprocess: truthy `PERRY_LLVM_INPROCESS` routes `.ll -> .o`
-/// through the LLVM C API inside this process (no clang subprocess, no `.ll`
-/// on disk). The flag participates in both the build cache and the object
-/// cache keys, so the two backends can never share a cached object.
+/// Route `.ll -> .o` through the LLVM C API inside this process (no clang
+/// subprocess, no `.ll` on disk).
+///
+/// **ON BY DEFAULT.** Perry links LLVM 22 statically and ships self-contained,
+/// so there is no "find a compatible clang" step to get wrong. It is also
+/// load-bearing rather than a preference: the explicit statepoint bridge is
+/// gone (#7348), leaving RS4GC as the only native-root backend, and RS4GC
+/// cannot round-trip its IR through an external `opt` + a different clang
+/// (#7339).
+///
+/// `PERRY_LLVM_INPROCESS=0`/`off`/`false` reverts to the clang subprocess for
+/// bisection. `=native` additionally builds function bodies through the C API
+/// instead of rendering per-function text; that is byte-identical on the
+/// 81-module zod corpus but has narrower CI coverage, so it stays opt-in until
+/// that widens.
+///
+/// The value participates in both the build cache and the object cache keys,
+/// so the backends can never share a cached object.
 fn inprocess_requested() -> bool {
     match env::var("PERRY_LLVM_INPROCESS").as_deref() {
-        Ok("") | Ok("0") | Ok("off") | Ok("false") | Err(_) => false,
+        Ok("0") | Ok("off") | Ok("false") => false,
+        // Explicitly asked for: honour it even without the feature, so the
+        // stub below can say "rebuild with the feature" instead of silently
+        // serving the text path to an A/B arm that asked for this backend.
         Ok(_) => true,
+        // Unset means ON *iff* the backend is actually compiled in. It is a
+        // default feature, so that is the normal case — but a
+        // `--no-default-features` build must keep working, and defaulting to
+        // `true` there would route every compile into the not-built-in stub
+        // and fail the build outright.
+        Err(_) => cfg!(feature = "llvm-inprocess"),
     }
 }
 
@@ -695,7 +718,25 @@ fn compile_ll_inprocess_in(
             }
             Ok(obj)
         }
-        Ok(bytes) => Ok(bytes),
+        Ok(bytes) => {
+            // `PERRY_LLVM_KEEP_IR` promises the whole scratch dir, `.o`
+            // included. The clang path gets that for free because the object
+            // IS a file; in-process returns bytes and would silently drop it —
+            // degrading a debugging aid at exactly the moment someone is
+            // debugging. Now that this backend is the default, write it.
+            if policy.keep {
+                let _ = fs::create_dir_all(&paths.scratch_dir);
+                if let Err(e) = fs::write(&plan.obj_path, &bytes) {
+                    eprintln!(
+                        "[perry-codegen] could not keep {}: {e}",
+                        plan.obj_path.display()
+                    );
+                } else {
+                    eprintln!("[perry-codegen] kept object: {}", plan.obj_path.display());
+                }
+            }
+            Ok(bytes)
+        }
         Err(e) => {
             // Same contract as a failed clang compile: the IR that produced
             // the failure is left on disk and named in the error.

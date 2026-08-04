@@ -9,12 +9,23 @@ description = "LLVM code generation backend for Perry"
 workspace = true
 
 [features]
-# exp/llvm-inprocess: compile `.ll -> .o` through the LLVM C API inside this
-# process instead of shelling out to a user-supplied `clang -c`. Off by
-# default — the default build has no LLVM link dependency and the text path
-# is byte-for-byte untouched. Building with this feature requires LLVM 22
-# (`brew install llvm`; set LLVM_SYS_221_PREFIX if llvm-config is not on
-# PATH). The backend still only runs when PERRY_LLVM_INPROCESS=1 at runtime.
+# Compile `.ll -> .o` through the LLVM C API inside this process instead of
+# shelling out to a user-supplied `clang -c`.
+#
+# ON BY DEFAULT. Perry links LLVM 22 statically and ships self-contained: we
+# own the assumption instead of pushing it onto the user, and there is no
+# "install a matching clang" step to get wrong. Building Perry therefore needs
+# LLVM 22 present (`brew install llvm`, apt.llvm.org, or the official MSVC
+# tarball; `LLVM_SYS_221_PREFIX` if llvm-config is not on PATH) — CI provisions
+# it via `.github/actions/setup-llvm22`.
+#
+# It is also load-bearing rather than an optimization: the explicit statepoint
+# bridge is gone (#7348), so RS4GC is the only native-root backend, and RS4GC
+# needs this pipeline — an external `opt` feeding a different clang cannot
+# parse the IR it emits (#7339).
+#
+# `--no-default-features` still builds the text path for bisection.
+default = ["llvm-inprocess"]
 llvm-inprocess = ["dep:inkwell", "dep:llvm-sys"]
 
 [dependencies]

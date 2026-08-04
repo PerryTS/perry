@@ -115,6 +115,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -296,6 +297,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -365,6 +367,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -432,6 +435,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -542,6 +546,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -800,6 +805,7 @@ jobs:
       - name: Install Rust toolchain
         if: steps.scope.outputs.suites != ''
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         if: steps.scope.outputs.suites != ''
@@ -894,6 +900,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -1031,6 +1038,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -1137,6 +1145,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -1313,6 +1322,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -1469,6 +1479,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -1560,6 +1571,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -1650,6 +1662,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -1756,6 +1769,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -2133,6 +2147,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -2194,6 +2209,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -2260,6 +2276,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -2313,6 +2330,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -2462,6 +2480,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Set up MSVC environment (Windows)
         # Populates LIB / INCLUDE / PATH so link.exe can find user32.lib
@@ -2612,6 +2631,7 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@v2
         with:

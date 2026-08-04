@@ -124,6 +124,7 @@ jobs:
         with:
           node-version-file: .node-version
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: gc-native-roots

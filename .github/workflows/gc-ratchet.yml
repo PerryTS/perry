@@ -115,6 +115,7 @@ jobs:
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
         uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
 
       - name: Cache cargo
         if: steps.relevance.outputs.run == 'true'

@@ -1,0 +1,72 @@
+name: Setup LLVM 22
+description: >
+  Provision the LLVM 22 development libraries that `llvm-inprocess` links
+  against, and export LLVM_SYS_221_PREFIX. Every job that compiles Rust needs
+  this now that the feature is on by default.
+
+# One definition, not 44 inline recipes. The three platforms need three
+# different sources and only one of them is obvious:
+#
+#   macOS   brew's llvm formula.
+#   Linux   apt.llvm.org. The distro's `llvm-dev` is whatever the release
+#           froze on (Ubuntu 24.04 ships 18), so the LLVM project's own
+#           repository is the only way to get a pinned 22.
+#   Windows the official `clang+llvm-*-pc-windows-msvc` tarball. NOT
+#           chocolatey: its `llvm` package is the clang *toolchain* — no
+#           llvm-config.exe and none of the static libraries llvm-sys links
+#           against — and it has no 22.x pin at all.
+#
+# Every arm asserts the major version. llvm-sys 221 requires LLVM 22
+# specifically, and a runner image moving its formula on must fail loudly
+# here rather than build something subtly different several steps later.
+inputs:
+  version:
+    description: LLVM major.minor.patch used by the Windows tarball
+    required: false
+    default: "22.1.8"
+
+runs:
+  using: composite
+  steps:
+    - name: LLVM 22 (macOS, brew)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        brew install llvm@22 2>/dev/null || brew install llvm
+        PREFIX="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
+        "$PREFIX/bin/llvm-config" --version | grep -q '^22\.' \
+          || { echo "::error::brew LLVM is not 22.x ($("$PREFIX/bin/llvm-config" --version))"; exit 1; }
+        echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+
+    - name: LLVM 22 (Linux, apt.llvm.org)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+          | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+        . /etc/os-release
+        echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-22 main" \
+          | sudo tee /etc/apt/sources.list.d/llvm22.list >/dev/null
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+          llvm-22-dev libpolly-22-dev libzstd-dev
+        llvm-config-22 --version | grep -q '^22\.' \
+          || { echo "::error::apt LLVM is not 22.x"; exit 1; }
+        echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
+
+    - name: LLVM 22 (Windows, official MSVC tarball)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $ver = "${{ inputs.version }}"
+        $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-x86_64-pc-windows-msvc.tar.xz"
+        Write-Host "downloading $url"
+        curl.exe -sSL --retry 3 -o "$env:RUNNER_TEMP\llvm.tar.xz" $url
+        New-Item -ItemType Directory -Force -Path C:\llvm | Out-Null
+        tar -xf "$env:RUNNER_TEMP\llvm.tar.xz" -C C:\llvm --strip-components=1
+        $v = & "C:\llvm\bin\llvm-config.exe" --version
+        if (-not $v.StartsWith("22.")) { Write-Error "LLVM is not 22.x ($v)"; exit 1 }
+        "LLVM_SYS_221_PREFIX=C:\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
