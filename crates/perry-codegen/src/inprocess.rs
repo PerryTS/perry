@@ -41,7 +41,28 @@ static ANNOUNCE: Once = Once::new();
 
 fn global_init(mllvm: &[String]) {
     LLVM_GLOBAL_INIT.call_once(|| {
-        Target::initialize_all(&InitializationConfig::default());
+        // Only the backends Perry can actually emit for. `initialize_all()`
+        // references every LLVM target's init symbol, which makes the static
+        // link pull in all ~20 backends — measured at **+86.9 MB** on the
+        // `perry` binary (185.9 MB -> 98.9 MB), 47% of the whole feature
+        // build, for backends nothing can reach. It was inkwell's convenient
+        // default in #7301, not a considered choice; the feature was opt-in so
+        // nobody paid for it.
+        //
+        // Perry's LLVM target surface is exactly two architectures. Every
+        // triple the compile driver can produce is aarch64 (Apple platforms,
+        // Android, Linux gnu/musl/ohos, and watchOS's ILP32 `arm64_32`, which
+        // is still the AArch64 backend) or x86 (`x86_64`, `x86_64h`, `i686`).
+        // The lone `riscv64gc` string in the tree is a unit-test assertion in
+        // `gc_map.rs`, not an emission target, and wasm has its own crate
+        // (`perry-codegen-wasm`) that never reaches this backend.
+        //
+        // A triple outside this set fails loudly at `Target::from_triple`
+        // ("no LLVM target for ..."), so adding an architecture without
+        // initializing its backend is a hard error, never a silent fallback.
+        let cfg = InitializationConfig::default();
+        Target::initialize_aarch64(&cfg);
+        Target::initialize_x86(&cfg);
         if !mllvm.is_empty() {
             let mut argv: Vec<CString> = vec![CString::new("perry-llvm-inprocess").unwrap()];
             for flag in mllvm {
@@ -380,6 +401,35 @@ entry:
             "live GC pointer not relocated across the call:\n{printed}"
         );
         module.verify().expect("statepoint IR verifies");
+    }
+
+    /// The initialized backend set must cover every triple the compile driver
+    /// can produce. `initialize_all()` cost +86.9 MB of static link for ~18
+    /// unreachable backends; this pins the replacement, so narrowing it
+    /// further — or adding a target without initializing its backend — fails
+    /// here rather than at a user's compile.
+    #[test]
+    fn every_supported_triple_resolves_to_an_initialized_backend() {
+        global_init(&[]);
+        for triple in [
+            "arm64-apple-macosx",
+            "aarch64-apple-ios",
+            "aarch64-apple-watchos",
+            "aarch64-unknown-linux-gnu",
+            "aarch64-unknown-linux-musl",
+            "aarch64-linux-android",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "i686-unknown-linux-gnu",
+        ] {
+            let t = TargetTriple::create(triple);
+            assert!(
+                Target::from_triple(&t).is_ok(),
+                "{triple} has no initialized LLVM backend — the compile driver \
+                 can emit this triple, so `global_init` must initialize it"
+            );
+        }
     }
 
     /// #7327 CI regression: an empty CPU string makes LLVM pick `generic`,
