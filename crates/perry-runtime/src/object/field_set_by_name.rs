@@ -1404,6 +1404,17 @@ pub extern "C" fn js_object_set_field_by_name(
                 // (bundled zod assigns `create` onto ~40 sibling class
                 // objects), so from the SECOND class on the write lands
                 // here — the mirror must fire on this path too.
+                // #7341: the own-data write just above can reach an allocator --
+                // `overflow_set` inserts into a Rust map, and a minor GC triggers on
+                // the malloc-count threshold as well as on arena blocks. The mirror's
+                // FIRST instruction dereferences `obj` (`ldr w8, [x0]` at +24), so a
+                // collection in that write leaves it reading from-space.
+                //
+                // Scoped deliberately to the two own-data-write arms. The macro also
+                // republishes `value` from its handle, so an arm that intentionally
+                // rebinds `value` locally must NOT refresh here -- applying it to all
+                // eight mirror sites is wrong for that reason.
+                refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 return;
             }
@@ -1439,6 +1450,17 @@ pub extern "C" fn js_object_set_field_by_name(
                 (*obj).field_count = 1;
             }
             js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
+            // #7341: the own-data write just above can reach an allocator --
+            // `overflow_set` inserts into a Rust map, and a minor GC triggers on
+            // the malloc-count threshold as well as on arena blocks. The mirror's
+            // FIRST instruction dereferences `obj` (`ldr w8, [x0]` at +24), so a
+            // collection in that write leaves it reading from-space.
+            //
+            // Scoped deliberately to the two own-data-write arms. The macro also
+            // republishes `value` from its handle, so an arm that intentionally
+            // rebinds `value` locally must NOT refresh here -- applying it to all
+            // eight mirror sites is wrong for that reason.
+            refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             // Record the null→single-key transition so the next object
             // that starts with `{}` and sets the same first key hits the
