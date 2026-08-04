@@ -82,8 +82,26 @@ impl StackMapIndex {
 
 static STACK_MAPS: OnceLock<StackMapIndex> = OnceLock::new();
 
+// The two register numbers the compact format's short base tags stand for.
+// These are aarch64's by definition of the FORMAT, on every architecture — see
+// `gc_map.rs`, which deliberately keeps them literal so the compiler's idea of
+// the target and this runtime's `target_arch` can never disagree.
 const DWARF_REG_FP_AARCH64: u16 = 29;
 const DWARF_REG_SP_AARCH64: u16 = 31;
+
+// Which DWARF register is the stack pointer on the machine this runtime was
+// built for. Distinct from the format constants above and used only to choose
+// how a base is resolved: `_Unwind_GetGR` is not a supported query for the SP
+// column, so an SP-relative root must come from the CFA instead. On x86-64
+// every root is `Indirect [RSP + off]` — DWARF 7, measured 56 of 56 on one
+// probe — and reading it with `GetGR` returned garbage the collector then
+// wrote through, which is the segfault the Linux gate hit.
+#[cfg(target_arch = "aarch64")]
+const ARCH_DWARF_SP: u16 = 31;
+#[cfg(target_arch = "x86_64")]
+const ARCH_DWARF_SP: u16 = 7;
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+const ARCH_DWARF_SP: u16 = u16::MAX;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WalkerMode {
@@ -809,6 +827,10 @@ mod unwind {
         ) -> i32;
         fn _Unwind_GetIP(context: *mut UnwindContext) -> usize;
         fn _Unwind_GetGR(context: *mut UnwindContext, register: i32) -> usize;
+        /// The frame's canonical frame address — the supported way to reach a
+        /// frame's stack pointer. `_Unwind_GetGR` on the SP column is not a
+        /// supported query and returns garbage on x86-64.
+        fn _Unwind_GetCFA(context: *mut UnwindContext) -> usize;
     }
 
     struct WalkState<'a, F> {
@@ -853,7 +875,24 @@ mod unwind {
         for record in matched {
             for location in state.index.locations(record) {
                 state.stats.locations_visited = state.stats.locations_visited.saturating_add(1);
-                let base = _Unwind_GetGR(context, i32::from(location.dwarf_reg));
+                // SP-relative roots derive their base from the CFA. By the
+                // SysV/AAPCS definition the CFA is the caller's stack pointer
+                // immediately before the call, so this frame's body stack
+                // pointer sits one return-address slot plus this function's own
+                // frame below it — and `stack_size` is exactly that frame,
+                // recorded per function in the map.
+                let base = if location.dwarf_reg == ARCH_DWARF_SP {
+                    let cfa = _Unwind_GetCFA(context);
+                    match cfa
+                        .checked_sub(std::mem::size_of::<usize>())
+                        .and_then(|v| v.checked_sub(record.stack_size as usize))
+                    {
+                        Some(sp) => sp,
+                        None => continue,
+                    }
+                } else {
+                    _Unwind_GetGR(context, i32::from(location.dwarf_reg))
+                };
                 let address = if location.offset < 0 {
                     base.checked_sub(location.offset.unsigned_abs() as usize)
                 } else {

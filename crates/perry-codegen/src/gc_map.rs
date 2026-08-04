@@ -839,22 +839,24 @@ pub fn compact_and_assemble(
     // the collector finds no native roots at all — the exact outcome the hard
     // error below exists to prevent, reached with no diagnostic. The mode is
     // opt-in, so refusing loudly costs nothing.
-    // The runtime can only resolve aarch64 frame bases. Measured on x86-64:
-    // every root is `Indirect [RSP + off]` (DWARF register 7), so
-    // `chain_walkable` is false — it admits only aarch64's FP/SP, 29 and 31 —
-    // and every frame falls back to `_Unwind_GetGR(ctx, 7)`. That call does not
-    // reliably return the stack pointer (`_Unwind_GetCFA` is the supported way
-    // to obtain it), so the walker computes wild addresses and the collector
-    // segfaults writing through them. Observed exactly that on the Linux gate.
+    // Architectures whose frame bases this runtime can resolve. x86-64 joined
+    // aarch64 once SP-relative roots stopped going through
+    // `_Unwind_GetGR(SP)` — not a supported query, and the garbage it returned
+    // is what the collector wrote through — and started deriving the base from
+    // `_Unwind_GetCFA` instead.
     //
-    // The mode is opt-in, so refusing here is free; emitting a binary that
-    // crashes under collection is not.
-    if !target.starts_with("aarch64") && !target.starts_with("arm64") {
+    // Still a deny-list rather than an allow-anything: a target whose bases the
+    // runtime cannot resolve must fail the compile, because the alternative is
+    // a binary that segfaults during collection with no diagnostic.
+    let arch_supported = target.starts_with("aarch64")
+        || target.starts_with("arm64")
+        || target.starts_with("x86_64");
+    if !arch_supported {
         return Err(anyhow!(
-            "perry: native GC roots (PERRY_STATEPOINTS / PERRY_RS4GC) are \
-             aarch64-only — target `{target}` records roots against frame \
-             bases this runtime cannot resolve, and the collector would \
-             segfault rather than report anything. Tracked for #7173."
+            "perry: native GC roots (PERRY_RS4GC) are not supported for target \
+             `{target}` — its roots are recorded against frame bases this \
+             runtime cannot resolve, and the collector would segfault rather \
+             than report anything. Tracked for #7173."
         ));
     }
     let macho = target.contains("apple") || target.contains("darwin");
