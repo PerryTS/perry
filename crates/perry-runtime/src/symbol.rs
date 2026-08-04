@@ -377,10 +377,27 @@ pub(crate) unsafe fn alloc_symbol(
     // SYMBOL_REGISTRY (for registered symbols) or not at all (for fresh
     // symbols — in practice they live for the duration of the program,
     // which is fine for test workloads).
+    // #7341: `gc_malloc` below is a collection point, and `description` was
+    // computed by the caller before it. An evacuating minor there relocates the
+    // description string, and the pre-collection address is then written into
+    // the header — permanently stale in a live symbol, exactly the shape fixed
+    // for `RegExpHeader::flags_ptr`. `js_symbol_to_string` reads it through
+    // `str_from_header` and faults on retired from-space; that is 3 of the 31
+    // catches in #7341.
+    //
+    // Root across the allocation and re-read. NOTE the remaining gap the
+    // comment above describes and this does not close: the payload is opaque to
+    // the collector (`GC_TYPE_STRING`), so a fresh symbol's description is
+    // neither marked nor rewritten afterwards. Rooting here makes the STORED
+    // value correct; keeping it alive for the symbol's lifetime is a separate
+    // fix, tracked in #7341.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let desc_root = scope.root_string_ptr(description);
     let raw = crate::gc::gc_malloc(
         std::mem::size_of::<SymbolHeader>(),
         crate::gc::GC_TYPE_STRING,
     );
+    let description = desc_root.get_raw_mut_ptr::<StringHeader>();
     let ptr = raw as *mut SymbolHeader;
     (*ptr).magic = SYMBOL_MAGIC;
     (*ptr).registered = if registered { 1 } else { 0 };
