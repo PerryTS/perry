@@ -477,3 +477,28 @@ fn ll_content_hash_is_stable_for_fixed_input() {
     assert_eq!(ll_content_hash(""), 0xcbf2_9ce4_8422_2325);
     assert_eq!(ll_content_hash("a"), 0xaf63_dc4c_8601_ec8c);
 }
+
+#[test]
+fn rs4gc_refuses_wineh_funclet_modules_before_the_pass_runs() {
+    // #7354: rewrite-statepoints-for-gc crashes (0xC0000005) on WinEH funclet
+    // pads — reproduced from an eight-line module with one `invoke` unwinding
+    // to a `catchswitch`. The refusal must fire on the funclet instructions...
+    let funclets = "\
+        pad:\n  %cs = catchswitch within none [label %catch] unwind to caller\n\
+        catch:\n  %cp = catchpad within %cs [ptr @filter]\n";
+    let refusal = rs4gc_funclet_refusal(funclets).expect("funclet module must be refused");
+    assert!(refusal.contains("funclet"), "{refusal}");
+    assert!(refusal.contains("#7354"), "{refusal}");
+    assert!(
+        rs4gc_funclet_refusal("  %cp = cleanuppad within none []\n").is_some(),
+        "cleanup funclets take the same crash path"
+    );
+
+    // ...and must NOT fire on the Itanium EH shape RS4GC supports, nor on a
+    // user string literal that merely names the opcode.
+    assert!(rs4gc_funclet_refusal("  %lp = landingpad { ptr, i32 } cleanup\n").is_none());
+    assert!(
+        rs4gc_funclet_refusal("@str = constant [10 x i8] c\"catchpad!\00\"\n").is_none(),
+        "a string literal naming the opcode is not a funclet"
+    );
+}

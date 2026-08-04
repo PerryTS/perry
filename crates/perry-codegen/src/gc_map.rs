@@ -909,22 +909,24 @@ pub fn compact_and_assemble(
              than report anything. Tracked for #7173."
         ));
     }
-    // Windows is staged, not enabled. The compiler can emit a COFF `.pgcmap`
-    // and the runtime can find it in a PE image, but there is no stack walker
-    // there: `_Unwind_*` does not exist on Windows, so `gc/roots/stack_maps.rs`
-    // falls to the stub and no frame is ever visited.
+    // Windows x86-64 is enabled (#7354): the runtime walks native frames there
+    // with `RtlVirtualUnwind` (`gc/roots/stack_maps.rs`), verified on a real
+    // Windows host against the pinned oracle with non-zero walk telemetry.
     //
-    // Emitting the map anyway would produce exactly the failure this backend
-    // exists to prevent — a binary whose roots the collector cannot find, with
-    // no diagnostic. Refuse until a walker (RtlVirtualUnwind, or an fp-chain
-    // walk given Perry forces frame pointers) lands and can be verified on a
-    // Windows host.
-    if matches!(format_for(target), ObjectFormat::Coff) {
+    // ARM64 Windows stays refused. It passes the `arch_supported` check above
+    // (aarch64) and it is COFF, but the runtime's Windows walker is x86-64
+    // only — the `CONTEXT` layout and the unwinder's register model differ on
+    // ARM64 — so that combination still has NO walker and falls to the stub
+    // that visits nothing. Emitting the map anyway would produce exactly the
+    // failure this backend exists to prevent: a binary whose roots the
+    // collector cannot find, with no diagnostic.
+    if matches!(format_for(target), ObjectFormat::Coff) && !target.starts_with("x86_64") {
         return Err(anyhow!(
             "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
              `{target}` yet — the COFF section and its PE lookup exist, but the \
-             runtime has no stack walker on Windows, so no frame would ever be \
-             visited and the collector would free live objects. Tracked for #7173."
+             runtime's Windows stack walker is x86-64 only, so no frame would \
+             ever be visited and the collector would free live objects. \
+             Tracked for #7173."
         ));
     }
 
@@ -1064,22 +1066,33 @@ mod tests {
     fn compact_and_assemble_refusal(target: &str) -> String {
         // Mirrors the guard in `compact_and_assemble`; kept here so the test
         // fails if that guard is removed rather than if a string changes.
-        if matches!(format_for(target), ObjectFormat::Coff) {
+        if matches!(format_for(target), ObjectFormat::Coff) && !target.starts_with("x86_64") {
             return format!(
                 "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
-                 `{target}` yet — the runtime has no stack walker on Windows"
+                 `{target}` yet — the runtime's Windows stack walker is x86-64 only"
             );
         }
         String::new()
     }
 
     #[test]
-    fn windows_is_refused_until_it_has_a_walker() {
-        // The section and its PE lookup exist, but Windows has no stack walker,
-        // so every frame would go unvisited and the collector would free live
-        // objects. Staged is not enabled.
-        let err = compact_and_assemble_refusal("x86_64-pc-windows-msvc");
-        assert!(err.contains("no stack walker"), "{err}");
+    fn x86_64_windows_is_no_longer_refused() {
+        // #7354: the RtlVirtualUnwind walker landed and was verified on a
+        // Windows host, so the COFF refusal must not fire for x86-64 — a
+        // refusal here would silently disable the platform the walker exists
+        // for.
+        assert_eq!(compact_and_assemble_refusal("x86_64-pc-windows-msvc"), "");
+    }
+
+    #[test]
+    fn arm64_windows_is_refused_until_it_has_a_walker() {
+        // ARM64 Windows passes the arch gate (aarch64) and is COFF, but the
+        // runtime's Windows walker is x86-64 only — the CONTEXT layout and
+        // unwinder register model differ on ARM64 — so every frame would go
+        // unvisited and the collector would free live objects. Staged is not
+        // enabled.
+        let err = compact_and_assemble_refusal("aarch64-pc-windows-msvc");
+        assert!(err.contains("x86-64 only"), "{err}");
     }
 
     #[test]

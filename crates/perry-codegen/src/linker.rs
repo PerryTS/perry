@@ -496,9 +496,42 @@ fn build_clang_compile_plan(
 /// relocation, and downstream-use rewrite. Fails the compile loudly when no
 /// `opt` is available or the pass pipeline errors — a silent skip would be a
 /// vacuous mode.
+/// The refusal for a module whose EH lowered to WinEH funclet pads under
+/// RS4GC, or `None` when the module is safe to pipe through the pass.
+///
+/// windows-msvc `try` lowers to `catchswitch`/`catchpad` funclets (#7302), and
+/// LLVM's `rewrite-statepoints-for-gc` does not support funclet EH: it crashes
+/// outright — measured on opt 22.1.3 as an access violation (0xC0000005) with
+/// a symbol-less stack dump, reproducible from an eight-line module carrying
+/// one `invoke` that unwinds to a `catchswitch` (#7354). Detect the shape
+/// BEFORE spawning the pass and name the actual limitation; the alternative on
+/// the external path is a crash pointing at LLVM's bug tracker, and on the
+/// in-process path it would take the whole compiler process down.
+///
+/// Matched on the ` within ` instruction syntax rather than the bare opcode
+/// names so a user string literal containing "catchpad" cannot trip it.
+pub(crate) fn rs4gc_funclet_refusal(ll_text: &str) -> Option<String> {
+    ["catchswitch within ", "catchpad within ", "cleanuppad within "]
+        .iter()
+        .any(|needle| ll_text.contains(needle))
+        .then(|| {
+            "PERRY_RS4GC: this module contains a `try`/`catch` that lowered to \
+             WinEH funclet pads (catchswitch/catchpad — the windows-msvc EH \
+             shape), and LLVM's rewrite-statepoints-for-gc pass does not \
+             support funclet EH: it crashes with an access violation rather \
+             than reporting anything. Refusing before the pass runs. \
+             Compile without PERRY_RS4GC, or keep `try` out of RS4GC-compiled \
+             modules on Windows. Tracked in #7354."
+                .to_string()
+        })
+}
+
 fn maybe_rs4gc_preprocess(ll_text: &str) -> Result<Option<String>> {
     if !crate::codegen::helpers::rs4gc_enabled() {
         return Ok(None);
+    }
+    if let Some(refusal) = rs4gc_funclet_refusal(ll_text) {
+        return Err(anyhow!(refusal));
     }
     // The in-process backend runs RS4GC itself, against the same LLVM that
     // emits the object (see `inprocess::optimize_and_emit`). Shelling out to a
@@ -545,8 +578,29 @@ fn maybe_rs4gc_preprocess(ll_text: &str) -> Result<Option<String>> {
         .write_all(ll_text.as_bytes())?;
     let output = child.wait_with_output()?;
     if !output.status.success() {
+        // The IR went to `opt` through a pipe, so unlike a failed clang
+        // compile nothing was on disk to debug from — an `opt` crash (probe
+        // 09 on Windows: access violation inside rewrite-statepoints-for-gc)
+        // left only a symbol-less stack dump. Write the exact input next to
+        // the other failure artifacts and name it, so the crash is
+        // reproducible with one command.
+        let ir_path = env::temp_dir().join(format!(
+            "perry_rs4gc_failed_{}.ll",
+            std::process::id()
+        ));
+        let ir_note = match fs::write(&ir_path, ll_text) {
+            Ok(()) => format!("input IR left at: {}", ir_path.display()),
+            Err(error) => format!("(could not write input IR: {error})"),
+        };
         return Err(anyhow!(
-            "PERRY_RS4GC: opt pipeline failed:\n{}",
+            "PERRY_RS4GC: opt pipeline failed ({}).\n{}\n\
+             reproduce: {} -passes='function(mem2reg),rewrite-statepoints-for-gc' -S {}\n\
+             \n\
+             stderr:\n{}",
+            output.status,
+            ir_note,
+            opt.display(),
+            ir_path.display(),
             String::from_utf8_lossy(&output.stderr)
         ));
     }

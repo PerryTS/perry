@@ -97,11 +97,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Both host shapes Perry supports for native roots, on one job. macOS covers
+  # Every host shape Perry supports for native roots, on one job. macOS covers
   # aarch64 + Mach-O; ubuntu covers x86-64 + ELF — and ELF is where every
   # object-format bug in this design surfaced (SHF_GNU_RETAIN, SHF_WRITE, the
-  # Mach-O underscore convention in eh_walker). ARM64 Linux would cover the
-  # fourth corner, but those runners queue for hours here, and its two
+  # Mach-O underscore convention in eh_walker). Windows covers x86-64 + PE/COFF
+  # with the RtlVirtualUnwind walker (#7354) — the one walker with no Itanium
+  # unwinder under it, which is why its arm alone carries the
+  # `--require-locations` telemetry gate below. ARM64 Linux would cover a
+  # fifth corner, but those runners queue for hours here, and its two
   # components are each covered above.
   native-roots-rs4gc:
     strategy:
@@ -114,7 +117,15 @@ jobs:
           - os: ubuntu-latest
             arch: x86-64
             format: ELF
+          - os: windows-latest
+            arch: x86-64
+            format: PE
     runs-on: ${{ matrix.os }}
+    # The ubuntu/macos steps were written for bash and windows-latest defaults
+    # to pwsh; one explicit default keeps a single script dialect per step.
+    defaults:
+      run:
+        shell: bash
     # 120, not 90: the in-process step below builds a second time with the
     # llvm-inprocess feature, which cargo cannot share with the build above.
     timeout-minutes: 120
@@ -145,9 +156,23 @@ jobs:
           # `nocreateundeforpoison`, Homebrew opt 22 feeding Apple clang, which
           # is the pairing Perry's own independent discovery picks by default on
           # a Mac. Anyone enabling this knob hits that; pin both here.
+          exe=""
           if [ "$RUNNER_OS" = "macOS" ]; then
             brew list llvm >/dev/null 2>&1 || brew install llvm
             llvm_bin="$(brew --prefix llvm)/bin"
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            # windows-latest ships clang (the NSIS LLVM build) but NOT `opt`;
+            # the matched pair comes from the official clang+llvm release
+            # archive — one directory, so opt and clang cannot skew.
+            exe=".exe"
+            llvm_ver=22.1.3
+            llvm_root="$RUNNER_TEMP/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc"
+            if [ ! -x "$llvm_root/bin/opt.exe" ]; then
+              curl -sSL --retry 3 -o "$RUNNER_TEMP/llvm.tar.xz" \
+                "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvm_ver/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc.tar.xz"
+              tar -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP"
+            fi
+            llvm_bin="$llvm_root/bin"
           else
             # Ubuntu ships a matched opt+clang pair; take the newest present,
             # and install one only if the image has none.
@@ -160,12 +185,12 @@ jobs:
               llvm_bin="$(dirname "$(command -v opt)")"
             fi
           fi
-          if [ ! -x "$llvm_bin/opt" ] || [ ! -x "$llvm_bin/clang" ]; then
+          if [ ! -x "$llvm_bin/opt$exe" ] || [ ! -x "$llvm_bin/clang$exe" ]; then
             echo "::error::no matched opt+clang pair under $llvm_bin — RS4GC cannot run, and silently skipping it is exactly the gate that cannot fail"
             exit 1
           fi
-          export PERRY_LLVM_OPT="$llvm_bin/opt"
-          export PERRY_LLVM_CLANG="$llvm_bin/clang"
+          export PERRY_LLVM_OPT="$llvm_bin/opt$exe"
+          export PERRY_LLVM_CLANG="$llvm_bin/clang$exe"
           echo "RS4GC toolchain: $llvm_bin"
           "$PERRY_LLVM_OPT" --version | head -2
           "$PERRY_LLVM_CLANG" --version | head -2
@@ -176,22 +201,51 @@ jobs:
           for probe in benchmarks/gc_ratchet/probes/*.ts; do
             total=$((total+1))
             name=$(basename "$probe" .ts)
+            if [ "$RUNNER_OS" = "Windows" ] && [ "$name" = "09_try_catch_roots" ]; then
+              # #7354 measured negative, pinned as a REFUSAL: windows-msvc
+              # `try` lowers to WinEH funclet pads, which crash LLVM's
+              # rewrite-statepoints-for-gc outright (access violation on opt
+              # 22.1.3, reproducible from an eight-line module). Perry refuses
+              # the module before the pass runs; this arm pins that it STAYS a
+              # refusal — never a crash, never a silently rootless binary. It
+              # goes red the day the pass learns funclet EH, which is the
+              # prompt to fold 09 into this matrix.
+              if PERRY_RS4GC=1 ./target/perry-dev/perry "$probe" \
+                  -o "/tmp/rs4gc-$name" > "/tmp/rs4gc-$name.compile.log" 2>&1; then
+                echo "::error::$name compiled under RS4GC on Windows — the funclet refusal is gone: either rewrite-statepoints-for-gc learned funclet EH (fold 09 into the matrix) or the refusal was lost"
+                exit 1
+              fi
+              grep -q "funclet" "/tmp/rs4gc-$name.compile.log" \
+                || { echo "::error::$name failed for a reason other than the funclet refusal:"; cat "/tmp/rs4gc-$name.compile.log"; exit 1; }
+              pass=$((pass+1))
+              continue
+            fi
             node --expose-gc --experimental-strip-types "$probe" > "/tmp/rs4gc-$name.oracle"
             PERRY_RS4GC=1 ./target/perry-dev/perry "$probe" -o "/tmp/rs4gc-$name"
+            # perry appends the platform default extension to an -o with none.
+            out="/tmp/rs4gc-$name$exe"
             if [ "$RUNNER_OS" = "macOS" ]; then
-              otool -l "/tmp/rs4gc-$name" | grep -q "sectname __perry_gcmap" \
+              otool -l "$out" | grep -q "sectname __perry_gcmap" \
                 || { echo "::error::$name has no __perry_gcmap section — RS4GC produced no native root map"; exit 1; }
-              otool -l "/tmp/rs4gc-$name" | grep -q "sectname __llvm_stackmaps" \
+              otool -l "$out" | grep -q "sectname __llvm_stackmaps" \
                 && { echo "::error::$name still carries __llvm_stackmaps — the compact rewrite did not run"; exit 1; }
+            elif [ "$RUNNER_OS" = "Windows" ]; then
+              # PE: an image section header holds 8 name bytes — which is why
+              # the section is `.pgcmap` (gc_map.rs) — and a surviving LLVM
+              # stackmap section would appear truncated, so match the prefix.
+              "$llvm_bin/llvm-readobj$exe" --sections "$out" | grep -q "Name: .pgcmap" \
+                || { echo "::error::$name has no .pgcmap section — RS4GC produced no native root map"; exit 1; }
+              "$llvm_bin/llvm-readobj$exe" --sections "$out" | grep -q "llvm_st" \
+                && { echo "::error::$name still carries an llvm_stackmaps section — the compact rewrite did not run"; exit 1; }
             else
-              readelf -S "/tmp/rs4gc-$name" | grep -q "\.perry_gcmap" \
+              readelf -S "$out" | grep -q "\.perry_gcmap" \
                 || { echo "::error::$name has no .perry_gcmap section — RS4GC produced no native root map"; exit 1; }
-              readelf -S "/tmp/rs4gc-$name" | grep -q "\.llvm_stackmaps" \
+              readelf -S "$out" | grep -q "\.llvm_stackmaps" \
                 && { echo "::error::$name still carries .llvm_stackmaps — the compact rewrite did not run"; exit 1; }
             fi
             PERRY_RS4GC=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
             PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
-              "/tmp/rs4gc-$name" > "/tmp/rs4gc-$name.out" 2> "/tmp/rs4gc-$name.err"
+              "$out" > "/tmp/rs4gc-$name.out" 2> "/tmp/rs4gc-$name.err"
             diff "/tmp/rs4gc-$name.oracle" "/tmp/rs4gc-$name.out" \
               || { echo "::error::$name diverged from the pinned oracle under RS4GC"; exit 1; }
             errs="$errs /tmp/rs4gc-$name.err"
@@ -213,8 +267,24 @@ jobs:
           PERRY_RS4GC=1 ./target/perry-dev/perry \
             benchmarks/gc_ratchet/probes/09_try_catch_roots.ts \
             -o /tmp/rs4gc-report-probe --statepoint-report=json 2> /tmp/rs4gc-report.json
-          python3 scripts/statepoint_report_assert.py /tmp/rs4gc-report.json \
+          # windows-latest exposes the toolcache python as `python`, not python3.
+          py=python3; command -v python3 >/dev/null 2>&1 || py=python
+          "$py" scripts/statepoint_report_assert.py /tmp/rs4gc-report.json \
             --only-backend rs4gc
+
+          # #7354: the Windows walker liveness gate. It is the one walker with
+          # no Itanium unwinder under it and no verify-mode cross-check, and a
+          # walker that visits zero frames still lets most probes print the
+          # right answer (other root sources cover them). Non-zero
+          # frames/records/locations telemetry is the only proof it ran.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PERRY_GC_TRACE=1 PERRY_RS4GC=1 \
+            PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+            PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+              "/tmp/rs4gc-04_dead_after_deep_stack$exe" > /dev/null 2> /tmp/rs4gc-trace.err
+            "$py" scripts/gc_walker_trace_assert.py /tmp/rs4gc-trace.err \
+              --require-locations
+          fi
 
       # #7327. Everything above pins PERRY_LLVM_OPT + PERRY_LLVM_CLANG to one
       # brew install, because RS4GC piped IR through an external `opt` and a

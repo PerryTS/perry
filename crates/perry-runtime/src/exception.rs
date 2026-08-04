@@ -342,8 +342,16 @@ pub extern "C" fn js_throw(value: f64) -> ! {
     // success. Declines (undecodable frame, disabled, or verification
     // mode) fall through to the system unwinder below — same semantics,
     // slower.
-    crate::eh_walker::predict_before_raise();
-    crate::eh_walker::try_fast_transport(crate::eh::exception_object_addr());
+    //
+    // Not on Windows: `eh_walker` is Itanium-unwind machinery and the module
+    // is `#[cfg(not(windows))]`; `crate::eh` there is `eh_windows.rs`, whose
+    // `raise_perry_exception` below is the whole transport. These two calls
+    // landing unguarded is what broke the Windows build of this crate (#7354).
+    #[cfg(not(windows))]
+    {
+        crate::eh_walker::predict_before_raise();
+        crate::eh_walker::try_fast_transport(crate::eh::exception_object_addr());
+    }
     let reason = crate::eh::raise_perry_exception();
     eprintln!(
         "perry: FATAL: exception transport failed (reason={reason}): a try \

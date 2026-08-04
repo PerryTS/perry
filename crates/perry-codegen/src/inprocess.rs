@@ -103,6 +103,15 @@ pub fn compile_ll_to_object_inprocess(
     module_name: &str,
 ) -> Result<Vec<u8>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
+    // Same guard as the external `opt` path (`linker::rs4gc_funclet_refusal`):
+    // rewrite-statepoints-for-gc crashes on WinEH funclet pads, and here the
+    // pass runs inside THIS process — the crash would take the compiler down
+    // with it, not just a child.
+    if crate::codegen::helpers::rs4gc_enabled() {
+        if let Some(refusal) = crate::linker::rs4gc_funclet_refusal(ll_text) {
+            return Err(anyhow!(refusal));
+        }
+    }
     let context = Context::create();
     let module = parse_ir_text(&context, ll_text, module_name)?;
     optimize_and_emit(

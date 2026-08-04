@@ -18,10 +18,18 @@ does not exist `verify` panics outright), and `--forbid-fp-walks` is the
 liveness assert for `unwind` (nonzero means the mode did not take effect and
 the arm was measuring `fast` all along).
 
+`--require-locations` is the liveness assert for a walker that has never run
+anywhere before (#7354, the Windows RtlVirtualUnwind arm): a walker that visits
+zero frames still lets most probes print the right answer, because other root
+sources cover them — so a green probe proves nothing. Non-zero
+`frames_visited`, `records_matched` and `locations_visited` are what prove the
+walker actually stepped mapped frames and enumerated their roots.
+
 Usage:
     <program> 2> trace.err
     gc_walker_trace_assert.py trace.err --require-fp-walks
     gc_walker_trace_assert.py trace.err --forbid-fp-walks
+    gc_walker_trace_assert.py trace.err --require-locations
 """
 
 from __future__ import annotations
@@ -31,8 +39,8 @@ import json
 import sys
 
 
-def totals(path: str) -> tuple[int, int, int]:
-    fp_walks = walks = locations = 0
+def totals(path: str) -> tuple[int, int, int, int, int]:
+    fp_walks = walks = frames = records = locations = 0
     saw_event = False
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -49,13 +57,15 @@ def totals(path: str) -> tuple[int, int, int]:
             saw_event = True
             fp_walks += stats.get("fp_walks", 0)
             walks += stats.get("walks", 0)
+            frames += stats.get("frames_visited", 0)
+            records += stats.get("records_matched", 0)
             locations += stats.get("locations_visited", 0)
     if not saw_event:
         sys.exit(
             f"::error::{path} carries no GC trace events with root_sources — "
             "PERRY_GC_TRACE=1 was not set, or no collection ran at all"
         )
-    return fp_walks, walks, locations
+    return fp_walks, walks, frames, records, locations
 
 
 def main() -> int:
@@ -63,10 +73,15 @@ def main() -> int:
     ap.add_argument("trace")
     ap.add_argument("--require-fp-walks", action="store_true")
     ap.add_argument("--forbid-fp-walks", action="store_true")
+    ap.add_argument("--require-locations", action="store_true")
     args = ap.parse_args()
 
-    fp_walks, walks, locations = totals(args.trace)
-    print(f"{args.trace}: walks={walks} fp_walks={fp_walks} locations_visited={locations}")
+    fp_walks, walks, frames, records, locations = totals(args.trace)
+    print(
+        f"{args.trace}: walks={walks} fp_walks={fp_walks} "
+        f"frames_visited={frames} records_matched={records} "
+        f"locations_visited={locations}"
+    )
 
     failures: list[str] = []
     if walks <= 0:
@@ -84,6 +99,22 @@ def main() -> int:
             f"fp_walks == {fp_walks}: PERRY_STACKMAP_WALKER=unwind did not take "
             "effect, the fast walk ran anyway"
         )
+    if args.require_locations:
+        zeroed = [
+            (name, meaning)
+            for name, value, meaning in (
+                ("frames_visited", frames, "stepped a frame"),
+                ("records_matched", records, "matched a mapped safepoint"),
+                ("locations_visited", locations, "enumerated a root slot"),
+            )
+            if value <= 0
+        ]
+        for name, meaning in zeroed:
+            failures.append(
+                f"{name} == 0: the walker never {meaning} — green probes with "
+                "zero telemetry mean the walker did not run, and other root "
+                "sources covered for it (#7354)"
+            )
 
     for message in failures:
         print(f"::error::{message}", file=sys.stderr)
