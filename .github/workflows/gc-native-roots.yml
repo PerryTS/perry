@@ -50,9 +50,11 @@
 # wild address, and no address validation after it can help. The wording here
 # before was a guess, and it pointed at the wrong fix.
 #
-# The compiler now refuses that target outright (#7324) rather than emitting a
+# x86-64 was refused outright until #7349 taught the runtime to derive an
+# SP-relative base from the CFA; it is a first-class arm of the matrix now. The
+# old note said (#7324) that a run there would
 # binary that crashes under collection, so an x86-64 run of this matrix would
-# test nothing but the refusal — which is what `statepoints-refuse-x86` is for.
+# test nothing but the refusal — no longer true, and that job is gone.
 #
 # The same walk is unsound on aarch64 **Linux** too, where it is merely the
 # non-default path: #7333.
@@ -75,9 +77,9 @@
 # CLAUDE.md's GC knob kill-policy: an arm exercising the non-default state, or
 # delete the mode.
 #
-#   PERRY_GC_SAFEPOINT_ONLY  -> native-roots-aarch64, "safepoint-only" steps
-#   PERRY_STACKMAP_WALKER    -> native-roots-aarch64, "both non-default walkers"
-#   PERRY_RS4GC              -> native-roots-rs4gc-aarch64
+#   PERRY_GC_SAFEPOINT_ONLY  -> native-roots-rs4gc, "safepoint-only" steps
+#   PERRY_STACKMAP_WALKER    -> native-roots-rs4gc, "both non-default walkers"
+#   PERRY_RS4GC              -> native-roots-rs4gc
 #   PERRY_STATEPOINT_REPORT  -> deleted. It was a second spelling of
 #                               `--statepoint-report`; the flag is now the only
 #                               entry point and the "fails closed" step is its
@@ -95,8 +97,24 @@ on:
   workflow_dispatch:
 
 jobs:
-  native-roots-rs4gc-aarch64:
-    runs-on: macos-14
+  # Both host shapes Perry supports for native roots, on one job. macOS covers
+  # aarch64 + Mach-O; ubuntu covers x86-64 + ELF — and ELF is where every
+  # object-format bug in this design surfaced (SHF_GNU_RETAIN, SHF_WRITE, the
+  # Mach-O underscore convention in eh_walker). ARM64 Linux would cover the
+  # fourth corner, but those runners queue for hours here, and its two
+  # components are each covered above.
+  native-roots-rs4gc:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: aarch64
+            format: Mach-O
+          - os: ubuntu-latest
+            arch: x86-64
+            format: ELF
+    runs-on: ${{ matrix.os }}
     # 120, not 90: the in-process step below builds a second time with the
     # llvm-inprocess feature, which cargo cannot share with the build above.
     timeout-minutes: 120
@@ -127,8 +145,21 @@ jobs:
           # `nocreateundeforpoison`, Homebrew opt 22 feeding Apple clang, which
           # is the pairing Perry's own independent discovery picks by default on
           # a Mac. Anyone enabling this knob hits that; pin both here.
-          brew list llvm >/dev/null 2>&1 || brew install llvm
-          llvm_bin="$(brew --prefix llvm)/bin"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew list llvm >/dev/null 2>&1 || brew install llvm
+            llvm_bin="$(brew --prefix llvm)/bin"
+          else
+            # Ubuntu ships a matched opt+clang pair; take the newest present,
+            # and install one only if the image has none.
+            llvm_bin="$(dirname "$(command -v opt || true)")"
+            if [ ! -x "$llvm_bin/opt" ]; then
+              llvm_bin="$(ls -d /usr/lib/llvm-*/bin 2>/dev/null | sort -V | tail -1 || true)"
+            fi
+            if [ ! -x "$llvm_bin/opt" ]; then
+              sudo apt-get update -qq && sudo apt-get install -y -qq llvm clang
+              llvm_bin="$(dirname "$(command -v opt)")"
+            fi
+          fi
           if [ ! -x "$llvm_bin/opt" ] || [ ! -x "$llvm_bin/clang" ]; then
             echo "::error::no matched opt+clang pair under $llvm_bin — RS4GC cannot run, and silently skipping it is exactly the gate that cannot fail"
             exit 1
@@ -147,10 +178,17 @@ jobs:
             name=$(basename "$probe" .ts)
             node --expose-gc --experimental-strip-types "$probe" > "/tmp/rs4gc-$name.oracle"
             PERRY_RS4GC=1 ./target/perry-dev/perry "$probe" -o "/tmp/rs4gc-$name"
-            otool -l "/tmp/rs4gc-$name" | grep -q "sectname __perry_gcmap" \
-              || { echo "::error::$name has no __perry_gcmap section — RS4GC produced no native root map"; exit 1; }
-            otool -l "/tmp/rs4gc-$name" | grep -q "sectname __llvm_stackmaps" \
-              && { echo "::error::$name still carries __llvm_stackmaps — the compact rewrite did not run"; exit 1; }
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              otool -l "/tmp/rs4gc-$name" | grep -q "sectname __perry_gcmap" \
+                || { echo "::error::$name has no __perry_gcmap section — RS4GC produced no native root map"; exit 1; }
+              otool -l "/tmp/rs4gc-$name" | grep -q "sectname __llvm_stackmaps" \
+                && { echo "::error::$name still carries __llvm_stackmaps — the compact rewrite did not run"; exit 1; }
+            else
+              readelf -S "/tmp/rs4gc-$name" | grep -q "\.perry_gcmap" \
+                || { echo "::error::$name has no .perry_gcmap section — RS4GC produced no native root map"; exit 1; }
+              readelf -S "/tmp/rs4gc-$name" | grep -q "\.llvm_stackmaps" \
+                && { echo "::error::$name still carries .llvm_stackmaps — the compact rewrite did not run"; exit 1; }
+            fi
             PERRY_RS4GC=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
             PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
               "/tmp/rs4gc-$name" > "/tmp/rs4gc-$name.out" 2> "/tmp/rs4gc-$name.err"
@@ -190,7 +228,10 @@ jobs:
       # PERRY_LLVM_* variables UNSET -- otherwise it proves nothing the steps
       # above have not already proven.
       - name: RS4GC works on a stock toolchain via the in-process backend
-        if: ${{ !cancelled() }}
+        # macOS only: the assertions below read Mach-O section names. The point
+        # of the step is the stock-toolchain path, which the ELF arm covers by
+        # using the system LLVM in the first place.
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         run: |
           set -euo pipefail
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
@@ -239,49 +280,8 @@ jobs:
   # REFUSAL (never a silently rootless binary), and goes red the day x86-64
   # starts working, which is the prompt to widen the aarch64 matrix above (#7321).
   # Deliberately cheap: one probe, no runtime, no oracle.
-  statepoints-refuse-x86:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: gc-native-roots-x86
-      - name: Build compiler and static runtime (perry-dev profile)
-        run: |
-          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
-          cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
-      - name: Statepoints must refuse, not silently drop roots
-        run: |
-          set -uo pipefail
-          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
-          export PERRY_NO_AUTO_OPTIMIZE=1
-          probe=benchmarks/gc_ratchet/probes/01_nursery_churn.ts
-          set +e
-          PERRY_RS4GC=1 ./target/perry-dev/perry "$probe" -o /tmp/x86-probe \
-            > /tmp/x86.out 2> /tmp/x86.err
-          rc=$?
-          set -e
-          tail -40 /tmp/x86.out /tmp/x86.err || true
-          if [ "$rc" -eq 0 ]; then
-            echo "::error::native GC roots now compile on x86-64. That is good news and this job is the wrong shape for it: add the x86-64 host to native-roots-rs4gc-aarch64 (rename it) and delete this job."
-            exit 1
-          fi
-          # Non-zero for the RIGHT reason. Any old failure (missing clang, a
-          # broken checkout) would also be non-zero, and a job green on an
-          # unrelated error is the hazard this whole workflow is about.
-          if ! grep -qiE "stack map|compact-map|gc roots would be invisible" /tmp/x86.out /tmp/x86.err; then
-            echo "::error::statepoint compilation failed on x86-64, but not with the compact-map refusal this job asserts. Read the output above: either the refusal message changed, or something unrelated is broken."
-            exit 1
-          fi
-          echo "x86-64: statepoint compilation refuses, as expected, with the compact-map message."
-
-  # Fan-in, mirroring `conformance-smoke-complete` in test.yml: ONE context for
-  # branch protection to require, so adding an arm never needs a protection edit
-  # and a red arm cannot hide behind a green sibling.
   gc-native-roots-complete:
-    needs: [native-roots-rs4gc-aarch64, statepoints-refuse-x86]
+    needs: [native-roots-rs4gc]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -291,9 +291,8 @@ jobs:
           set -euo pipefail
           failed=0
           for arm in \
-            "native-roots-aarch64=${{ needs.native-roots-aarch64.result }}" \
-            "native-roots-rs4gc-aarch64=${{ needs.native-roots-rs4gc-aarch64.result }}" \
-            "statepoints-refuse-x86=${{ needs.statepoints-refuse-x86.result }}"; do
+            "native-roots-rs4gc=${{ needs.native-roots-rs4gc.result }}" \
+            ; do
             echo "$arm"
             case "$arm" in
               *=success) ;;
