@@ -557,16 +557,73 @@ stripped binary, so `grep -c` returned 0 both before and after) and host load
 had reached 55. Neither axis carried evidence. Re-measure on a quiet host with
 `--debug-symbols` before trusting any array-path number.
 
+### ★ Speed, resolved further the same night
+
+The section above recorded the first measurement. Four corrections followed, and
+the corrections are the useful part.
+
+**The benchmarks were lying in two different ways** (#7403, shipped). Discarding
+the result let Perry eliminate the loop; and even with the result consumed,
+`fibonacci(FIB_N)` is loop-invariant, so it hoists out and runs **once** — the
+checksum stays correct while `TOTAL` drops to 0. Both files now accumulate into a
+printed `CHECKSUM:` and assert their subject was live. Corrected picture:
+
+| benchmark | was reported | actually |
+|---|---|---|
+| `bench_fibonacci` | ~240x faster | **2.5x faster** |
+| `bench_bitwise` | infinitely faster | **20.4x SLOWER** |
+| `bench_array_ops` | (valid) | 4.2x slower |
+
+**`bench_bitwise` is the biggest gap, and the fast path already exists.** The
+hot loop contains **no runtime helper calls at all** — it is 4 `frem` per
+iteration, and `frem` is not an aarch64 instruction: `4 x bl _fmod`, 1754 profile
+samples. But `expr/binary.rs:588` already emits guarded `srem` for `%`, complete
+with the IEEE `-0` correction, gated on `type_analysis::is_integer_valued_expr`.
+
+The gap is the **analysis**, reduced to a one-line repro (#7404):
+
+```ts
+let a = 12345678; … a % 1000            // srem — fires
+let a = 12345678; … a % 1000; a = a + 1 // frem — lost
+```
+
+Reassignment disqualifies the local. The obligation is judged in
+`ProvenanceJudge::walk_expr` (`collectors/integer_locals.rs:632`).
+
+**Four hypotheses about that subsystem were wrong**, and are recorded in #7404 so
+they are not retried: that the mechanism lived only in `loops.rs` scoped to
+counters; that a guarded `srem` needed building; that the fixpoint was
+least-ordered; that no rule existed for reassignment. The module carries a
+written exactness proof (*"judging once against the optimistic set and pruning
+transitively is exact"*), so widening it is a proof-preserving change, not an
+additive one — and a wrong widening returns silently wrong integer arithmetic
+that `===` tests cannot see. Pair any attempt with the `Object.is` differential
+table in #7404 and `bench_bitwise`'s `CHECKSUM:525000000`.
+
+**A negative result on the array growth path** (#7396): `js_array_grow`'s
+HOLE-init loop is **already vectorised** — 6 `stp` in the baseline. The proposal
+to rewrite it as a `slice::fill` measures nothing. The original "zero paired
+stores" reading came from grepping a symbol absent from a stripped binary, which
+returns 0 whether or not the pattern exists. If there is a win in that path it is
+the *pre-sizing policy*, not the cost of each grow. The store-guard half (103
+samples) is untouched and remains the real target.
+
 ### Method notes that cost time to learn
 
 - **Minimise the right statement.** `object_assign_collection` cost eleven wrong
   hypotheses because the program died four statements before the one the file's
   tail suggested — and the "minimal repro" built from it exited 0 the whole time,
   unchecked.
-- **Verify a check can fail.** Twice in one day a check of mine could not:
-  `PERRY_GC_HEAP_LIMIT=64` ran zero collections, and the vectorisation check
-  above matched an absent symbol. Both would have produced confident wrong
-  conclusions.
+- **Verify a check can fail.** Three times in one day a check of mine could not:
+  `PERRY_GC_HEAP_LIMIT=64` ran zero collections; a vectorisation check matched a
+  symbol absent from a stripped binary; and a `grep -c` returning 0 was read as
+  evidence when it meant "pattern never matched". A disassembly check needs a
+  `--debug-symbols` build, an address resolved via `nm`, and an assertion that
+  the extraction is non-empty.
+- **A fix that compiles, passes every correctness test, and changes no emitted
+  instruction is a fix to the wrong site.** The guarded `srem` written for #7404
+  passed the whole `-0` edge-case table and emitted **zero** `srem`, because the
+  gate never matched the path in question. Check the IR before the timer.
 - **Baseline before attributing.** Two gap tests that failed alongside a patch
   turned out to fail identically on pristine `main`; the `perry-runtime` unit
   suite fails 3/5/3 across three runs of pristine `main` (#7365), so a raw
