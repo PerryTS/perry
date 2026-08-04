@@ -1304,6 +1304,8 @@ pub extern "C" fn js_object_set_field_by_name(
 
         let mut prev_keys_usize = keys as usize;
 
+        // #7341: call after ANY allocating step, before the next use of
+        // obj/key/value. Rationale in changelog.d/7381-*, 7383-*.
         macro_rules! refresh_roots_after_alloc {
             () => {{
                 obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
@@ -1404,16 +1406,6 @@ pub extern "C" fn js_object_set_field_by_name(
                 // (bundled zod assigns `create` onto ~40 sibling class
                 // objects), so from the SECOND class on the write lands
                 // here — the mirror must fire on this path too.
-                // #7341: the own-data write just above can reach an allocator --
-                // `overflow_set` inserts into a Rust map, and a minor GC triggers on
-                // the malloc-count threshold as well as on arena blocks. The mirror's
-                // FIRST instruction dereferences `obj` (`ldr w8, [x0]` at +24), so a
-                // collection in that write leaves it reading from-space.
-                //
-                // Scoped deliberately to the two own-data-write arms. The macro also
-                // republishes `value` from its handle, so an arm that intentionally
-                // rebinds `value` locally must NOT refresh here -- applying it to all
-                // eight mirror sites is wrong for that reason.
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 return;
@@ -1450,16 +1442,6 @@ pub extern "C" fn js_object_set_field_by_name(
                 (*obj).field_count = 1;
             }
             js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
-            // #7341: the own-data write just above can reach an allocator --
-            // `overflow_set` inserts into a Rust map, and a minor GC triggers on
-            // the malloc-count threshold as well as on arena blocks. The mirror's
-            // FIRST instruction dereferences `obj` (`ldr w8, [x0]` at +24), so a
-            // collection in that write leaves it reading from-space.
-            //
-            // Scoped deliberately to the two own-data-write arms. The macro also
-            // republishes `value` from its handle, so an arm that intentionally
-            // rebinds `value` locally must NOT refresh here -- applying it to all
-            // eight mirror sites is wrong for that reason.
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             // Record the null→single-key transition so the next object
@@ -1574,11 +1556,6 @@ pub extern "C" fn js_object_set_field_by_name(
                     };
                     overflow_set(obj as usize, i, vbits);
                 }
-                // #7341: same as the two own-data-write arms -- the write above can
-                // reach an allocator and the mirror's first instruction dereferences
-                // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
-                // handles are taken, so republishing all four is a no-op except for
-                // the relocation it repairs.
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 return;
@@ -1650,11 +1627,6 @@ pub extern "C" fn js_object_set_field_by_name(
                     super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
                 }
                 overflow_set(obj as usize, new_index, vbits);
-                // #7341: same as the two own-data-write arms -- the write above can
-                // reach an allocator and the mirror's first instruction dereferences
-                // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
-                // handles are taken, so republishing all four is a no-op except for
-                // the relocation it repairs.
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 transition_cache_insert(
@@ -1697,11 +1669,6 @@ pub extern "C" fn js_object_set_field_by_name(
                 (*obj).field_count = new_index as u32 + 1;
             }
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
-            // #7341: same as the two own-data-write arms -- the write above can
-            // reach an allocator and the mirror's first instruction dereferences
-            // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
-            // handles are taken, so republishing all four is a no-op except for
-            // the relocation it repairs.
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             transition_cache_insert(
@@ -1773,11 +1740,6 @@ pub extern "C" fn js_object_set_field_by_name(
                     };
                     overflow_set(obj as usize, i, vbits);
                 }
-                // #7341: same as the two own-data-write arms -- the write above can
-                // reach an allocator and the mirror's first instruction dereferences
-                // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
-                // handles are taken, so republishing all four is a no-op except for
-                // the relocation it repairs.
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 return;
@@ -1867,11 +1829,6 @@ pub extern "C" fn js_object_set_field_by_name(
                 super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
             }
             overflow_set(obj as usize, new_index, vbits);
-            // #7341: same as the two own-data-write arms -- the write above can
-            // reach an allocator and the mirror's first instruction dereferences
-            // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
-            // handles are taken, so republishing all four is a no-op except for
-            // the relocation it repairs.
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             // Record the shape transition so the next object sharing
@@ -1916,11 +1873,6 @@ pub extern "C" fn js_object_set_field_by_name(
             (*obj).field_count = new_index as u32 + 1;
         }
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
-        // #7341: same as the two own-data-write arms -- the write above can
-        // reach an allocator and the mirror's first instruction dereferences
-        // `obj`. None of these arms rebinds `obj`/`key`/`value` after the
-        // handles are taken, so republishing all four is a no-op except for
-        // the relocation it repairs.
         refresh_roots_after_alloc!();
         mirror_class_object_static_write(obj, key, value);
         // Record the shape transition — see above for semantics.
