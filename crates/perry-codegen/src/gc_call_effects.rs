@@ -23,14 +23,6 @@ pub(crate) enum GcCallEffect {
     /// consumed at this call site and it needs no statepoint. Without the
     /// contract these remain safepoints.
     AllocNoReentry,
-    /// The callee never returns to this call site (audited 2026-08-01: every
-    /// `js_throw*` helper funnels into `exception::js_throw`, which is
-    /// `-> !` — the `f64` results are unreachable ABI shape). No relocation
-    /// can ever be consumed downstream and the frame's roots are dead past
-    /// the call, so the site needs no metadata in ANY mode. Values the
-    /// helper itself holds are its own frame's responsibility
-    /// (`RuntimeHandleScope`/temp roots), exactly as for every helper call.
-    NeverReturns,
     Unknown,
 }
 
@@ -113,9 +105,12 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_validate_array_comparator"
         | "js_validate_array_map_callback" => GcCallEffect::AllocNoReentry,
         // NO `js_throw*` prefix arm. It used to classify the whole family
-        // `NeverReturns`, which suppresses the safepoint in every mode — the
-        // strongest classification in this table, and the only one applied by
-        // prefix rather than exact name.
+        // a `NeverReturns` classification that suppressed the safepoint in
+        // every mode — the strongest possible, and the only one that would be
+        // applied by prefix rather than exact name. That variant is DELETED,
+        // not merely unused: it was never constructed, so its three match arms
+        // in `precise_roots.rs` were dead, and the kill-policy in CLAUDE.md
+        // says an unexercised mode is a decision nobody has made.
         //
         // Two things make that unsafe. The audit it rested on is already
         // false: `js_throw_reference_error_tdz`, `js_throw_not_a_constructor`
