@@ -1112,6 +1112,69 @@ mod tests {
         assert!(super::COFF_SECTION_NAME.len() <= 8);
     }
 
+    /// Every Apple target Perry can build for must be accepted here, with the
+    /// address width its ABI actually uses.
+    ///
+    /// This is cheap and it is not redundant with the two width tests above.
+    /// Those pin one ILP32 target and one LP64 target; this pins the *set*, so
+    /// adding a triple to the compiler without deciding its width fails here
+    /// rather than at someone's link step.
+    ///
+    /// Measured 2026-08-04, `cargo check -p perry-runtime --target <t>`:
+    /// macOS, iOS, iOS-sim, tvOS, watchOS and visionOS all compile. watchOS and
+    /// visionOS needed `--no-default-features` (or any feature set without
+    /// `dyn-eval`) until a third-party fix landed: `psm`, reached only via
+    /// `dyn-eval` -> perry-parser -> swc_ecma_parser -> stacker, selects its
+    /// assembly with
+    ///
+    ///   #if defined(CFG_TARGET_OS_darwin) || ..._macos) || ..._ios) || ..._tvos)
+    ///
+    /// which omits `watchos` and `visionos`, so both fall to the ELF branch and
+    /// emit `.type`/`.size` that the Mach-O assembler rejects. Nothing in Perry
+    /// is involved, and the auto-optimize path enables `dyn-eval` only for
+    /// programs that construct a function body at runtime — so watch and vision
+    /// apps that never call `new Function` were always buildable.
+    #[test]
+    fn every_apple_target_is_accepted_with_its_own_address_width() {
+        // (triple, expects 64-bit addresses)
+        let targets = [
+            ("arm64-apple-macosx15.0.0", true),
+            ("arm64-apple-ios", true),
+            ("arm64-apple-ios-sim", true),
+            ("arm64-apple-tvos", true),
+            ("arm64-apple-visionos", true),
+            ("arm64-apple-watchos", true),
+            // The one ILP32 Apple target. `arm64_32` must be tested before any
+            // `arm64` prefix match, which is why the emitter checks it first.
+            ("arm64_32-apple-watchos", false),
+            ("x86_64-apple-macosx15.0.0", true),
+        ];
+        for (target, lp64) in targets {
+            assert_eq!(
+                compact_and_assemble_refusal(target),
+                "",
+                "{target} must not be refused"
+            );
+            let (out, _) = compact_stack_map_asm(&sample_asm(), target)
+                .unwrap_or_else(|e| panic!("{target} must parse: {e}"))
+                .unwrap_or_else(|| panic!("{target} must be rewritten"));
+            let (want, reject) = if lp64 {
+                ("\t.quad\t_probe_fn", "\t.long\t_probe_fn")
+            } else {
+                ("\t.long\t_probe_fn", "\t.quad\t_probe_fn")
+            };
+            assert!(
+                out.contains(want),
+                "{target} must emit a {}-bit address field:\n{out}",
+                if lp64 { 64 } else { 32 }
+            );
+            assert!(
+                !out.contains(reject),
+                "{target} emitted the wrong address width:\n{out}"
+            );
+        }
+    }
+
     #[test]
     fn lp64_targets_keep_the_eight_byte_address_field() {
         let (out, _) = compact_stack_map_asm(&sample_asm(), "arm64-apple-ios")
