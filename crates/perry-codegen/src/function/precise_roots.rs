@@ -143,8 +143,7 @@ fn lower_roots_for_rs4gc(lines: &[&str], root_ptrs: &[String]) -> Option<String>
         if is_call && trimmed.ends_with(')') && !trimmed.contains(" asm ") {
             if let Some(callee) = direct_callee_name(line) {
                 let leaf = match crate::gc_call_effects::classify_direct_callee(callee) {
-                    crate::gc_call_effects::GcCallEffect::CannotCollect
-                    | crate::gc_call_effects::GcCallEffect::NeverReturns => true,
+                    crate::gc_call_effects::GcCallEffect::CannotCollect => true,
                     crate::gc_call_effects::GcCallEffect::AllocNoReentry => {
                         crate::codegen::helpers::gc_safepoint_only_contract_enabled()
                     }

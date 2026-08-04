@@ -28,8 +28,8 @@ pointer has **three different homes**, each needing a different mechanism.
 |---|---|---|---|---|
 | **0** | *enabler* | — | **in-process LLVM** (#7241) | ✅ **landed** (#7301) |
 | 1 | `perry-codegen` lowering code | #7192, #7206, #7211 | `Raw`/`Rooted` borrow discipline | proposed |
-| 2 | emitted code's liveness | #7280, #7271, #7252, #7243 | statepoints (#7108, #7174) | ✅ **landed opt-in** (#7314) |
-| 3 | `perry-runtime` hand-written Rust | #7249, #7239, #7226, #7231 | `RuntimeHandleScope`, non-optional | not started |
+| 2 | emitted code's liveness | #7280, #7271, #7252, #7243 | statepoints (#7108, #7174) | ✅ **landed opt-in** (#7314), **usable** (#7339, #7340) |
+| 3 | `perry-runtime` hand-written Rust | #7249, #7239, #7226, #7231 | `RuntimeHandleScope`, non-optional | mechanism exists (675 uses), **still optional**; 54 open catches (#7341) |
 
 **Order is 0 → 2. Layers 1 and 3 are independent and can proceed now.**
 #7108 measured statepoints viable but blocked: *"the text-IR-plus-stock-clang
@@ -342,8 +342,26 @@ only), but it means one published figure reproduces only inside the checkout.
 
 ## Sequencing
 
-1. **Now, independent:** layer 1 and layer 3 rooting; #7286's index range proof.
-2. **Next:** in-process LLVM (#7241) → statepoints (#7108/#7174).
-3. **After the collector is trustworthy:** re-derive the RSS numbers (#7056).
-4. **Do not** re-measure GC pacing, or update the README's performance table,
+**Updated 2026-08-04.** Step 2 below is complete: layer 0 landed (#7301), layer 2
+landed (#7314) and became *reachable* (#7339) and *selectable* (#7340). The spine
+`0 → 2` is done, so the ordering that remains is:
+
+1. ~~**Next:** in-process LLVM (#7241) → statepoints (#7108/#7174).~~ **Done.**
+2. **Reduce root density — now a PREREQUISITE, not a nice-to-have.** Statepoints
+   cost **+18.95% binary size on root-dense code and +0% on root-free code**
+   (measured, see Part 1), and 97% of that is `__text`. Adopting them as the
+   default today therefore *regresses* the owner's stated goal of minimal binary
+   size. Fewer roots fixes that, and it is the same lever #7296 already proved
+   worth 9.9× on `matmul`, so speed and size pull together here rather than
+   trading off. The plan predicted this lever but flagged it "expected, not
+   measured. Layer 2 must prove it first" — layer 2 has now landed, so it can be
+   measured.
+3. **Layers 1 and 3, independent of the above.** Layer 3's instrument is now
+   aimed (#7342 arm 4) and has a 54-item worklist (#7341) whose dominant
+   signature is a stale `GC_TYPE_STRING` at minor #0.
+4. **Then the adoption fork.** Flipping statepoints on by default additionally
+   needs `llvm-inprocess` to become a default cargo feature (#7301's scope, since
+   RS4GC is the only invoke-capable backend) and x86-64 to work (#7333).
+5. **After the collector is trustworthy:** re-derive the RSS numbers (#7056).
+6. **Do not** re-measure GC pacing, or update the README's performance table,
    mid-cycle.
