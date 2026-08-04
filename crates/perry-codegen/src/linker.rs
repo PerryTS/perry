@@ -782,6 +782,7 @@ fn compile_ll_inprocess_in(
                 &plan.effective_target,
                 asm_path,
                 &plan.obj_path,
+                &plan.clang_args,
             )?;
             let obj = fs::read(&plan.obj_path)
                 .with_context(|| format!("Failed to read assembled {}", plan.obj_path.display()))?;
@@ -978,6 +979,7 @@ fn compile_ll_to_object_in(
             &plan.effective_target,
             asm_path,
             &obj_path,
+            &plan.clang_args,
         )?;
     }
 

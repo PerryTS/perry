@@ -913,6 +913,7 @@ pub fn compact_and_assemble(
     target: &str,
     asm_path: &Path,
     obj_path: &Path,
+    codegen_args: &[String],
 ) -> Result<()> {
     let asm = fs::read_to_string(asm_path)
         .with_context(|| format!("Failed to read assembly at {}", asm_path.display()))?;
@@ -1013,15 +1014,47 @@ pub fn compact_and_assemble(
         crate::statepoint_report::note_gc_map(stats.functions, stats.records, stats.roots);
     }
 
-    assemble(clang, target, asm_path, obj_path)
+    assemble(clang, target, asm_path, obj_path, codegen_args)
 }
 
-fn assemble(clang: &Path, target: &str, asm_path: &Path, obj_path: &Path) -> Result<()> {
+/// The subset of the codegen's clang argv that selects the target MACHINE.
+///
+/// The assembler must be told the same machine the code generator was told, or
+/// it rejects instructions the generator legitimately emitted. Optimisation and
+/// output flags are excluded: they mean nothing to an assembler, and forwarding
+/// them wholesale would be a second way for the two invocations to disagree.
+fn cpu_selection_flags(codegen_args: &[String]) -> Vec<&String> {
+    codegen_args
+        .iter()
+        .filter(|a| a.starts_with("-mcpu=") || a.starts_with("-march=") || a.starts_with("-mtune="))
+        .collect()
+}
+
+fn assemble(
+    clang: &Path,
+    target: &str,
+    asm_path: &Path,
+    obj_path: &Path,
+    codegen_args: &[String],
+) -> Result<()> {
+    // Mirror the codegen's CPU selection onto the assembler.
+    //
+    // Perry compiles with `-mcpu=native`, so on a host with SVE (Graviton, and
+    // any aarch64 server part) LLVM emits SVE instructions -- `mov z1.d, #…`.
+    // Assembling that text with a clang that was given no `-mcpu` fails with
+    // `instruction requires: sve or sme`, because the assembler defaults to the
+    // portable baseline while the code generator did not.
+    //
+    // The two invocations describe the SAME machine and must agree. Forwarding
+    // only the CPU-selection flags keeps that contract without dragging along
+    // optimisation or output flags, which mean nothing to an assembler.
+    let cpu_flags = cpu_selection_flags(codegen_args);
     let output = Command::new(clang)
         .arg("-c")
         .arg(asm_path)
         .arg("-o")
         .arg(obj_path)
+        .args(&cpu_flags)
         .arg("-target")
         .arg(target)
         .output()
@@ -1354,6 +1387,34 @@ mod tests {
         // the dispatch reported the SYMBOL as an unrecognised directive and
         // refused the module. Mach-O never emits this spelling, which is why
         // every macOS arm stayed green.
+    }
+
+    #[test]
+    fn the_assembler_is_told_the_same_machine_as_the_code_generator() {
+        // `-mcpu=native` on a host with SVE makes LLVM emit `mov z1.d, #…`.
+        // Assembling that with a clang given no `-mcpu` fails with
+        // `instruction requires: sve or sme` — the aarch64-linux arm's second
+        // failure, after the parse fix. Forward machine selection, nothing else.
+        let args: Vec<String> = [
+            "-O3",
+            "-mcpu=native",
+            "-fno-math-errno",
+            "-march=armv8.3-a",
+            "-mtune=neoverse-n1",
+            "-o",
+            "out.o",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let got: Vec<&str> = super::cpu_selection_flags(&args)
+            .into_iter()
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(
+            got,
+            ["-mcpu=native", "-march=armv8.3-a", "-mtune=neoverse-n1"]
+        );
     }
 
     #[test]
