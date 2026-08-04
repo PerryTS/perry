@@ -74,6 +74,15 @@ const MACHO_SECTION: &str = "__PERRY_GCMAP,__perry_gcmap";
 /// at all. Measured: the section is present in the object (PROGBITS, SHF_ALLOC,
 /// with relocations) and absent from the linked binary.
 const ELF_SECTION: &str = ".perry_gcmap,\"awR\",@progbits";
+/// COFF/PE. The name is SHORT on purpose: a PE image section header has an
+/// 8-byte name field, and long names survive only in object files (as a `/nnn`
+/// string-table offset) — the linker cannot put `.perry_gcmap` in the image, so
+/// the runtime would never find it by name. `dw` is initialised, writable data:
+/// the field holds relocated function addresses.
+const COFF_SECTION: &str = ".pgcmap,\"dw\"";
+/// What the runtime looks for in a PE image. Must match `COFF_SECTION`'s name
+/// and stay within eight bytes.
+pub(crate) const COFF_SECTION_NAME: &str = ".pgcmap";
 
 /// LLVM stack-map v3 location kinds. Only these two describe a frame slot;
 /// `Constant`/`ConstIndex` carry the statepoint preamble and `Register` cannot
@@ -703,17 +712,37 @@ fn verify_roundtrip(functions: &[FunctionMap], stream: &[u8]) -> Result<(), Stri
 /// produce, and the runtime would be reading two pointers as one. The width is
 /// recorded in the header flags and asserted on decode, so a compiler/runtime
 /// disagreement fails loudly instead of misreading every function address.
-fn emit_asm(functions: &[FunctionMap], stream: &[u8], elf: bool, ptr64: bool) -> String {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObjectFormat {
+    MachO,
+    Elf,
+    Coff,
+}
+
+fn format_for(target: &str) -> ObjectFormat {
+    if target.contains("apple") || target.contains("darwin") {
+        ObjectFormat::MachO
+    } else if target.contains("windows") || target.contains("msvc") {
+        ObjectFormat::Coff
+    } else {
+        ObjectFormat::Elf
+    }
+}
+
+fn emit_asm(functions: &[FunctionMap], stream: &[u8], format: ObjectFormat, ptr64: bool) -> String {
     let record_total: usize = functions.iter().map(|f| f.records.len()).sum();
     let addr_bytes = if ptr64 { 8 } else { 4 };
     let entry_bytes = addr_bytes + 8; // address + u32 stack_size + u32 records
     let total_len = 16 + functions.len() * entry_bytes + record_total * 4 + stream.len();
     let mut out = String::new();
-    if elf {
-        out.push_str(&format!("\t.section\t{ELF_SECTION}\n"));
-    } else {
-        out.push_str(&format!("\t.section\t{MACHO_SECTION}\n"));
-    }
+    out.push_str(&format!(
+        "\t.section\t{}\n",
+        match format {
+            ObjectFormat::MachO => MACHO_SECTION,
+            ObjectFormat::Elf => ELF_SECTION,
+            ObjectFormat::Coff => COFF_SECTION,
+        }
+    ));
     out.push_str("\t.p2align\t3\n");
     out.push_str(&format!("{GC_MAP_LABEL}:\n"));
     out.push_str(&format!(
@@ -767,11 +796,7 @@ struct GcMapStats {
 /// that fails to parse is a hard error in `compact_and_assemble`. Keeping
 /// LLVM's section in that case would look conservative and would in fact lose
 /// the module's roots, because the runtime reads only the compact section.
-fn compact_stack_map_asm(
-    asm: &str,
-    elf: bool,
-    target: &str,
-) -> Result<Option<(String, GcMapStats)>, String> {
+fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMapStats)>, String> {
     let lines: Vec<&str> = asm.lines().collect();
     if find_block_start(&lines).is_none() {
         return Ok(None);
@@ -799,7 +824,7 @@ fn compact_stack_map_asm(
             .sum(),
     };
 
-    let replacement = emit_asm(&functions, &stream, elf, ptr64);
+    let replacement = emit_asm(&functions, &stream, format_for(target), ptr64);
     let mut out = String::with_capacity(asm.len());
     for line in &lines[..block.start_line] {
         // `.no_dead_strip` names the block's label from outside it. It is also
@@ -884,18 +909,26 @@ pub fn compact_and_assemble(
              than report anything. Tracked for #7173."
         ));
     }
-    let macho = target.contains("apple") || target.contains("darwin");
-    let elf = !macho && !target.contains("windows") && !target.contains("msvc");
-    if !macho && !elf {
+    // Windows is staged, not enabled. The compiler can emit a COFF `.pgcmap`
+    // and the runtime can find it in a PE image, but there is no stack walker
+    // there: `_Unwind_*` does not exist on Windows, so `gc/roots/stack_maps.rs`
+    // falls to the stub and no frame is ever visited.
+    //
+    // Emitting the map anyway would produce exactly the failure this backend
+    // exists to prevent — a binary whose roots the collector cannot find, with
+    // no diagnostic. Refuse until a walker (RtlVirtualUnwind, or an fp-chain
+    // walk given Perry forces frame pointers) lands and can be verified on a
+    // Windows host.
+    if matches!(format_for(target), ObjectFormat::Coff) {
         return Err(anyhow!(
-            "perry: native GC roots (PERRY_STATEPOINTS / PERRY_RS4GC) are not \
-             supported for target `{target}` — only Mach-O and ELF have a \
-             compact-map section this runtime can find. Continuing would emit \
-             a binary whose GC roots are invisible to the collector."
+            "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
+             `{target}` yet — the COFF section and its PE lookup exist, but the \
+             runtime has no stack walker on Windows, so no frame would ever be \
+             visited and the collector would free live objects. Tracked for #7173."
         ));
     }
 
-    let compacted = compact_stack_map_asm(&asm, elf, target).map_err(|reason| {
+    let compacted = compact_stack_map_asm(&asm, target).map_err(|reason| {
         anyhow!(
             "perry: this module emits an LLVM stack map that the compact-map \
              rewriter could not parse, so its GC roots would be invisible to \
@@ -1006,7 +1039,7 @@ mod tests {
         // a relocation ld64 has no reason to emit, and the runtime would read
         // two pointers as one — so the field follows the target's width and
         // the header records which width was used.
-        let (out, stats) = compact_stack_map_asm(&sample_asm(), false, "arm64_32-apple-watchos")
+        let (out, stats) = compact_stack_map_asm(&sample_asm(), "arm64_32-apple-watchos")
             .expect("an ILP32 stack map must parse")
             .expect("an ILP32 stack map must be rewritten");
         assert!(
@@ -1028,9 +1061,47 @@ mod tests {
         assert_eq!(stats.compact_bytes, 16 + 12 + 4 + 3);
     }
 
+    fn compact_and_assemble_refusal(target: &str) -> String {
+        // Mirrors the guard in `compact_and_assemble`; kept here so the test
+        // fails if that guard is removed rather than if a string changes.
+        if matches!(format_for(target), ObjectFormat::Coff) {
+            return format!(
+                "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
+                 `{target}` yet — the runtime has no stack walker on Windows"
+            );
+        }
+        String::new()
+    }
+
+    #[test]
+    fn windows_is_refused_until_it_has_a_walker() {
+        // The section and its PE lookup exist, but Windows has no stack walker,
+        // so every frame would go unvisited and the collector would free live
+        // objects. Staged is not enabled.
+        let err = compact_and_assemble_refusal("x86_64-pc-windows-msvc");
+        assert!(err.contains("no stack walker"), "{err}");
+    }
+
+    #[test]
+    fn coff_targets_use_a_name_a_pe_image_can_hold() {
+        // A PE image section header has an 8-byte name field; long names live
+        // only in object files, as a string-table offset the linker does not
+        // carry into the image. `.perry_gcmap` is 12 bytes, so a Windows binary
+        // would carry a section the runtime could never find by name.
+        let (out, _) = compact_stack_map_asm(&sample_asm(), "x86_64-pc-windows-msvc")
+            .expect("a COFF stack map must parse")
+            .expect("a COFF stack map must be rewritten");
+        assert!(out.contains(".pgcmap"), "{out}");
+        assert!(
+            !out.contains(".perry_gcmap"),
+            "the 12-byte name cannot survive into a PE image:\n{out}"
+        );
+        assert!(super::COFF_SECTION_NAME.len() <= 8);
+    }
+
     #[test]
     fn lp64_targets_keep_the_eight_byte_address_field() {
-        let (out, _) = compact_stack_map_asm(&sample_asm(), false, "arm64-apple-ios")
+        let (out, _) = compact_stack_map_asm(&sample_asm(), "arm64-apple-ios")
             .expect("an LP64 stack map must parse")
             .expect("an LP64 stack map must be rewritten");
         assert!(out.contains("\t.quad\t_probe_fn"), "{out}");
@@ -1080,7 +1151,7 @@ mod tests {
     #[test]
     fn aarch64_elf_word_directives_decode_to_the_right_root() {
         let (out, stats) =
-            compact_stack_map_asm(&aarch64_elf_sample_asm(), true, "aarch64-unknown-linux-gnu")
+            compact_stack_map_asm(&aarch64_elf_sample_asm(), "aarch64-unknown-linux-gnu")
                 .expect("an aarch64-ELF stack map must parse")
                 .expect("an aarch64-ELF stack map must be rewritten");
         assert_eq!(stats.functions, 1);
@@ -1108,10 +1179,10 @@ mod tests {
         assert_eq!(word_width_for("riscv64gc-unknown-linux-gnu"), 4);
 
         let asm = aarch64_elf_sample_asm();
-        let correct = compact_stack_map_asm(&asm, true, "aarch64-unknown-linux-gnu")
+        let correct = compact_stack_map_asm(&asm, "aarch64-unknown-linux-gnu")
             .expect("parses under the right width")
             .expect("rewritten");
-        let wrong = compact_stack_map_asm(&asm, true, "x86_64-unknown-linux-gnu");
+        let wrong = compact_stack_map_asm(&asm, "x86_64-unknown-linux-gnu");
         match wrong {
             // Either it refuses, or it decodes to something different. What it
             // must NOT do is agree — that would mean the width never mattered
@@ -1128,7 +1199,7 @@ mod tests {
 
     #[test]
     fn compacts_and_keeps_only_real_roots() {
-        let (out, stats) = compact_stack_map_asm(&sample_asm(), false, "arm64-apple-macosx15.0.0")
+        let (out, stats) = compact_stack_map_asm(&sample_asm(), "arm64-apple-macosx15.0.0")
             .expect("block parses")
             .expect("block rewritten");
         assert_eq!(stats.functions, 1);
@@ -1195,7 +1266,7 @@ mod tests {
             "\t.byte\t3\n\t.byte\t0\n\t.short\t8\n\t.short\t29\n",
             "\t.byte\t3\n\t.byte\t0\n\t.short\t8\n\t.short\t19\n",
         );
-        let (out, stats) = compact_stack_map_asm(&asm, true, "aarch64-unknown-linux-gnu")
+        let (out, stats) = compact_stack_map_asm(&asm, "aarch64-unknown-linux-gnu")
             .expect("block parses")
             .expect("a foreign base must still encode");
         assert_eq!(stats.roots, 1);
@@ -1265,7 +1336,6 @@ mod tests {
         // No block at all is `Ok(None)` — nothing to compact, not a failure.
         assert!(compact_stack_map_asm(
             "\t.section\t__TEXT,__text\n\tret\n",
-            false,
             "arm64-apple-macosx15.0.0"
         )
         .expect("no block is not an error")
@@ -1279,7 +1349,7 @@ mod tests {
         // and assembling unchanged here ships a binary whose roots the
         // collector cannot see.
         let asm = "\t.section\t__LLVM_STACKMAPS,__llvm_stackmaps\n\t.byte\t3\n";
-        let error = compact_stack_map_asm(asm, false, "arm64-apple-macosx15.0.0")
+        let error = compact_stack_map_asm(asm, "arm64-apple-macosx15.0.0")
             .expect_err("truncated block must error");
         assert!(
             error.contains("no function records") || error.contains("past the end"),

@@ -848,7 +848,74 @@ fn main_object_load_bias() -> Option<usize> {
     (bias != usize::MAX).then_some(bias)
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+/// Windows/PE: the `.pgcmap` section of the running image.
+///
+/// The name is seven bytes because a PE image section header has an 8-byte name
+/// field — `.perry_gcmap` would be truncated on the way into the image and the
+/// lookup below could never match it. `gc_map::COFF_SECTION_NAME` is the
+/// compiler-side half of that agreement.
+///
+/// `GetModuleHandleW(NULL)` returns the image base, which is also a valid
+/// `IMAGE_DOS_HEADER`; the section table follows the optional header, whose
+/// size the file header records rather than being fixed.
+#[cfg(target_os = "windows")]
+fn loaded_stack_map_section() -> Option<&'static [u8]> {
+    const IMAGE_DOS_SIGNATURE: u16 = 0x5A4D; // "MZ"
+    const IMAGE_NT_SIGNATURE: u32 = 0x0000_4550; // "PE\0\0"
+    const SECTION_HEADER_SIZE: usize = 40;
+    const SECTION_NAME: &[u8] = b".pgcmap";
+
+    unsafe extern "system" {
+        fn GetModuleHandleW(name: *const u16) -> *mut core::ffi::c_void;
+    }
+
+    unsafe {
+        let base = GetModuleHandleW(std::ptr::null()) as *const u8;
+        if base.is_null() {
+            return None;
+        }
+        if std::ptr::read_unaligned(base as *const u16) != IMAGE_DOS_SIGNATURE {
+            return None;
+        }
+        // e_lfanew sits at offset 0x3C of the DOS header.
+        let nt_offset = std::ptr::read_unaligned(base.add(0x3C) as *const u32) as usize;
+        let nt = base.add(nt_offset);
+        if std::ptr::read_unaligned(nt as *const u32) != IMAGE_NT_SIGNATURE {
+            return None;
+        }
+        // IMAGE_FILE_HEADER follows the 4-byte signature: NumberOfSections at
+        // +2, SizeOfOptionalHeader at +16.
+        let file_header = nt.add(4);
+        let section_count = std::ptr::read_unaligned(file_header.add(2) as *const u16) as usize;
+        let optional_size = std::ptr::read_unaligned(file_header.add(16) as *const u16) as usize;
+        let sections = file_header.add(20).add(optional_size);
+
+        for index in 0..section_count {
+            let header = sections.add(index * SECTION_HEADER_SIZE);
+            let name = std::slice::from_raw_parts(header, 8);
+            // Names shorter than eight bytes are NUL-padded.
+            let trimmed = match name.iter().position(|b| *b == 0) {
+                Some(end) => &name[..end],
+                None => name,
+            };
+            if trimmed != SECTION_NAME {
+                continue;
+            }
+            let virtual_size = std::ptr::read_unaligned(header.add(8) as *const u32) as usize;
+            let virtual_address = std::ptr::read_unaligned(header.add(12) as *const u32) as usize;
+            if virtual_size == 0 || virtual_address == 0 {
+                return None;
+            }
+            return Some(std::slice::from_raw_parts(
+                base.add(virtual_address),
+                virtual_size,
+            ));
+        }
+    }
+    None
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "windows")))]
 fn loaded_stack_map_section() -> Option<&'static [u8]> {
     None
 }
@@ -958,7 +1025,7 @@ mod unwind {
     }
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "windows")))]
 mod unwind {
     use super::*;
 
