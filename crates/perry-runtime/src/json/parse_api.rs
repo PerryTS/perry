@@ -113,11 +113,48 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
         return Err(syntax_error_value(&format!("JSON parse error: {}", err)));
     }
 
+    // #7341: root the source string BEFORE the collection points, then
+    // re-derive the input slice from the rooted value.
+    //
+    // The order used to be: derive `bytes`, run `serde_json::from_slice` (which
+    // allocates and arms the malloc trigger), call `gc_check_trigger()` (which
+    // can collect outright), suppress, and only THEN push the root. Two things
+    // went wrong at once. The slice predated a collection point, and — the part
+    // that makes re-deriving alone useless — so did the root: pushing
+    // `text_ptr` after the collection roots an address the collector has
+    // already moved away from, so reading it back yields the same stale
+    // pointer. The parser then reads retired from-space for the whole parse,
+    // which the quarantine reports as a fault at `parse_value + 36`, on the
+    // very first `peek()`.
+    //
+    // Rooting first means the collector rewrites the slot, so the re-read below
+    // yields the post-move payload address. The suppression that follows was
+    // already here and was never the bug.
+    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+
     crate::gc::gc_collect_pending_suppressed_parse();
     crate::gc::gc_check_trigger();
     crate::gc::gc_suppress();
 
-    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+    //
+    // `bytes` above was taken from the StringHeader's payload before two
+    // collection points ran: `serde_json::from_slice` allocates (arming the
+    // malloc trigger), and `gc_check_trigger` can collect outright. An
+    // evacuating minor in either moves the source string, and the parser then
+    // reads the pre-collection address for the whole parse — the from-space
+    // quarantine reports it as a fault at `parse_value + 36`, on the very first
+    // `peek()`.
+    //
+    // The suppression was already here and is not the bug; the bug is that the
+    // borrow predates it. `text_root` keeps the string alive and the collector
+    // rewrites that root, so re-reading the header now yields the post-move
+    // payload address.
+    let bytes = {
+        let moved = crate::json::parse_root_get(text_root);
+        let hdr = moved.as_string_ptr();
+        let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
+        std::slice::from_raw_parts(data_ptr, len)
+    };
     let mut parser = DirectParser::new(bytes);
     let result = parser.parse_value();
     parse_root_push(result);
@@ -249,6 +286,24 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // in `gc_check_trigger` protects adversarial cases (previous stringify
     // result strings sharing blocks with interned keys) from retrigger
     // thrash when block-persistence keeps everything alive.
+    // #7341: root the source string BEFORE `gc_check_trigger`, and re-derive
+    // the input slice from the rooted value afterwards.
+    //
+    // The `gc_check_trigger()` immediately below is deliberate — see the
+    // comment above, it is what keeps parse-churn garbage shedding between
+    // iterations — but it is a COLLECTION POINT, and both `bytes` and
+    // `text_ptr` were derived above it. An evacuating minor there moves the
+    // source string, and the parser then reads the pre-collection address for
+    // the entire parse; the from-space quarantine reports it as a fault at
+    // `parse_value + 36`, on the very first `peek()`.
+    //
+    // Pushing the root first is what makes the re-read work. The old order
+    // pushed it AFTER the trigger, which roots an address the collector has
+    // already moved away from — so re-deriving from that slot returns the same
+    // stale pointer and fixes nothing. Rooting first means the collector
+    // rewrites the slot, and the re-read yields the post-move payload.
+    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+
     crate::gc::gc_check_trigger();
 
     // Suppress GC for the duration of the parse. Parse is synchronous and
@@ -257,7 +312,12 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // cycles walking an ever-growing live set (issue #59).
     crate::gc::gc_suppress();
 
-    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+    let bytes = {
+        let moved = crate::json::parse_root_get(text_root);
+        let hdr = moved.as_string_ptr();
+        let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
+        std::slice::from_raw_parts(data_ptr, len)
+    };
 
     let mut parser = DirectParser::new(bytes);
     let result = parser.parse_value();
