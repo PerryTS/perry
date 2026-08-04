@@ -204,16 +204,13 @@ jobs:
             fi
             llvm_bin="$llvm_root/bin"
           else
-            # Ubuntu ships a matched opt+clang pair; take the newest present,
-            # and install one only if the image has none.
-            llvm_bin="$(dirname "$(command -v opt || true)")"
-            if [ ! -x "$llvm_bin/opt" ]; then
-              llvm_bin="$(ls -d /usr/lib/llvm-*/bin 2>/dev/null | sort -V | tail -1 || true)"
-            fi
-            if [ ! -x "$llvm_bin/opt" ]; then
-              sudo apt-get update -qq && sudo apt-get install -y -qq llvm clang
-              llvm_bin="$(dirname "$(command -v opt)")"
-            fi
+            # The setup-llvm22 action (uses: above) installs, co-locates, and
+            # verifies the matched LLVM 22 opt+clang pair under
+            # $LLVM_SYS_221_PREFIX. Consume that prefix directly — hand-rediscovery
+            # could resolve an unversioned /usr/bin/opt and run RS4GC on the
+            # distro's LLVM 18, a green gate on the wrong LLVM. The pair-check
+            # below stays as the assertion.
+            llvm_bin="${LLVM_SYS_221_PREFIX:-/usr/lib/llvm-22}/bin"
           fi
           if [ ! -x "$llvm_bin/opt$exe" ] || [ ! -x "$llvm_bin/clang$exe" ]; then
             echo "::error::no matched opt+clang pair under $llvm_bin — RS4GC cannot run, and silently skipping it is exactly the gate that cannot fail"
