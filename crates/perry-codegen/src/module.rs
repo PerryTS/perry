@@ -648,7 +648,7 @@ impl LlModule {
         if crate::codegen::helpers::native_stack_roots_enabled() {
             ir.push_str("declare void @llvm.experimental.stackmap(i64, i32, ...)\n");
         }
-        if crate::codegen::helpers::statepoints_enabled() {
+        if crate::codegen::helpers::native_stack_roots_enabled() {
             push_statepoint_declarations(&mut ir);
         }
         ir.push('\n');
@@ -920,7 +920,7 @@ impl LlModule {
             if crate::codegen::helpers::native_stack_roots_enabled() {
                 pre.push_str("declare void @llvm.experimental.stackmap(i64, i32, ...)\n");
             }
-            if crate::codegen::helpers::statepoints_enabled() {
+            if crate::codegen::helpers::native_stack_roots_enabled() {
                 push_statepoint_declarations(&mut pre);
             }
             pre.push('\n');

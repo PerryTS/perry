@@ -405,8 +405,7 @@ fn build_clang_compile_plan(
     // the statepoint backends emit a stack map, so only they pay for it, and
     // the cost is small: `-S` takes the same time as `-c` (codegen is the
     // cost, printing text is free) and assembling is ~0.02s per module.
-    let compact_gc_map =
-        crate::codegen::helpers::statepoints_enabled() || crate::codegen::helpers::rs4gc_enabled();
+    let compact_gc_map = crate::codegen::helpers::native_stack_roots_enabled();
     let asm_path = compact_gc_map.then(|| PathBuf::from(format!("{}.s", obj_path.display())));
 
     let mut clang_args = vec![

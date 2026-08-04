@@ -105,26 +105,6 @@ pub(crate) fn precise_root_analysis_enabled() -> bool {
     shadow_stack_enabled() || native_stack_roots_enabled()
 }
 
-/// Research-only moving-GC backend using LLVM's explicit statepoint
-/// relocation sequence (`PERRY_STATEPOINTS=1`).
-///
-/// The standalone plain-stack-map mode (`PERRY_STACK_MAPS`) was deleted per
-/// the GC knob kill-policy after the quiet-host matrix: statepoints matched
-/// it within timer quantization, and it is structurally unsound — LLVM's
-/// stackmap intrinsic can record a root slot's address as `Register R#N`
-/// (caller-saved, unrecoverable at collection time), making those roots
-/// invisible to the collector by construction. The plain-map LOWERING
-/// survives only as this mode's internal fallback for `try`/setjmp
-/// functions and unsupported call forms. The Register hazard exists there
-/// too, which is why shrinking the fallback set is the remaining
-/// correctness work for this backend, tracked in the experiment doc.
-pub(crate) fn statepoints_enabled() -> bool {
-    matches!(
-        std::env::var("PERRY_STATEPOINTS").as_deref(),
-        Ok("1") | Ok("on") | Ok("true")
-    )
-}
-
 /// `PERRY_RS4GC=1` — research pipeline for #7174: root allocas become
 /// `ptr addrspace(1)`, functions are tagged `gc "statepoint-example"`, and
 /// each module is piped through `opt -passes='function(mem2reg),
@@ -146,7 +126,7 @@ pub(crate) fn rs4gc_enabled() -> bool {
 /// Whether precise roots should use a native-stack metadata backend rather
 /// than Perry's heap-backed shadow frame.
 pub(crate) fn native_stack_roots_enabled() -> bool {
-    statepoints_enabled() || rs4gc_enabled()
+    rs4gc_enabled()
 }
 
 /// `PERRY_GC_SAFEPOINT_ONLY=1` — the explicit-safepoint collection contract

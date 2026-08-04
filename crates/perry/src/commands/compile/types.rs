@@ -500,7 +500,7 @@ pub struct CompileArgs {
     /// cannot collect, statepoint relocation counts, plain stack-map
     /// fallbacks, and the live-root-width distribution.
     ///
-    /// Useful with `PERRY_STATEPOINTS=1`.
+    /// Useful with `PERRY_RS4GC=1`.
     /// `--statepoint-report=json` emits a stable machine-readable schema.
     /// Observational only; cache reuse is disabled for the reporting run so
     /// codegen executes and produces records.

@@ -230,7 +230,6 @@ fn stable_type_key(ty: &perry_hir::types::Type) -> String {
 /// at compile time but that aren't part of `CompileOptions`:
 /// `PERRY_DEBUG_INIT`, `PERRY_DEBUG_SYMBOLS`, `PERRY_LLVM_CLANG`,
 /// `PERRY_WRITE_BARRIERS`, `PERRY_SHADOW_STACK`,
-/// `PERRY_STATEPOINTS`,
 /// `PERRY_DISABLE_BUFFER_FAST_PATH`, `PERRY_VERIFY_NATIVE_REGIONS`,
 /// `PERRY_UNBOXED_OBJECT_FIELDS`, and `PERRY_TARGET_CPU`. See the env-var
 /// block at the bottom of this function for the rationale.
@@ -805,10 +804,6 @@ fn compute_object_cache_key_with_env(
     h.field(
         "env_shadow_stack",
         env_var("PERRY_SHADOW_STACK").as_deref().unwrap_or(""),
-    );
-    h.field(
-        "env_statepoints",
-        env_var("PERRY_STATEPOINTS").as_deref().unwrap_or(""),
     );
     h.field("env_rs4gc", env_var("PERRY_RS4GC").as_deref().unwrap_or(""));
     // Explicit-safepoint contract: flips audited AllocNoReentry helpers

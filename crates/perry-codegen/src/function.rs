@@ -13,9 +13,7 @@ use crate::types::LlvmType;
 /// #7173 / #7174). A sibling file only because of the 2,000-line cap.
 mod precise_roots;
 
-use precise_roots::{
-    lower_precise_roots_to_native_stack, retype_landing_pads_for_statepoints, PreciseRootBackend,
-};
+use precise_roots::{lower_precise_roots_to_native_stack, retype_landing_pads_for_statepoints};
 
 pub struct LlFunction {
     pub name: String,
@@ -685,14 +683,12 @@ impl LlFunction {
         // #7174: the `!has_try` exclusion is gone with the field. Try/catch no
         // longer lowers to setjmp/longjmp (#7302), so nothing can jump past a
         // `gc.relocate` any more and statepoints cover every function.
-        let gc_strategy = if self.stack_map_requested
-            && (crate::codegen::helpers::statepoints_enabled()
-                || crate::codegen::helpers::rs4gc_enabled())
-        {
-            " gc \"statepoint-example\""
-        } else {
-            ""
-        };
+        let gc_strategy =
+            if self.stack_map_requested && crate::codegen::helpers::native_stack_roots_enabled() {
+                " gc \"statepoint-example\""
+            } else {
+                ""
+            };
         // Invoke-EH (#7302): functions containing landing/funclet pads name
         // their personality on the define line. LLVM's grammar orders these
         // `[fn attrs] [gc] [personality]`, so the strategy precedes it.
@@ -730,17 +726,7 @@ impl LlFunction {
         // lazily-reserved scalar root and every call site is visible.
         //
         let ir = if self.stack_map_requested {
-            let backend = if crate::codegen::helpers::rs4gc_enabled() {
-                PreciseRootBackend::Rs4gc
-            } else {
-                // Not `StackMap`: that variant is gone. Both sites that set
-                // `stack_map_requested` are guarded by
-                // `native_stack_roots_enabled()`, which is exactly
-                // `statepoints_enabled() || rs4gc_enabled()`, so this branch
-                // is only reachable with statepoints on.
-                PreciseRootBackend::Statepoint
-            };
-            lower_precise_roots_to_native_stack(&ir, &self.name, self.stack_map_slot_count, backend)
+            lower_precise_roots_to_native_stack(&ir, &self.name, self.stack_map_slot_count)
         } else {
             ir
         };
