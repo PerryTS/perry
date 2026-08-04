@@ -774,6 +774,19 @@ pub extern "C" fn js_regexp_new(
     // GC-survivable source table all agree on the canonical form, and the
     // header never holds the caller's possibly-temporary input flags.
     let canonical_flags_ptr = js_string_from_str(flags_str);
+    // ★ #7341: root the canonical flags string too. The `gc_malloc` below is an
+    // allocation and therefore a collection point, exactly as the comment above
+    // `pattern_root` says — but only the PATTERN was rooted and re-read. The
+    // flags string is created here and stored into the header AFTER that
+    // allocation, so an evacuating minor in `gc_malloc` moved it and the header
+    // kept the pre-collection address. `flags_ptr` is then permanently stale in
+    // a live header: `lookup_fancy_regex` reads it through `string_as_str` and
+    // faults on retired from-space, which is 5 of the 31 catches in #7341
+    // (four different callers, all reaching that one read).
+    //
+    // The write barrier below already treated this as a real GC edge; what was
+    // missing is that the value written had to survive the allocation first.
+    let flags_root = scope.root_string_ptr(canonical_flags_ptr);
     unsafe {
         let raw = crate::gc::gc_malloc(header_size, crate::gc::GC_TYPE_OBJECT);
         if raw.is_null() {
@@ -789,6 +802,8 @@ pub extern "C" fn js_regexp_new(
         // so the incoming argument may name from-space; the handle is a mutable
         // root the collector rewrote.
         let pattern = pattern_root.get_raw_const_ptr::<StringHeader>();
+        // #7341: same re-read for the flags, for the same reason.
+        let canonical_flags_ptr = flags_root.get_raw_const_ptr::<StringHeader>();
 
         (*ptr).regex_ptr = regex_ptr;
         (*ptr).pattern_ptr = pattern;
