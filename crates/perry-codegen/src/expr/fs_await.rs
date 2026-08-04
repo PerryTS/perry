@@ -93,6 +93,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // intermediate block. Hoisted to the entry block so the
             // slot dominates the merge block even when this Await is
             // itself nested inside an if-arm.
+            // #7341: root the promise for the whole await loop.
+            //
+            // `wait` calls `js_promise_run_microtasks_await_loop`,
+            // `js_run_stdlib_pump` and `js_await_loop_tick_timers`, every one of
+            // which allocates and can drive an evacuating minor — then branches
+            // back to `check`, which re-unboxes the SAME SSA value. The comment
+            // below about unboxing per block solves LLVM dominance, not GC
+            // movement: the box names the pre-collection promise, so after one
+            // pump the loop polls retired from-space and `js_promise_state`
+            // dereferences it.
+            //
+            // 4 of the 31 catches in #7341 are this, all `obj_type=5`
+            // (GC_TYPE_PROMISE) with frame #1 in generated code. The temp-root
+            // slot is what the collector rewrites, so every block re-reads it
+            // instead of reusing the register.
+            let promise_root = crate::expr::temp_root::temp_root_push_double(ctx, &promise_box);
             let result_slot = ctx.func.alloca_entry(DOUBLE);
             // Pre-seed with the boxed operand so the non-promise
             // branch just needs to jump to merge.
@@ -144,6 +160,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // could hoist the unbox into (check is reachable from
             // both the initial branch AND from `wait`).
             ctx.current_block = check_idx;
+            let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
             let promise_handle = unbox_to_i64(ctx.block(), &promise_box);
             let state = ctx
                 .block()
@@ -178,6 +195,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let wait_for_event_label = ctx.block_label(wait_for_event_idx);
                 let unsettled_exit_label = ctx.block_label(unsettled_exit_idx);
 
+                let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
                 let promise_handle_wait = unbox_to_i64(ctx.block(), &promise_box);
                 let state_after_tick =
                     ctx.block()
@@ -214,6 +232,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             // === settled ===
             ctx.current_block = settled_idx;
+            let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
             let promise_handle2 = unbox_to_i64(ctx.block(), &promise_box);
             let state2 = ctx
                 .block()
@@ -230,6 +249,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // would terminate the process because `js_throw` longjmps
             // through a non-existent handler frame.
             ctx.current_block = reject_idx;
+            let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
             let promise_handle3 = unbox_to_i64(ctx.block(), &promise_box);
             let reason = ctx
                 .block()
@@ -246,6 +266,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             // === done ===
             ctx.current_block = done_idx;
+            let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
             let promise_handle4 = unbox_to_i64(ctx.block(), &promise_box);
             let value = ctx
                 .block()
