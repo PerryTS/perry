@@ -415,6 +415,7 @@ entry:
             "arm64-apple-macosx",
             "aarch64-apple-ios",
             "aarch64-apple-watchos",
+            "arm64_32-apple-watchos",
             "aarch64-unknown-linux-gnu",
             "aarch64-unknown-linux-musl",
             "aarch64-linux-android",
