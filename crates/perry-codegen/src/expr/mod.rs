@@ -1739,6 +1739,7 @@ mod ta_param_f64_read;
 pub(crate) use index_get::packed_f64_loop_index_parts;
 pub(crate) use masked_window::masked_window_fact_for_index;
 mod index_set;
+mod index_set_typed_array;
 mod instance_misc1;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;
