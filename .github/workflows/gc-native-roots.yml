@@ -453,6 +453,48 @@ jobs:
           [ "$checked" -gt 0 ] \
             || { echo "::error::no probe ran under a non-default walker — the step measured nothing"; exit 1; }
 
+          # Everything above proves a process exited zero and printed what the
+          # oracle printed. It does NOT prove `PERRY_STACKMAP_WALKER=$mode`
+          # selected that walker, that the walker reached a mapped frame, or
+          # that anything was evacuated — and all three modes are supposed to
+          # produce identical output, so program output cannot tell them apart.
+          # That is CLAUDE.md's fourth hazard, and the very shape of #7392: the
+          # walker under test read the wrong words for months while every probe
+          # stayed green.
+          #
+          # So assert the subject was live, per mode, off one traced run of
+          # `11_collect_at_depth` (deep stack, a live root in every frame, so
+          # the telemetry is non-trivial on every arm):
+          #
+          #   fp_walks == 0  proves `unwind` took effect — nonzero means the
+          #                  chain walk ran anyway and the mode did nothing.
+          #   fp_walks > 0   proves `verify` cross-checked something rather
+          #                  than quietly not running the chain walk.
+          #   --require-locations   the walker stepped frames, matched
+          #                  safepoints and enumerated roots, rather than
+          #                  visiting nothing while other root sources covered.
+          #   evacuation liveness   a copying minor ran and MOVED an object, so
+          #                  the roots being enumerated were roots that had to
+          #                  be rewritten (#6942/#6946, #7336).
+          #
+          # python3 unqualified: this step never runs on Windows, which is the
+          # only runner where the toolcache spells it `python`.
+          for mode in $modes; do
+            case "$mode" in
+              unwind) fp_flag="--forbid-fp-walks" ;;
+              verify) fp_flag="--require-fp-walks" ;;
+              *) echo "::error::no liveness assert defined for walker $mode"; exit 1 ;;
+            esac
+            PERRY_GC_TRACE=1 PERRY_GC_DIAG=1 PERRY_STACKMAP_WALKER="$mode" \
+            PERRY_RS4GC=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+            PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+              /tmp/rs4gc-11_collect_at_depth > /dev/null 2> "/tmp/walker-trace-$mode.err"
+            python3 scripts/gc_walker_trace_assert.py "/tmp/walker-trace-$mode.err" \
+              --require-locations $fp_flag
+            python3 scripts/gc_evacuation_liveness_assert.py "/tmp/walker-trace-$mode.err" \
+              --probe "11_collect_at_depth (PERRY_STACKMAP_WALKER=$mode)"
+          done
+
       # #7327. Everything above pins PERRY_LLVM_OPT + PERRY_LLVM_CLANG to one
       # brew install, because RS4GC piped IR through an external `opt` and a
       # newer `opt` emits attributes an older `clang` cannot parse. That made
