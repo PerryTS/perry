@@ -416,6 +416,164 @@ only), but it means one published figure reproduces only inside the checkout.
 
 ---
 
+## ★ Status 2026-08-04, later — ELF was never compiling, and three CI arms were never running
+
+A day of Layer 2 and Layer 3 work. The headline is not any single fix: it is that
+two of the things this plan treated as *measured* were not.
+
+### Statepoints could not compile on aarch64-ELF at all
+
+The default is target-aware and aarch64-Linux is inside the allowed set, so this
+was a hard compile failure on a default-on path — not a CI annoyance. Two
+independent bugs, stacked, each masking the next:
+
+1. **The compact stack-map parser did not model GNU-as symbol assignments.**
+   `sym = expr` — the bare spelling of `.set`, zero bytes, no leading directive —
+   so the dispatch reported the *symbol* as an unrecognised directive and refused
+   the module. Emitted only at `-O3` (the optimiser materialises absolute-symbol
+   aliases such as `perry_null_guard_zero = 0` and `.Lperry_ic_8 = .Ltmp3-4`) and
+   only on ELF; Mach-O's asm printer does not use that spelling. #7390.
+2. **The assembler was not told the CPU the code generator was told.** Perry
+   compiles with `-mcpu=native`; on a Graviton runner LLVM emits SVE
+   (`mov z1.d, #…`) and `compact_and_assemble` handed that text to clang with no
+   `-mcpu` at all, so the assembler applied the portable baseline and rejected
+   what the generator had just produced. #7390 forwards `-mcpu`/`-march`/`-mtune`.
+
+Toolchain provisioning was a third layer: `setup-llvm22` installed `llvm-22-dev`
+without `clang-22`, leaving `/usr/lib/llvm-22/bin/opt` with no clang beside it
+(#7388), and the workflow then re-discovered a toolchain by hand and could land
+on the distro's LLVM 18 — a green gate on the wrong LLVM. #7384 deleted the
+hand-discovery in favour of `$LLVM_SYS_221_PREFIX/bin`.
+
+**Reproduced without a Linux host**, which is the transferable part: the parser is
+a pure function over assembly *text*, so what was needed was ELF text, not an ELF
+machine. Trace the module, retarget the triple, drop the Mach-O-only
+`.no_dead_strip` module asm, `opt -passes=rewrite-statepoints-for-gc`, then
+`llc -mattr=+jsconv,+v8.3a` (generic ARMv8.0 cannot select `fjcvtzs`). The real
+assembly then parsed at `-O2` and refused at `-O3` exactly as CI reported.
+
+With both fixed the arm compiles everything and runs probe 1 with real GC
+metrics, then segfaults in `02_survivor_promotion` under forced evacuation —
+**#7392**, a genuine statepoint-lowering GC bug rather than a toolchain gap.
+
+### ★★★ Three of the four RS4GC arms had never executed — not once
+
+`gc-native-roots.yml` had **no `concurrency` group**, so nothing superseded a
+stale run and its four-arm matrix multiplied on every push. Ten consecutive runs
+were checked: `macos-14` was `queued` in **all ten**, as were `ubuntu-latest`
+(x86-64 ELF) and `windows-latest` (PE). Only the aarch64 arm ever reached a
+runner — which is precisely why it was the only arm ever observed red or green.
+
+Fixed in #7393 with the same shape `llvm-inprocess.yml` already used (#7357):
+push runs keyed on SHA, `cancel-in-progress` scoped to `pull_request`.
+
+**This invalidates conclusions, not just tidiness.** Every "the ELF arm is the
+only one red" statement rested on arms that had never run. It also makes #7392
+unanswerable until they do: *"the segfault is ELF-specific"* and *"macOS has
+never run the probe"* are indistinguishable.
+
+Add to CLAUDE.md's four ways a gate cannot fail: **a matrix arm that never
+reaches a runner presents as platform coverage while reporting nothing.**
+
+### Layer 3 — nine fixes, and the finding that generalises
+
+#7373 #7374 #7375 #7376 #7380 #7381 #7383 #7385 #7391. **Every one was an
+ordering bug, not a missing root.** Each site already had rooting; what was
+missing was ordering the root relative to the collection point. The rule is
+*root before the allocation, re-read after* — not *add roots*.
+
+Two consequences worth carrying:
+
+- **A fault that MOVES is a real fix; a fault that does not move by a single
+  byte means the value was already dead when you rooted it** — walk upstream, do
+  not refine the root. This single test separated every real fix from every dud;
+  ten attempts measured exactly zero and three of them shared the unmoved-fault
+  signature.
+- **Some catches are chains.** `js_object_get_field_by_name`'s `.size` arm had
+  three stale-receiver sites masking one another (+664 → +560 → +820), and
+  `gc_assign_string_source_rooting` likewise. "N remaining catches" undercounts.
+
+One was not a rooting bug at all: #7380, a **type confusion**. The exotic-source
+skip in `js_object_assign_one` classifies by GC type, and a RegExp is literally
+`gc_malloc(GC_TYPE_OBJECT)` — so it passed the very test that excludes Map/Set/
+Date and its `RegExpHeader` was read at `ObjectHeader`'s field offsets.
+Generalises: **any "is this a plain object" test written as
+`gc_type == GC_TYPE_OBJECT` is wrong for RegExp.**
+
+#7391 is the one to remember for why the quarantine earns its keep: without it
+the stale read is *silent*. The `CLOSURE_MAGIC` check simply fails, the
+user-prototype link is skipped, and `foo.prototype = new Array(1,2,3)` quietly
+does not take effect. Evacuation copies rather than zeroes, so a stale address
+still holds plausible bytes and the program prints a wrong answer with no crash.
+
+### ★ Layer 1 is further along than this plan assumed
+
+`expr/temp_root.rs::lower_exprs_rooted` **already implements what the RFC
+proposes for codegen operands**: lower left to right, root each finished value
+across the evaluation of those that follow, gated on
+`any_later_ref_may_trigger_gc` so an operand with nothing allocating after it
+emits exactly the IR it did before. All four arms of `lower_call/func_ref.rs`
+use it or its rest-bundling sibling.
+
+So the codegen half of "rooting by construction" is substantially built, and
+#7378's scoring says where the gap actually is: of four bugs found *after* the
+RFC was written, it would have caught **one** — and the other three were layer 3,
+where `RuntimeHandleScope` exists (675 uses / 169 files) but was **optional**.
+#7389 is the first structural answer there: `RuntimeHandle::across_*` runs the
+allocating call and returns the post-collection address in one step, so the
+pre-call pointer is never bound, plus a **1006-site debt ratchet** wired into
+`test.yml`.
+
+**It is a debt counter, not a soundness proof, and says so.** Rust has no effect
+system to mark "may allocate", so no signature can reject holding a stale copy
+across such a call, and a `&mut Heap` token cannot cross `extern "C"`.
+
+### RSS
+
+#7377: nursery cap unconditional and scavenge default-on — **peak RSS −69%**.
+Item 5 of the sequencing below is therefore partly answered already.
+
+### Performance — first honest measurement, and two traps
+
+- **Two top-level benchmarks measure nothing.** `bench_fibonacci` and
+  `bench_bitwise` report `TOTAL:0` on Perry: the result is unused and LLVM
+  eliminates the loop. Wall clock says ~240× faster than Node and *infinitely*
+  faster respectively. #7395. The benchmark form of "the gate runs but its
+  subject never did".
+- **`bench_array_ops` is 4.5× behind Node** (262 vs 58, its own timer) and over
+  half the time is outside generated code: `js_typed_feedback_numeric_array_
+  index_set_guard` 103 samples, `js_array_grow` 87, `js_array_fill_f64_iota_
+  extend` 89, GC temp-root ops 52. #7396.
+
+  The guard is **not** overhead for a disabled feature — with typed feedback off
+  it does the real work and authorises the fast store. The problem is siting: a
+  five-argument cross-crate call per element for a predicate whose hot case is
+  one masked load of the GC header's layout flag. That is the "native-able
+  primitive became a runtime call" pattern in its clearest form.
+
+A first fix attempt (slice-fill for the growth hole-init) was **reverted
+unmeasured**: the disassembly check was vacuous (the symbol is absent from a
+stripped binary, so `grep -c` returned 0 both before and after) and host load
+had reached 55. Neither axis carried evidence. Re-measure on a quiet host with
+`--debug-symbols` before trusting any array-path number.
+
+### Method notes that cost time to learn
+
+- **Minimise the right statement.** `object_assign_collection` cost eleven wrong
+  hypotheses because the program died four statements before the one the file's
+  tail suggested — and the "minimal repro" built from it exited 0 the whole time,
+  unchecked.
+- **Verify a check can fail.** Twice in one day a check of mine could not:
+  `PERRY_GC_HEAP_LIMIT=64` ran zero collections, and the vectorisation check
+  above matched an absent symbol. Both would have produced confident wrong
+  conclusions.
+- **Baseline before attributing.** Two gap tests that failed alongside a patch
+  turned out to fail identically on pristine `main`; the `perry-runtime` unit
+  suite fails 3/5/3 across three runs of pristine `main` (#7365), so a raw
+  failure count says nothing without it.
+
+---
+
 ## Sequencing
 
 **Updated 2026-08-04.** Step 2 below is complete: layer 0 landed (#7301), layer 2
@@ -433,9 +591,22 @@ landed (#7314) and became *reachable* (#7339) and *selectable* (#7340). The spin
    completely; metadata was never the dominant term. Fewer roots is still the
    same lever #7296 proved worth 9.9× on `matmul`, so size and speed pull
    together rather than trading off.
-3. **Layers 1 and 3, independent of the above.** Layer 3's instrument is now
-   aimed (#7342 arm 4) and has a 54-item worklist (#7341) whose dominant
-   signature is a stale `GC_TYPE_STRING` at minor #0.
+3. **Layers 1 and 3, independent of the above.** *Updated 2026-08-04.*
+
+   **Layer 1 is largely built for codegen** — `lower_exprs_rooted` is the RFC's
+   proposal, already gated on `any_later_ref_may_trigger_gc`, and all four arms
+   of `lower_call/func_ref.rs` use it. The remaining Layer 1 question is not
+   "build the mechanism" but "where is it still not used".
+
+   **Layer 3 is where the gap is.** #7378 scored the RFC against four bugs found
+   after it was written: one caught, three in `perry-runtime` where the mechanism
+   did not exist. #7389 supplies the first half — `RuntimeHandle::across_*` plus
+   a 1006-site debt ratchet — and the count is the worklist.
+
+   Nine catches closed (#7373–#7376, #7380, #7381, #7383, #7385, #7391); the rest
+   are **#7394**, whose documented cause is already fixed, so start from the
+   disassembly rather than the tests' headers. Some catches are chains: one
+   function held three stale sites masking one another.
 4. ~~**Then the adoption fork.**~~ **CLOSED — statepoints are the default as of
    #7370.** Every gate it listed is shut: `llvm-inprocess` became a default
    cargo feature (#7353), x86-64 landed (#7349), Windows landed (#7355), the
@@ -452,5 +623,19 @@ landed (#7314) and became *reachable* (#7339) and *selectable* (#7340). The spin
    lowering of the same analysis, which #7340 split apart precisely so this
    choice could be per-target.
 5. **After the collector is trustworthy:** re-derive the RSS numbers (#7056).
+   *Partly answered:* #7377 made the nursery cap unconditional and scavenge
+   default-on for **peak RSS −69%**. What remains is the re-derivation under the
+   statepoint default rather than the shadow stack.
+
+7. **Performance now has a measured starting point, and two traps in front of
+   it.** `bench_fibonacci`/`bench_bitwise` measure nothing (#7395) — fix or
+   retire them before any performance claim cites them. `bench_array_ops` is
+   4.5× behind Node with the array-store guard and growth path dominating
+   (#7396). **Measure on a quiet host**: a first fix attempt was reverted because
+   host load hit 55 and its disassembly check matched an absent symbol.
+
+8. **CI hygiene is a correctness input, not housekeeping.** Three of four RS4GC
+   arms had never executed (#7393). Before citing any matrix as platform
+   coverage, confirm its arms actually reach a runner.
 6. **Do not** re-measure GC pacing, or update the README's performance table,
    mid-cycle.
