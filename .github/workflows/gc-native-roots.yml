@@ -77,8 +77,20 @@
 # CLAUDE.md's GC knob kill-policy: an arm exercising the non-default state, or
 # delete the mode.
 #
-#   PERRY_GC_SAFEPOINT_ONLY  -> native-roots-rs4gc, "safepoint-only" steps
-#   PERRY_STACKMAP_WALKER    -> native-roots-rs4gc, "both non-default walkers"
+#   PERRY_GC_SAFEPOINT_ONLY  -> NOTHING. This entry was false: no step in this
+#                               file, or any other, ever set the variable. Left
+#                               spelled out rather than quietly deleted, because
+#                               a ledger that has been wrong once has to say so.
+#   PERRY_STACKMAP_WALKER    -> native-roots-rs4gc, "Both non-default walkers"
+#                               step. Also false until #7392 — the entry claimed
+#                               an arm that did not exist, and both walkers it
+#                               named were carrying real bugs the whole time:
+#                               `unwind` placed every SP-relative root one frame
+#                               too low, and `verify` could not run at all
+#                               because the fast walk bailed on a legal frame
+#                               record. Measured on aarch64-Linux the day the
+#                               step was added: 2 of 11 probes passed all three
+#                               walkers before the fix, 11 of 11 after.
 #   PERRY_RS4GC              -> native-roots-rs4gc
 #   PERRY_STATEPOINT_REPORT  -> not a knob. It survives as the driver's
 #                               internal handoff to the rayon module workers,
@@ -375,6 +387,71 @@ jobs:
             "/tmp/rs4gc-11_collect_at_depth$exe" > /dev/null 2> /tmp/rs4gc-trace.err
           "$py" scripts/gc_walker_trace_assert.py /tmp/rs4gc-trace.err \
             --require-locations
+
+      # #7392. `PERRY_STACKMAP_WALKER` selects between three walks over the same
+      # roots, and until this step nothing anywhere set it — the ledger at the
+      # top of this file said otherwise for months. Both non-default walks were
+      # broken the whole time, on every platform, and could not have been
+      # noticed:
+      #
+      #   unwind  resolved SP-relative roots against `CFA - stack_size`, but the
+      #           CFA an `_Unwind_Backtrace` callback reports IS the frame's
+      #           stack pointer, so every such root landed one frame too low. A
+      #           wrong stack word looks exactly like a right one to everything
+      #           downstream — no code knows what a root slot should contain.
+      #   verify  runs both walks and compares the slot sets, i.e. it is the
+      #           only check that can catch the above. It could not run: the
+      #           fast walk rejected a legal 8-mod-16 frame record (which is
+      #           what AArch64 ELF frame lowering produces whenever an odd
+      #           number of callee-saved GPRs sits below the pair) and returned
+      #           "unavailable", which verify turns into a panic.
+      #
+      # So the default walker was the only one anyone exercised, and on
+      # aarch64-Linux its bail-out landed in the broken fallback: the roots of
+      # that frame were never rewritten after an evacuation, and the mutator
+      # dereferenced a stale from-space pointer (`02_survivor_promotion`,
+      # SIGSEGV). Measured on aarch64-Linux before the fix: 2 of 11 probes
+      # passed all three walkers. After: 11 of 11.
+      #
+      # `verify` needs the fp-chain walk to exist, which is aarch64-only, so it
+      # is gated on the arch rather than skipped quietly. Windows has neither
+      # walker (`RtlVirtualUnwind` is its own module) and is excluded outright.
+      - name: Both non-default walkers
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        run: |
+          set -euo pipefail
+          modes="unwind"
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            modes="unwind verify"
+          fi
+          echo "walkers under test: $modes"
+          checked=0
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            name=$(basename "$probe" .ts)
+            # Binaries and oracles come from the matrix step above, same job and
+            # same runner — as the walker-liveness assert already does. Missing
+            # ones are a hard error: silently checking nothing is the failure
+            # mode this whole step exists to close.
+            [ -x "/tmp/rs4gc-$name" ] \
+              || { echo "::error::$name has no binary from the probe matrix step"; exit 1; }
+            [ -s "/tmp/rs4gc-$name.oracle" ] \
+              || { echo "::error::$name has no pinned oracle from the probe matrix step"; exit 1; }
+            for mode in $modes; do
+              PERRY_STACKMAP_WALKER="$mode" \
+              PERRY_RS4GC=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+                "/tmp/rs4gc-$name" > "/tmp/walker-$name-$mode.out" \
+                                  2> "/tmp/walker-$name-$mode.err" \
+                || { echo "::error::$name crashed under PERRY_STACKMAP_WALKER=$mode"; \
+                     tail -20 "/tmp/walker-$name-$mode.err"; exit 1; }
+              diff "/tmp/rs4gc-$name.oracle" "/tmp/walker-$name-$mode.out" \
+                || { echo "::error::$name diverged from the pinned oracle under PERRY_STACKMAP_WALKER=$mode"; exit 1; }
+              checked=$((checked+1))
+            done
+          done
+          echo "non-default walker runs, all oracle-diffed: $checked"
+          [ "$checked" -gt 0 ] \
+            || { echo "::error::no probe ran under a non-default walker — the step measured nothing"; exit 1; }
 
       # #7327. Everything above pins PERRY_LLVM_OPT + PERRY_LLVM_CLANG to one
       # brew install, because RS4GC piped IR through an external `opt` and a

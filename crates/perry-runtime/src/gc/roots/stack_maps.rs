@@ -51,6 +51,14 @@ struct StackMapRecord {
     /// location needs the FP-to-SP offset (see `fp_to_sp_offset`).
     function_address: usize,
     /// The containing function's total frame size from the function table.
+    ///
+    /// Decoded because the map carries it and `parse_gc_map`'s tests pin that
+    /// the field is read at the right offset — NOT because a walker may build
+    /// a root's base out of it. The unwinder fallback used to compute
+    /// `CFA - stack_size` and that was #7392: the CFA a backtrace callback
+    /// reports IS the frame's stack pointer, so the subtraction put every
+    /// SP-relative root one frame too low.
+    #[allow(dead_code)]
     stack_size: u64,
     /// Half-open range into `StackMapIndex::roots`.
     ///
@@ -100,25 +108,29 @@ static STACK_MAPS: OnceLock<StackMapIndex> = OnceLock::new();
 const DWARF_REG_FP_AARCH64: u16 = 29;
 const DWARF_REG_SP_AARCH64: u16 = 31;
 
-// How far below the CFA this frame's return address sits, if it sits on the
-// stack at all. This is NOT a constant across architectures and getting it
-// wrong shifts every SP-relative root by a word:
+// A frame record is two 64-bit words, so it needs EIGHT-byte alignment, not
+// sixteen.
 //
-//   x86-64: `call` PUSHES the return address, so CFA is the caller's SP before
-//           the call and the callee's SP starts one slot lower.
-//   aarch64: `bl` writes the return address to x30. Nothing is pushed, so the
-//           frame's SP is simply CFA - stack_size.
+// The stack pointer is 16-byte aligned at a public interface on both supported
+// ABIs, and on Darwin the frame record sits at the top of the frame, so there
+// x29 is always 16-aligned as well and a `fp & 0xF` test never fires. AAPCS64
+// does not promise that: §6.4.6 fixes the record's CONTENTS and leaves its
+// location within the frame unspecified, and LLVM's AArch64 **ELF** frame
+// lowering puts the `x29,x30` pair *below* the other callee-saved GPRs. With an
+// odd number of those, the pair lands 8 mod 16.
 //
-// The aarch64 case is easy to miss because `chain_walkable` is true there, so
-// the fast x29 walker normally runs and this path is only the fallback — an
-// eight-byte error would stay latent until the fast walk bailed.
-// Unused on Windows: `RtlVirtualUnwind` hands back the frame's real `Rsp`, so
-// the Windows walker never derives SP from a CFA (there is no CFA query).
-#[cfg(target_arch = "x86_64")]
-#[cfg_attr(target_os = "windows", allow(dead_code))]
-const CFA_RETURN_ADDRESS_BYTES: usize = std::mem::size_of::<usize>();
-#[cfg(not(target_arch = "x86_64"))]
-const CFA_RETURN_ADDRESS_BYTES: usize = 0;
+// Measured on aarch64-unknown-linux-gnu (#7392), from the `.eh_frame` of a
+// runtime frame that saves x19..x23 and v8:
+//
+//     LOC        CFA      x19  x20  x21  x22  x23  x29  ra   v8
+//     ...        x29+56   c-8  c-16 c-24 c-32 c-40 c-56 c-48 c-64
+//
+// x29 = CFA - 56, and CFA is 16-aligned, so x29 ≡ 8 (mod 16) — a legal frame
+// record the 16-byte test rejected. That abandoned the fast walk mid-stack and
+// fell back to the unwinder, which had its own SP-base bug (see
+// `unwind::walk_frame`), so the frame's roots were never rewritten after an
+// evacuation and the mutator then dereferenced a stale from-space pointer.
+const FRAME_RECORD_ALIGN_MASK: usize = 0x7;
 
 // Which DWARF register is the stack pointer on the machine this runtime was
 // built for. Distinct from the format constants above and used only to choose
@@ -1000,21 +1012,31 @@ mod unwind {
         for record in matched {
             for location in state.index.locations(record) {
                 state.stats.locations_visited = state.stats.locations_visited.saturating_add(1);
-                // SP-relative roots derive their base from the CFA. By the
-                // SysV/AAPCS definition the CFA is the caller's stack pointer
-                // immediately before the call, so this frame's body stack
-                // pointer sits one return-address slot plus this function's own
-                // frame below it — and `stack_size` is exactly that frame,
-                // recorded per function in the map.
+                // SP-relative roots take the CFA as their base VERBATIM.
+                //
+                // Not `CFA - stack_size`, which is what the DWARF definition of
+                // a CFA suggests and what this code used to compute. What
+                // `_Unwind_GetCFA` returns inside an `_Unwind_Backtrace`
+                // callback is the body stack pointer of the frame whose return
+                // address `_Unwind_GetIP` just reported, so subtracting the
+                // frame size lands one whole frame too low.
+                //
+                // MEASURED (#7392) by `unwind_cfa_is_the_frames_stack_pointer`
+                // below, which records each frame's real SP and matches it
+                // against the walk: the identity holds on aarch64 Linux
+                // (libgcc), aarch64 macOS (Apple libunwind) and x86-64 Linux
+                // alike — so there is no return-address adjustment to make and
+                // no per-architecture constant left to get wrong.
+                //
+                // It stayed invisible because this is the FALLBACK path: on
+                // aarch64 the x29 chain walk normally answers, and wherever it
+                // bailed this read unrelated words instead of the roots, which
+                // nothing downstream can notice — no code knows what a root slot
+                // is supposed to contain. Cross-checked directly on
+                // `02_survivor_promotion`: at the CFA the slot holds a NaN-boxed
+                // pointer (`0x7ffd…`); one frame lower it holds a stack address.
                 let base = if location.dwarf_reg == ARCH_DWARF_SP {
-                    let cfa = _Unwind_GetCFA(context);
-                    match cfa
-                        .checked_sub(CFA_RETURN_ADDRESS_BYTES)
-                        .and_then(|v| v.checked_sub(record.stack_size as usize))
-                    {
-                        Some(sp) => sp,
-                        None => continue,
-                    }
+                    _Unwind_GetCFA(context)
                 } else {
                     _Unwind_GetGR(context, i32::from(location.dwarf_reg))
                 };
@@ -1366,7 +1388,7 @@ mod fp_chain {
         let high_pc = index.max_pc.saturating_add(MAX_SAFEPOINT_RETURN_DELTA);
         let mut fp = current_frame_pointer();
         while fp != 0 {
-            if fp & 0xF != 0 || fp.checked_add(16)? > top {
+            if fp & FRAME_RECORD_ALIGN_MASK != 0 || fp.checked_add(16)? > top {
                 return None;
             }
             let return_address = unsafe { *((fp + 8) as *const usize) };
@@ -1393,7 +1415,7 @@ mod fp_chain {
                         // outside the stack that the collector then reads and
                         // rewrites. Fail closed to the platform unwinder.
                         if caller_fp == 0
-                            || caller_fp & 0xF != 0
+                            || caller_fp & FRAME_RECORD_ALIGN_MASK != 0
                             || caller_fp <= fp
                             || caller_fp.checked_add(16)? > top
                         {
@@ -1460,6 +1482,18 @@ mod fp_chain {
         None
     }
 }
+
+// The contract the Itanium fallback rests on, asserted against a real walk
+// rather than against DWARF's definition of a CFA — the two disagree, and
+// believing the definition was #7392. Its own file because this one is close to
+// the 2000-line cap.
+#[cfg(all(
+    test,
+    any(target_vendor = "apple", target_os = "linux"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
+#[path = "stack_maps_unwind_contract.rs"]
+mod unwind_contract;
 
 #[cfg(test)]
 mod tests {
