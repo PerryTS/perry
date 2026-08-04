@@ -104,6 +104,28 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: gc-native-roots-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  # Same shape as llvm-inprocess (#7357), and for the same measured reason.
+  #
+  # This workflow had NO concurrency group at all, so nothing ever superseded a
+  # stale run. Its four-arm matrix therefore multiplied: ten consecutive runs
+  # were checked and the macos-14 arm was `queued` in every one of them --
+  # never executed, not once. ubuntu-latest and windows-latest likewise. Only
+  # the aarch64 arm ever reached a runner, which is why it was the only arm
+  # ever seen red or green.
+  #
+  # That is CLAUDE.md's fourth hazard wearing a different hat: three quarters of
+  # this matrix has been reporting nothing while looking like platform coverage.
+  # It also made #7392 unanswerable -- whether that segfault is ELF-specific
+  # cannot be told apart from "the macOS arm has never run the probe".
+  #
+  # `cancel-in-progress: false` alone would not fix it: GitHub allows at most one
+  # PENDING run per group and cancels the previously pending one when a new run
+  # enters, regardless of that setting (#7205). Keying push runs on the SHA gives
+  # every merged commit a group of its own; PR runs supersede freely.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Every host shape Perry supports for native roots, on one job. macOS covers
   # aarch64 + Mach-O; ubuntu covers x86-64 + ELF — and ELF is where every
