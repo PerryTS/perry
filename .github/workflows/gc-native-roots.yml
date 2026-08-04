@@ -113,6 +113,11 @@ jobs:
   # unwinder under it, which is why its arm alone carries the
   # `--require-locations` telemetry gate below.
   #
+  # NOTE: all four shapes run on `main` and on `workflow_dispatch`; a pull
+  # request runs only the `ubuntu-latest` arm. See the comment on the matrix
+  # itself for why — the short version is that fanning four runner classes out
+  # on every push meant the workflow never completed a run at all.
+  #
   # ARM64 Linux is the fourth arm, and the note that used to sit here — that
   # its "two components are each covered above" — was the exact compositional
   # fallacy `word_width_for` in `gc_map.rs` exists to warn about. `.word` is
@@ -135,20 +140,31 @@ jobs:
   native-roots-rs4gc:
     strategy:
       fail-fast: false
+      # ONE arm on pull requests, all four on `main` and on demand.
+      #
+      # Measured 2026-08-04: this workflow had **never completed a single run**
+      # — 40 of 40 queued, the oldest sitting nine hours. Every other workflow
+      # in the repo was draining 2–3 runs per 20 in the same window. The cause
+      # is this matrix: four runner classes, two of them the scarcest GitHub
+      # offers (macOS and Windows), fanned out on every push to every branch.
+      # With ~20 of its own runs competing for those runners it could not
+      # drain, and cancelling the backlog refilled it within minutes.
+      #
+      # A gate that never executes is the purest form of CLAUDE.md's fourth
+      # failure mode: it cannot fail, because it cannot run. One executing arm
+      # is worth more than four that never start.
+      #
+      # `ubuntu-latest` is the PR arm because its runners are plentiful and it
+      # exercises the path with the least redundancy elsewhere: x86-64 roots go
+      # through the CFA-derived SP base (#7349), which neither the aarch64 x29
+      # chain walk nor Windows' RtlVirtualUnwind shares. The cost is that a
+      # break confined to macOS, Windows or aarch64-ELF surfaces on `main`
+      # rather than on the PR — acceptable while the alternative is surfacing
+      # nowhere.
       matrix:
-        include:
-          - os: macos-14
-            arch: aarch64
-            format: Mach-O
-          - os: ubuntu-latest
-            arch: x86-64
-            format: ELF
-          - os: windows-latest
-            arch: x86-64
-            format: PE
-          - os: ubuntu-24.04-arm
-            arch: aarch64
-            format: ELF
+        include: ${{ fromJSON(github.event_name == 'pull_request'
+          && '[{"os":"ubuntu-latest","arch":"x86-64","format":"ELF"}]'
+          || '[{"os":"macos-14","arch":"aarch64","format":"Mach-O"},{"os":"ubuntu-latest","arch":"x86-64","format":"ELF"},{"os":"windows-latest","arch":"x86-64","format":"PE"},{"os":"ubuntu-24.04-arm","arch":"aarch64","format":"ELF"}]') }}
     runs-on: ${{ matrix.os }}
     # The ubuntu/macos steps were written for bash and windows-latest defaults
     # to pwsh; one explicit default keeps a single script dialect per step.
