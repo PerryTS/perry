@@ -247,10 +247,14 @@ fn render_text_with(records: &[FunctionRecord], gc_map: GcMapTotals) -> String {
 struct JsonReport<'a> {
     schema_version: u32,
     totals: Totals,
-    /// Safepoint counts from the compact-map rewrite. `modules: 0` means the
-    /// rewrite never reported, so `records`/`roots` are absent rather than
-    /// zero — a consumer must be able to tell "no safepoints" from "not
-    /// measured", which is the distinction that went missing in #7348.
+    /// Safepoint counts from the compact-map rewrite.
+    ///
+    /// **`modules` is the sentinel, not field absence.** Every count here is a
+    /// plain `u64` and serialises unconditionally, so `records: 0` alone cannot
+    /// tell a consumer whether the program had no safepoints or the rewrite
+    /// never reported. `modules == 0` means the latter — treat the other counts
+    /// as unmeasured. That distinction is what went missing in #7348, when the
+    /// old emission-time counters lost their writers and kept printing zero.
     gc_map: GcMapTotals,
     functions: &'a [FunctionRecord],
 }

@@ -103,14 +103,21 @@ def main() -> int:
         """Which section answered, so the printed line is not misleading."""
         return "totals" if field in totals else "gc_map"
 
-    # A report whose map never reported cannot answer any safepoint question,
-    # and must not be allowed to satisfy a --require-zero by absence.
-    if (args.require_positive or args.require_zero or args.print_field) and not gc_map.get(
-        "modules"
-    ):
+    # A report whose map never reported cannot answer a SAFEPOINT question, and
+    # must not be allowed to satisfy a --require-zero by absence.
+    #
+    # Scoped to fields that actually come from the map. `totals` fields are
+    # counted at IR-emission time and are measured whether or not the rewrite
+    # ran, so `--require-positive textual_calls` must not be failed by an
+    # unreported map it does not depend on.
+    requested = [*args.require_positive, *args.require_zero]
+    if args.print_field:
+        requested.append(args.print_field)
+    map_backed = [f for f in requested if f not in totals and f in gc_map]
+    if map_backed and not gc_map.get("modules"):
         failures.append(
-            "gc_map.modules == 0: the compact-map rewrite never reported, so "
-            "safepoint counts are NOT MEASURED rather than zero"
+            f"gc_map.modules == 0: the compact-map rewrite never reported, so "
+            f"{', '.join(sorted(map_backed))} are NOT MEASURED rather than zero"
         )
 
     for field in args.require_positive:

@@ -294,11 +294,18 @@ jobs:
           # every function quietly lowered by the other backend, the arm
           # measuring the mode it was not testing. `--only-backend rs4gc`
           # rejects a single such fallback.
-          PERRY_RS4GC=1 ./target/perry-dev/perry \
-            benchmarks/gc_ratchet/probes/09_try_catch_roots.ts \
-            -o /tmp/rs4gc-report-probe --statepoint-report=json 2> /tmp/rs4gc-report.json
           # windows-latest exposes the toolcache python as `python`, not python3.
           py=python3; command -v python3 >/dev/null 2>&1 || py=python
+
+          # The PORTABLE assertion, on every arm. `11_collect_at_depth` is
+          # deliberate: it contains no `try`, so it compiles under RS4GC
+          # everywhere. `09_try_catch_roots` does NOT — RS4GC cannot rewrite
+          # WinEH funclet pads, so `linker.rs`'s `rs4gc_funclet_refusal` rejects
+          # it on windows-msvc, and the probe loop above only tolerates that
+          # because it greps the compile log for "funclet". A report assertion
+          # pinned to a probe that cannot compile on one arm is a gate that
+          # fails for a reason unrelated to its subject.
+          #
           # --only-backend proves the lowering ran on every function; the two
           # --require-positive checks prove it PRODUCED something. Those counts
           # come from the compact-map rewrite parsing the assembly LLVM
@@ -307,10 +314,27 @@ jobs:
           # IR-emission time, #7348 deleted those writers with the bridge, and
           # every compile printed `0 statepoints emitted` while its binary
           # carried hundreds. A label check could not see that; these can.
+          PERRY_RS4GC=1 ./target/perry-dev/perry \
+            benchmarks/gc_ratchet/probes/11_collect_at_depth.ts \
+            -o /tmp/rs4gc-report-probe --statepoint-report=json 2> /tmp/rs4gc-report.json
           "$py" scripts/statepoint_report_assert.py /tmp/rs4gc-report.json \
             --only-backend rs4gc \
             --require-positive records \
             --require-positive roots
+
+          # The try-specific arm, everywhere RS4GC can compile a `try`. This is
+          # the coverage the probe above cannot give: 128 of 479 gap tests
+          # contain `try {}`, and RS4GC being the only backend that handles them
+          # is the reason the bridge could be deleted (#7339, #7348).
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            PERRY_RS4GC=1 ./target/perry-dev/perry \
+              benchmarks/gc_ratchet/probes/09_try_catch_roots.ts \
+              -o /tmp/rs4gc-try-probe --statepoint-report=json 2> /tmp/rs4gc-try.json
+            "$py" scripts/statepoint_report_assert.py /tmp/rs4gc-try.json \
+              --only-backend rs4gc \
+              --require-positive records \
+              --require-positive roots
+          fi
 
           # Walker liveness, on EVERY arm. A walker that visits zero frames
           # still lets most probes print the right answer, because other root

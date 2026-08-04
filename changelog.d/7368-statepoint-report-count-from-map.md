@@ -45,3 +45,21 @@ that never had a writer at all). The new test documents why the first invariant
 missed this one: `every_rendered_counter_has_a_writer` called the mutators
 itself, so "has a writer" passed while "is written" was false. The structural fix
 is that the numbers now have exactly one producer and their absence is loud.
+
+Three review fixes on top of the above:
+
+- The report assertion ran on `09_try_catch_roots`, which contains four `try`
+  blocks — and RS4GC cannot rewrite WinEH funclet pads, so
+  `rs4gc_funclet_refusal` rejects that probe on `windows-msvc`. The probe loop
+  above tolerates it by grepping the compile log for "funclet"; this step did
+  not. The portable assertion now uses `11_collect_at_depth` (no `try`, compiles
+  on all four arms) and `09_try_catch_roots` keeps its own non-Windows step, so
+  the try-specific coverage is not lost.
+- The `gc_map` doc claimed `records`/`roots` would be *absent* when unmeasured.
+  They are plain `u64` fields on a plain derive and always serialise; `modules`
+  is the sentinel. Corrected to describe what the code does.
+- The "map never reported" guard in `statepoint_report_assert.py` fired for any
+  `--require-*`/`--print`, including fields that live in `totals` and are
+  counted at IR-emission time regardless of the rewrite. It is now scoped to
+  map-backed fields, so `--require-positive textual_calls` is answered from its
+  measured value instead of being failed by an unreported map it does not use.
