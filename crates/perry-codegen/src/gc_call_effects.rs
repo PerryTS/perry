@@ -56,6 +56,28 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_write_barrier_slot"
         | "js_write_barrier_root_heap_word"
         | "js_write_barrier_root_nanbox"
+        // `gc/roots.rs`: registers one module-level global as a root. Audited
+        // 2026-08-04 and admitted because its whole body is two calls that are
+        // already covered:
+        //
+        //   runtime_write_barrier_root_heap_word(*root)  <- `js_write_barrier_
+        //       root_heap_word` immediately above is a ONE-LINE wrapper around
+        //       this exact function, and is already CannotCollect. It shades
+        //       one header and calls `push_mark_seed`, which is a TLS
+        //       `Vec::push` (`gc/trace.rs`) — no trace, no sweep, no trigger.
+        //   GLOBAL_ROOTS.with(|r| r.borrow_mut().push(root))  <- a TLS Vec.
+        //
+        // The `Vec::push` is the only thing worth pausing on, because CLAUDE.md
+        // lists a "malloc count threshold" as a GC trigger. It does not apply:
+        // that counter is `MALLOC_STATE.objects.len()`, a registry of Perry GC
+        // objects, and the `#[global_allocator]` is plain mimalloc/System with
+        // no GC hook. A raw Rust allocation cannot arm a trigger — which is the
+        // case the module doc above already carves out.
+        //
+        // Worth the audit: at 148 call sites across the probe suite this is the
+        // single most frequent non-leaf callee, all of it module-init code
+        // registering `@perry_global_*` roots.
+        | "js_gc_register_global_root"
         // `gc/layout.rs`: side-table metadata updates only.
         | "js_gc_note_slot_layout"
         | "js_gc_note_slot_layout_aware"
@@ -71,6 +93,11 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_typed_feedback_class_field_set_guard"
         | "js_typed_feedback_observe_property_get"
         | "js_typed_feedback_observe_property_set"
+        // Same family, audited 2026-08-04: under `diagnostics` it reads an env
+        // var, serialises the counters with serde_json and writes a file;
+        // without the feature the body is empty. No Perry allocation, no
+        // re-entry into generated code, no route into collection.
+        | "js_typed_feedback_maybe_dump_trace"
         // Refcount writes and array-layout observations; none enters GC.
         | "js_string_addref"
         | "js_string_addref_if_heap_string"
@@ -129,6 +156,38 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `js_gc_register_global_root` is `js_write_barrier_root_heap_word` plus
+    /// a TLS `Vec::push`, so the two must never be classified differently —
+    /// if a future audit demotes the barrier, this catches the sibling that
+    /// would otherwise keep claiming to be leaf.
+    #[test]
+    fn register_global_root_tracks_the_barrier_it_wraps() {
+        assert_eq!(
+            classify_direct_callee("js_gc_register_global_root"),
+            classify_direct_callee("js_write_barrier_root_heap_word"),
+            "js_gc_register_global_root's entire body is that barrier plus a \
+             TLS Vec::push; they cannot have different GC effects"
+        );
+    }
+
+    /// The helpers that *do* allocate must stay out of `CannotCollect`, and
+    /// this pins the two that read as pure but are not.
+    ///
+    /// `js_nanbox_string` looks like bit manipulation and mostly is — but its
+    /// null-pointer guard calls `js_string_from_bytes` to allocate an empty
+    /// string rather than boxing null. At 120 call sites it is the obvious
+    /// thing to reach for next; it is not admissible.
+    #[test]
+    fn allocating_helpers_are_not_cannot_collect() {
+        for name in ["js_nanbox_string", "js_string_from_bytes", "js_array_alloc"] {
+            assert_ne!(
+                classify_direct_callee(name),
+                GcCallEffect::CannotCollect,
+                "{name} can allocate and must not be marked gc-leaf"
+            );
+        }
+    }
 
     #[test]
     fn audited_runtime_bookkeeping_cannot_collect() {
