@@ -20,6 +20,19 @@ pub extern "C" fn js_buffer_from_string(
         return buffer_alloc(0);
     }
 
+    // #7341: `str_bytes` borrows the StringHeader's payload, and every arm of
+    // `buffer_from_str_bytes` allocates before reading it — the UTF-8 arm most
+    // plainly: `buffer_alloc(len)` then `copy_nonoverlapping(str_bytes...)`.
+    // An evacuating minor inside that allocation relocates the string, leaving
+    // the slice pointing at retired from-space, and the copy reads it. That is
+    // the stale-`memmove` fault the from-space quarantine reports.
+    //
+    // A no-move window rather than a root: the borrow is not a value we can
+    // reload, it is a raw slice handed to a callee that reads it at an
+    // arbitrary point, so rooting the header would still leave the slice
+    // stale. The window covers one bounded allocate-and-copy — the same
+    // argument #7249 made for the globalThis bootstrap.
+    let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
         let len = (*str_ptr).byte_len as usize;
         let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());

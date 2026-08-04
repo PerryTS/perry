@@ -249,6 +249,11 @@ pub extern "C" fn js_text_decoder_ignore_bom(handle: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_text_encoder_encode_llvm(value: f64) -> i64 {
     let str_ptr = text_encoder_string_ptr(value);
+    // #7341: `data_ptr` points into the StringHeader's payload and is read by
+    // the copy BELOW `buffer_alloc`. An evacuating minor inside that
+    // allocation relocates the string and the copy reads retired from-space —
+    // the same stale-`memmove` fault as `js_buffer_from_string`.
+    let _no_move = crate::gc::GcSuppressScope::new();
     let (data_ptr, len) = unsafe {
         let l = (*str_ptr).byte_len as usize;
         let d = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
