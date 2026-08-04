@@ -215,6 +215,38 @@ flipping it globally, and neither is correctness:
 So the honest state is: *aarch64-viable, globally blocked on two pieces of scope
 that are both already identified.*
 
+### ★ Binary size, measured 2026-08-04 — it is a ROOT-DENSITY problem, not a metadata one
+
+The note above says *"closing that axis needs **fewer roots**, not a tighter
+encoding."* That is now measured, and the shape is sharper than "a wash".
+
+Two synthetic programs, 2000 functions each, aarch64, `PERRY_STATEPOINTS=1` vs
+the shadow-stack default:
+
+| workload | total delta | `__text` | `__perry_gcmap` |
+|---|---:|---:|---:|
+| 2000 **root-free** functions (scalar only) | **+0 B** | +12 B | not emitted |
+| 2000 **root-dense** functions (3 heap values live across an alloc) | **+4,330,592 B (+18.95%)** | +4,203,608 B | 902,124 B |
+
+Two things follow, and both matter for planning:
+
+1. **Statepoints have no fixed cost.** A function with nothing live across a
+   safepoint pays nothing at all — no map entry, no text. So the axis is not
+   "statepoints are bigger", it is "roots are bigger", and a program's exposure
+   is exactly its root density.
+2. **97% of the growth is `__text`, not metadata.** #7314's compact map answered
+   the metadata objection completely (it is 21% of the cost at this scale), but
+   metadata was never the dominant term for root-dense code. The cost is the
+   relocation sequence emitted per live root per safepoint.
+
+⇒ **Do not spend further effort on the encoding.** The lever is safepoint density
+and root-set size — which is the same lever #7287/#7296 are already pulling for
+speed, so the two axes are aligned rather than in tension.
+
+Runtime, same probes, quiet host, median of 5: statepoints are **1–2% faster**
+across the board (2054 ms → 2013 ms total; every probe neutral or faster, none
+slower), consistent with the −0.93% recorded above.
+
 ### The adoption decision itself
 
 Two precise-root mechanisms now exist. The kill-policy says that state is
