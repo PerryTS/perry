@@ -848,9 +848,15 @@ pub fn compact_and_assemble(
     // Still a deny-list rather than an allow-anything: a target whose bases the
     // runtime cannot resolve must fail the compile, because the alternative is
     // a binary that segfaults during collection with no diagnostic.
-    let arch_supported = target.starts_with("aarch64")
-        || target.starts_with("arm64")
-        || target.starts_with("x86_64");
+    // `arm64_32` (watchOS) is excluded deliberately, and before `arm64`: it has
+    // 32-bit pointers, while the map stores function addresses as `u64` and the
+    // runtime does `usize` arithmetic on them. The runtime's loader is gated to
+    // 64-bit Apple for the same reason, so admitting it here would emit a map
+    // nothing reads — roots lost silently on the platform hardest to debug.
+    let arch_supported = !target.starts_with("arm64_32")
+        && (target.starts_with("aarch64")
+            || target.starts_with("arm64")
+            || target.starts_with("x86_64"));
     if !arch_supported {
         return Err(anyhow!(
             "perry: native GC roots (PERRY_RS4GC) are not supported for target \

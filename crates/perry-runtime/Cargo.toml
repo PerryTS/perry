@@ -355,7 +355,11 @@ windows-sys = { version = "0.61", features = [
 # upstream-recommended replacement. Pulled in only where we actually
 # call host_statistics64 (`js_os_freemem` on macOS / iOS). Need 0.6+
 # because earlier mach2 releases didn't surface mach_host_self.
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# Every Apple platform, not just macOS/iOS: the GC's Mach-O stack-map discovery
+# (`gc/roots/stack_maps.rs`) uses `_dyld_get_image_header` on tvOS and visionOS
+# too, and gating the dependency more narrowly than the code silently drops
+# those targets into the no-section stub — i.e. a collector with no roots.
+[target.'cfg(target_vendor = "apple")'.dependencies]
 mach2 = "0.6"
 
 # build.rs auto-generates no-op `perry_ui_*` FFI stubs for the harmonyos

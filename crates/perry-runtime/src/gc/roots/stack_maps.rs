@@ -625,7 +625,17 @@ fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
     ))
 }
 
-#[cfg(target_os = "macos")]
+/// Every 64-bit Apple platform, not only macOS. iOS, iPadOS (which reports as
+/// iOS), tvOS and visionOS are all aarch64 + Mach-O and share this loader
+/// verbatim; gating it to `target_os = "macos"` sent them to the stub below,
+/// where the section is never found and the index is empty — a collector with
+/// no native roots, silently, on exactly the platforms that cannot be debugged
+/// easily.
+///
+/// 64-bit only: watchOS's `arm64_32` has 32-bit pointers, while the map stores
+/// function addresses as `u64` and this code does `usize` arithmetic on them.
+/// The compiler refuses that target for the same reason.
+#[cfg(all(target_vendor = "apple", target_pointer_width = "64"))]
 fn loaded_stack_map_section() -> Option<&'static [u8]> {
     use mach2::dyld::{_dyld_get_image_header, _dyld_get_image_vmaddr_slide};
 
@@ -806,12 +816,20 @@ fn main_object_load_bias() -> Option<usize> {
     (bias != usize::MAX).then_some(bias)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(
+    all(target_vendor = "apple", target_pointer_width = "64"),
+    target_os = "linux"
+)))]
 fn loaded_stack_map_section() -> Option<&'static [u8]> {
     None
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+// Same platform set as the loader above: the Itanium unwinder personality and
+// `_Unwind_*` API are present on every Apple platform, not just macOS.
+#[cfg(any(
+    all(target_vendor = "apple", target_pointer_width = "64"),
+    target_os = "linux"
+))]
 mod unwind {
     use super::*;
 
@@ -914,7 +932,10 @@ mod unwind {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(
+    all(target_vendor = "apple", target_pointer_width = "64"),
+    target_os = "linux"
+)))]
 mod unwind {
     use super::*;
 
@@ -940,7 +961,13 @@ mod unwind {
 /// whole scan through the platform unwinder. Slot visitation is idempotent
 /// (a rewritten slot no longer points at a forwarded object), so a partial
 /// fast walk followed by a full unwinder walk is safe.
-#[cfg(all(any(target_os = "macos", target_os = "linux"), target_arch = "aarch64"))]
+#[cfg(all(
+    any(
+        all(target_vendor = "apple", target_pointer_width = "64"),
+        target_os = "linux"
+    ),
+    target_arch = "aarch64"
+))]
 mod fp_chain {
     use super::*;
 
@@ -952,7 +979,10 @@ mod fp_chain {
         fp
     }
 
-    #[cfg(target_os = "macos")]
+    // `pthread_get_stackaddr_np` is Apple-wide, not macOS-only. Gating it to
+    // macOS is what broke the iOS build outright — which is the good outcome:
+    // the alternative was this module quietly not existing there.
+    #[cfg(target_vendor = "apple")]
     fn stack_top() -> usize {
         unsafe extern "C" {
             fn pthread_self() -> usize;
@@ -1095,7 +1125,13 @@ mod fp_chain {
     }
 }
 
-#[cfg(not(all(any(target_os = "macos", target_os = "linux"), target_arch = "aarch64")))]
+#[cfg(not(all(
+    any(
+        all(target_vendor = "apple", target_pointer_width = "64"),
+        target_os = "linux"
+    ),
+    target_arch = "aarch64"
+)))]
 mod fp_chain {
     use super::*;
 
