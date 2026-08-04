@@ -163,6 +163,38 @@ fn directive_width(directive: &str, word_width: usize) -> Option<usize> {
 /// everything after it; the decode then either fails somewhere unrelated or,
 /// worse, succeeds against garbage. Anything not on this list and not in
 /// `directive_width` is a refusal that names the directive.
+/// Is this a GNU-as symbol assignment (`sym = expr`) rather than a directive?
+///
+/// Assemblers accept `.set sym, expr` and the bare `sym = expr` for the same
+/// thing. Only the former starts with a `.`, so the directive dispatch sees the
+/// SYMBOL as the mnemonic and refuses it. Both emit zero bytes.
+///
+/// Deliberately narrow: the name must be a single token that is not itself a
+/// directive, and the `=` must not be part of a comparison inside a longer
+/// expression. `.size sym, .-sym` and `.byte 1` are unaffected.
+fn is_symbol_assignment(line: &str) -> bool {
+    let Some((lhs, _rhs)) = line.split_once('=') else {
+        return false;
+    };
+    // `==`, `>=`, `<=`, `!=` are expression operators, not an assignment.
+    if lhs.ends_with(['=', '>', '<', '!']) {
+        return false;
+    }
+    let name = lhs.trim();
+    // ELF local labels start with `.L`, so "does not start with a dot" is the
+    // wrong test -- it would reject `.Lperry_ic_8 = …`, which -O3 emits. Test
+    // what actually matters instead: the LHS must not be a directive this
+    // module already models. Anything else that is a single bare token before
+    // an `=` is a symbol assignment.
+    !name.is_empty()
+        && !name.contains(char::is_whitespace)
+        && directive_width(name, 8).is_none()
+        && !is_zero_width_directive(name)
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.')
+}
+
 fn is_zero_width_directive(directive: &str) -> bool {
     matches!(
         directive,
@@ -235,6 +267,20 @@ fn parse_block(lines: &[&str], word_width: usize) -> Result<RawBlock, String> {
         {
             continue;
         }
+        // GNU-as symbol assignment: `sym = expr`, the bare form of `.set`.
+        // It defines a symbol and emits ZERO bytes. `.set`/`.equ` are already on
+        // the zero-width list; this spelling is not a directive at all, so the
+        // dispatch below would report the SYMBOL as an unrecognised directive.
+        //
+        // It only shows up at -O3, which is why the arm CI caught it and the -O2
+        // paths never did: the optimiser materialises absolute-symbol aliases
+        // (`perry_null_guard_zero = …`, `perry_class_keys__… = …`) and the ELF
+        // asm printer emits them in this form. Mach-O output does not, so this
+        // is invisible on the macOS arms.
+        if is_symbol_assignment(line) {
+            continue;
+        }
+
         let mut parts = line.splitn(2, char::is_whitespace);
         let directive = parts.next().unwrap_or_default();
         let operand = parts.next().unwrap_or_default();
@@ -1302,6 +1348,51 @@ mod tests {
         assert!(!out.contains("__LLVM_StackMaps"));
         // The dead-strip guard must survive, retargeted.
         assert!(out.contains(".no_dead_strip\t_perry_gc_map"));
+
+        // Guard the -O3 ELF shapes that broke the aarch64-linux arm. Both are
+        // GNU-as symbol assignments -- zero bytes, no leading directive -- so
+        // the dispatch reported the SYMBOL as an unrecognised directive and
+        // refused the module. Mach-O never emits this spelling, which is why
+        // every macOS arm stayed green.
+    }
+
+    #[test]
+    fn elf_symbol_assignments_parse_as_zero_width() {
+        let asm = concat!(
+            "\t.section\t.llvm_stackmaps,\"a\",@progbits\n",
+            "__LLVM_StackMaps:\n",
+            "\t.byte\t3\n",
+            "perry_null_guard_zero = 0\n",
+            "\t.byte\t0\n",
+            ".Lperry_ic_8 = .Ltmp3-4\n",
+            "\t.hword\t0\n",
+            "\t.word\t2\n",
+        );
+        let lines: Vec<&str> = asm.lines().collect();
+        let block = super::parse_block(&lines, 4).expect("ELF symbol assignments must parse");
+        // 1 + 1 + 2 + 4 -- the assignments contribute nothing.
+        assert_eq!(block.bytes.len(), 8);
+    }
+
+    #[test]
+    fn expression_operators_are_not_mistaken_for_assignments() {
+        for line in [
+            ".byte\t1",
+            "\t.size\tsym, .-sym",
+            "\t.if a == b",
+            "\t.if a != b",
+        ] {
+            assert!(
+                !super::is_symbol_assignment(line),
+                "`{line}` must not be treated as a symbol assignment"
+            );
+        }
+        for line in ["sym = 1", ".Lfoo = .Ltmp1-4", "a$b = 7"] {
+            assert!(
+                super::is_symbol_assignment(line),
+                "`{line}` is a symbol assignment"
+            );
+        }
     }
 
     #[test]
