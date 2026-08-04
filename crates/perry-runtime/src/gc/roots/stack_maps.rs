@@ -130,6 +130,17 @@ const DWARF_REG_SP_AARCH64: u16 = 31;
 // fell back to the unwinder, which had its own SP-base bug (see
 // `unwind::walk_frame`), so the frame's roots were never rewritten after an
 // evacuation and the mutator then dereferenced a stale from-space pointer.
+//
+// Only the fp-chain walker reads it, and that walker exists on aarch64 Unix
+// alone — the same cfg, spelled out rather than approximated, so an x86-64 or
+// Windows build does not warn on a constant it has no walker for.
+#[cfg_attr(
+    not(all(
+        any(target_vendor = "apple", target_os = "linux"),
+        target_arch = "aarch64"
+    )),
+    allow(dead_code)
+)]
 const FRAME_RECORD_ALIGN_MASK: usize = 0x7;
 
 // Which DWARF register is the stack pointer on the machine this runtime was

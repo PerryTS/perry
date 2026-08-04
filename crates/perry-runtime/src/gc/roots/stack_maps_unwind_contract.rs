@@ -39,24 +39,42 @@ unsafe extern "C" {
     fn _Unwind_GetCFA(context: *mut UnwindContext) -> usize;
 }
 
-fn stack_pointer() -> usize {
-    let sp: usize;
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        std::arch::asm!("mov {sp}, sp", sp = out(reg) sp, options(nomem, nostack));
-    }
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        std::arch::asm!("mov {sp}, rsp", sp = out(reg) sp, options(nomem, nostack));
-    }
-    sp
+/// The stack pointer of the frame that expands this, which is why it is a macro
+/// and not a function: as a function it is only inlined once the optimiser is
+/// on, and at `opt-level=0` — the profile `cargo test` uses — it reported its
+/// OWN frame instead of its caller's, so every recorded value was wrong by one
+/// frame and the test failed for a reason that had nothing to do with the
+/// walker. Expanding at the call site takes the question away entirely.
+macro_rules! stack_pointer {
+    () => {{
+        let sp: usize;
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            std::arch::asm!("mov {sp}, sp", sp = out(reg) sp, options(nomem, nostack));
+        }
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            std::arch::asm!("mov {sp}, rsp", sp = out(reg) sp, options(nomem, nostack));
+        }
+        sp
+    }};
 }
+
+/// `_URC_NO_REASON`, the only code that continues the walk.
+const URC_NO_REASON: i32 = 0;
+/// `_URC_END_OF_STACK`. Any non-zero code stops `_Unwind_Backtrace`; this is
+/// the one that says "stop, normally".
+const URC_END_OF_STACK: i32 = 5;
 
 unsafe extern "C" fn collect(context: *mut UnwindContext, argument: *mut c_void) -> i32 {
     let out = unsafe { &mut *argument.cast::<Vec<usize>>() };
     out.push(unsafe { _Unwind_GetCFA(context) });
     // Bounded: a runaway walk must fail the assertion, not hang the suite.
-    i32::from(out.len() > 24)
+    if out.len() > 24 {
+        URC_END_OF_STACK
+    } else {
+        URC_NO_REASON
+    }
 }
 
 fn walk_cfas() -> Vec<usize> {
@@ -72,7 +90,7 @@ fn walk_cfas() -> Vec<usize> {
 #[inline(never)]
 fn innermost(sps: &mut Vec<usize>) -> Vec<usize> {
     let pad = black_box([0u64; 4]);
-    sps.push(stack_pointer());
+    sps.push(stack_pointer!());
     let cfas = walk_cfas();
     black_box(pad);
     cfas
@@ -81,7 +99,7 @@ fn innermost(sps: &mut Vec<usize>) -> Vec<usize> {
 #[inline(never)]
 fn middle(sps: &mut Vec<usize>) -> Vec<usize> {
     let pad = black_box([0u64; 16]);
-    sps.push(stack_pointer());
+    sps.push(stack_pointer!());
     let cfas = innermost(sps);
     black_box(pad);
     cfas
@@ -90,7 +108,7 @@ fn middle(sps: &mut Vec<usize>) -> Vec<usize> {
 #[inline(never)]
 fn outermost(sps: &mut Vec<usize>) -> Vec<usize> {
     let pad = black_box([0u64; 32]);
-    sps.push(stack_pointer());
+    sps.push(stack_pointer!());
     let cfas = middle(sps);
     black_box(pad);
     cfas
