@@ -483,25 +483,54 @@ jobs:
         run: |
           set -e
           # Format: "<platform>:<device-triple>:<sim-triple>"
-          # watchOS dropped v0.5.888: ring 0.17.14 has a pointer-size
-          # assertion that fails for `arm64_32-apple-watchos` (32-bit
-          # pointers with 64-bit regs). Sim target (aarch64-apple-watchos-sim)
-          # also dropped to keep the matrix simple — re-add both when
-          # ring publishes a fix or we pin to a working pre-0.17.14
-          # version.
+          #
+          # watchOS is back (v0.5.888 dropped it). The drop reason was real but
+          # narrower than the old note claimed: ring 0.17.14's pointer-size
+          # assertion fails for `arm64_32-apple-watchos` — 32-bit pointers with
+          # 64-bit registers. That is ILP32-specific. `aarch64-apple-watchos` is
+          # LP64 and ring builds for it fine, as does `perry-ui-watchos`, so the
+          # LP64 device triple and its simulator are restored here. The ILP32
+          # `arm64_32` triple stays out until ring is fixed or pinned.
           for entry in \
             "tvos:aarch64-apple-tvos:aarch64-apple-tvos-sim" \
-            "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim"; do
+            "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim" \
+            "watchos:aarch64-apple-watchos:aarch64-apple-watchos-sim"; do
             plat="${entry%%:*}"
             rest="${entry#*:}"
             dev="${rest%%:*}"
             sim="${rest#*:}"
+            # watchOS and visionOS cannot build `dyn-eval` today, and it is in
+            # `default`. The feature reaches `psm` three crates down
+            # (dyn-eval -> perry-parser -> swc_ecma_parser -> stacker -> psm),
+            # whose Mach-O guard enumerates darwin/macos/ios/tvos and omits
+            # watchos/visionos — so both fall through to psm's ELF branch and
+            # emit `.type`/`.size`, which the Mach-O assembler rejects. Nothing
+            # in Perry is involved. Fix filed upstream as rust-lang/stacker#152;
+            # DELETE this branch and the feature list when it lands.
+            #
+            # The cost is scoped and worth stating: these two platforms ship
+            # without runtime `new Function` over a string body. Everything else
+            # in `default` is present — the list below is `default` minus
+            # `dyn-eval`, nothing more.
+            runtime_features=""
+            case "$plat" in
+              watchos|visionos)
+                runtime_features="--no-default-features --features full,regex-engine,temporal,url-engine,string-normalize,intl-segmenter,intl-namespace,global-math,global-json,global-reflect,global-atomics,global-url,global-text,global-websocket,global-webcrypto,global-webfetch,proc-ipc,intl-locale,intl-datetime,diagnostics,mod-dgram,mod-http2-constants,keepalive-anchors,alloc-mimalloc"
+                ;;
+            esac
             for triple in "$dev" "$sim"; do
               echo "::group::$plat $triple"
+              # Runtime first, with the per-platform feature set; stdlib and UI
+              # keep `default` (neither reaches psm).
               cargo +nightly build --profile dist \
                 -Z build-std=core,std,panic_abort \
                 --target "$triple" \
-                -p perry-runtime -p perry-runtime-static -p perry-stdlib -p perry-stdlib-static "-p" "perry-ui-${plat}"
+                $runtime_features \
+                -p perry-runtime -p perry-runtime-static
+              cargo +nightly build --profile dist \
+                -Z build-std=core,std,panic_abort \
+                --target "$triple" \
+                -p perry-stdlib -p perry-stdlib-static "-p" "perry-ui-${plat}"
               echo "::endgroup::"
             done
           done
@@ -653,12 +682,18 @@ jobs:
               cp "$sim_dir/libperry_ui_ios.a" "staging/libperry_ui_ios_sim.a"
             fi
             # Closes #396 / #397 / #398: same pattern as iOS for the Tier-3
-            # Apple platforms. Device triple varies (watchOS = arm64_32) so
-            # we drive the staging copy from the explicit triple list above.
-            # watchOS dropped — see the build step above.
+            # Apple platforms. Driven from an explicit triple list so the
+            # device/sim pairs stay visible rather than derived.
+            #
+            # watchOS uses `aarch64-apple-watchos`, NOT the ILP32
+            # `arm64_32-apple-watchos` an earlier note here assumed. That
+            # distinction is the whole reason it can ship again: ring 0.17.14's
+            # pointer-size assertion is ILP32-specific, so the LP64 triple was
+            # never affected. Keep them in step with the build step above.
             for entry in \
               "tvos:aarch64-apple-tvos:aarch64-apple-tvos-sim" \
-              "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim"; do
+              "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim" \
+              "watchos:aarch64-apple-watchos:aarch64-apple-watchos-sim"; do
               plat="${entry%%:*}"
               rest="${entry#*:}"
               dev_triple="${rest%%:*}"
@@ -966,12 +1001,18 @@ jobs:
             ui_lib: libperry_ui_ios.a
             tier3: false
           # --- Apple, Tier-3 (nightly + build-std) --------------------------
-          # tvOS / visionOS are Rust Tier-3: no prebuilt std, so we install
-          # nightly + rust-src and pass `-Zbuild-std=core,std,panic_abort`
-          # in the build step below. Mirrors the existing `build:` job's
-          # tvos/visionos handling. watchOS is currently dropped — see the
-          # comment in `build:` (ring 0.17.14 pointer-size assertion fails
-          # for `arm64_32-apple-watchos`).
+          # tvOS / visionOS / watchOS are Rust Tier-3: no prebuilt std, so we
+          # install nightly + rust-src and pass `-Zbuild-std=core,std,panic_abort`
+          # in the build step below. Mirrors the existing `build:` job.
+          #
+          # watchOS is restored here on `aarch64-apple-watchos`. The v0.5.888
+          # drop was for ring 0.17.14's pointer-size assertion, which is
+          # specific to the ILP32 `arm64_32-apple-watchos` triple; the LP64
+          # triple builds ring and `perry-ui-watchos` fine. `arm64_32` stays
+          # out until ring is fixed or pinned.
+          #
+          # watchOS and visionOS need `dyn-eval` excluded — see the long note
+          # in `build:` and rust-lang/stacker#152.
           - os: macos-14
             target: aarch64-apple-tvos
             ui_crate: perry-ui-tvos
@@ -991,6 +1032,16 @@ jobs:
             target: aarch64-apple-visionos-sim
             ui_crate: perry-ui-visionos
             ui_lib: libperry_ui_visionos.a
+            tier3: true
+          - os: macos-14
+            target: aarch64-apple-watchos
+            ui_crate: perry-ui-watchos
+            ui_lib: libperry_ui_watchos.a
+            tier3: true
+          - os: macos-14
+            target: aarch64-apple-watchos-sim
+            ui_crate: perry-ui-watchos
+            ui_lib: libperry_ui_watchos.a
             tier3: true
           # --- Android (NDK on Linux runner) --------------------------------
           # perry-ui-android requires the NDK clang++ wrapper and JNI; the
@@ -1134,10 +1185,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # watchOS and visionOS cannot build `dyn-eval`, which is in `default`:
+          # it reaches `psm` via perry-parser -> swc_ecma_parser -> stacker, and
+          # psm's Mach-O guard omits watchos/visionos so both fall through to
+          # its ELF branch and emit directives the Mach-O assembler rejects.
+          # Upstream fix: rust-lang/stacker#152 — delete this branch when it
+          # lands. The list is `default` minus `dyn-eval`, nothing else, so the
+          # only capability these two lose is runtime `new Function`.
+          runtime_features=""
+          case "${{ matrix.target }}" in
+            *-apple-watchos|*-apple-watchos-sim|*-apple-visionos|*-apple-visionos-sim)
+              runtime_features="--no-default-features --features full,regex-engine,temporal,url-engine,string-normalize,intl-segmenter,intl-namespace,global-math,global-json,global-reflect,global-atomics,global-url,global-text,global-websocket,global-webcrypto,global-webfetch,proc-ipc,intl-locale,intl-datetime,diagnostics,mod-dgram,mod-http2-constants,keepalive-anchors,alloc-mimalloc"
+              ;;
+          esac
           cargo +nightly build --profile dist \
             -Z build-std=core,std,panic_abort \
             --target ${{ matrix.target }} \
-            -p perry-runtime -p perry-runtime-static -p perry-stdlib -p perry-stdlib-static -p ${{ matrix.ui_crate }}
+            $runtime_features \
+            -p perry-runtime -p perry-runtime-static
+          cargo +nightly build --profile dist \
+            -Z build-std=core,std,panic_abort \
+            --target ${{ matrix.target }} \
+            -p perry-stdlib -p perry-stdlib-static -p ${{ matrix.ui_crate }}
 
       # #4856 — defense in depth behind the cache eviction above: a stale
       # cached runtime archive fails the release here instead of breaking
