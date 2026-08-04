@@ -27,6 +27,11 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // #7341: the `.size` arm below calls two helpers that allocate, and every
+    // arm AFTER it dereferences `obj` again. Shadow the parameter so that arm
+    // can republish the post-collection address instead of leaving from-space
+    // in scope for the rest of the function.
+    let mut obj = obj;
     // #5972: a null key reaches here when the property-key expression didn't
     // yield a usable string handle — e.g. `js_get_string_pointer_unified`
     // returned 0 for a NaN/number key that fell through its coercion branches.
@@ -235,29 +240,65 @@ pub extern "C" fn js_object_get_field_by_name(
         unsafe {
             let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let name_len = (*key).byte_len as usize;
-            if std::slice::from_raw_parts(name_ptr, name_len) == b"size"
-                && !super::super::own_key_present(obj as *mut ObjectHeader, key)
-            {
-                // A subclass may also OVERRIDE `size` on its prototype
-                // (`class M extends Map { get size() { return 42 } }`). Such an
-                // inherited getter lives in the class vtable, not as an own key,
-                // so check the class chain first and fall through to the normal
-                // class/prototype resolution when it shadows the backing size.
-                let class_id = super::super::js_object_get_class_id(obj);
-                let has_inherited_size = class_id != 0
-                    && super::super::native_module::class_instance_has_member(class_id, "size");
-                if !has_inherited_size {
-                    let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-                    match crate::object::map_set_subclass::subclass_backing_of(boxed) {
-                        Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
-                            return JSValue::number(crate::map::js_map_size(m) as f64);
+            // #7341: `own_key_present` allocates too, and it runs INSIDE the
+            // original condition — so the scope has to open before that call,
+            // not inside the body. The fault without this is the GC-type probe
+            // at +560, immediately after `bl own_key_present` returns.
+            //
+            // Test the key FIRST and open the scope only for `.size`. Opening it
+            // ahead of the key test would put a `RuntimeHandleScope` on every
+            // property read that reaches this block, which is the one cost this
+            // arm must not have.
+            let is_size_key = std::slice::from_raw_parts(name_ptr, name_len) == b"size";
+            if is_size_key {
+                let size_arm_scope = crate::gc::RuntimeHandleScope::new();
+                let size_arm_obj = size_arm_scope.root_raw_const_ptr(obj as *const u8);
+                let has_own_size = super::super::own_key_present(obj as *mut ObjectHeader, key);
+                obj = size_arm_obj.get_raw_const_ptr::<ObjectHeader>();
+                if !has_own_size {
+                    // A subclass may also OVERRIDE `size` on its prototype
+                    // (`class M extends Map { get size() { return 42 } }`). Such an
+                    // inherited getter lives in the class vtable, not as an own key,
+                    // so check the class chain first and fall through to the normal
+                    // class/prototype resolution when it shadows the backing size.
+                    let class_id = super::super::js_object_get_class_id(obj);
+                    // #7341: BOTH helpers below allocate — `class_instance_has_member`
+                    // builds a `String` for its cache probe, and `subclass_backing_of`
+                    // calls `js_string_from_bytes` to materialise its constant
+                    // `BACKING_KEY` on every call. Either can drive an evacuating
+                    // minor, and `obj` is a bare local held across them, so on the
+                    // `None` fall-through every later arm reads from-space. The fault
+                    // is the GC-type probe at `js_object_get_field_by_name + 664`
+                    // (`ldurb w8, [x22, #-0x8]`), reached after the plausibility
+                    // checks pass because a retired from-space address still looks
+                    // like a heap pointer. `test_gap_field_lane_semantics` and
+                    // `test_gap_put_value_plan_cache` under from-space quarantine.
+                    //
+                    // Scoped to this arm, which is gated on the key being exactly
+                    // `"size"` — this is not the general property-read fast lane and
+                    // costs nothing on it.
+                    let obj_h = &size_arm_obj;
+                    let has_inherited_size = class_id != 0
+                        && super::super::native_module::class_instance_has_member(class_id, "size");
+                    if !has_inherited_size {
+                        let obj_now = obj_h.get_raw_const_ptr::<ObjectHeader>();
+                        let boxed = f64::from_bits(JSValue::pointer(obj_now as *const u8).bits());
+                        match crate::object::map_set_subclass::subclass_backing_of(boxed) {
+                            Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+                                return JSValue::number(crate::map::js_map_size(m) as f64);
+                            }
+                            Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+                                return JSValue::number(crate::set::js_set_size(s) as f64);
+                            }
+                            None => {}
                         }
-                        Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
-                            return JSValue::number(crate::set::js_set_size(s) as f64);
-                        }
-                        None => {}
                     }
+                    // #7341: republish before falling through — the helpers
+                    // above may have moved it, and every arm below
+                    // dereferences `obj`.
+                    obj = obj_h.get_raw_const_ptr::<ObjectHeader>();
                 }
+                obj = size_arm_obj.get_raw_const_ptr::<ObjectHeader>();
             }
         }
     }
