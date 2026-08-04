@@ -155,6 +155,47 @@ Rust and become the single source of truth both consume.
 Four of five by construction, the fifth by making the frame own its own slot
 numbering. That is a strong enough result to justify the work.
 
+### Re-tested against four bugs found after this RFC was written (2026-08-04)
+
+#7341's from-space quarantine produced 31 real stale-pointer bugs and four of
+them were fixed (#7373–#7376). Scoring them against this proposal is the
+strongest available calibration, because none of them existed when the table
+above was written.
+
+| bug | layer | shape | caught? |
+|---|---|---|---|
+| **#7375** `await` polls a moved promise | 1 (codegen) | promise unboxed, pump helpers emitted, promise reused | **Yes.** The pump calls are `&mut` emits, so the `Raw` is dead at the back-edge. The author must hold a `Rooted` and `get()` per block — which is exactly the fix that landed. |
+| **#7373** `JSON.parse` reads a moved input | 3 (runtime) | slice derived, `gc_check_trigger()`, slice used | **No.** Rust locals in `perry-runtime`; this RFC governs `perry-codegen` lowering only. |
+| **#7374** `RegExp` flags stored stale | 3 (runtime) | string allocated, `gc_malloc`, pre-collection pointer stored | **No.** Same reason. |
+| **#7376** `Symbol` description stored stale | 3 (runtime) | identical to #7374 | **No.** Same reason. |
+
+**One of four.** That is not an argument against the RFC — the one it catches it
+catches completely, and #7375 had survived a code comment explicitly reasoning
+about the surrounding hazard ("unbox the promise in each block that uses it",
+which solves LLVM dominance and not GC movement). It is an argument about
+**where the remaining risk lives**: three of the four were layer 3, which this
+mechanism cannot reach by construction.
+
+**The sharper finding is that all four were the same defect shape.** Every one
+had rooting already — the pattern's root, the receiver's root, the per-block
+unbox, the registry for registered symbols. What was missing in each case was
+**ordering the root relative to the collection point**. That is precisely the
+property this RFC enforces: a `Raw` that dies at the next `&mut` emit makes
+"used after a collection point" unrepresentable rather than reviewable.
+
+So the design generalises, and the open question this evidence raises is not
+whether to adopt it for codegen, but whether layer 3 needs the same discipline
+in `perry-runtime` — where `RuntimeHandleScope` exists (675 uses across 169
+files) but is **optional**, and where three of these four bugs lived. A handle
+type that made the raw pointer unusable across an allocating call would have
+caught all three by the same mechanism.
+
+**Caveat on the sample.** These four are the clusters that were *tractable* from
+a backtrace. The eight catches left open in #7341 fault on an argument that is
+already stale on entry, so they are caller-side and this RFC would not catch
+them either — the value crosses a function boundary, and `Raw<'e>` does not
+survive one. Counting them would make the ratio worse, not better.
+
 ## Migration cost
 
 The honest number is large but the distribution is favourable.
