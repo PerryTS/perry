@@ -206,6 +206,11 @@ fn mutable_root_mark_and_rewrite_accept_the_same_word_forms() {
 /// the sweep ran) and the shadow slot was left dangling.
 #[test]
 fn bare_address_in_shadow_slot_survives_a_real_collection() {
+    // #7056: drives the BUDGETED stepper via `complete_budgeted_gc_cycle`,
+    // which the shipped default bypasses (scavenge defers alloc-point
+    // collections to a precise safepoint). Pin legacy pacing so the cycle
+    // actually starts and this keeps testing what it was written for.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -267,6 +272,11 @@ fn bare_address_in_shadow_slot_survives_a_real_collection() {
 /// the old `mark_global_root_bits` into the shared decoder.
 #[test]
 fn bare_address_in_global_root_survives_a_real_collection() {
+    // #7056: drives the BUDGETED stepper via `complete_budgeted_gc_cycle`,
+    // which the shipped default bypasses (scavenge defers alloc-point
+    // collections to a precise safepoint). Pin legacy pacing so the cycle
+    // actually starts and this keeps testing what it was written for.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

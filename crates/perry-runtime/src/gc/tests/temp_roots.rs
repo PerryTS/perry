@@ -43,6 +43,11 @@ fn register_temp_root_scanner_for_tests() {
 /// memory, so the label silently vanished from the output.
 #[test]
 fn temp_rooted_value_survives_a_real_collection() {
+    // #7056: drives the BUDGETED stepper via `complete_budgeted_gc_cycle`,
+    // which the shipped default bypasses (scavenge defers alloc-point
+    // collections to a precise safepoint). Pin legacy pacing so the cycle
+    // actually starts and this keeps testing what it was written for.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -208,6 +213,11 @@ fn shadow_savepoint_restores_the_temp_root_depth() {
 /// and the test passes without proving anything about precise roots.
 #[test]
 fn rewriting_a_slot_roots_the_new_value_and_releases_the_replaced_one() {
+    // #7056: drives the BUDGETED stepper via `complete_budgeted_gc_cycle`,
+    // which the shipped default bypasses (scavenge defers alloc-point
+    // collections to a precise safepoint). Pin legacy pacing so the cycle
+    // actually starts and this keeps testing what it was written for.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

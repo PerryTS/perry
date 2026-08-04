@@ -123,6 +123,12 @@ fn realloc_until_header_moves(mut ptr: *mut u8) -> *mut u8 {
 
 #[test]
 fn malloc_sweep_pauses_mid_list_and_eventually_frees_dead_malloc() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -157,6 +163,12 @@ fn malloc_sweep_pauses_mid_list_and_eventually_frees_dead_malloc() {
 
 #[test]
 fn budgeted_malloc_sweep_revalidates_live_malloc_moved_by_realloc() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -221,6 +233,12 @@ fn budgeted_malloc_sweep_revalidates_live_malloc_moved_by_realloc() {
 
 #[test]
 fn arena_sweep_pauses_before_block_cleanup_and_preserves_live_objects() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -270,6 +288,12 @@ fn arena_sweep_pauses_before_block_cleanup_and_preserves_live_objects() {
 
 #[test]
 fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -330,6 +354,12 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
 
 #[test]
 fn budgeted_sweep_phase_requires_multiple_host_steps() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -371,6 +401,12 @@ fn budgeted_sweep_phase_requires_multiple_host_steps() {
 
 #[test]
 fn budgeted_reclaim_phase_is_split_from_completion() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -403,6 +439,12 @@ fn budgeted_reclaim_phase_is_split_from_completion() {
 
 #[test]
 fn budgeted_reclaim_slices_remembered_maintenance_entries() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -454,6 +496,12 @@ fn budgeted_reclaim_slices_remembered_maintenance_entries() {
 
 #[test]
 fn budgeted_reclaim_slices_many_external_dirty_slot_page_buckets() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -498,6 +546,12 @@ fn budgeted_reclaim_slices_many_external_dirty_slot_page_buckets() {
 
 #[test]
 fn budgeted_reclaim_slices_conservative_pin_cleanup() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -545,6 +599,12 @@ fn budgeted_reclaim_slices_conservative_pin_cleanup() {
 
 #[test]
 fn budgeted_reclaim_runs_process_malloc_trim() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _trace_guard = TestGcTraceCaptureGuard::force_enabled();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

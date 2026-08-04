@@ -296,7 +296,20 @@ fn gc_verify_evacuation_enabled() -> bool {
 /// `PERRY_GC_VERIFY_EVACUATION` probing only. Pairs with
 /// `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` so the #6939 pacing doesn't escalate the
 /// minor to a full before the copying path is reached.
+#[cfg(test)]
+thread_local! {
+    /// Test-only override, consulted BEFORE the process-wide OnceLock so a
+    /// single test can pin a pacing mode even though the process default is on.
+    /// Same discipline as `GC_MOVING_LOOP_POLLS_TEST_OVERRIDE`.
+    pub(super) static GC_SCAVENGE_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
 pub(super) fn gc_scavenge_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = GC_SCAVENGE_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return forced;
+    }
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {

@@ -378,6 +378,12 @@ fn direct_malloc_minor_rebaselines_trigger_above_survivors() {
 /// linearly with measured debt (and be exactly the base when no debt).
 #[test]
 fn mutator_assist_work_units_scale_with_debt() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     // Suppressed triggers (usize::MAX) → both debts read zero → base budget.
@@ -553,6 +559,12 @@ fn manual_gc_drains_parked_budgeted_cycle_first() {
 /// referenced by nothing until it is planted in the slot mid-cycle.
 #[test]
 fn atomic_finalize_remark_rescues_pointer_hidden_in_shadow_slot_after_root_scan() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(2);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -609,6 +621,12 @@ fn atomic_finalize_remark_rescues_pointer_hidden_in_shadow_slot_after_root_scan(
 /// and MARKS the target instead of treating the stub as zero-children.
 #[test]
 fn forwarded_array_stub_propagates_liveness_to_grown_array() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -663,6 +681,12 @@ fn forwarded_array_stub_propagates_liveness_to_grown_array() {
 /// the precise pre-fix reclaim conditions.
 #[test]
 fn minor_sweep_retains_window_expired_growth_stub() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _ = &trigger_guard;
@@ -752,6 +776,12 @@ fn minor_sweep_retains_window_expired_growth_stub() {
 /// failure the debt-proportional pacing exists to prevent.
 #[test]
 fn test_arena_debt_measured_against_effective_trigger_not_raw_cell() {
+    // #7056: this exercises the BUDGETED/incremental stepper, which the
+    // shipped default now bypasses — scavenge defers alloc-point
+    // collections to a precise safepoint instead of starting a cycle here.
+    // Pin legacy pacing so the test keeps asserting the path it was written
+    // for; the new default's behaviour is asserted by the probe matrix.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     use super::super::heap_budget::gc_trigger_absolute_ceiling_bytes;
     use super::super::policy::{
         effective_next_arena_trigger, GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,

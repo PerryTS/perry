@@ -2,6 +2,11 @@ use super::support::GcTriggerThresholdTestGuard;
 
 #[test]
 fn map_set_side_allocations_release_on_thread_exit() {
+    // #7056: drives the BUDGETED stepper via `complete_budgeted_gc_cycle`,
+    // which the shipped default bypasses (scavenge defers alloc-point
+    // collections to a precise safepoint). Pin legacy pacing so the cycle
+    // actually starts and this keeps testing what it was written for.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let map_before = crate::map::test_map_side_deallocation_snapshot();
     let set_before = crate::set::test_set_side_deallocation_snapshot();
 

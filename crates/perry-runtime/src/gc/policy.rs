@@ -475,6 +475,7 @@ thread_local! {
 pub(super) struct LegacyGcPacingGuard {
     previous: Option<bool>,
     cap_previous: bool,
+    scavenge_previous: Option<bool>,
 }
 
 #[cfg(test)]
@@ -482,6 +483,7 @@ impl Drop for LegacyGcPacingGuard {
     fn drop(&mut self) {
         GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| cell.set(self.previous));
         GC_NURSERY_CAP_TEST_SUPPRESSED.with(|cell| cell.set(self.cap_previous));
+        super::GC_SCAVENGE_TEST_OVERRIDE.with(|cell| cell.set(self.scavenge_previous));
     }
 }
 
@@ -494,12 +496,18 @@ pub(super) fn force_legacy_gc_pacing() -> LegacyGcPacingGuard {
         cell.set(Some(false));
         previous
     });
-    // The nursery cap is unconditional now (#7056), so pinning the polls flag
-    // no longer un-caps the trigger on its own. Legacy pacing means BOTH.
+    // Legacy pacing now means THREE things, not one. Pinning the polls flag
+    // used to be sufficient because both the nursery cap and the deferral
+    // branch hung off it; #7056 made the cap unconditional and scavenge
+    // default-on, so a guard that only touched the polls flag silently stopped
+    // pinning anything. That is what broke 23 gc:: tests — they were correct,
+    // and their guard had quietly become a no-op.
     let cap_previous = GC_NURSERY_CAP_TEST_SUPPRESSED.with(|cell| cell.replace(true));
+    let scavenge_previous = super::GC_SCAVENGE_TEST_OVERRIDE.with(|cell| cell.replace(Some(false)));
     LegacyGcPacingGuard {
         previous,
         cap_previous,
+        scavenge_previous,
     }
 }
 
@@ -517,9 +525,11 @@ pub(super) fn force_moving_gc_pacing() -> LegacyGcPacingGuard {
         previous
     });
     let cap_previous = GC_NURSERY_CAP_TEST_SUPPRESSED.with(|cell| cell.replace(false));
+    let scavenge_previous = super::GC_SCAVENGE_TEST_OVERRIDE.with(|cell| cell.replace(Some(true)));
     LegacyGcPacingGuard {
         previous,
         cap_previous,
+        scavenge_previous,
     }
 }
 
