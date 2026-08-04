@@ -8,7 +8,13 @@
   `str_from_header`.
 
   The description is now rooted across the allocation and re-read, the same fix
-  as `RegExpHeader::flags_ptr` (#7374). Closes 3 of the 31 catches in #7341.
+  as `RegExpHeader::flags_ptr` (#7374).
+
+  Closes **6 of the 31** catches in #7341, not 3: the same stale field is read
+  by two different helpers. `js_symbol_to_string` reaches it directly, and
+  `infer_symbol_function_name` reaches it through
+  `js_object_literal_infer_computed_function_name` — which had been triaged as a
+  separate cluster until the fix closed both.
 
   **A related gap is left open deliberately, and is worth knowing about.** The
   header is allocated `GC_TYPE_STRING`, whose payload the collector treats as
