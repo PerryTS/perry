@@ -1263,7 +1263,7 @@ pub fn try_array_proto_chain_method(
     let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
     let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
     let own = crate::object::js_object_get_field_by_name_f64(raw, key);
-    if matches!(classify_own_slot(own), OwnSlot::UserMethod) {
+    if matches!(classify_own_slot(own, method), OwnSlot::UserMethod) {
         return None;
     }
     if !proto_chain_contains_real_array(raw as usize) {
@@ -1462,7 +1462,7 @@ enum OwnSlot {
     BorrowedBuiltin,
 }
 
-fn classify_own_slot(v: f64) -> OwnSlot {
+fn classify_own_slot(v: f64, method: &str) -> OwnSlot {
     let jv = JSValue::from_bits(v.to_bits());
     if !jv.is_pointer() {
         return OwnSlot::Absent;
@@ -1473,19 +1473,32 @@ fn classify_own_slot(v: f64) -> OwnSlot {
     }
     let fp = crate::closure::get_valid_func_ptr(c);
     if fp.is_null() {
-        OwnSlot::Absent
-    } else if fp == crate::closure::BOUND_METHOD_FUNC_PTR
-        // A raw built-in prototype-method closure (`{ splice:
-        // Array.prototype.splice }` stores the thunk itself, not a bound
-        // reification) must also run the generic engine on THIS receiver —
-        // dispatching it as a user method loses the receiver entirely
-        // (test262 splice/S15.4.4.12_A6.1_T3).
-        || crate::object::builtin_closure_is_non_constructable_value(v)
-    {
-        OwnSlot::BorrowedBuiltin
-    } else {
-        OwnSlot::UserMethod
+        return OwnSlot::Absent;
     }
+    if fp == crate::closure::BOUND_METHOD_FUNC_PTR {
+        return OwnSlot::BorrowedBuiltin;
+    }
+    // A raw built-in prototype-method closure (`{ splice:
+    // Array.prototype.splice }` stores the thunk itself, not a bound
+    // reification) must also run the generic engine on THIS receiver —
+    // dispatching it as a user method loses the receiver entirely
+    // (test262 splice/S15.4.4.12_A6.1_T3).
+    //
+    // #5902: but "a non-constructable builtin closure" is NOT the same claim as
+    // "a borrowed *Array* builtin". Every builtin prototype method answers that
+    // test, so `obj.concat = String.prototype.concat` was misclassified and ran
+    // the ARRAY algorithm — `[obj, "two", undefined]` instead of
+    // `"onetwoundefined"` (test262 concat/S15.5.4.6_A4_T1), even though the
+    // equivalent `String.prototype.concat.call(obj, …)` was already correct.
+    // Require the slot to hold the actual `Array.prototype[method]`; anything
+    // else is a foreign builtin that must reach its own reflective thunk via
+    // the normal dispatch, which binds `this` to the receiver.
+    if crate::object::builtin_closure_is_non_constructable_value(v)
+        && crate::object::is_array_prototype_method_value(v, method)
+    {
+        return OwnSlot::BorrowedBuiltin;
+    }
+    OwnSlot::UserMethod
 }
 
 /// True when `object` owns a user method (an own callable field, not a borrowed
@@ -1498,7 +1511,7 @@ pub(crate) fn object_owns_user_method(object: f64, method: &str) -> bool {
     let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
     let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
     let own = crate::object::js_object_get_field_by_name_f64(raw, key);
-    matches!(classify_own_slot(own), OwnSlot::UserMethod)
+    matches!(classify_own_slot(own, method), OwnSlot::UserMethod)
 }
 
 /// Dispatch a generic `Array.prototype` mutator over an array-like receiver.
@@ -1540,7 +1553,7 @@ pub fn try_object_arraylike_mutator(
     // method (`{ push(x) {…} }`) is left to the normal dispatch.
     let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
     let own = crate::object::js_object_get_field_by_name_f64(raw, key);
-    if matches!(classify_own_slot(own), OwnSlot::UserMethod) {
+    if matches!(classify_own_slot(own, method), OwnSlot::UserMethod) {
         return None;
     }
     run_object_mutator(object, method, args_ptr, args_len)

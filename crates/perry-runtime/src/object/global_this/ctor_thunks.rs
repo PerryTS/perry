@@ -221,6 +221,58 @@ pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
     crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
 }
 
+/// #5902: is `value` literally `Array.prototype[method]`?
+///
+/// The array-like engine treats *any* borrowed builtin closure stored in an
+/// own slot as a borrowed **Array** builtin (`classify_own_slot`), which is
+/// only true when the borrow actually came off `Array.prototype`.
+/// `obj.concat = String.prototype.concat` stores a non-constructable builtin
+/// closure too, so it was misread and ran the array algorithm — returning
+/// `[obj, "two", undefined]` where the spec (and the working
+/// `String.prototype.concat.call(obj, …)` form) gives `"onetwoundefined"`.
+///
+/// Compared by closure FUNCTION POINTER, not by closure identity: reading
+/// `Array.prototype.concat` can hand back a freshly reified closure, but every
+/// reification of the same builtin shares one code address. A func ptr is a
+/// code address rather than a heap pointer, so nothing here is GC-visible and
+/// no root scanner is required.
+pub(crate) fn is_array_prototype_method_value(value: f64, method: &str) -> bool {
+    let slot = crate::value::JSValue::from_bits(value.to_bits());
+    if !slot.is_pointer() {
+        return false;
+    }
+    let slot_ptr = slot.as_pointer::<crate::closure::ClosureHeader>();
+    if slot_ptr.is_null() {
+        return false;
+    }
+    let slot_fp = crate::closure::get_valid_func_ptr(slot_ptr);
+    if slot_fp.is_null() {
+        return false;
+    }
+
+    let proto = builtin_prototype_value("Array");
+    let proto_bits = proto.to_bits();
+    if (proto_bits >> 48) != 0x7FFD {
+        return false;
+    }
+    let proto_ptr = (proto_bits & crate::value::POINTER_MASK) as *const super::super::ObjectHeader;
+    if proto_ptr.is_null() {
+        return false;
+    }
+    let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+    let canonical = super::super::js_object_get_field_by_name_f64(proto_ptr, key);
+    let canonical_jv = crate::value::JSValue::from_bits(canonical.to_bits());
+    if !canonical_jv.is_pointer() {
+        return false;
+    }
+    let canonical_ptr = canonical_jv.as_pointer::<crate::closure::ClosureHeader>();
+    if canonical_ptr.is_null() {
+        return false;
+    }
+    let canonical_fp = crate::closure::get_valid_func_ptr(canonical_ptr);
+    !canonical_fp.is_null() && canonical_fp == slot_fp
+}
+
 pub(crate) extern "C" fn webcrypto_illegal_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {

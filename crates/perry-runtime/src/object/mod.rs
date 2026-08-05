@@ -55,7 +55,8 @@ mod global_this;
 pub mod handle_expando;
 pub(crate) mod prop_plan;
 pub(crate) use global_this::{
-    default_prepare_stack_trace_func_ptr, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+    default_prepare_stack_trace_func_ptr, is_array_prototype_method_value,
+    scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };
 mod global_this_tables;
 mod groupby;
