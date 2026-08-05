@@ -335,14 +335,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // reloaded receiver, so neither crosses the window in a register.
             // The guard lives to the end of the arm: every use below is a use
             // of one of the two rooted values.
-            let (vals, operand_guard) = super::temp_root::lower_exprs_rooted(ctx, &[params, name])?;
+            // All operands rooted together, `value` included when present, so
+            // nothing crosses its lowering in a register. #7462 rooted only
+            // `params`+`name` and left this path with the window it was meant
+            // to close.
+            let mut operand_exprs: Vec<&Expr> = vec![params, name];
+            if let Some(v_expr) = value {
+                operand_exprs.push(v_expr);
+            }
+            let (vals, operand_guard) = super::temp_root::lower_exprs_rooted(ctx, &operand_exprs)?;
             let (p_v, n_v) = (vals[0].clone(), vals[1].clone());
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             // Runtime returns 0.0 / 1.0 as a plain f64 — not NaN-boxed.
             // Translate to TAG_TRUE / TAG_FALSE so `typeof` and strict-eq
             // behave correctly.
-            let raw = if let Some(v_expr) = value {
-                let v_v = lower_expr(ctx, v_expr)?;
+            let raw = if value.is_some() {
+                let v_v = vals[2].clone();
                 ctx.block().call(
                     DOUBLE,
                     "js_url_search_params_has2",
@@ -380,10 +388,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // reloaded receiver, so neither crosses the window in a register.
             // The guard lives to the end of the arm: every use below is a use
             // of one of the two rooted values.
-            let (vals, operand_guard) = super::temp_root::lower_exprs_rooted(ctx, &[params, name])?;
-            let (p_v, n_v) = (vals[0].clone(), vals[1].clone());
+            // All operands are rooted together: `value` is lowered too, so
+            // nothing crosses it in a register. #7462 rooted only
+            // `params`+`name`, which left the three-operand path with the same
+            // window it was meant to close.
+            let (vals, operand_guard) =
+                super::temp_root::lower_exprs_rooted(ctx, &[params, name, value])?;
+            let (p_v, n_v, val_v) = (vals[0].clone(), vals[1].clone(), vals[2].clone());
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
-            let val_v = lower_expr(ctx, value)?;
             ctx.block().call_void(
                 "js_url_search_params_set",
                 &[(I64, &p_ptr), (DOUBLE, &n_v), (DOUBLE, &val_v)],
@@ -406,10 +418,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // reloaded receiver, so neither crosses the window in a register.
             // The guard lives to the end of the arm: every use below is a use
             // of one of the two rooted values.
-            let (vals, operand_guard) = super::temp_root::lower_exprs_rooted(ctx, &[params, name])?;
-            let (p_v, n_v) = (vals[0].clone(), vals[1].clone());
+            // All operands are rooted together: `value` is lowered too, so
+            // nothing crosses it in a register. #7462 rooted only
+            // `params`+`name`, which left the three-operand path with the same
+            // window it was meant to close.
+            let (vals, operand_guard) =
+                super::temp_root::lower_exprs_rooted(ctx, &[params, name, value])?;
+            let (p_v, n_v, val_v) = (vals[0].clone(), vals[1].clone(), vals[2].clone());
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
-            let val_v = lower_expr(ctx, value)?;
             ctx.block().call_void(
                 "js_url_search_params_append",
                 &[(I64, &p_ptr), (DOUBLE, &n_v), (DOUBLE, &val_v)],
@@ -432,11 +448,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // reloaded receiver, so neither crosses the window in a register.
             // The guard lives to the end of the arm: every use below is a use
             // of one of the two rooted values.
-            let (vals, operand_guard) = super::temp_root::lower_exprs_rooted(ctx, &[params, name])?;
+            // All operands rooted together, `value` included when present, so
+            // nothing crosses its lowering in a register. #7462 rooted only
+            // `params`+`name` and left this path with the window it was meant
+            // to close.
+            let mut operand_exprs: Vec<&Expr> = vec![params, name];
+            if let Some(v_expr) = value {
+                operand_exprs.push(v_expr);
+            }
+            let (vals, operand_guard) = super::temp_root::lower_exprs_rooted(ctx, &operand_exprs)?;
             let (p_v, n_v) = (vals[0].clone(), vals[1].clone());
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
-            if let Some(v_expr) = value {
-                let v_v = lower_expr(ctx, v_expr)?;
+            if value.is_some() {
+                let v_v = vals[2].clone();
                 ctx.block().call_void(
                     "js_url_search_params_delete2",
                     &[(I64, &p_ptr), (DOUBLE, &n_v), (DOUBLE, &v_v)],
@@ -446,9 +470,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_url_search_params_delete",
                     &[(I64, &p_ptr), (DOUBLE, &n_v)],
                 );
-                // Released after the consuming call, which itself allocates.
-                super::temp_root::temp_root_release(ctx, operand_guard);
             }
+            // Released after the consuming call on BOTH arms. #7462's automated
+            // placement put this inside the `else` only, so the with-value path
+            // pushed two temp roots per execution and never truncated them —
+            // unbounded growth in a loop, and it compiled without a warning.
+            super::temp_root::temp_root_release(ctx, operand_guard);
             Ok(ctx
                 .block()
                 .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
