@@ -268,22 +268,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cmd_box = lower_expr(ctx, command)?;
             // #3079: throw `ERR_INVALID_ARG_TYPE` for a missing/non-string command.
             emit_cp_validate_command(ctx, &cmd_box, "command");
-            let cmd_str = unbox_to_i64(ctx.block(), &cmd_box);
-            let arg1 = if let Some(o) = options {
-                lower_expr(ctx, o)?
+            // `cmd_box` is a heap string and the `options`/`callback`
+            // lowerings below run arbitrary user code, so the raw pointer must
+            // not be taken until after them. Root the validated command, lower
+            // the rest, then unbox from the reload. `arg1` needs the same
+            // treatment: it is a NaN-boxed heap value crossing the `callback`
+            // lowering. Truncating to `cmd_slot` drops both (temp roots are a
+            // stack), so one release covers them.
+            let cmd_slot = super::temp_root::temp_root_push_double(ctx, &cmd_box);
+            let arg1_slot = if let Some(o) = options {
+                let v = lower_expr(ctx, o)?;
+                Some(super::temp_root::temp_root_push_double(ctx, &v))
             } else {
-                undef.clone()
+                None
             };
             let arg2 = if let Some(cb) = callback {
                 lower_expr(ctx, cb)?
             } else {
                 undef.clone()
             };
+            let arg1 = match &arg1_slot {
+                Some(slot) => super::temp_root::temp_root_get_double(ctx, slot),
+                None => undef.clone(),
+            };
+            let cmd_box = super::temp_root::temp_root_get_double(ctx, &cmd_slot);
+            let cmd_str = unbox_to_i64(ctx.block(), &cmd_box);
             let result = ctx.block().call(
                 DOUBLE,
                 "js_child_process_exec",
                 &[(I64, &cmd_str), (DOUBLE, &arg1), (DOUBLE, &arg2)],
             );
+            super::temp_root::temp_root_truncate(ctx, &cmd_slot);
             Ok(result)
         }
 
@@ -302,24 +317,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let file_box = lower_expr(ctx, file)?;
             // #3079: throw `ERR_INVALID_ARG_TYPE` for a missing/non-string file.
             emit_cp_validate_command(ctx, &file_box, "file");
-            let file_str = unbox_to_i64(ctx.block(), &file_box);
-            let args_v = if let Some(a) = args {
+            // Same window as the `exec` arm above: `file_box` is a heap string
+            // and every optional operand below lowers arbitrary user code. Root
+            // each as it is produced, lower the rest, then reload. One truncate
+            // to `file_slot` releases them all -- temp roots are a stack.
+            let file_slot = super::temp_root::temp_root_push_double(ctx, &file_box);
+            let args_slot = if let Some(a) = args {
                 let v = lower_expr(ctx, a)?;
                 emit_cp_validate_args(ctx, &v);
-                v
+                Some(super::temp_root::temp_root_push_double(ctx, &v))
             } else {
-                undef.clone()
+                None
             };
-            let opts_v = if let Some(o) = options {
-                lower_expr(ctx, o)?
+            let opts_slot = if let Some(o) = options {
+                let v = lower_expr(ctx, o)?;
+                Some(super::temp_root::temp_root_push_double(ctx, &v))
             } else {
-                undef.clone()
+                None
             };
             let cb_v = if let Some(c) = callback {
                 lower_expr(ctx, c)?
             } else {
                 undef.clone()
             };
+            let args_v = match &args_slot {
+                Some(slot) => super::temp_root::temp_root_get_double(ctx, slot),
+                None => undef.clone(),
+            };
+            let opts_v = match &opts_slot {
+                Some(slot) => super::temp_root::temp_root_get_double(ctx, slot),
+                None => undef.clone(),
+            };
+            let file_box = super::temp_root::temp_root_get_double(ctx, &file_slot);
+            let file_str = unbox_to_i64(ctx.block(), &file_box);
             let result = ctx.block().call(
                 DOUBLE,
                 "js_child_process_exec_file",
@@ -330,6 +360,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &cb_v),
                 ],
             );
+            super::temp_root::temp_root_truncate(ctx, &file_slot);
             Ok(result)
         }
 
@@ -346,24 +377,40 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let file_box = lower_expr(ctx, file)?;
             // #3079: throw `ERR_INVALID_ARG_TYPE` for a missing/non-string file.
             emit_cp_validate_command(ctx, &file_box, "file");
-            let file_str = unbox_to_i64(ctx.block(), &file_box);
-            let args_v = if let Some(a) = args {
+            // Same window as the `exec` arm above: `file_box` is a heap string
+            // and every optional operand below lowers arbitrary user code. Root
+            // each as it is produced, lower the rest, then reload. One truncate
+            // to `file_slot` releases them all -- temp roots are a stack.
+            let file_slot = super::temp_root::temp_root_push_double(ctx, &file_box);
+            let args_slot = if let Some(a) = args {
                 let v = lower_expr(ctx, a)?;
                 emit_cp_validate_args(ctx, &v);
-                v
+                Some(super::temp_root::temp_root_push_double(ctx, &v))
             } else {
-                undef.clone()
+                None
             };
-            let opts_v = if let Some(o) = options {
-                lower_expr(ctx, o)?
+            let opts_slot = if let Some(o) = options {
+                let v = lower_expr(ctx, o)?;
+                Some(super::temp_root::temp_root_push_double(ctx, &v))
             } else {
-                undef.clone()
+                None
             };
+            let args_v = match &args_slot {
+                Some(slot) => super::temp_root::temp_root_get_double(ctx, slot),
+                None => undef.clone(),
+            };
+            let opts_v = match &opts_slot {
+                Some(slot) => super::temp_root::temp_root_get_double(ctx, slot),
+                None => undef.clone(),
+            };
+            let file_box = super::temp_root::temp_root_get_double(ctx, &file_slot);
+            let file_str = unbox_to_i64(ctx.block(), &file_box);
             let result = ctx.block().call(
                 DOUBLE,
                 "js_child_process_exec_file_sync",
                 &[(I64, &file_str), (DOUBLE, &args_v), (DOUBLE, &opts_v)],
             );
+            super::temp_root::temp_root_truncate(ctx, &file_slot);
             Ok(result)
         }
 
