@@ -179,5 +179,8 @@ fn user_members_named_like_clone_suffixes_keep_their_own_symbols() {
     let add_clone = function_body(&ir, "perry_fn_clone_suffix_ts__add$typed_f64");
     assert!(add_clone.contains("fadd"), "add's clone body is a + b");
     let user_clone = function_body(&ir, "perry_fn_clone_suffix_ts__add__typed_f64$typed_f64");
-    assert!(user_clone.contains("fmul"), "add__typed_f64's clone body is a * b");
+    assert!(
+        user_clone.contains("fmul"),
+        "add__typed_f64's clone body is a * b"
+    );
 }

@@ -966,7 +966,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
             .filter(|&i| block_has_live[i])
             .count();
         eprintln!(
-            "[gc] blocks: general={} ({} live), longlived={} ({} live), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
+            "[gc] blocks: general={} ({} live), non_general={} ({} live, survivors+longlived+old), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
             resettable_general_n,
             live_general,
             n_blocks - resettable_general_n,
@@ -1324,7 +1324,7 @@ impl ArenaSweepObjectsState {
             .filter(|&i| self.block_has_live[i])
             .count();
         eprintln!(
-            "[gc] blocks: general={} ({} live), longlived={} ({} live), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
+            "[gc] blocks: general={} ({} live), non_general={} ({} live, survivors+longlived+old), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
             self.resettable_general_n,
             live_general,
             self.block_has_live.len() - self.resettable_general_n,

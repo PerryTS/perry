@@ -49,12 +49,12 @@ mod func_registry;
 mod function;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
+#[cfg(test)]
+mod clone_suffix_tests;
 pub(crate) mod helpers;
 mod method;
 mod method_registry;
 mod module_globals_emit;
-#[cfg(test)]
-mod clone_suffix_tests;
 #[cfg(test)]
 mod number_exactness_tests;
 mod opts;
