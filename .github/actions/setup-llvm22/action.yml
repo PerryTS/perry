@@ -79,9 +79,17 @@ runs:
     - name: LLVM 22 (Windows, official MSVC tarball)
       if: runner.os == 'Windows'
       shell: pwsh
+      # `inputs.version` arrives through the environment, NOT through `${{ }}`
+      # interpolated into the script body. A template expansion is substituted
+      # as raw text before pwsh ever parses the line, so an input containing a
+      # quote plus a statement separator executes as code with the runner's
+      # privileges; reading `$env:` is a plain string load with no such step.
+      # Caught by zizmor's `template-injection` audit at High confidence.
+      env:
+        LLVM_VERSION: ${{ inputs.version }}
       run: |
         $ErrorActionPreference = "Stop"
-        $ver = "${{ inputs.version }}"
+        $ver = $env:LLVM_VERSION
         $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-x86_64-pc-windows-msvc.tar.xz"
         Write-Host "downloading $url"
         curl.exe -sSL --retry 3 -o "$env:RUNNER_TEMP\llvm.tar.xz" $url
