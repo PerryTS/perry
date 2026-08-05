@@ -238,3 +238,67 @@ mod tests {
         assert_eq!(len.0, "%r0");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Applying the design to the REAL emitter.
+//
+// `FnCtx` has no interior mutability -- `ctx.block()` needs `&mut` -- so the
+// borrow-carrying `Raw` above cannot be built on it directly: `root(self)`
+// would need a second borrow while the handle still holds the first (the same
+// E0499 the RFC's own API hits, see `Raw`'s doc).
+//
+// The shape that DOES work against a `&mut`-only emitter is the combinator, and
+// it is the same one the runtime settled on for layer 3 (`RuntimeHandle::
+// across_*`): never hand out an unrooted handle at all. `call_rooted` emits the
+// collecting call and roots its result in one step, so there is no window in
+// which an unrooted register exists to be misused, and `read` re-reads through
+// the slot every time.
+//
+// This is weaker than the borrow formulation -- it prevents the bug rather than
+// detecting attempts to write it -- but it needs no emitter rewrite, which is
+// what makes it migratable one call site at a time.
+// ---------------------------------------------------------------------------
+
+use crate::expr::FnCtx;
+use crate::types::{I32, I64};
+
+/// A slot holding a GC-managed pointer for the duration of a lowering.
+#[derive(Debug, Clone)]
+pub struct RootedSlot {
+    idx: String,
+}
+
+impl RootedSlot {
+    /// Re-read the slot. Called afresh at every use: the returned register is
+    /// only valid until the next emission that can collect, and re-reading is
+    /// cheaper than reasoning about whether one has happened.
+    pub fn read(&self, ctx: &mut FnCtx<'_>) -> String {
+        ctx.block()
+            .call(I64, "js_gc_temp_root_get", &[(I32, &self.idx)])
+    }
+
+    /// Release the slot. Call after the last [`RootedSlot::read`].
+    pub fn release(self, ctx: &mut FnCtx<'_>) {
+        ctx.block()
+            .call_void("js_gc_temp_root_truncate", &[(I32, &self.idx)]);
+    }
+}
+
+/// Emit a call that can collect and root its result in one step.
+///
+/// The point is what this function does NOT return: an unrooted register. A
+/// caller cannot hold the result across a later collection point because it
+/// never has the result -- only a slot -- which is what makes the #7453 shape
+/// unwritable here rather than merely reviewable.
+pub fn call_rooted(
+    ctx: &mut FnCtx<'_>,
+    ret_ty: crate::types::LlvmType,
+    callee: &str,
+    args: &[(crate::types::LlvmType, &str)],
+) -> RootedSlot {
+    let reg = ctx.block().call(ret_ty, callee, args);
+    let idx = ctx
+        .block()
+        .call(I32, "js_gc_temp_root_push", &[(I64, &reg)]);
+    RootedSlot { idx }
+}

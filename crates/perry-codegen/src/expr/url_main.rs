@@ -54,15 +54,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // would root an already-stale pointer.
                 let url_slot = super::temp_root::temp_root_push_i64(ctx, &url_ptr);
                 let base_v = lower_expr(ctx, base)?;
-                let base_ptr = ctx
-                    .block()
-                    .call(I64, "js_url_coerce_string", &[(DOUBLE, &base_v)]);
+                // Layer 1 migration (#7459): `call_rooted` emits the collecting
+                // call and roots its result in one step, so no unrooted
+                // register for `base_ptr` ever exists to be held across a later
+                // collection point. The window that made #7453 a bug is not
+                // expressible here.
+                let base_slot = crate::rooting::call_rooted(
+                    ctx,
+                    I64,
+                    "js_url_coerce_string",
+                    &[(DOUBLE, &base_v)],
+                );
                 let url_ptr = super::temp_root::temp_root_get_i64(ctx, &url_slot);
+                let base_ptr = base_slot.read(ctx);
                 let obj = ctx.block().call(
                     I64,
                     "js_url_new_with_base",
                     &[(I64, &url_ptr), (I64, &base_ptr)],
                 );
+                base_slot.release(ctx);
                 super::temp_root::temp_root_truncate(ctx, &url_slot);
                 obj
             } else {
