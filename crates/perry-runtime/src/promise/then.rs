@@ -488,8 +488,10 @@ pub extern "C" fn js_promise_then(
     let promise_handle = scope.root_raw_mut_ptr(promise);
     let on_fulfilled_handle = scope.root_raw_const_ptr(on_fulfilled);
     let on_rejected_handle = scope.root_raw_const_ptr(on_rejected);
-    let next = js_promise_new_with_parent(promise);
-    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    // `across_mut` runs the allocating call and returns the post-collection
+    // address, so the receiver is never bound stale in between (#7341).
+    let (next, promise) =
+        promise_handle.across_mut::<Promise, _>(|| js_promise_new_with_parent(promise));
     let on_fulfilled = on_fulfilled_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     let on_rejected = on_rejected_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
 
@@ -764,8 +766,10 @@ pub extern "C" fn js_promise_finally(
     let scope = crate::gc::RuntimeHandleScope::new();
     let promise_handle = scope.root_raw_mut_ptr(promise);
     let on_finally_handle = scope.root_raw_const_ptr(on_finally);
-    let next = js_promise_new_with_parent(promise);
-    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    // See the sibling in `then`: the allocating call and the re-read are one
+    // combinator so the order cannot drift apart (#7341).
+    let (next, promise) =
+        promise_handle.across_mut::<Promise, _>(|| js_promise_new_with_parent(promise));
     let on_finally = on_finally_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     let next_i64 = next as i64;
 

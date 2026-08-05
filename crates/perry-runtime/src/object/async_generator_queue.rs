@@ -268,8 +268,10 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: Reques
         let scope = crate::gc::RuntimeHandleScope::new();
         let original_handle = scope.root_raw_const_ptr(original);
         let arg_handle = scope.root_nanbox_f64(arg);
-        let promise = js_promise_new();
-        let original = original_handle.get_raw_const_ptr::<ClosureHeader>();
+        // `across_const` pairs the allocating call with the re-read, so the
+        // closure pointer cannot be bound stale in between (#7341).
+        let (promise, original) =
+            original_handle.across_const::<ClosureHeader, _>(|| js_promise_new());
         let arg = arg_handle.get_nanbox_f64();
         STATES.with(|states| {
             if let Some(state) = states.borrow_mut().get_mut(state_id - 1) {

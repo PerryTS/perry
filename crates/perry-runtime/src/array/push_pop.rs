@@ -443,10 +443,14 @@ pub(super) fn proxy_array_mutator(
                 for k in 0..actual_delete_count {
                     let from = (actual_start + k).to_string();
                     if proxy_has_str_key(p(), from.as_bytes()) {
-                        let v = proxy_get_str_key(p(), from.as_bytes());
-                        // Re-derive `removed` from its handle: the traps above
-                        // run arbitrary JS, which can move it.
-                        let removed = removed_handle.get_raw_mut_ptr::<ArrayHeader>();
+                        // The trap runs arbitrary JS and can move `removed`, so
+                        // its address is only valid after the call. `across_mut`
+                        // is that pattern as one combinator: it runs the call and
+                        // hands back the post-collection address, so a stale
+                        // pointer is never bound in between (#7341).
+                        let (v, removed) = removed_handle.across_mut::<ArrayHeader, _>(|| {
+                            proxy_get_str_key(p(), from.as_bytes())
+                        });
                         let elems = (removed as *mut u8).add(std::mem::size_of::<ArrayHeader>())
                             as *mut f64;
                         // GC_STORE_AUDIT(BARRIERED): note_array_slot re-stores
