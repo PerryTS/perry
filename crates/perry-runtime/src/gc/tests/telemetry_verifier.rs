@@ -396,7 +396,10 @@ fn test_pause_ring_records_max_and_window() {
 fn test_record_collection_bumps_read_pic_epoch() {
     use std::sync::atomic::Ordering;
     let before = crate::object::PERRY_IC_EPOCH.load(Ordering::Relaxed);
-    assert!(before >= 1, "epoch starts at 1 so zeroinitializer never hits");
+    assert!(
+        before >= 1,
+        "epoch starts at 1 so zeroinitializer never hits"
+    );
     GC_STATS.with(|stats| {
         stats.borrow_mut().record_collection(0, 1);
     });
