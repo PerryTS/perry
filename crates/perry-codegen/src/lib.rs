@@ -33,6 +33,7 @@ pub(crate) mod native_value;
 pub(crate) mod nm_install;
 pub mod opt_report;
 pub(crate) mod root_reload;
+pub mod rooting;
 pub mod runtime_decls;
 pub mod statepoint_report;
 pub(crate) mod stmt;
