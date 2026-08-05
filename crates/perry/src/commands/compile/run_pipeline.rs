@@ -5917,6 +5917,7 @@ pub fn run_with_parse_cache(
         &exe_path,
         format,
         args.debug_symbols,
+        verbose,
     )?;
 
     // HarmonyOS: emit the ArkTS EntryAbility + Index page next to the .so,

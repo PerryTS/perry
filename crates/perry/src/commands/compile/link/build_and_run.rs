@@ -45,6 +45,13 @@ pub(crate) fn build_and_run_link(
     // `--debug-symbols`: keep symbols / emit a PDB so RUST_BACKTRACE
     // panics in the compiled app symbolize. Windows-active today.
     debug_symbols: bool,
+    // `--verbose` (#6899): print the exact linker invocation before spawning
+    // it and its exit status after. The hang reported in #6899 sits between
+    // the `[strip-dedup]` line and the `Wrote executable:` line — a window
+    // that previously logged NOTHING even under `--verbose`, so a report
+    // could not tell "linker never spawned" from "linker hung" from
+    // "post-link step hung". These two lines split that window.
+    verbose: u8,
 ) -> Result<LinkCacheStatus> {
     // #498 - supply-chain gate. Before any prebuilt archive hits the
     // linker, hash it and compare against `perry.lock`. First build
@@ -1901,7 +1908,25 @@ pub(crate) fn build_and_run_link(
         }
     }
 
+    // #6899 breadcrumbs: everything between `[strip-dedup]` and
+    // `Wrote executable:` used to run silently, so a hang in this window was
+    // unattributable. Print the spawn and the return, on stderr like the
+    // strip-dedup lines, flushed via eprintln's line buffering.
+    if verbose > 0 {
+        let program = cmd.get_program().to_string_lossy().into_owned();
+        let rendered: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        eprintln!("[link] invoking: {} {}", program, rendered.join(" "));
+    }
     let status_result = cmd.status();
+    if verbose > 0 {
+        match &status_result {
+            Ok(status) => eprintln!("[link] linker exited: {status}"),
+            Err(e) => eprintln!("[link] linker spawn failed: {e}"),
+        }
+    }
     if let Some(path) = response_file_to_clean {
         let _ = fs::remove_file(path);
     }
