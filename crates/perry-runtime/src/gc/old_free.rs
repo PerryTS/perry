@@ -90,7 +90,11 @@ pub(super) fn old_free_rebuild_from_live_old_blocks(
     OLD_FREE_MAP.with(|m| m.borrow_mut().clear());
     OLD_FREE_BYTES.with(|c| c.set(0));
     OLD_FREE_NONEMPTY.with(|c| c.set(false));
-    crate::arena::arena_walk_objects_filtered(
+    // The raw-headers walker is load-bearing: the walkable-gated walkers
+    // (`arena_walk_objects_filtered` and friends) step over invalidated
+    // headers WITHOUT invoking the callback, so a rebuild written against
+    // them silently records zero holes.
+    crate::arena::old_arena_walk_all_headers_filtered(
         |block_idx| {
             block_idx >= old_block_start && block_has_live.get(block_idx).copied().unwrap_or(false)
         },

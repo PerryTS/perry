@@ -839,3 +839,43 @@ pub fn longlived_end() -> usize {
     let l = LONGLIVED_ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
     g + s0 + s1 + l
 }
+
+/// #7437: walk EVERY header in the selected old-gen blocks, including
+/// invalidated dead ones (`obj_type == 0`), which the walkable-gated
+/// walkers above deliberately skip. Stepping is by `GcHeader::size`, which
+/// `invalidate_dead_old_arena_header` preserves exactly so holes remain
+/// traversable. `block_filter` receives GLOBAL block indices (same base as
+/// `arena_walk_objects_filtered`'s old-gen region).
+pub(crate) fn old_arena_walk_all_headers_filtered(
+    mut block_filter: impl FnMut(usize) -> bool,
+    mut callback: impl FnMut(*mut u8, usize),
+) {
+    use crate::gc::GcHeader;
+    let old_block_start = longlived_end();
+    OLD_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for (i, block) in arena.blocks.iter().enumerate() {
+            let block_idx = old_block_start + i;
+            if block.data.is_null() || !block_filter(block_idx) {
+                continue;
+            }
+            let mut offset = 0usize;
+            while offset < block.offset {
+                let aligned = (offset + 7) & !7;
+                if aligned >= block.offset {
+                    break;
+                }
+                let header_ptr = unsafe { block.data.add(aligned) };
+                let header = header_ptr as *const GcHeader;
+                unsafe {
+                    let total_size = (*header).size as usize;
+                    if total_size == 0 || total_size > block.size {
+                        break;
+                    }
+                    callback(header_ptr, block_idx);
+                    offset = aligned + total_size;
+                }
+            }
+        }
+    });
+}
