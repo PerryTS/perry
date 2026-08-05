@@ -283,6 +283,7 @@ extern "C" fn interp_thunk(closure: *const crate::closure::ClosureHeader, raw_ar
     let fn_id = crate::closure::js_closure_get_capture_f64(closure, 0) as u32;
     let def_env = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 1));
     let this_bits = crate::closure::js_closure_get_capture_bits(closure, 2);
+    let is_arrow = this_bits != NO_LEXICAL_THIS;
     let this = if this_bits == NO_LEXICAL_THIS {
         crate::object::js_implicit_this_get()
     } else {
@@ -309,6 +310,7 @@ extern "C" fn interp_thunk(closure: *const crate::closure::ClosureHeader, raw_ar
         intrinsics,
         strings_allowed,
         wasm_allowed,
+        is_arrow,
         &args,
     )
 }
@@ -324,6 +326,7 @@ pub(crate) fn invoke_interp_fn(
     intrinsics: f64,
     strings_allowed: bool,
     wasm_allowed: bool,
+    is_arrow: bool,
     args: &[f64],
 ) -> f64 {
     let fun = match lookup_fn(fn_id) {
@@ -354,20 +357,22 @@ pub(crate) fn invoke_interp_fn(
     let call_env = env::env_new(root_get(def_env_idx));
     let env_idx = root_push(call_env);
 
-    let arguments_idx = root_push(bridge::object_new());
-    bridge::set_member(
-        root_get(arguments_idx),
-        "length",
-        bridge::make_number(arg_idxs.len() as f64),
-    );
-    for (index, &arg_idx) in arg_idxs.iter().enumerate() {
+    if !is_arrow {
+        let arguments_idx = root_push(bridge::object_new());
         bridge::set_member(
             root_get(arguments_idx),
-            &index.to_string(),
-            root_get(arg_idx),
+            "length",
+            bridge::make_number(arg_idxs.len() as f64),
         );
+        for (index, &arg_idx) in arg_idxs.iter().enumerate() {
+            bridge::set_member(
+                root_get(arguments_idx),
+                &index.to_string(),
+                root_get(arg_idx),
+            );
+        }
+        env::define(root_get(env_idx), "arguments", root_get(arguments_idx));
     }
-    env::define(root_get(env_idx), "arguments", root_get(arguments_idx));
 
     let ctx = Ctx {
         this_idx,
@@ -553,7 +558,7 @@ pub(crate) fn exec_direct_eval_stmts(
     for name in vars {
         env::ensure_var_binding(root_get(variable_env_idx), &name);
     }
-    hoist_fn_decls(ctx, stmts, lexical_env_idx, false);
+    hoist_fn_decls(ctx, stmts, lexical_env_idx, ctx.strict);
     for stmt in stmts {
         let flow = if let ast::Stmt::Expr(expr) = stmt {
             let value = eval_expr(ctx, &expr.expr, lexical_env_idx);

@@ -445,6 +445,10 @@ pub(crate) fn assign(env: f64, name: &str, value: f64, strict: bool) {
         match env_parent(root_get(cur_idx)) {
             Some(p) => root_set(cur_idx, p),
             None => {
+                if strict {
+                    roots_truncate(value_idx);
+                    super::bridge::throw_reference_error(&format!("{name} is not defined"));
+                }
                 if let Some(bindings) = env_object_bindings(root_get(cur_idx)) {
                     object_write_binding(bindings, name, root_get(value_idx), strict);
                 } else {

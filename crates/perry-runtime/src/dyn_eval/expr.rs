@@ -765,7 +765,7 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                         "Code generation from strings disallowed for this context",
                     );
                 }
-                return super::eval_direct_in(
+                let result = super::eval_direct_in(
                     &source,
                     root_get(ctx.global_idx),
                     root_get(ctx.intrinsics_idx),
@@ -774,6 +774,8 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                     ctx.strings_allowed,
                     ctx.wasm_allowed,
                 );
+                roots_truncate(resolved_idx);
+                return result;
             }
         }
     }
@@ -797,13 +799,15 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                             }
                         ));
                     }
+                    let callee_idx = (!ctx.strings_allowed
+                        && (crate::object::js_value_is_heap_object(root_get(obj_idx))
+                            || (root_get(obj_idx).to_bits() >> 48) == 0x7FFE))
+                        .then(|| root_push(bridge::get_member(root_get(obj_idx), &name)));
                     let codegen_blocked = !ctx.strings_allowed
                         && ((name == "constructor"
                             && crate::object::value_is_callable(root_get(obj_idx)))
-                            || is_string_codegen_callee(
-                                ctx,
-                                bridge::get_member(root_get(obj_idx), &name),
-                            ));
+                            || callee_idx
+                                .is_some_and(|idx| is_string_codegen_callee(ctx, root_get(idx))));
                     let wasm_codegen_blocked = !ctx.wasm_allowed
                         && matches!(
                             name.as_str(),
@@ -822,10 +826,15 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                                 crate::object::is_registered_wasm_module(*value)
                             }))
                     {
-                        return bridge::wasm_codegen_rejection(&format!("WebAssembly.{name}"));
+                        let result = bridge::wasm_codegen_rejection(&format!("WebAssembly.{name}"));
+                        roots_truncate(obj_idx);
+                        return result;
                     }
                     let receiver = root_get(obj_idx);
-                    let result = bridge::call_method(receiver, &name, &args);
+                    let result = callee_idx.map_or_else(
+                        || bridge::call_method(receiver, &name, &args),
+                        |idx| call_with_args(root_get(idx), receiver, &args),
+                    );
                     let result = attach_realm_static_result(ctx, receiver, &name, result);
                     roots_truncate(obj_idx);
                     result
@@ -833,11 +842,14 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                 ast::MemberProp::Computed(comp) => {
                     let key = eval_expr(ctx, &comp.expr, env_idx);
                     let key_idx = root_push(key);
-                    let codegen_blocked = !ctx.strings_allowed
-                        && is_string_codegen_callee(
-                            ctx,
-                            bridge::get_index(root_get(obj_idx), root_get(key_idx)),
-                        );
+                    let callee_idx = (!ctx.strings_allowed
+                        && (crate::object::js_value_is_heap_object(root_get(obj_idx))
+                            || (root_get(obj_idx).to_bits() >> 48) == 0x7FFE))
+                        .then(|| {
+                            root_push(bridge::get_index(root_get(obj_idx), root_get(key_idx)))
+                        });
+                    let codegen_blocked =
+                        callee_idx.is_some_and(|idx| is_string_codegen_callee(ctx, root_get(idx)));
                     let method = bridge::read_string(root_get(key_idx)).unwrap_or_default();
                     let wasm_codegen_blocked = !ctx.wasm_allowed
                         && matches!(
@@ -857,10 +869,16 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                                 crate::object::is_registered_wasm_module(*value)
                             }))
                     {
-                        return bridge::wasm_codegen_rejection(&format!("WebAssembly.{method}"));
+                        let result =
+                            bridge::wasm_codegen_rejection(&format!("WebAssembly.{method}"));
+                        roots_truncate(obj_idx);
+                        return result;
                     }
                     let receiver = root_get(obj_idx);
-                    let result = bridge::call_method_value(receiver, root_get(key_idx), &args);
+                    let result = callee_idx.map_or_else(
+                        || bridge::call_method_value(receiver, root_get(key_idx), &args),
+                        |idx| call_with_args(root_get(idx), receiver, &args),
+                    );
                     let result = attach_realm_static_result(ctx, receiver, &method, result);
                     roots_truncate(obj_idx);
                     result
