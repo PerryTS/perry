@@ -158,11 +158,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Expr::UrlSetHref { .. } => "js_url_set_href",
                 _ => unreachable!(),
             };
-            let url_v = lower_expr(ctx, url)?;
+            // Same window as the URLSearchParams family (#7462/#7463), and it
+            // covers all nine setters at once: `url_handle` is a raw heap
+            // pointer and lowering `value` runs arbitrary user code that can
+            // collect. Root both, unbox from the reloaded receiver.
+            let (vals, operand_guard) = super::temp_root::lower_exprs_rooted(ctx, &[url, value])?;
+            let (url_v, val_v) = (vals[0].clone(), vals[1].clone());
             let url_handle = unbox_to_i64(ctx.block(), &url_v);
-            let val_v = lower_expr(ctx, value)?;
             ctx.block()
                 .call_void(runtime_fn, &[(I64, &url_handle), (DOUBLE, &val_v)]);
+            super::temp_root::temp_root_release(ctx, operand_guard);
             // Assignment expression evaluates to the value on the RHS.
             Ok(val_v)
         }
@@ -533,11 +538,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callback,
             this_arg,
         } => {
-            let p_v = lower_expr(ctx, params)?;
+            // Two windows here, not one: `p_ptr` crosses the `callback`
+            // lowering, and both it and `cb_v` cross `this_arg`'s. Root every
+            // operand together and unbox from the reloaded receiver.
+            let mut operand_exprs: Vec<&Expr> = vec![params, callback];
+            if let Some(this_arg) = this_arg {
+                operand_exprs.push(this_arg);
+            }
+            let (vals, operand_guard) = super::temp_root::lower_exprs_rooted(ctx, &operand_exprs)?;
+            let (p_v, cb_v) = (vals[0].clone(), vals[1].clone());
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
-            let cb_v = lower_expr(ctx, callback)?;
-            let this_v = if let Some(this_arg) = this_arg {
-                lower_expr(ctx, this_arg)?
+            let this_v = if this_arg.is_some() {
+                vals[2].clone()
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
@@ -545,6 +557,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_url_search_params_for_each",
                 &[(I64, &p_ptr), (DOUBLE, &cb_v), (DOUBLE, &this_v)],
             );
+            super::temp_root::temp_root_release(ctx, operand_guard);
             Ok(ctx
                 .block()
                 .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
