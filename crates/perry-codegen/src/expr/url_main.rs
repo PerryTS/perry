@@ -39,15 +39,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(I64, "js_url_coerce_string", &[(DOUBLE, &url_v)]);
             let obj = if let Some(base) = base {
+                // `js_url_coerce_string` returns a RAW `StringHeader` pointer,
+                // not a NaN-boxed value, so nothing else keeps it alive. Two
+                // collection points then stand between it and its use:
+                // lowering `base` runs arbitrary user code, and the second
+                // coercion allocates whenever `base` is not already a string.
+                // An evacuating cycle in either window leaves `url_ptr`
+                // pointing at a forwarded object and
+                // `js_url_new_with_base` parses freed bytes.
+                //
+                // Root before the first collection point and re-read after the
+                // last, per `docs/src/internals/gc-rooting-invariant.md` — the
+                // ordering is the whole fix; adding the root after the coercion
+                // would root an already-stale pointer.
+                let url_slot = super::temp_root::temp_root_push_i64(ctx, &url_ptr);
                 let base_v = lower_expr(ctx, base)?;
                 let base_ptr = ctx
                     .block()
                     .call(I64, "js_url_coerce_string", &[(DOUBLE, &base_v)]);
-                ctx.block().call(
+                let url_ptr = super::temp_root::temp_root_get_i64(ctx, &url_slot);
+                let obj = ctx.block().call(
                     I64,
                     "js_url_new_with_base",
                     &[(I64, &url_ptr), (I64, &base_ptr)],
-                )
+                );
+                super::temp_root::temp_root_truncate(ctx, &url_slot);
+                obj
             } else {
                 ctx.block().call(I64, "js_url_new", &[(I64, &url_ptr)])
             };
@@ -55,17 +72,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         Expr::UrlPatternNew { input, base } => {
-            let input_v = lower_expr(ctx, input)?;
-            let base_v = if let Some(base) = base {
-                lower_expr(ctx, base)?
+            // Same window as `UrlNew` above: `input_v` is a NaN-boxed heap
+            // value held in a register while `base` lowers, which can run user
+            // code and collect. `lower_exprs_rooted` protects each operand
+            // whose later siblings may trigger GC and hands back reloaded
+            // values, so nothing crosses the window in a bare register.
+            let (input_v, base_v, operand_guard) = if let Some(base) = base {
+                let (vals, guard) = super::temp_root::lower_exprs_rooted(ctx, &[input, base])?;
+                (vals[0].clone(), vals[1].clone(), guard)
             } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                let input_v = lower_expr(ctx, input)?;
+                (
+                    input_v,
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                    None,
+                )
             };
             let obj = ctx.block().call(
                 I64,
                 "js_url_pattern_new",
                 &[(DOUBLE, &input_v), (DOUBLE, &base_v)],
             );
+            // Released only after the last use of both operands.
+            super::temp_root::temp_root_release(ctx, operand_guard);
             Ok(nanbox_pointer_inline(ctx.block(), &obj))
         }
 
