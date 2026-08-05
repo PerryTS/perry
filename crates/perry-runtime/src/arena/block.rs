@@ -78,8 +78,42 @@ fn block_size_for(min_size: usize) -> usize {
 // and thread teardown (`Arena::drop`) never pools.
 // ---------------------------------------------------------------------------
 
+/// Owns the pooled blocks, so that a thread exiting with a non-empty pool
+/// releases them instead of leaking up to [`BLOCK_POOL_CAP_BYTES`].
+///
+/// The ownership has to live *here* rather than in a drain called from
+/// `Arena::drop`: both are TLS destructors, their relative order is not
+/// specified, and `LocalKey::with` panics once its own destructor has run —
+/// so a drain could be skipped exactly when it is needed. A `Drop` on the
+/// pool's own value is order-independent by construction.
+///
+/// Matters for `perry/thread`: `spawn`/`parallelMap` give every agent its own
+/// arena and GC, so each exiting agent thread would otherwise strand its
+/// pooled blocks — unbounded growth across repeated spawns, in the one change
+/// whose purpose is lowering RSS.
+struct BlockPool(Vec<(*mut u8, usize)>);
+
+impl Drop for BlockPool {
+    fn drop(&mut self) {
+        for &(data, size) in &self.0 {
+            if data.is_null() || size == 0 {
+                continue;
+            }
+            let layout = Layout::from_size_align(size, 16).unwrap();
+            unsafe {
+                // #4665, mirroring `Arena::drop`: test builds keep freed blocks
+                // mapped so unit tests holding raw GC pointers across a
+                // collection read stale bytes instead of faulting.
+                if !cfg!(test) {
+                    std::alloc::dealloc(data, layout);
+                }
+            }
+        }
+    }
+}
+
 thread_local! {
-    static BLOCK_POOL: RefCell<Vec<(*mut u8, usize)>> = const { RefCell::new(Vec::new()) };
+    static BLOCK_POOL: RefCell<BlockPool> = const { RefCell::new(BlockPool(Vec::new())) };
     static BLOCK_POOL_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -105,7 +139,7 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
     unsafe {
         libc::madvise(data as *mut libc::c_void, size, libc::MADV_FREE);
     }
-    BLOCK_POOL.with(|p| p.borrow_mut().push((data, size)));
+    BLOCK_POOL.with(|p| p.borrow_mut().0.push((data, size)));
     BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_add(size)));
     true
 }
@@ -113,8 +147,8 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
 fn block_pool_take(size: usize) -> Option<*mut u8> {
     let taken = BLOCK_POOL.with(|p| {
         let mut pool = p.borrow_mut();
-        let idx = pool.iter().rposition(|&(_, s)| s == size)?;
-        Some(pool.swap_remove(idx).0)
+        let idx = pool.0.iter().rposition(|&(_, s)| s == size)?;
+        Some(pool.0.swap_remove(idx).0)
     })?;
     BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_sub(size)));
     Some(taken)

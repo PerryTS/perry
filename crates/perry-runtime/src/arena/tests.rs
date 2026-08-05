@@ -1133,3 +1133,38 @@ fn recycled_block_pool_reuses_released_blocks() {
     // Hand it back to the allocator so the test doesn't leak the mapping.
     unsafe { std::alloc::dealloc(block.data, layout) };
 }
+
+/// A thread exiting with a non-empty pool must run the pool's own `Drop`
+/// rather than stranding its blocks. Before the `BlockPool` newtype the
+/// thread-local held a bare `Vec<(*mut u8, usize)>`, so the TLS destructor
+/// freed the Vec's buffer and leaked every block it pointed at — up to
+/// `BLOCK_POOL_CAP_BYTES` per exiting thread, which `perry/thread`'s
+/// `spawn`/`parallelMap` create routinely.
+///
+/// The dealloc itself is `cfg!(test)`-skipped (#4665, exactly as in
+/// `Arena::drop`), so this asserts the destructor RUNS and that pools are
+/// per-thread; it cannot observe the free. Its value is that a regression to
+/// a bare `Vec` — or a drain called from another TLS destructor, whose
+/// ordering is unspecified — still has to keep this path alive.
+#[test]
+fn block_pool_is_per_thread_and_drops_with_its_thread() {
+    let before = block_pool_bytes_for_test();
+    let handle = std::thread::spawn(|| {
+        // Fresh thread => fresh pool.
+        assert_eq!(block_pool_bytes_for_test(), 0);
+        let layout = std::alloc::Layout::from_size_align(BLOCK_SIZE, 16).unwrap();
+        let raw = unsafe { std::alloc::alloc(layout) };
+        assert!(!raw.is_null());
+        assert!(
+            block_pool_put(raw, BLOCK_SIZE),
+            "pool should accept the block"
+        );
+        assert_eq!(block_pool_bytes_for_test(), BLOCK_SIZE);
+        // Thread exits here with a non-empty pool: BlockPool::drop must run.
+    });
+    handle
+        .join()
+        .expect("spawned thread must exit cleanly, not double-free");
+    // The other thread's pool never touched ours.
+    assert_eq!(block_pool_bytes_for_test(), before);
+}
