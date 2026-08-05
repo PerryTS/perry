@@ -995,6 +995,9 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // better than hole-by-hole reuse.
     if reclaim_dead_old_blocks {
         old_free_rebuild_from_live_old_blocks(&block_has_live, old_block_start);
+        if std::env::var_os("PERRY_GC_DIAG").is_some() {
+            eprintln!("[gc-old-free] reusable_bytes={}", old_free_bytes());
+        }
     }
     let reset = crate::arena::ArenaResetStats {
         reset_blocks: nursery_reset
@@ -1284,6 +1287,9 @@ impl ArenaSweepObjectsState {
                 &self.block_has_live,
                 self.old_block_start,
             );
+            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+                eprintln!("[gc-old-free] reusable_bytes={}", super::old_free_bytes());
+            }
         }
     }
 
