@@ -58,10 +58,7 @@ pub(crate) fn old_free_bytes() -> usize {
     OLD_FREE_BYTES.with(Cell::get)
 }
 
-/// Record a swept dead old object as a reusable hole. `user_ptr` is the
-/// payload pointer (header at `user_ptr - GC_HEADER_SIZE`); `total_size`
-/// is the header-inclusive padded size from `GcHeader::size`.
-pub(super) fn old_free_push(user_ptr: usize, total_size: usize) {
+fn old_free_push(user_ptr: usize, total_size: usize) {
     if user_ptr == 0 || total_size < GC_HEADER_SIZE {
         return;
     }
@@ -70,6 +67,43 @@ pub(super) fn old_free_push(user_ptr: usize, total_size: usize) {
     });
     OLD_FREE_BYTES.with(|c| c.set(c.get().saturating_add(total_size)));
     OLD_FREE_NONEMPTY.with(|c| c.set(true));
+}
+
+/// Rebuild the hole map from the heap itself: every invalidated dead
+/// header (`obj_type == 0` — only `invalidate_dead_old_arena_header`
+/// produces those; no live object has type 0) inside an old block that
+/// still holds a live object. Called at the completion point of every
+/// old-reclaiming sweep, replacing whatever the map held.
+///
+/// Rebuilding beats accumulating a staging vector during the sweep walk on
+/// two counts, both measured on `12_large_live_set` (~700k dead old
+/// objects): the staging vector alone added ~17 MB of peak RSS to the very
+/// number this feature exists to lower, and rebuild is idempotent — a hole
+/// consumed by reuse gets a real `obj_type` and drops out, a hole whose
+/// block died is never visited, so no cross-sweep dedup bookkeeping can
+/// drift. The walk is block-filtered (live old blocks only), so its cost
+/// is O(objects in surviving old blocks), paid only on reclaim sweeps.
+pub(super) fn old_free_rebuild_from_live_old_blocks(
+    block_has_live: &[bool],
+    old_block_start: usize,
+) {
+    OLD_FREE_MAP.with(|m| m.borrow_mut().clear());
+    OLD_FREE_BYTES.with(|c| c.set(0));
+    OLD_FREE_NONEMPTY.with(|c| c.set(false));
+    crate::arena::arena_walk_objects_filtered(
+        |block_idx| {
+            block_idx >= old_block_start && block_has_live.get(block_idx).copied().unwrap_or(false)
+        },
+        |header_ptr, _block_idx| {
+            let header = header_ptr as *mut GcHeader;
+            unsafe {
+                if (*header).obj_type == 0 {
+                    let total_size = (*header).size as usize;
+                    old_free_push(header as usize + GC_HEADER_SIZE, total_size);
+                }
+            }
+        },
+    );
 }
 
 /// Take a hole of exactly `total_size` bytes, if one exists. When

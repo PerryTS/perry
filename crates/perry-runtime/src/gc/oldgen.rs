@@ -761,11 +761,6 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // across GC cycles instead of page-faulting through fresh blocks.
     let n_blocks = crate::arena::arena_block_count();
     let mut block_has_live: Vec<bool> = vec![false; n_blocks];
-    // #7437: dead old objects observed by this walk. After block liveness is
-    // known, the ones whose block survives become reusable holes
-    // (gc/old_free.rs); the ones in fully-dead blocks are dropped — block
-    // reclaim below recycles those wholesale.
-    let mut dead_old_holes: Vec<(usize, usize, usize)> = Vec::new();
     // Inclusive upper bound on indices that age. `general_block_count()`
     // is the first non-general index; objects with `block_idx < general_n`
     // are nursery-resident and need the age-bump update.
@@ -821,7 +816,6 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 finalize_dead_arena_payload(header, user_ptr, overflow_active);
                 if reclaim_dead_old_blocks && dead_old {
                     invalidate_dead_old_arena_header(header, total_size);
-                    dead_old_holes.push((block_idx, user_ptr as usize, total_size));
                 }
                 return;
             }
@@ -901,7 +895,6 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     }
                     if reclaim_dead_old_blocks && dead_old {
                         invalidate_dead_old_arena_header(header, total_size);
-                        dead_old_holes.push((block_idx, user_ptr as usize, total_size));
                     } else {
                         (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
                     }
@@ -936,7 +929,6 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 // memory bandwidth (700k × 88 bytes = 62MB written).
                 if reclaim_dead_old_blocks && dead_old {
                     invalidate_dead_old_arena_header(header, total_size);
-                    dead_old_holes.push((block_idx, user_ptr as usize, total_size));
                 }
             } else {
                 if block_idx >= old_block_start {
@@ -997,14 +989,12 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     } else {
         crate::arena::ArenaResetStats::default()
     };
-    // #7437: dead old objects in blocks that stayed live become reusable
-    // holes for future promotions. Runs AFTER the block reclaim above so a
-    // fully-dead block's candidates are simply dropped — its bytes were
-    // recycled wholesale, which is strictly better than hole-by-hole reuse.
-    for &(block_idx, user_ptr, total_size) in &dead_old_holes {
-        if block_has_live.get(block_idx).copied().unwrap_or(false) {
-            old_free_push(user_ptr, total_size);
-        }
+    // #7437: rebuild the old-gen hole free list from the surviving blocks.
+    // Runs AFTER the block reclaim above, so a fully-dead block's holes are
+    // never recorded — its bytes were recycled wholesale, which is strictly
+    // better than hole-by-hole reuse.
+    if reclaim_dead_old_blocks {
+        old_free_rebuild_from_live_old_blocks(&block_has_live, old_block_start);
     }
     let reset = crate::arena::ArenaResetStats {
         reset_blocks: nursery_reset
@@ -1221,10 +1211,6 @@ struct ArenaSweepObjectsState {
     overflow_active: bool,
     do_age_bump: bool,
     reclaim_dead_old_blocks: bool,
-    /// #7437: dead old objects seen by this budgeted sweep — the twin of the
-    /// monolithic sweep's `dead_old_holes`. Drained into the old-gen hole
-    /// free list (live blocks only) when the object walk completes.
-    dead_old_holes: Vec<(usize, usize, usize)>,
     /// This sweep follows a MINOR trace, whose mark bits say nothing about the
     /// old generation: old-gen parents are black leaves whose slots are only
     /// visited through dirty remembered-set pages, so an object reachable only
@@ -1280,7 +1266,6 @@ impl ArenaSweepObjectsState {
                 || crate::closure::closure_dynamic_side_tables_nonempty(),
             do_age_bump,
             reclaim_dead_old_blocks,
-            dead_old_holes: Vec::new(),
             minor_sweep,
             targeted_old_blocks,
             freed_bytes: 0,
@@ -1289,18 +1274,17 @@ impl ArenaSweepObjectsState {
         }
     }
 
-    /// #7437: hand the walk's dead-old candidates in still-live blocks to
-    /// the hole free list. Called exactly once, when the object walk
+    /// #7437: rebuild the old-gen hole free list once the object walk
     /// completes — block liveness is final at that point, and the block
     /// cleanup that follows only touches blocks with NO live object, which
-    /// are exactly the candidates this skips.
+    /// the rebuild's filter already skips.
     fn push_live_block_holes(&mut self) {
-        for &(block_idx, user_ptr, total_size) in &self.dead_old_holes {
-            if self.block_has_live.get(block_idx).copied().unwrap_or(false) {
-                super::old_free_push(user_ptr, total_size);
-            }
+        if self.reclaim_dead_old_blocks {
+            super::old_free_rebuild_from_live_old_blocks(
+                &self.block_has_live,
+                self.old_block_start,
+            );
         }
-        self.dead_old_holes.clear();
     }
 
     fn step(&mut self, budget: usize) -> bool {
@@ -1463,8 +1447,6 @@ impl ArenaSweepObjectsState {
         }
         if self.reclaim_dead_old_blocks && dead_old {
             invalidate_dead_old_arena_header(header, total_size);
-            self.dead_old_holes
-                .push((block_idx, user_ptr as usize, total_size));
         } else {
             (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
         }
@@ -1481,8 +1463,6 @@ impl ArenaSweepObjectsState {
         finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
         if self.reclaim_dead_old_blocks && dead_old {
             invalidate_dead_old_arena_header(header, total_size);
-            self.dead_old_holes
-                .push((block_idx, user_ptr as usize, total_size));
         }
     }
 }
