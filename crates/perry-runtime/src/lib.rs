@@ -141,6 +141,11 @@ pub mod symbol;
 /// TC39 Temporal API (#4686): `Temporal.Duration`, `Temporal.Instant`,
 /// `Temporal.PlainDate`, … wrapping the pure-Rust `temporal_rs` engine.
 pub mod temporal;
+/// Cross-module test-only serialization primitives (#6965). Nothing here
+/// exists outside `cfg(test)`; production code must not grow a dependency on
+/// it.
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod text;
 pub mod timer;
 pub mod typed_feedback;

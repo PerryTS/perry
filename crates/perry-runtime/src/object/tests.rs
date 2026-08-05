@@ -117,6 +117,10 @@ extern "C" fn to_iso_string_sentinel(_closure: *const crate::closure::ClosureHea
 
 #[test]
 fn date_to_json_number_hint_honors_symbol_to_primitive() {
+    // The @@toPrimitive install lands in the PROCESS-global SYMBOL_PROPERTIES
+    // table, which the gc test guards' state reset wipes from parallel test
+    // threads (#6965). Hold the global side-table lock.
+    let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let receiver = js_object_alloc(0, 0);
         let receiver_value = crate::value::js_nanbox_pointer(receiver as i64);
@@ -156,6 +160,8 @@ fn date_to_json_number_hint_honors_symbol_to_primitive() {
 
 #[test]
 fn date_to_json_symbol_to_primitive_object_result_throws() {
+    // See date_to_json_number_hint_honors_symbol_to_primitive (#6965).
+    let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let receiver = js_object_alloc(0, 0);
         let receiver_value = crate::value::js_nanbox_pointer(receiver as i64);
@@ -194,6 +200,11 @@ fn date_to_json_symbol_to_primitive_object_result_throws() {
 
 #[test]
 fn builtin_prototype_methods_reject_dynamic_new() {
+    // `installed_builtin_method` reads each constructor's `prototype` off a
+    // closure — a PROCESS-global `CLOSURE_PROPS` entry the gc test guards'
+    // state reset wipes from parallel test threads (#6965). Hold the global
+    // side-table lock across the populate-then-assert.
+    let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         for (ctor, method) in [
             ("Date", "toJSON"),
@@ -267,6 +278,11 @@ fn recorded_prototype_constructor_overrides_plain_object_constructor() {
 
 #[test]
 fn closure_name_and_length_ignore_plain_assignment() {
+    // The closure side tables are PROCESS-global: the clear below must not
+    // land mid-test in a parallel lock-holder's populate-then-assert window,
+    // and this test's own populate-then-assert must not be wiped by the gc
+    // test guards' state reset (#6965). Hold the global side-table lock.
+    let _global = crate::gc::global_side_table_test_lock();
     crate::closure::test_clear_closure_side_tables();
     {
         let closure = crate::closure::js_closure_alloc(
@@ -301,6 +317,9 @@ fn closure_name_and_length_ignore_plain_assignment() {
 
 #[test]
 fn closure_name_can_be_redefined_with_define_property() {
+    // See closure_name_and_length_ignore_plain_assignment: the clear and the
+    // populate-then-assert both need the global side-table lock (#6965).
+    let _global = crate::gc::global_side_table_test_lock();
     crate::closure::test_clear_closure_side_tables();
     {
         let closure = crate::closure::js_closure_alloc(
@@ -376,6 +395,9 @@ extern "C" fn closure_accessor_getter(_closure: *const crate::closure::ClosureHe
 
 #[test]
 fn closure_accessor_define_property_is_own_and_invoked() {
+    // See closure_name_and_length_ignore_plain_assignment: the clear and the
+    // populate-then-assert both need the global side-table lock (#6965).
+    let _global = crate::gc::global_side_table_test_lock();
     crate::closure::test_clear_closure_side_tables();
     let closure = crate::closure::js_closure_alloc(
         crate::object::global_this_builtin_noop_thunk as *const u8,
@@ -429,6 +451,9 @@ fn closure_accessor_define_property_is_own_and_invoked() {
 
 #[test]
 fn symbol_define_property_attrs_round_trip_descriptor() {
+    // The symbol side tables are PROCESS-global: the clear below and the
+    // populate-then-assert both need the global side-table lock (#6965).
+    let _global = crate::gc::global_side_table_test_lock();
     crate::symbol::test_clear_symbol_side_table_roots();
     unsafe {
         let obj = js_object_alloc(0, 0);
@@ -560,6 +585,10 @@ fn test_object_to_value_roundtrip() {
 
 #[test]
 fn text_encoding_stream_globals_construct_readable_writable_shape() {
+    // Constructing the stream globals reads their `prototype` slots out of
+    // the PROCESS-global CLOSURE_PROPS table (#6965). Hold the global
+    // side-table lock across the populate-then-construct.
+    let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let global_ptr = js_object_alloc(0, 0);
         super::global_this::populate_global_this_builtins(global_ptr);
@@ -611,6 +640,10 @@ fn text_encoding_stream_globals_construct_readable_writable_shape() {
 #[test]
 fn navigator_global_constructor_identity_shape() {
     {
+        // The constructor's `prototype` read below goes through the
+        // PROCESS-global CLOSURE_PROPS table (#6965). Hold the global
+        // side-table lock across the populate-then-assert.
+        let _global = crate::gc::global_side_table_test_lock();
         let ctor_raw = test_global_this_builtin_constructor_value("Navigator");
         let ctor = JSValue::from_bits(ctor_raw.to_bits());
         assert!(ctor.is_pointer());

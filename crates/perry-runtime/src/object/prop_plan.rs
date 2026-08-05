@@ -246,11 +246,28 @@ pub(crate) fn read_plan_record(keys_id: usize, key_ptr: usize, field_idx: u32) {
 mod tests {
     use super::*;
 
+    /// A recorded verdict is invalidated by two PROCESS-global counters:
+    /// `PROP_PLAN_EPOCH` (bumped by every GC cycle's dead-owner fan-out and
+    /// every descriptor install, on any thread) and `VTABLE_GEN` (bumped by
+    /// every class method/getter registration in any parallel test). A bump
+    /// landing between record and check legitimately flushes the entry, so a
+    /// single-shot `record → assert(check)` is order-dependent under
+    /// default-parallel `cargo test` (#6965). Retry instead: a genuine
+    /// record/check regression fails every lap, while a concurrent bump only
+    /// costs one. The caches themselves are thread-local, so nothing a
+    /// parallel thread does can turn a MISS assertion into a spurious hit —
+    /// only the positive direction needs this.
+    fn store_plan_records_and_hits(class_id: u32, key_ptr: usize) -> bool {
+        (0..64).any(|_| {
+            store_plan_record(class_id, key_ptr);
+            store_plan_check(class_id, key_ptr)
+        })
+    }
+
     #[test]
     fn record_then_check_hits_and_epoch_bump_invalidates() {
         let key = 0xDEAD_BEE0usize;
-        store_plan_record(7, key);
-        assert!(store_plan_check(7, key));
+        assert!(store_plan_records_and_hits(7, key));
         // Different class or key misses.
         assert!(!store_plan_check(8, key));
         assert!(!store_plan_check(7, key + 16));
@@ -258,15 +275,13 @@ mod tests {
         prop_plan_epoch_bump();
         assert!(!store_plan_check(7, key));
         // Re-record under the new epoch works again.
-        store_plan_record(7, key);
-        assert!(store_plan_check(7, key));
+        assert!(store_plan_records_and_hits(7, key));
     }
 
     #[test]
     fn vtable_generation_bump_invalidates() {
         let key = 0xBEEF_00F0usize;
-        store_plan_record(9, key);
-        assert!(store_plan_check(9, key));
+        assert!(store_plan_records_and_hits(9, key));
         crate::object::class_registry::test_bump_vtable_generation();
         assert!(!store_plan_check(9, key));
     }
@@ -275,8 +290,13 @@ mod tests {
     fn read_plan_roundtrip_and_epoch_flush() {
         let keys = 0xAAAA_0040usize;
         let key = 0xBBBB_0080usize;
-        read_plan_record(keys, key, 21);
-        assert_eq!(read_plan_lookup(keys, key), Some(21));
+        // Same order-dependence as the store-plan tests: a concurrent global
+        // epoch bump between record and lookup flushes the thread-local
+        // entry, so retry the roundtrip.
+        assert!((0..64).any(|_| {
+            read_plan_record(keys, key, 21);
+            read_plan_lookup(keys, key) == Some(21)
+        }));
         assert_eq!(read_plan_lookup(keys, key + 8), None);
         prop_plan_epoch_bump();
         assert_eq!(read_plan_lookup(keys, key), None);

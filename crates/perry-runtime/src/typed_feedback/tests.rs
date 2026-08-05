@@ -122,13 +122,22 @@ impl Drop for EnvGuard {
 
 struct CurrentDirGuard {
     previous: std::path::PathBuf,
+    /// The process cwd is PROCESS-global: hold the crate-wide cwd lock for
+    /// the guard's lifetime so parallel tests that read-then-compare
+    /// `current_dir()` (the url path-to-file-URL tests) never observe the
+    /// temporary directory (#6965).
+    _lock: std::sync::MutexGuard<'static, ()>,
 }
 
 impl CurrentDirGuard {
     fn set(path: &std::path::Path) -> Self {
+        let lock = crate::test_support::process_cwd_test_lock();
         let previous = std::env::current_dir().expect("current dir");
         std::env::set_current_dir(path).expect("set current dir");
-        Self { previous }
+        Self {
+            previous,
+            _lock: lock,
+        }
     }
 }
 

@@ -1,7 +1,22 @@
 use super::support::GcTriggerThresholdTestGuard;
 
+/// The Map/Set side-deallocation counters are PROCESS-global, and every test
+/// in this module measures deltas of them across a spawn/join window — run
+/// concurrently (default-parallel `cargo test`, sharpest under a filter that
+/// leaves few other tests), the probe threads' releases land inside each
+/// other's windows and the exact-delta asserts read the sum (#6965).
+/// Serialize the module. Poison-tolerant so one failure doesn't cascade
+/// `PoisonError`s into the siblings.
+fn teardown_counter_lock() -> std::sync::MutexGuard<'static, ()> {
+    static TEARDOWN_COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TEARDOWN_COUNTER_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn map_set_side_allocations_release_on_thread_exit() {
+    let _counters = teardown_counter_lock();
     // #7056: drives the BUDGETED stepper via `complete_budgeted_gc_cycle`,
     // which the shipped default bypasses (scavenge defers alloc-point
     // collections to a precise safepoint). Pin legacy pacing so the cycle
@@ -25,14 +40,21 @@ fn map_set_side_allocations_release_on_thread_exit() {
     let map_after = crate::map::test_map_side_deallocation_snapshot();
     let set_after = crate::set::test_set_side_deallocation_snapshot();
 
-    assert_eq!(map_after.0 - map_before.0, 64);
-    assert_eq!(map_after.1 - map_before.1, 4096);
-    assert_eq!(set_after.0 - set_before.0, 64);
-    assert_eq!(set_after.1 - set_before.1, 2048);
+    // The deallocation counters are PROCESS-global: under default-parallel
+    // `cargo test`, any other test thread exiting (or deallocating Maps/Sets)
+    // inside the spawn/join window bumps them too, so an exact-delta assert
+    // is order-dependent (#6965). Lower bounds still prove the property under
+    // test — the probe thread's exit released ITS 64 Maps/Sets — while an
+    // under-release regression still lands below them in the serial CI run.
+    assert!(map_after.0 - map_before.0 >= 64);
+    assert!(map_after.1 - map_before.1 >= 4096);
+    assert!(set_after.0 - set_before.0 >= 64);
+    assert!(set_after.1 - set_before.1 >= 2048);
 }
 
 #[test]
 fn map_set_side_allocations_release_exactly_once() {
+    let _counters = teardown_counter_lock();
     let map_before = crate::map::test_map_side_deallocation_snapshot();
     let set_before = crate::set::test_set_side_deallocation_snapshot();
 
@@ -89,18 +111,19 @@ fn map_set_side_allocations_release_exactly_once() {
 
     let map_after = crate::map::test_map_side_deallocation_snapshot();
     let set_after = crate::set::test_set_side_deallocation_snapshot();
-    assert_eq!(
-        (map_after.0 - map_before.0, map_after.1 - map_before.1),
-        (2, 128)
-    );
-    assert_eq!(
-        (set_after.0 - set_before.0, set_after.1 - set_before.1),
-        (2, 64)
-    );
+    // Cross-thread window: lower bounds, same rationale as
+    // map_set_side_allocations_release_on_thread_exit (#6965). The
+    // exactly-once core property is the exact-delta pair asserted INSIDE the
+    // probe thread above.
+    assert!(map_after.0 - map_before.0 >= 2);
+    assert!(map_after.1 - map_before.1 >= 128);
+    assert!(set_after.0 - set_before.0 >= 2);
+    assert!(set_after.1 - set_before.1 >= 64);
 }
 
 #[test]
 fn map_set_owner_records_follow_growth() {
+    let _counters = teardown_counter_lock();
     let map_before = crate::map::test_map_side_deallocation_snapshot();
     let set_before = crate::set::test_set_side_deallocation_snapshot();
 
@@ -134,12 +157,12 @@ fn map_set_owner_records_follow_growth() {
 
     let map_after = crate::map::test_map_side_deallocation_snapshot();
     let set_after = crate::set::test_set_side_deallocation_snapshot();
-    assert_eq!(
-        (map_after.0 - map_before.0, map_after.1 - map_before.1),
-        (1, 128)
-    );
-    assert_eq!(
-        (set_after.0 - set_before.0, set_after.1 - set_before.1),
-        (1, 64)
-    );
+    // Cross-thread window: lower bounds, same rationale as
+    // map_set_side_allocations_release_on_thread_exit (#6965). The growth
+    // ownership itself is asserted exactly INSIDE the probe thread above; the
+    // grown (128/64-byte) release still has to land for these to hold.
+    assert!(map_after.0 - map_before.0 >= 1);
+    assert!(map_after.1 - map_before.1 >= 128);
+    assert!(set_after.0 - set_before.0 >= 1);
+    assert!(set_after.1 - set_before.1 >= 64);
 }

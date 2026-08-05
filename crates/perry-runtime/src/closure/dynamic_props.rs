@@ -843,6 +843,16 @@ mod tests_1802 {
 
     static SIDE_TABLE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Poison-tolerant acquisition: one test's assert failure must read as
+    /// ONE failure, not cascade `PoisonError` panics into every sibling that
+    /// serializes on this lock (#6965 — the observed second failure). The
+    /// guarded data is `()`, so poison carries no corruption to tolerate.
+    fn side_table_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        SIDE_TABLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// #1802: the side-table values must be visited in mark phases, not
     /// only during the metadata-rewrite tail. Pre-fix
     /// `scan_closure_dynamic_props_roots_mut` early-returned unless
@@ -857,7 +867,7 @@ mod tests_1802 {
         // threads, wiping this test's parked entry mid-assertion. Serialize
         // against those guards, THEN against this module's own tests.
         let _global = crate::gc::global_side_table_test_lock();
-        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
+        let _guard = side_table_test_lock();
         // A unique synthetic closure address (just an integer key — the
         // scanner doesn't deref it during value visitation; the
         // metadata-key visitor is a no-op for non-heap addresses).
@@ -896,7 +906,7 @@ mod tests_1802 {
         // threads, wiping this test's parked entry mid-assertion. Serialize
         // against those guards, THEN against this module's own tests.
         let _global = crate::gc::global_side_table_test_lock();
-        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
+        let _guard = side_table_test_lock();
         let owner: usize = 0xC10C_AB1E_0000_1803;
         let value_bits: u64 = 0x7FFD_AAAA_BBBB_CCCD;
         closure_set_dynamic_prop(owner, "errors", f64::from_bits(value_bits));
@@ -907,7 +917,22 @@ mod tests_1802 {
             let mut mark = |v: f64| {
                 if v.to_bits() == value_bits {
                     saw_value = true;
-                    lock_was_free = get_closure_props().try_lock().is_ok();
+                    // The regression under test is the SCANNER holding
+                    // CLOSURE_PROPS across visitor callbacks — a same-thread
+                    // hold, so `try_lock` can never succeed no matter how
+                    // long we wait. A one-shot `try_lock` also fails on
+                    // transient contention from an unrelated parallel test
+                    // thread's brief map access (#6965) — retry with a yield
+                    // so a foreign holder gets to release. `Poisoned` counts
+                    // as free: poison means a panicking holder already
+                    // RELEASED the mutex.
+                    lock_was_free = (0..4096).any(|_| match get_closure_props().try_lock() {
+                        Ok(_) | Err(std::sync::TryLockError::Poisoned(_)) => true,
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            std::thread::yield_now();
+                            false
+                        }
+                    });
                 }
             };
             let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
@@ -935,7 +960,7 @@ mod tests_1802 {
         // threads, wiping this test's parked entry mid-assertion. Serialize
         // against those guards, THEN against this module's own tests.
         let _global = crate::gc::global_side_table_test_lock();
-        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
+        let _guard = side_table_test_lock();
         let obj = crate::object::js_object_alloc(0, 0) as usize;
 
         assert_eq!(
