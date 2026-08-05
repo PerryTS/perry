@@ -380,11 +380,29 @@ pub(super) extern "C" fn bigint_proto_to_locale_string_thunk(
     let value = bigint_receiver_or_throw("toLocaleString");
     let args = super::global_this::global_this_rest_array_values(rest);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let locales = args.first().copied().unwrap_or(undef);
-    let options = args.get(1).copied().unwrap_or(undef);
-    string_value(crate::intl::bigint_to_locale_string(
-        value, locales, options,
-    ))
+    let _locales = args.first().copied().unwrap_or(undef);
+    let _options = args.get(1).copied().unwrap_or(undef);
+    #[cfg(feature = "intl-namespace")]
+    {
+        string_value(crate::intl::bigint_to_locale_string(
+            value, _locales, _options,
+        ))
+    }
+    // Binary size: this thunk is the ONLY retainer of the ECMA-402
+    // number-formatting machinery in a program that never mentions
+    // `toLocale*` (measured with `-why_live`: everything reachable under
+    // `intl::number_format*` hangs off this one call). The compiler turns
+    // `intl-namespace` on for any source containing the substring `toLocale`
+    // — including inside a string literal, so `x["toLocaleString"]()` and
+    // `x[m]()` with `m = "toLocaleString"` are both covered — so reaching
+    // this arm means the program cannot name the method, and cannot have
+    // supplied `locales`/`options` either. ECMA-262 leaves the result
+    // implementation-defined when ECMA-402 is absent, so render plain
+    // decimal digits.
+    #[cfg(not(feature = "intl-namespace"))]
+    {
+        string_value(crate::value::js_jsvalue_to_string_radix(value, 10.0))
+    }
 }
 
 /// `String.prototype.toString()` — brand-checked: returns the underlying string
