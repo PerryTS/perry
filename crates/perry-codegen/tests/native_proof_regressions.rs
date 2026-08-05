@@ -13960,6 +13960,120 @@ fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
     );
 }
 
+/// #7288: a SLOPPY-mode `obj.f = <number>` on a declared `number` field of a
+/// known class must take the inline class-field raw store, not a per-write
+/// inline-cache miss.
+///
+/// The strict/sloppy split is invisible in the source and comes from an upward
+/// walk for the nearest `package.json`: `"type": "module"` makes the file ESM,
+/// hence strict. So the identical `.ts` file compiled inside the Perry checkout
+/// (whose root `package.json` is `"type": "module"`) took the fast arm at 83 ms,
+/// and compiled in a user's scratch directory took the slow arm at 3.8 s — a
+/// 46x cliff with no diagnosable cause, and the reason
+/// `benchmarks/results/public-node-bun-v1.json` reported 79 ms for
+/// `09_method_calls` while a user running the same file saw 3.4 s.
+///
+/// Asserts the codegen decision, not wall-clock time, and asserts the arm is
+/// LIVE (the fast block exists) rather than merely that nothing threw. The
+/// sloppy-correct miss path is asserted too: `js_put_value_set` takes a
+/// `strict` operand and must receive 0, so a rejected write stays a silent
+/// no-op instead of throwing the way the strict route's
+/// `js_object_set_field_by_name` fallback would.
+#[test]
+fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
+    // The synthetic `Counter` constructor legitimately emits the STRICT
+    // class-field store (class bodies are always strict), so every assertion
+    // below is scoped to the probe function that holds the store under test.
+    fn probe_body(ir: &str) -> &str {
+        let start = ir
+            .find("define double @perry_fn_sloppy_class_field_store_ts__probe")
+            .expect("probe function must be emitted");
+        let rest = &ir[start..];
+        let end = rest[1..]
+            .find("\ndefine ")
+            .map(|offset| offset + 1)
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    fn ir_for(strict: bool) -> String {
+        let counter = class(217, "Counter", vec![class_field("value", Type::Number)]);
+        let module = module_with_classes_and_params(
+            "sloppy_class_field_store.ts",
+            vec![counter],
+            vec![param(1, "counter", Type::Named("Counter".to_string()))],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PutValueSet {
+                    target: Box::new(local(1)),
+                    key: Box::new(Expr::String("value".to_string())),
+                    value: Box::new(Expr::Number(7.0)),
+                    receiver: Box::new(local(1)),
+                    strict,
+                }),
+                Stmt::Return(Some(int(0))),
+            ],
+        );
+        compile_ir_for_module_with_opts(module, empty_opts()).unwrap()
+    }
+
+    let sloppy_module = ir_for(false);
+    let sloppy = probe_body(&sloppy_module);
+    assert!(
+        sloppy.contains("class_field_sloppy_set.fast"),
+        "a sloppy number-field store must reach the inline class-field raw \
+         store; the #6542 `!strict` bail was wider than the hazard it guarded \
+         (#7288):\n{sloppy}"
+    );
+    // The precheck that makes the fast arm mode-independent: it rejects a
+    // frozen receiver (OBJ_FLAG_FROZEN) and one carrying any property
+    // descriptor (OBJ_FLAG_HAS_DESCRIPTORS) — exactly the receivers whose
+    // store strict and sloppy disagree about.
+    assert!(
+        sloppy.contains("class_field_inline.deref"),
+        "the sloppy arm must be fronted by the #5093 shape/flags precheck, \
+         which is what makes the raw store safe in sloppy mode (#7288):\n{sloppy}"
+    );
+    // Miss arm: strict-aware runtime, strict = 0. Matched on the CALL, not the
+    // module's extern `declare` line — every runtime symbol is declared whether
+    // or not it is reached, so a `contains("@js_put_value_set")` would pass
+    // vacuously.
+    let miss_call = sloppy
+        .lines()
+        .find(|line| line.contains("call double @js_put_value_set("))
+        .unwrap_or_else(|| {
+            panic!(
+                "the sloppy arm's miss must CALL `js_put_value_set` (#7288):\n{sloppy}"
+            )
+        });
+    assert!(
+        miss_call.trim_end().ends_with("i32 0)"),
+        "the sloppy miss must pass strict = 0, so a rejected write is a silent \
+         no-op rather than a throw (#7288):\n  {miss_call}"
+    );
+    // The throwing strict fallback must not be reached on this arm.
+    assert!(
+        !sloppy.contains("call void @js_class_field_set_fallback"),
+        "the sloppy arm must not CALL `js_class_field_set_fallback`, whose \
+         `js_object_set_field_by_name` throws unconditionally on a \
+         non-writable slot (#7288):\n{sloppy}"
+    );
+
+    // Negative control: the strict arm is unchanged and keeps its own blocks,
+    // so the assertions above are testing the new path rather than a rename.
+    let strict_module = ir_for(true);
+    let strict = probe_body(&strict_module);
+    assert!(
+        !strict.contains("class_field_sloppy_set"),
+        "the strict arm must keep its existing lowering (#7288):\n{strict}"
+    );
+    assert!(
+        strict.contains("class_field_set.fast"),
+        "the strict arm must still take the class-field store fast path — if \
+         this fails the test is measuring nothing (#7288):\n{strict}"
+    );
+}
+
 #[path = "native_proof_regressions/invalidation.rs"]
 mod invalidation;
 
