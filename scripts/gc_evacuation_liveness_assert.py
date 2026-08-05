@@ -26,6 +26,13 @@ import sys
 COPIED = re.compile(r"copied_objects=(\d+)")
 ELIGIBLE = re.compile(r"\[gc-copy-minor\] eligible=(\w+)(?: fallback=(\S+))?")
 MANUAL = re.compile(r"\[gc-scan-fallback\] site=manual_collect")
+# Any collector diagnostic at all. Every one of them is printed behind
+# `PERRY_GC_DIAG`, so a trace with none of them was produced by a run that did
+# not set it — which is indistinguishable, by counts alone, from a collector
+# that moved nothing. Told apart below, because guessing wrong costs a build:
+# the `gc-native-roots` in-process arm read as "evacuated NOTHING" on its
+# first-ever execution purely for want of the variable.
+ANY_DIAG = re.compile(r"^\[gc-[a-z-]+\]", re.MULTILINE)
 
 
 def main() -> int:
@@ -43,6 +50,14 @@ def main() -> int:
     if copied >= args.min_copied and ran > 0:
         print(f"{args.probe}: evacuation live — {ran} copying minor(s), {copied} objects copied")
         return 0
+
+    if not ANY_DIAG.search(text):
+        print(f"::error::{args.probe}: {args.trace} carries no collector diagnostics at all, "
+              "so this assert measured nothing about the collector. Every line it reads is "
+              "printed behind PERRY_GC_DIAG; re-run the binary with PERRY_GC_DIAG=1 set "
+              "alongside PERRY_GC_FORCE_EVACUATE=1. (Diagnostics go to stderr, so this does "
+              "not disturb an stdout oracle diff.)")
+        return 1
 
     print(f"::error::{args.probe}: the forced-evacuation arm evacuated NOTHING "
           f"({ran} copying minors, {copied} objects copied). The arm is vacuous: "

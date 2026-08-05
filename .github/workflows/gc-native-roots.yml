@@ -535,15 +535,26 @@ jobs:
           # Same answer as the shadow stack, and a collection that actually
           # moved something. Without the movement assert this passes with the
           # conservative scan doing all the rooting (#7336, #7338).
+          #
+          # PERRY_GC_DIAG=1 is what makes the evacuation assert able to see
+          # anything: `[gc-copy-minor] ran copied_objects=...` is printed only
+          # under that variable (`gc/copying.rs`). Without it the trace holds
+          # nothing but the probe's own `#gcmetric` lines, the assert reads
+          # 0 copying minors / 0 objects copied off an empty file, and the step
+          # fails no matter how the collector behaved — which is how this arm
+          # read on its first-ever execution (three of four arms in this matrix
+          # were permanently queued until #7393). Diagnostics go to stderr only,
+          # so the control diff below is unaffected.
           ./target/perry-dev/perry "$probe" -o /tmp/inproc-09-control
           PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
             /tmp/inproc-09-control > /tmp/inproc-09.control.out 2>/dev/null
-          PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+          PERRY_GC_DIAG=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
           PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
             /tmp/inproc-09 > /tmp/inproc-09.out 2> /tmp/inproc-09.err
           diff /tmp/inproc-09.control.out /tmp/inproc-09.out \
             || { echo "::error::in-process RS4GC diverged from the shadow-stack control"; exit 1; }
-          python3 scripts/gc_evacuation_liveness_assert.py /tmp/inproc-09.err
+          python3 scripts/gc_evacuation_liveness_assert.py /tmp/inproc-09.err \
+            --probe "09_try_catch_roots (in-process)"
 
           # And it must be RS4GC doing the lowering, not a per-function bail to
           # the bridge -- which would make this arm green while testing the
