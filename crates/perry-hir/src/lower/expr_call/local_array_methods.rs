@@ -42,6 +42,37 @@ fn receiver_is_class_instance(recv_ty: Option<&Type>) -> bool {
     }
 }
 
+/// #5902: is `recv_ty` a boxed primitive wrapper (`new Number(1)`,
+/// `new Boolean`, …) or a plain `Object` wrapper (`new Object(true)`)?
+///
+/// These are never arrays, but they are also not strings, and the array
+/// fast-path gate reads "definitely not a string" as positive evidence of
+/// array-ness (`is_known_not_string`). So `Named("Object")` / `Named("Number")`
+/// / `Named("Boolean")` walked straight into the array block and lowered
+/// `inst.indexOf(x)` to `Expr::ArrayIndexOf`, which reads the wrapper's
+/// `ObjectHeader` as an `ArrayHeader` and answers `-1` — even when the receiver
+/// owns or inherits a real `indexOf`. test262 `S15.5.4.7_A1_T1` borrows
+/// `String.prototype.indexOf` onto `new Object(true)`, and `S15.5.4.7_A4_T4`
+/// puts it on `Number.prototype`; both expect the borrowed method to run.
+///
+/// `Named("String")` is deliberately absent — it is handled one step earlier by
+/// `is_boxed_string_wrapper`, which routes to the *string* dispatch (so the
+/// wrapper gets `ToString`-coerced) rather than to generic dispatch.
+///
+/// Declining the fold is always safe: the generic runtime dispatch resolves the
+/// own/inherited property first and still reaches the array engine for a
+/// genuine array, so a mistyped-but-really-an-array receiver keeps working.
+fn receiver_is_non_array_builtin_wrapper(recv_ty: Option<&Type>) -> bool {
+    matches!(
+        recv_ty,
+        Some(Type::Named(n))
+            if matches!(
+                n.as_str(),
+                "Object" | "Number" | "Boolean" | "Symbol" | "BigInt"
+            )
+    )
+}
+
 pub(super) fn try_local_array_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -107,6 +138,7 @@ pub(super) fn try_local_array_methods(
                 // file because they aren't Array methods.
                 let is_boxed_string_wrapper =
                     matches!(type_info, Some(Type::Named(n)) if n == "String");
+                let is_non_array_builtin_wrapper = receiver_is_non_array_builtin_wrapper(type_info);
                 let is_known_string = type_info
                     .map(|ty| matches!(ty, Type::String))
                     .unwrap_or(false)
@@ -245,6 +277,8 @@ pub(super) fn try_local_array_methods(
                     false // user class — must dispatch to class method, skip array fast-path
                 } else if is_object_type {
                     false // object type literal — dispatch via method call, not array ops
+                } else if is_non_array_builtin_wrapper {
+                    false // boxed primitive wrapper / plain Object — never an array
                 } else if is_buffer_type {
                     false // Buffer/Uint8Array — runtime dispatch handles byte-level methods
                 } else if is_node_stream_readable_type {
@@ -1084,4 +1118,59 @@ pub(super) fn try_local_array_methods(
         }
     }
     Ok(Err(args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn named(n: &str) -> Option<Type> {
+        Some(Type::Named(n.to_string()))
+    }
+
+    #[test]
+    fn boxed_primitive_wrappers_decline_the_array_fold() {
+        // #5902: `new Object(true)` / `new Boolean` / `new Number(1)` are not
+        // strings, but they are not arrays either — the array fast path must
+        // not claim `indexOf`/`lastIndexOf`/`slice`/`includes` on them.
+        for n in ["Object", "Number", "Boolean", "Symbol", "BigInt"] {
+            assert!(
+                receiver_is_non_array_builtin_wrapper(named(n).as_ref()),
+                "{n} wrapper must decline the array fast path"
+            );
+        }
+    }
+
+    #[test]
+    fn string_wrapper_is_not_claimed_here() {
+        // `Named("String")` routes to the STRING dispatch via
+        // `is_boxed_string_wrapper`, one arm earlier, so this predicate must
+        // leave it alone — claiming it here would send a boxed String to
+        // generic dispatch instead of the ToString-coercing string path.
+        assert!(!receiver_is_non_array_builtin_wrapper(
+            named("String").as_ref()
+        ));
+    }
+
+    #[test]
+    fn real_array_receivers_keep_the_fold() {
+        assert!(!receiver_is_non_array_builtin_wrapper(Some(&Type::Array(
+            Box::new(Type::Number)
+        ))));
+        assert!(!receiver_is_non_array_builtin_wrapper(Some(
+            &Type::Generic {
+                base: "Array".to_string(),
+                type_args: vec![Type::Number],
+            }
+        )));
+        // An unknown receiver is gated elsewhere (`is_ambiguous_method` /
+        // `is_arraylike_mutator_method`), not here.
+        assert!(!receiver_is_non_array_builtin_wrapper(Some(&Type::Any)));
+        assert!(!receiver_is_non_array_builtin_wrapper(None));
+        // A user class named e.g. `Number`-adjacent must not be confused with
+        // the builtin set; only the exact builtin names are claimed.
+        assert!(!receiver_is_non_array_builtin_wrapper(
+            named("NumberLike").as_ref()
+        ));
+    }
 }
