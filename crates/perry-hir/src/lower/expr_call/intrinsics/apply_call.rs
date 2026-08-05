@@ -319,6 +319,13 @@ fn is_primitive_wrapper_brand_method(recv: &ast::Expr, method: &str) -> bool {
     match base.sym.as_ref() {
         "Number" => matches!(method, "valueOf" | "toString" | "toLocaleString"),
         "Boolean" => matches!(method, "valueOf" | "toString"),
+        // `String.prototype.toString`/`valueOf` are `thisStringValue` brand
+        // checks (ECMA-262 §22.1.3), NOT ToString-coercing like the rest of
+        // `String.prototype` — the installed thunks throw a `TypeError` for a
+        // non-String receiver, so `String.prototype.toString.call(42)` (and
+        // the extracted-local form) must stay reflective (test262
+        // built-ins/String/prototype/{toString,valueOf}/non-generic.js).
+        "String" => matches!(method, "valueOf" | "toString"),
         _ => false,
     }
 }
@@ -783,5 +790,48 @@ fn is_builtin_prototype_receiver(ctx: &LoweringContext, recv: &ast::Expr) -> boo
         // `"".charAt.call(…)`.
         ast::Expr::Lit(ast::Lit::Str(_)) => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swc_common::DUMMY_SP;
+
+    fn prototype_member(base: &str) -> ast::Expr {
+        ast::Expr::Member(ast::MemberExpr {
+            span: DUMMY_SP,
+            obj: Box::new(ast::Expr::Ident(ast::Ident::new(
+                base.into(),
+                DUMMY_SP,
+                Default::default(),
+            ))),
+            prop: ast::MemberProp::Ident(ast::IdentName {
+                span: DUMMY_SP,
+                sym: "prototype".into(),
+            }),
+        })
+    }
+
+    /// #5902: `String.prototype.toString`/`valueOf` are `thisStringValue`
+    /// brand checks — the `.call`/`.apply` fold (and the extracted-local
+    /// tracking in `as_builtin_proto_method_ref`, which consults the same
+    /// predicate) must leave them reflective so the runtime thunk can throw
+    /// a TypeError on a non-String receiver (test262 non-generic.js).
+    /// Deleting the `"String"` arm from `is_primitive_wrapper_brand_method`
+    /// turns this red.
+    #[test]
+    fn string_to_string_and_value_of_are_brand_methods() {
+        let recv = prototype_member("String");
+        assert!(is_primitive_wrapper_brand_method(&recv, "toString"));
+        assert!(is_primitive_wrapper_brand_method(&recv, "valueOf"));
+        // The ToString-coercing generics are guarded by the sibling
+        // `is_string_prototype_generic_method` predicate, not the brand one —
+        // and the brand pair must stay OUT of the generic list (a generic
+        // thunk would coerce instead of throwing).
+        assert!(!is_primitive_wrapper_brand_method(&recv, "charAt"));
+        assert!(is_string_prototype_generic_method(&recv, "charAt"));
+        assert!(!is_string_prototype_generic_method(&recv, "toString"));
+        assert!(!is_string_prototype_generic_method(&recv, "valueOf"));
     }
 }

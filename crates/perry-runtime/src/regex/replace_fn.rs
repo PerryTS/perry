@@ -8,7 +8,13 @@ pub(super) unsafe fn call_replace_callback(callback: f64, args: &[f64]) -> Strin
     let prev = crate::object::js_implicit_this_set(f64::from_bits(crate::value::TAG_UNDEFINED));
     let ret = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
     crate::object::js_implicit_this_set(prev);
-    let ptr = crate::value::js_get_string_pointer_unified(ret) as *const StringHeader;
+    // §22.1.3.19 step "Let replacement be ? ToString(? Call(replaceValue, …))":
+    // the callback result is ToString-coerced — `undefined` renders as
+    // "undefined", a number stringifies, an object runs its `toString`, and a
+    // Symbol throws a TypeError. The old raw pointer-extract silently dropped
+    // every non-string result to "" (test262 replace S15.5.4.11_A1_T5/T10).
+    crate::builtins::reject_symbol_to_string(ret);
+    let ptr = crate::builtins::js_string_coerce(ret) as *const StringHeader;
     if is_valid_ptr(ptr) {
         string_as_str(ptr).to_string()
     } else {

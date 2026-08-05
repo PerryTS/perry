@@ -16,6 +16,9 @@ mod object_proto;
 mod primitive_methods;
 mod proto_dispatch;
 mod string_methods;
+
+#[cfg(test)]
+mod dispatch_arg_coercion_tests;
 mod typed_array;
 
 use disposal::{
@@ -569,21 +572,6 @@ pub unsafe extern "C" fn js_native_call_method_value_apply(
         (buf.as_ptr(), buf.len())
     };
     js_native_call_method_value(object, key, args_ptr, args_len)
-}
-
-#[inline]
-fn root_string_arg_handle<'scope>(
-    scope: &'scope crate::gc::RuntimeHandleScope,
-    arg_handles: &[crate::gc::RuntimeHandle<'scope>],
-    index: usize,
-) -> Option<crate::gc::RuntimeHandle<'scope>> {
-    let value = arg_handles.get(index)?.get_nanbox_f64();
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
-    if ptr.is_null() {
-        None
-    } else {
-        Some(scope.root_string_ptr(ptr))
-    }
 }
 
 fn throw_type_error_message(message: &[u8]) -> ! {
