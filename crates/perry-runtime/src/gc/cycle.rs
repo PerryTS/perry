@@ -1648,6 +1648,15 @@ impl GcCycleState {
     fn step_sweep(&mut self, budget: GcWorkBudget) {
         let phase_start = trace_phase_start(&self.trace);
         if self.sweep_state.is_none() {
+            // #6080a: invalidate pointer-token read-PIC primes BEFORE the
+            // first address can be freed. A budgeted cycle's sweep slices
+            // interleave with the mutator, so waiting for the end-of-cycle
+            // `record_collection` bump would leave a window where a primed
+            // `@perry_ic_N` cache pointer-matches a keys array whose address
+            // an earlier slice already recycled. Primes taken after this
+            // bump reference marked (live-this-cycle) arrays, which later
+            // slices of this same sweep never free.
+            crate::object::pic_epoch_bump();
             let full_trace = self.minor.is_none();
             // Close the finalize->sweep gap: the barrier stayed enabled across
             // the mutator windows since AtomicFinalize ended. Trace whatever

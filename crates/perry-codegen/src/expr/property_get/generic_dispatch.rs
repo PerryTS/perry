@@ -177,12 +177,14 @@ pub(crate) fn lower_generic_property_get(
         ],
     );
 
-    // Issue #51: monomorphic inline cache. Per-site 16-byte global
-    // holds [cached_keys_array_ptr, cached_slot_index]. The fast path
-    // compares obj->keys_array (offset 16) to cache[0]; on match,
-    // loads the field directly at obj+24+slot*8 — no function call,
-    // no hash, no linear scan. On miss, calls the slow helper which
-    // does the full lookup and primes the cache for next time.
+    // Issue #51: monomorphic inline cache. Per-site `[8 x i64]` global
+    // holds [shape_token, cached_slot_index, primed_epoch, ...unused].
+    // The fast path compares the receiver's discriminated shape token
+    // (#6804: ShapeId stamp or raw keys_array pointer) to cache[0]; on
+    // match — pointer tokens additionally epoch-gated, #6080a — loads
+    // the field directly at obj+24+slot*8: no function call, no hash,
+    // no linear scan. On miss, calls the slow helper which does the
+    // full lookup and primes the cache for next time.
     let site_id = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
     let cache_name = format!("perry_ic_{}", site_id);
@@ -368,6 +370,26 @@ pub(crate) fn lower_generic_property_get(
     let token_nonnull = ctx.block().icmp_ne(I64, &token, "0");
     let hit_token = ctx.block().and(I1, &is_object, &token_eq);
     let hit = ctx.block().and(I1, &hit_token, &token_nonnull);
+
+    // #6080a: pointer tokens are only trustworthy within the GC epoch they
+    // were primed in. The `@perry_ic_N` global is invisible to every GC
+    // scanner, so after a collection frees or evacuates a shape-shared keys
+    // array, its recycled address can be adopted by a different-shape keys
+    // array — `token_eq` then falsely matches and the hit path loads the
+    // wrong slot, silently. `js_object_get_field_ic_miss` snapshots
+    // `PERRY_IC_EPOCH` into `cache[2]` at prime time and every completed
+    // collection bumps the global, so requiring `cache[2] == PERRY_IC_EPOCH`
+    // forces the first read after any collection back through the miss
+    // handler (which re-primes against live arrays). Shape-ID tokens
+    // (`is_stamp`, #6804) bypass the check — ids are never reused, so they
+    // cannot alias across collections. Cost on the hot stamped path: two
+    // loads + icmp + or, folded into the existing `hit` cond_br.
+    let cache_epoch_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
+    let cache_epoch = ctx.block().load(I64, &cache_epoch_ptr);
+    let live_epoch = ctx.block().load(I64, "@PERRY_IC_EPOCH");
+    let epoch_eq = ctx.block().icmp_eq(I64, &cache_epoch, &live_epoch);
+    let epoch_ok = ctx.block().or(I1, &is_stamp, &epoch_eq);
+    let hit = ctx.block().and(I1, &hit, &epoch_ok);
 
     let hit_idx = ctx.new_block("pic.hit");
     let miss_idx = ctx.new_block("pic.miss");

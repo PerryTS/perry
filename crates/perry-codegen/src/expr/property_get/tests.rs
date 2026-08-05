@@ -122,6 +122,35 @@ fn no_call_location_without_debug_symbols() {
     );
 }
 
+/// #6080a: the inline PIC hit predicate must gate raw keys-POINTER tokens on
+/// the GC epoch — `cache[2] == @PERRY_IC_EPOCH` — because the `@perry_ic_N`
+/// globals are invisible to every GC scanner, so a primed keys-array address
+/// that GC frees/moves can be recycled under a different shape and falsely
+/// pointer-match. This asserts the emitted IR still carries the guard: the
+/// per-site epoch-slot load (gep index 2) and the live-epoch load from the
+/// runtime-exported global. Deleting either from `lower_generic_property_get`
+/// turns this red.
+#[test]
+fn generic_property_get_hit_path_is_epoch_gated() {
+    let ir = emit(false, None);
+    assert!(
+        ir.contains("@perry_ic_"),
+        "test premise: the generic read reaches the inline monomorphic PIC:\n{ir}"
+    );
+    assert!(
+        ir.contains("load i64, ptr @PERRY_IC_EPOCH"),
+        "hit path must load the live read-PIC epoch (@PERRY_IC_EPOCH):\n{ir}"
+    );
+    // The per-site primed-epoch slot: a gep to index 2 of some @perry_ic_N
+    // global (the site number depends on how many IC sites precede this one).
+    assert!(
+        ir.lines().any(|l| {
+            l.contains("getelementptr i64, ptr @perry_ic_") && l.trim_end().ends_with(", i64 2")
+        }),
+        "hit path must load the per-site primed-epoch slot (cache[2]):\n{ir}"
+    );
+}
+
 #[test]
 fn fs_parent_promises_property_installs_before_resolution() {
     let mut module = Module::new("fs_parent_promises_property.ts");

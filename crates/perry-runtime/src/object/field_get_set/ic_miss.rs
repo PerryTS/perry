@@ -188,13 +188,47 @@ pub(crate) fn is_timer_handle_method_key(key: &[u8]) -> bool {
 /// #6759 C3c: is `keys` safe to prime into a per-site PIC cache whose hit
 /// path does an UNVALIDATED compare-and-load? True only for
 /// `GC_FLAG_SHAPE_SHARED` arrays — those are shape-cache-resident
-/// (process-rooted, so the address can never be freed and recycled under a
-/// different shape). Conservative `false` for anything else.
+/// (process-rooted, so they stay LIVE for as long as a cache references
+/// them). Conservative `false` for anything else.
+///
+/// Rooted is not address-STABLE, though: the copying minor moves
+/// shape-shared arrays like anything else (`move_young` merely preserves
+/// the flag), rewriting every rooted reference — but not the `@perry_ic_N`
+/// globals, which no GC scanner knows about. The vacated from-space address
+/// is then recycled, and a different keys array landing there makes a
+/// primed site falsely HIT with the old slot mapping (#6080a). That residual
+/// is closed by [`PERRY_IC_EPOCH`] below, not by this predicate.
 pub(crate) unsafe fn keys_cacheable_for_pic(keys: *const crate::array::ArrayHeader) -> bool {
     let Some(gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
         return false;
     };
     gc.obj_type == crate::gc::GC_TYPE_ARRAY && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+}
+
+/// #6080(a): process-global read-PIC epoch, exported to the emitted IR as
+/// `@PERRY_IC_EPOCH` (same pattern as `PERRY_TA_VIEW_GUARD`). A keys-POINTER
+/// token primed into a `@perry_ic_N` cache is only trustworthy for as long
+/// as no address has been freed or moved since priming: the cache global is
+/// invisible to every GC scanner, so a recycled keys-array address would
+/// pointer-match a different shape and the inline hit path would load the
+/// wrong slot — silently.
+///
+/// The miss handler snapshots this epoch into `cache[2]` at prime time; the
+/// emitted hit predicate requires `cache[2] == PERRY_IC_EPOCH` before
+/// trusting a pointer token (shape-ID tokens skip the check — ids are never
+/// reused, so they cannot alias). Every completed collection bumps the epoch
+/// (`GcStats::record_collection`, the single per-collection funnel), and
+/// budgeted cycles additionally bump at sweep ENTRY, because their sweep
+/// slices interleave with the mutator — an address freed by an early slice
+/// must not be trusted while the cycle is still running.
+///
+/// Starts at 1 so a `zeroinitializer` cache (epoch 0) can never match.
+#[no_mangle]
+pub static PERRY_IC_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Invalidate every pointer-token read-PIC prime (see [`PERRY_IC_EPOCH`]).
+pub(crate) fn pic_epoch_bump() {
+    PERRY_IC_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Monomorphic inline cache miss handler (issue #51).
@@ -204,7 +238,10 @@ pub(crate) unsafe fn keys_cacheable_for_pic(keys: *const crate::array::ArrayHead
 /// then populates the per-site cache so subsequent calls with the same shape
 /// hit the inline fast path (no function call, direct field load).
 ///
-/// `cache` layout: `[keys_array_ptr: i64, field_slot_index: i64]`
+/// `cache` layout: `[shape_token: i64, field_slot_index: i64, primed_epoch: i64]`
+/// (`shape_token` is a shape-ID token or a raw keys-array pointer — see #6804;
+/// `primed_epoch` is the [`PERRY_IC_EPOCH`] snapshot taken at prime time,
+/// #6080a). The emitted global is `[8 x i64]`; slots 3..8 are unused here.
 ///
 /// Only caches when:
 /// - obj is a valid ObjectHeader (not null, not handle, not string/array/etc.)
@@ -217,7 +254,7 @@ pub(crate) unsafe fn keys_cacheable_for_pic(keys: *const crate::array::ArrayHead
 pub extern "C" fn js_object_get_field_ic_miss(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
-    cache: *mut [i64; 2],
+    cache: *mut [i64; 3],
 ) -> f64 {
     // SSO receiver — never cacheable. Route through the SSO-aware
     // `js_object_get_field_by_name` which handles `.length` inline
@@ -463,13 +500,21 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     // is unvalidated and a recycled owned-array address
                     // would read the wrong slot.
                     let stamp = (*obj).parent_class_id;
+                    // #6080a: stamp the current GC epoch alongside either
+                    // token kind. The emitted hit predicate only consults it
+                    // for pointer tokens, but priming it unconditionally
+                    // keeps `cache[2]` coherent when a site re-primes from
+                    // one token kind to the other.
+                    let epoch = PERRY_IC_EPOCH.load(std::sync::atomic::Ordering::Relaxed) as i64;
                     if (*obj).class_id == 0 && crate::object::shapes::is_shape_id(stamp) {
                         (*cache)[0] =
                             (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
                         (*cache)[1] = i as i64;
+                        (*cache)[2] = epoch;
                     } else if keys_cacheable_for_pic(keys) {
                         (*cache)[0] = keys as i64;
                         (*cache)[1] = i as i64;
+                        (*cache)[2] = epoch;
                     }
                     let field_ptr = (obj as *const u8)
                         .add(std::mem::size_of::<ObjectHeader>() + i * 8)
@@ -508,7 +553,7 @@ pub extern "C" fn js_object_get_field_ic(
     obj_bits: i64,
     key: *const crate::StringHeader,
     site_id: u64,
-    cache: *mut [i64; 2],
+    cache: *mut [i64; 3],
 ) -> f64 {
     // POINTER_MASK: lower 48 bits — strips the NaN-box tag to a raw heap pointer.
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -797,6 +842,61 @@ mod c3c_pic_tests {
             assert!(
                 super::keys_cacheable_for_pic(keys),
                 "a shape-shared keys array must stay PIC-cacheable"
+            );
+        }
+    }
+
+    /// #6080a: a pointer-token prime snapshots the live PIC epoch into
+    /// `cache[2]`, and a subsequent epoch bump strands that snapshot — the
+    /// exact inputs of the emitted `cache[2] == @PERRY_IC_EPOCH` guard, so
+    /// this proves the guard CAN fail (a primed entry goes stale), not just
+    /// that priming writes something.
+    #[test]
+    fn pointer_token_prime_stamps_epoch_and_goes_stale_on_bump() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            use std::sync::atomic::Ordering;
+            // A CLASS instance (class_id != 0) is the population that still
+            // primes raw keys pointers — plain objects take the #6804
+            // shape-ID token, which the epoch guard deliberately skips.
+            let obj = crate::object::js_object_alloc(0x6080, 8);
+            let key = crate::string::js_string_from_bytes(b"pic6080_x".as_ptr(), 9);
+            crate::object::js_object_set_field_by_name(obj, key, 7.0);
+            let keys = (*obj).keys_array;
+            assert!(!keys.is_null(), "test premise: field append built keys");
+            let gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            (*gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+
+            let mut cache = [0i64; 3];
+            let v = super::js_object_get_field_ic_miss(obj, key, &mut cache);
+            assert_eq!(v, 7.0);
+            assert_eq!(
+                cache[0], keys as i64,
+                "class instance must prime the raw keys pointer token"
+            );
+            let primed_epoch = cache[2];
+            assert_eq!(
+                primed_epoch,
+                super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
+                "prime must snapshot the LIVE epoch"
+            );
+            assert!(primed_epoch >= 1, "epoch starts at 1, never 0");
+
+            super::pic_epoch_bump();
+            assert_ne!(
+                cache[2],
+                super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
+                "a bump must strand every pointer-token prime (the emitted \
+                 hit predicate then misses and re-primes)"
+            );
+
+            // Re-priming heals: the miss handler stamps the NEW epoch.
+            let v = super::js_object_get_field_ic_miss(obj, key, &mut cache);
+            assert_eq!(v, 7.0);
+            assert_eq!(
+                cache[2],
+                super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
+                "re-prime must heal the epoch snapshot"
             );
         }
     }

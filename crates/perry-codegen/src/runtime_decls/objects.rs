@@ -47,6 +47,17 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // inline `header + 16 + idx*elem_size` load matches the runtime `data_ptr`).
     module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
     module.add_external_global("PERRY_TA_VIEW_GUARD", I64);
+    // #6080a: process-global read-PIC epoch (perry-runtime
+    // `object::field_get_set::ic_miss::PERRY_IC_EPOCH`, starts at 1, bumped on
+    // every completed GC collection and at budgeted-sweep entry). The inline
+    // monomorphic property-get hit path compares its per-site `cache[2]`
+    // snapshot against this before trusting a raw keys-array POINTER token —
+    // the `@perry_ic_N` globals are invisible to every GC scanner, so a
+    // primed address that GC has since freed/moved would otherwise
+    // pointer-match a recycled keys array of a different shape and load the
+    // wrong slot. Shape-ID tokens (#6804, bit 62) skip the check: ids are
+    // never reused.
+    module.add_external_global("PERRY_IC_EPOCH", I64);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed
     // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.

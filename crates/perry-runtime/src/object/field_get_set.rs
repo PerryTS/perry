@@ -199,8 +199,9 @@ pub(crate) use ic_miss::{
 pub use ic_miss::{
     js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_get_field_ic_miss, js_object_set_field_by_property_id, js_private_brand_check,
-    js_private_guard,
+    js_private_guard, PERRY_IC_EPOCH,
 };
+pub(crate) use ic_miss::pic_epoch_bump;
 
 #[cfg(test)]
 mod buffer_ic_miss_tests {
@@ -231,7 +232,7 @@ mod buffer_ic_miss_tests {
         unsafe {
             for len in [16usize, 24, 32] {
                 let buf = secret_buffer(len);
-                let mut cache = [0i64; 2];
+                let mut cache = [0i64; 3];
 
                 let ty = js_object_get_field_ic_miss(
                     buf as *const ObjectHeader,
