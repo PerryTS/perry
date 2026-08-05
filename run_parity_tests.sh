@@ -996,6 +996,15 @@ if [[ "$RESUME_RUN" == "1" && -s "$PARITY_JOURNAL" ]]; then
     if JOURNAL_DONE_IDS=$(journal_py resume-check "$PARITY_JOURNAL" "$JOURNAL_IDENTITY" 2>"$resume_err"); then
         JOURNAL_RESUMED=$(printf '%s' "$JOURNAL_DONE_IDS" | grep -c '' || true)
         [[ -z "$JOURNAL_DONE_IDS" ]] && JOURNAL_RESUMED=0
+        # Seal a torn final line before appending. A kill -9 (or a full disk)
+        # can leave the last record without its newline; the next append would
+        # then concatenate onto it and BOTH records would be unparseable —
+        # losing a second, entirely innocent test. Terminating the line keeps
+        # the damage to the one record that was actually in flight.
+        if [[ -n "$(tail -c 1 "$PARITY_JOURNAL")" ]]; then
+            printf '\n' >> "$PARITY_JOURNAL"
+            echo "Note: journal had an unterminated final line (interrupted mid-write); it was sealed and will be re-run."
+        fi
         echo "Resuming from journal: $PARITY_JOURNAL ($JOURNAL_RESUMED result(s) already recorded)"
     else
         rc=$?
