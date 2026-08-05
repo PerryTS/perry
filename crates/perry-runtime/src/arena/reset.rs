@@ -1025,6 +1025,9 @@ impl OldArenaReclaimDeadBlocksState {
             let last_page = generation_page_for_addr(base + size - 1);
             let pages: Vec<usize> = (first_page..=last_page).collect();
             unregister_old_block_pages(&pages);
+            // #7437: this block's bytes are being recycled; any swept hole
+            // recorded inside it must not be handed out again.
+            crate::gc::old_free_filter_range(base, size);
 
             if used != 0 {
                 self.stats.reset_blocks = self.stats.reset_blocks.saturating_add(1);
@@ -1115,6 +1118,9 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
             let last_page = generation_page_for_addr(base + size - 1);
             let pages: Vec<usize> = (first_page..=last_page).collect();
             unregister_old_block_pages(&pages);
+            // #7437: this block's bytes are being recycled; any swept hole
+            // recorded inside it must not be handed out again.
+            crate::gc::old_free_filter_range(base, size);
 
             if used != 0 {
                 stats.reset_blocks = stats.reset_blocks.saturating_add(1);
@@ -1217,6 +1223,9 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
             let last_page = generation_page_for_addr(base + size - 1);
             let pages: Vec<usize> = (first_page..=last_page).collect();
             unregister_old_block_pages(&pages);
+            // #7437: this block's bytes are being recycled; any swept hole
+            // recorded inside it must not be handed out again.
+            crate::gc::old_free_filter_range(base, size);
 
             if used != 0 {
                 stats.reset_blocks = stats.reset_blocks.saturating_add(1);

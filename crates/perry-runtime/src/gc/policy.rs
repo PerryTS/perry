@@ -1155,6 +1155,16 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
 }
 
+/// Old-gen pressure the reclaim arms act on: block-offset in-use minus the
+/// swept holes the free list can already hand back (#7437). Before hole
+/// reuse existed, dead-but-unreclaimable bytes counted as pressure, so
+/// old-reclaim kept re-firing full collections that could not actually
+/// lower the number they were watching (probe 12: 49/50 blocks pinned by
+/// scattered survivors, in-use immovable at ~105 MB).
+pub(super) fn old_gen_reclaimable_pressure_bytes() -> usize {
+    crate::arena::old_gen_in_use_bytes().saturating_sub(super::old_free_bytes())
+}
+
 #[inline]
 pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bool {
     (old_in_use >= gc_old_gen_reclaim_threshold_dyn_bytes()
@@ -1218,7 +1228,7 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
     }
     let promotable = copied_minor_promotable_active_survivor_bytes();
     let old_in_use =
-        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
+        old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     copied_minor_promotion_handoff_pressure_due(promotable, old_in_use, baseline)
 }
@@ -1229,7 +1239,7 @@ pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
     // reclaim's old-gen sweep finalizes it, so the buffer bytes must be
     // able to escalate that reclaim.
     let old_in_use =
-        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
+        old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_reclaim_pressure_due(old_in_use, baseline) {
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
@@ -1240,7 +1250,7 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     // Baseline includes external side-buffer bytes (#6010) so the growth
     // delta in `old_reclaim_pressure_due` stays unit-consistent.
     let old_in_use =
-        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
+        old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
     // Record the TOTAL post-full live set for major-GC pacing (young+old): the
     // full sweep is the only collection that frees forwarding stubs, so this is
@@ -1869,7 +1879,7 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     let old_pending = GC_OLD_RECLAIM_PENDING.with(Cell::get);
     // #6010: external Map/Set side-buffer bytes escalate to OldReclaim too.
     let old_in_use =
-        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
+        old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
         return Some(BudgetedGcTrigger::OldReclaim);

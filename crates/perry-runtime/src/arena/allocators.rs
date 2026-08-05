@@ -121,6 +121,23 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // Same alignment-preservation rationale as `arena_alloc_gc`.
     let pad = align.max(8);
     let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    // #7437: reuse a swept same-size hole before bumping — otherwise a
+    // block with any live object never yields its dead bytes back and old
+    // capacity only ever grows. Exact fit keeps `GcHeader::size` equal to
+    // what per-object promotion accounting records for this allocation.
+    if let Some(user_ptr) = crate::gc::old_free_take_exact(total, None) {
+        let raw = (user_ptr - GC_HEADER_SIZE) as *mut u8;
+        unsafe {
+            let header = raw as *mut GcHeader;
+            (*header).obj_type = obj_type;
+            (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
+            crate::gc::gc_note_black_birth(header);
+            (*header)._reserved = 0;
+            (*header).size = total as u32;
+        }
+        register_old_object_pages(raw as usize, total);
+        return user_ptr as *mut u8;
+    }
     let raw = arena_alloc_old(total, align);
 
     unsafe {
@@ -146,6 +163,21 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
 
     let pad = align.max(8);
     let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    // #7437: same hole reuse as `arena_alloc_gc_old`, but never into a page
+    // this defrag pass is evacuating.
+    if let Some(user_ptr) = crate::gc::old_free_take_exact(total, Some(excluded_pages)) {
+        let raw = (user_ptr - GC_HEADER_SIZE) as *mut u8;
+        unsafe {
+            let header = raw as *mut GcHeader;
+            (*header).obj_type = obj_type;
+            (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
+            crate::gc::gc_note_black_birth(header);
+            (*header)._reserved = 0;
+            (*header).size = total as u32;
+        }
+        register_old_object_pages(raw as usize, total);
+        return user_ptr as *mut u8;
+    }
     let raw = arena_alloc_old_excluding_pages(total, align, excluded_pages);
 
     unsafe {

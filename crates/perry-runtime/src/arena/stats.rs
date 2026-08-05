@@ -50,6 +50,13 @@ pub extern "C" fn js_arena_stats(out_used: *mut u64, out_total: *mut u64) {
             total += block.size as u64;
         }
     });
+    // #7437: swept old-gen holes are reusable capacity, not used heap.
+    // Block offsets cannot express a hole (the bump pointer never moves
+    // back), so without this subtraction `heapUsed` reports the scattered-
+    // survivor high-water forever — 105.6 MB for a ~1 MB live set on the
+    // 12_large_live_set ratchet probe — and looks like a leak that no
+    // amount of collecting can fix.
+    used = used.saturating_sub(crate::gc::old_free_bytes() as u64);
     unsafe {
         *out_used = used;
         *out_total = total;

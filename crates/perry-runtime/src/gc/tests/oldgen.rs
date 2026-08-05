@@ -1374,3 +1374,111 @@ fn test_full_sweep_still_finalizes_unmarked_old_object() {
     clear_marks();
     remembered_set_clear();
 }
+
+// ---------------------------------------------------------------------------
+// #7437: old-generation hole free list.
+// ---------------------------------------------------------------------------
+
+/// Dead old objects in a block that still holds a live object become
+/// exact-size reusable holes; a same-size promotion lands in one, a
+/// different-size allocation does not, and the pressure/heap accounting
+/// subtracts the reusable bytes.
+#[test]
+fn test_dead_old_holes_in_live_blocks_are_reused_by_exact_size() {
+    let _isolation = copying_nursery_isolation_lock();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    old_free_reset_for_test();
+    crate::arena::old_pages_begin_gc_cycle();
+
+    // One marked anchor keeps the block out of whole-block reclaim; the
+    // same-size dead neighbors around it become holes.
+    let live = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+    let mut dead = Vec::new();
+    for _ in 0..8 {
+        dead.push(crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize);
+    }
+    let (live_header, _) = old_test_header_and_size(live);
+    let (_, dead_total) = old_test_header_and_size(dead[0]);
+    unsafe {
+        (*live_header).gc_flags |= GC_FLAG_MARKED;
+    }
+
+    let _sweep = sweep_with_age_bump_and_old_reclaim(false, true);
+
+    assert!(
+        old_free_entry_count() >= dead.len(),
+        "each swept dead neighbor must become a hole (got {})",
+        old_free_entry_count()
+    );
+    let free_bytes = old_free_bytes();
+    assert!(free_bytes >= dead.len() * dead_total);
+    assert_eq!(
+        old_gen_reclaimable_pressure_bytes(),
+        crate::arena::old_gen_in_use_bytes().saturating_sub(free_bytes),
+        "reclaim pacing must see in-use minus the reusable holes"
+    );
+
+    // Exact-size allocation reuses a hole instead of growing the bump.
+    let reused = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+    assert!(
+        dead.contains(&reused),
+        "a same-size old allocation must land in a swept hole"
+    );
+    assert_eq!(old_free_bytes(), free_bytes - dead_total);
+
+    // A different size must NOT take a hole (exact fit keeps GcHeader::size
+    // in agreement with per-object promotion accounting).
+    let other = crate::arena::arena_alloc_gc_old(96, 8, GC_TYPE_STRING) as usize;
+    assert!(
+        !dead.contains(&other),
+        "a different-size allocation must not be placed in a mismatched hole"
+    );
+    assert_eq!(old_free_bytes(), free_bytes - dead_total);
+
+    old_free_reset_for_test();
+    clear_marks();
+    remembered_set_clear();
+}
+
+/// A hole's block can die on a LATER cycle; the block reclaim that recycles
+/// its bytes must drop the block's holes so the free list never hands out a
+/// pointer into recycled memory.
+#[test]
+fn test_old_holes_are_dropped_when_their_block_is_reclaimed() {
+    let _isolation = copying_nursery_isolation_lock();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    old_free_reset_for_test();
+    crate::arena::old_pages_begin_gc_cycle();
+
+    let live = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+    let mut dead = Vec::new();
+    for _ in 0..4 {
+        dead.push(crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize);
+    }
+    let (live_header, _) = old_test_header_and_size(live);
+    let (_, dead_total) = old_test_header_and_size(dead[0]);
+    unsafe {
+        (*live_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    let _sweep = sweep_with_age_bump_and_old_reclaim(false, true);
+    assert!(old_free_entry_count() >= dead.len());
+
+    // Second cycle: the anchor dies too, the whole block reclaims, and the
+    // filter must remove every hole inside it.
+    crate::arena::old_pages_begin_gc_cycle();
+    let _sweep2 = sweep_with_age_bump_and_old_reclaim(false, true);
+    while let Some(ptr) = old_free_take_exact(dead_total, None) {
+        assert!(
+            !dead.contains(&ptr) && ptr != live,
+            "a hole inside a reclaimed block must never be handed out"
+        );
+    }
+
+    old_free_reset_for_test();
+    clear_marks();
+    remembered_set_clear();
+}
