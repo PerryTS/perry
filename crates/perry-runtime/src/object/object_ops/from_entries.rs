@@ -108,9 +108,11 @@ unsafe fn object_from_entries_materialize_entries(entries_value: f64) -> *mut Ar
         return crate::map::js_map_entries(raw as *const crate::map::MapHeader);
     }
 
+    // The whole arm exists to serve `URLSearchParams`, so it goes with the
+    // feature rather than leaving `obj` bound for a body that isn't compiled.
+    #[cfg(feature = "url-engine")]
     if gc_type == Some(crate::gc::GC_TYPE_OBJECT) {
         let obj = raw as *mut ObjectHeader;
-        #[cfg(feature = "url-engine")]
         if crate::url::try_read_as_search_params(obj).is_some() {
             let boxed = crate::url::js_url_search_params_entries_arr(obj);
             return object_from_entries_array_ptr(boxed);

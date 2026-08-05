@@ -276,12 +276,14 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     // registry ids, not heap `ObjectHeader`s, so the shape probe would
     // dereference unmapped memory.
     if !crate::value::addr_class::is_handle_band(ptr) {
-        let boxed =
-            f64::from_bits(crate::value::POINTER_TAG | ((ptr as u64) & crate::value::POINTER_MASK));
         // See the matching note in `value/to_string.rs`: shape probes on a
         // generic path, kept out of non-URL binaries so the parser can strip.
+        // `boxed` is bound inside the gate: it feeds only these probes.
         #[cfg(feature = "url-engine")]
         {
+            let boxed = f64::from_bits(
+                crate::value::POINTER_TAG | ((ptr as u64) & crate::value::POINTER_MASK),
+            );
             let href = crate::url::url_class::js_url_href_if_url(boxed);
             if href.to_bits() != crate::value::TAG_UNDEFINED {
                 let s = js_jsvalue_to_string(href);
