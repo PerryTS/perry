@@ -29,14 +29,14 @@ pub(crate) use allocators::{
     inactive_survivor_index, with_survivor_arena, with_survivor_arena_mut,
 };
 pub(crate) use block::{
-    arena_cell_alloc, old_gen_in_use_bytes_sub, Arena, ArenaBlock, ACTIVE_SURVIVOR, ARENA,
-    ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE,
+    arena_cell_alloc, block_pool_put, old_gen_in_use_bytes_sub, Arena, ArenaBlock, ACTIVE_SURVIVOR,
+    ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE,
     LONGLIVED_ARENA, OLD_ARENA, OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
 };
 #[cfg(test)]
 pub(crate) use block::{
-    force_next_block_alloc_failure, gc_trigger_arena_borrow_depth, gc_trigger_arena_calls,
-    reset_gc_trigger_arena_probe,
+    block_pool_bytes_for_test, force_next_block_alloc_failure, gc_trigger_arena_borrow_depth,
+    gc_trigger_arena_calls, reset_gc_trigger_arena_probe,
 };
 pub(crate) use page_meta::{
     address_span_overlaps_pages, register_block_space, register_old_object_pages,

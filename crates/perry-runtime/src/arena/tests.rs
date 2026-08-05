@@ -1103,3 +1103,33 @@ fn emergency_block_reclaim_runs_with_no_live_arena_borrow() {
          reallocate its `blocks` Vec underneath the borrow (#7022)"
     );
 }
+
+/// #7438: a released block offered to the recycled-block pool is handed back
+/// by the next same-size block reservation instead of a fresh allocator
+/// mapping — the mechanism that bounds ever-dirtied pages at the concurrent
+/// high-water instead of cumulative promotion volume.
+#[test]
+fn recycled_block_pool_reuses_released_blocks() {
+    let layout = std::alloc::Layout::from_size_align(BLOCK_SIZE, 16).unwrap();
+    let raw = unsafe { std::alloc::alloc(layout) };
+    assert!(!raw.is_null());
+    let before = block_pool_bytes_for_test();
+    assert!(
+        block_pool_put(raw, BLOCK_SIZE),
+        "pool must accept a block under its cap"
+    );
+    assert_eq!(block_pool_bytes_for_test(), before + BLOCK_SIZE);
+
+    // The reservation funnel must serve the pooled block back (LIFO) rather
+    // than minting a fresh mapping.
+    let block = crate::arena::block::reserve_arena_block(BLOCK_SIZE / 2);
+    assert_eq!(
+        block.data as usize, raw as usize,
+        "same-size reservation must reuse the pooled block"
+    );
+    assert_eq!(block.size, BLOCK_SIZE);
+    assert_eq!(block.offset, 0);
+    assert_eq!(block_pool_bytes_for_test(), before);
+    // Hand it back to the allocator so the test doesn't leak the mapping.
+    unsafe { std::alloc::dealloc(block.data, layout) };
+}
