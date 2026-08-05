@@ -27,9 +27,9 @@ pointer has **three different homes**, each needing a different mechanism.
 | Layer | Home | Example bugs | Mechanism | Status |
 |---|---|---|---|---|
 | **0** | *enabler* | — | **in-process LLVM** (#7241) | ✅ **landed** (#7301) |
-| 1 | `perry-codegen` lowering code | #7192, #7206, #7211 | `Raw`/`Rooted` borrow discipline | proposed |
+| 1 | `perry-codegen` lowering code | #7192, #7206, #7211 | `Raw`/`Rooted` borrow discipline | design **validated** (#7459); migration **started** (#7461); one bug shape **eliminated** crate-wide (#7462–#7465) |
 | 2 | emitted code's liveness | #7280, #7271, #7252, #7243 | statepoints (#7108, #7174) | ✅ **THE DEFAULT** (#7370); landed #7314, made usable by #7339/#7340 |
-| 3 | `perry-runtime` hand-written Rust | #7249, #7239, #7226, #7231 | `RuntimeHandleScope`, non-optional | mechanism exists (675 uses), **still optional**; **41** open catches (#7341) |
+| 3 | `perry-runtime` hand-written Rust | #7249, #7239, #7226, #7231 | `RuntimeHandleScope`, non-optional | still optional *inside* 107 listed modules; **595 modules locked at zero** by per-module ceilings (#7457), debt 1008 → 999 |
 
 **Order is 0 → 2. Layers 1 and 3 are independent and can proceed now.**
 #7108 measured statepoints viable but blocked: *"the text-IR-plus-stock-clang
@@ -630,6 +630,64 @@ samples) is untouched and remains the real target.
   failure count says nothing without it.
 
 ---
+
+## ★★★ Status 2026-08-05 — four gates were dead, and that came first
+
+**Before any of the layer work below was verifiable, four gates on `main` could
+not fail.** Three were *required* contexts, so every merge in their windows
+bypassed them. None surfaced from CI; each came from running the gate by hand
+and asking whether its subject was actually present.
+
+| gate | why it could not fail | fix |
+|---|---|---|
+| `gc-root-dominance` (curated corpus) | statepoints became the default lowering (#7370) and express roots as `gc.statepoint` bundles, not `@js_shadow_slot_bind` calls — the corpus held **0** of the checker's subject | #7452 |
+| the same, **dependency-scale** corpus | identical cause; #7452 fixed one corpus and missed its twin. 81 modules, **0** bind call sites | #7460 |
+| raw-handle debt ratchet | red since #7424, and its baseline only moves *down*, so it could not be satisfied by re-pinning | #7455 |
+| the dominance checker itself | `ALLOC_RE` did not recognise `js_url_coerce_string`, so it could not see the #7453 bug class at all | #7454 |
+
+**The lesson is the checkers' own design, not the incidents.** `gc_root_dominance_check.py`
+refuses a clean verdict when it counts zero root stores — that guard is the only
+reason the statepoint-era vacuity was visible at all. Every gate added here
+should assert its subject was live, and CI's floors should be written so a
+corpus that stops containing the subject goes red rather than green.
+
+### Layer 1 — what changed
+
+The RFC's proposed API **does not compile as written**: `emit_call(...).root(&mut e, …)`
+is `E0499`, because the returned handle already borrows the emitter. Corrected in
+#7459, where the design is also turned into `compile_fail` doctests pinned to
+`E0499` and sabotage-tested, so the claim "the borrow checker rejects the bug
+shape" is executable rather than asserted.
+
+`FnCtx` has no interior mutability, so the borrow-carrying form cannot be built
+on the real emitter. The shape that works there is the **combinator** — the same
+one layer 3 settled on with `RuntimeHandle::across_*`: never hand out an unrooted
+handle. That is what makes the migration incremental.
+
+**One bug shape is now eliminated crate-wide**: a raw pointer bound before a
+`lower_expr` and used after it. 11 sites in `url_main.rs` (nine URL setters,
+the URLSearchParams family, `forEach`) and 3 in `child_proc.rs`. An arm-aware
+scan now reports zero, with the single remaining hit confirmed *not* a bug — a
+`perry/ui` widget handle, a registry id below the handle band.
+
+**Four of those seven merges corrected the previous one.** Every defect compiled
+cleanly with no warnings: a guard bound to `_operand_guard` that emitted no
+truncate, a release placed inside one branch of an `if/else`, a fix that covered
+the two-operand path and missed the three-operand one. Two of my scan counts
+were also wrong — one high (arm-boundary false positives), one low (missed the
+third operand). **This class does not survive review, only mechanical checking**:
+read the emitted IR, audit reachability with a script, verify the runtime
+semantics of anything that looks like a leak.
+
+### Layer 3 — the ratchet was the wrong shape
+
+A single global total cannot make the discipline non-optional: it is blind to
+debt moving between modules, it lets a new file start dirty if something else
+got cleaner, and it has no finish line. Since **595 of 705 runtime modules were
+already clean**, #7457 inverts it — list the 110 modules *permitted* to carry
+debt, and everything else must be zero. A cleaned module's line must be
+**deleted** (an entry matching nothing fails), so cleanup is permanent and the
+list can only shrink.
 
 ## Sequencing
 
