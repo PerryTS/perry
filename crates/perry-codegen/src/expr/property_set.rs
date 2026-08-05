@@ -43,6 +43,168 @@ fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool
         .is_some_and(|class| !class.computed_members.is_empty())
 }
 
+/// #7288: the SLOPPY-mode arm of the #5093 class-field raw-f64 store.
+///
+/// `put_value_static_property_fast_path` bars sloppy code from the whole
+/// class-field route (#6542) because that route's terminal fallback is
+/// `js_object_set_field_by_name`, which throws unconditionally on a
+/// non-writable slot — correct for strict `PutValue`, wrong for sloppy, where a
+/// rejected write is a silent no-op.
+///
+/// That bail is far wider than the hazard, and the width is user-visible: an
+/// identical `.ts` file compiles to a 46× slower object depending only on
+/// whether an upward walk from the source finds a `package.json` with
+/// `"type": "module"` (which makes the module ESM, hence strict). Inside the
+/// Perry checkout it does; in a user's scratch directory it does not, so
+/// `benchmarks/suite/09_method_calls.ts` measured 83 ms in-tree and 3.8 s
+/// anywhere else.
+///
+/// The fast arm never needed the bail. The #5093 inline precheck
+/// (`emit_class_field_inline_precheck`) already rejects every receiver whose
+/// store could be *rejected* — `OBJ_FLAG_FROZEN`, `OBJ_FLAG_HAS_DESCRIPTORS`, a
+/// mismatched class id or keys token, a cleared typed-layout-intact bit — plus
+/// every value that is not a plain finite number, and the process-global gate
+/// is flipped by any prototype-level descriptor install naming a declared
+/// field. A store that reaches the raw slot is therefore one that could not
+/// have been rejected in either mode, so the fast arm is mode-independent.
+/// Only the fallback needed strict-awareness, and this sends every miss to
+/// `js_put_value_set(..., strict = 0)` — the sloppy-correct runtime the
+/// surrounding `PutValueSet` lowering already uses — instead of the throwing
+/// by-name setter.
+///
+/// Scope is deliberately narrow: declared raw-f64 (`number`) fields on a known
+/// class, receiver == target. Boxed slots need the layout note and write
+/// barrier that the guard-call path emits, so they stay on the unchanged
+/// sloppy inline caches.
+pub(crate) fn try_lower_sloppy_class_field_raw_store(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+) -> Result<Option<String>> {
+    // Oversized modules full-outline the whole IC diamond into one call
+    // (#5334 lever B); that outlined runtime has no sloppy variant, so leave
+    // those modules on the unchanged path.
+    if crate::codegen::full_outline_ic_enabled() {
+        return Ok(None);
+    }
+    let Some(class_name) = receiver_class_name(ctx, object) else {
+        return Ok(None);
+    };
+    if class_has_computed_runtime_members(ctx, &class_name) {
+        return Ok(None);
+    }
+    // A compiled setter owns the name; never store into the slot behind it.
+    // (`class_field_global_index` also rejects accessors anywhere in the
+    // chain — this is the same check the strict arm makes first, kept so the
+    // two arms agree on which shapes are eligible.)
+    if ctx
+        .methods
+        .contains_key(&(class_name.clone(), format!("__set_{}", property)))
+    {
+        return Ok(None);
+    }
+    let Some(field_index) =
+        crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+    else {
+        return Ok(None);
+    };
+    let (Some(&expected_class_id), Some(keys_global_name)) = (
+        ctx.class_ids.get(&class_name),
+        ctx.class_keys_globals.get(&class_name).cloned(),
+    ) else {
+        return Ok(None);
+    };
+    // Raw-f64 slots only — see the doc comment.
+    if !crate::type_analysis::class_field_declared_type(ctx, &class_name, property)
+        .as_ref()
+        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate)
+    {
+        return Ok(None);
+    }
+
+    // Operand order mirrors the strict class-field arm below verbatim: the
+    // assignment reference is evaluated before the RHS, and the receiver's
+    // relocation across an allocating RHS is handled by the same statepoint
+    // re-read that arm relies on.
+    let recv_box = lower_expr(ctx, object)?;
+    let val_double = lower_expr(ctx, value)?;
+
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let field_idx_str = field_index.to_string();
+    let expected_class_id_str = expected_class_id.to_string();
+
+    let (obj_bits, obj_handle, key_box, val_bits, expected_keys) = {
+        let blk = ctx.block();
+        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+        let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let val_bits = blk.bitcast_double_to_i64(&val_double);
+        let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
+        (obj_bits, obj_handle, key_box, val_bits, expected_keys)
+    };
+
+    let fast_idx = ctx.new_block("class_field_sloppy_set.fast");
+    let merge_idx = ctx.new_block("class_field_sloppy_set.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    // Emits the shape/flags/value precheck and branches to `fast_label` on a
+    // hit; leaves `ctx.current_block` on the freshly created miss block.
+    let _miss_label = crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
+        ctx,
+        &obj_bits,
+        &obj_handle,
+        &expected_class_id_str,
+        &expected_keys,
+        field_index,
+        true,
+        Some(&val_bits),
+        &fast_label,
+    );
+
+    // Miss: the strict-aware runtime with `strict = 0`, so a rejected write
+    // stays a silent no-op exactly as sloppy `PutValue` requires.
+    {
+        let blk = ctx.block();
+        let _ = blk.call(
+            DOUBLE,
+            "js_put_value_set",
+            &[
+                (DOUBLE, &recv_box),
+                (DOUBLE, &key_box),
+                (DOUBLE, &val_double),
+                (DOUBLE, &recv_box),
+                (I32, "0"),
+            ],
+        );
+        blk.br(&merge_label);
+    }
+
+    ctx.current_block = fast_idx;
+    {
+        // arm64_32 watchOS: the fields region starts at `size_of::<ObjectHeader>()`
+        // past the user pointer (24 on 64-bit, 20 on ILP32) — same derivation as
+        // the strict arm and the runtime setter.
+        let header_skip =
+            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let blk = ctx.block();
+        let obj_ptr = blk.inttoptr(I64, &obj_handle);
+        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+        let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+        // GC_STORE_AUDIT(POINTER_FREE): a guarded raw-f64 class slot holds
+        // numbers only, and the precheck rejected every value that is not a
+        // plain finite double, so no write barrier and no layout note are due.
+        let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, &val_double);
+        blk.store(DOUBLE, &numeric_value, &field_ptr);
+        blk.br(&merge_label);
+    }
+
+    ctx.current_block = merge_idx;
+    Ok(Some(val_double))
+}
+
 fn lower_runtime_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
