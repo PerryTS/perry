@@ -14042,9 +14042,7 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         .lines()
         .find(|line| line.contains("call double @js_put_value_set("))
         .unwrap_or_else(|| {
-            panic!(
-                "the sloppy arm's miss must CALL `js_put_value_set` (#7288):\n{sloppy}"
-            )
+            panic!("the sloppy arm's miss must CALL `js_put_value_set` (#7288):\n{sloppy}")
         });
     assert!(
         miss_call.trim_end().ends_with("i32 0)"),
