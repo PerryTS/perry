@@ -13,37 +13,38 @@ use super::*;
 /// per-class-instance hot path that uses the inline allocator.
 #[inline]
 pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
-    INLINE_STATE.with(|inline_s| unsafe {
-        let inline_ptr = inline_s.get();
-        ARENA.with(|a| {
-            let arena_ptr = (*a).get();
-            // Sync inline → block before allocating, if the inline
-            // state has been initialized. Borrows are deliberately
-            // short-lived: `arena_cell_alloc` runs the GC between two
-            // disjoint borrows, and the collector mutates BOTH the arena
-            // and `INLINE_STATE` (`Arena::resync_inline_to_current`). #7022.
-            if !(*inline_ptr).data.is_null() {
-                let offset = (*inline_ptr).offset;
-                let arena = &mut *arena_ptr;
-                let current = arena.current;
-                arena.blocks[current].offset = offset;
-            }
-            let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
-            // Resync block → inline (may have advanced to a new block).
-            if !(*inline_ptr).data.is_null() {
-                let (data, offset, block_size) = {
-                    let arena = &*arena_ptr;
-                    let block = &arena.blocks[arena.current];
-                    (block.data, block.offset, block.size)
-                };
-                let inline = &mut *inline_ptr;
-                inline.data = data;
-                inline.offset = offset;
-                inline.size = block_size;
-            }
-            ptr
-        })
-    })
+    // #7469: both thread-locals come off the one cached hot-TLS base rather
+    // than two `_tlv_get_addr` calls. The comment above about "two extra TLS
+    // reads cost ~5-10ns" was measuring exactly that toll.
+    unsafe {
+        let inline_ptr = crate::arena::hot_inline_state();
+        let arena_ptr = crate::arena::hot_arena();
+        // Sync inline → block before allocating, if the inline
+        // state has been initialized. Borrows are deliberately
+        // short-lived: `arena_cell_alloc` runs the GC between two
+        // disjoint borrows, and the collector mutates BOTH the arena
+        // and `INLINE_STATE` (`Arena::resync_inline_to_current`). #7022.
+        if !(*inline_ptr).data.is_null() {
+            let offset = (*inline_ptr).offset;
+            let arena = &mut *arena_ptr;
+            let current = arena.current;
+            arena.blocks[current].offset = offset;
+        }
+        let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
+        // Resync block → inline (may have advanced to a new block).
+        if !(*inline_ptr).data.is_null() {
+            let (data, offset, block_size) = {
+                let arena = &*arena_ptr;
+                let block = &arena.blocks[arena.current];
+                (block.data, block.offset, block.size)
+            };
+            let inline = &mut *inline_ptr;
+            inline.data = data;
+            inline.offset = offset;
+            inline.size = block_size;
+        }
+        ptr
+    }
 }
 
 /// Allocate from the longlived arena (issue #179). Unlike `arena_alloc`,
@@ -286,9 +287,9 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // micro-benchmarks like object_create / binary_trees run their tight
     // loops. Walking an empty Vec was costing ~10ns per alloc (borrow,
     // iterate, drop) for nothing; this `Cell` check is ~1ns.
-    let reused = if crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.get()) {
-        crate::gc::ARENA_FREE_LIST.with(|fl| {
-            let mut fl = fl.borrow_mut();
+    let reused = if crate::gc::hot_arena_free_list_nonempty().get() {
+        {
+            let mut fl = crate::gc::hot_arena_free_list().borrow_mut();
             // Find a slot that fits (exact or slightly larger)
             let mut best_idx = None;
             let mut best_waste = usize::MAX;
@@ -304,13 +305,13 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
             if let Some(idx) = best_idx {
                 let (ptr, _slot_size) = fl.swap_remove(idx);
                 if fl.is_empty() {
-                    crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
+                    crate::gc::hot_arena_free_list_nonempty().set(false);
                 }
                 Some(ptr)
             } else {
                 None
             }
-        })
+        }
     } else {
         None
     };

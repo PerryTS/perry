@@ -55,6 +55,8 @@ pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, Shad
 pub(crate) use temp_roots::reset_temp_roots;
 #[cfg(test)]
 pub(super) use temp_roots::temp_root_depth;
+/// #7469: consumed by `crate::tls_hot::fill`, which lives outside `gc`.
+pub(crate) use temp_roots::temp_roots_hot_addr;
 pub use temp_roots::{
     js_array_push_f64_temp_rooted, js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_set,
     js_gc_temp_root_truncate,

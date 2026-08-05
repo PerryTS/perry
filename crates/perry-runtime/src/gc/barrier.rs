@@ -1,3 +1,6 @@
+use super::hot_tls::{
+    hot_birth_extra_flags, hot_incremental_mark_minor_only, hot_incremental_mark_valid_ptrs,
+};
 use super::*;
 
 /// Snapshot the remembered dirty ranges before the collection clears them.
@@ -672,14 +675,21 @@ pub static PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT: std::sync::atomic::Atomi
 
 pub(super) fn incremental_mark_barrier_enable(valid_ptrs: &ValidPointerSet, minor_only: bool) {
     INCREMENTAL_MARK_BARRIER_MINOR_ONLY.with(|cell| cell.set(minor_only));
-    let newly_active = INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
-        let newly_active = cell.get().is_null();
-        cell.set(valid_ptrs as *const ValidPointerSet);
-        newly_active
-    });
+    // Arm the global count BEFORE installing the thread-local pointer, and
+    // (in `disable`) decrement it AFTER clearing the pointer. Both halves keep
+    // the count conservatively armed across the whole window in which the
+    // pointer is live.
+    //
+    // #7469 made this ordering load-bearing rather than merely tidy:
+    // `incremental_mark_barrier_value` now treats a zero count as proof that
+    // no shading is needed, so a window where the pointer is installed but the
+    // count is not yet bumped would be a window where a store silently skips
+    // its insertion barrier — a lost mark, i.e. a live object swept.
+    let newly_active = INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| cell.get().is_null());
     if newly_active {
         PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_add(1, Ordering::SeqCst);
     }
+    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| cell.set(valid_ptrs as *const ValidPointerSet));
 }
 
 pub(super) fn incremental_mark_barrier_disable() {
@@ -705,11 +715,30 @@ pub(super) fn incremental_mark_barrier_disable() {
     GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
 }
 
+/// True when no thread anywhere has an incremental mark barrier installed.
+///
+/// The same authority `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` already
+/// gives generated code (see its doc comment): zero proves *this* thread's
+/// `INCREMENTAL_MARK_BARRIER_VALID_PTRS` is null, because a thread arming its
+/// own barrier increments the count before any store can observe the armed
+/// pointer. Non-zero is conservative and falls through to the thread-local
+/// read, which then finds its own null and returns.
+///
+/// #7469: the point is to skip the *thread-local* read. On Darwin that read is
+/// an out-of-line `_tlv_get_addr` call on every heap-pointer store, and it was
+/// 91 of the 653 attributed `_tlv_get_addr` samples on `churn.ts` — all of them
+/// spent proving a null pointer was still null. This is a relaxed load of a
+/// static: `adrp` + `ldr` and a perfectly-predicted branch.
+#[inline(always)]
+fn incremental_mark_barrier_globally_idle() -> bool {
+    PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed) == 0
+}
+
 /// Allocate-black birth flags for runtime-path allocations — see
 /// `GC_BIRTH_EXTRA_FLAGS`.
 #[inline(always)]
 pub fn gc_birth_extra_flags() -> u8 {
-    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.get())
+    hot_birth_extra_flags().get()
 }
 
 /// A born-black object must also be TRACED: marking treats MARKED as
@@ -725,7 +754,7 @@ pub fn gc_birth_extra_flags() -> u8 {
 /// visit per mid-cycle runtime allocation.
 #[inline]
 pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
-    if GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.get()) & GC_FLAG_MARKED == 0 {
+    if hot_birth_extra_flags().get() & GC_FLAG_MARKED == 0 {
         return;
     }
     // Leaf types (strings, pointer-free payloads) carry no child edges — the
@@ -740,7 +769,10 @@ pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
 
 #[inline]
 pub(super) fn incremental_mark_barrier_active() -> bool {
-    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| !cell.get().is_null())
+    if incremental_mark_barrier_globally_idle() {
+        return false;
+    }
+    !hot_incremental_mark_valid_ptrs().get().is_null()
 }
 
 #[inline]
@@ -820,9 +852,7 @@ fn incremental_mark_barrier_value_with_valid_ptrs(
     // Minor cycles shade only nursery children (see the
     // INCREMENTAL_MARK_BARRIER_MINOR_ONLY doc: stray old-gen marks survive a
     // minor's sweep and poison the next full cycle's trace).
-    if INCREMENTAL_MARK_BARRIER_MINOR_ONLY.with(|cell| cell.get())
-        && !crate::arena::pointer_in_nursery(addr)
-    {
+    if hot_incremental_mark_minor_only().get() && !crate::arena::pointer_in_nursery(addr) {
         return false;
     }
     unsafe {
@@ -837,14 +867,18 @@ fn incremental_mark_barrier_value_with_valid_ptrs(
 }
 
 pub(super) fn incremental_mark_barrier_value(value_bits: u64) -> bool {
-    INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
-        let ptr = cell.get();
-        if ptr.is_null() {
-            return false;
-        }
-        let valid_ptrs = unsafe { &*ptr };
-        incremental_mark_barrier_value_with_valid_ptrs(value_bits, valid_ptrs)
-    })
+    // #7469: the overwhelmingly common case is "no cycle anywhere", and
+    // proving it must not cost a thread-local resolution — this runs on every
+    // heap-pointer store in compiled code.
+    if incremental_mark_barrier_globally_idle() {
+        return false;
+    }
+    let ptr = hot_incremental_mark_valid_ptrs().get();
+    if ptr.is_null() {
+        return false;
+    }
+    let valid_ptrs = unsafe { &*ptr };
+    incremental_mark_barrier_value_with_valid_ptrs(value_bits, valid_ptrs)
 }
 
 #[allow(dead_code)]

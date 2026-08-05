@@ -149,6 +149,8 @@ pub mod temporal;
 pub(crate) mod test_support;
 pub mod text;
 pub mod timer;
+/// #7469: one `_tlv_get_addr` for the whole allocation hot path.
+pub(crate) mod tls_hot;
 pub mod typed_feedback;
 pub mod typedarray;
 pub mod typedarray_half;

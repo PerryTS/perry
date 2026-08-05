@@ -196,7 +196,21 @@ thread_local! {
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
+/// Has any thread ever registered a `Set`? Monotone twin of
+/// `map::MAP_REGISTRY_EVER_USED` — see that flag for the full rationale and
+/// the #7469 measurement.
+static SET_REGISTRY_EVER_USED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// True when no `Set` has ever been registered, so `is_registered_set` can
+/// answer without touching the thread-local registry.
+#[inline(always)]
+fn set_registry_never_used() -> bool {
+    !SET_REGISTRY_EVER_USED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn register_set(ptr: *mut SetHeader, elements: *mut f64, capacity: usize) {
+    SET_REGISTRY_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
     SET_REGISTRY.with(|r| {
         let mut registry = r.borrow_mut();
         assert!(
@@ -208,6 +222,11 @@ fn register_set(ptr: *mut SetHeader, elements: *mut f64, capacity: usize) {
 }
 
 pub fn is_registered_set(addr: usize) -> bool {
+    // #7469: nothing registered ⟹ nothing to find, without a thread-local
+    // resolution or a hash. See `map::is_registered_map` for the pairing.
+    if set_registry_never_used() {
+        return false;
+    }
     // #4004: reject the small-handle band (Web Fetch / node:http / timer ids
     // are NaN-boxed POINTER_TAG values, not heap addresses) before
     // dereferencing the GC header. Managed Sets are arena-allocated above the

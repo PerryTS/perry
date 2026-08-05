@@ -858,6 +858,34 @@ thread_local! {
     }) };
 }
 
+// --- #7469 hot-TLS address providers. See `crate::tls_hot`. ---
+
+/// Address of this thread's `ARENA`. Resolving it once and caching it is what
+/// lets the allocation path stop paying `_tlv_get_addr` per access.
+pub(crate) fn arena_hot_addr() -> *mut u8 {
+    ARENA.with(|a| a.get() as *mut u8)
+}
+
+/// Address of this thread's `INLINE_STATE`. `js_inline_arena_state` already
+/// hands this same pointer to generated code, so caching it here adds no new
+/// exposure.
+pub(crate) fn inline_state_hot_addr() -> *mut u8 {
+    INLINE_STATE.with(|s| s.get() as *mut u8)
+}
+
+/// This thread's nursery arena, one cached load instead of a TLS resolution.
+#[inline(always)]
+pub(crate) fn hot_arena() -> *mut Arena {
+    crate::tls_hot::hot().arena as *mut Arena
+}
+
+/// This thread's inline bump-allocator state, one cached load instead of a TLS
+/// resolution.
+#[inline(always)]
+pub(crate) fn hot_inline_state() -> *mut InlineArenaState {
+    crate::tls_hot::hot().inline_state as *mut InlineArenaState
+}
+
 /// Delta-maintenance for `OLD_GEN_IN_USE_BYTES` — see the thread-local's
 /// doc comment for the full mutation-site inventory.
 #[inline]

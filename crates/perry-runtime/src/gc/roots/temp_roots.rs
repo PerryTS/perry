@@ -60,6 +60,26 @@ thread_local! {
         std::cell::UnsafeCell::new(Vec::with_capacity(TEMP_ROOT_RESERVE));
 }
 
+// --- #7469 hot-TLS address provider. See `crate::tls_hot`. ---
+
+/// Address of this thread's `TEMP_ROOTS`.
+pub(crate) fn temp_roots_hot_addr() -> *mut u8 {
+    TEMP_ROOTS.with(|cell| cell.get() as *mut u8)
+}
+
+/// This thread's temp-root stack without a TLS resolution.
+///
+/// `TEMP_ROOTS` is lazily initialised (its `Vec::with_capacity` is not const),
+/// so every `.with()` pays `_tlv_get_addr` **plus** an initialised/destroyed
+/// check. Generated code calls push/get/set/truncate as four separate FFI
+/// calls around a single allocating expression, so that toll is paid four
+/// times per temporary: 144 of the 653 attributed `_tlv_get_addr` samples on
+/// `churn.ts`.
+#[inline(always)]
+fn hot_temp_roots() -> *mut Vec<u64> {
+    crate::tls_hot::hot().temp_roots as *mut Vec<u64>
+}
+
 /// Report a temp-root stack overflow without unwinding.
 ///
 /// Same defect class as #7145's `js_shadow_frame_pop`: a `debug_assert!(false)`
@@ -85,8 +105,8 @@ a live slot. Reported once per process."
 /// `js_gc_temp_root_get` / `js_gc_temp_root_set` / `js_gc_temp_root_truncate`.
 #[no_mangle]
 pub extern "C" fn js_gc_temp_root_push(value: u64) -> u32 {
-    TEMP_ROOTS.with(|cell| unsafe {
-        let s = &mut *cell.get();
+    unsafe {
+        let s = &mut *hot_temp_roots();
         let idx = s.len();
         // A depth this large means codegen dropped a truncate; refusing to grow
         // keeps a runaway from turning into unbounded retention. The returned
@@ -100,44 +120,44 @@ pub extern "C" fn js_gc_temp_root_push(value: u64) -> u32 {
             crate::gc::runtime_write_barrier_root_heap_word(value);
         }
         idx as u32
-    })
+    }
 }
 
 /// Read slot `idx` back. Generated code must use this value, not the register
 /// it pushed: an evacuating cycle rewrites the slot in place.
 #[no_mangle]
 pub extern "C" fn js_gc_temp_root_get(idx: u32) -> u64 {
-    TEMP_ROOTS.with(|cell| unsafe {
-        let s = &*cell.get();
+    unsafe {
+        let s = &*hot_temp_roots();
         s.get(idx as usize).copied().unwrap_or(0)
-    })
+    }
 }
 
 /// Overwrite slot `idx`, for producers that hand back a possibly-reallocated
 /// pointer (`js_array_push_f64`).
 #[no_mangle]
 pub extern "C" fn js_gc_temp_root_set(idx: u32, value: u64) {
-    TEMP_ROOTS.with(|cell| unsafe {
-        let s = &mut *cell.get();
+    unsafe {
+        let s = &mut *hot_temp_roots();
         if let Some(slot) = s.get_mut(idx as usize) {
             *slot = value;
             if value != 0 {
                 crate::gc::runtime_write_barrier_root_heap_word(value);
             }
         }
-    });
+    }
 }
 
 /// Drop slot `base` and every slot above it.
 #[no_mangle]
 pub extern "C" fn js_gc_temp_root_truncate(base: u32) {
-    TEMP_ROOTS.with(|cell| unsafe {
-        let s = &mut *cell.get();
+    unsafe {
+        let s = &mut *hot_temp_roots();
         let base = base as usize;
         if base < s.len() {
             s.truncate(base);
         }
-    });
+    }
 }
 
 /// Push a rooted value onto the array in temp-root slot `idx`, writing the
@@ -157,7 +177,7 @@ pub extern "C" fn js_array_push_f64_temp_rooted(idx: u32, value: f64) {
 
 /// Current depth — the value a savepoint records.
 pub(crate) fn temp_root_depth() -> usize {
-    TEMP_ROOTS.with(|cell| unsafe { (*cell.get()).len() })
+    unsafe { (*hot_temp_roots()).len() }
 }
 
 /// Restore a previously-recorded depth. Used by the exception unwind path via

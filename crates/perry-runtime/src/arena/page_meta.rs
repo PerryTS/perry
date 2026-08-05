@@ -108,6 +108,69 @@ impl PageGenerationCache {
     }
 }
 
+/// Ways in the [`PageGenerationCacheSet`] below.
+///
+/// #7469: this was a **one**-entry cache, and the write barrier classifies at
+/// least two unrelated addresses per store — the child being written and the
+/// object being written into. On `churn.ts` those live in different 1 MiB
+/// generation classes, so consecutive classifications evicted each other and
+/// the "cache" missed on essentially every call: 71 self samples in the
+/// authoritative map lookup that the cache exists to avoid. Four ways covers
+/// the barrier's working set (child, parent, array payload, header) with room
+/// to spare; it is still a fixed-size array probed linearly, so a hit is a few
+/// compares off one cache line.
+const PAGE_GENERATION_CACHE_WAYS: usize = 4;
+
+/// Small direct-probed cache in front of [`PageGenerationMap`].
+///
+/// Pure accelerator: a miss, a stale way, or a full set all fall through to
+/// the authoritative map, so the only thing correctness depends on is that
+/// every invalidation clears **all** ways — which is why
+/// [`invalidate_generation_cache`] resets the whole set rather than one entry.
+///
+/// Stored behind an `UnsafeCell`, not a `Cell`: `Cell::get` returns a **copy**,
+/// and copying ~200 bytes on every classification cost more than the map lookup
+/// the cache exists to avoid (measured as a ~2% regression on `retain.ts`
+/// before this was switched). Access is single-threaded by construction — the
+/// cache is thread-local and no path holds a reference across a call that could
+/// re-enter classification.
+#[derive(Clone, Copy)]
+struct PageGenerationCacheSet {
+    ways: [PageGenerationCache; PAGE_GENERATION_CACHE_WAYS],
+    /// Round-robin victim for the next insert.
+    next: usize,
+}
+
+impl PageGenerationCacheSet {
+    const fn empty() -> Self {
+        Self {
+            ways: [PageGenerationCache::empty(); PAGE_GENERATION_CACHE_WAYS],
+            next: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn lookup(&self, key: usize, addr: usize) -> Option<PageGenerationRange> {
+        for way in self.ways.iter() {
+            if way.valid && way.key == key && way.range.contains(addr) {
+                return Some(way.range);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    fn insert(&mut self, key: usize, range: PageGenerationRange) {
+        let slot = self.next % PAGE_GENERATION_CACHE_WAYS;
+        self.ways[slot] = PageGenerationCache {
+            key,
+            range,
+            valid: true,
+        };
+        self.next = slot.wrapping_add(1);
+    }
+}
+
 /// #7187: this map used to carry a bespoke identity hasher (`write_usize`
 /// stored the key verbatim). `HashMap` is hashbrown, which takes the bucket
 /// index from the hash's LOW bits and the SIMD control byte from
@@ -242,8 +305,8 @@ thread_local! {
     static PAGE_GENERATIONS: RefCell<PageGenerationMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
-    static PAGE_GENERATION_CACHE: Cell<PageGenerationCache> =
-        const { Cell::new(PageGenerationCache::empty()) };
+    static PAGE_GENERATION_CACHE: UnsafeCell<PageGenerationCacheSet> =
+        const { UnsafeCell::new(PageGenerationCacheSet::empty()) };
 
     static OLD_GEN_PAGE_OBJECTS: RefCell<OldGenPageObjectMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
@@ -260,6 +323,34 @@ thread_local! {
     /// page (stamp 0, see `OldPageMeta::zero_for_page`) reads as having no
     /// dirty slots. `u64` never wraps in practice (one bump per collection).
     static OLD_GEN_PAGE_DIRTY_EPOCH: Cell<u64> = const { Cell::new(1) };
+}
+
+// --- #7469 hot-TLS address providers. See `crate::tls_hot`. ---
+
+/// Address of this thread's `PAGE_GENERATION_CACHE`.
+pub(crate) fn page_generation_cache_hot_addr() -> *mut u8 {
+    PAGE_GENERATION_CACHE.with(|c| c.get() as *mut u8)
+}
+
+/// Address of this thread's `PAGE_GENERATIONS`.
+pub(crate) fn page_generations_hot_addr() -> *mut u8 {
+    PAGE_GENERATIONS.with(|p| p as *const _ as *mut u8)
+}
+
+/// [`PAGE_GENERATION_CACHE`] without a TLS resolution — see `crate::tls_hot`.
+#[inline(always)]
+fn hot_page_generation_cache() -> *mut PageGenerationCacheSet {
+    // SAFETY: the slot is filled from `page_generation_cache_hot_addr` above,
+    // and `tls_hot::tests::cached_addresses_match_thread_locals` asserts the
+    // pairing.
+    crate::tls_hot::hot().page_generation_cache as *mut PageGenerationCacheSet
+}
+
+/// [`PAGE_GENERATIONS`] without a TLS resolution — see `crate::tls_hot`.
+#[inline(always)]
+fn hot_page_generations() -> &'static RefCell<PageGenerationMap> {
+    // SAFETY: as above, paired with `page_generations_hot_addr`.
+    unsafe { &*(crate::tls_hot::hot().page_generations as *const RefCell<PageGenerationMap>) }
 }
 
 #[inline]
@@ -284,7 +375,9 @@ pub(crate) fn generation_page_base(page: usize) -> usize {
 
 #[inline]
 fn invalidate_generation_cache() {
-    PAGE_GENERATION_CACHE.with(|cache| cache.set(PageGenerationCache::empty()));
+    // Every way, not one — a stale way is exactly what this guards against.
+    // SAFETY: thread-local, single-threaded.
+    PAGE_GENERATION_CACHE.with(|cache| unsafe { *cache.get() = PageGenerationCacheSet::empty() });
 }
 
 fn register_old_block_pages(base: usize, size: usize) {
@@ -430,32 +523,42 @@ pub(crate) fn unregister_block_generation(base: usize, size: usize) {
     invalidate_generation_cache();
 }
 
-#[inline]
+/// #7469: split so the **cache-hit** arm is small enough to actually inline
+/// into its callers. A single `js_write_barrier_slot` classifies twice (child
+/// then parent) and `write_barrier_decoded_parent` classifies again; with the
+/// miss path inlined alongside, the whole thing stayed out of line and each
+/// call paid its own `_tlv_get_addr`. Out-of-lining the miss lets the hit arm
+/// inline, and LLVM then CSEs the one remaining hot-TLS resolution across
+/// every classification in the barrier.
+#[inline(always)]
 pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
     if addr == 0 {
         return HeapGeneration::Unknown;
     }
     let key = generation_class_key_for_addr(addr);
-    if let Some(generation) = PAGE_GENERATION_CACHE.with(|cache| {
-        let cached = cache.get();
-        (cached.valid && cached.key == key && cached.range.contains(addr))
-            .then_some(cached.range.generation)
-    }) {
-        return generation;
+    // Both tables come off the one cached hot-TLS base — this runs on every
+    // `decode_heap_addr`, i.e. every heap store the write barrier sees, and was
+    // the single largest `_tlv_get_addr` caller on `churn.ts` (116 of 653
+    // attributed samples) precisely because it resolved two distinct
+    // thread-locals per call.
+    // SAFETY: thread-local, single-threaded, and the borrow ends here.
+    if let Some(range) = unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
+        return range.generation;
     }
+    classify_heap_generation_uncached(addr, key)
+}
 
-    let found = PAGE_GENERATIONS.with(|pages| {
-        let pages = pages.borrow();
+/// Cache-miss arm of [`classify_heap_generation`]: consult the page map and
+/// re-prime the one-entry cache.
+#[inline(never)]
+fn classify_heap_generation_uncached(addr: usize, key: usize) -> HeapGeneration {
+    let found = {
+        let pages = hot_page_generations().borrow();
         pages.get(&key).and_then(|slot| slot.find(addr))
-    });
+    };
     if let Some(range) = found {
-        PAGE_GENERATION_CACHE.with(|cache| {
-            cache.set(PageGenerationCache {
-                key,
-                range,
-                valid: true,
-            });
-        });
+        // SAFETY: as above.
+        unsafe { (*hot_page_generation_cache()).insert(key, range) };
         range.generation
     } else {
         HeapGeneration::Unknown
@@ -468,26 +571,18 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
         return HeapSpace::Unknown;
     }
     let key = generation_class_key_for_addr(addr);
-    if let Some(space) = PAGE_GENERATION_CACHE.with(|cache| {
-        let cached = cache.get();
-        (cached.valid && cached.key == key && cached.range.contains(addr))
-            .then_some(cached.range.space)
-    }) {
-        return space;
+    // SAFETY: thread-local, single-threaded, and the borrow ends here.
+    if let Some(range) = unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
+        return range.space;
     }
 
-    let found = PAGE_GENERATIONS.with(|pages| {
-        let pages = pages.borrow();
+    let found = {
+        let pages = hot_page_generations().borrow();
         pages.get(&key).and_then(|slot| slot.find(addr))
-    });
+    };
     if let Some(range) = found {
-        PAGE_GENERATION_CACHE.with(|cache| {
-            cache.set(PageGenerationCache {
-                key,
-                range,
-                valid: true,
-            });
-        });
+        // SAFETY: as above.
+        unsafe { (*hot_page_generation_cache()).insert(key, range) };
         range.space
     } else {
         HeapSpace::Unknown

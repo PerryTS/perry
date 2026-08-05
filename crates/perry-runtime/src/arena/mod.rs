@@ -33,6 +33,10 @@ pub(crate) use block::{
     ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE,
     LONGLIVED_ARENA, OLD_ARENA, OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
 };
+/// #7469 hot-TLS plumbing — see `crate::tls_hot`. The `*_hot_addr` half is
+/// consumed by `tls_hot::fill`; the `hot_*` half is the cached accessor the
+/// allocation path uses instead of a per-access `_tlv_get_addr`.
+pub(crate) use block::{arena_hot_addr, hot_arena, hot_inline_state, inline_state_hot_addr};
 #[cfg(test)]
 pub(crate) use block::{
     block_pool_bytes_for_test, force_next_block_alloc_failure, gc_trigger_arena_borrow_depth,
@@ -43,6 +47,7 @@ pub(crate) use page_meta::{
     unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_RETURNED_BYTES,
     OLD_GEN_RECLAIM_REUSABLE_BYTES,
 };
+pub(crate) use page_meta::{page_generation_cache_hot_addr, page_generations_hot_addr};
 
 // --- Public API (explicit named re-exports) ---
 

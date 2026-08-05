@@ -48,6 +48,11 @@ mod telemetry;
 pub use telemetry::*;
 mod malloc;
 pub use malloc::*;
+/// #7469: the `gc` half of the hot-thread-local address cache. Split out of
+/// `barrier.rs` / `layout.rs` / `malloc.rs` so each stays under the repo's
+/// 2000-line-per-file cap.
+mod hot_tls;
+pub(crate) use hot_tls::*;
 mod roots;
 pub use roots::*;
 /// #7148: the census of conservative-scan fallbacks and the precise-safepoint

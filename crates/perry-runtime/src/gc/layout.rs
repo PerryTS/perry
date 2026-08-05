@@ -1,3 +1,4 @@
+use super::hot_tls::{hot_layout_slot_masks, hot_shape_layouts, hot_typed_layouts};
 use super::*;
 
 // Copied-nursery survival age stored in otherwise-unused low
@@ -292,9 +293,9 @@ pub(super) struct TypedLayoutDescriptor {
 // NaN-boxing tag constants (duplicated from value.rs to avoid circular deps)
 
 thread_local! {
-    pub(super) static LAYOUT_SLOT_MASKS: RefCell<crate::fast_hash::PtrHashMap<usize, LayoutSlotMask>> =
+    pub(in crate::gc) static LAYOUT_SLOT_MASKS: RefCell<crate::fast_hash::PtrHashMap<usize, LayoutSlotMask>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
-    pub(super) static TYPED_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<usize, TypedLayoutDescriptor>> =
+    pub(in crate::gc) static TYPED_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<usize, TypedLayoutDescriptor>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
     #[cfg(test)]
     pub(super) static TRACE_SLOT_READS: Cell<usize> = const { Cell::new(0) };
@@ -318,8 +319,33 @@ thread_local! {
 // conservative scan — never a wrong descriptor (mirrors the ShapeTable trust
 // model). Nothing to prune on object death (entries are per-shape, shared).
 thread_local! {
-    static SHAPE_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<usize, Option<TypedLayoutDescriptor>>> =
+    pub(in crate::gc) static SHAPE_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<usize, Option<TypedLayoutDescriptor>>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+/// Drop any per-object layout record keyed by `user_ptr`.
+///
+/// Both maps are probed on **every** object allocation
+/// ([`layout_init_pointer_free`]) and again on every typed-shape install, to
+/// clear whatever a previous tenant of a recycled address left behind. The
+/// `is_empty()` guards skip the hash of an address that provably cannot be
+/// present: with #6893 shape-keying, `TYPED_LAYOUTS` holds only objects that
+/// diverged from their shape, so on a well-behaved workload it is empty and
+/// the probe is pure cost.
+#[inline]
+fn layout_forget_object(user_ptr: usize) {
+    // One `borrow_mut` per map, not a `borrow` to test emptiness followed by a
+    // second `borrow_mut` to remove: `RefCell`'s flag traffic is a measurable
+    // share of a function this hot (#7469).
+    let mut masks = hot_layout_slot_masks().borrow_mut();
+    if !masks.is_empty() {
+        masks.remove(&user_ptr);
+    }
+    drop(masks);
+    let mut typed = hot_typed_layouts().borrow_mut();
+    if !typed.is_empty() {
+        typed.remove(&user_ptr);
+    }
 }
 
 fn shape_layout_keyed_enabled() -> bool {
@@ -375,14 +401,12 @@ unsafe fn with_shape_shared_descriptor<R>(
     // a shape with a different field count (moving-GC relocation before the new
     // address is re-installed). Fall back (per-object → conservative).
     let field_count = (*(user_ptr as *const crate::object::ObjectHeader)).field_count as usize;
-    SHAPE_LAYOUTS.with(|m| {
-        let map = m.borrow();
-        let desc = map.get(&keys)?.as_ref()?;
-        if desc.slot_count != field_count {
-            return None;
-        }
-        Some(f(desc))
-    })
+    let map = hot_shape_layouts().borrow();
+    let desc = map.get(&keys)?.as_ref()?;
+    if desc.slot_count != field_count {
+        return None;
+    }
+    Some(f(desc))
 }
 
 /// Cloning form of [`with_shape_shared_descriptor`], for the callers that need
@@ -457,28 +481,24 @@ unsafe fn shape_install_shared(
     header: *mut GcHeader,
     descriptor: &TypedLayoutDescriptor,
 ) -> bool {
-    let mut shared_ok = false;
-    SHAPE_LAYOUTS.with(|m| {
-        let mut m = m.borrow_mut();
+    let shared_ok = {
+        let mut m = hot_shape_layouts().borrow_mut();
         match m.get(&keys) {
             None => {
                 m.insert(keys, Some(descriptor.clone()));
-                shared_ok = true;
+                true
             }
-            Some(Some(existing)) if existing == descriptor => {
-                shared_ok = true;
-            }
+            Some(Some(existing)) if existing == descriptor => true,
             Some(Some(_)) => {
                 // Same keys, different layout ⟹ ambiguous. Poison the entry so
                 // future lookups (and any still-INTACT siblings) fall back.
                 m.insert(keys, None);
-                shared_ok = false;
+                false
             }
-            Some(None) => {
-                shared_ok = false; // already ambiguous
-            }
+            // Already ambiguous.
+            Some(None) => false,
         }
-    });
+    };
     if shared_ok {
         header_set_typed_layout_intact(header);
         if descriptor.pointer_mask.is_empty() {
@@ -571,12 +591,7 @@ pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
         return;
     };
     set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-    LAYOUT_SLOT_MASKS.with(|m| {
-        m.borrow_mut().remove(&(user_ptr as usize));
-    });
-    TYPED_LAYOUTS.with(|m| {
-        m.borrow_mut().remove(&(user_ptr as usize));
-    });
+    layout_forget_object(user_ptr as usize);
     header_clear_typed_layout_intact(header);
 }
 
@@ -590,12 +605,7 @@ pub(crate) unsafe fn layout_init_all_pointer_slots(user_ptr: *mut u8) {
         return;
     };
     header_clear_typed_layout_intact(header);
-    TYPED_LAYOUTS.with(|m| {
-        m.borrow_mut().remove(&(user_ptr as usize));
-    });
-    LAYOUT_SLOT_MASKS.with(|m| {
-        m.borrow_mut().remove(&(user_ptr as usize));
-    });
+    layout_forget_object(user_ptr as usize);
     set_layout_state(header, GC_LAYOUT_SIDE_MASK);
     (*header)._reserved |= GC_LAYOUT_ALL_POINTERS;
 }
@@ -706,8 +716,10 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             // #6893: per-object descriptor (diverged/ambiguous objects) OR the
             // shared shape descriptor (the common INTACT case). Exactly one is
             // present for an INTACT object.
-            let typed = TYPED_LAYOUTS
-                .with(|m| m.borrow().get(&parent_user).cloned())
+            let typed = hot_typed_layouts()
+                .borrow()
+                .get(&parent_user)
+                .cloned()
                 .or_else(|| shape_shared_descriptor(parent_user));
             if let Some(typed) = typed {
                 if slot_index >= typed.slot_count {
@@ -743,8 +755,8 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
             return;
         }
-        LAYOUT_SLOT_MASKS.with(|m| {
-            let mut masks = m.borrow_mut();
+        {
+            let mut masks = hot_layout_slot_masks().borrow_mut();
             if pointer {
                 if let Some(mask) = masks.get_mut(&parent_user) {
                     mask.set_slot(slot_index);
@@ -777,7 +789,7 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                     set_layout_state(header, GC_LAYOUT_POINTER_FREE);
                 }
             }
-        });
+        }
     }
 }
 
@@ -921,28 +933,28 @@ unsafe fn init_typed_shape_layout(
         0
     };
     if keys != 0 && shape_install_shared(keys, header, &descriptor) {
-        TYPED_LAYOUTS.with(|m| {
-            m.borrow_mut().remove(&user_ptr);
-        });
-        LAYOUT_SLOT_MASKS.with(|m| {
-            m.borrow_mut().remove(&user_ptr);
-        });
+        // The common path for every object literal: the shape already owns a
+        // canonical descriptor, so this object needs no per-object record at
+        // all. `layout_forget_object` skips the hash entirely when the maps
+        // are empty, which on a monomorphic workload they are.
+        layout_forget_object(user_ptr);
         return;
     }
-    TYPED_LAYOUTS.with(|m| {
-        m.borrow_mut().insert(user_ptr, descriptor);
-    });
+    hot_typed_layouts()
+        .borrow_mut()
+        .insert(user_ptr, descriptor);
     header_set_typed_layout_intact(header);
     if pointer_mask.is_empty() {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-        LAYOUT_SLOT_MASKS.with(|m| {
-            m.borrow_mut().remove(&user_ptr);
-        });
+        let masks = hot_layout_slot_masks();
+        if !masks.borrow().is_empty() {
+            masks.borrow_mut().remove(&user_ptr);
+        }
     } else {
         set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-        LAYOUT_SLOT_MASKS.with(|m| {
-            m.borrow_mut().insert(user_ptr, pointer_mask);
-        });
+        hot_layout_slot_masks()
+            .borrow_mut()
+            .insert(user_ptr, pointer_mask);
     }
 }
 
