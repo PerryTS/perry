@@ -1759,7 +1759,20 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
     }
 
     if unsafe { crate::symbol::js_is_symbol(idx) } != 0 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
+        // Symbol-keyed read on an array: `arr[sym] = v` stores into the
+        // symbol side table keyed by the header address (write arm in
+        // `js_array_set_index_or_string`), so read it back through the
+        // standard symbol getter — which also serves an accessor installed
+        // via `defineProperty(arr, sym, {get})`. This used to hard-return
+        // `undefined`, making every stored symbol property unreadable
+        // (test262 getOwnPropertySymbols/order-after-define-property,
+        // Array-receiver half).
+        return unsafe {
+            crate::symbol::js_object_get_symbol_property(
+                crate::value::js_nanbox_pointer(arr as i64),
+                idx,
+            )
+        };
     }
     // #6935: read-side sibling of `js_array_set_index_or_string` below —
     // `js_jsvalue_to_string` on an object key (`a[new Number(1)]`,
@@ -1848,13 +1861,34 @@ pub extern "C" fn js_array_set_index_or_string(
         }
         return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
+    // Symbol-keyed write: store through the symbol side table (keyed by the
+    // header address), exactly like a plain-object receiver. This arm used to
+    // be missing — a symbol key fell past the string fallback below (guarded
+    // `js_is_symbol == 0`) to the final bare return, so the write was
+    // silently DROPPED and `arr[sym]` / `getOwnPropertySymbols(arr)` saw
+    // nothing (test262 getOwnPropertySymbols/order-after-define-property,
+    // Array-receiver half).
+    if unsafe { crate::symbol::js_is_symbol(idx) } != 0 {
+        // The store can run a user setter (symbol accessor installed on the
+        // array), which can GC and evacuate the receiver.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                crate::value::js_nanbox_pointer(arr as i64),
+                idx,
+                value,
+            );
+        }
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+    }
     // Fallback for a NON-numeric key: a primitive (`a[null]`, `a[undefined]`,
     // `a[true]`, `a[10n]`) or a boxed object (`a[new Number(1)]`). Per
     // ToPropertyKey these become string property keys (or, for `10n`, the
     // canonical index "10"); `js_array_set_string_key` routes accordingly.
     // Arrays previously DROPPED these writes (plain objects handled them).
     // Restricted to `numeric.is_none()`: numeric keys (including non-integer
-    // finite floats) are handled above. Symbols stay symbol-keyed.
+    // finite floats) are handled above. Symbols are handled by the arm above.
     //
     // #6935: this is the boxed-object arm the doc comment above names, so
     // `js_jsvalue_to_string` here runs a USER `toString` / `valueOf` — allocate

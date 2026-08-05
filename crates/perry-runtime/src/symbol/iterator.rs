@@ -63,10 +63,19 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
         .cloned()
         .unwrap_or_default();
     drop(guard);
-    // `entries[..data_len]` are the data-valued symbol properties from
-    // `SYMBOL_PROPERTIES`, already in their true insertion order. Everything
-    // appended after `data_len` is an accessor-only symbol.
+    // `entries` is the full own-symbol-key list in property-CREATION order:
+    // data entries hold their value, accessor properties hold an
+    // order-preserving placeholder written by `set_symbol_accessor_property`
+    // (the descriptor itself lives in `SYMBOL_ACCESSOR_PROPERTIES`). That
+    // placeholder is what keeps a data→accessor redefine at its original
+    // position (test262 getOwnPropertySymbols/order-after-define-property)
+    // and an interleaved `defineProperty(o, sym, {get})` between two data
+    // installs at ITS position, per `[[OwnPropertyKeys]]`.
     let data_len = entries.len();
+    // Defensive fallback: any accessor key that somehow has no placeholder
+    // (the accessor table's only writer installs one, so this loop should
+    // find nothing) is appended and sorted by the symbol's monotonic
+    // creation id — the best remaining approximation of creation order.
     for sym_key in accessors::owner_symbol_accessor_keys(obj_key) {
         if !entries.iter().any(|(existing, _)| *existing == sym_key) {
             entries.push((sym_key, 0));
@@ -75,17 +84,6 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     if entries.is_empty() {
         return crate::array::js_array_alloc(0) as i64;
     }
-    // `[[OwnPropertyKeys]]` reports symbol keys in property-creation order.
-    // Data-valued symbols already arrive in insertion order, so we must NOT
-    // reorder them (an unconditional sort by creation id would reorder e.g.
-    // `obj[b]=…; obj[a]=…` when `a` was created before `b`). Accessor-only
-    // symbols, however, are appended from a HashMap (`owner_symbol_accessor_keys`)
-    // in nondeterministic order, so a `defineProperty(o, sym, {get})` pair came
-    // out unstable (test262 assign/strings-and-symbol-order,
-    // getOwnPropertyDescriptors/order-after-define-property). Sort ONLY that
-    // appended accessor-only tail by the symbol's monotonic creation id (the
-    // convention the class-ref symbol path already uses), leaving the data-symbol
-    // insertion order intact.
     entries[data_len..].sort_by_key(|(sym_ptr_usize, _)| {
         let ptr = *sym_ptr_usize as *const SymbolHeader;
         if ptr.is_null() {

@@ -468,23 +468,72 @@ fn for_each_string_char<F: FnMut(u32, f64)>(value: f64, mut emit: F) -> Option<u
 /// handle-band payload, not an address — either got dereferenced (SIGSEGV) or,
 /// once the handle-band guard rejected it, silently reported no properties.
 unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHeader {
-    let keys_boxed = crate::proxy::proxy_enum_own_keys(value);
+    // EnumerableOwnPropertyNames(O, value / key+value) on a Proxy: ONE
+    // `ownKeys` trap, then — per string key — `getOwnPropertyDescriptor`
+    // followed immediately by `get` when the descriptor is enumerable. The
+    // traps must interleave per key (test262 values/entries
+    // observable-operations); routing through `proxy_enum_own_keys` batched
+    // every descriptor read before the first `get`
+    // (|gOPD:a|gOPD:b|gOPD:c|get:a|…).
+    //
+    // Both trap calls run user code that can GC, so the receiver, the key
+    // list, the result array, and the per-iteration key/value all live in
+    // handles and are re-read after each call.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(value);
+    let keys_boxed = crate::proxy::js_proxy_own_keys(value);
     let keys_arr = (keys_boxed.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
-    let len = crate::array::js_array_length(keys_arr);
-    let mut out = crate::array::js_array_alloc(len.max(1) as u32);
+    let keys_h = scope.root_raw_mut_ptr(keys_arr);
+    let len = crate::array::js_array_length(keys_h.get_raw_const_ptr::<ArrayHeader>());
+    let out_h = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len.max(1) as u32));
+    let key_h = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+    // Allocated once and rewritten per iteration so an N-key proxy doesn't
+    // push N slots onto the handle stack (same discipline as
+    // `js_object_get_own_property_descriptors`).
+    let val_h = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
     for i in 0..len {
-        let key = crate::array::js_array_get(keys_arr, i);
-        let val = crate::proxy::js_proxy_get(value, f64::from_bits(key.bits()));
+        let key = crate::array::js_array_get(keys_h.get_raw_const_ptr::<ArrayHeader>(), i);
+        if !key.is_any_string() {
+            continue; // symbol keys are excluded from values/entries
+        }
+        key_h.set_nanbox_u64(key.bits());
+        let desc = crate::proxy::js_reflect_get_own_property_descriptor(
+            recv_h.get_nanbox_f64(),
+            key_h.get_nanbox_f64(),
+        );
+        if desc.to_bits() == crate::value::TAG_UNDEFINED {
+            continue;
+        }
+        let desc_ptr = (desc.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+        if desc_ptr.is_null() {
+            continue;
+        }
+        let ek = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+        if crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(desc_ptr, ek))
+            == 0
+        {
+            continue;
+        }
+        let val = crate::proxy::js_proxy_get(recv_h.get_nanbox_f64(), key_h.get_nanbox_f64());
+        val_h.set_nanbox_f64(val);
         if want_pairs {
             let pair = crate::array::js_array_alloc(2);
-            let pair = crate::array::js_array_push(pair, key);
-            let pair = crate::array::js_array_push_f64(pair, val);
-            out = crate::array::js_array_push(out, JSValue::array_ptr(pair));
+            let pair = crate::array::js_array_push_f64(pair, key_h.get_nanbox_f64());
+            let pair = crate::array::js_array_push_f64(pair, val_h.get_nanbox_f64());
+            let pushed = crate::array::js_array_push(
+                out_h.get_raw_mut_ptr::<ArrayHeader>(),
+                JSValue::array_ptr(pair),
+            );
+            out_h.set_raw_mut_ptr(pushed);
         } else {
-            out = crate::array::js_array_push_f64(out, val);
+            let pushed = crate::array::js_array_push_f64(
+                out_h.get_raw_mut_ptr::<ArrayHeader>(),
+                val_h.get_nanbox_f64(),
+            );
+            out_h.set_raw_mut_ptr(pushed);
         }
     }
-    out
+    out_h.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// Tag-dispatching `Object.values(value)` — see [`js_object_keys_value`].

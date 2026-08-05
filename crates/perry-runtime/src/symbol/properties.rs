@@ -26,12 +26,27 @@ pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize
     if src_obj_ptr == 0 {
         return Vec::new();
     }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    guard
-        .as_ref()
-        .and_then(|m| m.get(&src_obj_ptr))
-        .cloned()
-        .unwrap_or_default()
+    let mut entries = {
+        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+        guard
+            .as_ref()
+            .and_then(|m| m.get(&src_obj_ptr))
+            .cloned()
+            .unwrap_or_default()
+    };
+    // Accessor-keyed entries are order-preserving placeholders whose real
+    // descriptor lives in `SYMBOL_ACCESSOR_PROPERTIES` (see
+    // `set_symbol_accessor_property`). Every consumer of this clone
+    // (console formatting, the freeze/seal walks) handles accessors through
+    // the accessor table separately, so hand back only the data entries —
+    // the same view they got when conversion removed the entry outright.
+    if !entries.is_empty() {
+        let accessor_keys = accessors::owner_symbol_accessor_keys(src_obj_ptr);
+        if !accessor_keys.is_empty() {
+            entries.retain(|(sym, _)| !accessor_keys.contains(sym));
+        }
+    }
+    entries
 }
 
 pub(crate) fn symbol_property_root_bits(owner: usize, sym_key: usize) -> Option<u64> {

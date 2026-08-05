@@ -540,6 +540,85 @@ fn symbol_define_property_attrs_round_trip_descriptor() {
 }
 
 #[test]
+fn symbol_keys_keep_creation_order_across_accessor_redefine() {
+    // `[[OwnPropertyKeys]]` reports symbol keys in property-CREATION order. A
+    // data→accessor redefine must not move the key to the end (test262
+    // getOwnPropertySymbols/order-after-define-property), and an accessor
+    // installed BETWEEN two data installs must enumerate at its install
+    // position — both rest on the order-preserving placeholder that
+    // `set_symbol_accessor_property` leaves in `SYMBOL_PROPERTIES`.
+    let _global = crate::gc::global_side_table_test_lock();
+    crate::symbol::test_clear_symbol_side_table_roots();
+    unsafe {
+        let own_symbol_order = |obj_value: f64| -> Vec<usize> {
+            let arr = crate::symbol::js_object_get_own_property_symbols(obj_value)
+                as *const crate::array::ArrayHeader;
+            assert!(!arr.is_null());
+            let n = crate::array::js_array_length(arr);
+            (0..n)
+                .map(|i| {
+                    (crate::array::js_array_get(arr, i).bits() & crate::value::POINTER_MASK)
+                        as usize
+                })
+                .collect()
+        };
+        let getter_descriptor = || -> f64 {
+            let getter = crate::closure::js_closure_alloc(closure_accessor_getter as *const u8, 0);
+            assert!(!getter.is_null());
+            let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+            let descriptor = js_object_alloc(0, 0);
+            assert!(!descriptor.is_null());
+            js_object_set_field_by_name(
+                descriptor,
+                get_key,
+                crate::value::js_nanbox_pointer(getter as i64),
+            );
+            crate::value::js_nanbox_pointer(descriptor as i64)
+        };
+
+        // Data → accessor redefine keeps the key's position.
+        let obj = js_object_alloc(0, 0);
+        assert!(!obj.is_null());
+        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+        let sym_a = crate::symbol::js_symbol_new_empty();
+        let sym_b = crate::symbol::js_symbol_new_empty();
+        let a_ptr = crate::symbol::sym_key_from_f64(sym_a);
+        let b_ptr = crate::symbol::sym_key_from_f64(sym_b);
+        crate::symbol::js_object_set_symbol_property(obj_value, sym_a, 1.0);
+        crate::symbol::js_object_set_symbol_property(obj_value, sym_b, 2.0);
+        js_object_define_property(obj_value, sym_a, getter_descriptor());
+        assert_eq!(
+            own_symbol_order(obj_value),
+            vec![a_ptr, b_ptr],
+            "data→accessor redefine moved the key out of creation order"
+        );
+        // The placeholder must never serve as the value — the read goes
+        // through the accessor table and runs the getter.
+        let read = crate::symbol::js_object_get_symbol_property(obj_value, sym_a);
+        assert_eq!(read.to_bits(), 4.0f64.to_bits());
+
+        // Accessor installed between two data installs enumerates in place.
+        let obj2 = js_object_alloc(0, 0);
+        assert!(!obj2.is_null());
+        let obj2_value = crate::value::js_nanbox_pointer(obj2 as i64);
+        let sym_c = crate::symbol::js_symbol_new_empty();
+        let sym_d = crate::symbol::js_symbol_new_empty();
+        let sym_e = crate::symbol::js_symbol_new_empty();
+        let c_ptr = crate::symbol::sym_key_from_f64(sym_c);
+        let d_ptr = crate::symbol::sym_key_from_f64(sym_d);
+        let e_ptr = crate::symbol::sym_key_from_f64(sym_e);
+        crate::symbol::js_object_set_symbol_property(obj2_value, sym_c, 1.0);
+        js_object_define_property(obj2_value, sym_d, getter_descriptor());
+        crate::symbol::js_object_set_symbol_property(obj2_value, sym_e, 3.0);
+        assert_eq!(
+            own_symbol_order(obj2_value),
+            vec![c_ptr, d_ptr, e_ptr],
+            "interleaved accessor install enumerated out of creation order"
+        );
+    }
+}
+
+#[test]
 fn test_object_alloc_and_fields() {
     let obj = js_object_alloc(1, 3);
 
