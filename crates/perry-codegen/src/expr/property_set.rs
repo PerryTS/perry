@@ -130,6 +130,62 @@ pub(crate) fn try_lower_sloppy_class_field_raw_store(
     let recv_box = lower_expr(ctx, object)?;
     let val_double = lower_expr(ctx, value)?;
 
+    // #7287: inside the fast clone of a #5093 class-field versioned loop, this
+    // store is covered by the preheader's hoisted shape check — emit the same
+    // inline plain-finite check + bare slot store the STRICT arm emits (see
+    // `lower`'s class-field arm), instead of the per-access diamond.
+    //
+    // Sound in sloppy mode for the same reason #7423 made the fast arm
+    // mode-independent: the preheader proved not-frozen, no per-receiver
+    // descriptors, matching class id and keys token, and an intact typed
+    // layout, and the loop's body is call-free so none of that can change while
+    // the clone runs. A store that reaches the raw slot could not have been
+    // *rejected* in either mode, so there is no sloppy/strict divergence to
+    // preserve. Everything else — a non-finite or NaN-boxed value — side-exits
+    // to the slow clone BEFORE storing, and the slow clone re-executes the whole
+    // iteration through this unchanged sloppy lowering.
+    if let Expr::LocalGet(recv_id) = object {
+        if let Some((fact, _)) = crate::expr::class_field_loop_fact_lookup(
+            &ctx.class_field_loop_facts,
+            *recv_id,
+            &class_name,
+            property,
+        )
+        .filter(|(_, loop_idx)| *loop_idx == field_index)
+        {
+            let obj_ptr = fact.obj_ptr.clone();
+            let side_exit_label = fact.side_exit_label.clone();
+            let store_idx = ctx.new_block("class_field_loop_store.sloppy_fast");
+            let store_label = ctx.block_label(store_idx);
+            {
+                let blk = ctx.block();
+                let val_bits = blk.bitcast_double_to_i64(&val_double);
+                let finite =
+                    crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
+                        blk, &val_bits,
+                    );
+                blk.cond_br(&finite, &store_label, &side_exit_label);
+            }
+            ctx.current_block = store_idx;
+            {
+                let header_skip =
+                    crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+                let blk = ctx.block();
+                let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_index.to_string())]);
+                // No `js_array_numeric_value_to_raw_f64` canonicalization is
+                // needed: INT32-boxed and NaN values — the only inputs it
+                // rewrites — cannot pass the finite check above.
+                //
+                // GC_STORE_AUDIT(POINTER_FREE): the finite check proved
+                // `val_double` is a genuine unboxed double, never a heap
+                // pointer — no edge, no write barrier.
+                blk.store(DOUBLE, &val_double, &field_ptr);
+            }
+            return Ok(Some(val_double));
+        }
+    }
+
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let field_idx_str = field_index.to_string();

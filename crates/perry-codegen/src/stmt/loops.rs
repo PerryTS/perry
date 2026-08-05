@@ -3401,7 +3401,9 @@ fn match_class_field_versioned_loop(
             if ctx.boxed_vars.contains(bound_id) {
                 return None;
             }
-            if !ctx.locals.contains_key(bound_id) && !ctx.module_globals.contains_key(bound_id) {
+            if !local_has_readable_slot(ctx, *bound_id)
+                && !ctx.module_globals.contains_key(bound_id)
+            {
                 return None;
             }
             if !local_bound_is_loop_invariant(condition?, update, body, *bound_id) {
@@ -3421,7 +3423,7 @@ fn match_class_field_versioned_loop(
     ) {
         return None;
     }
-    if !ctx.locals.contains_key(&counter_id)
+    if !local_has_readable_slot(ctx, counter_id)
         || ctx.boxed_vars.contains(&counter_id)
         || !ctx.integer_locals.contains(&counter_id)
         || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
@@ -5804,9 +5806,33 @@ pub(crate) fn classify_for_local_bound_dynamic(
 fn local_bound_storage_accessible(ctx: &crate::expr::FnCtx<'_>, bound_id: u32) -> bool {
     // Repsel Phase 1: a canonical-i32 bound has no `ctx.locals` entry; its
     // i32 slot is directly readable storage (better, even — no conversion).
-    (ctx.locals.contains_key(&bound_id) || ctx.local_slot_reps.contains_key(&bound_id))
+    local_has_readable_slot(ctx, bound_id)
         && !ctx.boxed_vars.contains(&bound_id)
         && !ctx.module_globals.contains_key(&bound_id)
+}
+
+/// Does `local_id` own function-local storage a loop matcher can read back
+/// directly (as opposed to a closure capture or a stale HIR id)?
+///
+/// Both registries have to be consulted. Representation-selection Phase 1
+/// (`expr/slot_rep.rs`) made the canonical i32 slot the **only** storage for a
+/// proven-integer local: such a local is registered in `ctx.local_slot_reps`
+/// (with its alloca in `ctx.i32_counter_slots`) and has **no** `ctx.locals`
+/// entry at all. A bare `ctx.locals.contains_key(..)` test therefore stopped
+/// admitting exactly the locals the loop matchers are written for — integer
+/// counters and integer bounds — the moment Phase 1 landed.
+///
+/// That is how #7287 happened: the #5093 class-field versioned loop gated on
+/// `ctx.locals` for both its counter and its bound, so after Phase 1 it matched
+/// nothing, and `09_method_calls` paid the per-access guard diamond on every
+/// iteration with no hoisted form to fall into. It was unreachable in the other
+/// configuration too — under the pre-Phase-1 parallel-shadow model a `++`
+/// counter never earned an i32 shadow, which the lowering separately requires.
+/// `class_field_versioned_loop_fires_for_module_scope_counter` is the assertion
+/// that the lowering is live; keep it that way (CLAUDE.md, "a gate must assert
+/// its subject was live").
+fn local_has_readable_slot(ctx: &crate::expr::FnCtx<'_>, local_id: u32) -> bool {
+    ctx.locals.contains_key(&local_id) || ctx.local_slot_reps.contains_key(&local_id)
 }
 
 fn local_bound_is_loop_invariant(
