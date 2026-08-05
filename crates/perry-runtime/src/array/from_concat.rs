@@ -1029,11 +1029,11 @@ unsafe fn try_append_spread_array_dense(
         // e.g. from `array_subclass_dense_snapshot`) and re-resolve both.
         let scope = crate::gc::RuntimeHandleScope::new();
         let src_handle = scope.root_raw_const_ptr(src);
-        let grown = crate::array::js_array_grow(result, new_len);
-        (
-            grown,
-            clean_arr_ptr(src_handle.get_raw_const_ptr::<ArrayHeader>()),
-        )
+        // `js_array_grow` allocates and can move `src`; `across_const` runs it
+        // and hands back the post-collection address (#7341).
+        let (grown, src_after) = src_handle
+            .across_const::<ArrayHeader, _>(|| crate::array::js_array_grow(result, new_len));
+        (grown, clean_arr_ptr(src_after))
     } else {
         (result, src)
     };

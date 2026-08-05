@@ -393,11 +393,14 @@ pub(crate) unsafe fn alloc_symbol(
     // fix, tracked in #7341.
     let scope = crate::gc::RuntimeHandleScope::new();
     let desc_root = scope.root_string_ptr(description);
-    let raw = crate::gc::gc_malloc(
-        std::mem::size_of::<SymbolHeader>(),
-        crate::gc::GC_TYPE_STRING,
-    );
-    let description = desc_root.get_raw_mut_ptr::<StringHeader>();
+    // `gc_malloc` can collect, so the description's address is only valid
+    // after it; `across_mut` binds the two together (#7341).
+    let (raw, description) = desc_root.across_mut::<StringHeader, _>(|| {
+        crate::gc::gc_malloc(
+            std::mem::size_of::<SymbolHeader>(),
+            crate::gc::GC_TYPE_STRING,
+        )
+    });
     let ptr = raw as *mut SymbolHeader;
     (*ptr).magic = SYMBOL_MAGIC;
     (*ptr).registered = if registered { 1 } else { 0 };

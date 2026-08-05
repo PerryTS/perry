@@ -271,8 +271,11 @@ pub(crate) unsafe fn array_length_reflect_define(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let desc_handle = scope.root_nanbox_f64(descriptor_value);
-    let key_str = crate::builtins::js_string_coerce(key_value);
-    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    // `js_string_coerce` allocates (and can run a user `toString`), so the
+    // receiver's address is only valid after it. `across_mut` is that pair as
+    // one combinator (#7341).
+    let (key_str, obj) =
+        obj_handle.across_mut::<ObjectHeader, _>(|| crate::builtins::js_string_coerce(key_value));
     let descriptor_value = desc_handle.get_nanbox_f64();
     if key_str.is_null() {
         return None;

@@ -23,7 +23,6 @@
 # rule above covers 84% of the crate on day one.
 #
 # Format: <count> <path>
-1 crates/perry-runtime/src/array/from_concat.rs
 5 crates/perry-runtime/src/array/header.rs
 6 crates/perry-runtime/src/array/indexing.rs
 2 crates/perry-runtime/src/array/iter_methods.rs
@@ -63,7 +62,6 @@
 4 crates/perry-runtime/src/node_submodules/mod.rs
 4 crates/perry-runtime/src/node_submodules/test.rs
 33 crates/perry-runtime/src/object/alloc.rs
-1 crates/perry-runtime/src/object/array_object_ops.rs
 2 crates/perry-runtime/src/object/bigint_dispatch.rs
 5 crates/perry-runtime/src/object/class_registry/construct.rs
 2 crates/perry-runtime/src/object/delete_rest.rs
@@ -79,9 +77,9 @@
 1 crates/perry-runtime/src/object/native_call_method/object_proto.rs
 4 crates/perry-runtime/src/object/native_call_method/primitive_methods.rs
 10 crates/perry-runtime/src/object/native_call_method/string_methods.rs
+4 crates/perry-runtime/src/object/native_module.rs
 19 crates/perry-runtime/src/object/native_module/async_hooks_exports.rs
 26 crates/perry-runtime/src/object/native_module/callable_exports.rs
-4 crates/perry-runtime/src/object/native_module.rs
 6 crates/perry-runtime/src/object/object_literal_ops.rs
 3 crates/perry-runtime/src/object/object_ops/define_property.rs
 3 crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs
@@ -100,22 +98,21 @@
 1 crates/perry-runtime/src/promise/native_async.rs
 3 crates/perry-runtime/src/promise/rejection.rs
 8 crates/perry-runtime/src/promise/then.rs
-1 crates/perry-runtime/src/proxy/put_value.rs
 8 crates/perry-runtime/src/proxy.rs
+1 crates/perry-runtime/src/proxy/put_value.rs
+9 crates/perry-runtime/src/regex.rs
 17 crates/perry-runtime/src/regex/exec.rs
 30 crates/perry-runtime/src/regex/exec_array.rs
 14 crates/perry-runtime/src/regex/match_all.rs
 24 crates/perry-runtime/src/regex/match_string.rs
 7 crates/perry-runtime/src/regex/replace_expand.rs
 3 crates/perry-runtime/src/regex/replace_fn.rs
-9 crates/perry-runtime/src/regex.rs
 41 crates/perry-runtime/src/set.rs
 2 crates/perry-runtime/src/string/append.rs
 7 crates/perry-runtime/src/string/concat.rs
 1 crates/perry-runtime/src/string/mod.rs
 10 crates/perry-runtime/src/string/split.rs
 2 crates/perry-runtime/src/symbol/iterator.rs
-1 crates/perry-runtime/src/symbol.rs
 27 crates/perry-runtime/src/thread.rs
 7 crates/perry-runtime/src/timer.rs
 1 crates/perry-runtime/src/typed_feedback.rs
