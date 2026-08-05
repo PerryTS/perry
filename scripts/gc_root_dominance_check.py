@@ -353,6 +353,14 @@ ALLOC_RE = re.compile(
     # fresh strings. Every one of these returns a *mut StringHeader the
     # caller holds raw; `string_coerce` and `jsvalue_to_string_coerce` are
     # the two the `/re/` lowerings feed.
+    # `url_coerce_string` is the third `coerce -> *mut StringHeader` helper
+    # (`crates/perry-runtime/src/url/mod.rs:116`); the other two are already
+    # covered by `string_coerce` and `jsvalue_to_string\w*` above. It does not
+    # match either, because after `js_` it reads `url_coerce_string`. That gap
+    # is why the checker did not flag #7453, where `new URL(input, base)` held
+    # its coerced pointer across the lowering of `base`. Verified to exist
+    # before being added, per the extrapolated-suffix warning below.
+    r"url_coerce_string|"
     r"string_concat\w*|string_coerce|string_from\w*|string_append|"
     r"jsvalue_to_string\w*|value_to_string\w*|number_to_string\w*|"
     r"string_repeat|string_slice|string_substring|string_substr|"
