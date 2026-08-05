@@ -13,7 +13,7 @@ use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
 use crate::type_analysis::receiver_class_name;
-use crate::types::{DOUBLE, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes
@@ -695,6 +695,39 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     );
 
     ctx.current_block = fallback_idx;
+    // #7153: same nullish-receiver check as the value-context diamond in
+    // property_get.rs — a nullish field read must throw TypeError, not coerce
+    // `undefined` to NaN and keep running.
+    let (is_null, is_nullish) = {
+        let blk = ctx.block();
+        let is_undef = blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_UNDEFINED_I64);
+        let is_null = blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_NULL_I64);
+        let is_nullish = blk.or(I1, &is_undef, &is_null);
+        (is_null, is_nullish)
+    };
+    let throw_idx = ctx.new_block("class_field_get_number.throw_nullish");
+    let lookup_idx = ctx.new_block("class_field_get_number.fallback_lookup");
+    let throw_label = ctx.block_label(throw_idx);
+    let lookup_label = ctx.block_label(lookup_idx);
+    ctx.block()
+        .cond_br(&is_nullish, &throw_label, &lookup_label);
+
+    ctx.current_block = throw_idx;
+    let prop_entry = ctx.strings.entry(key_idx);
+    let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
+    let prop_len_str = prop_entry.byte_len.to_string();
+    let is_null_i32 = ctx.block().zext(I1, &is_null, I32);
+    ctx.block().call_void(
+        "js_throw_type_error_property_access",
+        &[
+            (I32, &is_null_i32),
+            (PTR, &prop_bytes_global),
+            (I64, &prop_len_str),
+        ],
+    );
+    ctx.block().unreachable();
+
+    ctx.current_block = lookup_idx;
     let blk = ctx.block();
     blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
     let val_fallback_js = blk.call(

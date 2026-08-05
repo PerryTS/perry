@@ -761,7 +761,24 @@ pub extern "C" fn js_class_field_get_ic(
 
     crate::typed_feedback::js_typed_feedback_record_fallback_call(site_id);
     let obj_bits = receiver.to_bits();
+    // #7153: this function is the full-outline of the codegen class-field-get
+    // diamond (#5391), so it must mirror the diamond's nullish-receiver check —
+    // a field read on undefined/null throws TypeError instead of answering
+    // `undefined` through the by-name lookup.
     let key_raw = key as u64 & crate::value::POINTER_MASK;
+    if obj_bits == crate::value::TAG_UNDEFINED || obj_bits == crate::value::TAG_NULL {
+        let name = unsafe {
+            crate::object::has_own_helpers::str_from_string_header(
+                key_raw as *const crate::StringHeader,
+            )
+        }
+        .unwrap_or("");
+        crate::error::js_throw_type_error_property_access(
+            (obj_bits == crate::value::TAG_NULL) as u32,
+            name.as_ptr(),
+            name.len(),
+        );
+    }
     crate::object::js_object_get_field_by_name_f64(
         obj_bits as *const ObjectHeader,
         key_raw as *const crate::StringHeader,

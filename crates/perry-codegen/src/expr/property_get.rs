@@ -1602,6 +1602,44 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }
 
                         ctx.current_block = fallback_idx;
+                        // #7153: the guard rejects a nullish receiver along with
+                        // every other shape miss, but a nullish field read must
+                        // throw TypeError per spec — the by-name lookup below
+                        // answers `undefined` and the program keeps running on a
+                        // silent wrong value. Mirror the generic path's check
+                        // (generic_dispatch.rs); the cost sits on the cold
+                        // fallback arm only.
+                        let (is_null, is_nullish) = {
+                            let blk = ctx.block();
+                            let is_undef =
+                                blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_UNDEFINED_I64);
+                            let is_null = blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_NULL_I64);
+                            let is_nullish = blk.or(I1, &is_undef, &is_null);
+                            (is_null, is_nullish)
+                        };
+                        let throw_idx = ctx.new_block("class_field_get.throw_nullish");
+                        let lookup_idx = ctx.new_block("class_field_get.fallback_lookup");
+                        let throw_label = ctx.block_label(throw_idx);
+                        let lookup_label = ctx.block_label(lookup_idx);
+                        ctx.block()
+                            .cond_br(&is_nullish, &throw_label, &lookup_label);
+
+                        ctx.current_block = throw_idx;
+                        let prop_entry = ctx.strings.entry(key_idx);
+                        let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
+                        let prop_len_str = prop_entry.byte_len.to_string();
+                        let is_null_i32 = ctx.block().zext(I1, &is_null, I32);
+                        ctx.block().call_void(
+                            "js_throw_type_error_property_access",
+                            &[
+                                (I32, &is_null_i32),
+                                (PTR, &prop_bytes_global),
+                                (I64, &prop_len_str),
+                            ],
+                        );
+                        ctx.block().unreachable();
+
+                        ctx.current_block = lookup_idx;
                         let blk = ctx.block();
                         blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
                         let val_fallback_js = blk.call(
