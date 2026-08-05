@@ -13886,6 +13886,80 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     );
 }
 
+/// #7396: `arr[i] = arr[j]` must take the INLINE numeric-store guard tier, not
+/// an out-of-line `js_typed_feedback_numeric_array_index_set_guard` call per
+/// element.
+///
+/// The inline tier (Repsel 4a.1) existed but was gated on
+/// `expr_produces_canonical_raw_f64(value)`. A guarded array READ lowers to a
+/// phi over `{raw slot load, boxed fallback}`, which is not statically
+/// canonical, so element-to-element stores — the most common numeric store
+/// there is — fell out of the tier. `bench_array_ops` paid the call 10.5M
+/// times; it was the largest single non-generated profile frame.
+///
+/// This asserts the codegen decision rather than wall-clock time, so it stays
+/// meaningful under any optimization level. Critically it asserts the tier is
+/// **live** (the deref block and the runtime numeric-bits test are present),
+/// not merely that nothing threw — a guard that silently stops firing is
+/// exactly the regression this pins.
+#[test]
+fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
+    // const arr: number[] = [1, 2, 3];
+    // arr[0] = arr[2];
+    let arr = 1u32;
+    let body = vec![
+        Stmt::Let {
+            id: arr,
+            name: "arr".to_string(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: false,
+            init: Some(Expr::Array(vec![int(1), int(2), int(3)])),
+        },
+        array_set(arr, int(0), index_get(arr, int(2))),
+    ];
+
+    let ir = compile_ir("element_to_element_numeric_store", body);
+
+    assert!(
+        ir.contains("idxset.guard.deref"),
+        "`arr[i] = arr[j]` must enter the INLINE numeric-store guard tier; a \
+         non-statically-canonical RHS must no longer gate it off (#7396):\n{ir}"
+    );
+    // The `is_numeric_value_bits` leg, inlined: reject the whole
+    // `0x7FF9..=0x7FFF` NaN-box tag range in one unsigned range compare.
+    // Load-bearing — a hole/OOB read yields `undefined` into a `number[]`.
+    assert!(
+        ir.contains(", 32761") && ir.contains("icmp ugt i64"),
+        "the inline tier must runtime-test that the stored value is numeric \
+         when it is not statically canonical raw f64 (#7396):\n{ir}"
+    );
+    // `is_valid_obj_ptr`'s upper bound, which `gc_header_for_user_addr` applies
+    // before the out-of-line guard dereferences anything.
+    assert!(
+        ir.contains("140737488355328"),
+        "the inline tier must bound the receiver address from ABOVE before \
+         dereferencing it for a store (#7396):\n{ir}"
+    );
+    // The helper stays as the cold arm: its first-touch path rebuilds an
+    // unmarked-but-numeric array into raw-f64 layout.
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "the out-of-line guard must remain as the cold fallback arm (#7396):\n{ir}"
+    );
+    // …but no longer dominates the store: it must sit in the cold block.
+    let cold = ir
+        .find("idxset.guard.cold")
+        .expect("inline tier must create a cold guard block");
+    let guard_call = ir
+        .find("call i32 @js_typed_feedback_numeric_array_index_set_guard")
+        .expect("cold arm must still call the guard");
+    assert!(
+        guard_call > cold,
+        "the guard call must sit INSIDE the cold arm, not ahead of the inline \
+         tier — otherwise the call is still paid per element (#7396):\n{ir}"
+    );
+}
+
 #[path = "native_proof_regressions/invalidation.rs"]
 mod invalidation;
 
