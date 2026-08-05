@@ -113,7 +113,10 @@ handle-floor | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 4
 handle-floor | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 3
 handle-floor | crates/perry-runtime/src/object/field_get_set/has_property.rs | 2
 handle-floor | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 4
-handle-floor | crates/perry-runtime/src/object/field_set_by_name.rs | 11
+handle-floor | crates/perry-runtime/src/object/field_set_by_name.rs | 1
+handle-floor | crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs | 3
+handle-floor | crates/perry-runtime/src/object/field_set_by_name/tail.rs | 6
+handle-floor | crates/perry-runtime/src/object/field_set_by_name/write_helpers.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/array_error.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/ctor_thunks.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/typed_array.rs | 4
@@ -238,7 +241,8 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/field_ops.rs 
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/has_property.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_set_by_name.rs | 3
+lone-valid-obj-ptr | crates/perry-runtime/src/object/field_set_by_name/attr_variants.rs | 2
+lone-valid-obj-ptr | crates/perry-runtime/src/object/field_set_by_name/tail.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/global_this/array_error.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/global_this/fetch_globals.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/global_this/typed_array.rs | 1

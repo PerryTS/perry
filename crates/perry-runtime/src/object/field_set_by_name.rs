@@ -1,5 +1,4 @@
-//! Dynamic `obj[key] = value` write path
-//! (`js_object_set_field_by_name`) plus its diagnostic helper.
+//! Dynamic `obj[key] = value` write path (`js_object_set_field_by_name`).
 //!
 //! Split out of `object/field_get_set.rs` (issue #1103), then split again
 //! into topical sub-modules (issue #7402) when the single file reached the
