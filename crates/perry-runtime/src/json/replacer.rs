@@ -274,6 +274,7 @@ unsafe fn dispatch_pointer_with_replacer(
     // the URL, so the generic object walk below would trip the circular-
     // structure detector. The href is a plain string, so the emit is identical
     // for compact and pretty walks. See `write_url_href_json`.
+    #[cfg(feature = "url-engine")]
     if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
         super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
         return;
@@ -823,6 +824,7 @@ pub(crate) unsafe fn stringify_value_pretty(
         // be walked as a plain object (its `searchParams` back-reference trips
         // the circular-structure detector). Mirrors the compact-path branch in
         // `stringify_object_inner`; see `write_url_href_json`.
+        #[cfg(feature = "url-engine")]
         if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
             super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
             return;

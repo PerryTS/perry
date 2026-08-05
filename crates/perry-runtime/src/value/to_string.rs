@@ -1164,16 +1164,27 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // unmapped memory.
             if !crate::value::addr_class::is_handle_band(ptr as usize) {
                 let boxed = f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK));
-                let url_href = crate::url::url_class::js_url_href_if_url(boxed);
-                if url_href.to_bits() != crate::value::TAG_UNDEFINED {
-                    return js_jsvalue_to_string(url_href);
-                }
-                if crate::url::try_read_as_search_params(ptr as *mut crate::object::ObjectHeader)
-                    .is_some()
+                // Binary size: these are SHAPE probes on a generic path, so the
+                // static reference keeps the whole URL class + parser alive in
+                // every binary even though the runtime check can never pass
+                // without `url-engine`. `uses_url` (zero-false-negative by
+                // construction) is what turns that feature on, so a program
+                // with no URL API cannot own a URL or URLSearchParams here.
+                #[cfg(feature = "url-engine")]
                 {
-                    return crate::url::search_params::js_url_search_params_to_string(
+                    let url_href = crate::url::url_class::js_url_href_if_url(boxed);
+                    if url_href.to_bits() != crate::value::TAG_UNDEFINED {
+                        return js_jsvalue_to_string(url_href);
+                    }
+                    if crate::url::try_read_as_search_params(
                         ptr as *mut crate::object::ObjectHeader,
-                    );
+                    )
+                    .is_some()
+                    {
+                        return crate::url::search_params::js_url_search_params_to_string(
+                            ptr as *mut crate::object::ObjectHeader,
+                        );
+                    }
                 }
             }
             // OrdinaryToPrimitive(obj, "string"): the object has no

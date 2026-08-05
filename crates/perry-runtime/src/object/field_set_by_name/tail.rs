@@ -314,6 +314,11 @@ pub(super) fn set_field_by_name_object_tail(
             }
         }
 
+        // Binary size: this whole arm statically references eight
+        // `js_url_set_*` entry points, which is what kept the URL parser in
+        // every binary. Gated with the other URL shape probes; see
+        // `value/to_string.rs`.
+        #[cfg(feature = "url-engine")]
         if !plan_fast
             && !key.is_null()
             && (key as usize) > 0x10000

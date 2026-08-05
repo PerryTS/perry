@@ -59,6 +59,7 @@ unsafe fn object_from_entries_has_iterator(value: f64, raw: i64, gc_type: Option
         | Some(crate::gc::GC_TYPE_SET) => return true,
         Some(crate::gc::GC_TYPE_OBJECT) => {
             let obj = raw as *mut ObjectHeader;
+            #[cfg(feature = "url-engine")]
             if crate::url::try_read_as_search_params(obj).is_some() {
                 return true;
             }
@@ -109,6 +110,7 @@ unsafe fn object_from_entries_materialize_entries(entries_value: f64) -> *mut Ar
 
     if gc_type == Some(crate::gc::GC_TYPE_OBJECT) {
         let obj = raw as *mut ObjectHeader;
+        #[cfg(feature = "url-engine")]
         if crate::url::try_read_as_search_params(obj).is_some() {
             let boxed = crate::url::js_url_search_params_entries_arr(obj);
             return object_from_entries_array_ptr(boxed);

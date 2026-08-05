@@ -1,0 +1,1 @@
+size: the URL-shape probes on generic value paths (`ToString`, `+` coercion, `JSON.stringify`, `Object.fromEntries`, by-name field set) are now compiled only under `url-engine` — they were pinning the URL parser into every binary. Hello world drops 33,064 bytes (4,708,736 → 4,675,672).
