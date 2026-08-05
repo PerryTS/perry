@@ -107,7 +107,23 @@ for src in "${sources[@]}"; do
   # (#7161), so without it this corpus cannot express the bug at all.
   # PERRY_INLINE_SHADOW_SLOT=0 makes every root store the @js_shadow_slot_bind
   # call form; the #7088 inline diamond is equivalent but harder to anchor on.
-  if ! env PERRY_GC_MOVING_LOOP_POLLS=1 \
+  # PERRY_RS4GC=0 selects the SHADOW-STACK root lowering. Statepoints became
+  # the default in #7370, and they express roots as `gc.statepoint` relocation
+  # bundles rather than `@js_shadow_slot_bind` calls -- so without this the
+  # corpus contains 1251 statepoints and ZERO binds, the checker's subject
+  # does not appear at all, and the `--min-binds` floor fails the job. That is
+  # exactly what has been happening: `gc-root-dominance` has been red on main
+  # since the default flipped, reporting
+  #   "0 root store(s) in the corpus, need at least 1500".
+  #
+  # KNOWN GAP, deliberately not papered over: this gates the shadow-stack
+  # lowering, which is no longer the default on targets whose frames the
+  # runtime can walk. The statepoint lowering is currently protected by no
+  # equivalent static check -- teaching the checker to read relocation bundles
+  # is a separate change, and pretending otherwise by deleting the floor would
+  # restore a green tick over an unexamined corpus.
+  if ! env PERRY_RS4GC=0 \
+           PERRY_GC_MOVING_LOOP_POLLS=1 \
            PERRY_INLINE_SHADOW_SLOT=0 \
            PERRY_NO_AUTO_OPTIMIZE=1 \
        "$PERRY_BIN" compile "$src" -o "$scratch/$name" --trace llvm \
