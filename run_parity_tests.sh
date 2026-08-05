@@ -1044,7 +1044,9 @@ header.update({
     "runtime_dir": sys.argv[11],
 })
 with open(sys.argv[1], "a", encoding="utf-8") as fh:
-    fh.write(json.dumps(header, sort_keys=True) + "\n")
+    # Compact separators keep the header byte-shaped like the result lines the
+    # runner appends with printf, so a plain grep matches either.
+    fh.write(json.dumps(header, sort_keys=True, separators=(",", ":")) + "\n")
 ' "$PARITY_JOURNAL" "$JOURNAL_TOOLCHAIN" "$TEST_SUITE" "$MODULE_FILTER" "$TEST_FILTER" \
   "$SHARD_SPEC" "$HOST_PLATFORM" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$JOURNAL_GIT_HEAD" \
   "$PERRY_BIN" "$JOURNAL_RT_DIR"; then
