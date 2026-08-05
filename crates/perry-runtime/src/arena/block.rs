@@ -83,9 +83,13 @@ thread_local! {
     static BLOCK_POOL_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Cap on pooled bytes. Sized to cover the young cap ceiling (64 MB) so a
-/// phase change (cap scale shrinking, old reclaim) recycles rather than
-/// round-trips; beyond it, blocks genuinely return to the allocator.
+/// Cap on pooled bytes: 64 MB, matching the young cap ceiling. Measured on
+/// tree.ts (Mac mini M1, quiet): no pool -> 225 MB peak RSS; 64 MB pool ->
+/// 190 MB; 128 MB pool -> 210 MB. Bigger is NOT better — pooled pages are
+/// MADV_FREE'd but stay resident until the OS wants them, so an oversized
+/// pool trades fresh-segment growth for held free pages past the optimum.
+/// This is a cap, not a floor — the pool holds only blocks that were
+/// actually released, and the OS can take every pooled page under pressure.
 const BLOCK_POOL_CAP_BYTES: usize = 64 * 1024 * 1024;
 
 /// Offer a released block to the pool. Returns false (caller deallocs) when
