@@ -160,10 +160,9 @@ pub(crate) fn try_lower_sloppy_class_field_raw_store(
             {
                 let blk = ctx.block();
                 let val_bits = blk.bitcast_double_to_i64(&val_double);
-                let finite =
-                    crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
-                        blk, &val_bits,
-                    );
+                let finite = crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
+                    blk, &val_bits,
+                );
                 blk.cond_br(&finite, &store_label, &side_exit_label);
             }
             ctx.current_block = store_idx;
