@@ -86,6 +86,19 @@ MODULE_FILTER=""
 # ~1/M the wall-time. Empty = run the whole set (default; unchanged behavior
 # for release parity, local runs, and node-suite-guard).
 SHARD_SPEC=""
+# Durable per-test journal + resume (a 4.5 h sweep that dies at test 900 used
+# to lose all 900 results, and emitted nothing until the very end so a live run
+# was indistinguishable from a hang). One mechanism supplies both properties:
+# every completed test is appended to a JSONL journal the instant it finishes,
+# and that same append drives the stderr progress stream. The journal IS the
+# checkpoint — `--resume` replays it, skips what it already holds, and the final
+# report is rebuilt from it so a resumed run and an uninterrupted run produce
+# byte-identical output.
+#
+#   --journal PATH   override the journal location (env: PERRY_PARITY_JOURNAL)
+#   --resume         skip tests already recorded in the journal and continue
+RESUME_RUN=0
+PARITY_JOURNAL="${PERRY_PARITY_JOURNAL:-}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --filter) TEST_FILTER="$2"; shift 2 ;;
@@ -96,6 +109,9 @@ while [[ $# -gt 0 ]]; do
         --module=*) MODULE_FILTER="${1#--module=}"; shift ;;
         --shard) SHARD_SPEC="$2"; shift 2 ;;
         --shard=*) SHARD_SPEC="${1#--shard=}"; shift ;;
+        --journal) PARITY_JOURNAL="$2"; shift 2 ;;
+        --journal=*) PARITY_JOURNAL="${1#--journal=}"; shift ;;
+        --resume) RESUME_RUN=1; shift ;;
         *) shift ;;
     esac
 done
@@ -759,6 +775,16 @@ stop_echo_server() {
 
 cleanup_parity_run() {
     stop_echo_server
+    stop_tls_upgrade_server
+    # Reap anything still running out of this run's scratch dir. A pause
+    # (SIGINT/SIGTERM) can land while a test binary has forked workers that
+    # would otherwise outlive the harness — this session has already produced
+    # unkillable leftovers from a parity runner. The pattern is anchored on the
+    # run-scoped mktemp directory, so a concurrent suite run in another
+    # worktree is never matched.
+    if [[ "$HOST_PLATFORM" != "windows" ]] && command -v pkill &>/dev/null; then
+        pkill -9 -f "$(printf '%s/' "$PARITY_TMP" | sed 's/[][\.*^$()+?{|]/\\&/g')" 2>/dev/null
+    fi
     rm -rf "$PARITY_TMP"
 }
 
@@ -781,10 +807,294 @@ LATEST_REPORT="$REPORT_DIR/latest.json"
 # Compact per-test records consumed by scripts/parity_matrix_trend.py.
 declare -a TEST_RESULTS=()
 
+# ── Durable result journal ──────────────────────────────────────────────────
+# Every completed test is appended to a JSONL journal *as it finishes*, using a
+# fresh open/append/close per line so a `kill -9` loses at most the in-flight
+# test. The journal is the single source of truth for the final report: after
+# the loop the counters and failure lists below are rebuilt from it, so the
+# report is identical whether the results came from one run or from a run that
+# was interrupted and resumed. Report *generation* is deliberately untouched —
+# it still consumes the same bash arrays, which preserves quirks downstream
+# already depends on (an empty failure list serializes as [""], which
+# run_gap_tests.sh and parity_matrix_trend.py filter with `select(. != "")`).
+#
+# NOTE: this script runs under macOS's /bin/bash 3.2, which has no associative
+# arrays, so the "already recorded" set is a newline-delimited string tested
+# with `case`, not a hash.
+
+# Hash the artifacts that actually determine a test outcome. mtime is not
+# enough: a rebuild that produces identical bytes bumps mtime (spurious
+# mismatch, safe), but a binary swapped in place without a mtime change would
+# compare equal (unsafe). Content hashing is the only sound direction, and
+# libperry_{runtime,stdlib}.a are included because a stale archive silently
+# changes behavior while `perry` itself is untouched.
+if [[ "$HOST_PLATFORM" == "windows" ]]; then
+    JOURNAL_RT_LIB="perry_runtime.lib"
+    JOURNAL_SL_LIB="perry_stdlib.lib"
+else
+    JOURNAL_RT_LIB="libperry_runtime.a"
+    JOURNAL_SL_LIB="libperry_stdlib.a"
+fi
+JOURNAL_RT_DIR="${PERRY_RUNTIME_DIR_SHELL:-$TARGET_DIR/release}"
+
+journal_py() {
+    "$PYTHON_CMD" - "$@" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+cmd = sys.argv[1]
+
+
+def digest(paths):
+    outer = hashlib.sha256()
+    for path in paths:
+        outer.update(os.path.basename(path).encode("utf-8"))
+        if not os.path.exists(path):
+            outer.update(b"\0missing\0")
+            continue
+        inner = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                inner.update(chunk)
+        outer.update(inner.digest())
+        outer.update(str(os.path.getsize(path)).encode("utf-8"))
+    return outer.hexdigest()
+
+
+def load(path):
+    """Return (header, ordered_ids, id->status). Tolerates a torn last line."""
+    header = None
+    order = []
+    results = {}
+    if not os.path.exists(path):
+        return header, order, results
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except ValueError:
+                # A kill -9 mid-write can leave a partial final line. Dropping
+                # it costs one redone test on resume; failing here would throw
+                # away the whole journal.
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("kind") == "header":
+                if header is None:
+                    header = obj
+            elif obj.get("kind") == "result":
+                tid, status = obj.get("id"), obj.get("status")
+                if isinstance(tid, str) and isinstance(status, str):
+                    if tid not in results:
+                        order.append(tid)
+                    results[tid] = status
+    return header, order, results
+
+
+if cmd == "fingerprint":
+    sys.stdout.write(digest(sys.argv[2:]))
+
+elif cmd == "resume-check":
+    path = sys.argv[2]
+    expected = json.loads(sys.argv[3])
+    header, order, results = load(path)
+    if header is None:
+        sys.stderr.write("no-header")
+        raise SystemExit(4)
+    # Identity fields that would silently corrupt a resumed report if they
+    # differed. `toolchain` is the one that matters most: blending results
+    # from two compilers produces a report nobody can trust.
+    labels = {
+        "toolchain": "compiler/runtime build",
+        "suite": "--suite",
+        "module": "--module",
+        "filter": "--filter",
+        "shard": "--shard",
+        "host_platform": "host platform",
+    }
+    problems = []
+    for key in ("toolchain", "suite", "module", "filter", "shard", "host_platform"):
+        was, now = header.get(key), expected.get(key)
+        if was != now:
+            problems.append(
+                "  %-22s journal=%r  this run=%r" % (labels[key] + ":", was, now)
+            )
+    if problems:
+        sys.stderr.write("\n".join(problems))
+        raise SystemExit(3)
+    sys.stdout.write("\n".join(order))
+
+elif cmd == "summary":
+    header, order, results = load(sys.argv[2])
+    counts = {
+        "pass": 0, "parity_fail": 0, "compile_fail": 0,
+        "crash": 0, "node_fail": 0, "skipped": 0,
+    }
+    out = []
+    for tid in order:
+        status = results[tid]
+        if status in counts:
+            counts[status] += 1
+        if status == "parity_fail":
+            out.append("parity_failure\t%s" % tid)
+        elif status == "compile_fail":
+            out.append("compile_failure\t%s" % tid)
+        elif status == "crash":
+            out.append("crash_failure\t%s" % tid)
+        out.append(
+            "result\t%s"
+            % json.dumps({"id": tid, "status": status}, separators=(",", ":"))
+        )
+    lead = ["count_%s\t%d" % (k, v) for k, v in sorted(counts.items())]
+    # Trailing newline is load-bearing: `while read` drops a final unterminated
+    # line, which would silently lose the last test from the report.
+    sys.stdout.write("\n".join(lead + out) + "\n")
+
+else:
+    sys.stderr.write("unknown journal_py command %r\n" % cmd)
+    raise SystemExit(2)
+PY
+}
+
+# Default journal path is keyed by the selection (suite/module/filter/shard) so
+# that `--resume` with the same flags finds the same journal automatically, and
+# so that concurrent shards — conformance-smoke fans out over 8 — never share
+# one file.
+if [[ -z "$PARITY_JOURNAL" ]]; then
+    journal_key="$TEST_SUITE"
+    [[ -n "$MODULE_FILTER" ]] && journal_key="${journal_key}_mod-${MODULE_FILTER}"
+    [[ -n "$TEST_FILTER" ]] && journal_key="${journal_key}_flt-${TEST_FILTER}"
+    [[ -n "$SHARD_SPEC" ]] && journal_key="${journal_key}_shard-${SHARD_INDEX}-of-${SHARD_TOTAL}"
+    journal_key=$(printf '%s' "$journal_key" | tr -c 'A-Za-z0-9._-' '_')
+    PARITY_JOURNAL="$REPORT_DIR/journal/parity_${journal_key}.jsonl"
+fi
+mkdir -p "$(dirname "$PARITY_JOURNAL")" || {
+    echo -e "${RED}Cannot create journal directory for $PARITY_JOURNAL${NC}" >&2
+    exit 1
+}
+
+JOURNAL_TOOLCHAIN=$(journal_py fingerprint \
+    "$PERRY_BIN" "$JOURNAL_RT_DIR/$JOURNAL_RT_LIB" "$JOURNAL_RT_DIR/$JOURNAL_SL_LIB")
+JOURNAL_GIT_HEAD=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+JOURNAL_IDENTITY=$("$PYTHON_CMD" -c '
+import json, sys
+keys = ("toolchain", "suite", "module", "filter", "shard", "host_platform")
+print(json.dumps(dict(zip(keys, sys.argv[1:]))))
+' "$JOURNAL_TOOLCHAIN" "$TEST_SUITE" "$MODULE_FILTER" "$TEST_FILTER" "$SHARD_SPEC" "$HOST_PLATFORM")
+
+JOURNAL_DONE_IDS=""
+JOURNAL_RESUMED=0
+NL=$'\n'
+
+if [[ "$RESUME_RUN" == "1" && -s "$PARITY_JOURNAL" ]]; then
+    resume_err="$PARITY_TMP/resume-check.err"
+    if JOURNAL_DONE_IDS=$(journal_py resume-check "$PARITY_JOURNAL" "$JOURNAL_IDENTITY" 2>"$resume_err"); then
+        JOURNAL_RESUMED=$(printf '%s' "$JOURNAL_DONE_IDS" | grep -c '' || true)
+        [[ -z "$JOURNAL_DONE_IDS" ]] && JOURNAL_RESUMED=0
+        echo "Resuming from journal: $PARITY_JOURNAL ($JOURNAL_RESUMED result(s) already recorded)"
+    else
+        rc=$?
+        echo -e "${RED}Refusing to resume: $PARITY_JOURNAL${NC}" >&2
+        if [[ $rc -eq 4 ]]; then
+            echo "  The journal has no header line — it is truncated or was not written by this script." >&2
+        else
+            echo "  The journal was recorded under a different identity:" >&2
+            cat "$resume_err" >&2
+            echo "" >&2
+            echo "  Resuming would blend results produced by two different builds or two" >&2
+            echo "  different test selections into one report. Rebuild to match, or start a" >&2
+            echo "  fresh run (drop --resume, or pass --journal <new-path>)." >&2
+        fi
+        exit 1
+    fi
+elif [[ "$RESUME_RUN" == "1" ]]; then
+    # Supports the CI idiom of always passing --resume so a retried job
+    # continues: the first attempt simply has nothing to resume from.
+    echo "No journal to resume at $PARITY_JOURNAL — starting a fresh run"
+fi
+
+if [[ "$JOURNAL_RESUMED" -eq 0 ]]; then
+    # Never append to a stale journal: a plain re-run must not inherit results
+    # from a previous one. Keep the old file around for post-mortems.
+    [[ -f "$PARITY_JOURNAL" ]] && mv -f "$PARITY_JOURNAL" "$PARITY_JOURNAL.prev"
+    if ! "$PYTHON_CMD" -c '
+import json, sys
+keys = ("toolchain", "suite", "module", "filter", "shard", "host_platform")
+header = dict(zip(keys, sys.argv[2:8]))
+header.update({
+    "kind": "header",
+    "journal_version": 1,
+    "started_at": sys.argv[8],
+    "git_head": sys.argv[9],
+    "perry_bin": sys.argv[10],
+    "runtime_dir": sys.argv[11],
+})
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(header, sort_keys=True) + "\n")
+' "$PARITY_JOURNAL" "$JOURNAL_TOOLCHAIN" "$TEST_SUITE" "$MODULE_FILTER" "$TEST_FILTER" \
+  "$SHARD_SPEC" "$HOST_PLATFORM" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$JOURNAL_GIT_HEAD" \
+  "$PERRY_BIN" "$JOURNAL_RT_DIR"; then
+        echo -e "${RED}Cannot write journal header to $PARITY_JOURNAL${NC}" >&2
+        exit 1
+    fi
+fi
+echo "Result journal: $PARITY_JOURNAL"
+
+JOURNAL_RUN_T0=$SECONDS
+JOURNAL_INDEX=0
+JOURNAL_TOTAL=0
+JOURNAL_THIS_RUN=0
+
+# ── Pause (SIGINT / SIGTERM) ────────────────────────────────────────────────
+# Bash defers a trap until the running foreground command returns, so a signal
+# sent to the script alone lets the in-flight test finish and be journaled. A
+# terminal Ctrl-C instead hits the whole foreground process group, killing the
+# test's children too — record_result() detects that case and abandons the
+# in-flight result rather than journaling a signal-induced status.
+PARITY_INTERRUPTED=0
+PARITY_INTERRUPT_SIGNAL=""
+on_parity_interrupt() {
+    PARITY_INTERRUPTED=$1
+    PARITY_INTERRUPT_SIGNAL=$2
+    echo "" >&2
+    echo "Caught $2 — finishing the current test, then stopping." >&2
+}
+trap 'on_parity_interrupt 130 SIGINT' INT
+trap 'on_parity_interrupt 143 SIGTERM' TERM
+
 record_result() {
     local test_id=$1
     local status=$2
+    # An interrupt arriving mid-test leaves a status derived from a killed
+    # child. Abandon it rather than journal a value the signal produced; the
+    # test is simply absent from the journal and re-runs on resume.
+    if [[ "$PARITY_INTERRUPTED" != "0" ]]; then
+        return 0
+    fi
     TEST_RESULTS+=("{\"id\":\"$test_id\",\"status\":\"$status\"}")
+    JOURNAL_THIS_RUN=$((JOURNAL_THIS_RUN + 1))
+    # One open/append/close per line: durable against kill -9 without relying
+    # on a long-lived file descriptor being flushed.
+    if ! printf '{"kind":"result","id":"%s","status":"%s","at":"%s"}\n' \
+        "$test_id" "$status" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PARITY_JOURNAL"; then
+        # A silent journal-write failure (a full disk is the realistic case)
+        # would quietly drop results from the final report. Refuse to continue.
+        echo -e "${RED}FATAL: cannot append to journal $PARITY_JOURNAL${NC}" >&2
+        exit 1
+    fi
+    # Progress stream. stderr on purpose: stdout is the log CI already parses
+    # (run_module_parity.sh scrapes "Parity Pass: N" style lines out of a
+    # 2>&1 capture), so the progress channel must not perturb it.
+    local elapsed=$((SECONDS - JOURNAL_RUN_T0))
+    printf '[%d/%d] (%02d:%02d:%02d) %s … %s\n' \
+        "$JOURNAL_INDEX" "$JOURNAL_TOTAL" \
+        "$((elapsed / 3600))" "$(((elapsed % 3600) / 60))" "$((elapsed % 60))" \
+        "$test_id" "$(printf '%s' "$status" | tr 'a-z' 'A-Z')" >&2
 }
 
 declare -a TEST_FILES=()
@@ -821,7 +1131,17 @@ if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
     echo -e "${YELLOW}No tests matched suite/filter selection${NC}"
 fi
 
-# Run each test
+# ── Selection pre-pass ──────────────────────────────────────────────────────
+# --filter and --shard are pure *selection* (they never produce a result), so
+# they are resolved before the run rather than by `continue`ing inside it. That
+# yields the denominator the progress stream needs ("[142/1178]") — the whole
+# point being that a human can tell a live sweep from a hung one — and it is
+# the exact set `--resume` reasons about. Ordering and shard arithmetic are
+# unchanged: the counter still advances once per filter-surviving test, so the
+# M shards still partition the set with no overlap and no gaps.
+declare -a SELECTED_FILES=()
+declare -a SELECTED_IDS=()
+declare -a SELECTED_NAMES=()
 SHARD_COUNTER=0
 for test_file in "${TEST_FILES[@]}"; do
     # Skip directories (multi/ folder)
@@ -852,6 +1172,33 @@ for test_file in "${TEST_FILES[@]}"; do
         if (( this_idx % SHARD_TOTAL != SHARD_INDEX - 1 )); then
             continue
         fi
+    fi
+
+    SELECTED_FILES+=("$test_file")
+    SELECTED_IDS+=("$test_id")
+    SELECTED_NAMES+=("$test_name")
+done
+JOURNAL_TOTAL=${#SELECTED_FILES[@]}
+
+# Run each test
+for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
+    test_file="${SELECTED_FILES[$selected_i]}"
+    test_id="${SELECTED_IDS[$selected_i]}"
+    test_name="${SELECTED_NAMES[$selected_i]}"
+    JOURNAL_INDEX=$((selected_i + 1))
+
+    # Already recorded by an earlier run of this journal — skip without
+    # re-running. bash 3.2 has no associative arrays; the done-set is a
+    # newline-delimited string matched with `case`.
+    if [[ -n "$JOURNAL_DONE_IDS" ]]; then
+        case "$NL$JOURNAL_DONE_IDS$NL" in
+            *"$NL$test_id$NL"*) continue ;;
+        esac
+    fi
+
+    # Stop cleanly at a test boundary once a pause signal has been seen.
+    if [[ "$PARITY_INTERRUPTED" != "0" ]]; then
+        break
     fi
 
     safe_test_id="${test_id//\//__}"
@@ -1125,6 +1472,37 @@ for test_file in "${TEST_FILES[@]}"; do
     rm -f "$perry_binary"
 done
 
+# ── Rebuild the report state from the journal ───────────────────────────────
+# The journal is the source of truth, so a resumed run reports exactly what an
+# uninterrupted run would: results carried over from a previous attempt are
+# indistinguishable from results produced just now. Everything below this point
+# (the human summary, the JSON report, the threshold gate) is unchanged and
+# still reads these same variables.
+PARITY_PASS=0
+PARITY_FAIL=0
+COMPILE_FAIL=0
+CRASH_FAIL=0
+NODE_FAIL=0
+SKIPPED=0
+PARITY_FAILURES=()
+COMPILE_FAILURES=()
+CRASH_FAILURES=()
+TEST_RESULTS=()
+while IFS=$'\t' read -r journal_key journal_val; do
+    case "$journal_key" in
+        count_pass) PARITY_PASS=$journal_val ;;
+        count_parity_fail) PARITY_FAIL=$journal_val ;;
+        count_compile_fail) COMPILE_FAIL=$journal_val ;;
+        count_crash) CRASH_FAIL=$journal_val ;;
+        count_node_fail) NODE_FAIL=$journal_val ;;
+        count_skipped) SKIPPED=$journal_val ;;
+        parity_failure) PARITY_FAILURES+=("$journal_val") ;;
+        compile_failure) COMPILE_FAILURES+=("$journal_val") ;;
+        crash_failure) CRASH_FAILURES+=("$journal_val") ;;
+        result) TEST_RESULTS+=("$journal_val") ;;
+    esac
+done < <(journal_py summary "$PARITY_JOURNAL")
+
 # Calculate parity percentage
 TOTAL_RUN=$((PARITY_PASS + PARITY_FAIL + CRASH_FAIL))
 if [[ $TOTAL_RUN -gt 0 ]]; then
@@ -1147,6 +1525,14 @@ echo -e "${YELLOW}Skipped:${NC}       $SKIPPED"
 echo ""
 echo -e "${CYAN}Parity Rate:${NC}   ${PARITY_PCT}%"
 echo ""
+
+# Be explicit about provenance whenever a report is not wholly the product of
+# this process. Printed only for an actual resume, so an ordinary run's output
+# is unchanged.
+if [[ "$JOURNAL_RESUMED" -gt 0 ]]; then
+    echo -e "${CYAN}Result provenance:${NC} $JOURNAL_RESUMED from journal (earlier run(s)), $JOURNAL_THIS_RUN from this run"
+    echo ""
+fi
 
 # List crashes first — these are hard defects (signal death / timeout), not
 # output nits, and must never be skimmed past as if they were.
@@ -1204,11 +1590,31 @@ cat > "$REPORT_FILE" << EOF
 }
 EOF
 
-# Create latest symlink
-cp "$REPORT_FILE" "$LATEST_REPORT"
+# Create latest symlink. An interrupted run is deliberately NOT published as
+# `latest.json`: that file is what the gap gate, the threshold gate and the
+# parity matrix read, and a partial sweep silently consumed as a complete one
+# would move a gate on tests that never ran. The timestamped report is still
+# written for post-mortems.
+if [[ "$PARITY_INTERRUPTED" == "0" ]]; then
+    cp "$REPORT_FILE" "$LATEST_REPORT"
+fi
 
 echo "Report saved to: $REPORT_FILE"
 echo ""
+
+if [[ "$PARITY_INTERRUPTED" != "0" ]]; then
+    resume_cmd="$0"
+    [[ -n "$TEST_FILTER" ]] && resume_cmd="$resume_cmd --filter $TEST_FILTER"
+    [[ "$TEST_SUITE" != "all" ]] && resume_cmd="$resume_cmd --suite $TEST_SUITE"
+    [[ -n "$MODULE_FILTER" ]] && resume_cmd="$resume_cmd --module $MODULE_FILTER"
+    [[ -n "$SHARD_SPEC" ]] && resume_cmd="$resume_cmd --shard $SHARD_SPEC"
+    echo -e "${YELLOW}PAUSED${NC} after $PARITY_INTERRUPT_SIGNAL — $((PARITY_PASS + PARITY_FAIL + COMPILE_FAIL + CRASH_FAIL + NODE_FAIL + SKIPPED))/$JOURNAL_TOTAL test(s) recorded."
+    echo "  $LATEST_REPORT was left untouched (this run is incomplete)."
+    echo "  Resume with:"
+    echo "      $resume_cmd --resume"
+    echo ""
+    exit "$PARITY_INTERRUPTED"
+fi
 
 # release_sweep.sh consumes a flat single-line summary if PERRY_TEST_SUMMARY_OUT
 # is exported. Standalone runs (env var unset) are unaffected.
