@@ -758,6 +758,9 @@ static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
 use std::sync::atomic::AtomicPtr;
 #[derive(Copy, Clone)]
 #[repr(usize)]
+// `Test`/`TestReporters` keep their discriminants (they size and index
+// `SUBMOD_REGISTRY`) but are only constructed under `mod-node-test`.
+#[cfg_attr(not(feature = "mod-node-test"), allow(dead_code))]
 enum SubmodBucket {
     Vm,
     Timers,
