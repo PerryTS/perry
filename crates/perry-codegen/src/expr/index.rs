@@ -130,17 +130,29 @@ pub(crate) fn lower_index_set_fast(
     // read side — the structural facts (array type, no forwarding, integrity
     // + descriptor bits, prototype-chain byte, header sanity) plus the
     // `GC_ARRAY_RAW_F64_LAYOUT` dense bit live in two header bytes and one
-    // sticky global. It only applies when the RHS is canonical-raw-f64 by
-    // construction (`expr_produces_canonical_raw_f64`): the out-of-line
-    // guard's remaining job on such values is exactly these header tests
-    // (its `is_numeric_value_bits(value)` leg is statically true). Guard
-    // misses fall to the existing out-of-line guard, whose first-touch path
-    // rebuilds unmarked numeric arrays (setting the dense flag), so the
-    // steady state is call-free. Feedback-emission builds keep the
-    // out-of-line guard for observation coverage.
-    let inline_write_tier = require_numeric_layout
-        && value_is_canonical_raw_f64
-        && !super::typed_feedback_emission_enabled();
+    // sticky global. Guard misses fall to the existing out-of-line guard,
+    // whose first-touch path rebuilds unmarked numeric arrays (setting the
+    // dense flag), so the steady state is call-free. Feedback-emission builds
+    // keep the out-of-line guard for observation coverage.
+    //
+    // #7396: this tier used to additionally require the RHS to be
+    // canonical-raw-f64 *by construction* (`expr_produces_canonical_raw_f64`),
+    // on the reasoning that the out-of-line guard's `is_numeric_value_bits`
+    // leg is then statically true. That was the only thing the flag bought —
+    // the `inbounds`/`extend_inline` arms below already canonicalize a
+    // non-canonical RHS through `js_array_numeric_value_to_raw_f64`. But it
+    // gated the tier off for the single most common numeric store there is:
+    // element-to-element traffic, `arr[i] = arr[j]`. A guarded array READ
+    // lowers to a phi over {raw slot load, boxed fallback}, which is not
+    // statically canonical, so `bench_array_ops`' reverse-in-place loop paid
+    // a five-argument cross-crate call per store — 103 of ~660 profile
+    // samples, the largest single non-generated frame.
+    //
+    // The static flag is now replaced by a *runtime* test of the same
+    // predicate (see `value_numeric` below) whenever it is not statically
+    // known, so the tier covers those stores too and the flag only decides
+    // whether those three instructions are emitted at all.
+    let inline_write_tier = require_numeric_layout && !super::typed_feedback_emission_enabled();
     let cold_guard_idx = if inline_write_tier {
         Some(ctx.new_block("idxset.guard.cold"))
     } else {
@@ -155,7 +167,20 @@ pub(crate) fn lower_index_set_fast(
             let tag = blk.lshr(I64, &arr_bits, "48");
             let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
             let above_handle_band = blk.icmp_ugt(I64, &arr_handle, "1048575");
-            let heap_candidate = blk.and(I1, &is_pointer, &above_handle_band);
+            // #7396: `is_valid_obj_ptr`'s UPPER bound (0x8000_0000_0000), which
+            // `gc_header_for_user_addr` applies before the out-of-line guard
+            // dereferences anything. `arr_handle` is a 48-bit mask of the
+            // NaN-box payload, so without this a corrupted POINTER_TAG box
+            // carrying a payload in [2^47, 2^48) passes the inline tier and is
+            // dereferenced here while the helper it fronts would have rejected
+            // it. One `icmp` makes the tier provably no weaker than the guard
+            // it replaces. (The sibling read-side tier in
+            // `index_get/guarded_array.rs` still omits it — same latent gap,
+            // but a bad *load* rather than a bad *store*, and widening that one
+            // is out of scope here.)
+            let below_heap_limit = blk.icmp_ult(I64, &arr_handle, "140737488355328");
+            let mut heap_candidate = blk.and(I1, &is_pointer, &above_handle_band);
+            heap_candidate = blk.and(I1, &heap_candidate, &below_heap_limit);
             blk.cond_br(&heap_candidate, &deref_label, &cold_label);
         }
         ctx.current_block = deref_idx;
@@ -212,6 +237,34 @@ pub(crate) fn lower_index_set_fast(
             guard_ok = blk.and(I1, &guard_ok, &length_sane);
             guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
             guard_ok = blk.and(I1, &guard_ok, &length_within_capacity);
+            if !value_is_canonical_raw_f64 {
+                // #7396: the out-of-line guard's `is_numeric_value_bits(value)`
+                // leg, inlined. It is load-bearing and NOT implied by
+                // `require_numeric_layout`: that is a *static* TypeScript
+                // judgment, and Perry does not validate declared types at
+                // runtime, so a `number[]` slot can genuinely receive a
+                // non-number — a hole/OOB read fallback returning `undefined`
+                // is the ordinary way it happens for `arr[i] = arr[j]`. Letting
+                // one through would hand a NaN-boxed tag to
+                // `js_array_numeric_value_to_raw_f64` and corrupt the array's
+                // raw-f64 invariant.
+                //
+                // Deliberately STRICTER than `is_numeric_value_bits`, which
+                // also admits `INT32_TAG` payloads that are not registered
+                // class ids — replicating that needs the class-id registry
+                // lookup, i.e. exactly the out-of-line call being removed. So
+                // reject the whole non-numeric NaN-box tag range
+                // `0x7FF9..=0x7FFF` (pointer, string, BigInt, INT32,
+                // undefined/null/bool) in one unsigned range compare; INT32
+                // numerics simply take the cold arm. Unsigned wraparound covers
+                // both sides: a real double's top 16 bits are either below
+                // 0x7FF9 (subtraction wraps high) or >= 0x8000 (negative).
+                let val_bits = blk.bitcast_double_to_i64(val_double);
+                let val_tag = blk.lshr(I64, &val_bits, "48");
+                let tag_offset = blk.sub(I64, &val_tag, "32761"); // 0x7FF9
+                let value_numeric = blk.icmp_ugt(I64, &tag_offset, "6"); // span of 0x7FF9..=0x7FFF
+                guard_ok = blk.and(I1, &guard_ok, &value_numeric);
+            }
             blk.cond_br(&guard_ok, &guarded_label, &cold_label);
         }
     }
