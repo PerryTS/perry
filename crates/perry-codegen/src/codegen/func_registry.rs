@@ -24,8 +24,11 @@ pub(crate) struct FuncRegistry {
 
 /// Resolve user function names + signatures up front. Names are scoped by
 /// module prefix; distinct functions that mangle to the same symbol get a
-/// numeric `__dupN` suffix (exported functions reserve their canonical name
-/// first and never get suffixed).
+/// numeric `$dupN` suffix (exported functions reserve their canonical name
+/// first and never get suffixed). The `$` separator keeps the uniquifier in
+/// the reserved generated-suffix namespace (issue #6927): `sanitize` output
+/// is `[A-Za-z0-9_]`-only, so a user function literally named `A__dup1`
+/// cannot collide with the disambiguated symbol of a duplicate `A`.
 pub(crate) fn build_func_registry(hir: &HirModule, module_prefix: &str) -> FuncRegistry {
     let mut func_names: HashMap<u32, String> = HashMap::new();
     let mut func_signatures: HashMap<u32, (usize, bool, bool, bool)> = HashMap::new();
@@ -34,8 +37,8 @@ pub(crate) fn build_func_registry(hir: &HirModule, module_prefix: &str) -> FuncR
     // Distinct functions can mangle to the same symbol: minified code reuses
     // short names (`function A`) across scopes, and perry lambda-lifts nested
     // functions to module level, so two module functions can share a name — clang
-    // then rejects the duplicate `define perry_fn_<mod>__A`. Disambiguate with a
-    // numeric suffix, keyed by the mangled symbol. Exported functions are
+    // then rejects the duplicate `define perry_fn_<mod>__A`. Disambiguate with
+    // a numeric suffix, keyed by the mangled symbol. Exported functions are
     // referenced cross-module by their canonical `scoped_fn_name` and are unique
     // per module, so they reserve that name first and never get suffixed.
     let mut used_fn_symbols: HashMap<String, u32> = HashMap::new();
@@ -56,7 +59,7 @@ pub(crate) fn build_func_registry(hir: &HirModule, module_prefix: &str) -> FuncR
             let s = if *n == 0 {
                 base.clone()
             } else {
-                format!("{base}__dup{n}")
+                format!("{base}$dup{n}")
             };
             *n += 1;
             s

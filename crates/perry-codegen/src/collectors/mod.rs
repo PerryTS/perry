@@ -72,7 +72,7 @@ pub(crate) use mutation::has_any_mutation;
 pub(crate) use param_ranges::{collect_param_int_ranges, ParamIntRanges};
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
 pub(crate) use proven_this::{
-    method_proven_this, prune_colliding_clones, pshape_method_name,
+    method_proven_this, prune_unregistered_clones, pshape_method_name,
     tower_route_profitable as pshape_tower_route_profitable,
 };
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};

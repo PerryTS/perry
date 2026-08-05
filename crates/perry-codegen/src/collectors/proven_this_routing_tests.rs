@@ -1,6 +1,6 @@
 //! Phase 5a proven-`this` **call-site** ratchets (#7128).
 //!
-//! `collectors/proven_this.rs` decides *whether* a `{public}__pshape` clone may
+//! `collectors/proven_this.rs` decides *whether* a `{public}$pshape` clone may
 //! be emitted; `codegen/artifacts.rs` emits it. Neither of those is worth
 //! anything unless a call site actually *targets* the clone — and for the whole
 //! corpus measured in #7128, none did: every clone was emitted, reachable from
@@ -17,7 +17,7 @@
 //! So these tests assert on **call sites**, never on symbol presence alone:
 //! every one of them requires `define`+`call` together, and
 //! [`pshape_call_targets`] deliberately matches the callee position so a
-//! `ptrtoint ptr @…__pshape` (the shape the typed-feedback guard passes a
+//! `ptrtoint ptr @…$pshape` (the shape the typed-feedback guard passes a
 //! function pointer in) can never be miscounted as a call.
 //!
 //! Both routing sites are covered:
@@ -181,10 +181,10 @@ fn call(recv: Expr, method: &str, args: Vec<Expr>) -> Expr {
     }
 }
 
-/// Every LLVM callee named `…__pshape`.
+/// Every LLVM callee named `…$pshape`.
 ///
 /// Matches the **callee position** of a `call` instruction specifically. A
-/// `__pshape` symbol also appears in `define` lines and could appear in a
+/// `$pshape` symbol also appears in `define` lines and could appear in a
 /// `ptrtoint ptr @… to i64` operand (how the typed-feedback guard receives a
 /// function pointer); counting either as a call site is exactly the vacuous
 /// pass this file exists to prevent.
@@ -202,7 +202,7 @@ fn pshape_call_targets(ir: &str) -> Vec<String> {
             continue;
         };
         let name = &tail[at + 1..at + paren];
-        if name.ends_with("__pshape") {
+        if name.ends_with("$pshape") {
             out.push(name.to_string());
         }
     }
@@ -211,7 +211,7 @@ fn pshape_call_targets(ir: &str) -> Vec<String> {
 
 fn pshape_definitions(ir: &str) -> Vec<String> {
     ir.lines()
-        .filter(|l| l.starts_with("define") && l.contains("__pshape"))
+        .filter(|l| l.starts_with("define") && l.contains("$pshape"))
         .filter_map(|l| {
             let at = l.find('@')?;
             let paren = l[at..].find('(')?;
@@ -430,7 +430,7 @@ fn untyped_method_routes_to_proven_this_clone() {
     let calls = pshape_call_targets(&ir);
     let bump = defs
         .iter()
-        .find(|d| d.contains("__bump__pshape"))
+        .find(|d| d.contains("__bump$pshape"))
         .unwrap_or_else(|| panic!("no proven-`this` clone emitted for `bump`: {defs:?}"));
     assert!(
         calls.iter().any(|c| c == bump),
@@ -459,7 +459,7 @@ fn typed_clone_fallback_routes_to_proven_this_clone() {
     let calls = pshape_call_targets(&ir);
     let scale = defs
         .iter()
-        .find(|d| d.contains("__scale__pshape"))
+        .find(|d| d.contains("__scale$pshape"))
         .unwrap_or_else(|| panic!("no proven-`this` clone emitted for `scale`: defined={defs:?}"));
     assert!(
         calls.iter().any(|c| c == scale),
@@ -470,7 +470,7 @@ fn typed_clone_fallback_routes_to_proven_this_clone() {
     // The typed arm itself must survive — this fix reroutes the FALLBACK, it
     // does not displace the typed clone.
     assert!(
-        ir.contains("__typed_f64_recv") || ir.contains("__typed_f64"),
+        ir.contains("$typed_f64_recv") || ir.contains("$typed_f64"),
         "the typed clone must still be emitted and preferred on the fast \
          path:\n{ir}"
     );
@@ -493,7 +493,7 @@ fn ptr_shape_local_typed_fallback_routes_to_proven_this_clone() {
     let calls = pshape_call_targets(&ir);
     let norm2 = defs
         .iter()
-        .find(|d| d.contains("__norm2__pshape"))
+        .find(|d| d.contains("__norm2$pshape"))
         .unwrap_or_else(|| {
             panic!(
                 "no proven-`this` clone emitted for `norm2` — the Phase 3b \
@@ -681,7 +681,7 @@ fn tower_case_routes_to_proven_this_clone() {
     let calls = pshape_call_targets(&ir);
     let rescore = defs
         .iter()
-        .find(|d| d.contains("__rescore__pshape"))
+        .find(|d| d.contains("__rescore$pshape"))
         .unwrap_or_else(|| panic!("no proven-`this` clone emitted for `rescore`: {defs:?}"));
     assert!(
         calls.iter().any(|c| c == rescore),
@@ -706,7 +706,7 @@ fn tower_route_is_guarded_by_the_class_keys_token() {
     let bs = blocks(&ir);
     let clone = pshape_definitions(&ir)
         .into_iter()
-        .find(|d| d.contains("__rescore__pshape"))
+        .find(|d| d.contains("__rescore$pshape"))
         .expect("no proven-`this` clone for `rescore`");
     let (clone_block, _) = block_calling(&bs, &clone)
         .unwrap_or_else(|| panic!("the clone is never called — nothing to guard:\n{ir}"));
@@ -780,7 +780,7 @@ fn tower_route_refused_when_clone_deletes_one_field_site() {
     let calls = pshape_call_targets(&ir);
     let tag = defs
         .iter()
-        .find(|d| d.contains("__tag__pshape"))
+        .find(|d| d.contains("__tag$pshape"))
         .unwrap_or_else(|| {
             panic!(
                 "`tag` admits a proven-`this` clone (it reads a declared field), \

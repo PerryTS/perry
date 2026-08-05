@@ -15,7 +15,7 @@
 //! 2. `lower_call/property_get/dynamic_dispatch.rs` — the Phase 3b guard-free
 //!    `Ptr<Shape>` receiver arm, whose receiver is a shape-proven local.
 //!
-//! Phase 5a emits an `internal` `{public}__pshape` clone of the method whose
+//! Phase 5a emits an `internal` `{public}$pshape` clone of the method whose
 //! `this` carries the [`PtrShapeLocal`] proof, and routes those two sites to
 //! it. Net new proof work: zero. Net new GC work: zero — the clone keeps the
 //! identical `(double this, double args…)` ABI and the identical shadow-bound
@@ -81,54 +81,38 @@ pub fn ptr_shape_this_enabled() -> bool {
 /// `(double this, double args…)` ABI as the public symbol — only the body's
 /// `this.field` lowering differs.
 ///
+/// The `$` separator puts the clone in the reserved generated-suffix
+/// namespace (issue #6927): `sanitize`/`sanitize_member` outputs are strictly
+/// `[A-Za-z0-9_]`, so no user member — not even one literally named
+/// `foo__pshape` or `foo$pshape` — can compose a public symbol equal to a
+/// clone symbol. (The old `__pshape` suffix was forgeable and needed a
+/// composed-symbol collision prune here.)
+///
 /// This symbol is NEVER registered into a runtime vtable
 /// (`js_register_class_method` keeps the public name) and is reachable only
-/// from the two proven call sites. [`tests::pshape_symbol_reachability`]
+/// from the proven call sites. [`tests::pshape_symbol_reachability`]
 /// ratchets that.
 pub(crate) fn pshape_method_name(public_name: &str) -> String {
-    format!("{public_name}__pshape")
+    format!("{public_name}$pshape")
 }
 
-/// Drop any proven-`this` clone whose composed symbol would collide with a
-/// symbol the module already defines for a real, user-declared member.
+/// Drop any proven-`this` clone whose method pair never made it into the
+/// method registry: a pair with no registered public symbol could never have
+/// been emitted, and a routing site consulting `pshape_methods` must never
+/// route to a clone the emission loop cannot produce.
 ///
-/// `pshape_method_name` builds the clone symbol by appending a suffix to the
-/// public one, so a class with methods `foo` and `foo__pshape` would have
-/// `foo`'s clone and `foo__pshape`'s PUBLIC entry resolve to the same LLVM
-/// symbol — two definitions of one name. (Cross-class shapes collide the same
-/// way, e.g. a class literally named `C__foo` with a method `pshape`, because
-/// the `__` separators are not escaped either — which is why this compares
-/// composed SYMBOLS from the registry rather than member names.)
-///
-/// This is a **local mitigation for this phase's suffix only**. The hazard is
-/// pre-existing and shared by the whole generated-clone family (`__generic`,
-/// `__typed_f64`, `__typed_i32`, `__typed_i1`, `__typed_string`,
-/// `__typed_f64_recv`, the Phase 2 specialized-ABI suffix, `__pshape`) —
-/// `foo` + `foo__generic`
-/// already collides today. The family-wide fix (a reserved escape in
-/// `sanitize_member`, content-addressed mangling, or a uniquifier) is tracked
-/// in **issue #6927**; it is deliberately not attempted here because it would
-/// touch every clone kind plus Phase 2's specialized-ABI reachability ratchet
-/// (whose allowlist must stay exactly as tight as it is — this comment
-/// deliberately avoids naming that suffix literally, because the ratchet
-/// scans for it).
-///
-/// Standing down is always sound: without a clone, both routing sites fall
-/// through to today's guarded lowering, which is correct for any receiver.
-pub(crate) fn prune_colliding_clones(
+/// Until #6927's reserved-`$` namespace this also pruned composed-symbol
+/// collisions with user members literally named `{method}__pshape`; that arm
+/// is now dead by construction (no registry symbol can contain `$`, so no
+/// registry symbol can equal `pshape_method_name(public)`) and was deleted.
+pub(crate) fn prune_unregistered_clones(
     pshape_methods: &mut HashMap<(String, String), PtrShapeLocal>,
     method_names: &HashMap<(String, String), String>,
 ) {
     if pshape_methods.is_empty() {
         return;
     }
-    let taken: HashSet<&str> = method_names.values().map(String::as_str).collect();
-    pshape_methods.retain(|key, _| match method_names.get(key) {
-        // Keep only when the clone symbol is not already a defined symbol.
-        Some(public) => !taken.contains(pshape_method_name(public).as_str()),
-        // Not in the registry at all: it could never have been emitted.
-        None => false,
-    });
+    pshape_methods.retain(|key, _| method_names.contains_key(key));
 }
 
 /// The `Object.freeze` / `Object.seal` / `Object.preventExtensions` family.
@@ -144,7 +128,7 @@ pub(crate) fn expr_is_freeze_barrier(expr: &Expr) -> bool {
 }
 
 /// Admission test for one instance method. `Some(fact)` means a
-/// `{public}__pshape` clone may be emitted, with `fact` installed as
+/// `{public}$pshape` clone may be emitted, with `fact` installed as
 /// `FnCtx::proven_this`.
 pub(crate) fn method_proven_this(
     class: &Class,
@@ -229,7 +213,7 @@ pub(crate) fn method_proven_this(
 }
 
 /// #7142 profitability: should a class-id dispatch-tower case route to
-/// `method`'s `{public}__pshape` clone?
+/// `method`'s `{public}$pshape` clone?
 ///
 /// Only meaningful once [`method_proven_this`] has admitted a clone — this adds
 /// the "should we?" half that the admission test (a pure "may we?" conjunction)
@@ -291,62 +275,61 @@ mod tests {
         assert!(!expr_is_freeze_barrier(&Expr::This));
     }
 
-    /// Issue #6927: a class with methods `foo` and `foo__pshape` would give
-    /// `foo`'s clone the same LLVM symbol as `foo__pshape`'s PUBLIC entry.
-    /// The colliding clone must stand down (falling back to the always-correct
-    /// guarded lowering); the innocent one alongside it must survive.
+    /// Issue #6927: the clone symbol lives in the reserved `$` namespace, so
+    /// no user member can forge it — a class with methods `foo` and
+    /// `foo__pshape` (or `foo$pshape`, or a cross-class shape like class
+    /// `C__foo` + method `pshape`) composes publics that can never equal
+    /// `foo`'s clone symbol, and BOTH keep their clones.
     #[test]
-    fn colliding_clone_symbols_are_pruned() {
+    fn clone_symbols_are_unforgeable_and_unregistered_pairs_prune() {
         let fact = || PtrShapeLocal {
             class_name: "C".to_string(),
             numeric_fields: HashSet::new(),
             report_name: None,
         };
         let k = |m: &str| ("C".to_string(), m.to_string());
+
+        // The old forgery shapes: same-class `foo__pshape`, cross-class
+        // `C__foo` + `pshape`. Every registry symbol is sanitize-produced
+        // (`[A-Za-z0-9_]` only) and therefore `$`-free; the clone symbol
+        // always contains `$`.
         let mut method_names = HashMap::new();
         method_names.insert(k("foo"), "perry_method_m__C__foo".to_string());
-        // A real user member whose symbol IS `foo`'s clone symbol.
         method_names.insert(
             k("foo__pshape"),
             "perry_method_m__C__foo__pshape".to_string(),
         );
-        method_names.insert(k("safe"), "perry_method_m__C__safe".to_string());
-
-        let mut pshape = HashMap::new();
-        pshape.insert(k("foo"), fact());
-        pshape.insert(k("safe"), fact());
-        prune_colliding_clones(&mut pshape, &method_names);
-
-        assert!(
-            !pshape.contains_key(&k("foo")),
-            "`foo`'s clone collides with `foo__pshape`'s public symbol and must be dropped"
-        );
-        assert!(
-            pshape.contains_key(&k("safe")),
-            "a non-colliding clone must survive the prune"
-        );
-
-        // Cross-CLASS collision: class `C__foo` + method `pshape` composes the
-        // exact same symbol, because `__` separators are not escaped either.
-        let mut method_names = HashMap::new();
-        method_names.insert(k("foo"), "perry_method_m__C__foo".to_string());
         method_names.insert(
             ("C__foo".to_string(), "pshape".to_string()),
-            "perry_method_m__C__foo__pshape".to_string(),
+            "perry_method_m__C__foo__pshape__dup1".to_string(),
         );
+        for public in method_names.values() {
+            assert!(
+                !public.contains('$'),
+                "registry symbols are sanitize-produced and must never \
+                 contain `$`: {public}"
+            );
+        }
+        let clone = pshape_method_name(&method_names[&k("foo")]);
+        assert_eq!(clone, "perry_method_m__C__foo$pshape");
+        assert!(
+            !method_names.values().any(|public| *public == clone),
+            "no registered public symbol can equal a clone symbol"
+        );
+
+        // Both the promoted method AND its forgery-named sibling keep their
+        // clones now — nothing stands down.
         let mut pshape = HashMap::new();
         pshape.insert(k("foo"), fact());
-        prune_colliding_clones(&mut pshape, &method_names);
-        assert!(
-            pshape.is_empty(),
-            "cross-class symbol collisions must be caught too — the check \
-             compares composed SYMBOLS, not member names"
-        );
+        pshape.insert(k("foo__pshape"), fact());
+        prune_unregistered_clones(&mut pshape, &method_names);
+        assert!(pshape.contains_key(&k("foo")));
+        assert!(pshape.contains_key(&k("foo__pshape")));
 
         // A pair not present in the registry can never have been emitted.
         let mut pshape = HashMap::new();
         pshape.insert(k("ghost"), fact());
-        prune_colliding_clones(&mut pshape, &HashMap::new());
+        prune_unregistered_clones(&mut pshape, &HashMap::new());
         assert!(pshape.is_empty());
     }
 
@@ -395,7 +378,7 @@ mod tests {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).expect("read source file");
-                if text.contains("__pshape") {
+                if text.contains("$pshape") {
                     out.push(rel);
                 }
             }

@@ -1318,7 +1318,7 @@ mod tests {
         let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let ir = one_capture_closure_ir();
         // The public `perry_closure_*` symbol can be a typed trampoline over a
-        // straight-line `__typed_f64` clone; the real body is the one that
+        // straight-line `$typed_f64` clone; the real body is the one that
         // carries a shadow frame. (The typed clone lowers arithmetic-only,
         // loop-free, call-free statements — `lower_typed_f64_body_*` bails on
         // anything else — so it contains no safepoint and its `%this_closure`

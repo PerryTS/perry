@@ -666,6 +666,13 @@ pub(super) fn scoped_method_name(
 /// a digit, so prefix with `_` if the first character would be one (this
 /// happens with module names like `05_fibonacci.ts`).
 ///
+/// The output alphabet being strictly `[A-Za-z0-9_]` is a load-bearing
+/// invariant (issue #6927): `$` is reserved for compiler-generated clone /
+/// uniquifier suffixes (`$generic`, `$typed_*`, `$dupN`, the spec-ABI and
+/// proven-`this` suffixes), so a user-derived symbol component can never
+/// forge a generated symbol. Never emit `$` from this function or from
+/// [`sanitize_member`].
+///
 /// NOTE: this mapping is *lossy* — every special character collapses to `_`,
 /// so distinct inputs can share an output. That is fine for the module-prefix
 /// and static-field components (whose values are recorded once and re-derived
@@ -713,6 +720,9 @@ pub(super) fn sanitize(name: &str) -> String {
 ///
 /// Must be applied at BOTH the definition site and every reference site for a
 /// given symbol component, or the symbols desync and the linker fails.
+///
+/// Like [`sanitize`], the output is strictly `[A-Za-z0-9_]` — `$` is reserved
+/// for generated suffixes and must never appear here (issue #6927).
 pub(super) fn sanitize_member(name: &str) -> String {
     let is_plain = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     if is_plain {
@@ -1541,6 +1551,42 @@ pub(super) fn emit_namespace_populator(
     crate::expr::emit_root_nanbox_store_on_block(blk, &result, &format!("@{}", ns_name));
     let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);
     blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::{sanitize, sanitize_member, scoped_fn_name, scoped_method_name};
+
+    /// Issue #6927: the generated-clone namespace (`{public}$<suffix>`) is
+    /// unforgeable ONLY because these two functions never emit `$`. If either
+    /// ever lets a `$` through, a user member could compose a public symbol
+    /// equal to a generated clone symbol and silently usurp it
+    /// (`deduped_function_refs` keeps the first definition).
+    #[test]
+    fn sanitize_never_emits_the_reserved_generated_suffix_separator() {
+        for hostile in [
+            "foo$generic",
+            "$dup1",
+            "a$b$c",
+            "foo__generic", // old forgeable spelling — plain, passes through, harmless now
+            "#$",
+            "℘$typed_f64",
+        ] {
+            assert!(
+                !sanitize(hostile).contains('$'),
+                "sanitize({hostile:?}) leaked a `$`: {:?}",
+                sanitize(hostile)
+            );
+            assert!(
+                !sanitize_member(hostile).contains('$'),
+                "sanitize_member({hostile:?}) leaked a `$`: {:?}",
+                sanitize_member(hostile)
+            );
+        }
+        // And therefore no composed public symbol contains one either.
+        assert!(!scoped_fn_name("m", "add$typed_f64").contains('$'));
+        assert!(!scoped_method_name("m", "C$x", "foo$generic").contains('$'));
+    }
 }
 
 #[cfg(test)]

@@ -54,6 +54,8 @@ mod method;
 mod method_registry;
 mod module_globals_emit;
 #[cfg(test)]
+mod clone_suffix_tests;
+#[cfg(test)]
 mod number_exactness_tests;
 mod opts;
 mod spec_abi;
@@ -1916,13 +1918,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     );
 
     // Representation-selection Phase 5a: now that the method registry exists,
-    // drop any proven-`this` clone whose composed symbol would collide with a
-    // symbol a real user member already owns (issue #6927 tracks the
-    // family-wide fix for every generated-clone suffix). Pruning HERE — before
-    // `emit_module_artifacts` reads `cross_module.pshape_methods` for both
-    // emission and call-site routing — keeps the two in lockstep, so a call
-    // site can never route to a clone the emission loop declined to produce.
-    crate::collectors::prune_colliding_clones(&mut cross_module.pshape_methods, &method_names);
+    // drop any proven-`this` clone whose pair never made it into it. (Symbol
+    // collisions with user members are impossible since #6927's reserved-`$`
+    // clone namespace, so registry presence is all that is checked.) Pruning
+    // HERE — before `emit_module_artifacts` reads `cross_module.pshape_methods`
+    // for both emission and call-site routing — keeps the two in lockstep, so
+    // a call site can never route to a clone the emission loop cannot produce.
+    crate::collectors::prune_unregistered_clones(&mut cross_module.pshape_methods, &method_names);
 
     // Resolve user function names + signatures up front. See
     // `func_registry::build_func_registry`.
@@ -1975,7 +1977,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `closure.rs` filters module globals OUT of `closure_captures`, so the
     // closure is `alloc_singleton` with no capture slots. But advertising the
     // local's type to the typed-ABI closure specialization
-    // (`__typed_f64`/i32/…) made it read `js_closure_get_capture_bits(this,
+    // (`$typed_f64`/i32/…) made it read `js_closure_get_capture_bits(this,
     // 0)` — an UNSET slot (0) — while the generic variant correctly loads the
     // global; the dispatcher picked the typed body, so every closure returned
     // 0. Repro (bisected to #5466 representation lowering):
@@ -2337,7 +2339,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     }
 
     // Representation-selection Phase 2: emit full-body specialized entries
-    // (`{public}__spec_...`, internal linkage) before the public bodies. Same
+    // (`{public}$spec_...`, internal linkage) before the public bodies. Same
     // real `compile_function`, parameterized on the plan's rep tuple.
     for f in &hir.functions {
         let Some(plan) = cross_module.spec_abi_functions.get(&f.id).cloned() else {

@@ -774,10 +774,10 @@ pub(super) fn emit_guarded_direct_method_call(
             //
             // NOTE: the per-field `js_typed_feedback_class_field_get_guard`
             // loop above is deliberately LEFT IN PLACE. It guards the
-            // `__typed_f64_recv` clone's bare `load double` field access, and
+            // `$typed_f64_recv` clone's bare `load double` field access, and
             // the whole-object shape guard does NOT subsume it: an external
             // `obj.f = "s"` preserves both the class id and the key set while
-            // downgrading the slot's raw-f64 layout. The `__pshape` clone
+            // downgrading the slot's raw-f64 layout. The `$pshape` clone
             // needs no such guard because it never claims `JsNumber` — its
             // bare loads carry generic `JsValue` semantics (see
             // `collectors/proven_this.rs`).

@@ -128,7 +128,7 @@ at least one double-consuming read inside a loop, stays `Boxed`
 toward "not a cost"; a missed refusal is the pre-existing behaviour.
 
 The same shape exists for the other representations and is not yet modelled: #7128 found every
-`__pshape` clone dead-stripped before the object (finding C) and `Ptr<NumArray>` emitting nothing
+`$pshape` clone dead-stripped before the object (finding C) and `Ptr<NumArray>` emitting nothing
 outside its own fixture (finding D). Both are "selected, and no byte changed" — the cheap end of
 the same gap.
 

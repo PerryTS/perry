@@ -21,7 +21,7 @@ use crate::lower_call::method_override::{
 /// #7142: the proven-`this` clone a class-id dispatch-tower case may route to,
 /// plus the keys token the routed path must re-check inline.
 struct TowerPshapeRoute {
-    /// The `{public}__pshape` clone symbol (same `(double this, args…)` ABI as
+    /// The `{public}$pshape` clone symbol (same `(double this, args…)` ABI as
     /// the public one — only the body's `this.field` lowering differs).
     clone_fn: String,
     /// `@perry_class_keys_<mod>__<Class>`, holding the class's canonical
@@ -68,7 +68,7 @@ fn tower_pshape_route(
 }
 
 /// Emit the keys-guarded diamond for one dispatch-tower case: inline shape
-/// re-check → `{public}__pshape` on a match, the unchanged public body
+/// re-check → `{public}$pshape` on a match, the unchanged public body
 /// otherwise.
 ///
 /// The tower's case block proves `class_id`, which is NOT enough for the
@@ -999,7 +999,7 @@ pub(crate) fn try_lower_instance_method_call(
                 // `this`-flow safe), no own-property write can shadow the
                 // method (non-declared-field writes disqualify), and
                 // `prototype_is_stable` held for the chain.
-                // Phase 5a additionally admits `this` inside a `__pshape`
+                // Phase 5a additionally admits `this` inside a `$pshape`
                 // clone, so a proven receiver's `this.other()` chain stays
                 // guard-free instead of falling back to the dispatch tower.
                 let ptr_shape_receiver = ctx

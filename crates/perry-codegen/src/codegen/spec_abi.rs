@@ -70,7 +70,7 @@ pub(crate) fn spec_abi_max() -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpecDispatch {
     /// Tier A: every non-Boxed slot proven BY CONSTRUCTION at the call site —
-    /// direct `call @{name}__spec_...` with raw args, no guard.
+    /// direct `call @{name}$spec_...` with raw args, no guard.
     Static,
     /// Tier B: reps proven only by declared types — the call site keeps the
     /// runtime-guarded diamond (guard → spec entry / boxed fallback → phi).
@@ -93,12 +93,15 @@ pub(crate) fn spec_rep_llvm_ty(rep: SpecParamRep) -> LlvmType {
     }
 }
 
-/// Specialized-entry symbol: `{public}__spec_<label>_<label>...`. Labels are
-/// `[a-z0-9]`-only (`b`, `i32`, `f64`, `ta<kind>[x<len>]`), so the composed
-/// name is byte-stable under `sanitize`/`sanitize_member` (no `$`).
+/// Specialized-entry symbol: `{public}$spec_<label>_<label>...`. Labels are
+/// `[a-z0-9]`-only (`b`, `i32`, `f64`, `ta<kind>[x<len>]`); the `$` separator
+/// puts the name in the reserved generated-clone namespace (issue #6927 —
+/// `sanitize`/`sanitize_member` outputs are strictly `[A-Za-z0-9_]`, so no
+/// user-derived public symbol can ever equal a specialized entry). Composed
+/// symbols never round-trip through `sanitize`.
 pub(crate) fn spec_function_name(public_name: &str, reps: &[SpecParamRep]) -> String {
     let mangle: Vec<String> = reps.iter().map(|r| r.label()).collect();
-    format!("{}__spec_{}", public_name, mangle.join("_"))
+    format!("{}$spec_{}", public_name, mangle.join("_"))
 }
 
 /// Element-kind → class name, for stamping `local_types` inside the
@@ -218,7 +221,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mangle_is_sanitize_stable() {
+    fn mangle_is_unforgeable() {
         let reps = [
             SpecParamRep::TaPtr {
                 kind: 4,
@@ -233,10 +236,18 @@ mod tests {
             SpecParamRep::F64,
         ];
         let name = spec_function_name("perry_fn_m___encipher", &reps);
-        assert_eq!(name, "perry_fn_m___encipher__spec_ta4x2_i32_ta4_b_f64");
-        // Every char is symbol-safe: sanitize/sanitize_member must return the
-        // name byte-identical (no `$`, no unicode).
-        assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        assert_eq!(name, "perry_fn_m___encipher$spec_ta4x2_i32_ta4_b_f64");
+        // The `$` separator is the unforgeability guarantee (issue #6927):
+        // sanitize/sanitize_member outputs are strictly `[A-Za-z0-9_]`, so no
+        // user function — even one literally named `_encipher$spec_...` or
+        // `_encipher__spec_...` — can compose a public symbol equal to a
+        // specialized entry.
+        assert!(name.contains('$'));
+        let forged = super::super::helpers::sanitize_member("_encipher$spec_ta4x2_i32_ta4_b_f64");
+        assert!(
+            !forged.contains('$'),
+            "sanitize_member must escape `$` out of user names: {forged}"
+        );
     }
 
     #[test]
@@ -266,7 +277,7 @@ mod tests {
 
     /// The reachability ratchet: specialized symbols must NEVER be constructed
     /// outside the allowlisted modules (naming + emission + direct-call
-    /// dispatch). A `__spec_` string appearing in a closure/wrapper emission
+    /// dispatch). A `$spec_` string appearing in a closure/wrapper emission
     /// path would mean an indirect route to a raw-ABI entry — unsound by
     /// construction. Scans this crate's sources at test time.
     #[test]
@@ -303,7 +314,7 @@ mod tests {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).expect("read source file");
-                if text.contains("__spec_") {
+                if text.contains("$spec_") {
                     out.push(rel);
                 }
             }
