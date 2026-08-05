@@ -618,13 +618,26 @@ fn budgeted_reclaim_runs_process_malloc_trim() {
 
     let _status = budgeted_step_until_phase(GcCyclePhase::Reclaim);
     reset_test_malloc_trim_call_count();
+    #[cfg(any(target_env = "gnu", target_os = "macos"))]
+    reset_test_malloc_trim_executed_count();
     let before = gc_collection_count();
 
     let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    // Portable claim: budgeted reclaim REACHED the trim call. That is #6180's
+    // subject -- the bug was `ordinary_budgeted` skipping it -- and it holds on
+    // every target, including those with no trim primitive.
     assert!(
         test_malloc_trim_call_count() >= 1,
-        "budgeted reclaim must invoke allocator trim (#6180 RSS floor)"
+        "budgeted reclaim must REACH allocator trim (#6180 RSS floor)"
+    );
+    // Stronger claim, only where a trim primitive exists: one actually ran.
+    // Without this the portable counter alone would pass even if the platform
+    // arm were removed, which is the property #6180 ultimately cares about.
+    #[cfg(any(target_env = "gnu", target_os = "macos"))]
+    assert!(
+        test_malloc_trim_executed_count() >= 1,
+        "on a target with a trim primitive, budgeted reclaim must EXECUTE it"
     );
     assert!(gc_collection_count() > before);
     assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);

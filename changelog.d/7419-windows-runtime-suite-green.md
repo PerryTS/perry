@@ -17,3 +17,17 @@ Test-shape fixes, each keeping the subject live on Windows rather than skipping:
 CI: the `windows-build` job now runs `RUST_TEST_THREADS=1 cargo test --profile perry-dev --lib -p perry-runtime` — same single-threaded invocation as the ubuntu leg (#1444), perry-dev profile so it shares the job's build artifacts. Before #7355 there was zero Windows CI to notice the crate didn't compile; this step is what keeps the suite from rotting back to "unmeasurable".
 
 Out of scope, recorded for honesty: the suite has 5 pre-existing failures in *parallel* mode (`closure::dynamic_props`, `gc teardown`, `prop_plan`, `global_this_webassembly`) — cross-thread interference that CI already sidesteps on every platform by running single-threaded.
+
+**Review follow-up (audit of this PR).** Moving the malloc-trim counter to the
+top of `run_malloc_trim` made the gate satisfiable on Windows/musl, but it also
+silently dropped the stronger property on glibc/macOS: the portable counter
+witnesses only that reclaim *reached* the call, so it would pass even if the
+platform arm were deleted. The assertion still read "must invoke allocator trim",
+which is not what it proved.
+
+Both claims are now asserted separately — a portable `..._CALLS` counter for
+"reached" (#6180's actual subject) and a `cfg`-gated `..._EXECUTED` counter,
+incremented in both the glibc and Darwin arms, for "a trim primitive actually
+ran". Verified the new assertion can fail: removing the Darwin instrumentation
+fails the test with "on a target with a trim primitive, budgeted reclaim must
+EXECUTE it".
