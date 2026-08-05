@@ -1211,8 +1211,18 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         let key_tag = key_bits & 0xFFFF_0000_0000_0000;
         let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
             (key_bits & POINTER_MASK) as *const StringHeader
-        } else {
+        } else if ptr_is_tracked_heap_object(key_bits as *const u8) {
+            // Untagged raw key pointer (#3576 module-slot shape). It must be
+            // VALIDATED, not assumed: this arm previously accepted anything
+            // that was not STRING_TAG/POINTER_TAG and dereferenced it, so a
+            // key slot holding a NaN-boxed immediate — observed as
+            // `0x7FFC_0000_0000_0010` — was read as a `StringHeader`
+            // (byte_len at +4, data at +0x14) and SIGSEGV'd. Same bug class as
+            // #7447, same predicate: decide by GC allocation membership, which
+            // is dereference-free, rather than by bit pattern.
             key_bits as *const StringHeader
+        } else {
+            std::ptr::null()
         };
 
         // SerializeJSONProperty step 2 (#5909): apply a heap-valued member's
