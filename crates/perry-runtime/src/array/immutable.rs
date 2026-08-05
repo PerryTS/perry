@@ -548,3 +548,30 @@ pub extern "C" fn js_array_copy_within_value(
 
     receiver
 }
+
+/// `Array.prototype.copyWithin` over a *value* receiver, backing the real
+/// prototype thunk (#6908 — previously noop-backed, so a Proxy or borrowed
+/// reference silently returned `undefined`). Dense receivers route to the
+/// dense helper (mirroring the dynamic-dispatch #2802 arm); everything else —
+/// Proxy / array-like object / primitive — runs [`js_array_copy_within_value`],
+/// which ToObject-throws on nullish receivers and trap-routes proxies.
+#[no_mangle]
+pub extern "C" fn js_arraylike_copy_within(
+    recv: f64,
+    target: f64,
+    start: f64,
+    has_end: i32,
+    end: f64,
+) -> f64 {
+    let arr = super::generic::as_real_array(recv);
+    if !arr.is_null() {
+        let r = js_array_copy_within(arr, target, start, has_end, end);
+        return super::generic::nanbox_arr(r);
+    }
+    js_array_copy_within_value(recv, target, start, has_end, end)
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_ARRAYLIKE_COPY_WITHIN: extern "C" fn(f64, f64, f64, i32, f64) -> f64 =
+    js_arraylike_copy_within;

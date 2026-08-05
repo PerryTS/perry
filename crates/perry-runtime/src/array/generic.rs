@@ -1316,6 +1316,15 @@ pub fn dispatch_arraylike_read_method(
 /// engine; any other receiver yields `undefined`. `recv` is the call-site
 /// `this` (IMPLICIT_THIS) the thunk read.
 pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_len: usize) -> f64 {
+    // #6908: every mutator's step 1 is `ToObject(this value)`, which throws
+    // for a nullish receiver. This is the receiver-less thunk invocation
+    // (`const f = arr.push; f(3)` — IMPLICIT_THIS holds its `undefined`
+    // default), which previously fell through every normalization below and
+    // silently no-opped; node throws.
+    let bits = recv.to_bits();
+    if bits == TAG_UNDEFINED || bits == TAG_NULL {
+        crate::collection_iter::throw_type_error("Cannot convert undefined or null to object");
+    }
     // A Proxy receiver reaches this generic path whenever the eager HIR array
     // fold bails (untyped receiver — #6397) and the dispatcher resolves the
     // method through `Get(proxy, name)` → prototype thunk → here. Neither
@@ -1328,8 +1337,11 @@ pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_l
         if let Some(r) = super::push_pop::proxy_array_mutator(recv, method, args_ptr, args_len) {
             return r;
         }
-        // Mutators not yet trap-routed (reverse/sort/splice/fill/copyWithin)
-        // keep the pre-existing fall-through.
+        // `sort` (routed to `object_sort` over the proxy-aware `al_*`
+        // primitives by its thunk), `fill` (`proxy_array_fill` via
+        // `js_array_fill_generic`) and `copyWithin`
+        // (`js_array_copy_within_value`) never arrive here; anything else
+        // keeps the pre-existing fall-through.
     }
     let arr = as_real_array(recv);
     if !arr.is_null() {

@@ -88,9 +88,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("copyWithin", 2),
                     ("entries", 0),
-                    ("fill", 1),
                     ("flat", 0),
                     ("flatMap", 1),
                     ("keys", 0),
@@ -138,6 +136,24 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 proto_obj,
                 "splice",
                 array_prototype_splice_thunk as *const u8,
+                2,
+                0,
+            );
+            // #6908: `fill` / `copyWithin` get real thunks too — a Proxy
+            // receiver resolves them through `Get(proxy, name)` to the
+            // prototype thunk, so the previous noop backing silently returned
+            // undefined without firing a trap.
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "fill",
+                array_prototype_fill_thunk as *const u8,
+                1,
+                0,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "copyWithin",
+                array_prototype_copy_within_thunk as *const u8,
                 2,
                 0,
             );

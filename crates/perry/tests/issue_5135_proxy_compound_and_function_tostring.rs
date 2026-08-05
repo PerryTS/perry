@@ -214,3 +214,235 @@ fn proxy_array_mutators_preserve_holes_and_throw_on_refused_delete() {
         "proxy mutators must preserve holes and DeletePropertyOrThrow"
     );
 }
+
+/// #6908 §1: the remaining `Array.prototype` mutators — `reverse` / `splice` /
+/// `fill` / `copyWithin` — on a Proxy receiver run their spec loops through
+/// the traps instead of silently falling through to `undefined` (`fill` /
+/// `copyWithin` were additionally noop-backed on the prototype, so even the
+/// method value was inert). `sort` already worked via the array-like engine;
+/// pinned here so it stays that way. All expectations byte-identical to
+/// `node --experimental-strip-types` (v26.5.1).
+#[test]
+fn proxy_array_remaining_mutators_route_through_traps() {
+    let out = compile_and_run(
+        r#"
+{
+  const t: any = [3, 1, 2];
+  const p: any = new Proxy(t, {});
+  const r = p.reverse();
+  console.log("reverse:", t.join(","), r === p);
+}
+{
+  // Even length with a hole: the (lower-exists, upper-missing) case runs
+  // DeletePropertyOrThrow on the lower side.
+  const t: any = [1, , 3, 4];
+  const p: any = new Proxy(t, {});
+  p.reverse();
+  console.log("reverse-hole:", t.join(","), 0 in t, 1 in t, 2 in t, 3 in t);
+}
+{
+  const t: any = [10, 9, 1];
+  const p: any = new Proxy(t, {});
+  const r = p.sort();
+  console.log("sort:", t.join(","), r === p);
+}
+{
+  const t: any = [1, 2, 3, 4, 5];
+  const p: any = new Proxy(t, {});
+  const removed = p.splice(1, 2, "a", "b", "c");
+  console.log("splice:", t.join(","), t.length, Array.isArray(removed), removed.join(","));
+}
+{
+  // One-arg form deletes to the end; holes stay holes in the removed array.
+  const t: any = [1, , 3];
+  const p: any = new Proxy(t, {});
+  const removed = p.splice(1);
+  console.log("splice-1arg:", t.join(","), t.length, removed.length, 0 in removed, 1 in removed);
+}
+{
+  const t: any = [1, 2, 3, 4];
+  const p: any = new Proxy(t, {});
+  const r = p.fill(7, 1, 3);
+  console.log("fill:", t.join(","), r === p);
+}
+{
+  const t: any = [1, 2, 3, 4, 5];
+  const p: any = new Proxy(t, {});
+  const r = p.copyWithin(0, 3);
+  console.log("copyWithin:", t.join(","), r === p);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "reverse: 2,1,3 true\n\
+         reverse-hole: 4,3,,1 true true false true\n\
+         sort: 1,10,9 true\n\
+         splice: 1,a,b,c,4,5 6 true 2,3\n\
+         splice-1arg: 1 1 2 false true\n\
+         fill: 1,7,7,4 true\n\
+         copyWithin: 4,5,3,4,5 true\n",
+        "proxy reverse/sort/splice/fill/copyWithin must mutate through the traps and return per spec"
+    );
+}
+
+/// #6908 §1 trap-order pin: the spec loops drive `set` / `deleteProperty` in
+/// a defined sequence, and a `deleteProperty` trap returning false throws the
+/// spec TypeError BEFORE the length write. Byte-identical to node.
+#[test]
+fn proxy_array_remaining_mutators_fire_traps_in_spec_order() {
+    let out = compile_and_run(
+        r#"
+{
+  const log: string[] = [];
+  const t: any = [1, 2, 3, 4];
+  const p: any = new Proxy(t, {
+    get(o: any, k: any, rc: any) {
+      if (typeof k === "string") log.push("g" + k);
+      return Reflect.get(o, k, rc);
+    },
+    set(o: any, k: any, v: any, rc: any) {
+      log.push("s" + k + "=" + v);
+      return Reflect.set(o, k, v, rc);
+    },
+  });
+  p.reverse();
+  console.log("reverse-traps:", t.join(","), log.join("|"));
+}
+{
+  const log: string[] = [];
+  const t: any = [1, 2, 3];
+  const p: any = new Proxy(t, {
+    set(o: any, k: any, v: any, rc: any) {
+      log.push("s" + k + "=" + v);
+      return Reflect.set(o, k, v, rc);
+    },
+    deleteProperty(o: any, k: any) {
+      log.push("d" + k);
+      return Reflect.deleteProperty(o, k);
+    },
+  });
+  const removed = p.splice(0, 1);
+  console.log("splice-traps:", t.join(","), removed.join(","), log.join("|"));
+}
+{
+  const log: string[] = [];
+  const t: any = [1, 2, 3];
+  const p: any = new Proxy(t, {
+    set(o: any, k: any, v: any, rc: any) {
+      log.push("s" + k + "=" + v);
+      return Reflect.set(o, k, v, rc);
+    },
+  });
+  p.fill(0, 1);
+  console.log("fill-traps:", t.join(","), log.join("|"));
+}
+{
+  const t: any = [1, 2, 3];
+  const p: any = new Proxy(t, { deleteProperty() { return false; } });
+  try { p.splice(0, 1); console.log("splice-refused: NO-THROW"); }
+  catch (e: any) { console.log("splice-refused:", (e instanceof TypeError) ? "TypeError" : "other"); }
+  console.log("splice-refused-after:", t.join(","), t.length);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "reverse-traps: 4,3,2,1 greverse|glength|g0|g3|s0=4|s3=1|g1|g2|s1=3|s2=2\n\
+         splice-traps: 2,3 1 s0=2|s1=3|d2|slength=2\n\
+         fill-traps: 1,0,0 s1=0|s2=0\n\
+         splice-refused: TypeError\n\
+         splice-refused-after: 2,3,3 3\n",
+        "proxy mutator trap sequences must match the spec algorithms"
+    );
+}
+
+/// #6908 §1, `.call` forms: `Array.prototype.<m>.call(proxy, …)` lowers to
+/// the value-generic engines (`js_array_reverse_value` / `js_arraylike_splice`
+/// / `js_array_fill_generic` / `js_array_copy_within_value`), which must
+/// route a Proxy receiver to the same trap loops as the member call.
+#[test]
+fn proxy_array_mutator_call_forms_route_through_traps() {
+    let out = compile_and_run(
+        r#"
+{
+  const t: any = [1, 2, 3];
+  const p: any = new Proxy(t, {});
+  Array.prototype.reverse.call(p);
+  console.log("call-reverse:", t.join(","));
+}
+{
+  const t: any = [1, 2, 3, 4];
+  const p: any = new Proxy(t, {});
+  const rm: any = Array.prototype.splice.call(p, 1, 2);
+  console.log("call-splice:", rm.join(","), t.join(","));
+}
+{
+  const t: any = [1, 2, 3];
+  const p: any = new Proxy(t, {});
+  Array.prototype.fill.call(p, 8, 1);
+  console.log("call-fill:", t.join(","));
+}
+{
+  const t: any = [1, 2, 3, 4];
+  const p: any = new Proxy(t, {});
+  Array.prototype.copyWithin.call(p, 0, 2);
+  console.log("call-copyWithin:", t.join(","));
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "call-reverse: 3,2,1\ncall-splice: 2,3 1,4\ncall-fill: 1,8,8\ncall-copyWithin: 3,4,3,4\n",
+        "Array.prototype.<m>.call(proxy, ...) must fire the proxy traps"
+    );
+}
+
+/// #6908 §2: a prototype mutator thunk invoked as a plain value has no
+/// receiver (`IMPLICIT_THIS` is undefined) — spec step 1 `ToObject(this)`
+/// throws TypeError. Previously this silently no-opped, the worst outcome:
+/// callers observed neither the mutation nor an error. Also pins that a
+/// PRIOR method call's receiver does not leak into the bare call.
+#[test]
+fn receiverless_prototype_mutator_thunk_throws_type_error() {
+    let out = compile_and_run(
+        r#"
+{
+  const t: any = [1, 2];
+  const f: any = t["push"];
+  console.log("typeof:", typeof f);
+  try { f(3); console.log("bare-push: NO-THROW"); }
+  catch (e: any) { console.log("bare-push:", (e instanceof TypeError) ? "TypeError" : "other", e.message); }
+  console.log("bare-push-after:", t.join(","));
+}
+{
+  const t: any = [1, 2];
+  const p: any = new Proxy(t, {});
+  const g: any = p.push;
+  try { g(3); console.log("proxy-bare-push: NO-THROW"); }
+  catch (e: any) { console.log("proxy-bare-push:", (e instanceof TypeError) ? "TypeError" : "other"); }
+  console.log("proxy-bare-push-after:", t.join(","));
+}
+{
+  // A previous method-style call must not leave its receiver armed.
+  const t: any = [1];
+  t.push(9);
+  const f: any = t["pop"];
+  try { f(); console.log("stale-this: NO-THROW"); }
+  catch (e: any) { console.log("stale-this:", (e instanceof TypeError) ? "TypeError" : "other"); }
+  console.log("stale-this-after:", t.join(","));
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "typeof: function\n\
+         bare-push: TypeError Cannot convert undefined or null to object\n\
+         bare-push-after: 1,2\n\
+         proxy-bare-push: TypeError\n\
+         proxy-bare-push-after: 1,2\n\
+         stale-this: TypeError\n\
+         stale-this-after: 1,9\n",
+        "a receiver-less builtin mutator thunk must throw the spec TypeError, not silently no-op"
+    );
+}

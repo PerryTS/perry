@@ -81,7 +81,7 @@ pub(crate) use self::header::{
 pub use self::immutable::{
     js_array_copy_within, js_array_copy_within_value, js_array_to_reversed,
     js_array_to_sorted_default, js_array_to_sorted_with_comparator, js_array_to_spliced,
-    js_array_with,
+    js_array_with, js_arraylike_copy_within,
 };
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,

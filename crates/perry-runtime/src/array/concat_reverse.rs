@@ -249,6 +249,16 @@ pub extern "C" fn js_array_reverse_value(receiver: f64) -> f64 {
         reverse_throw_type_error(b"Cannot convert undefined or null to object");
     }
 
+    // #6908: a Proxy receiver routes every element move through its traps —
+    // the polymorphic index reads/writes below don't decode handle-band ids.
+    if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
+        if let Some(r) =
+            super::push_pop::proxy_array_mutator(receiver, "reverse", std::ptr::null(), 0)
+        {
+            return r;
+        }
+    }
+
     let object = crate::object::js_object_coerce(receiver);
     let len = reverse_length_of_array_like(object);
     if reverse_is_boxed_string(object) && len > 1 {
@@ -488,6 +498,13 @@ pub extern "C" fn js_array_fill_generic(
     let receiver_value = JSValue::from_bits(receiver.to_bits());
     if receiver_value.is_null() || receiver_value.is_undefined() {
         throw_fill_nullish_receiver();
+    }
+
+    // #6908: Proxy receivers — every element write goes through the `set`
+    // trap. Without this branch a proxy's handle-band id fell past both typed
+    // branches below into `js_object_coerce` + self-recursion.
+    if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
+        return super::push_pop::proxy_array_fill(receiver, value, has_start, start, has_end, end);
     }
 
     if receiver_value.is_pointer() {
