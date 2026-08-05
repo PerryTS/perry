@@ -22,7 +22,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "mod-node-test", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
 # points as dead-strip roots. They exist for the whole-program bitcode-LTO
@@ -65,6 +65,17 @@ mod-dgram = []
 # only the constant tables — the HTTP/2 server surface (`js_node_http2_*`) is
 # unaffected (it lives in perry-ext-http, routed via `http-client`).
 mod-http2-constants = []
+# Per-module Node-API gate (binary-size): compiles the `node:test` runner
+# (`node_submodules::test` + its snapshot/property/reporter helpers, ~2.7k LOC)
+# and its two dispatch buckets only when the program imports `node:test` or
+# `node:test/reporters`. Measured with `-why_live`: the runner is the ONLY
+# retainer of the JSON serializer in an otherwise plain program —
+# `test::snapshot::assert_snapshot` calls `js_json_stringify_full`, so every
+# binary carried `crate::json` whether or not it could reach it. The compiler
+# enables this on `test`/`test/reporters` in `native_module_imports`, and on
+# `process.getBuiltinModule` (whose target is only known at runtime), the same
+# way `mod-http2-constants` does. Pure cfg gate, no extra deps.
+mod-node-test = []
 # Cold-path diagnostic JSON serializers (~67 KB of code + the `serde_json`
 # pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
 # (`PERRY_GC_DIAG`), typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), the v8

@@ -516,6 +516,62 @@ fn explicit_undici_import_routes_to_well_known_undici() {
 }
 
 #[test]
+fn node_test_usage_enables_mod_node_test_cross_feature() {
+    // The `node:test` runner is the only retainer of the JSON serializer in an
+    // otherwise plain program (`test::snapshot::assert_snapshot` calls
+    // `js_json_stringify_full`), so it sits behind `mod-node-test`. Codegen
+    // emits a direct `js_node_submod_install_test` call for any program that
+    // imports it, so the gate MUST be on whenever that call is emitted or the
+    // link dies with an undefined symbol.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let empty_features: std::collections::BTreeSet<&'static str> =
+        std::collections::BTreeSet::new();
+
+    let mut with_test = CompilationContext::new(dir.path().to_path_buf());
+    with_test.uses_node_test = true;
+    let cross_on = auto_optimized_cross_features(&with_test, &empty_features, &[]);
+    assert!(
+        cross_on.iter().any(|f| f == "perry-runtime/mod-node-test"),
+        "node:test usage should enable mod-node-test, got {cross_on:?}"
+    );
+
+    let without = CompilationContext::new(dir.path().to_path_buf());
+    let cross_off = auto_optimized_cross_features(&without, &empty_features, &[]);
+    assert!(
+        !cross_off.iter().any(|f| f == "perry-runtime/mod-node-test"),
+        "no node:test usage should leave mod-node-test off, got {cross_off:?}"
+    );
+
+    // `process.getBuiltinModule("node:test")` resolves at runtime, so the
+    // runner has to be present even though no import statement names it.
+    let mut dynamic = CompilationContext::new(dir.path().to_path_buf());
+    dynamic.uses_get_builtin_module = true;
+    let cross_dynamic = auto_optimized_cross_features(&dynamic, &empty_features, &[]);
+    assert!(
+        cross_dynamic
+            .iter()
+            .any(|f| f == "perry-runtime/mod-node-test"),
+        "getBuiltinModule should enable mod-node-test, got {cross_dynamic:?}"
+    );
+}
+
+#[test]
+fn node_test_gate_keys_the_auto_optimize_cache() {
+    // Two programs that differ ONLY in `node:test` usage build different
+    // archives, so they must not share a `target/perry-auto-<hash>` dir.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut with_test = CompilationContext::new(dir.path().to_path_buf());
+    with_test.uses_node_test = true;
+    let without = CompilationContext::new(dir.path().to_path_buf());
+
+    assert_ne!(
+        auto_optimized_cache_key("", true, false, None, &with_test),
+        auto_optimized_cache_key("", true, false, None, &without),
+        "mod-node-test must participate in the auto-optimize cache key"
+    );
+}
+
+#[test]
 fn http2_import_enables_http2_constants_cross_feature() {
     // #6468: importing `node:http2` records "http2" in `native_module_imports`,
     // which must flip on `perry-runtime/mod-http2-constants` so the constant
