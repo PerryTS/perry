@@ -178,13 +178,28 @@ Two things to know before reading `vmmap`, Instruments' VM Tracker, or
   zones.
 - **Those regions used to render as `IOAccelerator`** — i.e. GPU driver
   memory — because mimalloc tags its mappings with VM tag 100, which macOS
-  tooling decodes as `IOAccelerator`. Since #6882 the runtime retags them to
-  `VM_MEMORY_APPLICATION_SPECIFIC_1` (240) during `js_gc_init`, so the JS
-  heap shows up as **`Memory Tag 240`**. If you see large `IOAccelerator`
-  regions in a Perry process, you are either on a pre-#6882 build or looking
-  at the few pages mapped before `js_gc_init` ran; there is no GPU memory
-  involved. Set `MIMALLOC_OS_TAG=<n>` to steer the tag yourself — the
-  runtime's retag defers to an explicit env setting.
+  tooling decodes as `IOAccelerator`. The runtime retags them to
+  `VM_MEMORY_APPLICATION_SPECIFIC_1` (240), so the JS heap shows up as
+  **`Memory Tag 240`** and there is no GPU memory involved. Set
+  `MIMALLOC_OS_TAG=<n>` to steer the tag yourself — the runtime defers to an
+  explicit env setting.
+
+  The retag runs from a `__DATA,__mod_init_func` constructor
+  (`perry-runtime/src/mimalloc_os_tag.rs`), *not* from `js_gc_init`, and that
+  placement is load-bearing: mimalloc reserves a 1 GiB arena on its first
+  allocation — during `std`'s pre-`main` startup — and every later allocation
+  just commits pages inside that already-tagged region, so setting the option
+  from any Rust code, `main` included, retags nothing that matters. #6882 set
+  it from `js_gc_init` and was therefore inert for the whole heap until #7450
+  moved it pre-`main`. On a build between those two, expect ~all of the heap
+  as `IOAccelerator` and a token `Memory Tag 240` region.
+
+  So: large `IOAccelerator` regions on a current build are a *bug*, not a
+  documentation caveat — most likely the module initializer was dropped from
+  the link. `crates/perry-runtime/src/gc/tests/os_tag.rs` asserts the real
+  thing (the kernel's `user_tag` for a live heap address, via
+  `mach_vm_region`); note that `mi_option_get(mi_option_os_tag)` reports 240
+  in the broken case too, so it is not a diagnosis.
 
 Also note that mimalloc purges freed memory with `MADV_FREE`-style advice:
 macOS keeps such pages counted in RSS and `phys_footprint` until memory

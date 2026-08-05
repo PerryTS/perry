@@ -87,6 +87,7 @@ pub mod macos_bundle;
 pub mod map;
 pub mod math;
 pub mod messaging;
+pub mod mimalloc_os_tag;
 pub mod module_require;
 pub mod native_abi;
 pub mod native_arena;
