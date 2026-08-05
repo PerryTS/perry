@@ -284,13 +284,14 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
     let global = crate::object::js_get_global_this();
     let root_env = env::env_new_root();
     let root_idx = root_push(root_env);
-    let closure = interp::alloc_interp_closure(fn_id, root_get(root_idx), None, global, global);
+    let closure =
+        interp::alloc_interp_closure(fn_id, root_get(root_idx), None, global, global, true, true);
     roots_truncate(root_idx);
     closure
 }
 
 /// Build a persistent script lexical environment over a live global/object
-/// environment chain. `object_envs[0]` has highest lookup precedence.
+/// environment chain. The last `object_envs` entry has highest precedence.
 pub(crate) fn script_environment(global: f64, object_envs: &[f64]) -> f64 {
     let chain = object_environment_chain(global, object_envs);
     let chain_idx = root_push(chain);
@@ -299,20 +300,43 @@ pub(crate) fn script_environment(global: f64, object_envs: &[f64]) -> f64 {
     lexical
 }
 
+pub(crate) fn script_binding(lexical_env: f64, name: &str) -> f64 {
+    env::lookup(lexical_env, name).unwrap_or_else(bridge::undefined)
+}
+
 /// Compile a Function-constructor body against a selected global and live
 /// context-extension objects. Parameter/local bindings still win; then
-/// object_envs are searched in array order; the global is last.
+/// object_envs are searched from last to first; the global is last.
+#[cfg(test)]
 pub(crate) fn function_from_strings_in(
     args: &[String],
     global_this: f64,
     intrinsics: f64,
     object_envs: &[f64],
 ) -> f64 {
+    function_from_strings_in_with_codegen(args, global_this, intrinsics, object_envs, true, true)
+}
+
+pub(crate) fn function_from_strings_in_with_codegen(
+    args: &[String],
+    global_this: f64,
+    intrinsics: f64,
+    object_envs: &[f64],
+    strings_allowed: bool,
+    wasm_allowed: bool,
+) -> f64 {
     let fn_id = prepare_function_args(args);
     let chain = object_environment_chain(global_this, object_envs);
     let chain_idx = root_push(chain);
-    let closure =
-        interp::alloc_interp_closure(fn_id, root_get(chain_idx), None, global_this, intrinsics);
+    let closure = interp::alloc_interp_closure(
+        fn_id,
+        root_get(chain_idx),
+        None,
+        global_this,
+        intrinsics,
+        strings_allowed,
+        wasm_allowed,
+    );
     roots_truncate(chain_idx);
     closure
 }
@@ -326,20 +350,78 @@ pub(crate) fn eval_script_in(
     intrinsics: f64,
     lexical_env: f64,
 ) -> f64 {
+    eval_script_in_with_codegen(source, global_this, intrinsics, lexical_env, true, true)
+}
+
+pub(crate) fn eval_script_in_with_codegen(
+    source: &str,
+    global_this: f64,
+    intrinsics: f64,
+    lexical_env: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
+) -> f64 {
     let statements = parse_script_statements(source);
     let base = roots_len();
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);
     let env_idx = root_push(lexical_env);
+    let variable_env_idx = root_push(env::variable_environment(root_get(env_idx)));
     let ret_idx = root_push(bridge::undefined());
     let ctx = interp::Ctx {
         this_idx: global_idx,
         ret_idx,
         global_idx,
         intrinsics_idx,
+        variable_env_idx,
         strict: interp::has_use_strict_directive(&statements),
+        strings_allowed,
+        wasm_allowed,
     };
     let _ = interp::exec_script_stmts(&ctx, &statements, env_idx);
+    let result = root_get(ret_idx);
+    roots_truncate(base);
+    result
+}
+
+pub(crate) fn eval_direct_in(
+    source: &str,
+    global_this: f64,
+    intrinsics: f64,
+    caller_env: f64,
+    caller_variable_env: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
+) -> f64 {
+    let statements = parse_script_statements(source);
+    let strict = interp::has_use_strict_directive(&statements);
+    let base = roots_len();
+    let global_idx = root_push(global_this);
+    let intrinsics_idx = root_push(intrinsics);
+    let caller_env_idx = root_push(caller_env);
+    let caller_variable_env_idx = root_push(caller_variable_env);
+    let lexical_env_idx = root_push(env::env_new(root_get(caller_env_idx)));
+    let ret_idx = root_push(bridge::undefined());
+    let ctx = interp::Ctx {
+        this_idx: global_idx,
+        ret_idx,
+        global_idx,
+        intrinsics_idx,
+        variable_env_idx: if strict {
+            lexical_env_idx
+        } else {
+            caller_variable_env_idx
+        },
+        strict,
+        strings_allowed,
+        wasm_allowed,
+    };
+    let variable_env_idx = if strict {
+        lexical_env_idx
+    } else {
+        caller_variable_env_idx
+    };
+    let _ = interp::exec_direct_eval_stmts(&ctx, &statements, lexical_env_idx, variable_env_idx);
     let result = root_get(ret_idx);
     roots_truncate(base);
     result

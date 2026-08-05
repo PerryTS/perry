@@ -113,9 +113,12 @@ pub extern "C" fn js_vm_create_context(sandbox: f64, options: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_vm_create_script_branded(code: f64, options: f64) -> f64 {
-    crate::object::class_registry::brand_vm_script_instance(crate::node_vm::js_vm_create_script(
-        code, options,
-    ))
+    crate::node_vm::dispatch_vm_method(
+        "createScript",
+        code,
+        options,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    )
 }
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

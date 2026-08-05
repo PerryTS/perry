@@ -122,13 +122,7 @@ pub(super) unsafe fn dispatch_primitive(
             if let Some(result) = crate::value::function_to_string_method_result(object) {
                 return Some(result);
             }
-            let s = crate::node_vm::compiled_function_source_for_closure(raw_addr).unwrap_or_else(
-                || {
-                    let func_ptr =
-                        (*(raw_addr as *const crate::closure::ClosureHeader)).func_ptr as usize;
-                    crate::builtins::function_source_for_func_ptr(func_ptr)
-                },
-            );
+            let s = crate::node_vm::function_source_for_closure(raw_addr);
             let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
         }

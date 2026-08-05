@@ -166,6 +166,42 @@ fn env_has_own(env: f64, name: &str) -> bool {
     crate::value::js_is_truthy(has) != 0
 }
 
+pub(crate) fn variable_environment(env: f64) -> f64 {
+    let cur_idx = root_push(env);
+    loop {
+        if env_object_bindings(root_get(cur_idx)).is_some() {
+            let result = root_get(cur_idx);
+            roots_truncate(cur_idx);
+            return result;
+        }
+        match env_parent(root_get(cur_idx)) {
+            Some(parent) => root_set(cur_idx, parent),
+            None => {
+                let result = root_get(cur_idx);
+                roots_truncate(cur_idx);
+                return result;
+            }
+        }
+    }
+}
+
+pub(crate) fn ensure_var_binding(env: f64, name: &str) {
+    let env_idx = root_push(env);
+    if let Some(bindings) = env_object_bindings(root_get(env_idx)) {
+        if !object_has_binding(bindings, name) {
+            object_write_binding(
+                env_object_bindings(root_get(env_idx)).unwrap(),
+                name,
+                super::bridge::undefined(),
+                false,
+            );
+        }
+    } else if !env_has_own(root_get(env_idx), name) {
+        define(root_get(env_idx), name, super::bridge::undefined());
+    }
+    roots_truncate(env_idx);
+}
+
 fn env_read(env: f64, name: &str) -> f64 {
     let env_idx = root_push(env);
     let key = key_string(name);
@@ -276,8 +312,7 @@ pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
         std::ptr::null()
     };
     loop {
-        let current = root_get(cur_idx);
-        if fast && env_object_bindings(current).is_none() {
+        if fast && env_object_bindings(root_get(cur_idx)).is_none() {
             match scope_probe(root_get(cur_idx), key) {
                 ScopeProbe::Hit(v) => {
                     roots_truncate(cur_idx);
@@ -296,7 +331,7 @@ pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
                 ScopeProbe::Bail => {}
             }
         }
-        let value = env_read(current, name);
+        let value = env_read(root_get(cur_idx), name);
         if value.to_bits() != crate::value::TAG_UNDEFINED {
             roots_truncate(cur_idx);
             return Some(value);
@@ -308,12 +343,12 @@ pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
             roots_truncate(cur_idx);
             return Some(value);
         }
-        if let Some(bindings) = env_object_bindings(current) {
-            if object_has_binding(bindings, name) {
-                let value = object_read_binding(bindings, name);
-                roots_truncate(cur_idx);
-                return Some(value);
-            }
+        let has_object_binding = env_object_bindings(root_get(cur_idx))
+            .is_some_and(|bindings| object_has_binding(bindings, name));
+        if has_object_binding {
+            let value = object_read_binding(env_object_bindings(root_get(cur_idx)).unwrap(), name);
+            roots_truncate(cur_idx);
+            return Some(value);
         }
         match env_parent(root_get(cur_idx)) {
             Some(p) => root_set(cur_idx, p),
@@ -395,16 +430,22 @@ pub(crate) fn assign(env: f64, name: &str, value: f64, strict: bool) {
             roots_truncate(value_idx);
             return;
         }
-        let object_bindings = env_object_bindings(root_get(cur_idx));
-        if object_bindings.is_some_and(|bindings| object_has_binding(bindings, name)) {
-            object_write_binding(object_bindings.unwrap(), name, root_get(value_idx), strict);
+        let has_object_binding = env_object_bindings(root_get(cur_idx))
+            .is_some_and(|bindings| object_has_binding(bindings, name));
+        if has_object_binding {
+            object_write_binding(
+                env_object_bindings(root_get(cur_idx)).unwrap(),
+                name,
+                root_get(value_idx),
+                strict,
+            );
             roots_truncate(value_idx);
             return;
         }
         match env_parent(root_get(cur_idx)) {
             Some(p) => root_set(cur_idx, p),
             None => {
-                if let Some(bindings) = object_bindings {
+                if let Some(bindings) = env_object_bindings(root_get(cur_idx)) {
                     object_write_binding(bindings, name, root_get(value_idx), strict);
                 } else {
                     env_write(root_get(cur_idx), name, root_get(value_idx));

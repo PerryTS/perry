@@ -337,6 +337,11 @@ fn value_wasm_kind_matches(value: f64, expected: &[u8]) -> bool {
     registered_module_handle(obj as usize).is_some()
 }
 
+pub(crate) fn is_registered_wasm_module(value: f64) -> bool {
+    value_object_ptr(value)
+        .is_some_and(|object| registered_module_handle(object as usize).is_some())
+}
+
 /// `mod instanceof WebAssembly.Module` for the wasm-host module wrapper.
 /// That wrapper is a plain heap object whose `[[Prototype]]` does NOT reach
 /// `WebAssembly.Module.prototype` — the same shape problem the namespace

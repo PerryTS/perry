@@ -177,8 +177,6 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         ret: NR_F64,
     },
     // ========== node:vm ==========
-    // Minimal contextification surface for APIs that require a vm context
-    // object but do not execute code inside it yet.
     NativeModSig {
         module: "vm",
         has_receiver: false,

@@ -685,6 +685,33 @@ fn call_with_args(callee: f64, this: f64, args: &[f64]) -> f64 {
     bridge::call_function(callee, this, args)
 }
 
+fn is_string_codegen_callee(ctx: &Ctx, callee: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callee = scope.root_nanbox_f64(callee);
+    ["eval", "Function"].into_iter().any(|name| {
+        bridge::get_member(root_get(ctx.intrinsics_idx), name).to_bits()
+            == callee.get_nanbox_f64().to_bits()
+    })
+}
+
+fn is_wasm_namespace(ctx: &Ctx, value: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    bridge::get_member(root_get(ctx.intrinsics_idx), "WebAssembly").to_bits()
+        == value.get_nanbox_f64().to_bits()
+}
+
+fn is_wasm_module_constructor(ctx: &Ctx, callee: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callee = scope.root_nanbox_f64(callee);
+    let namespace = scope.root_nanbox_f64(bridge::get_member(
+        root_get(ctx.intrinsics_idx),
+        "WebAssembly",
+    ));
+    bridge::get_member(namespace.get_nanbox_f64(), "Module").to_bits()
+        == callee.get_nanbox_f64().to_bits()
+}
+
 fn attach_realm_static_result(ctx: &Ctx, receiver: f64, method: &str, result: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
@@ -720,18 +747,34 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
         ast::Callee::Import(_) => throw_unsupported("dynamic import in interpreted code"),
     };
     if let ast::Expr::Ident(ident) = callee.as_ref() {
-        if ident.sym.as_ref() == "eval" && !env::is_bound(root_get(env_idx), "eval") {
-            let args = eval_args(ctx, &c.args, env_idx);
-            let source = args.first().copied().unwrap_or_else(bridge::undefined);
-            let Some(source) = bridge::read_string(source) else {
-                return source;
-            };
-            return super::eval_script_in(
-                &source,
-                root_get(ctx.global_idx),
-                root_get(ctx.intrinsics_idx),
-                root_get(env_idx),
-            );
+        if ident.sym.as_ref() == "eval" {
+            let resolved = eval_ident(ctx, "eval", env_idx);
+            let resolved_idx = root_push(resolved);
+            let intrinsic_eval = bridge::get_member(root_get(ctx.intrinsics_idx), "eval");
+            if root_get(resolved_idx).to_bits() != intrinsic_eval.to_bits() {
+                roots_truncate(resolved_idx);
+            } else {
+                let args = eval_args(ctx, &c.args, env_idx);
+                let source = args.first().copied().unwrap_or_else(bridge::undefined);
+                let Some(source) = bridge::read_string(source) else {
+                    roots_truncate(resolved_idx);
+                    return source;
+                };
+                if !ctx.strings_allowed {
+                    bridge::throw_eval_error(
+                        "Code generation from strings disallowed for this context",
+                    );
+                }
+                return super::eval_direct_in(
+                    &source,
+                    root_get(ctx.global_idx),
+                    root_get(ctx.intrinsics_idx),
+                    root_get(env_idx),
+                    root_get(ctx.variable_env_idx),
+                    ctx.strings_allowed,
+                    ctx.wasm_allowed,
+                );
+            }
         }
     }
     match callee.as_ref() {
@@ -754,7 +797,33 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                             }
                         ));
                     }
+                    let codegen_blocked = !ctx.strings_allowed
+                        && ((name == "constructor"
+                            && crate::object::value_is_callable(root_get(obj_idx)))
+                            || is_string_codegen_callee(
+                                ctx,
+                                bridge::get_member(root_get(obj_idx), &name),
+                            ));
+                    let wasm_codegen_blocked = !ctx.wasm_allowed
+                        && matches!(
+                            name.as_str(),
+                            "compile" | "compileStreaming" | "instantiate" | "instantiateStreaming"
+                        )
+                        && is_wasm_namespace(ctx, root_get(obj_idx));
                     let args = eval_args(ctx, &c.args, env_idx);
+                    if codegen_blocked {
+                        bridge::throw_eval_error(
+                            "Code generation from strings disallowed for this context",
+                        );
+                    }
+                    if wasm_codegen_blocked
+                        && !(name == "instantiate"
+                            && args.first().is_some_and(|value| {
+                                crate::object::is_registered_wasm_module(*value)
+                            }))
+                    {
+                        return bridge::wasm_codegen_rejection(&format!("WebAssembly.{name}"));
+                    }
                     let receiver = root_get(obj_idx);
                     let result = bridge::call_method(receiver, &name, &args);
                     let result = attach_realm_static_result(ctx, receiver, &name, result);
@@ -764,10 +833,34 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                 ast::MemberProp::Computed(comp) => {
                     let key = eval_expr(ctx, &comp.expr, env_idx);
                     let key_idx = root_push(key);
+                    let codegen_blocked = !ctx.strings_allowed
+                        && is_string_codegen_callee(
+                            ctx,
+                            bridge::get_index(root_get(obj_idx), root_get(key_idx)),
+                        );
+                    let method = bridge::read_string(root_get(key_idx)).unwrap_or_default();
+                    let wasm_codegen_blocked = !ctx.wasm_allowed
+                        && matches!(
+                            method.as_str(),
+                            "compile" | "compileStreaming" | "instantiate" | "instantiateStreaming"
+                        )
+                        && is_wasm_namespace(ctx, root_get(obj_idx));
                     let args = eval_args(ctx, &c.args, env_idx);
+                    if codegen_blocked {
+                        bridge::throw_eval_error(
+                            "Code generation from strings disallowed for this context",
+                        );
+                    }
+                    if wasm_codegen_blocked
+                        && !(method == "instantiate"
+                            && args.first().is_some_and(|value| {
+                                crate::object::is_registered_wasm_module(*value)
+                            }))
+                    {
+                        return bridge::wasm_codegen_rejection(&format!("WebAssembly.{method}"));
+                    }
                     let receiver = root_get(obj_idx);
                     let result = bridge::call_method_value(receiver, root_get(key_idx), &args);
-                    let method = bridge::read_string(root_get(key_idx)).unwrap_or_default();
                     let result = attach_realm_static_result(ctx, receiver, &method, result);
                     roots_truncate(obj_idx);
                     result
@@ -779,7 +872,14 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
         other => {
             let callee_value = eval_call_callee(ctx, other, env_idx);
             let callee_idx = root_push(callee_value);
+            let codegen_blocked =
+                !ctx.strings_allowed && is_string_codegen_callee(ctx, root_get(callee_idx));
             let args = eval_args(ctx, &c.args, env_idx);
+            if codegen_blocked {
+                bridge::throw_eval_error(
+                    "Code generation from strings disallowed for this context",
+                );
+            }
             let result = call_with_args(root_get(callee_idx), bridge::undefined(), &args);
             roots_truncate(callee_idx);
             result
@@ -880,7 +980,17 @@ fn eval_new(ctx: &Ctx, n: &ast::NewExpr, env_idx: usize) -> f64 {
     // class the generated code was handed.
     let callee = eval_expr(ctx, &n.callee, env_idx);
     let callee_idx = root_push(callee);
+    let codegen_blocked =
+        !ctx.strings_allowed && is_string_codegen_callee(ctx, root_get(callee_idx));
+    let wasm_codegen_blocked =
+        !ctx.wasm_allowed && is_wasm_module_constructor(ctx, root_get(callee_idx));
     let args = eval_args(ctx, args_ast, env_idx);
+    if codegen_blocked {
+        bridge::throw_eval_error("Code generation from strings disallowed for this context");
+    }
+    if wasm_codegen_blocked {
+        bridge::throw_wasm_codegen_error("WebAssembly.Module");
+    }
     let result = bridge::construct(root_get(callee_idx), &args);
     let result_idx = root_push(result);
     let result = [

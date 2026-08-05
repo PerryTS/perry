@@ -168,6 +168,26 @@ pub(crate) fn throw_syntax_error(message: &str) -> ! {
     throw_error_kind(crate::error::ERROR_KIND_SYNTAX_ERROR, message)
 }
 
+pub(crate) fn throw_eval_error(message: &str) -> ! {
+    throw_error_kind(crate::error::ERROR_KIND_EVAL_ERROR, message)
+}
+
+fn wasm_codegen_error(api: &str) -> f64 {
+    let message = format!("{api}(): Wasm code generation disallowed by embedder");
+    let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_error_new_with_name_message_bytes(b"CompileError", message);
+    crate::value::js_nanbox_pointer(error as i64)
+}
+
+pub(crate) fn wasm_codegen_rejection(api: &str) -> f64 {
+    let promise = crate::promise::js_promise_rejected(wasm_codegen_error(api));
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+pub(crate) fn throw_wasm_codegen_error(api: &str) -> ! {
+    crate::exception::js_throw(wasm_codegen_error(api))
+}
+
 /// The diagnostic contract of #6559: anything outside the interpreter subset
 /// throws a TypeError that NAMES the construct, so gaps met in the wild show
 /// up as actionable errors, never as silent miscomputation.

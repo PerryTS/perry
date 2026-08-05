@@ -76,8 +76,19 @@ fn recorded_prototype_instanceof_builtin(value: f64, name: &str) -> Option<bool>
     if addr == 0 || super::prototype_chain::object_static_prototype(addr).is_none() {
         return None;
     }
-    let constructor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
-    Some(ordinary_has_instance_prototype_walk(value, constructor))
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let constructor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+        name.as_ptr(),
+        name.len(),
+    ));
+    if !value_is_callable(constructor.get_nanbox_f64()) {
+        return None;
+    }
+    Some(ordinary_has_instance_prototype_walk(
+        value.get_nanbox_f64(),
+        constructor.get_nanbox_f64(),
+    ))
 }
 
 fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
@@ -654,15 +665,18 @@ fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
     // share tag-space with raw heap pointers (a bare `is_number()` would
     // misclassify a module-level object var), so they are intentionally left to
     // those paths rather than guarded here.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let type_ref = scope.root_nanbox_f64(type_ref);
     {
-        let jv = crate::value::JSValue::from_bits(value.to_bits());
+        let jv = crate::value::JSValue::from_bits(value.get_nanbox_f64().to_bits());
         if jv.is_null()
             || jv.is_undefined()
             || jv.is_bool()
             || jv.is_int32()
             || jv.is_any_string()
             || jv.is_bigint()
-            || unsafe { crate::symbol::js_is_symbol(value) != 0 }
+            || unsafe { crate::symbol::js_is_symbol(value.get_nanbox_f64()) != 0 }
         {
             return false;
         }
@@ -670,7 +684,7 @@ fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
     // P = type_ref.prototype (the constructor's `.prototype` data property).
     let proto = unsafe {
         crate::value::js_dynamic_object_get_property(
-            type_ref,
+            type_ref.get_nanbox_f64(),
             b"prototype".as_ptr() as *const i8,
             9,
         )
@@ -680,7 +694,7 @@ fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
         return false; // non-object `.prototype` can never be on the chain
     }
     // Walk `value`'s real [[Prototype]] chain looking for identity with P.
-    let mut cur = unsafe { js_object_get_prototype_of(value) };
+    let mut cur = unsafe { js_object_get_prototype_of(value.get_nanbox_f64()) };
     let mut depth = 0usize;
     while depth < 100_000 {
         if crate::value::JSValue::from_bits(cur.to_bits()).is_null() {

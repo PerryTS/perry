@@ -32,8 +32,11 @@ pub(crate) struct Ctx {
     pub global_idx: usize,
     /// Root index of the realm global that owns intrinsic constructors.
     pub intrinsics_idx: usize,
+    pub variable_env_idx: usize,
     /// Current ECMAScript strict-mode state.
     pub strict: bool,
+    pub strings_allowed: bool,
+    pub wasm_allowed: bool,
 }
 
 /// Statement completion. Thrown exceptions never appear here — they longjmp
@@ -225,20 +228,23 @@ const NO_LEXICAL_THIS: u64 = crate::value::TAG_HOLE;
 /// Allocate the first-class runtime closure for an interpreted function.
 /// Captures: [0] fn id (number), [1] defining environment (traced pointer),
 /// [2] lexical `this` for arrows (or the hole sentinel), [3] target global,
-/// [4] intrinsic-global fallback.
+/// [4] intrinsic-global fallback, [5] string code generation policy,
+/// [6] WebAssembly code generation policy.
 pub(crate) fn alloc_interp_closure(
     fn_id: u32,
     def_env: f64,
     lexical_this: Option<f64>,
     global: f64,
     intrinsics: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
 ) -> f64 {
     ensure_thunk_registered();
     let env_idx = root_push(def_env);
     let this_idx = root_push(lexical_this.unwrap_or(f64::from_bits(NO_LEXICAL_THIS)));
     let global_idx = root_push(global);
     let intrinsics_idx = root_push(intrinsics);
-    let closure = crate::closure::js_closure_alloc(interp_thunk as *const u8, 5);
+    let closure = crate::closure::js_closure_alloc(interp_thunk as *const u8, 7);
     if closure.is_null() {
         roots_truncate(env_idx);
         bridge::throw_range_error("out of memory allocating dynamic function");
@@ -248,10 +254,12 @@ pub(crate) fn alloc_interp_closure(
     crate::closure::js_closure_set_capture_bits(closure, 2, root_get(this_idx).to_bits());
     crate::closure::js_closure_set_capture_bits(closure, 3, root_get(global_idx).to_bits());
     crate::closure::js_closure_set_capture_bits(closure, 4, root_get(intrinsics_idx).to_bits());
+    crate::closure::js_closure_set_capture_f64(closure, 5, strings_allowed as u8 as f64);
+    crate::closure::js_closure_set_capture_f64(closure, 6, wasm_allowed as u8 as f64);
     // Record the capture layout + fire write barriers so the GC traces the
     // environment / lexical-this slots (they are heap pointers).
     unsafe {
-        crate::closure::rebuild_closure_layout_and_barriers(closure, 5);
+        crate::closure::rebuild_closure_layout_and_barriers(closure, 7);
     }
     roots_truncate(env_idx);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -282,6 +290,8 @@ extern "C" fn interp_thunk(closure: *const crate::closure::ClosureHeader, raw_ar
     };
     let global = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 3));
     let intrinsics = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 4));
+    let strings_allowed = crate::closure::js_closure_get_capture_f64(closure, 5) != 0.0;
+    let wasm_allowed = crate::closure::js_closure_get_capture_f64(closure, 6) != 0.0;
     let raw_args =
         (raw_args.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
     let args = if raw_args.is_null() {
@@ -291,7 +301,16 @@ extern "C" fn interp_thunk(closure: *const crate::closure::ClosureHeader, raw_ar
             .map(|index| crate::array::js_array_get_f64(raw_args, index))
             .collect()
     };
-    invoke_interp_fn(fn_id, def_env, this, global, intrinsics, &args)
+    invoke_interp_fn(
+        fn_id,
+        def_env,
+        this,
+        global,
+        intrinsics,
+        strings_allowed,
+        wasm_allowed,
+        &args,
+    )
 }
 
 /// Run one interpreted call: fresh scope chained to the defining env, params
@@ -303,6 +322,8 @@ pub(crate) fn invoke_interp_fn(
     this: f64,
     global: f64,
     intrinsics: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
     args: &[f64],
 ) -> f64 {
     let fun = match lookup_fn(fn_id) {
@@ -353,7 +374,10 @@ pub(crate) fn invoke_interp_fn(
         ret_idx,
         global_idx,
         intrinsics_idx,
+        variable_env_idx: env_idx,
         strict: fun.strict,
+        strings_allowed,
+        wasm_allowed,
     };
 
     // Parameters.
@@ -417,6 +441,8 @@ pub(crate) fn make_function_value(
             lexical_this,
             root_get(ctx.global_idx),
             root_get(ctx.intrinsics_idx),
+            ctx.strings_allowed,
+            ctx.wasm_allowed,
         );
         let closure_idx = root_push(closure);
         env::define(root_get(name_env_idx), &fn_name, root_get(closure_idx));
@@ -430,6 +456,8 @@ pub(crate) fn make_function_value(
             lexical_this,
             root_get(ctx.global_idx),
             root_get(ctx.intrinsics_idx),
+            ctx.strings_allowed,
+            ctx.wasm_allowed,
         )
     }
 }
@@ -504,6 +532,35 @@ pub(crate) fn exec_script_stmts(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) 
             Flow::Normal
         } else {
             exec_stmt(ctx, stmt, env_idx)
+        };
+        if !matches!(flow, Flow::Normal) {
+            return flow;
+        }
+    }
+    Flow::Normal
+}
+
+pub(crate) fn exec_direct_eval_stmts(
+    ctx: &Ctx,
+    stmts: &[ast::Stmt],
+    lexical_env_idx: usize,
+    variable_env_idx: usize,
+) -> Flow {
+    let mut vars = Vec::new();
+    collect_var_names(stmts, &mut vars);
+    vars.sort_unstable();
+    vars.dedup();
+    for name in vars {
+        env::ensure_var_binding(root_get(variable_env_idx), &name);
+    }
+    hoist_fn_decls(ctx, stmts, lexical_env_idx, false);
+    for stmt in stmts {
+        let flow = if let ast::Stmt::Expr(expr) = stmt {
+            let value = eval_expr(ctx, &expr.expr, lexical_env_idx);
+            root_set(ctx.ret_idx, value);
+            Flow::Normal
+        } else {
+            exec_stmt(ctx, stmt, lexical_env_idx)
         };
         if !matches!(flow, Flow::Normal) {
             return flow;

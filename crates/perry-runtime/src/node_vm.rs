@@ -109,6 +109,13 @@ pub(crate) fn compiled_function_source_for_closure(closure: usize) -> Option<Str
         .and_then(|sources| sources.lock().ok()?.get(&closure).cloned())
 }
 
+pub(crate) fn function_source_for_closure(closure: usize) -> String {
+    compiled_function_source_for_closure(closure).unwrap_or_else(|| {
+        let func_ptr = unsafe { (*(closure as *const ClosureHeader)).func_ptr as usize };
+        crate::builtins::function_source_for_func_ptr(func_ptr)
+    })
+}
+
 #[derive(Clone, Debug)]
 struct ImportBinding {
     specifier: String,
@@ -226,13 +233,6 @@ fn set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
 
 fn get_field(obj: *mut ObjectHeader, name: &str) -> f64 {
     crate::object::js_object_get_field_by_name_f64(obj, field_key(name))
-}
-
-fn get_object_field(object: f64, name: &str) -> f64 {
-    let Some(ptr) = object_ptr_from_value(object) else {
-        return undefined_value();
-    };
-    get_field(ptr, name)
 }
 
 fn set_value_field(value: f64, name: &str, field_value: f64) {
@@ -787,7 +787,9 @@ fn build_import_env(module: *mut ObjectHeader) -> HashMap<String, f64> {
 }
 
 fn evaluate_source_module(module: *mut ObjectHeader) -> f64 {
-    let status = module_status(module);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let module = scope.root_raw_mut_ptr(module);
+    let status = module_status(module.get_raw_mut_ptr::<ObjectHeader>());
     if status != STATUS_LINKED && status != STATUS_EVALUATED {
         return throw_vm_status("Module status must be linked");
     }
@@ -795,45 +797,52 @@ fn evaluate_source_module(module: *mut ObjectHeader) -> f64 {
         return undefined_value();
     }
 
-    set_status(module, STATUS_EVALUATING);
-    let Some(namespace) = namespace_for_module(module) else {
-        set_status(module, STATUS_ERRORED);
+    set_status(module.get_raw_mut_ptr::<ObjectHeader>(), STATUS_EVALUATING);
+    let Some(namespace) = namespace_for_module(module.get_raw_mut_ptr::<ObjectHeader>()) else {
+        set_status(module.get_raw_mut_ptr::<ObjectHeader>(), STATUS_ERRORED);
         return throw_vm_status("Module namespace is unavailable");
     };
+    let namespace = scope.root_raw_mut_ptr(namespace);
 
-    let source = get_string_field(module, FIELD_SOURCE).unwrap_or_default();
-    let context = get_field(module, FIELD_CONTEXT);
-    for (name, value) in build_import_env(module) {
-        set_object_field(context, &name, value);
+    let source = get_string_field(module.get_raw_mut_ptr::<ObjectHeader>(), FIELD_SOURCE)
+        .unwrap_or_default();
+    let context = scope.root_nanbox_f64(get_field(
+        module.get_raw_mut_ptr::<ObjectHeader>(),
+        FIELD_CONTEXT,
+    ));
+    for (name, value) in build_import_env(module.get_raw_mut_ptr::<ObjectHeader>()) {
+        set_object_field(context.get_nanbox_f64(), &name, value);
     }
     let executable = split_source_statements(&source)
         .into_iter()
         .filter(|stmt| !stmt.starts_with("import "))
-        .map(|stmt| {
-            ["export const ", "export let ", "export var "]
-                .iter()
-                .find_map(|prefix| stmt.strip_prefix(prefix))
-                .map(str::to_string)
-                .unwrap_or(stmt)
-        })
+        .map(|stmt| stmt.strip_prefix("export ").unwrap_or(&stmt).to_string())
         .collect::<Vec<_>>()
         .join(";");
-    let lexical = crate::dyn_eval::script_environment(context, &[]);
+    let lexical = scope.root_nanbox_f64(crate::dyn_eval::script_environment(
+        context.get_nanbox_f64(),
+        &[],
+    ));
     if let Err(error) = crate::exception::js_call_catching(|| {
-        crate::dyn_eval::eval_script_in(&executable, context, context, lexical)
+        crate::dyn_eval::eval_script_in(
+            &executable,
+            context.get_nanbox_f64(),
+            context.get_nanbox_f64(),
+            lexical.get_nanbox_f64(),
+        )
     }) {
-        set_field(module, FIELD_ERROR, error);
-        set_status(module, STATUS_ERRORED);
+        set_field(module.get_raw_mut_ptr::<ObjectHeader>(), FIELD_ERROR, error);
+        set_status(module.get_raw_mut_ptr::<ObjectHeader>(), STATUS_ERRORED);
         return error;
     }
-    for export in read_exports(module) {
+    for export in read_exports(module.get_raw_mut_ptr::<ObjectHeader>()) {
         set_field(
-            namespace,
+            namespace.get_raw_mut_ptr::<ObjectHeader>(),
             &export.name,
-            get_object_field(context, &export.name),
+            crate::dyn_eval::script_binding(lexical.get_nanbox_f64(), &export.name),
         );
     }
-    set_status(module, STATUS_EVALUATED);
+    set_status(module.get_raw_mut_ptr::<ObjectHeader>(), STATUS_EVALUATED);
     undefined_value()
 }
 
@@ -952,6 +961,12 @@ fn install_module_accessor(
         0,
         object_value(module.get_raw_mut_ptr::<ObjectHeader>()),
     );
+    unsafe {
+        crate::closure::rebuild_closure_layout_and_barriers(
+            closure.get_raw_mut_ptr::<ClosureHeader>(),
+            1,
+        );
+    }
     set_field(
         module.get_raw_mut_ptr::<ObjectHeader>(),
         name,
@@ -1339,18 +1354,13 @@ fn main_context_state() -> ContextState {
 }
 
 fn execute_in_state(source: &str, state: &ContextState) -> f64 {
-    if !state.strings_allowed && (source.contains("eval(") || source.contains("new Function(")) {
-        let message = b"Code generation from strings disallowed for this context";
-        let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        let error = crate::error::js_evalerror_new(message);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
-    }
-    let _wasm_allowed = state.wasm_allowed;
-    let result = crate::dyn_eval::eval_script_in(
+    let result = crate::dyn_eval::eval_script_in_with_codegen(
         source,
         f64::from_bits(state.global_this_bits),
         f64::from_bits(state.intrinsics_bits),
         f64::from_bits(state.lexical_env_bits),
+        state.strings_allowed,
+        state.wasm_allowed,
     );
     if state.microtask_after_evaluate {
         crate::promise::js_promise_run_microtasks();
@@ -1493,10 +1503,10 @@ fn make_script(code: String, options: f64) -> f64 {
     let cached_data = validate_cached_data_option(options);
     let produce_cached_data = validate_produce_cached_data(options);
     let source_map_url = extract_source_map_url(&code);
-    let obj = crate::object::js_object_alloc(0, 0);
-    let value = crate::value::js_nanbox_pointer(obj as i64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     scripts().lock().unwrap().insert(
-        obj as usize,
+        obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
         ScriptMetadata {
             source: code,
             filename: source_options.filename,
@@ -1505,23 +1515,31 @@ fn make_script(code: String, options: f64) -> f64 {
         },
     );
     if let Some(url) = source_map_url {
-        set_field(obj, "sourceMapURL", string_value(&url));
+        set_field(
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            "sourceMapURL",
+            string_value(&url),
+        );
     }
     if let Some(bytes) = cached_data {
         set_field(
-            obj,
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
             "cachedDataRejected",
             bool_value(!cache_bytes_accepted(&bytes, CACHE_KIND_SCRIPT, hash)),
         );
     } else if produce_cached_data {
         set_field(
-            obj,
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
             "cachedData",
             cached_data_buffer(CACHE_KIND_SCRIPT, hash),
         );
-        set_field(obj, "cachedDataProduced", bool_value(true));
+        set_field(
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            "cachedDataProduced",
+            bool_value(true),
+        );
     }
-    value
+    object_value(obj.get_raw_mut_ptr::<ObjectHeader>())
 }
 
 extern "C" fn vm_script_create_cached_data_method(
@@ -1728,35 +1746,42 @@ pub extern "C" fn js_vm_compile_function(code: f64, params: f64, options: f64) -
     let (context, extensions, source_options) = compile_options(options);
     let mut source = params.clone();
     source.push(body.clone());
-    let value = with_source_location(&source_options, || {
-        crate::dyn_eval::function_from_strings_in(
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(with_source_location(&source_options, || {
+        crate::dyn_eval::function_from_strings_in_with_codegen(
             &source,
             f64::from_bits(context.global_this_bits),
             f64::from_bits(context.intrinsics_bits),
             &extensions,
+            context.strings_allowed,
+            context.wasm_allowed,
         )
-    });
-    let closure = crate::value::js_nanbox_get_pointer(value) as usize;
+    }));
+    let closure = crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize;
     crate::object::set_builtin_closure_length(closure, params.len() as u32);
     compiled_function_sources().lock().unwrap().insert(
-        closure,
+        crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
         format!("function ({}) {{\n{}\n}}", params.join(", "), body),
     );
     if let Some(bytes) = cached_data {
         set_value_field(
-            value,
+            value.get_nanbox_f64(),
             "cachedDataRejected",
             bool_value(!cache_bytes_accepted(&bytes, CACHE_KIND_FUNCTION, hash)),
         );
     } else if produce_cached_data {
         set_value_field(
-            value,
+            value.get_nanbox_f64(),
             "cachedData",
             cached_data_buffer(CACHE_KIND_FUNCTION, hash),
         );
-        set_value_field(value, "cachedDataProduced", bool_value(true));
+        set_value_field(
+            value.get_nanbox_f64(),
+            "cachedDataProduced",
+            bool_value(true),
+        );
     }
-    value
+    value.get_nanbox_f64()
 }
 
 fn memory_range_value(estimate: f64) -> f64 {
@@ -1893,13 +1918,9 @@ pub fn scan_vm_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     }
 }
 
-/// Death pruning (2026-07-09 GC audit wave 2): `VM_CONTEXTS` / `VM_SCRIPTS`
-/// retained one entry — including the FULL SOURCE TEXT for scripts — per
-/// `node:vm` API call forever (move-rekey only, no
-/// death hook on the owning objects). Prune entries whose owner object is
-/// provably dead. `is_dead_owner` is one of the GC's deadness predicates
-/// (`gc::dead_owner`); the tables are process-global, so foreign threads'
-/// owners don't attribute and are skipped (documented residual).
+/// Prune VM metadata whose owner is provably dead. `VM_CONTEXTS` is local to
+/// the calling thread; process-global script/source entries owned by another
+/// thread are retained because their deadness cannot be attributed here.
 pub(crate) fn prune_dead_vm_owner_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
     VM_CONTEXTS.with(|contexts| {
         contexts
@@ -2322,7 +2343,7 @@ pub fn dispatch_vm_method(method: &str, arg0: f64, arg1: f64, arg2: f64) -> f64 
             "Class constructor SyntheticModule cannot be invoked without 'new'",
         ),
         "createContext" => create_context(arg0, arg1),
-        "createScript" => js_vm_create_script(arg0, arg1),
+        "createScript" => crate::object::brand_vm_script_instance(js_vm_create_script(arg0, arg1)),
         "runInContext" => js_vm_run_in_context(arg0, arg1, arg2),
         "runInNewContext" => js_vm_run_in_new_context(arg0, arg1, arg2),
         "runInThisContext" => js_vm_run_in_this_context(arg0, arg1),
