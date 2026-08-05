@@ -763,6 +763,7 @@ pub(super) fn compile_function(
         try_depth: 0,
         pending_declares: Vec::new(),
         integer_locals: native_facts.integer_locals(),
+        int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,

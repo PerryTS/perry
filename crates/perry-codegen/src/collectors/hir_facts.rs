@@ -34,6 +34,15 @@ pub(crate) type NativeRegionFactGraph = TypeFacts;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RepresentationFacts {
     pub integer_locals: HashSet<u32>,
+    /// Locals that are integer-valued within **i64** range but NOT provably
+    /// within i32 range, mapped to a conservative `log2(|value|)` bound.
+    ///
+    /// Deliberately separate from `integer_locals`, which is an i32-RANGE set
+    /// feeding i32 shadow slots (`needs_i32_slot`) — widening that would place
+    /// an i32-overflowing value into an i32 slot. The `%` fast path converts to
+    /// i64 and only needs i64-range integrality, so it consults this set too.
+    /// See `collectors/int_valued_i64_locals.rs`. This is the ONLY consumer.
+    pub int_valued_i64_locals: std::collections::HashMap<u32, u32>,
     pub unsigned_i32_locals: HashSet<u32>,
     /// Locals whose runtime value provably can never be a BigInt (every write
     /// is a non-BigInt expression). Seeds `is_provably_not_bigint`, which gates
@@ -162,6 +171,10 @@ pub(crate) struct MaterializationHazardFacts {
 impl TypeFacts {
     pub(crate) fn integer_locals(&self) -> &HashSet<u32> {
         &self.representation.integer_locals
+    }
+
+    pub(crate) fn int_valued_i64_locals(&self) -> &std::collections::HashMap<u32, u32> {
+        &self.representation.int_valued_i64_locals
     }
 
     pub(crate) fn unsigned_i32_locals(&self) -> &HashSet<u32> {
@@ -564,9 +577,14 @@ pub(crate) fn collect_type_facts(
         compile_time_constants,
         &integer_locals,
     );
+    // i64-range integer-valued locals for the `%` fast path. Independent of
+    // `integer_locals` (which is i32-RANGE and drives i32 shadow slots); this
+    // one is consumed only by `type_analysis::numeric::integer_magnitude_bits`.
+    let int_valued_i64_locals = super::int_valued_i64_locals::collect_int_valued_i64_locals(stmts);
     let graph = TypeFacts {
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
+            int_valued_i64_locals,
             unsigned_i32_locals,
             not_bigint_locals,
             int_valued_ta_locals,

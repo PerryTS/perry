@@ -595,33 +595,111 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 ///
 /// Recognizes:
 /// - `Expr::Integer(_)` — integer literal
-/// - `Expr::LocalGet(id)` for locals pre-analyzed as integer-valued by
-///   `collectors::collect_integer_locals` (for-loop counters etc.)
+/// - `Expr::LocalGet(id)` for locals pre-analyzed as integer-valued, either by
+///   `collectors::collect_integer_locals` (i32-range: for-loop counters etc.)
+///   or by `collectors::int_valued_i64_locals` (i64-range: literal-initialised
+///   locals whose every write is a bounded constant translation)
 /// - `Expr::Update { .. }` — `i++`/`i--`, whose value is always integer
 ///   if the underlying local is integer-valued
 /// - `Expr::Binary { Add/Sub/Mul/Mod }` recursively when both operands are
 ///   integer-valued (closed under integer arithmetic; Div is excluded
 ///   because `1 / 2` is 0.5 in JS, not 0)
 /// - bitwise ops: always integer by JS ToInt32 semantics
+///
+/// The result additionally guarantees the value fits `fptosi double -> i64`
+/// — see `integer_magnitude_bits`, which this delegates to. `fptosi` is
+/// **poison** when the operand is out of the target's range, so proving
+/// integrality alone is not enough for the `%` lowering.
 pub(crate) fn is_integer_valued_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    integer_magnitude_bits_inner(ctx, e, true).is_some_and(|bits| bits <= MAX_FPTOSI_I64_BITS)
+}
+
+/// The same judgment for the **divisor** of `%`, with the i64-range local set
+/// deliberately withheld.
+///
+/// `srem(x, 0)` is UB in LLVM while JS requires `NaN`, and the caller's
+/// `right_is_known_zero` guard only recognises a literal `0` — a *local* that
+/// happens to hold `0` slips past it. The i64-range set admits exactly the
+/// counters that walk through zero (`for (let d = 10; d >= 0; d--) … x % d`),
+/// so letting it widen the divisor would introduce a UB window that
+/// `integer_locals` alone does not open. The dividend has no such constraint.
+pub(crate) fn is_integer_valued_divisor(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    integer_magnitude_bits_inner(ctx, e, false).is_some_and(|bits| bits <= MAX_FPTOSI_I64_BITS)
+}
+
+/// Largest magnitude (as `log2`) an expression may have and still convert
+/// exactly and in-range through `fptosi double -> i64`. `i64::MAX` is
+/// `2^63 - 1`, so `2^62` leaves a full bit of headroom.
+const MAX_FPTOSI_I64_BITS: u32 = 62;
+
+/// Conservative upper bound on `log2(|value|)` for a provably integer-valued
+/// expression; `None` when the expression is not provably integer-valued.
+///
+/// This is a magnitude *lattice*, not just an integrality predicate, because
+/// the `%` fast path emits `fptosi double -> i64` and LLVM makes that **poison**
+/// for an operand outside i64 range. A plain "is it an integer?" answer lets
+/// `(a * b * c) % n` through even when the product needs 93 bits.
+///
+/// Leaf bounds:
+/// - `integer_locals` — proven i32-range, so `|v| <= 2^31` → 31 bits.
+/// - `int_valued_i64_locals` — per-local bound recorded by the collector
+///   (56 bits for the common `+-1` step chain; see that module for the
+///   IEEE-754 saturation proof that makes it a hard ceiling).
+/// - bitwise results — `ToInt32` gives `|v| <= 2^31`; `>>>` is `ToUint32`,
+///   so `|v| <= 2^32`.
+/// - `Uint8ArrayGet` / `BufferIndexGet` — a byte, `|v| <= 2^8`.
+///
+/// Composition mirrors ordinary magnitude arithmetic: `Add`/`Sub` add a bit,
+/// `Mul` adds the exponents, and `%` is bounded by the smaller operand
+/// (`|a % b| <= min(|a|, |b|)`).
+fn integer_magnitude_bits_inner(ctx: &FnCtx<'_>, e: &Expr, allow_i64_locals: bool) -> Option<u32> {
+    let recurse = |sub: &Expr| integer_magnitude_bits_inner(ctx, sub, allow_i64_locals);
     match e {
-        Expr::Integer(_) => true,
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
-        Expr::LocalGet(id) => ctx.integer_locals.contains(id),
-        Expr::Update { id, .. } => ctx.integer_locals.contains(id),
-        Expr::Binary { op, left, right } => match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Mod => {
-                is_integer_valued_expr(ctx, left) && is_integer_valued_expr(ctx, right)
+        Expr::Integer(v) => Some(crate::collectors::ceil_log2_abs(*v)),
+        // A byte value.
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => Some(8),
+        Expr::LocalGet(id) | Expr::Update { id, .. } => {
+            if ctx.integer_locals.contains(id) {
+                Some(31)
+            } else if allow_i64_locals {
+                ctx.int_valued_i64_locals.get(id).copied()
+            } else {
+                None
             }
+        }
+        Expr::Binary { op, left, right } => match op {
+            BinaryOp::Add | BinaryOp::Sub => {
+                let l = recurse(left)?;
+                let r = recurse(right)?;
+                Some(l.max(r).saturating_add(1))
+            }
+            BinaryOp::Mul => {
+                let l = recurse(left)?;
+                let r = recurse(right)?;
+                Some(l.saturating_add(r))
+            }
+            // `|a % b| <= min(|a|, |b|)`. Admitted only against a NON-ZERO
+            // integer literal divisor: `x % 0` is NaN, and `fptosi(NaN)` is
+            // poison, so a nested `%` by a possibly-zero divisor must not be
+            // treated as an integer.
+            BinaryOp::Mod => match right.as_ref() {
+                Expr::Integer(d) if *d != 0 => {
+                    let l = recurse(left)?;
+                    Some(l.min(crate::collectors::ceil_log2_abs(*d)))
+                }
+                _ => None,
+            },
+            // ToInt32 → |v| <= 2^31.
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
-            | BinaryOp::Shr
-            | BinaryOp::UShr => true,
-            _ => false,
+            | BinaryOp::Shr => Some(31),
+            // ToUint32 → |v| <= 2^32.
+            BinaryOp::UShr => Some(32),
+            _ => None,
         },
-        _ => false,
+        _ => None,
     }
 }
 

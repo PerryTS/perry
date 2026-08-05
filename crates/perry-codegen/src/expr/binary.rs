@@ -587,7 +587,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 || matches!(**right, Expr::Number(v) if v == 0.0);
             if matches!(op, BinaryOp::Mod)
                 && crate::type_analysis::is_integer_valued_expr(ctx, left)
-                && crate::type_analysis::is_integer_valued_expr(ctx, right)
+                && crate::type_analysis::is_integer_valued_divisor(ctx, right)
                 && !right_is_known_zero
             {
                 let l_raw = lower_expr(ctx, left)?;

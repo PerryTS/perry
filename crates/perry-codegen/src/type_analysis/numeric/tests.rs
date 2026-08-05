@@ -222,3 +222,132 @@ fn dynamic_operand_multiply_keeps_bigint_aware_helper() {
          multiply routing:\n{ir}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #7404 — the `%` integer fast path must fire for locals that are
+// integer-valued within i64 range but NOT provably i32-range.
+//
+// These assert on the emitted IR rather than on a predicate, because the whole
+// failure mode being fixed was a gate that was live but asking the wrong
+// question: a test that only checked "nothing threw" would have passed against
+// the broken compiler.
+// ---------------------------------------------------------------------------
+
+fn mod_(left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Mod,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+
+fn add(left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+
+/// `let a = 12345678; for (…) { acc += a % 1000; a = a + 1; }`
+///
+/// `a` is mutated by an unbounded `+ 1` chain, so it is (correctly) NOT in the
+/// i32-range `integer_locals` set — before #7404 this fell through to
+/// `frem double`, i.e. a `bl _fmod` libm call on AArch64.
+#[test]
+fn i64_range_local_reaches_the_integer_modulo_fast_path() {
+    let ir = emitted_ir(probe_module(
+        "mod_i64_local_unit.ts",
+        Vec::new(),
+        vec![
+            number_let(1, "acc", true, Expr::Integer(0)),
+            number_let(2, "a", true, Expr::Integer(12345678)),
+            Stmt::For {
+                init: Some(Box::new(number_let(3, "i", true, Expr::Integer(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::Integer(64)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(
+                        1,
+                        Box::new(add(
+                            Expr::LocalGet(1),
+                            mod_(Expr::LocalGet(2), Expr::Integer(1000)),
+                        )),
+                    )),
+                    Stmt::Expr(Expr::LocalSet(
+                        2,
+                        Box::new(add(Expr::LocalGet(2), Expr::Integer(1))),
+                    )),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+    assert!(
+        ir.contains("srem i64"),
+        "`a % 1000` for an i64-range increment counter must lower to srem, \
+         not a frem/fmod libm call:\n{ir}"
+    );
+}
+
+/// The dividend may come from the i64-range set; the **divisor** may not.
+///
+/// `srem(x, 0)` is UB in LLVM while JS requires NaN, and the lowering's
+/// zero guard only recognises a literal `0`. A counter that walks through zero
+/// (`d = d - 1`) is exactly what the i64-range set admits, so it must stay on
+/// `frem`.
+#[test]
+fn i64_range_local_is_refused_as_a_modulo_divisor() {
+    let ir = emitted_ir(probe_module(
+        "mod_i64_divisor_unit.ts",
+        Vec::new(),
+        vec![
+            number_let(1, "acc", true, Expr::Integer(0)),
+            number_let(2, "d", true, Expr::Integer(10)),
+            Stmt::For {
+                init: Some(Box::new(number_let(3, "i", true, Expr::Integer(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::Integer(64)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(
+                        1,
+                        Box::new(add(
+                            Expr::LocalGet(1),
+                            mod_(Expr::Integer(1000), Expr::LocalGet(2)),
+                        )),
+                    )),
+                    Stmt::Expr(Expr::LocalSet(
+                        2,
+                        Box::new(Expr::Binary {
+                            op: BinaryOp::Sub,
+                            left: Box::new(Expr::LocalGet(2)),
+                            right: Box::new(Expr::Integer(1)),
+                        }),
+                    )),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+    assert!(
+        !ir.contains("srem i64"),
+        "a divisor that can walk through zero must NOT reach srem \
+         (srem by 0 is UB; JS requires NaN):\n{ir}"
+    );
+}
