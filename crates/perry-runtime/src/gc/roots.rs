@@ -374,13 +374,17 @@ pub(super) fn mark_stack_roots_unchecked(
     // Size check: 32 * 8 = 256 bytes, which exceeds the darwin arm64
     // `jmp_buf` (48 * 4 = 192 bytes) and every other platform we
     // currently support — see `crate::ffi::setjmp::JMP_BUF_MIN_BYTES`.
-    let mut jmp_buf = [0u64; 32]; // oversized for safety
+    // 16-aligned: MSVC's `_setjmp` saves XMM registers with aligned
+    // stores, and a bare `[u64; 32]` is only 8-aligned (#7356).
+    #[repr(C, align(16))]
+    struct JmpBufWords([u64; 32]);
+    let mut jmp_buf = JmpBufWords([0u64; 32]); // oversized for safety
     unsafe {
-        crate::ffi::setjmp::setjmp(jmp_buf.as_mut_ptr() as *mut std::os::raw::c_int);
+        crate::ffi::setjmp::setjmp(jmp_buf.0.as_mut_ptr() as *mut std::os::raw::c_int);
     }
 
     // Scan the register buffer (covers callee-saved regs: x19-x28 on AArch64, rbx/rbp/r12-r15 on x86_64)
-    for &word in &jmp_buf {
+    for &word in &jmp_buf.0 {
         if try_mark_conservative_word(word, valid_ptrs, pin_only_old) {
             stats.root_count += 1;
         }

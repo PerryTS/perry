@@ -157,9 +157,22 @@ mod tests {
     fn test_spawn_sync_result_fields() {
         // #1936: spawnSync result carries pid / output / stdout / stderr /
         // status / signal.
-        let cmd = "echo";
+        //
+        // `echo` is a real executable on unix but a cmd.exe BUILTIN on
+        // Windows — spawnSync (no shell) can never launch it there, in Node
+        // too (ENOENT). The subject is the result shape of a SUCCESSFUL
+        // spawn, so spawn `cmd /c echo hi` on Windows instead (#7356).
+        #[cfg(windows)]
+        let (cmd, extra_args): (&str, &[&[u8]]) = ("cmd", &[b"/c", b"echo"]);
+        #[cfg(not(windows))]
+        let (cmd, extra_args): (&str, &[&[u8]]) = ("echo", &[]);
+
         let cmd_ptr = js_string_from_bytes(cmd.as_ptr(), cmd.len() as u32);
-        let args = crate::array::js_array_alloc(1);
+        let args = crate::array::js_array_alloc((extra_args.len() + 1) as u32);
+        for a in extra_args {
+            let s = js_string_from_bytes(a.as_ptr(), a.len() as u32);
+            crate::array::js_array_push_f64(args, crate::value::js_nanbox_string(s as i64));
+        }
         let hi = js_string_from_bytes(b"hi".as_ptr(), 2);
         crate::array::js_array_push_f64(args, crate::value::js_nanbox_string(hi as i64));
 

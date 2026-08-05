@@ -1716,6 +1716,8 @@ mod tests {
             // 2025-06-20T00:00:00.000Z is still June 19 in Los Angeles.
             // The three UTC calendar getters must nevertheless keep the UTC
             // date, while the old delegation to local getters returned 19.
+            // The `get_date == 19` assertion proves the child's TZ actually
+            // took effect (subject-is-live guard, not part of the regression).
             let timestamp = 1_750_377_600_000.0;
             assert_eq!(js_date_get_date(timestamp), 19.0);
             assert_eq!(js_date_get_utc_full_year(timestamp), 2025.0);
@@ -1724,10 +1726,20 @@ mod tests {
             return;
         }
 
+        // The UCRT's `TZ` parser understands only the POSIX `tzn[+-]hh dzn`
+        // shape — an IANA id like `America/Los_Angeles` silently degrades to
+        // UTC on Windows (#7356), which would fail the subject-is-live guard
+        // above. Use the spelling each platform's localtime honors; both put
+        // the child in US-Pacific time (June ⇒ UTC-7 under DST).
+        #[cfg(windows)]
+        let tz = "PST8PDT";
+        #[cfg(not(windows))]
+        let tz = "America/Los_Angeles";
+
         let status = std::process::Command::new(std::env::current_exe().expect("current test exe"))
             .arg("date::tests::utc_getters_ignore_process_timezone")
             .arg("--exact")
-            .env("TZ", "America/Los_Angeles")
+            .env("TZ", tz)
             .env(CHILD_MARKER, "1")
             .status()
             .expect("spawn timezone-isolated date getter test");

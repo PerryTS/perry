@@ -934,6 +934,20 @@ jobs:
       - name: Build compiler + runtime + Windows UI crates (perry-dev)
         run: cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ui-windows -p perry-ui-windows-winui
 
+      # #7356: the full perry-runtime --lib suite is green on Windows for the
+      # first time (the SEH/longjmp transport, setjmp alignment, TZ, trim and
+      # spawnSync fixes). Before that, unguarded eh_walker calls meant the
+      # crate did not even COMPILE here and nothing noticed — this step is the
+      # arm that keeps the suite green rather than letting it rot back to
+      # "unmeasurable". Single-threaded for the same #1444 process-global-state
+      # reason as the ubuntu leg (both its invocations set RUST_TEST_THREADS=1);
+      # perry-dev profile so the test build shares the dependency artifacts the
+      # build step above already produced instead of paying a second cold
+      # dev-profile build of a ~340k-line crate.
+      - name: perry-runtime unit tests (single-threaded, #7356)
+        shell: bash
+        run: RUST_TEST_THREADS=1 cargo test --profile perry-dev --lib -p perry-runtime
+
       # Small deterministic subset: verifies the Git Bash driver itself,
       # `.exe`/`.lib` discovery, native TEMP paths, compilation, execution,
       # and Node/Perry comparison on a real Windows host.
