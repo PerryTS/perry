@@ -19,6 +19,17 @@
 # genuinely needs a new bare read in an unlisted file, the honest move is to
 # convert a pair elsewhere and say so in the PR, not to add a line here.
 #
+# ONE shape may join the list instead of converting: a LOOP whose collection
+# window is a user-visible trap/getter call (Proxy traps, accessors, valueOf)
+# re-reads every live handle at the top of each iteration. That re-read IS the
+# #7341 discipline -- `across_*` pairs exactly one allocating call with one
+# re-read and cannot express "re-read across two interleaved trap calls, every
+# iteration". Listing such a module is legitimate ONLY when the same change
+# converts enough pairs elsewhere that the global baseline does not rise; name
+# the loop and the trap in the PR. Current instances of this shape:
+#   - object/field_get_set/enumeration.rs -- proxy values/entries interleave
+#     (ownKeys, then per-key gOPD + get; #7467).
+#
 # 595 of 705 runtime modules were already clean when this was seeded, so the
 # rule above covers 84% of the crate on day one.
 #
@@ -51,7 +62,7 @@
 3 crates/perry-runtime/src/json/stringify.rs
 1 crates/perry-runtime/src/json/stringify_scalars.rs
 22 crates/perry-runtime/src/json_tape.rs
-27 crates/perry-runtime/src/map.rs
+26 crates/perry-runtime/src/map.rs
 2 crates/perry-runtime/src/module_require.rs
 7 crates/perry-runtime/src/node_stream/async_iterator.rs
 2 crates/perry-runtime/src/node_stream_dispatch.rs
@@ -66,6 +77,7 @@
 5 crates/perry-runtime/src/object/class_registry/construct.rs
 2 crates/perry-runtime/src/object/delete_rest.rs
 12 crates/perry-runtime/src/object/descriptors.rs
+5 crates/perry-runtime/src/object/field_get_set/enumeration.rs
 2 crates/perry-runtime/src/object/field_get_set/get_field_by_name.rs
 3 crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs
 11 crates/perry-runtime/src/object/field_set_by_name/tail.rs
@@ -100,11 +112,11 @@
 8 crates/perry-runtime/src/promise/then.rs
 8 crates/perry-runtime/src/proxy.rs
 1 crates/perry-runtime/src/proxy/put_value.rs
-9 crates/perry-runtime/src/regex.rs
-17 crates/perry-runtime/src/regex/exec.rs
+8 crates/perry-runtime/src/regex.rs
+16 crates/perry-runtime/src/regex/exec.rs
 30 crates/perry-runtime/src/regex/exec_array.rs
 14 crates/perry-runtime/src/regex/match_all.rs
-24 crates/perry-runtime/src/regex/match_string.rs
+22 crates/perry-runtime/src/regex/match_string.rs
 7 crates/perry-runtime/src/regex/replace_expand.rs
 3 crates/perry-runtime/src/regex/replace_fn.rs
 41 crates/perry-runtime/src/set.rs

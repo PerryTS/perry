@@ -1371,8 +1371,9 @@ pub extern "C" fn js_string_split_regex_n(
         let arr = crate::array::js_array_alloc(1);
         let scope = crate::gc::RuntimeHandleScope::new();
         let arr_handle = scope.root_raw_mut_ptr(arr);
-        let str_ptr = js_string_from_str(&str_data) as u64;
-        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        // Allocating string + array re-read as one combinator (#7341).
+        let (str_ptr, arr) =
+            arr_handle.across_mut::<ArrayHeader, _>(|| js_string_from_str(&str_data) as u64);
         unsafe {
             (*arr).length = 1;
             let nanboxed = STRING_TAG | (str_ptr & POINTER_MASK);

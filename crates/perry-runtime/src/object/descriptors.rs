@@ -284,8 +284,10 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             // `TypedArrayHeader` after it.
             let scope = crate::gc::RuntimeHandleScope::new();
             let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
-            let key_str = crate::builtins::js_string_coerce(key_value);
-            let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
+            // Allocating coercion + re-read as one combinator (#7341).
+            let (key_str, addr_ptr) =
+                addr_handle.across_mut::<u8, _>(|| crate::builtins::js_string_coerce(key_value));
+            let addr = addr_ptr as usize;
             if key_str.is_null() {
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
@@ -491,8 +493,10 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     // the `func_ptr` read) *after* the GC-capable coercion below.
                     let scope = crate::gc::RuntimeHandleScope::new();
                     let ptr_handle = scope.root_raw_mut_ptr(ptr as *mut u8);
-                    let key_str = crate::builtins::js_string_coerce(key_value);
-                    let ptr = ptr_handle.get_raw_mut_ptr::<u8>() as usize;
+                    // Allocating coercion + re-read as one combinator (#7341).
+                    let (key_str, ptr_raw) = ptr_handle
+                        .across_mut::<u8, _>(|| crate::builtins::js_string_coerce(key_value));
+                    let ptr = ptr_raw as usize;
                     if key_str.is_null() {
                         return f64::from_bits(crate::value::TAG_UNDEFINED);
                     }
@@ -649,8 +653,10 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         } else {
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
-            let key_str = crate::builtins::js_string_coerce(key_value);
-            (obj_handle.get_raw_mut_ptr::<ObjectHeader>(), key_str)
+            // Allocating coercion + re-read as one combinator (#7341).
+            let (key_str, obj_now) = obj_handle
+                .across_mut::<ObjectHeader, _>(|| crate::builtins::js_string_coerce(key_value));
+            (obj_now, key_str)
         };
         if key_str.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -1432,13 +1438,12 @@ unsafe fn proxy_get_own_property_descriptors(obj_value: f64) -> f64 {
                 desc_handle.get_nanbox_f64(),
             );
         } else {
-            let key_str = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
+            // Allocating coercion + receiver re-read as one combinator (#7341).
+            let (key_str, result_ptr) = result_handle.across_mut::<ObjectHeader, _>(|| {
+                crate::builtins::js_string_coerce(key_handle.get_nanbox_f64())
+            });
             if !key_str.is_null() {
-                js_object_set_field_by_name(
-                    result_handle.get_raw_mut_ptr::<ObjectHeader>(),
-                    key_str,
-                    desc_handle.get_nanbox_f64(),
-                );
+                js_object_set_field_by_name(result_ptr, key_str, desc_handle.get_nanbox_f64());
             }
         }
     }
@@ -1523,13 +1528,12 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
                     continue;
                 }
                 desc_handle.set_nanbox_f64(desc);
-                let key_str = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
+                // Allocating coercion + receiver re-read as one combinator (#7341).
+                let (key_str, result_ptr) = result_handle.across_mut::<ObjectHeader, _>(|| {
+                    crate::builtins::js_string_coerce(key_handle.get_nanbox_f64())
+                });
                 if !key_str.is_null() {
-                    js_object_set_field_by_name(
-                        result_handle.get_raw_mut_ptr::<ObjectHeader>(),
-                        key_str,
-                        desc_handle.get_nanbox_f64(),
-                    );
+                    js_object_set_field_by_name(result_ptr, key_str, desc_handle.get_nanbox_f64());
                 }
             }
         }

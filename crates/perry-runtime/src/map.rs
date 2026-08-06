@@ -1959,8 +1959,9 @@ pub extern "C" fn js_map_entries(map: *const MapHeader) -> *mut crate::array::Ar
             // to MIN_ARRAY_CAPACITY), then write key/value/length directly.
             // Skips the two `js_array_push_f64` calls per pair (each does
             // its own bounds + capacity check).
-            let pair = crate::array::js_array_alloc(2);
-            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            // Allocating pair array + map re-read as one combinator (#7341).
+            let (pair, map) =
+                map_handle.across_const::<MapHeader, _>(|| crate::array::js_array_alloc(2));
             let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));

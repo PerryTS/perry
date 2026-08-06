@@ -1,6 +1,7 @@
 //! Array representation for Perry — split into topical sub-modules.
 mod alloc;
 mod concat_reverse;
+mod fill_extend;
 mod flat_clone;
 mod from_concat;
 mod generic;

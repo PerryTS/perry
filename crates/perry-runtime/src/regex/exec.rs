@@ -182,9 +182,10 @@ pub extern "C" fn js_regexp_exec(
 
                 for (i, cap) in caps.iter().enumerate() {
                     if let Some(m) = cap {
-                        let str_ptr = js_string_from_str(m.as_str());
-                        let nanboxed = js_nanbox_string(str_ptr as i64);
-                        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                        // Allocating string + array re-read as one combinator (#7341).
+                        let (nanboxed, arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+                            js_nanbox_string(js_string_from_str(m.as_str()) as i64)
+                        });
                         // GC_STORE_AUDIT(INIT): fresh exec-array slot; layout is
                         // noted per store and the exact layout/barrier rebuild
                         // below the loop covers a mid-loop tenuring (#6386).
