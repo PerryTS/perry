@@ -524,6 +524,18 @@ impl LlBlock {
         r
     }
 
+    pub fn icmp_uge(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
+        let r = self.reg();
+        self.push_inst(crate::inst::LlInst::ICmp {
+            dst: r.clone(),
+            pred: "uge",
+            ty,
+            a: a.to_string(),
+            b: b.to_string(),
+        });
+        r
+    }
+
     pub fn icmp_sge(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::ICmp {

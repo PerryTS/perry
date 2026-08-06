@@ -119,11 +119,11 @@ pub(crate) use v8_interop::{
 };
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_jsvalue_slot_store_scalar_aware_on_block, emit_jsvalue_slot_store_with_flags_on_block,
-    emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_heap_word_store_on_block,
-    emit_root_nanbox_store_on_block, emit_write_barrier, emit_write_barrier_slot_on_block,
-    lower_array_super_init, lower_event_emitter_subclass_init, lower_node_stream_super_init,
-    lower_stream_super_init,
+    emit_jsvalue_slot_store_pointer_tested, emit_jsvalue_slot_store_scalar_aware_on_block,
+    emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
+    emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block, emit_write_barrier,
+    emit_write_barrier_slot_on_block, lower_array_super_init, lower_event_emitter_subclass_init,
+    lower_node_stream_super_init, lower_stream_super_init,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its

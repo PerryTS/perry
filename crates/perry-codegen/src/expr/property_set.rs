@@ -20,7 +20,7 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
     class_field_store_needs_layout_note, class_field_store_needs_string_addref,
-    emit_jsvalue_slot_store_with_flags_on_block, emit_typed_feedback_register_site,
+    emit_jsvalue_slot_store_pointer_tested, emit_typed_feedback_register_site,
     expr_produces_non_pointer_bits_by_construction, lower_expr, lower_expr_native,
     raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx, TypedFeedbackContract,
     TypedFeedbackKind,
@@ -868,10 +868,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     class_field_store_needs_layout_note(ctx, value);
                                 let string_addref_needed =
                                     class_field_store_needs_string_addref(ctx, value);
-                                let blk = ctx.block();
-                                let field_addr = blk.ptrtoint(&field_ptr, I64);
-                                emit_jsvalue_slot_store_with_flags_on_block(
-                                    blk,
+                                let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
+                                // #7511: whatever these three flags could not
+                                // be proved away statically is decided by ONE
+                                // live test of the stored bits — see
+                                // `emit_jsvalue_slot_store_pointer_tested`.
+                                emit_jsvalue_slot_store_pointer_tested(
+                                    ctx,
                                     &field_ptr,
                                     &val_double,
                                     &obj_handle,
@@ -1056,16 +1059,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let header_skip =
                                 crate::target_layout::object_header_size_bytes(ctx.target_triple)
                                     .to_string();
-                            let blk = ctx.block();
-                            let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                            let field_ptr = {
+                                let blk = ctx.block();
+                                let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                                let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                                blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)])
+                            };
                             let raw_stored_value = if requires_raw_f64 {
                                 // Guarded raw-f64 slots are pointer-free by typed
                                 // shape descriptor; non-number writes miss the
                                 // guard and use the boxed setter fallback.
                                 // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
                                 // slots contain numbers only.
+                                let blk = ctx.block();
                                 let numeric_value =
                                     canonicalize_raw_f64_numeric_store_value(blk, &val_double);
                                 blk.store(DOUBLE, &numeric_value, &field_ptr);
@@ -1083,9 +1089,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 // `requires_raw_f64` is false here, which is the
                                 // precondition `class_field_store_needs_layout_note`
                                 // documents.
-                                let field_addr = blk.ptrtoint(&field_ptr, I64);
-                                emit_jsvalue_slot_store_with_flags_on_block(
-                                    blk,
+                                //
+                                // #7511: this is the arm the shared
+                                // `<class>_constructor` symbol lands on, where the
+                                // value is an opaque function parameter and lever D
+                                // can never fire. Whatever survives it is decided by
+                                // ONE live test of the stored bits instead of three
+                                // cross-crate calls that each re-ask the same
+                                // question — see
+                                // `emit_jsvalue_slot_store_pointer_tested`.
+                                let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
+                                emit_jsvalue_slot_store_pointer_tested(
+                                    ctx,
                                     &field_ptr,
                                     &val_double,
                                     &obj_handle,
@@ -1098,7 +1113,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 );
                                 None
                             };
-                            blk.br(&merge_label);
+                            ctx.block().br(&merge_label);
                             raw_stored_value
                         };
                         if let Some(numeric_value) = raw_stored_value {

@@ -9,7 +9,7 @@ use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64};
 
 /// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
 /// by default. Only explicit `PERRY_WRITE_BARRIERS=0`/`off`/`false`
@@ -258,6 +258,157 @@ pub(crate) fn emit_jsvalue_slot_store_scalar_aware_on_block(
         true,
         None,
     )
+}
+
+/// #7511 — emit the `i1` predicate "these NaN-boxed bits MAY carry a heap
+/// pointer", as a superset of every heap address the runtime can decode.
+///
+/// This is the codegen mirror of `perry-runtime::gc::barrier::decode_heap_addr`
+/// and `gc::layout::layout_pointer_bearing_bits`, narrowed to the part that can
+/// be decided from the top 16 bits alone. Both runtime functions resolve a heap
+/// address in exactly two situations:
+///
+/// - the NaN-box tag is `POINTER_TAG` / `STRING_TAG` / `BIGINT_TAG`
+///   (`0x7FFD` / `0x7FFF` / `0x7FFA`), or
+/// - the value is a **bare** heap address: all-zero high 16 bits
+///   (`decode_heap_addr`'s `(bits >> 48) != 0` reject,
+///   `layout_pointer_bearing_bits`' `bits <= POINTER_MASK` range) and at or
+///   above a low floor — `0x10000` in `decode_heap_addr`, `0x1000` in
+///   `layout_pointer_bearing_bits`. The **lower** of the two floors is used
+///   here, so neither runtime predicate can accept a value this one rejects.
+///
+/// Everything else — every plain IEEE double, `SHORT_STRING_TAG` (inline data,
+/// not a pointer), `JS_HANDLE`, the `0x7FFC` primitives, `INT32_TAG`,
+/// `STATIC_DISPATCH_TAG` — is rejected by both, so this predicate is `false`
+/// for them. The floor is what keeps `0.0` — whose bit pattern is all zeros,
+/// and which is one of the most-stored values in any program — on the fast
+/// path instead of colliding with the bare-address arm.
+///
+/// **The direction of the approximation is load-bearing.** The refinements the
+/// runtime applies *after* these tests (a null pointer payload, a misaligned
+/// address, an arena page-map miss) are all further REJECTIONS. Dropping them
+/// can only make this predicate say "maybe" where the runtime would say "no" —
+/// an extra call that does nothing. It can never say "no" where the runtime
+/// would say "yes", which is the direction that strands a child.
+/// `perry-runtime`'s `gc::tests::inline_pointer_bearing_contract` enumerates
+/// the entire 16-bit tag space against both runtime predicates to pin exactly
+/// that, and `nanbox::inline_pointer_bearing_top16_set_covers_every_heap_tag`
+/// pins the comparand set against the tag constants.
+pub(crate) fn emit_may_carry_heap_pointer_check(blk: &mut LlBlock, value_bits: &str) -> String {
+    use crate::nanbox::{BIGINT_TAG_TOP16_I64, POINTER_TAG_TOP16_I64, STRING_TAG_TOP16_I64};
+    // `layout_pointer_bearing_bits`' floor (`0x1000`), the lower of the two.
+    const BARE_HEAP_ADDR_FLOOR_I64: &str = "4096";
+    let top16 = blk.lshr(I64, value_bits, "48");
+    let top16_zero = blk.icmp_eq(I64, &top16, "0");
+    let above_floor = blk.icmp_uge(I64, value_bits, BARE_HEAP_ADDR_FLOOR_I64);
+    let is_raw_addr = blk.and(I1, &top16_zero, &above_floor);
+    let is_pointer_tag = blk.icmp_eq(I64, &top16, POINTER_TAG_TOP16_I64);
+    let is_string_tag = blk.icmp_eq(I64, &top16, STRING_TAG_TOP16_I64);
+    let is_bigint_tag = blk.icmp_eq(I64, &top16, BIGINT_TAG_TOP16_I64);
+    let tagged = blk.or(I1, &is_pointer_tag, &is_string_tag);
+    let tagged = blk.or(I1, &tagged, &is_bigint_tag);
+    blk.or(I1, &tagged, &is_raw_addr)
+}
+
+/// #7511 — a class-field JSValue slot store whose three GC-bookkeeping calls
+/// are placed behind ONE inline, live test of the stored value.
+///
+/// ## Why a live test rather than a wider static proof
+///
+/// The bookkeeping this guards costs 16.1% of `churn_alloc`'s profile on a
+/// program whose stores are all doubles, and #5334 lever D — which elides it
+/// for a value that is a non-pointer BY CONSTRUCTION — never fires there. The
+/// reason is structural, not a missing arm: since the `[#bloat]`
+/// `force_ctor_call` default (`lower_call/new.rs`), a class with its own
+/// constructor is NOT inlined at the `new` site. Its body is compiled once as
+/// the shared `<class>_constructor(this, p0, …)` symbol, and HIR rewrites every
+/// closed-shape object literal into a `New` of a synthesized anon-shape class
+/// with exactly that shape (`lower/context.rs::mint_anon_shape_class`). So the
+/// expression reaching the field store is `Expr::LocalGet(<ctor param>)` — an
+/// LLVM *function argument* of a function shared by every `new` site in the
+/// module, including ones passing pointers. No by-construction proof about that
+/// value can exist, and a declared `v: number` is not a layout fact (CLAUDE.md,
+/// "No runtime type *validation*"): the field legitimately receives a string
+/// through an `any`.
+///
+/// What CAN be decided there is the same question the three callees each ask
+/// first, at runtime, one at a time, across three cross-crate calls. Asking it
+/// ONCE inline and branching over all three is exactly #7501's shape (a live
+/// test at the store standing in for a static claim that cannot be made).
+///
+/// ## Why each call is dead when the test says "no pointer"
+///
+/// - `js_write_barrier_slot` → `write_barrier_slot_inner` opens with
+///   `barrier_child_prologue`, which returns immediately when
+///   `decode_heap_addr(child) == 0`. Nothing else in the barrier runs — not the
+///   incremental-mark shading (there is no heap object to shade), not the
+///   remembered set (a non-pointer publishes no old→young edge).
+/// - `js_string_addref_if_heap_string` is tag-checked and a no-op for every
+///   non-`STRING_TAG` value, SSO short strings included.
+/// - `js_gc_note_slot_layout` for a non-pointer value can only ever CLEAR mask
+///   state, never set it, so skipping it is never the difference between a slot
+///   being scanned and a live child being stranded. That is the identical
+///   argument `class_field_store_needs_layout_note` already ships for the
+///   static case, including its precondition — the caller only reaches here
+///   with `requires_raw_f64 == false`, so the note's raw-f64-mask arm (the one
+///   that MUST downgrade) is unreachable. Turning a static claim into a live
+///   test does not weaken it.
+///
+/// The store itself stays unconditional and outside the branch — only the
+/// bookkeeping moves.
+///
+/// Callers that already proved the value statically pass all three flags
+/// `false`; then no test and no blocks are emitted at all, and lever D's
+/// existing elision is unchanged.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
+    ctx: &mut FnCtx<'_>,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    slot_index: &str,
+    string_addref_needed: bool,
+    layout_note_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+) -> Option<String> {
+    {
+        let blk = ctx.block();
+        // GC_STORE_AUDIT(BARRIERED): the slot write itself is unconditional;
+        // the barrier below is guarded only by a live test that the stored
+        // bits carry no heap pointer, which is the barrier's own first test.
+        blk.store(DOUBLE, value_double, slot_ptr);
+    }
+    if !string_addref_needed && !layout_note_needed && !write_barrier_needed {
+        return None;
+    }
+    let value_bits = ctx.block().bitcast_double_to_i64(value_double);
+    let bookkeeping_idx = ctx.new_block("class_field_set.gc_bookkeeping");
+    let done_idx = ctx.new_block("class_field_set.gc_bookkeeping.done");
+    let bookkeeping_label = ctx.block_label(bookkeeping_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let may_carry_pointer = emit_may_carry_heap_pointer_check(blk, &value_bits);
+        blk.cond_br(&may_carry_pointer, &bookkeeping_label, &done_label);
+    }
+    ctx.current_block = bookkeeping_idx;
+    {
+        let blk = ctx.block();
+        if string_addref_needed {
+            blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
+        }
+        if layout_note_needed {
+            emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
+        }
+        if write_barrier_needed {
+            emit_write_barrier_slot_on_block(blk, barrier_parent_bits, slot_addr, &value_bits);
+        }
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
+    Some(value_bits)
 }
 
 #[allow(clippy::too_many_arguments)]

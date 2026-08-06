@@ -19,6 +19,7 @@ mod global_bootstrap;
 mod helper_stores;
 mod host_safepoints;
 mod incremental_sweep_reclaim;
+mod inline_pointer_bearing_contract;
 mod layout_trace;
 mod oldgen;
 mod os_tag;
