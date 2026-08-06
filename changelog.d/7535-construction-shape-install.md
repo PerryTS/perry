@@ -1,6 +1,10 @@
 **A repeat construction of an already-installed typed shape is now two header
 bit-writes instead of a `SHAPE_LAYOUTS` round-trip (#7510 item 1, the
-construction half of #5094).**
+construction half of #5094).** On the pinned quiet host, interleaved best-of-9
+user CPU over 20M constructions: **1.09× on a `{v, w}` object-literal churn,
+1.10× on the `new Node(v, w)` class form, 1.06× on a 16-shape polymorphic
+churn**. `shape_install_shared` is entered **once** in a 20,000,000-object run,
+against 100,000 times in 100,000 on `main` (lldb breakpoint hit counts).
 
 Since #6893 the descriptor `js_gc_init_typed_shape_layout` installs is
 per-*shape*, not per-object: every same-shape object shares one canonical
@@ -18,7 +22,7 @@ hit arm writes nothing at all. On a symbolicated `churn_alloc` profile the two
 functions were 8.9% + 2.2% of self time.
 
 The new `gc/shape_install` module memoises exactly that map answer, in a
-thread-local 8-entry direct-mapped table, and nothing else:
+thread-local 32-entry direct-mapped table (1 KiB), and nothing else:
 
 > `SHAPE_LAYOUTS[keys]` holds `Some(D)`, where `D` is the descriptor that
 > `(slot_count, raw_words, pointer_words)` describes.
@@ -39,6 +43,17 @@ now read the caller's mask words directly, which takes the drop glue off six
 early-return paths and the `Vec` allocation off every construction of a shape
 wider than 64 slots. `LayoutSlotMask::intersects` survives as the test-only
 reference implementation the three word helpers are pinned against.
+
+**32 entries, not 8, and that was measured rather than guessed.** A
+direct-mapped table cycled round-robin by more shapes than it has slots hits
+*zero* percent of the time — each entry is evicted by its partner before it is
+read again — so it pays the probe and gets nothing. A 16-shape churn loop
+against 8 slots was a reproducible 0.993×, the one regression this change had;
+at 32 slots the same loop fits and turns into 1.059×, with the monomorphic
+numbers unchanged. The slot index also mixes in the two mask-global addresses,
+not just the shape, because two object-literal sites with the same key names
+share one `keys_array` but get separate mask globals unless LLVM's constant
+merger folds them.
 
 **Self-healing.** An entry is falsified by exactly one transition:
 `SHAPE_LAYOUTS[keys]` ceasing to be `Some(D)`. `shape_install_shared` is that
