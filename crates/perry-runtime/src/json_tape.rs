@@ -1020,8 +1020,11 @@ pub struct LazyArrayHeader {
     /// `n` against a threshold of `2n` and never trips. A scan is
     /// therefore invisible to the only adaptive signal the header had,
     /// which is why `field_access` pays 10 000 element-wise
-    /// materializations at ~2.3× the batch parser's rate. This counter
-    /// is the missing signal; `scan_flip_threshold` is where it trips.
+    /// materializations at ~1.8× the batch parser's cost for the same
+    /// tree (#7478's quiet-host decomposition: 2540 ms of element-wise
+    /// materialization against 1412 ms for a whole `DirectParser` parse,
+    /// tokenization included). This counter is the missing signal;
+    /// `scan_flip_threshold` is where it trips.
     pub sequential_streak: u32,
     // Followed by `tape_len` `TapeEntry` elements inline.
 }
@@ -1030,17 +1033,22 @@ pub struct LazyArrayHeader {
 /// before we stop materializing element-by-element and hand the whole
 /// array to the batch parser.
 ///
-/// The batch producer costs ~1/2.3 of the element-wise one per element,
-/// so flipping pays as soon as more than ~43% of the array is going to
-/// be touched. A streak is evidence for that, and the threshold scales
-/// with the array so the evidence stays proportional: 1/64th of the
-/// elements, floored at 64 so small arrays are not flipped on a glance.
+/// The reparse rebuilds the WHOLE array, so with the element-wise
+/// producer costing `r`× the batch one, flipping after a fraction `f` of
+/// the array has been walked pays exactly when `f < 1 - 1/r`. At the
+/// measured `r ≈ 1.8` that is `f < 44%`, which is why the caller pairs
+/// this with `force_materialize_lazy`'s own `cached_count * 2 <
+/// cached_length` (`f < 50%`) gate rather than relying on the streak
+/// alone.
 ///
-/// The floor is what protects the "peek at a handful of records" shape —
+/// A streak is the evidence that `f` will keep growing, and the threshold
+/// scales with the array so that evidence stays proportional: 1/64th of
+/// the elements, floored at 64 so small arrays are not flipped on a
+/// glance. The floor protects the "peek at a handful of records" shape —
 /// `parsed[0]`..`parsed[9]` on a 10k array must NOT drag in a full parse.
-/// The ceiling on the waste is symmetrical: if the scan stops right after
-/// the flip we have done one batch parse, which is still cheaper than the
-/// element-wise walk it replaced.
+/// The waste is bounded on the other side too: if the scan stops right
+/// after the flip we have done one batch parse, which is still cheaper
+/// than the element-wise walk of the same array it replaced.
 #[inline]
 pub(crate) fn scan_flip_threshold(cached_length: u32) -> u32 {
     core::cmp::max(64, cached_length / 64)
@@ -1389,10 +1397,14 @@ pub(crate) fn reparse_materializations() -> u64 {
 /// with `str::parse::<f64>` (what `materialize_number` uses) and with node.
 /// That divergence (#7477) is what blocked this change the first time.
 ///
-/// The batch parser builds the same tree ~2.3× faster than the per-element
-/// materializer (#7478's decomposition: 24 ms/iter vs 56 ms/iter on the 10k-
-/// record fixture), because it makes one linear pass instead of re-entering
-/// the walk, the sparse cache and a fresh handle scope per element.
+/// The batch parser builds the same tree ~1.8× cheaper than the per-element
+/// materializer (#7478's quiet-host decomposition on the 10k-record fixture:
+/// 1412 ms for 50 whole `DirectParser` parses, tokenization included, against
+/// 2540 ms of element-wise materialization for the same trees), because it
+/// makes one linear pass instead of re-entering the walk, the sparse cache
+/// and a fresh handle scope per element — and because it pre-sizes each
+/// object from a known field count behind an inline hot-shape cache instead
+/// of growing it a field at a time.
 ///
 /// GC contract — this is the part the first attempt got wrong, and it
 /// SIGSEGV'd intermittently for it. `DirectParser` is only sound inside a
@@ -1542,12 +1554,13 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
 
     // #7478: when most of the array still has to be built, re-parse the
     // retained blob with the batch DirectParser instead of walking the
-    // tape element-by-element — same tree, ~2.3× the rate. When MOST
+    // tape element-by-element — same tree, ~1.8× cheaper. When MOST
     // elements are already cached the walk is the cheap producer (it
     // copies cached JSValues and materializes only the remainder), and a
-    // reparse would rebuild subtrees it is about to throw away. The
-    // measured crossover is at ~43% uncached; `cached_count * 2 <
-    // cached_length` sits on the conservative side of it.
+    // reparse would rebuild subtrees it is about to throw away. Since the
+    // reparse rebuilds the whole array, it pays exactly while the cached
+    // fraction is below `1 - 1/1.8 ≈ 44%`; `cached_count * 2 <
+    // cached_length` is that crossover rounded to a shift.
     if cached_count * 2 < cached_length as u64 {
         let (reparsed, refreshed) = reparse_materialize(&scope, &hdr_handle, hdr, cached_length);
         if let Some(arr) = reparsed {

@@ -234,7 +234,7 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // provably cannot see a scan: a sequential walk costs one tape
     // step per element, so it accumulates `n` against a `2n`
     // threshold and never trips. Every element was materialized one
-    // at a time at ~2.3× the batch parser's per-element rate, then
+    // at a time at ~1.8× the batch parser's cost for the same tree, then
     // merged. #7478 adds the missing signal — a consecutive-ascending
     // streak (`LazyArrayHeader::sequential_streak`) that trips
     // `json_tape::scan_flip_threshold` EARLY, while the sparse cache
