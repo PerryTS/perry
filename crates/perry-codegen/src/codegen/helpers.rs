@@ -114,7 +114,7 @@ pub(crate) fn precise_root_analysis_enabled() -> bool {
 /// explicit bridge's hand emission and its conservative CFG-union liveness.
 /// Requires an `opt` binary (`PERRY_LLVM_OPT`, Homebrew LLVM, or PATH).
 pub(crate) fn rs4gc_enabled() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     if let Some(pinned) = NATIVE_ROOTS_OVERRIDE.with(|c| c.get()) {
         return pinned;
     }
@@ -143,38 +143,61 @@ thread_local! {
     static NATIVE_ROOTS_TARGET_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Test-only RAII pin for the lowering under test.
-///
-/// Now that native roots are the default, a test that asserts on shadow-stack
-/// IR has to SAY so — it used to get that lowering by accident, because there
-/// was only one default. Eight tests broke on exactly this when the default
-/// flipped, and every one of them was correct about what it asserted.
-///
-/// Thread-local and restoring, so one test pinning a lowering cannot change
-/// another's — the same discipline `arena::quarantine`'s `ProtectionModeGuard`
-/// already uses for the from-space instrument.
-#[cfg(test)]
+// The pin's backing cell. Separate from `NATIVE_ROOTS_TARGET_OK` on purpose:
+// `compile_module` calls `set_native_roots_for_target` per module, so a pin
+// that wrote the target cell would be overwritten the moment the test invoked
+// codegen. This is consulted FIRST and the per-module decision cannot clear it.
+#[cfg(any(test, feature = "testing"))]
 thread_local! {
-    /// Separate from `NATIVE_ROOTS_TARGET_OK` on purpose: `compile_module`
-    /// calls `set_native_roots_for_target` per module, so a pin that wrote the
-    /// target cell would be overwritten the moment the test invoked codegen.
-    /// This is consulted FIRST and the per-module decision cannot clear it.
     static NATIVE_ROOTS_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
-pub(crate) struct NativeRootsPin(Option<bool>);
+/// Test-support RAII pin for the root lowering under test.
+///
+/// Now that native roots are the default, a test that asserts on shadow-stack
+/// IR has to SAY so — it used to get that lowering by accident, because there
+/// was only one default. Eight in-crate tests broke on exactly this when the
+/// default flipped, and every one of them was correct about what it asserted;
+/// five integration suites broke the same way and stayed red for weeks, because
+/// this type was `#[cfg(test)]` and they could not reach it (#7493).
+///
+/// Thread-local and restoring, so one test pinning a lowering cannot change
+/// another's — the same discipline `arena::quarantine`'s `ProtectionModeGuard`
+/// already uses for the from-space instrument. Safe under `cargo test`'s
+/// default parallelism.
+///
+/// Reachable from `tests/*.rs` as `perry_codegen::testing::NativeRootsPin`; see
+/// [`crate::testing`] for why that is behind a cargo feature rather than an
+/// unconditional `pub`.
+#[cfg(any(test, feature = "testing"))]
+pub struct NativeRootsPin(Option<bool>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 impl NativeRootsPin {
-    /// Pin this thread to the shadow-stack lowering for the guard's lifetime.
-    pub(crate) fn shadow() -> Self {
+    /// Pin this thread to the **shadow-stack** lowering for the guard's
+    /// lifetime — Perry's heap-backed shadow frame, `js_shadow_frame_enter` +
+    /// per-slot binds.
+    pub fn shadow() -> Self {
         NativeRootsPin(NATIVE_ROOTS_OVERRIDE.with(|c| c.replace(Some(false))))
+    }
+
+    /// Pin this thread to the **native-roots** (RS4GC statepoint) lowering:
+    /// `ptr addrspace(1)` root allocas, `gc "statepoint-example"`, relocations
+    /// inserted by LLVM.
+    ///
+    /// This is today's default on every target the runtime can walk, so a test
+    /// that wants it does not strictly *need* the pin — but a pin is not
+    /// redundant: it also overrides `PERRY_RS4GC` from the environment, so the
+    /// assertion means the same thing during a `PERRY_RS4GC=0` bisection run as
+    /// it does in CI. Without it, a whole-suite sweep under the process-global
+    /// env knob silently retargets every unpinned test at the other lowering.
+    pub fn native() -> Self {
+        NativeRootsPin(NATIVE_ROOTS_OVERRIDE.with(|c| c.replace(Some(true))))
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 impl Drop for NativeRootsPin {
     fn drop(&mut self) {
         NATIVE_ROOTS_OVERRIDE.with(|c| c.set(self.0));

@@ -9,7 +9,24 @@
 //! shifted by a numeric local) are unchanged. What they no longer prove is
 //! that a call is what executes; `expr::shadow_inline`'s unit tests cover the
 //! emitted shape.
+//!
+//! LOWERING (#7493): **every** test in this file asserts on the SHADOW-STACK
+//! lowering and pins it with `NativeRootsPin::shadow()`. That is not a style
+//! choice — the file's whole subject is the shadow frame's own mechanics (slot
+//! reservation, bind/clear ordering, slot indices, the post-init frame region),
+//! which the native-roots lowering does not have: it puts roots in
+//! `ptr addrspace(1)` allocas and lets LLVM's RS4GC pass relocate them, with no
+//! frame, no slot index and no bind. The two are different lowerings of the
+//! same root-set analysis (#7340), so there is nothing here to translate.
+//!
+//! Since #7370 native roots are the DEFAULT on this target, so these pins are
+//! load-bearing: without them the file was 0/12 red on `main`. But note what
+//! that means for coverage — this suite now tests a lowering that no longer
+//! ships on aarch64/x86_64. The equivalent native-roots assertions are tracked
+//! in #7495; where a mechanic has no native-side counterpart today, that issue
+//! names it.
 
+use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
@@ -629,6 +646,7 @@ fn init_body_function_name(ir: &str) -> String {
 
 #[test]
 fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(compile_module(&shadow_hygiene_module(), empty_opts()).unwrap())
         .expect("LLVM IR should be UTF-8");
 
@@ -669,6 +687,7 @@ fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
 /// covers the inline sites too.
 #[test]
 fn duplicate_var_declarations_keep_every_slot_inside_the_frame() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(&duplicate_var_decl_shadow_module(), empty_opts()).unwrap(),
     )
@@ -707,6 +726,7 @@ fn duplicate_var_declarations_keep_every_slot_inside_the_frame() {
 
 #[test]
 fn entry_module_top_level_shadow_frame_starts_after_init_prelude() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(&top_level_shadow_module("entry_shadow.ts"), entry_opts()).unwrap(),
     )
@@ -737,6 +757,7 @@ fn entry_module_top_level_shadow_frame_starts_after_init_prelude() {
 
 #[test]
 fn entry_module_top_level_shadow_slots_update_and_clear() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(
             &top_level_shadow_module("entry_shadow_slots.ts"),
@@ -774,6 +795,7 @@ fn entry_module_top_level_shadow_slots_update_and_clear() {
 
 #[test]
 fn non_entry_module_init_body_gets_post_init_shadow_frame() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(
             &top_level_shadow_module("non_entry_shadow.ts"),
@@ -809,6 +831,7 @@ fn non_entry_module_init_body_gets_post_init_shadow_frame() {
 
 #[test]
 fn top_level_loop_body_shadow_slots_clear_each_iteration() {
+    let _pin = NativeRootsPin::shadow();
     let ir =
         String::from_utf8(compile_module(&top_level_loop_shadow_module(), entry_opts()).unwrap())
             .expect("LLVM IR should be UTF-8");
@@ -836,6 +859,7 @@ fn top_level_loop_body_shadow_slots_clear_each_iteration() {
 
 #[test]
 fn immutable_index_alias_binds_once_but_keeps_incremental_root_barrier() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(&persistent_index_alias_shadow_module(), entry_opts()).unwrap(),
     )
@@ -867,6 +891,7 @@ fn immutable_index_alias_binds_once_but_keeps_incremental_root_barrier() {
 
 #[test]
 fn flat_const_row_aliases_do_not_reserve_shadow_slots() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(&flat_const_row_alias_shadow_module(), entry_opts()).unwrap(),
     )
@@ -891,6 +916,7 @@ fn flat_const_row_aliases_do_not_reserve_shadow_slots() {
 
 #[test]
 fn reassigned_any_from_number_to_pointer_reserves_and_updates_shadow_slot() {
+    let _pin = NativeRootsPin::shadow();
     let ir =
         String::from_utf8(compile_module(&reassigned_any_shadow_module(), empty_opts()).unwrap())
             .expect("LLVM IR should be UTF-8");
@@ -912,6 +938,7 @@ fn reassigned_any_from_number_to_pointer_reserves_and_updates_shadow_slot() {
 
 #[test]
 fn mixed_any_writes_keep_alias_shadow_slots_precise() {
+    let _pin = NativeRootsPin::shadow();
     let ir =
         String::from_utf8(compile_module(&mixed_any_alias_shadow_module(), empty_opts()).unwrap())
             .expect("LLVM IR should be UTF-8");
@@ -936,6 +963,7 @@ fn mixed_any_writes_keep_alias_shadow_slots_precise() {
 
 #[test]
 fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(&closure_captured_write_shadow_module(), empty_opts()).unwrap(),
     )
@@ -1038,6 +1066,7 @@ fn canonical_str_shadow_module() -> Module {
 /// drops the generic GC-type-byte tower for the 3-arm tag dispatch.
 #[test]
 fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
+    let _pin = NativeRootsPin::shadow();
     let ir =
         String::from_utf8(compile_module(&canonical_str_shadow_module(), empty_opts()).unwrap())
             .expect("LLVM IR should be UTF-8");

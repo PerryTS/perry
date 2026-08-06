@@ -18,7 +18,28 @@
 //! Both directions are covered: the gate must stay silent for a
 //! literal whose fields are numbers, or every scalar-replaced `{x, y}` in a hot
 //! loop would pay for rooting a value that can never be collected (#6997).
+//!
+//! LOWERING (#7493): every test here measures `js_shadow_slot_bind` /
+//! `js_shadow_frame_enter` call sites, which only the SHADOW-STACK lowering
+//! emits — so every test pins `NativeRootsPin::shadow()`. Native roots express
+//! the same root set as `ptr addrspace(1)` allocas that LLVM's RS4GC pass
+//! relocates; there is no bind call to count.
+//!
+//! That distinction was not cosmetic for the two `numeric_only_*_emits_no_rooting`
+//! tests. They assert `bind_calls(&ir) == 0`, and under the post-#7370 default
+//! that count is zero for EVERY program, rooted or not — so they were passing
+//! vacuously, which is CLAUDE.md hazard 4 ("the gate runs but its subject never
+//! did"). Pinning them makes them assert their subject again; they now fail for
+//! a real reason, tracked in #7497 (since #7487 a pooled temp root also emits
+//! `js_shadow_slot_bind`, so a whole-module bind count no longer isolates the
+//! scalar-replaced slots it means to measure). A red test that is measuring
+//! something beats a green one that is not.
+//!
+//! The native-roots side of this contract — that a scalar-replaced field
+//! holding a heap value becomes a relocatable `addrspace(1)` slot, and a
+//! numeric one does not — has NO equivalent assertion anywhere today. #7495.
 
+use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
@@ -219,6 +240,7 @@ fn frame_slot_count(ir: &str) -> u32 {
 /// and the read therefore swept the value (#6968).
 #[test]
 fn scalar_replaced_object_field_holding_a_heap_value_is_bound() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_object_field_root.ts",
         vec![
@@ -283,6 +305,7 @@ fn scalar_replaced_object_field_holding_a_heap_value_is_bound() {
 /// exactly what this module builds (`Type::Any`).
 #[test]
 fn numeric_only_scalar_replaced_object_emits_no_rooting() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_object_numeric.ts",
         vec![
@@ -310,6 +333,7 @@ fn numeric_only_scalar_replaced_object_emits_no_rooting() {
 /// one alloca per element, and element 0 is the only reference to its value.
 #[test]
 fn scalar_replaced_array_element_holding_a_heap_value_is_bound() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_array_element_root.ts",
         vec![
@@ -337,6 +361,7 @@ fn scalar_replaced_array_element_holding_a_heap_value_is_bound() {
 /// …and its numeric twin stays free.
 #[test]
 fn numeric_only_scalar_replaced_array_emits_no_rooting() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_array_numeric.ts",
         vec![
@@ -369,6 +394,7 @@ fn numeric_only_scalar_replaced_array_emits_no_rooting() {
 /// both compilers: only the extra binds can come from the part slots.
 #[test]
 fn scalar_replaced_split_parts_are_bound() {
+    let _pin = NativeRootsPin::shadow();
     let source = Stmt::Let {
         id: 1,
         name: "s".to_string(),
@@ -421,6 +447,7 @@ fn scalar_replaced_split_parts_are_bound() {
 /// object-literal initializer is not the only store site.
 #[test]
 fn later_store_into_a_scalar_replaced_field_is_bound() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_object_field_reassign.ts",
         vec![
@@ -463,6 +490,7 @@ fn later_store_into_a_scalar_replaced_field_is_bound() {
 /// the bind altogether (0), which would un-root the alloca and reopen #6968.
 #[test]
 fn repeated_stores_into_one_scalar_slot_bind_once() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_field_two_stores.ts",
         vec![
@@ -505,6 +533,7 @@ fn repeated_stores_into_one_scalar_slot_bind_once() {
 /// `js_shadow_slot_bind`), so the old compiler produces 0 and fails.
 #[test]
 fn every_store_into_a_hoisted_scalar_slot_shades_its_value() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_field_two_stores_barrier.ts",
         vec![
@@ -560,6 +589,7 @@ fn every_store_into_a_hoisted_scalar_slot_shades_its_value() {
 /// `bind < first_branch` claim fails on the old compiler.
 #[test]
 fn bind_is_hoisted_into_the_entry_block_ahead_of_the_storing_loop() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_field_loop_bind.ts",
         vec![
@@ -630,6 +660,7 @@ fn bind_is_hoisted_into_the_entry_block_ahead_of_the_storing_loop() {
 /// store, so the `undef_stores > 0` claim fails on the old compiler.
 #[test]
 fn scalar_replaced_array_element_slots_are_initialized_before_the_bind() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_array_element_init.ts",
         vec![
@@ -675,6 +706,7 @@ fn scalar_replaced_array_element_slots_are_initialized_before_the_bind() {
 /// for the entry region too.
 #[test]
 fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
+    let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_numeric_no_entry_rooting.ts",
         vec![

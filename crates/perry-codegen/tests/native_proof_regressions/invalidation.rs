@@ -1,3 +1,19 @@
+//! LOWERING (#7493): fifteen tests here pin `NativeRootsPin::native()`.
+//!
+//! Their subject — buffer/length fact invalidation — is lowering-independent,
+//! but the *assertion* is not: `assert_buffer_store_uses_dynamic_fallback`
+//! proves the absence of a native buffer GEP with a MODULE-WIDE
+//! `!ir.contains("getelementptr inbounds i8")`, and the shadow-stack lowering's
+//! own inline slot addressing (#7088) emits exactly that instruction for
+//! reasons that have nothing to do with a buffer store. Run the suite under
+//! `PERRY_RS4GC=0` and these fifteen report a stale proof that was never there.
+//!
+//! Native roots are the default on every target the runtime can walk, so the
+//! pin does not change what CI runs — it makes the assertion mean the same
+//! thing during a `PERRY_RS4GC=0` bisection, which is the sweep a GC engineer
+//! actually runs. The durable fix is to scope the search to the buffer-store
+//! site instead of the whole module; #7498.
+
 use super::*;
 
 fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
@@ -13,6 +29,7 @@ fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
 
 #[test]
 fn localset_invalidates_native_i32_alias_facts() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop(
@@ -33,6 +50,7 @@ fn localset_invalidates_native_i32_alias_facts() {
 
 #[test]
 fn update_invalidates_native_i32_alias_facts() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop(
@@ -53,6 +71,7 @@ fn update_invalidates_native_i32_alias_facts() {
 
 #[test]
 fn localset_invalidates_min_length_facts() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "src", int(8)),
         buffer_let(2, "dst", int(8)),
@@ -68,6 +87,7 @@ fn localset_invalidates_min_length_facts() {
 
 #[test]
 fn localset_invalidates_active_bounded_buffer_index_facts() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         number_let(1, "n", false, int(8)),
         buffer_let(2, "buf", local(1)),
@@ -88,6 +108,7 @@ fn localset_invalidates_active_bounded_buffer_index_facts() {
 
 #[test]
 fn inner_loop_bounded_buffer_fact_is_removed_after_outer_fact_invalidation() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         number_let(1, "n", false, int(8)),
         buffer_let(2, "a", local(1)),
@@ -113,6 +134,7 @@ fn inner_loop_bounded_buffer_fact_is_removed_after_outer_fact_invalidation() {
 
 #[test]
 fn localset_invalidates_buffer_view_local_length_sources() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         number_let(1, "n", true, int(8)),
         buffer_let(2, "buf", local(1)),
@@ -127,6 +149,7 @@ fn localset_invalidates_buffer_view_local_length_sources() {
 
 #[test]
 fn update_invalidates_buffer_view_local_length_sources() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         number_let(1, "n", true, int(8)),
         buffer_let(2, "buf", local(1)),
@@ -141,6 +164,7 @@ fn update_invalidates_buffer_view_local_length_sources() {
 
 #[test]
 fn negative_loop_counter_does_not_emit_inbounds_buffer_gep() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop_with_start_and_update(
@@ -159,6 +183,7 @@ fn negative_loop_counter_does_not_emit_inbounds_buffer_gep() {
 
 #[test]
 fn decrementing_loop_update_does_not_emit_inbounds_buffer_gep() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop_with_start_and_update(
@@ -177,6 +202,7 @@ fn decrementing_loop_update_does_not_emit_inbounds_buffer_gep() {
 
 #[test]
 fn body_counter_mutation_does_not_emit_inbounds_buffer_gep() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop(
@@ -193,6 +219,7 @@ fn body_counter_mutation_does_not_emit_inbounds_buffer_gep() {
 
 #[test]
 fn inclusive_length_loop_does_not_emit_inbounds_buffer_gep() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop_with_op_start_and_update(
@@ -1037,6 +1064,7 @@ fn loop_local_array_alias_push_blocks_packed_u32_loop_and_artifacts() {
 
 #[test]
 fn inclusive_local_length_bound_does_not_use_local_length_bound_fact() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         number_let(1, "n", false, int(8)),
         buffer_let(2, "buf", local(1)),
@@ -1057,6 +1085,7 @@ fn inclusive_local_length_bound_does_not_use_local_length_bound_fact() {
 
 #[test]
 fn negative_loop_counter_does_not_use_local_length_bound_fact() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         number_let(1, "n", false, int(8)),
         buffer_let(2, "buf", local(1)),
@@ -1076,6 +1105,7 @@ fn negative_loop_counter_does_not_use_local_length_bound_fact() {
 
 #[test]
 fn body_mutation_of_local_bound_does_not_use_local_length_bound_fact() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         number_let(1, "n", true, int(1)),
         buffer_let(2, "buf", local(1)),
@@ -1096,6 +1126,7 @@ fn body_mutation_of_local_bound_does_not_use_local_length_bound_fact() {
 
 #[test]
 fn negative_loop_counter_does_not_use_min_length_bound_fact() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "src", int(8)),
         buffer_let(2, "dst", int(8)),

@@ -2,8 +2,17 @@
 // toolkit, and each file drives a different subset of it. Per-file pruning
 // would make the next test in this family re-add the builder it needs, so the
 // toolkit stays whole.
+//
+// LOWERING (#7493): one test here — `loop_length_bound_does_not_prove_
+// multibyte_buffer_read_inbounds` — pins `NativeRootsPin::native()`. It proves
+// the absence of a native buffer GEP with a module-wide
+// `!ir.contains("getelementptr inbounds i8")`, and the shadow-stack lowering's
+// own inline slot addressing emits that instruction for unrelated reasons, so
+// under `PERRY_RS4GC=0` it reports a proof leak that is not there. Same shape,
+// same reasoning and the same durable fix as the `invalidation` module: #7498.
 #![allow(dead_code)]
 
+use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{FunctionType, ObjectType, PropertyInfo, Type};
 use perry_hir::{
@@ -11,7 +20,9 @@ use perry_hir::{
     UpdateOp,
 };
 
-static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[path = "native_proof_support/mod.rs"]
+mod native_proof_support;
+use native_proof_support::{artifact_env_lock, artifact_for_module, NativeRepsEnv};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -147,7 +158,7 @@ fn compile_artifact_json_for_module_with_opts(
     opts: CompileOptions,
 ) -> serde_json::Value {
     let name = module.name.clone();
-    let _guard = ARTIFACT_ENV_LOCK.lock().unwrap();
+    let _guard = artifact_env_lock();
     let dir = std::env::temp_dir().join(format!(
         "perry_native_reps_test_{}_{}",
         std::process::id(),
@@ -156,40 +167,15 @@ fn compile_artifact_json_for_module_with_opts(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let old_reps = std::env::var_os("PERRY_NATIVE_REPS");
-    let old_reps_dir = std::env::var_os("PERRY_NATIVE_REPS_DIR");
-    std::env::set_var("PERRY_NATIVE_REPS", "1");
-    std::env::set_var("PERRY_NATIVE_REPS_DIR", &dir);
-
-    let compile_result = compile_module(&module, opts);
-
-    match old_reps {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS"),
-    }
-    match old_reps_dir {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS_DIR", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS_DIR"),
-    }
+    let compile_result = {
+        // Restored before any fallible step below, and on an unwind out of
+        // `compile_module` itself.
+        let _env = NativeRepsEnv::install(&dir, false);
+        compile_module(&module, opts)
+    };
 
     compile_result.unwrap();
-    let paths: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    let mut parsed = Vec::new();
-    for path in paths {
-        if !path.extension().is_some_and(|ext| ext == "json") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        if value["module"] == name {
-            return value;
-        }
-        parsed.push(value["module"].clone());
-    }
-    panic!("native reps artifact for {name} not found in {dir:?}; saw modules {parsed:?}");
+    artifact_for_module(&dir, &name)
 }
 
 fn assert_typed_array_get_fallback_reason(artifact: &serde_json::Value, reason: &str) {
@@ -660,6 +646,7 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
 
 #[test]
 fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
+    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop(

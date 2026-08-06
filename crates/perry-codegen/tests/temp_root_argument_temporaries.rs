@@ -10,6 +10,19 @@
 //! `cargo-test`, so a lowering path that quietly goes back to threading an
 //! accumulator through an SSA register fails here rather than three weeks
 //! later under a narrowed forced scan.
+//!
+//! LOWERING (#7493): nothing in this file is pinned, because nothing in it is
+//! lowering-dependent — `PERRY_RS4GC=0` moves it not at all (3/7 either way).
+//! Its failures are #7487's, not #7370's, and are tracked in #7496: temp roots
+//! were re-lowered onto pooled frame allocas, so `js_gc_temp_root_push` /
+//! `_get` / `_truncate` now appear only on the FFI fallback arm that neither
+//! lowering takes. The four positive assertions therefore fail, and all three
+//! `!ir.contains("call i32 @js_gc_temp_root_push")` negatives — the entire
+//! passing half of this suite — are VACUOUS: they hold for every program,
+//! rooted or not. The #6951 contract is still emitted (store into an entry
+//! alloca, root-bind, re-load after the allocating call); only the spelling
+//! these assertions search for is gone, so the suite currently proves nothing
+//! in either direction.
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{Expr, Module, ModuleInitKind, Stmt};

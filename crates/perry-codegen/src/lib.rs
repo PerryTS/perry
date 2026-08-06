@@ -40,6 +40,12 @@ pub(crate) mod stmt;
 pub mod strings;
 pub mod stubs;
 pub mod target_layout;
+/// Test-support surface — compiled only under `cfg(test)` or the `testing`
+/// cargo feature (which nothing but this crate's own `[dev-dependencies]`
+/// enables). See the module docs for why it is a feature and not a
+/// `#[doc(hidden)] pub`.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub(crate) mod type_analysis;
 pub(crate) mod type_analysis_class_fields;
 pub(crate) mod type_analysis_facts;

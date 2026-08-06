@@ -1,5 +1,14 @@
 // See native_proof_buffer_views.rs — shared HIR builder toolkit, each file in
 // this family drives a different subset.
+//
+// LOWERING (#7493): this suite is overwhelmingly lowering-INDEPENDENT and
+// deliberately unpinned. The exceptions are named at the tests themselves:
+// three here pin `NativeRootsPin::shadow()` because they assert on the
+// shadow-frame slot's own emission, and fifteen in `invalidation` pin
+// `NativeRootsPin::native()` because their module-wide "no inbounds GEP" proxy
+// collides with the shadow lowering's inline slot addressing (see that file's
+// header).
+use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
 use perry_hir::{
@@ -8,7 +17,9 @@ use perry_hir::{
     ModuleInitKind, Param, Stmt, UnaryOp, UpdateOp,
 };
 
-static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[path = "native_proof_support/mod.rs"]
+mod native_proof_support;
+use native_proof_support::{artifact_env_lock, artifact_for_module, NativeRepsEnv};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -156,7 +167,7 @@ fn compile_artifact_json_for_module_with_opts_and_clone_rejections(
     all_typed_clone_rejections: bool,
 ) -> serde_json::Value {
     let name = module.name.clone();
-    let _guard = ARTIFACT_ENV_LOCK.lock().unwrap();
+    let _guard = artifact_env_lock();
     let dir = std::env::temp_dir().join(format!(
         "perry_native_reps_test_{}_{}",
         std::process::id(),
@@ -165,51 +176,15 @@ fn compile_artifact_json_for_module_with_opts_and_clone_rejections(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let old_reps = std::env::var_os("PERRY_NATIVE_REPS");
-    let old_reps_dir = std::env::var_os("PERRY_NATIVE_REPS_DIR");
-    let old_all_typed_clone_rejections =
-        std::env::var_os("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS");
-    std::env::set_var("PERRY_NATIVE_REPS", "1");
-    std::env::set_var("PERRY_NATIVE_REPS_DIR", &dir);
-    if all_typed_clone_rejections {
-        std::env::set_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS", "1");
-    } else {
-        std::env::remove_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS");
-    }
-
-    let compile_result = compile_module(&module, opts);
-
-    match old_reps {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS"),
-    }
-    match old_reps_dir {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS_DIR", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS_DIR"),
-    }
-    match old_all_typed_clone_rejections {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS"),
-    }
+    let compile_result = {
+        // Dropped — and so restored — before ANY fallible step below, and on
+        // an unwind out of `compile_module` itself.
+        let _env = NativeRepsEnv::install(&dir, all_typed_clone_rejections);
+        compile_module(&module, opts)
+    };
 
     compile_result.unwrap();
-    let paths: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    let mut parsed = Vec::new();
-    for path in paths {
-        if !path.extension().is_some_and(|ext| ext == "json") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        if value["module"] == name {
-            return value;
-        }
-        parsed.push(value["module"].clone());
-    }
-    panic!("native reps artifact for {name} not found in {dir:?}; saw modules {parsed:?}");
+    artifact_for_module(&dir, &name)
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
@@ -6688,6 +6663,11 @@ fn boxed_param_capture_module(name: &str) -> Module {
 
 #[test]
 fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
+    // Asserts the SHADOW-STACK spelling of the box-pointer slot: a plain
+    // `store i64 <bits>, ptr %slot`. Under native roots the same slot is a
+    // `ptr addrspace(1)` alloca and the store is `store ptr addrspace(1)
+    // %rs4gc.sN` — the identical root, a different lowering (#7493).
+    let _pin = NativeRootsPin::shadow();
     let module = boxed_local_capture_module("boxed_local_js_value_bits_ir.ts");
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
     let box_alloc = ir
@@ -6797,6 +6777,11 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
 
 #[test]
 fn boxed_param_slot_uses_i64_js_value_bits_until_helper_edges() {
+    // Asserts the SHADOW-STACK spelling of the box-pointer slot: a plain
+    // `store i64 <bits>, ptr %slot`. Under native roots the same slot is a
+    // `ptr addrspace(1)` alloca and the store is `store ptr addrspace(1)
+    // %rs4gc.sN` — the identical root, a different lowering (#7493).
+    let _pin = NativeRootsPin::shadow();
     let module = boxed_param_capture_module("boxed_param_js_value_bits_ir.ts");
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
     let box_alloc = ir
@@ -11691,6 +11676,11 @@ fn typed_f64_method_clone_rejects_this_default_rest_and_any() {
 
 #[test]
 fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
+    // NOT pinned, deliberately (#7493). #7493's sweep listed this among the
+    // failures `PERRY_RS4GC=0` heals; run alone it fails under BOTH lowerings,
+    // so that reading was an artifact of whole-suite ordering. It is a plain
+    // drifted assertion — the caller no longer emits a `$generic` call on guard
+    // failure — and is tracked in #7499, not here.
     let ir = String::from_utf8(
         compile_module(&typed_f64_receiver_method_positive_module(), empty_opts()).unwrap(),
     )

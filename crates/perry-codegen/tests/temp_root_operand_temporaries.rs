@@ -18,7 +18,25 @@
 //! forces a conservative native-stack scan that pins the temporary by accident.
 //! Equally important is the negative half: the shapes that were always safe
 //! must still emit no rooting calls at all.
+//!
+//! LOWERING (#7493). Two tests here assert on the SHADOW-STACK spelling of the
+//! `this`-slot root (`js_shadow_slot_bind`) and pin `NativeRootsPin::shadow()`;
+//! `a_collection_free_construction_emits_no_this_slot_root` needed the pin even
+//! though it was *passing*, because under the post-#7370 native-roots default
+//! its `!contains("@js_shadow_slot_bind")` is true of every program (hazard 4:
+//! the gate ran, its subject did not).
+//!
+//! The rest of this file is lowering-INDEPENDENT and deliberately unpinned —
+//! but READ #7496 BEFORE TRUSTING IT. #7487 re-lowered temp roots onto pooled
+//! frame allocas, so `js_gc_temp_root_push` / `_get` / `_set` / `_truncate` are
+//! now emitted only on the FFI fallback arm, which neither lowering takes here.
+//! Every positive assertion spelled that way fails, and — worse — every
+//! `!ir.contains("call i32 @js_gc_temp_root_push")` passes vacuously. The
+//! contract itself is intact (the value is stored into an entry alloca, root-
+//! bound, and re-loaded after the allocating call); only the spelling these
+//! assertions look for is gone.
 
+use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{Class, Expr, Module, ModuleInitKind, Stmt};
 
@@ -959,6 +977,7 @@ fn the_inline_ctor_result_slot_never_carries_an_instance_address() {
 /// and no bind names the `this` slot.
 #[test]
 fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
+    let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(
             &module_with_new_running_ctor("new_inst_this_slot.ts"),
@@ -1246,6 +1265,7 @@ fn a_put_value_set_key_is_re_derived_below_the_value() {
 /// `lower_new_impl_inner` and this fails.
 #[test]
 fn a_collection_free_construction_emits_no_this_slot_root() {
+    let _pin = NativeRootsPin::shadow();
     // `module_with_new` is the bare `Pair` class: no fields, no ctor, no
     // heritage — the exact shape `construction_runs_user_code` answers `false`
     // for.

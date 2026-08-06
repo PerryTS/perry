@@ -60,6 +60,8 @@ mod number_exactness_tests;
 mod opts;
 mod spec_abi;
 mod string_pool;
+#[cfg(test)]
+mod testing_feature_gate_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
 

@@ -5629,6 +5629,7 @@ dependencies = [
  "llvm-sys",
  "log",
  "perry-api-manifest",
+ "perry-codegen",
  "perry-dispatch",
  "perry-hir",
  "serde",
