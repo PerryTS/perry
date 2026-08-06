@@ -1,6 +1,16 @@
 # Memory & Performance Roadmap: Beating Bun and Node on `bench_json_roundtrip`
 
-**Status:** active. Written 2026-04-24 alongside v0.5.193.
+> **SUPERSEDED — 2026-08-06.** This document's goal was met: Perry now beats
+> both oracles on the reference roundtrip (**194 ms** vs bun 221 / node 384,
+> pinned in #7476). Its standings below are from **v0.5.211**; HEAD is
+> v0.5.1289, so every number and tier here is stale by ~1000 patch versions
+> and must not be cited. It is kept for the tier reasoning and the historical
+> record only.
+>
+> The live plan is **[`engine-plan.md`](engine-plan.md)**; JSON-specific
+> remaining work is tracked in #7478.
+
+**Status:** superseded (see the note above). Written 2026-04-24 alongside v0.5.193.
 **Goal:** beat **both** Node and Bun on **both** time and peak RSS on the reference
 `bench_json_roundtrip.ts` workload — a 50-iteration `JSON.parse + JSON.stringify`
 loop over a ~1 MB blob with a 10k-record module-level setup array.

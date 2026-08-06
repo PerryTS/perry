@@ -43,6 +43,47 @@ share one prerequisite (a per-array homogeneous-element-shape invariant,
 construction-maintained, self-healing like 4a's dense bit), consumed first by
 the #5093 versioned-loop clone, then by element `Ptr<Shape>`.
 
+### Object construction — the dominant cost (#7469 campaign)
+
+**This is the top row of the backlog and the best-measured part of the engine.**
+Symbolicated decomposition of `churn` on the pinned quiet host
+(`PERRY_DEBUG_SYMBOLS=1`, 1500 leaf samples, best-of-3):
+
+| variant | Perry | node | ratio |
+|---|--:|--:|--:|
+| `churn` (full) | 2.72 s | 0.17 s | 16.0× |
+| `churn_alloc` — object literal + push | 2.44 s | 0.14 s | 17.4× |
+| **`push_cls` — `new Node(v,w)` + push** | **3.99 s** | 0.14 s | **28.5×** |
+| `push_num` — numbers into array | 0.30 s | 0.11 s | 2.7× |
+| `churn_read` — element reads only | 0.35 s | 0.08 s | 4.3× |
+
+`push_num` at 2.7× shows the array machinery is fine; subtracting it puts
+**~79% of `churn` in object construction**. Within construction, **~76% is GC
+and feedback bookkeeping and 7.7% is the allocation itself**:
+
+| group | share | ticket |
+|---|--:|---|
+| `gc::layout` side tables (`layout_forget_*` 14.5%, `layout_note_slot` 7.9%, `js_gc_init_typed_shape_layout` 7.7%, …) | **33.6%** | **#7510** (construction/death half of #5094) |
+| `_tlv_get_addr` | 17.0% | #7469 structural half (partly the same thread-locals as #7510) |
+| write barriers | 16.1% | **#7511** — *correctness-first: a missed barrier is a use-after-free, not a slowdown* |
+| typed-feedback guards | 9.2% | repsel 3b |
+| array helpers | 6.2% | partly closed by #7501 |
+| **the actual allocation** | **7.7%** | — |
+| user code | 3.7% | — |
+
+A declared class costing **63% more than an object literal** is backwards and
+is tracked as a suspected defect (**#7512**), with an explicit off-ramp: if the
+cause lands in the layout or barrier subsystems it closes as a duplicate.
+
+**Two traps recorded here because they cost real time.** `PERRY_WRITE_BARRIERS=0`
+**cannot** bound barrier cost — it makes `churn_alloc` *slower* (2.44 → 5.21 s)
+because it also switches the collector out of evacuating mode; the 16.1% is
+profile-derived only. And a TS annotation is never a layout fact, so no
+bookkeeping may be elided because a field is declared `number` — elision must
+be by-construction (`expr_produces_non_pointer_bits_by_construction`), and
+#7501 found that even a static layout *declaration* gets revoked at runtime, so
+collector-facing metadata needs a live header test at the store.
+
 ### Performance backlog (public-baseline sweep, 2026-08-06, quiet host)
 
 Pinned Node v22.23.1 / Bun 1.3.14, 11 runs per cell. Worst-first vs bun:
@@ -52,8 +93,8 @@ Pinned Node v22.23.1 / Bun 1.3.14, 11 runs per cell. Worst-first vs bun:
 | `json_parse_1mb` | 6.27× | JSON parser speed (shared with tape) |
 | `map_1m` | 5.74× | Map internals |
 | `batch` | 5.29× | app-pattern batch |
-| `field_access` (json_polyglot) | ~13× | JSON tape scan — #7478, **now unblocked** (#7477 fixed by #7483) |
-| element-shape kernel (`keep[j].v`) | 6.2× vs node | repsel #7480 |
+| `field_access` (json_polyglot) | ~13× | JSON tape scan. #7499 landed the reparse path but is a deliberate **no-op here** — the cost is the 10k `lazy_get` calls, so the early batch-flip trigger is the real fix |
+| element-shape kernel (`keep[j].v`) | 6.2× vs node | repsel — invariant landed (#7496), consumer pending |
 | `string_template_interp` | 3.09× | string building |
 | `json_stringify_1mb` | 2.62× | JSON stringify |
 
@@ -83,25 +124,32 @@ numbers); `date_format_parse` 0.82× vs bun.
 
 ## What is left, in order
 
-1. **#7475** — fix the auto-optimize-archive failures, rerun
-   `benchmarks/run_public_baseline.sh`, publish the artifact. This also turns
-   `lint` green and ends admin-bypass merging.
-2. **JSON workstream** — re-land #7478's reparse-on-materialize (now
-   unblocked by #7483; projected ~1500 ms field_access from 2981 while
-   keeping the roundtrip win). The measured dead ends are recorded in #7478 —
-   do not re-walk them.
-3. **Repsel** — build the #7480 element-shape invariant → versioned-loop
-   consumer → element `Ptr<Shape>`. This is the dependency chain for the
-   follow-on optimization work (4b itself is done — #6919).
-4. **Layer 1** — migrate remaining lowerings onto the rooted-combinator API
+1. **#7510 — `gc::layout` side tables (33.6%)**, the single biggest lever in
+   the engine. Its thread-local lookups are also part of the 17% TLS residue,
+   so one fix pays twice. Needs the quiet host to verify.
+2. **#7497** — the last blocker on the public benchmark artifact. Publishing
+   turns `lint` green and **ends admin-bypass merging**; #7475 is closed
+   (it was a rooting bug, not the feature-stripped archive — #7495).
+3. **#7512** — cheap bisect first: a static IR call-census diff says what the
+   class path emits that the literal path does not. May collapse into #7510 or
+   #7511, which is why it runs before either.
+4. **#7511 — write barriers (16.1%)**, sequenced after #7512 in case that
+   accounts for it. Correctness-first: acceptance requires
+   `PERRY_GC_VERIFY_EVACUATION=1` / `PERRY_GC_VERIFY_MARK=1` and the ratchet
+   probes, because a wrong answer here corrupts memory rather than slowing it.
+5. **Repsel** — the element-shape invariant landed (#7496); the versioned-loop
+   consumer and element `Ptr<Shape>` remain. Deliberately sequenced **after**
+   the bookkeeping levers: element reads are 13% of `churn` at 4.3×, the best
+   ratio in the table, so this is an RSS/footprint play more than a time one.
+6. **Layer 1** — migrate remaining lowerings onto the rooted-combinator API
    (`crates/perry-codegen/src/rooting.rs`); the arm-aware scan is the
    worklist tool. **Layer 3** — shrink the 107-module ceiling list toward
    empty; the end state is the raw accessor unreachable, not counted.
-5. **Statepoint-side static checker** — teach `gc_root_dominance_check.py` to
+7. **Statepoint-side static checker** — teach `gc_root_dominance_check.py` to
    read relocation bundles, closing the gap the #7452/#7460 repairs named.
-6. **RSS re-derivation under the statepoint default** (#7056) — the earlier
+8. **RSS re-derivation under the statepoint default** (#7056) — the earlier
    numbers were measured under the shadow stack.
-7. **Ratchet large-Eden probe arm** (#7481's lesson), plus the pending
+9. **Ratchet large-Eden probe arm** (#7481's lesson), plus the pending
    quiet-host re-pins (`wt-scavtenure` baseline).
 
 ---
