@@ -302,6 +302,94 @@ fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
     }
 }
 
+/// #7538 / #7500: `lazy_get`'s sparse-cache store must be recorded as an
+/// EXTERNAL old→young edge.
+///
+/// The cache is not part of the `LazyArrayHeader` allocation — it is a
+/// separate `GC_TYPE_STRING` block, born old at ≥2049 elements. The
+/// in-object barrier `lazy_get` used marks the page the SLOT sits on, and the
+/// minor's dirty-page scan then walks the objects on that page and finds the
+/// cache's own `GC_TYPE_STRING` header, a GC leaf with no child slots. The
+/// only descriptor that can read those slots is
+/// `GcRewriteDescriptorKind::LazyArray`, which hangs off the OWNER header —
+/// whose pages stay clean. So the cached element pointers were neither marked
+/// nor rewritten by a copying minor.
+///
+/// `test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child`
+/// covers the CONSUMER of that entry, but plants the entry by hand — it was
+/// green the entire time no producer wrote one. This drives the real producer.
+#[test]
+fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    // Born-old header: >16 KB of inline tape. That is the shape the #7538
+    // workload had and the only one where the in-object/external distinction
+    // bites — a nursery header is traced directly and its descriptor reaches
+    // the cache without any remembered-set entry at all.
+    let elements = 4096;
+    let mut input = String::with_capacity(elements * 8 + 2);
+    input.push('[');
+    for i in 0..elements {
+        if i > 0 {
+            input.push(',');
+        }
+        input.push_str("{\"a\":1}");
+    }
+    input.push(']');
+    let hdr = unsafe { test_alloc_lazy_json_array(input.as_bytes()) };
+    assert!(
+        crate::arena::pointer_in_old_gen(hdr as usize),
+        "the lazy header must be born old, or this test exercises nothing"
+    );
+
+    let scope = RuntimeHandleScope::new();
+    let hdr_handle = scope.root_raw_mut_ptr(hdr);
+    let first = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 7) };
+    let element_addr = first.bits() & POINTER_MASK;
+    assert_ne!(
+        element_addr, 0,
+        "element 7 should materialize to a heap object"
+    );
+    assert!(
+        crate::arena::pointer_in_nursery(element_addr as usize),
+        "the materialized element must be young, or no old→young edge exists"
+    );
+
+    let hdr_after = hdr_handle.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
+    let (cache_slot, header_addr) = unsafe {
+        let cache = (*hdr_after).materialized_elements;
+        assert!(
+            !cache.is_null(),
+            "cold lazy_get should allocate the sparse cache"
+        );
+        (
+            cache.add(7) as usize,
+            header_from_user_ptr(hdr_after as *const u8) as usize,
+        )
+    };
+    assert_ne!(
+        crate::arena::generation_page_for_addr(cache_slot),
+        crate::arena::generation_page_for_addr(hdr_after as usize),
+        "cache and header must land on different pages, or the in-object barrier \
+         would have covered the slot by accident"
+    );
+
+    let snapshot = crate::gc::barrier::remembered_dirty_snapshot();
+    let slot_page = crate::arena::generation_page_for_addr(cache_slot);
+    assert!(
+        snapshot
+            .external_dirty_entries
+            .iter()
+            .any(|&(page, header)| page == slot_page && header == header_addr),
+        "lazy_get must record its sparse-cache store as an EXTERNAL dirty slot naming the \
+         owning LazyArrayHeader. Recording only the slot's page (the in-object barrier) is \
+         inert: the dirty scan walks the objects on that page and finds the cache's own \
+         GC_TYPE_STRING header, a leaf with no child slots, so nothing is marked or rewritten."
+    );
+}
+
 #[test]
 fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);

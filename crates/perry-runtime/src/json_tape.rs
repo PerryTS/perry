@@ -1205,6 +1205,35 @@ unsafe fn note_lazy_raw_slot(hdr: *mut LazyArrayHeader, slot_addr: usize, child_
     crate::gc::runtime_write_barrier_slot(hdr as usize, slot_addr, child_addr as u64);
 }
 
+/// Barrier for a store into the sparse element cache (#7538).
+///
+/// The cache is NOT part of the `LazyArrayHeader` allocation — it is a
+/// separate `GC_TYPE_STRING` block hanging off `materialized_elements`, and at
+/// ≥2049 elements (`cached_length * 8 > LARGE_OBJECT_THRESHOLD_BYTES`) it is
+/// born directly in old-gen. That makes the ordinary in-object barrier
+/// ([`note_lazy_raw_slot`]) the WRONG one here, and silently so:
+/// `remember_old_to_young_slot` marks the page the SLOT lives on, and the
+/// minor's dirty-page scan then walks the objects on that page and finds the
+/// cache's own `GC_TYPE_STRING` header — a GC leaf with no child slots, so it
+/// scans nothing. The only descriptor that can read those slots is
+/// `GcRewriteDescriptorKind::LazyArray`, which hangs off the OWNER header,
+/// whose pages stay clean. A copying minor therefore neither marked nor
+/// rewrote the cached element pointers: element identity survived (the bitmap
+/// still says "cached"), but the pointer named a retired from-space copy.
+/// Reading a record through it returned the pre-collection `keys_array`, which
+/// is why `JSON.stringify` emitted `{"field0":…,"field1":…}` for exactly one
+/// record per run with the values still correct.
+///
+/// `runtime_write_barrier_external_slot` is the out-of-object form: it records
+/// `(slot page → owner header)` so the scan re-enters through the owner's
+/// LazyArray descriptor, which is what
+/// `test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child`
+/// has always exercised — from a hand-planted entry no producer ever wrote.
+#[inline]
+unsafe fn note_lazy_cache_slot(hdr: *mut LazyArrayHeader, slot_addr: usize, value_bits: u64) {
+    crate::gc::runtime_write_barrier_external_slot(hdr as usize, slot_addr, value_bits);
+}
+
 /// Count top-level elements in the tape's root array. Hops forward
 /// from `root_idx + 1` via the `link` field on container kinds to
 /// skip nested subtrees — O(top-level-count), not O(total-nodes).
@@ -1367,11 +1396,7 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if !bitmap.is_null() && !cache.is_null() {
         let value_bits = value_handle.get_nanbox_u64();
         *cache.add(i as usize) = JSValue::from_bits(value_bits);
-        crate::gc::runtime_write_barrier_slot(
-            hdr as usize,
-            cache.add(i as usize) as usize,
-            value_bits,
-        );
+        note_lazy_cache_slot(hdr, cache.add(i as usize) as usize, value_bits);
         let word_idx = (i as usize) / 64;
         let bit_idx = (i as usize) % 64;
         *bitmap.add(word_idx) |= 1u64 << bit_idx;

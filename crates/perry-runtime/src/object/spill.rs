@@ -152,8 +152,43 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
     }
 }
 
+#[cfg(test)]
+pub(crate) type SpillSafepointHook = fn(usize);
+
+#[cfg(test)]
+thread_local! {
+    static SPILL_SAFEPOINT_HOOK: std::cell::Cell<Option<SpillSafepointHook>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_spill_safepoint_hook(
+    hook: Option<SpillSafepointHook>,
+) -> Option<SpillSafepointHook> {
+    SPILL_SAFEPOINT_HOOK.with(|slot| {
+        let previous = slot.get();
+        slot.set(hook);
+        previous
+    })
+}
+
+#[cfg(test)]
+#[inline]
+fn spill_safepoint(obj_ptr: usize) {
+    SPILL_SAFEPOINT_HOOK.with(|slot| {
+        if let Some(hook) = slot.get() {
+            hook(obj_ptr);
+        }
+    });
+}
+
+#[cfg(not(test))]
+#[inline]
+fn spill_safepoint(_obj_ptr: usize) {}
+
 /// Allocation path: ensure the meta record and a buffer wide enough for
-/// `field_index`, then store. Roots the owner across the allocations.
+/// `field_index`, then store. Roots the owner AND the incoming value across
+/// the allocations.
 #[cold]
 fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
     unsafe {
@@ -166,7 +201,24 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         // minor GC. Reload through the handle after every allocation.
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(obj);
+        // #7538: root the VALUE too. It arrives as plain `u64` bits — a
+        // by-value copy of a NaN-boxed pointer the caller may well have
+        // rooted, which does the callee no good: `object_meta_ensure` and
+        // `js_array_alloc_with_length` below are both collection points, and
+        // an evacuating minor at either one rewrites the caller's handle
+        // while this local keeps naming the from-space copy. The store at the
+        // end then publishes that address into a slot the collector has
+        // already finished rewriting, so the stale pointer is never fixed and
+        // never reported (its target is live, just relocated). Re-read the
+        // bits from the handle immediately before the store.
+        let value_handle = scope.root_nanbox_u64(vbits);
         object_meta_ensure(obj);
+        // Test-only stand-in for the collection `object_meta_ensure` (and the
+        // buffer allocation below) can genuinely take. Same pattern, and same
+        // reason, as `json_tape::json_tape_safepoint`: the window is one
+        // allocation wide, so a test that waits for the arena trigger to land
+        // in it is a coin flip. Compiles to nothing outside `cfg(test)`.
+        spill_safepoint(obj_handle.get_raw_mut_ptr::<ObjectHeader>() as usize);
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let meta = (*obj).meta;
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
@@ -212,7 +264,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let meta = (*obj).meta;
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
-        spill_store_slot(spill, field_index, vbits);
+        spill_store_slot(spill, field_index, value_handle.get_nanbox_u64());
     }
 }
 
