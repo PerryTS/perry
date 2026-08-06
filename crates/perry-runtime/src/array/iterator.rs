@@ -1123,15 +1123,41 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     use crate::string::js_string_from_bytes;
     use crate::value::{js_nanbox_get_pointer, TAG_UNDEFINED};
 
+    // #7475: EVERY value this loop carries across a `.next()` call is a
+    // GC-managed object, and `.next()` allocates the `{ value, done }` result
+    // — so any of the four can be moved by the copying minor that allocation
+    // triggers. Before this scope they lived in bare Rust locals, which the
+    // collector cannot see and therefore never rewrites:
+    //
+    //   * the iterator object itself. A moved iterator leaves the pre-move
+    //     copy in retired from-space; the next `.next()` dispatch reads its
+    //     STALE field 0 (an array iterator's backing array), and
+    //     `dispatch_array_iterator_method` then calls `js_array_length` on a
+    //     from-space address. That is the exact fault
+    //     `PERRY_GC_PROTECT_FROMSPACE=1` reports for `[...arr]` at scale.
+    //   * the accumulator array, re-read on every push.
+    //   * the `next` closure (non-movable, but sweepable while unreferenced).
+    //   * the two interned property keys.
+    //
+    // The per-iteration result object gets ONE reusable scratch slot rather
+    // than a fresh handle each turn — the loop runs up to 100k times and a
+    // push-per-iteration would grow the handle stack without bound.
+    //
+    // Every handle here is NaN-boxed rather than `root_raw_*_ptr`, so reading
+    // one back is a `get_nanbox_f64` at the point of use and the module stays
+    // out of `scripts/raw_handle_debt.py`'s ledger.
+    let scope = crate::gc::RuntimeHandleScope::new();
+
     let arr = js_array_alloc(8); // start with capacity 8
+    let result_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(arr as i64));
+    let read_result = || js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
 
     // Get the iterator object pointer
-    let _iter_bits = iter_f64.to_bits();
     let iter_ptr = js_nanbox_get_pointer(iter_f64);
     if iter_ptr == 0 {
-        return arr;
+        return read_result();
     }
-    let _iter_obj = iter_ptr as *const ObjectHeader;
+    let iter_h = scope.root_nanbox_f64(iter_f64);
 
     // Look up the "next" method on the iterator object as a stored closure
     // FIELD (the common case for generator objects / effect's `SingleShotGen`,
@@ -1155,19 +1181,31 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     // a `next` closure field, so the field lookup above misses. Fall back to a
     // method-call dispatch in that case instead of bailing with an empty array.
     let use_method_dispatch = next_ptr.is_null();
+    // `next_f64` is already the NaN-boxed closure value (or `undefined`, which
+    // the root scanner ignores), so it roots directly.
+    let next_h = scope.root_nanbox_f64(next_f64);
 
     // Iterate: call next() until done
-    let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
-    let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
-    let mut result = arr;
+    let done_key_h = scope.root_nanbox_f64(nanbox_string_key(js_string_from_bytes(
+        b"done".as_ptr(),
+        4,
+    )));
+    let value_key_h = scope.root_nanbox_f64(nanbox_string_key(js_string_from_bytes(
+        b"value".as_ptr(),
+        5,
+    )));
+    // Reusable scratch slot for the `{ value, done }` object `.next()` returns.
+    let step_h = scope.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
 
     for _ in 0..100_000 {
         // safety limit
         // Call next() — stored-closure fast path, or class-id method dispatch.
+        // Both addresses are read fresh from their roots at the callsite: the
+        // previous iteration's `.next()` may have moved either one.
         let result_f64 = if use_method_dispatch {
             unsafe {
                 crate::object::js_native_call_method(
-                    iter_f64,
+                    iter_h.get_nanbox_f64(),
                     b"next".as_ptr() as *const i8,
                     4,
                     std::ptr::null(),
@@ -1175,7 +1213,10 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
                 )
             }
         } else {
-            closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED))
+            closure::js_closure_call1(
+                js_nanbox_get_pointer(next_h.get_nanbox_f64()) as *const closure::ClosureHeader,
+                f64::from_bits(TAG_UNDEFINED),
+            )
         };
         // IteratorNext (ECMA-262 §7.4.2 step 3): if Type(result) is not
         // Object, throw a TypeError. `is_pointer()` is true only for
@@ -1189,11 +1230,19 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
         if !result_is_object {
             throw_iterator_result_not_object();
         }
-        let result_ptr = js_nanbox_get_pointer(result_f64);
-        let result_obj = result_ptr as *const ObjectHeader;
+        // Root the result object before touching it: the two field reads below
+        // can allocate (key interning / shape lookup), and the push certainly
+        // can.
+        step_h.set_nanbox_f64(result_f64);
+        let result_obj = js_nanbox_get_pointer(result_f64) as *const ObjectHeader;
 
         // Check .done
-        let done_val = js_object_get_field_by_name(result_obj, done_key);
+        let (done_val, result_obj) = step_h.across_const::<ObjectHeader, _>(|| {
+            js_object_get_field_by_name(
+                result_obj,
+                js_nanbox_get_pointer(done_key_h.get_nanbox_f64()) as *const crate::StringHeader,
+            )
+        });
         let done_bits = unsafe { std::mem::transmute::<_, u64>(done_val) };
         // done is true when it's TAG_TRUE (0x7FFC_0000_0000_0004) or truthy number
         if done_bits == 0x7FFC_0000_0000_0004 {
@@ -1201,12 +1250,24 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
         } // TAG_TRUE
 
         // Get .value and push to array
-        let val = js_object_get_field_by_name(result_obj, value_key);
+        let val = js_object_get_field_by_name(
+            result_obj,
+            js_nanbox_get_pointer(value_key_h.get_nanbox_f64()) as *const crate::StringHeader,
+        );
         let val_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(val)) };
-        result = js_array_push_f64(result, val_f64);
+        let pushed = js_array_push_f64(read_result(), val_f64);
+        result_h.set_nanbox_f64(crate::value::js_nanbox_pointer(pushed as i64));
     }
 
-    result
+    read_result()
+}
+
+/// NaN-box a `StringHeader*` so it can live in a `RuntimeHandleScope` slot as
+/// an ordinary `Nanbox` root (marked AND rewritten) instead of a `RawTagged`
+/// one that would have to be read back through `get_raw_const_ptr`.
+#[inline]
+fn nanbox_string_key(ptr: *mut crate::StringHeader) -> f64 {
+    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
 }
 
 /// `BindingRestElement` / `AssignmentRestElement` iterator drain for

@@ -518,35 +518,62 @@ pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
     }
 }
 
+/// Root every heap value an iterator-result constructor carries across its own
+/// allocations, and hand back the finished `{ … }` object.
+///
+/// #7475: `value` is a caller-supplied JSValue that is very often a heap
+/// pointer (an array element), `obj` is freshly allocated, and the two key
+/// strings and the keys array are all allocated while the earlier ones are
+/// still live. Every one of those lines can trigger the copying minor, and
+/// before this helper each was held in a bare Rust local the collector cannot
+/// see — so a collection during `make_iter_result` stored a from-space address
+/// into the result object, which the spread/`Array.from` drain then read back.
+///
+/// `first`/`second` name the two field slots in declaration order, since the
+/// array iterator stores `{ value, done }` and the `node:sqlite` iterator
+/// stores `{ done, value }`.
+unsafe fn build_iter_result(first: (&[u8], JSValue), second: (&[u8], JSValue)) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let first_h = scope.root_nanbox_u64(first.1.bits());
+    let second_h = scope.root_nanbox_u64(second.1.bits());
+
+    let obj_h = scope.root_nanbox_f64(js_nanbox_pointer(js_object_alloc(0, 2) as i64));
+
+    // keys array so destructuring + property reads find named slots.
+    let first_key_h = scope.root_nanbox_u64(
+        JSValue::string_ptr(crate::string::js_string_from_bytes(
+            first.0.as_ptr(),
+            first.0.len() as u32,
+        ))
+        .bits(),
+    );
+    let second_key_h = scope.root_nanbox_u64(
+        JSValue::string_ptr(crate::string::js_string_from_bytes(
+            second.0.as_ptr(),
+            second.0.len() as u32,
+        ))
+        .bits(),
+    );
+    let keys_h = scope.root_nanbox_f64(js_nanbox_pointer(crate::array::js_array_alloc(2) as i64));
+    let keys = || js_nanbox_get_pointer(keys_h.get_nanbox_f64()) as *mut ArrayHeader;
+    crate::array::js_array_push(keys(), JSValue::from_bits(first_key_h.get_nanbox_u64()));
+    crate::array::js_array_push(keys(), JSValue::from_bits(second_key_h.get_nanbox_u64()));
+
+    let obj = || js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
+    crate::object::js_object_set_keys(obj(), keys());
+    js_object_set_field(obj(), 0, JSValue::from_bits(first_h.get_nanbox_u64()));
+    js_object_set_field(obj(), 1, JSValue::from_bits(second_h.get_nanbox_u64()));
+    js_nanbox_pointer(obj() as i64)
+}
+
 /// Build the `{ value, done }` iterator-result object. `value` arrives as
 /// a NaN-boxed JSValue; `done` is a JS boolean.
 unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-
-    // keys array so destructuring + property reads find named slots.
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::object::js_object_set_keys(obj, keys);
-
-    js_object_set_field(obj, 0, value);
-    js_object_set_field(obj, 1, JSValue::bool(done));
-    js_nanbox_pointer(obj as i64)
+    build_iter_result((b"value", value), (b"done", JSValue::bool(done)))
 }
 
 unsafe fn make_sqlite_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::object::js_object_set_keys(obj, keys);
-    js_object_set_field(obj, 0, JSValue::bool(done));
-    js_object_set_field(obj, 1, value);
-    js_nanbox_pointer(obj as i64)
+    build_iter_result((b"done", JSValue::bool(done)), (b"value", value))
 }
 
 unsafe fn make_pair_array(idx: u32, value: f64) -> f64 {
@@ -628,6 +655,14 @@ pub unsafe fn dispatch_array_iterator_method(
             // subsequent `.next()` call sees the bumped index.
             js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
 
+            // #7475: the cursor store above can allocate (shape transition /
+            // storage growth), so `arr_ptr` — read before it — may now name
+            // from-space. Re-derive the backing array from the iterator's
+            // field 0, which the collector DOES rewrite, instead of reusing
+            // the pre-store copy.
+            let arr_ptr = js_nanbox_get_pointer(f64::from_bits(
+                js_object_get_field(iter_obj, 0).bits(),
+            )) as *const ArrayHeader;
             let elem = if arr_ptr.is_null() {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
