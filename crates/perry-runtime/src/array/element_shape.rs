@@ -185,13 +185,15 @@ pub(crate) fn element_class_of_bits(value_bits: u64) -> Option<u32> {
         return None;
     }
     let addr = (value_bits & crate::value::POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_plausible_heap_addr(addr) {
-        return None;
-    }
     unsafe {
-        let header =
-            (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        // The canonical validated header read: it rejects the handle bands and
+        // implausible magnitudes BEFORE touching `addr - GC_HEADER_SIZE`, and
+        // it also rejects small-buffer slab addresses, which are heap-plausible
+        // but carry no `GcHeader` at all.
+        let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+            return None;
+        };
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
