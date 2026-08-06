@@ -324,6 +324,100 @@ fn every_bookkeeping_call_is_still_emitted_not_removed() {
     );
 }
 
+/// A module whose `probe` binds `let o = new C(v)` and then writes a field on
+/// the LOCAL receiver rather than on `this`, so the store is lowered from a
+/// different `property_set.rs` entry than the constructor prologue's.
+fn module_with_local_receiver_store(class: Class, stored: Expr) -> Module {
+    let class_name = class.name.clone();
+    let mut module = module_with_new(class, vec![Expr::Number(1.0)]);
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 5,
+            name: "o".to_string(),
+            ty: Type::Named(class_name.clone()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name,
+                args: vec![Expr::Number(1.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(5)),
+            property: "v".to_string(),
+            value: Box::new(stored),
+        }),
+        Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(5)),
+            property: "v".to_string(),
+            byte_offset: 0,
+        })),
+    ];
+    module.functions[0].return_type = Type::Any;
+    module
+}
+
+/// **Every emitted block is still terminated.**
+///
+/// `emit_jsvalue_slot_store_pointer_tested` leaves `ctx.current_block` on a
+/// freshly created merge block, and `property_set.rs` has arms that terminate
+/// explicitly (the typed-feedback guarded arm's `br` to `class_field_set.merge`)
+/// and arms that fall through to whatever the caller emits next (the
+/// `ptr_shape_receiver_fact` arm returns without a terminator, exactly as it did
+/// before this change). A dangling merge block is invisible to a call-count
+/// assertion and is how the second shape would break, so scan the whole module:
+/// no label may follow another label with no terminator in between.
+#[test]
+fn guarded_store_leaves_every_block_terminated() {
+    assert_default_barrier_env_not_disabled();
+    let module = module_with_local_receiver_store(
+        class(
+            4,
+            "LocalBoxed",
+            vec![field("v", Type::Any)],
+            Some(param_prologue_ctor("v", 7, Type::Any)),
+        ),
+        // An opaque local read: no by-construction proof, so the flags survive
+        // to the guard instead of being retired by lever D.
+        Expr::LocalGet(5),
+    );
+    let ir = compile_ir(&module);
+    let guarded = gc_bookkeeping_block(&ir)
+        .unwrap_or_else(|| panic!("expected a guarded bookkeeping block in:\n{ir}"));
+    for call in [
+        "@js_write_barrier_slot",
+        "@js_gc_note_slot_layout",
+        "@js_string_addref_if_heap_string",
+    ] {
+        assert!(
+            guarded.contains(call),
+            "{call} must live inside the guarded block:\n{guarded}"
+        );
+    }
+
+    let mut open_block: Option<&str> = None;
+    for line in ir.lines() {
+        let trimmed = line.trim();
+        if line.ends_with(':') && !line.starts_with(' ') && !line.starts_with('%') {
+            assert!(
+                open_block.is_none(),
+                "block {:?} was left unterminated before {line:?}",
+                open_block.unwrap()
+            );
+            open_block = Some(line);
+        } else if trimmed.starts_with("br ")
+            || trimmed.starts_with("ret ")
+            || trimmed.starts_with("unreachable")
+            || trimmed.starts_with("switch ")
+            || trimmed == "}"
+        {
+            open_block = None;
+        }
+    }
+}
+
 /// A `number`-declared field takes the raw-f64 store path, which is proven
 /// pointer-free by the typed shape descriptor and never had bookkeeping to
 /// guard. Asserting the guard is ABSENT there keeps the test above from being

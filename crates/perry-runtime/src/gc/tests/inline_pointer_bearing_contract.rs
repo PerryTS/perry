@@ -227,7 +227,9 @@ fn sabotaged_guard_strands_a_young_child_the_shipped_guard_keeps() {
     let old_header2 = unsafe { header_from_user_ptr(old_obj2 as *const u8) };
     unsafe { (*old_header2).gc_flags |= GC_FLAG_MARKED };
     assert!(
-        !unsafe { guarded_field_store(old_obj2, fields2, ptr_bits(young2), never_needs_bookkeeping) },
+        !unsafe {
+            guarded_field_store(old_obj2, fields2, ptr_bits(young2), never_needs_bookkeeping)
+        },
         "the sabotaged guard must skip the barrier — otherwise this arm proves nothing"
     );
     let rejected = std::panic::catch_unwind(verify_old_to_young_edges_covered);
