@@ -707,11 +707,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                 let name = get_binding_name(&decl.name)?;
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-                                let id = ctx.define_local(name.clone(), Type::Any);
+                                // #7547: same type computation as an ordinary
+                                // `let`/`const`, not a hardcoded `Any`.
+                                let ty = crate::destructuring::for_init_decl_type(ctx, decl);
+                                let id = ctx.define_local(name.clone(), ty.clone());
                                 result.push(Stmt::Let {
                                     id,
                                     name,
-                                    ty: Type::Any,
+                                    ty,
                                     mutable: true,
                                     init: init_expr,
                                 });
@@ -748,11 +751,16 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                         .as_ref()
                                         .map(|e| lower_expr(ctx, e))
                                         .transpose()?;
-                                    let id = ctx.define_local(name.clone(), Type::Any);
+                                    // #7547: the loop variable of
+                                    // `for (let j = 0; …)`. Typing it is what
+                                    // unblocks every expression computed from
+                                    // it — see `for_init_decl_type`.
+                                    let ty = crate::destructuring::for_init_decl_type(ctx, decl);
+                                    let id = ctx.define_local(name.clone(), ty.clone());
                                     Some(Box::new(Stmt::Let {
                                         id,
                                         name,
-                                        ty: Type::Any,
+                                        ty,
                                         mutable: true,
                                         init: init_expr,
                                     }))
