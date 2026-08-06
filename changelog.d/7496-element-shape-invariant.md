@@ -49,17 +49,27 @@ outstanding record at O(1) without enumerating arrays. Arrays built outside
 the funnels (inline literals, `JSON.parse`, `map`) re-earn the proof through
 `ensure_element_shape`, a rescan that mirrors `ensure_array_numeric_raw_f64`.
 
-Two counters, both `AtomicU64` starting at 1 like `PROP_PLAN_EPOCH`:
+Three `AtomicU64` counters, all starting at 1 like `PROP_PLAN_EPOCH`.
 `js_array_element_shape_epoch()` advances on every clear anywhere and is the
-one-load word a hoisted guard re-reads without rescanning, while the
-per-array `epoch` in the record distinguishes "still the same proof" from
-"re-established after a break". `js_array_element_shape_check` pins both.
+one-load word a hoisted guard re-reads without rescanning; a class-shape
+generation retires every record at once on prototype surgery; and a proof
+sequence hands each *established* proof an identity that is never reused.
+That last one is what makes address recycling safe — establishing takes a new
+number rather than reading back whatever record sits at the address, so a
+record that outlives its array (left by a fail-closed relocation, or by a
+death whose prune has not run yet) can never donate its identity to the next
+array proven there. `js_array_element_shape_check` pins class and identity
+together.
 
-26 new tests. 24 cover the matrix row by row in
-`array/element_shape_tests.rs`; 2 in `gc/tests/layout_trace/element_shape.rs`
-put a proven array through a real copying minor and assert the subject was
-live first — the collector actually copied, and the array actually moved —
-so a run with zero copying minors cannot pass. One of them pushes *after* the
-move and asserts the proof both extends on a match and retires on a
-mismatch, which is what proves the record is reachable at the new key rather
-than merely readable once.
+29 new tests. 27 cover the matrix row by row in
+`array/element_shape_tests.rs`, including the two lifecycle hooks that stop a
+recycled address inheriting a stale record; 2 in
+`gc/tests/layout_trace/element_shape.rs` put a proven array through a real
+copying minor and assert the subject was live first — the collector actually
+copied, and the array actually moved — so a run with zero copying minors
+cannot pass. One of them pushes *after* the move and asserts the proof both
+extends on a match and retires on a mismatch, which is what proves the record
+is reachable at the new key rather than merely readable once. Both files
+serialize on a shared poison-tolerant lock, taken before any state-restoring
+guard, because the three counters are process-wide while the record table is
+thread-local (#7490's failure shape).
