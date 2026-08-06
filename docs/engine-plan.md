@@ -762,6 +762,15 @@ landed (#7314) and became *reachable* (#7339) and *selectable* (#7340). The spin
    the tape's memcpy path. Any tape change must keep it (#7476 pins the
    numbers).
 
+   **Ticket status (2026-08-06 sync):** the `JSON.stringify` crash that
+   blocked the artifact is FIXED (#7472 → #7473, default path verified
+   byte-equal to node's checksum); #7396 is CLOSED as fixed-by-#7421. The
+   public artifact now has exactly ONE blocker: **#7475** (two app-pattern
+   kernels fail only under the auto-optimize runtime — isolated to the
+   feature-stripped archive, scale-dependent, pre-existing). A residual
+   non-default-cap fault from #7472's investigation is tracked as #7481 —
+   a large-Eden ratchet-probe arm would have caught both it and #7472.
+
    **The JSON workstream is sequenced, with a correctness gate in front:**
    #7477 first — the DirectParser parses floats differently from the tape
    materializer *and node agrees with the tape*, which is silently wrong for
@@ -781,6 +790,19 @@ landed (#7314) and became *reachable* (#7339) and *selectable* (#7340). The spin
    **Measure on a quiet host**: a first fix attempt was reverted because
    host load hit 55 and its disassembly check matched an absent symbol; the
    sweep's own gate (≤25% CPU for 60 s, AC power) is the standard.
+
+   **The repsel stack (the "unbox-by-default" campaign this step feeds):**
+   phases 1 / 2 / 3a (#6909) / 3b (#6911) / 4a (#6915, plus #7421/#7425
+   follow-ups) are **merged**; #6904's 26× histogram is closed. Phase 4b
+   (field-store note/addref elision, prompt-file scoped to two items) is
+   **in flight**. The next gap after it is element-shape proofs through
+   array reads — `keep[j].v` measured at **6.2× vs node** on the pure
+   shape — and the route is decided in **#7480**: the two candidate routes
+   share one prerequisite (a per-array homogeneous-element-shape
+   invariant, construction-maintained and self-healing like 4a's dense
+   bit), consumed first by the #5093 versioned-loop clone and then by
+   element `Ptr<Shape>`. Every phase gates on the FULL gap suite against a
+   same-session main baseline (#6377's lesson), never its own microbench.
 
 8. **CI hygiene is a correctness input, not housekeeping.** Three of four RS4GC
    arms had never executed (#7393). Before citing any matrix as platform
