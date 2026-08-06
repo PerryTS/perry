@@ -58,10 +58,14 @@ raw-f64 path) is pinned in `tests/class_field_store_pointer_test.rs`.
 Measured on `gc-handoff/bench/churn_alloc.ts` via `PERRY_GC_TRACE` counters:
 barrier calls 79,780,888 → 39,890,444 with `non_pointer_child_skips`
 39,890,444 → 0 — exactly the wasted calls, with every remaining call doing real
-work and the GC cycle count unchanged. The whole bench set runs `rc=0` with
-identical stdout under `PERRY_GC_VERIFY_EVACUATION=1 PERRY_GC_VERIFY_MARK=1`
-with copying minors confirmed live. No wall-clock claim: no quiet host was
-available.
+work and the GC cycle count unchanged at 105. On the pinned quiet host (M1, load
+1.46, best-of-7 `user+sys`, both arms linked against the same runtime archive):
+`churn_alloc` 1.930 s → 1.630 s (1.18×) and `churn` 2.210 s → 1.960 s (1.13×),
+with `push_cls`, `tree`, `churn_read`, `deeplist` and `push_num` unchanged — the
+prediction, since none of those uses the `class_field_set` store path. The whole
+bench set produces byte-identical stdout with `rc=0` and re-runs clean under
+`PERRY_GC_VERIFY_EVACUATION=1 PERRY_GC_VERIFY_MARK=1` with copying minors
+confirmed live (105 copying-minor verifications on `churn_alloc`).
 
 The `put.pic.hit` store path (`expr/proxy_reflect.rs`), which is what a
 user-written `this.f = v` on a union-typed field lowers to, emits the same triple
