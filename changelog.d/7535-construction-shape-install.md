@@ -80,10 +80,15 @@ fast path reading its state out of the memo, the memo short-circuiting
 validation, and the poison branch not invalidating — each fail a different named
 assertion.
 
-**#7512's residual is not fixed here, and the reason is sharper than the ticket
-had it.** `js_gc_init_typed_shape_layout` is still emitted after the constructor
-call, so raw-f64 class-field stores inside a constructor body still cannot pass
-their guard. Moving it earlier fails validation because fresh slots hold
+**The constructor-ordering residual is not fixed here, and the reason is sharper
+than the ticket had it.** It originated on #7512, whose other half merged as
+#7515; #7510 then folded the remainder in as its construction-path item, which
+is why it is tracked there rather than on #7512 (still open for the broader
+class-vs-object-literal gap).
+
+`js_gc_init_typed_shape_layout` is still emitted after the constructor call, so
+raw-f64 class-field stores inside a constructor body still cannot pass their
+guard. Moving it earlier fails validation because fresh slots hold
 `undefined` — but *relaxing* validation to accept `undefined` in a raw-f64 slot
 would be safe for the collector (`undefined` is not pointer-bearing, so a
 skipped slot strands nothing) and unsafe for readers: `class_field_fast_contract`
