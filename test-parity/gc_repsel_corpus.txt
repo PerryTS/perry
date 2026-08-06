@@ -586,6 +586,19 @@ test_gap_gc_optional_param_receiver_rooting
 # Measured on this branch:
 #   before, default link + default env     TypeError: next is not a function
 #   before, auto-optimize link             TypeError: next is not a function
-#   before, PROTECT_FROMSPACE=1 DEPTH=200  FAULT in retired from-space, both links
+#   before, PROTECT_FROMSPACE=1 DEPTH=200  FAULT at js_array_length inside
+#                                          dispatch_array_iterator_method, both links
 #   after,  both links                     byte-exact with the oracle
+#   after,  PROTECT_FROMSPACE=1 DEPTH=200  that fault is GONE; a DIFFERENT one
+#                                          remains (#7498)
+#
+# THE INSTRUMENT IS NOT CLEAN AFTER THE FIX, and saying otherwise would be the
+# overclaim this repo keeps paying for. `[...o.meta.tags]` reaches the drain
+# through `array_from_spread_value`, whose `[Symbol.iterator]` prototype walk
+# has its OWN stale from-space deref — `array_prototype_property_value` →
+# `default_object_prototype_property_value` → `js_object_get_field_by_name`, on
+# a 56-byte GC_TYPE_STRING at minor #3. That is #7498, unfixed here: it does not
+# corrupt this file's result, so the file gates the drain and nothing else. When
+# #7498 lands, a protected run of this file should go silent — if it does not,
+# there is a third site.
 test_gap_gc_iterator_drain_rooting

@@ -1148,16 +1148,21 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     // out of `scripts/raw_handle_debt.py`'s ledger.
     let scope = crate::gc::RuntimeHandleScope::new();
 
+    // The iterator is rooted FIRST, before anything in this function allocates:
+    // `js_array_alloc` below can trigger a copying minor, and until the value is
+    // in a scope slot the collector has nothing to rewrite. Rooting a
+    // non-pointer (`undefined`/`null`) is harmless — the visitor ignores it —
+    // so the null check reads back through the handle rather than gating it.
+    let iter_h = scope.root_nanbox_f64(iter_f64);
+
     let arr = js_array_alloc(8); // start with capacity 8
     let result_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(arr as i64));
     let read_result = || js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
 
     // Get the iterator object pointer
-    let iter_ptr = js_nanbox_get_pointer(iter_f64);
-    if iter_ptr == 0 {
+    if js_nanbox_get_pointer(iter_h.get_nanbox_f64()) == 0 {
         return read_result();
     }
-    let iter_h = scope.root_nanbox_f64(iter_f64);
 
     // Look up the "next" method on the iterator object as a stored closure
     // FIELD (the common case for generator objects / effect's `SingleShotGen`,
@@ -1167,7 +1172,11 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     // on `this` being bound by the class-id method tower — so an INHERITED
     // `.next` must take the method-dispatch path below, not this raw
     // closure-call (which doesn't bind `this`).
-    let next_val = crate::object::js_object_get_own_field_or_undef(iter_f64, b"next".as_ptr(), 4);
+    let next_val = crate::object::js_object_get_own_field_or_undef(
+        iter_h.get_nanbox_f64(),
+        b"next".as_ptr(),
+        4,
+    );
     let next_val = crate::value::JSValue::from_bits(next_val.to_bits());
     let next_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(next_val)) };
     let next_ptr = if next_val.is_undefined() {

@@ -94,7 +94,10 @@ jobs:
           # The filter only spares docs-only PRs a compiler build; `set -e`
           # already aborted if the listing failed, so this cannot silently fall
           # through to "not relevant".
-          if grep -qE '^(crates/|benchmarks/app-patterns/|scripts/auto_opt_app_patterns\.sh$|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/auto-opt-app-patterns\.yml$)' changed.txt; then
+          # `.github/actions/setup-llvm22/` is in the list because it configures
+          # the LLVM the gate's compiler is built against — a change there can
+          # move the generated code without touching a single line under crates/.
+          if grep -qE '^(crates/|benchmarks/app-patterns/|scripts/auto_opt_app_patterns\.sh$|Cargo\.(toml|lock)$|\.node-version$|\.github/actions/setup-llvm22/|\.github/workflows/auto-opt-app-patterns\.yml$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change can affect a compiled app; running the kernels."
           else

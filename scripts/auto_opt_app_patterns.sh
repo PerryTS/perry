@@ -131,6 +131,23 @@ if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
   exit 2
 fi
 
+# The oracle version is a CORRECTNESS INPUT, not an incidental toolchain
+# detail — CLAUDE.md is explicit, and node patch releases change observable
+# output (error-message text, `v8` heap fields). Every kernel here is diffed
+# byte for byte against this node, so a mismatched one silently turns the
+# comparison into a different experiment. `scripts/gc_repsel_matrix.sh` refuses
+# on the same grounds; do the same rather than quietly measuring the wrong pin.
+if [[ -f "$ROOT/.node-version" ]]; then
+  pinned_node="$(tr -d '[:space:]' < "$ROOT/.node-version")"
+  running_node="$("$NODE_BIN" --version | sed 's/^v//')"
+  if [[ -n "$pinned_node" && "$running_node" != "$pinned_node" ]]; then
+    echo "error: node oracle is v$running_node but .node-version pins $pinned_node." >&2
+    echo "       Every kernel's stdout is diffed against this node, so the two must" >&2
+    echo "       agree. Install the pinned version or point NODE_BIN at it." >&2
+    exit 2
+  fi
+fi
+
 all_kernels=()
 for f in "$KERNEL_DIR"/*.ts; do
   all_kernels+=("$(basename "$f" .ts)")
