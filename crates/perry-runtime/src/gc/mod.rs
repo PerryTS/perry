@@ -66,6 +66,8 @@ pub(crate) use scan_fallback::*;
 mod root_words;
 use root_words::*;
 mod layout;
+mod layout_slot_visit;
+pub(crate) use layout_slot_visit::*;
 /// #7510: the per-object slot-layout side tables and the emptiness flag that
 /// keeps them off the allocation, store, death and trace paths. Split out of
 /// `layout.rs` so it stays under the repo's 2000-line-per-file cap.
