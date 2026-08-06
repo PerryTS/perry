@@ -377,18 +377,21 @@ fn test_json_tape_reparse_materialize_preserves_a_mutated_cache_entry() {
     let hdr_handle = scope.root_raw_mut_ptr(hdr);
 
     // Hand element 2 out (caching it), then mutate it — `parsed[2].id = 99`.
-    let cached = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 2) };
+    // Every step allocates, so the header comes back out of `across_mut`
+    // rather than being carried across the call.
+    let (cached, hdr) = hdr_handle.across_mut::<crate::json_tape::LazyArrayHeader, _>(|| unsafe {
+        crate::json_tape::lazy_get(hdr, 2)
+    });
     let cached_handle = scope.root_nanbox_u64(cached.bits());
-    let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
-    let key_handle = scope.root_string_ptr(key);
-    crate::object::js_object_set_field_by_name(
-        (cached_handle.get_nanbox_u64() & POINTER_MASK) as *mut crate::ObjectHeader,
-        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
-        99.0,
-    );
+    let (_, hdr) = hdr_handle.across_mut::<crate::json_tape::LazyArrayHeader, _>(|| {
+        let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+        // Re-derive the receiver AFTER the key allocation, not before it.
+        let obj = (cached_handle.get_nanbox_u64() & POINTER_MASK) as *mut crate::ObjectHeader;
+        crate::object::js_object_set_field_by_name(obj, key, 99.0);
+    });
 
     let before_reparses = crate::json_tape::reparse_materializations();
-    let arr = unsafe { crate::json_tape::force_materialize_lazy(hdr_handle.get_raw_mut_ptr()) };
+    let arr = unsafe { crate::json_tape::force_materialize_lazy(hdr) };
     assert_eq!(
         crate::json_tape::reparse_materializations(),
         before_reparses + 1,
