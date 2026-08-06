@@ -602,3 +602,34 @@ test_gap_gc_optional_param_receiver_rooting
 # #7498 lands, a protected run of this file should go silent — if it does not,
 # there is a third site.
 test_gap_gc_iterator_drain_rooting
+
+# --- #7497: the globalThis builtin-value lookup -----------------------------
+#
+# `js_get_global_this_builtin_value` read the `globalThis` object out of its
+# root into a raw `*const ObjectHeader` and only THEN allocated the lookup key.
+# The root is correct and IS rewritten by evacuation; the raw copy already read
+# out of it is not. That lookup interns nothing, so every call mints a fresh
+# string, and any of those allocations can be the copying minor that moves
+# `globalThis` — after which `js_object_get_field_by_name` dereferences retired
+# from-space.
+#
+# `Promise.all` is what finds it: each element runs `Promise.resolve`, and
+# `js_promise_resolve_spec` asks `is_default_promise_constructor` for
+# `globalThis.Promise` through that function. One 50 000-element combinator
+# call therefore performs 50 000 of these lookups, so one straddles the
+# collection. That is why the app-pattern kernel `promise_all_chains`
+# (1000 x 50) needed its full scale while a single wide call needs 0.2 s.
+#
+# Measured on this branch, release, PERRY_NO_AUTO_OPTIMIZE=1 and default env:
+#   before  Uncaught (in promise) TypeError: value is not a function
+#   before, PROTECT_FROMSPACE=1 DEPTH=200
+#           FAULT in js_object_get_field_by_name, reached from
+#           js_get_global_this_builtin_value <- js_promise_resolve_spec <-
+#           spec_combinators::call_with_this <- run_combinator <-
+#           js_promise_all_iterable, on a GC_TYPE_OBJECT at minor #0
+#   after   byte-exact with the oracle, and that fault is gone
+#
+# The failure is NOT arm-conditional — it fails on the shipped default — but it
+# is registered here because the moving arms are what turn it into a fault with
+# an address instead of a wrong answer.
+test_gap_gc_global_builtin_lookup_rooting

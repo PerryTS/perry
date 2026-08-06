@@ -24,12 +24,28 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     };
     // Force the singleton init the first time so the lookup below has
     // a populated field bag.
-    let global_this_f64 = js_get_global_this();
+    //
+    // #7497: `globalThis` must be ROOTED across the key allocation, and its
+    // address re-read AFTER it. `js_string_from_bytes` allocates a fresh
+    // string on EVERY call (this lookup interns nothing), so it can trigger a
+    // copying minor that evacuates the `globalThis` object. `THREAD_GLOBAL_THIS`
+    // is a registered root and gets rewritten — but a raw `*const ObjectHeader`
+    // already read out of it does not, and `js_object_get_field_by_name` then
+    // dereferences retired from-space. That is the whole of #7497: every
+    // element of a `Promise.all` runs `Promise.resolve`, which asks
+    // `is_default_promise_constructor` for `globalThis.Promise` through here,
+    // so one 50 000-element `Promise.all` performs 50 000 of these lookups and
+    // one of them straddles the collection.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let global_handle = scope.root_nanbox_f64(js_get_global_this());
+    let (key, global_this_f64) = global_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32));
     let global_obj = crate::value::js_nanbox_get_pointer(global_this_f64) as *const ObjectHeader;
     if global_obj.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    // Nothing between the re-read above and this call allocates, so
+    // `global_obj` is still the post-collection address here.
     let value = js_object_get_field_by_name(global_obj, key);
     let bits = value.bits();
     f64::from_bits(bits)

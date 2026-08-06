@@ -201,16 +201,24 @@ pub extern "C" fn js_nm_install_assert() {
 /// its absence will see it present under Perry.)
 #[no_mangle]
 pub extern "C" fn js_globalthis_seed_async_local_storage() {
-    let global = crate::object::js_get_global_this();
+    // #7497 (same shape as the proven site in `js_get_global_this_builtin_value`):
+    // both the export-value lookup and the key allocation below can collect, and
+    // `global` is the RECEIVER of the store that follows. Root it and re-read the
+    // address after the last allocation; root the constructor value too, since it
+    // is live across the key allocation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let global_handle = scope.root_nanbox_f64(crate::object::js_get_global_this());
     let ctor = crate::object::native_module::bound_native_callable_export_value(
         "async_hooks",
         "AsyncLocalStorage",
     );
+    let ctor_handle = scope.root_nanbox_f64(ctor);
     let key = crate::string::js_string_from_bytes(b"AsyncLocalStorage".as_ptr(), 17);
     crate::object::js_object_set_field_by_name(
-        crate::value::js_nanbox_get_pointer(global) as *mut crate::object::ObjectHeader,
+        crate::value::js_nanbox_get_pointer(global_handle.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader,
         key,
-        ctor,
+        ctor_handle.get_nanbox_f64(),
     );
 }
 

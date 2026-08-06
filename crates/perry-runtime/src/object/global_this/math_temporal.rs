@@ -833,24 +833,42 @@ pub(crate) fn temporal_kind_prototype(kind: crate::temporal::TemporalKind) -> f6
         PlainMonthDay => b"PlainMonthDay",
         ZonedDateTime => b"ZonedDateTime",
     };
-    let g = super::js_get_global_this();
+    // #7497 (same shape as the proven site in `js_get_global_this_builtin_value`):
+    // this walk allocates a fresh key string before EACH of its three hops, and
+    // each receiver — `globalThis`, the `Temporal` namespace, the constructor —
+    // used to be a raw Rust local read BEFORE the allocation that precedes its
+    // own dereference. Root each hop and re-read its address across the key
+    // allocation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let g_handle = scope.root_nanbox_f64(super::js_get_global_this());
+    let (tkey, g) =
+        g_handle.across_nanbox(|| crate::string::js_string_from_bytes(b"Temporal".as_ptr(), 8));
     let gp = (g.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
     if gp.is_null() {
         return undef;
     }
-    let tkey = crate::string::js_string_from_bytes(b"Temporal".as_ptr(), 8);
     let temporal = js_object_get_field_by_name(gp, tkey);
     if !temporal.is_pointer() {
         return undef;
     }
-    let tp = (temporal.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
-    let ckey = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let t_handle = scope.root_nanbox_f64(f64::from_bits(temporal.bits()));
+    let (ckey, temporal) = t_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32));
+    let tp = (temporal.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+    if tp.is_null() {
+        return undef;
+    }
     let ctor = js_object_get_field_by_name(tp, ckey);
     if !ctor.is_pointer() {
         return undef;
     }
-    let cp = (ctor.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
-    let pkey = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let c_handle = scope.root_nanbox_f64(f64::from_bits(ctor.bits()));
+    let (pkey, ctor) =
+        c_handle.across_nanbox(|| crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9));
+    let cp = (ctor.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+    if cp.is_null() {
+        return undef;
+    }
     let proto = js_object_get_field_by_name(cp, pkey);
     f64::from_bits(proto.bits())
 }
