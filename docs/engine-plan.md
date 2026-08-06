@@ -6,7 +6,7 @@
 every dated status section, incident narrative and superseded sequencing lives
 in [`engine-plan-history.md`](engine-plan-history.md); this file holds only the
 current state and the remaining work so it stays readable across context loads.
-Last synced **2026-08-06**.
+Last synced **2026-08-06** (repsel status corrected same day: 4b was already merged).
 
 | Concern | Detail lives in |
 |---|---|
@@ -34,9 +34,9 @@ has three homes, each needing its own mechanism.*
 
 ### Repsel stack (the unbox-by-default campaign)
 
-Phases **1 / 2 / 3a (#6909) / 3b (#6911) / 4a (#6915 + #7421/#7425)** are
-merged; #6904's 26× histogram is closed. **Phase 4b is in flight**
-(field-store note/addref elision, prompt-scoped to two items). Next gap:
+Phases **1 / 2 / 3a (#6909) / 3b (#6911) / 4a (#6915 + #7421/#7425) / 4b
+(#6919)** are all merged; #6904's 26× histogram is closed (#7485 deleted the
+dead 4b prototype flag). Next gap:
 **element-shape proofs through array reads** — `keep[j].v` measured **6.2× vs
 node** on the pure shape — route decided in **#7480**: both candidate routes
 share one prerequisite (a per-array homogeneous-element-shape invariant,
@@ -90,9 +90,9 @@ numbers); `date_format_parse` 0.82× vs bun.
    unblocked by #7483; projected ~1500 ms field_access from 2981 while
    keeping the roundtrip win). The measured dead ends are recorded in #7478 —
    do not re-walk them.
-3. **Repsel** — land 4b (in flight) → build the #7480 element-shape invariant
-   → versioned-loop consumer → element `Ptr<Shape>`. This is the dependency
-   chain for the follow-on optimization work.
+3. **Repsel** — build the #7480 element-shape invariant → versioned-loop
+   consumer → element `Ptr<Shape>`. This is the dependency chain for the
+   follow-on optimization work (4b itself is done — #6919).
 4. **Layer 1** — migrate remaining lowerings onto the rooted-combinator API
    (`crates/perry-codegen/src/rooting.rs`); the arm-aware scan is the
    worklist tool. **Layer 3** — shrink the 107-module ceiling list toward
