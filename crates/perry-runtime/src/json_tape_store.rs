@@ -92,6 +92,18 @@ thread_local! {
     /// `LazyArrayHeader` address -> its tape bytes.
     static TAPE_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, TapeSideAllocation>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    /// Live tape bytes on this thread.
+    ///
+    /// Deliberately NOT routed through `gc_note_external_side_alloc`. That
+    /// counter feeds `external_side_live_bytes()`, which every
+    /// `old_reclaim_pressure_due` call site ADDS to old-generation pressure —
+    /// correct for a `Map`'s entries buffer, whose owner is typically tenured
+    /// so only a full reclaim can free it, and exactly wrong here. A tape's
+    /// owner is a nursery object that dies at any minor, and materialization
+    /// frees the tape with no collector at all. Counting tape bytes as old-gen
+    /// pressure would keep firing the very `old_gen_bytes` full collections
+    /// #7539 exists to stop, and the fix would have measured as a no-op.
+    static TAPE_LIVE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Fast "this thread has never built a tape" gate, so the copying minor's
     /// from-space pass and the sweep's dead-owner pass cost a single `Cell`
     /// read on programs that never call `JSON.parse`.
@@ -125,13 +137,12 @@ pub(crate) fn allocate(entries: &[TapeEntry]) -> (*mut TapeEntry, TapeSideAlloca
     unsafe {
         std::ptr::copy_nonoverlapping(entries.as_ptr(), raw, entries.len());
     }
-    (
-        raw,
-        TapeSideAllocation {
-            ptr: raw,
-            len: entries.len(),
-        },
-    )
+    let allocation = TapeSideAllocation {
+        ptr: raw,
+        len: entries.len(),
+    };
+    note_allocated(allocation.byte_len());
+    (raw, allocation)
 }
 
 /// Hand ownership of `allocation` to `header_addr`.
@@ -153,6 +164,13 @@ pub(crate) fn register(header_addr: usize, allocation: TapeSideAllocation) {
     TAPE_REGISTRY_NONEMPTY.with(|c| c.set(true));
 }
 
+/// Live tape bytes owned by this thread. Diagnostic/test accounting only — see
+/// `TAPE_LIVE_BYTES` for why this is not old-generation pressure.
+#[inline]
+pub(crate) fn live_bytes() -> usize {
+    TAPE_LIVE_BYTES.with(Cell::get)
+}
+
 /// Drop the tape owned by `header_addr`, if any. Idempotent: the finalize
 /// hook, the copied-minor from-space pass, and the deterministic
 /// post-materialize release all funnel through here and any of them may run
@@ -172,8 +190,18 @@ pub(crate) fn release(header_addr: usize) {
     let Some(allocation) = allocation else {
         return;
     };
-    crate::gc::gc_note_external_side_free(allocation.byte_len());
+    note_freed(allocation.byte_len());
     drop(allocation);
+}
+
+#[inline]
+fn note_allocated(bytes: usize) {
+    TAPE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
+}
+
+#[inline]
+fn note_freed(bytes: usize) {
+    TAPE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
 }
 
 /// Rekey after the copying minor evacuated an owner.
@@ -231,17 +259,25 @@ pub(crate) fn release_current_thread_lazy_tapes() {
     });
     TAPE_REGISTRY_NONEMPTY.with(|c| c.set(false));
     for allocation in allocations {
-        crate::gc::gc_note_external_side_free(allocation.byte_len());
+        note_freed(allocation.byte_len());
         drop(allocation);
     }
 }
 
-#[cfg(test)]
-pub(crate) fn registered_len() -> usize {
-    TAPE_REGISTRY.with(|r| r.borrow().len())
-}
-
+/// Live tape bytes, cross-checked against the registry.
+///
+/// At rest the running counter and the registry must agree — they are updated
+/// by different code paths (`allocate`/`release` vs `register`/`remove`), and a
+/// drift between them would mean either a tape freed while still owned or an
+/// entry whose bytes were never accounted.
 #[cfg(test)]
 pub(crate) fn registered_bytes() -> usize {
-    TAPE_REGISTRY.with(|r| r.borrow().values().map(TapeSideAllocation::byte_len).sum())
+    let summed: usize =
+        TAPE_REGISTRY.with(|r| r.borrow().values().map(TapeSideAllocation::byte_len).sum());
+    assert_eq!(
+        summed,
+        live_bytes(),
+        "tape byte counter drifted from the registry"
+    );
+    summed
 }
