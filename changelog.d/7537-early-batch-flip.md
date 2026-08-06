@@ -23,17 +23,18 @@ both arms compiled with `PERRY_NO_AUTO_OPTIMIZE=1` and run back to back):
 
 | workload | before | after |
 |---|--:|--:|
-| `json_polyglot` roundtrip | 202 ms · 87 MB | 201 ms · 87 MB |
-| `json_polyglot` field_access | 2981 ms · σ154 · 214 MB | 2016 ms · σ219 · 193 MB |
+| `json_polyglot` roundtrip | 201 ms · σ1.3 · 87 MB | 201 ms · σ1.6 · 87 MB |
+| `json_polyglot` field_access | 2938 ms · σ135 · 222 MB | 2043 ms · σ146 · 195 MB |
 | parse + full scan, no stringify | 2729 ms · σ215 | 1339 ms · σ26 |
 
-The roundtrip arm's unmutated-blob memcpy path is untouched — a workload
-that never indexes never opens a streak. On a pure scan the tape now beats
-its own tape-off arm (1339 vs 1545 ms), so it has stopped being a net
-negative on that shape.
+Checksums identical to node on both arms. The roundtrip arm's
+unmutated-blob memcpy path is untouched by construction — a workload that
+never indexes never opens a streak. On a pure scan the tape now beats its
+own tape-off arm (1339 vs 1545 ms), so it has stopped being a net negative
+on that shape.
 
-**field_access does not reach the `idiomatic` floor** (2016 ms against
-1477 ms with the tape off and mark-sweep), and that is structural rather
+**field_access does not reach the `idiomatic` floor** (2043 ms against
+1478 ms with the tape off and mark-sweep), and that is structural rather
 than a tuning miss: the tape build is purely additive whenever the whole
 tree ends up materialized anyway, and the flip hands off to a producer that
 re-tokenizes the blob from scratch. Turning the tape off for this shape is
@@ -53,8 +54,21 @@ element-wise materializer is no longer the bottleneck — releasing the tape
 and blob once `materialized` is set is.
 
 Tests moved to `crates/perry-runtime/src/json_tape_tests.rs` (`#[path]`
-sibling) to keep `json_tape.rs` under the 2,000-line cap. The five new cases
+sibling) to keep `json_tape.rs` under the 2,000-line cap. The six new cases
 assert the producer that ran, not just the values: `reparse_materializations()`
 tells the batch reparse apart from the element-wise merge walk, which
 produces identical output, so a test that only checked the tree would pass
-against the old never-flips behaviour.
+against the old never-flips behaviour. `LazyArrayHeader::cached_length`'s
+offset-0 codegen contract — Perry inlines `.length` as a raw u32 load there
+rather than calling `js_array_length` — is now enforced by a `const`
+assertion rather than a doc comment, since this change adds a field to that
+struct.
+
+Surfaced two pre-existing defects, both filed rather than fixed here: the
+element-wise materializer can lose an object's key pointers under tape +
+generational GC, so `JSON.stringify` emits `field0`/`field1` instead of the
+real names (#7538 — this change reduces the exposure by retiring that path
+for scan shapes, but does not fix it), and
+`PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_ZEAL=1` faults in
+`test_json_tape_eager_materialization_handles_survive_copied_minor_gc`,
+A/B-confirmed identical on the merge base.
