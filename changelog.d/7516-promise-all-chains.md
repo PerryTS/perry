@@ -83,6 +83,17 @@ site; fixing it moved the fault and exposed the next.
    allocates) and returned the *pre-call* copy as the async function's own result
    promise.
 
+Review (CodeRabbit) found six more of the same shape, all fixed here: the
+SEARCHED closure value in `class_meta.rs`'s lookup loop (which *misses* rather
+than crashing, so the caller silently falls through to the generic construct
+tail); `perform_promise_then_with_cap`, which filled one wrapper's captures and
+then allocated the other; `js_array_values`, carrying (3)'s shape;
+`combinator_iterable_to_array`'s `GC_TYPE_OBJECT` arm, whose receiver crossed a
+user `[Symbol.iterator]` getter; `js_async_step_chain`'s three early-return
+suspend paths together with `then_backpatch_result` (which allocates the result
+promise and then STORES it into both thunks); and one encoding mismatch between
+`boxed_closure` and `rooted_closure` in the `AsyncStep` arm.
+
 All handles are NaN-boxed rather than `root_raw_*_ptr`, so
 `scripts/raw_handle_debt.py` is unchanged at 999. The per-element handles in
 `perform` live in a scope INSIDE the loop, so a 50 000-element combinator does not
