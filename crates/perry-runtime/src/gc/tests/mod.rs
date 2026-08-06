@@ -21,6 +21,7 @@ mod host_safepoints;
 mod incremental_sweep_reclaim;
 mod inline_pointer_bearing_contract;
 mod layout_trace;
+mod lazy_tape_side_alloc;
 mod oldgen;
 mod os_tag;
 mod root_words;

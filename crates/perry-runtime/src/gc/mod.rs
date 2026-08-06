@@ -826,6 +826,7 @@ pub extern "C" fn js_gc_init() {
 #[no_mangle]
 pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     crate::map::release_current_thread_map_side_allocations();
+    crate::json_tape_store::release_current_thread_lazy_tapes();
     crate::set::release_current_thread_set_side_allocations();
 }
 

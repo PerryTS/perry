@@ -150,6 +150,12 @@ pub(crate) enum GcMoveHookKind {
     /// move. Errors are movable; without this a moved error lost its
     /// `err.code`/`err.syscall`/user-assigned props.
     ErrorSideTables,
+    /// #7539: rekey the `json_tape_store` registry, which owns a lazy JSON
+    /// array's tape bytes keyed by the `LazyArrayHeader` address. The header
+    /// is ~88 bytes now (the tape moved out of the allocation), so it is born
+    /// in the nursery and the copying minor really does evacuate it — the old
+    /// multi-megabyte header was born old and never moved.
+    LazyArrayTape,
 }
 
 #[allow(dead_code)]
@@ -190,6 +196,9 @@ pub(crate) enum GcFinalizeHookKind {
     /// so a fresh error allocated at the recycled address doesn't inherit
     /// the dead error's codes/props.
     ErrorSideTables,
+    /// #7539: free a dead lazy JSON array's tape bytes, which
+    /// `json_tape_store` owns outside the GC heap.
+    LazyArrayTape,
 }
 
 #[allow(dead_code)]
@@ -375,12 +384,18 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteDescriptorKind::LazyArray,
         GcLayoutSlotKind::None,
         true,
-        GcExternalBytePolicy::InlinePayload,
+        // #7539: the tape is a `json_tape_store` side allocation now, not
+        // inline payload. Keeping it inline made the header ~2.4 MB on a
+        // 10 k-record blob, which `arena_alloc_gc` routed into the old
+        // generation with GC_FLAG_TENURED — reclaimable only by a FULL
+        // collection, so per-iteration-dead tapes drove `old_gen_bytes`
+        // fulls (6 of 9 fulls on the `field_access` fixture).
+        GcExternalBytePolicy::SideAllocation,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
         false,
-        GcMoveHookKind::None,
+        GcMoveHookKind::LazyArrayTape,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::None,
+        GcFinalizeHookKind::LazyArrayTape,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_BUFFER,
@@ -676,6 +691,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
                 old_user, new_user,
             );
         }
+        GcMoveHookKind::LazyArrayTape => {
+            crate::json_tape_store::owner_moved(old_user, new_user);
+        }
     }
 }
 
@@ -702,6 +720,7 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
         GcMoveHookKind::None
         | GcMoveHookKind::MapSideTables
         | GcMoveHookKind::SetSideTables
+        | GcMoveHookKind::LazyArrayTape
         | GcMoveHookKind::ExoticExpandoOwner => {}
     }
 }
@@ -750,6 +769,9 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
         }
         GcFinalizeHookKind::TypedArrayViewMeta => {
             crate::typedarray_view::clear_view_meta(user_ptr as usize);
+        }
+        GcFinalizeHookKind::LazyArrayTape => {
+            crate::json_tape_store::release(user_ptr as usize);
         }
     }
 }

@@ -121,6 +121,87 @@ fn tape_entry_layout() {
     );
 }
 
+/// #7539 requirement: the tape is POINTER-FREE BY CONSTRUCTION, which is what
+/// licenses moving it out of the GC heap into a `json_tape_store` side
+/// allocation that is never marked, scanned, or rewritten.
+///
+/// The claim is structural, not a convention, and this pins the structure:
+/// every `TapeEntry` field is an integer, and `offset`/`link` are `u32` — too
+/// narrow to hold a 48-bit heap address even if some future code tried. `kind`
+/// is a `u8`. There is exactly one writer of the region
+/// (`json_tape_store::allocate`'s `copy_nonoverlapping` from a
+/// `&[TapeEntry]`), so nothing can smuggle a reference in behind it.
+///
+/// If someone widens a field to pointer size this fails, and the whole
+/// direction has to be revisited: a tape that can carry a heap edge would need
+/// tracing, and an untraced one would be a use-after-free.
+#[test]
+fn tape_entry_is_pointer_free_by_construction() {
+    let probe = TapeEntry {
+        offset: u32::MAX,
+        kind: u8::MAX,
+        link: u32::MAX,
+    };
+    // Saturating every field cannot produce a plausible heap address in ANY
+    // 8-byte window of the entry: the widest field is 32 bits.
+    let bytes: [u8; std::mem::size_of::<TapeEntry>()] = unsafe { std::mem::transmute(probe) };
+    for window in bytes.windows(8) {
+        let word = u64::from_ne_bytes(window.try_into().unwrap());
+        assert!(
+            !crate::value::addr_class::is_plausible_heap_addr(word as usize),
+            "a saturated TapeEntry must not read as a heap address anywhere"
+        );
+    }
+}
+
+/// The tape lives outside the header allocation now, so the header stays small
+/// no matter how big the blob is. That is the property keeping it out of
+/// `arena_alloc_gc`'s large-object arm — and therefore out of the old
+/// generation, where only a FULL collection could reclaim it.
+#[test]
+fn lazy_array_header_stays_small_regardless_of_tape_size() {
+    assert!(
+        std::mem::size_of::<LazyArrayHeader>() < crate::gc::LARGE_OBJECT_THRESHOLD_BYTES,
+        "LazyArrayHeader must stay under the large-object threshold"
+    );
+    // Restated here because this file is where the header's shape is asserted:
+    // `.length` is an inlined raw u32 load at offset 0 (codegen contract), and
+    // #7537's scan-flip threshold must keep its shape.
+    assert_eq!(std::mem::offset_of!(LazyArrayHeader, cached_length), 0);
+    assert_eq!(scan_flip_threshold(10_000), 156);
+    assert_eq!(scan_flip_threshold(10), 64);
+}
+
+/// A disowned tape reads as EMPTY rather than as freed memory. Every reader
+/// checks `materialized` first, but the null guard is what makes a stale read
+/// safe instead of a use-after-free, so pin it directly.
+#[test]
+fn disowned_tape_reads_as_empty() {
+    let input = b"[1,2,3]";
+    let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+    let lazy = with_built_tape(input, |tape| unsafe {
+        alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
+    })
+    .expect("valid JSON should build a tape");
+
+    assert!(!unsafe { LazyArrayHeader::tape_slice(lazy) }.is_empty());
+    let arr = unsafe { force_materialize_lazy(lazy) };
+    assert_eq!(unsafe { (*arr).length }, 3);
+
+    unsafe {
+        assert!((*lazy).tape.is_null());
+        assert!(LazyArrayHeader::tape_slice(lazy).is_empty());
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source = TapeSource::Lazy {
+            hdr_handle: scope.root_raw_mut_ptr(lazy),
+        };
+        assert!(
+            source.entry(0).is_none(),
+            "a disowned tape must yield no entries"
+        );
+    }
+}
+
 #[test]
 fn force_materialize_numeric_lazy_array_preserves_raw_payload() {
     let input = br#"[1,2.5,3]"#;

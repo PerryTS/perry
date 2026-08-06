@@ -472,6 +472,34 @@ pub(super) fn sweep() -> u64 {
     sweep_with_age_bump(false).freed_bytes
 }
 
+/// #7539: is the lazy JSON array at `addr` provably dead at sweep entry?
+///
+/// Same rule `map.rs` applies to a registered Map: unmarked ∧ not pinned ∧ not
+/// forwarded, and — for a MINOR trace, which never traces the old generation —
+/// additionally not tenured and physically in the nursery.
+unsafe fn registered_lazy_array_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
+    if header.obj_type != GC_TYPE_LAZY_ARRAY {
+        return false;
+    }
+    let flags = header.gc_flags;
+    if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED) != 0 {
+        return false;
+    }
+    if full_trace {
+        return true;
+    }
+    if flags & GC_FLAG_TENURED != 0 {
+        return false;
+    }
+    matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Nursery
+    )
+}
+
 pub(super) fn sweep_malloc_objects() -> u64 {
     let mut state = MallocSweepCycleState::new(true);
     state.finish_unbounded()
@@ -1055,6 +1083,7 @@ pub(super) struct IncrementalSweepState {
     dead_sets: Vec<usize>,
     dead_buffers: Vec<usize>,
     dead_typed_arrays: Vec<usize>,
+    dead_lazy_arrays: Vec<usize>,
     malloc: MallocSweepCycleState,
     arena: ArenaSweepObjectsState,
     cleanup: Option<ArenaSweepCleanupState>,
@@ -1077,6 +1106,7 @@ impl IncrementalSweepState {
             dead_sets: Vec::new(),
             dead_buffers: Vec::new(),
             dead_typed_arrays: Vec::new(),
+            dead_lazy_arrays: Vec::new(),
             malloc: MallocSweepCycleState::new(sweep_malloc),
             arena: ArenaSweepObjectsState::new(
                 do_age_bump,
@@ -1108,10 +1138,18 @@ impl IncrementalSweepState {
         self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);
         self.dead_typed_arrays =
             crate::typedarray::collect_dead_registered_typed_arrays_post_trace(full_trace);
+        // #7539: lazy JSON arrays own their tape bytes outside the GC heap.
+        // The copying minor has its own from-space pass; this covers the
+        // non-copying cycles, including a dead owner sitting in the ACTIVE
+        // nursery block that no sweeper ever object-walks.
+        self.dead_lazy_arrays = crate::json_tape_store::collect_owners(&|addr| unsafe {
+            registered_lazy_array_is_dead_post_trace(addr, full_trace)
+        });
         if !self.dead_maps.is_empty()
             || !self.dead_sets.is_empty()
             || !self.dead_buffers.is_empty()
             || !self.dead_typed_arrays.is_empty()
+            || !self.dead_lazy_arrays.is_empty()
         {
             self.subphase = SweepCycleSubphase::CollectionSideBuffers;
         }
@@ -1131,6 +1169,8 @@ impl IncrementalSweepState {
                         crate::buffer::finalize_collected_dead_buffer(addr);
                     } else if let Some(addr) = self.dead_typed_arrays.pop() {
                         crate::typedarray::finalize_collected_dead_typed_array(addr);
+                    } else if let Some(addr) = self.dead_lazy_arrays.pop() {
+                        crate::json_tape_store::release(addr);
                     } else {
                         self.subphase = SweepCycleSubphase::Malloc;
                         break;
@@ -1141,6 +1181,7 @@ impl IncrementalSweepState {
                     && self.dead_sets.is_empty()
                     && self.dead_buffers.is_empty()
                     && self.dead_typed_arrays.is_empty()
+                    && self.dead_lazy_arrays.is_empty()
                 {
                     self.subphase = SweepCycleSubphase::Malloc;
                 }
