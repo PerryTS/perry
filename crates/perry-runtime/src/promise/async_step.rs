@@ -548,8 +548,18 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
         // Mirror `js_promise_resolved`'s adoption probes here, but settle
         // the existing `trap_next` instead of allocating a fresh promise
         // so the runner's self-chain fast path still fires.
-        resolve_trap_next_with_adoption(trap.trap_next, value);
-        trap.trap_next
+        // #7497: `resolve_trap_next_with_adoption` settles the promise, which
+        // can enqueue jobs and allocate — and the RETURN VALUE of this function
+        // is that same promise. Returning the pre-call copy hands the async
+        // state machine a from-space `GC_TYPE_PROMISE`;
+        // `PERRY_GC_PROTECT_FROMSPACE=1` faults on it here under the
+        // auto-optimize link.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target_h =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(trap.trap_next as i64));
+        let value_h = scope.root_nanbox_f64(value);
+        resolve_trap_next_with_adoption(trap.trap_next, value_h.get_nanbox_f64());
+        crate::value::js_nanbox_get_pointer(target_h.get_nanbox_f64()) as *mut Promise
     } else {
         bump(&MT_STEP_DONE_REUSE_MISS);
         // An async fn always returns a FRESH promise — `js_promise_resolved`'s
@@ -560,9 +570,19 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
         if js_value_is_promise(value) != 0 {
             let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
             if !inner.is_null() {
-                let fresh = js_promise_new();
-                super::assimilate::enqueue_native_adoption_job(fresh, inner);
-                return fresh;
+                // #7497: `js_promise_new` allocates and `inner` is its adoption
+                // source, so root `inner` across it and re-read; likewise the
+                // fresh promise across `enqueue_native_adoption_job`.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let inner_h = scope.root_nanbox_f64(value);
+                let fresh_h =
+                    scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_promise_new() as i64));
+                super::assimilate::enqueue_native_adoption_job(
+                    crate::value::js_nanbox_get_pointer(fresh_h.get_nanbox_f64()) as *mut Promise,
+                    crate::value::js_nanbox_get_pointer(inner_h.get_nanbox_f64()) as *mut Promise,
+                );
+                return crate::value::js_nanbox_get_pointer(fresh_h.get_nanbox_f64())
+                    as *mut Promise;
             }
         }
         js_promise_resolved(value)
