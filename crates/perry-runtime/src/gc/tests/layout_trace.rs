@@ -5,6 +5,7 @@ mod element_shape;
 mod object_closure_slots;
 mod object_layout_invalidation;
 mod per_object_tables;
+mod shape_install_memo;
 mod typed_shape;
 
 #[test]

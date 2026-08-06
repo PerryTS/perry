@@ -213,6 +213,12 @@ impl LayoutSlotMask {
         count
     }
 
+    /// Reference implementation only. The construction path asks this question
+    /// of the raw mask words (`shape_install::words_intersect`) rather than of
+    /// two built masks — see that module's "mask words" section — and
+    /// `shape_install::tests::mask_word_helpers_agree_with_layout_slot_mask`
+    /// pins the two together, which is what this now exists for.
+    #[cfg(test)]
     pub(super) fn intersects(&self, other: &Self, slot_count: usize) -> bool {
         let mut found = false;
         self.visit_slots(slot_count, |slot| {
@@ -481,6 +487,11 @@ unsafe fn shape_install_shared(
                 // Same keys, different layout ⟹ ambiguous. Poison the entry so
                 // future lookups (and any still-INTACT siblings) fall back.
                 m.insert(keys, None);
+                // #7510: `Some(D)` → `None` is the ONE transition that can
+                // falsify a construction memo (see `gc::shape_install`). It is
+                // also the only transition this map has, since entries are
+                // never removed and never overwritten with a different `Some`.
+                super::shape_install::invalidate();
                 false
             }
             // Already ambiguous.
@@ -943,9 +954,13 @@ unsafe fn init_typed_shape_layout(
         return;
     }
 
-    let raw_f64_mask = LayoutSlotMask::from_words(raw_f64_words);
-    let pointer_mask = LayoutSlotMask::from_words(pointer_words);
-    if raw_f64_mask.intersects(&pointer_mask, slot_count) {
+    // The two soundness checks, straight off the caller's mask words. Building
+    // a `LayoutSlotMask` here would be a 32-byte enum with a destructor —
+    // ×2, plus drop glue at every early return below, plus an allocation each
+    // for any shape wider than 64 slots — to answer two predicates. The
+    // descriptor that genuinely needs the type is built further down, only
+    // when a shape is actually installed.
+    if super::shape_install::words_intersect(raw_f64_words, pointer_words, slot_count) {
         layout_set_typed_unknown(header, user_ptr);
         return;
     }
@@ -956,37 +971,71 @@ unsafe fn init_typed_shape_layout(
             as *const u64;
         for i in 0..slot_count {
             let bits = *fields.add(i);
-            if raw_f64_mask.contains_slot(i) {
+            if super::shape_install::words_contain_slot(raw_f64_words, i) {
                 if !layout_raw_f64_bits(bits) {
                     layout_set_typed_unknown(header, user_ptr);
                     return;
                 }
                 continue;
             }
-            if layout_pointer_bearing_bits(bits) && !pointer_mask.contains_slot(i) {
+            if layout_pointer_bearing_bits(bits)
+                && !super::shape_install::words_contain_slot(pointer_words, i)
+            {
                 layout_set_typed_unknown(header, user_ptr);
                 return;
             }
         }
     }
 
+    // #7510 item 1: everything above this line is re-derived per object and
+    // stays that way — it is what makes the header declaration below true.
+    // What the 20-millionth `{v, w}` literal does NOT need to re-derive is the
+    // *map* answer: that its shape's canonical descriptor is already installed
+    // and already equal to the one these mask globals describe. That is all
+    // `shape_install::hit` asserts, and on a hit the construction reduces to
+    // the two header bit-writes `shape_install_shared` would have performed —
+    // no `TypedLayoutDescriptor` built, cloned and dropped, no `RefCell`
+    // borrow, no hash of `keys`, no field-by-field descriptor comparison.
+    //
+    // The memo carries no header state: `POINTER_FREE` vs `SIDE_MASK` is
+    // recomputed from the pointer mask exactly as the slow path computes it,
+    // so a stale entry can only cost work. See `gc::shape_install` for the
+    // full staleness argument.
+    //
+    // `object_keys_array_ptr`'s two guards are already discharged above
+    // (`layout_header_for_user` rejected the low addresses,
+    // `GcLayoutSlotKind::ObjectFields` was checked), so read the field
+    // directly rather than re-walking the header.
+    let keys = (*obj_header).keys_array as usize;
+    if keys != 0 && super::shape_install::hit(keys, slot_count, raw_f64_words, pointer_words) {
+        header_set_typed_layout_intact(header);
+        if super::shape_install::words_are_empty(pointer_words) {
+            set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        } else {
+            set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+        }
+        layout_forget_object(user_ptr);
+        return;
+    }
+
+    let pointer_mask = LayoutSlotMask::from_words(pointer_words);
     let descriptor = TypedLayoutDescriptor {
         slot_count,
-        raw_f64_mask,
+        raw_f64_mask: LayoutSlotMask::from_words(raw_f64_words),
         pointer_mask: pointer_mask.clone(),
     };
     // #6893: try the O(shapes) shared shape descriptor (keyed by the canonical
-    // keys_array) before per-object storage.
-    let keys = if shape_layout_keyed_enabled() {
-        object_keys_array_ptr(user_ptr)
-    } else {
-        0
-    };
+    // keys_array) before per-object storage. `shape_layout_keyed_enabled()`
+    // gates this and therefore also gates the memo above: the memo is only
+    // ever populated from a successful install here, so with the knob off the
+    // table stays empty and every lookup misses.
+    let keys = if shape_layout_keyed_enabled() { keys } else { 0 };
     if keys != 0 && shape_install_shared(keys, header, &descriptor) {
         // The common path for every object literal: the shape already owns a
         // canonical descriptor, so this object needs no per-object record at
         // all. `layout_forget_object` skips the hash entirely when the maps
         // are empty, which on a monomorphic workload they are.
+        super::shape_install::record(keys, slot_count, raw_f64_words, pointer_words);
         layout_forget_object(user_ptr);
         return;
     }

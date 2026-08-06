@@ -80,6 +80,8 @@ pub(crate) struct HotTls {
     pub(crate) typed_layouts: *mut u8,
     pub(crate) shape_layouts: *mut u8,
     pub(crate) per_object_layouts_nonempty: *mut u8,
+    // gc/shape_install.rs
+    pub(crate) shape_install_memo: *mut u8,
     // gc/roots/temp_roots.rs
     pub(crate) temp_roots: *mut u8,
 }
@@ -99,6 +101,7 @@ impl HotTls {
         typed_layouts: std::ptr::null_mut(),
         shape_layouts: std::ptr::null_mut(),
         per_object_layouts_nonempty: std::ptr::null_mut(),
+        shape_install_memo: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
     };
 }
@@ -136,6 +139,7 @@ fn fill(slots: *mut HotTls) {
         (*slots).typed_layouts = crate::gc::typed_layouts_hot_addr();
         (*slots).shape_layouts = crate::gc::shape_layouts_hot_addr();
         (*slots).per_object_layouts_nonempty = crate::gc::per_object_layouts_nonempty_hot_addr();
+        (*slots).shape_install_memo = crate::gc::shape_install_memo_hot_addr();
         // Last, and the field `hot()` tests: every other slot is already
         // written by the time this one is non-null, so a re-entrant call from
         // inside one of the providers above cannot observe a half-filled cache
@@ -230,6 +234,11 @@ mod tests {
             "per_object_layouts_nonempty"
         );
         assert_eq!(
+            hot.shape_install_memo,
+            crate::gc::shape_install_memo_hot_addr(),
+            "shape_install_memo"
+        );
+        assert_eq!(
             hot.temp_roots,
             crate::gc::temp_roots_hot_addr(),
             "temp_roots"
@@ -264,6 +273,7 @@ mod tests {
                 "per_object_layouts_nonempty",
                 hot.per_object_layouts_nonempty,
             ),
+            ("shape_install_memo", hot.shape_install_memo),
             ("temp_roots", hot.temp_roots),
         ] {
             assert!(!ptr.is_null(), "{name} slot was left null by fill()");

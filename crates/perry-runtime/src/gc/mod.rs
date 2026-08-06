@@ -70,6 +70,11 @@ mod layout;
 /// keeps them off the allocation, store, death and trace paths. Split out of
 /// `layout.rs` so it stays under the repo's 2000-line-per-file cap.
 mod layout_tables;
+/// #7510 item 1: the construction-side memo that turns an already-installed
+/// typed shape into two header bit-writes instead of a descriptor build plus a
+/// `SHAPE_LAYOUTS` round-trip.
+mod shape_install;
+pub(crate) use shape_install::shape_install_memo_hot_addr;
 pub use layout::*;
 mod trace;
 pub(crate) use trace::*;
