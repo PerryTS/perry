@@ -45,6 +45,8 @@ pub use self::element_shape::{
     js_array_element_shape_check, js_array_element_shape_class, js_array_element_shape_epoch,
     js_array_element_shape_version, js_array_ensure_element_shape,
 };
+#[cfg(test)]
+pub(crate) use self::element_shape::{test_element_shape_record_exists, test_serialize};
 pub use self::flat_clone::{
     js_array_clone, js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys,
     js_array_values,

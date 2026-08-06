@@ -10,6 +10,7 @@
 //! did").
 
 use super::*;
+use crate::array::{test_element_shape_record_exists, test_serialize};
 
 const CLASS_ELEM: u32 = 0x0007_4810;
 
@@ -35,6 +36,7 @@ fn proven_array(count: usize) -> *mut crate::array::ArrayHeader {
 
 #[test]
 fn test_element_shape_invariant_survives_a_copying_minor() {
+    let _serialized = test_serialize();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
@@ -64,6 +66,15 @@ fn test_element_shape_invariant_survives_a_copying_minor() {
         CLASS_ELEM as i32,
         "the address-keyed record must have followed the move via layout_transfer"
     );
+    assert!(
+        test_element_shape_record_exists(after),
+        "the record must be keyed by the post-move address"
+    );
+    assert!(
+        !test_element_shape_record_exists(arr as usize),
+        "and must not be left addressable under the pre-move key, where a \
+         recycled allocation could inherit its identity"
+    );
     // A caller still holding the pre-move head must reach the SAME proof, not
     // a second one: the query resolves the forwarding chain before it looks
     // the record up, exactly as the 4a element tiers do
@@ -78,6 +89,7 @@ fn test_element_shape_invariant_survives_a_copying_minor() {
 
 #[test]
 fn test_element_shape_invariant_keeps_growing_after_a_copying_minor() {
+    let _serialized = test_serialize();
     // A moved array must still be *maintainable*, not merely readable: the
     // record has to be reachable at the new key for the store funnel to find
     // it, or the next matching push would clear the proof instead of

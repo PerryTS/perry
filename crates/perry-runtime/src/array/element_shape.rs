@@ -71,6 +71,14 @@
 //!   generation is retired lazily on its next query, so one prototype write
 //!   retires every outstanding record at O(1) without enumerating arrays.
 //!
+//! A third counter, `ELEMENT_SHAPE_PROOF_SEQ`, is not an invalidation signal
+//! but an identity source: every *established* proof takes the next value and
+//! carries it unchanged while it is kept or extended. Because identities are
+//! never reused and are never read back from the table, a record that
+//! outlives its array — left by a fail-closed transfer, or by a death whose
+//! prune has not run yet — cannot donate its identity to whatever is
+//! established at that recycled address next.
+//!
 //! Both follow the crate's convention for invalidation counters (`AtomicU64`
 //! starting at 1, `PROP_PLAN_EPOCH` / `PERRY_IC_EPOCH`), not a per-thread
 //! `Cell`: the class registry a generation bump answers to is process-wide.
@@ -107,10 +115,13 @@ struct ElementShapeRecord {
     /// array's current `length` to still equal it, so every length-changing
     /// mutation invalidates the proof without needing its own call site.
     verified_len: u32,
-    /// Bumped each time THIS array's invariant is cleared, so a consumer
-    /// holding a proof can tell "still the same proof" from "re-established
-    /// with the same class after a break".
-    epoch: u32,
+    /// This proof's identity, drawn from `ELEMENT_SHAPE_PROOF_SEQ` when the
+    /// proof is *established*, and carried unchanged while it is merely kept
+    /// or extended. Values are never reused, so a consumer that pinned
+    /// `(class_id, epoch)` can never be fooled by the same array being
+    /// re-proven with the same class after a break — nor by a *different*
+    /// array being established at a recycled address.
+    epoch: u64,
     /// `CLASS_SHAPE_GENERATION` at install time. A prototype write bumps the
     /// global and retires every record at once.
     generation: u64,
@@ -122,7 +133,7 @@ struct ElementShapeRecord {
 pub(crate) struct ElementShapeProof {
     pub(crate) class_id: u32,
     pub(crate) verified_len: u32,
-    pub(crate) epoch: u32,
+    pub(crate) epoch: u64,
 }
 
 thread_local! {
@@ -141,6 +152,34 @@ static ELEMENT_SHAPE_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 /// Bumped only when a class stops being a reliable shape.
 static CLASS_SHAPE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Hands out a fresh identity to every proof that is *established*. Values
+/// are never reused, which is what makes address recycling safe: a record
+/// that survives at an address its array no longer owns cannot donate its
+/// identity to whatever is established there next, because establishing
+/// always takes a new number rather than reading the old one.
+static ELEMENT_SHAPE_PROOF_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// A shared serialization guard for the tests, which observe the two
+/// process-wide counters above. `ELEMENT_SHAPES` is thread-local, so each
+/// test thread gets its own table, but a concurrent test's clear or
+/// generation bump is visible in `ELEMENT_SHAPE_EPOCH` — order-dependent
+/// tests are exactly the failure #7490 spent a day untangling. Both test
+/// files take this lock, and it is deliberately poison-tolerant (#7492): a
+/// panicking test must not cascade into every other one.
+#[cfg(test)]
+pub(crate) static ELEMENT_SHAPE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take [`ELEMENT_SHAPE_TEST_LOCK`], recovering from poisoning.
+///
+/// Declare this guard **first** in a test, before any `…TestGuard`, so unwind
+/// order drops the state-restoring guards while this one is still held.
+#[cfg(test)]
+pub(crate) fn test_serialize() -> std::sync::MutexGuard<'static, ()> {
+    ELEMENT_SHAPE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// The consumer-facing "nothing has been retired" word. See the module docs.
 #[inline]
@@ -252,14 +291,12 @@ pub(crate) unsafe fn clear_element_shape(arr: *const ArrayHeader) {
     }
     clear_bit(header);
     let key = arr as usize;
+    // Drop the record outright. Keeping a retired one buys nothing —
+    // identities come from `ELEMENT_SHAPE_PROOF_SEQ`, never from whatever
+    // happens to sit at the address — and a record with no bit is a
+    // liability: it is the thing a later establishment could read.
     ELEMENT_SHAPES.with(|m| {
-        // Keep the record, with a bumped per-array epoch, so a later
-        // re-establishment is distinguishable from the proof just retired.
-        // The bit — not the record — is the authority, so a retained record
-        // under a cleared bit proves nothing.
-        if let Some(record) = m.borrow_mut().get_mut(&key) {
-            record.epoch = record.epoch.wrapping_add(1);
-        }
+        m.borrow_mut().remove(&key);
     });
     bump_epoch();
 }
@@ -286,28 +323,46 @@ pub(crate) fn forget_element_shape(user_ptr: usize) {
     });
 }
 
-/// Install the invariant for `arr` at `class_id`, verified over
-/// `[0, verified_len)`.
-unsafe fn install(arr: *mut ArrayHeader, class_id: u32, verified_len: u32) {
+/// **Establish** the invariant for `arr` at `class_id`, verified over
+/// `[0, verified_len)`, under a brand-new proof identity.
+///
+/// The identity is drawn from `ELEMENT_SHAPE_PROOF_SEQ` rather than read back
+/// from whatever record happens to sit at this address. That is the whole
+/// defence against address recycling: a survivor record — left by a
+/// fail-closed transfer, a dead array whose prune has not run yet — can never
+/// donate its identity to the array established here next.
+unsafe fn establish(arr: *mut ArrayHeader, class_id: u32, verified_len: u32) {
     let Some(header) = array_gc_header(arr) else {
         return;
     };
-    let key = arr as usize;
-    let generation = class_shape_generation();
+    let record = ElementShapeRecord {
+        class_id,
+        verified_len,
+        epoch: ELEMENT_SHAPE_PROOF_SEQ.fetch_add(1, Ordering::Relaxed),
+        generation: class_shape_generation(),
+    };
     ELEMENT_SHAPES.with(|m| {
-        let mut map = m.borrow_mut();
-        let epoch = map.get(&key).map_or(1, |r| r.epoch);
-        map.insert(
-            key,
+        m.borrow_mut().insert(arr as usize, record);
+    });
+    set_bit(header);
+}
+
+/// **Keep** an existing proof while extending its verified prefix. The
+/// identity is carried unchanged — a consumer that pinned it stays valid,
+/// which is the point: appending a matching element does not retire anything.
+unsafe fn extend_verified_len(arr: *mut ArrayHeader, record: ElementShapeRecord, new_len: u32) {
+    if array_gc_header(arr).is_none() {
+        return;
+    }
+    ELEMENT_SHAPES.with(|m| {
+        m.borrow_mut().insert(
+            arr as usize,
             ElementShapeRecord {
-                class_id,
-                verified_len,
-                epoch,
-                generation,
+                verified_len: new_len,
+                ..record
             },
         );
     });
-    set_bit(header);
 }
 
 /// The O(1) query: does `arr` still carry a homogeneous element-shape proof?
@@ -377,7 +432,7 @@ pub(crate) unsafe fn ensure_element_shape(arr: *mut ArrayHeader) -> Option<Eleme
             return None;
         }
     }
-    install(arr, class_id, length as u32);
+    establish(arr, class_id, length as u32);
     element_shape_proof(arr)
 }
 
@@ -421,7 +476,7 @@ pub(crate) unsafe fn note_element_store(arr: *mut ArrayHeader, index: usize, val
         // claim a prefix was verified when it never was.
         if index == 0 && (*arr).length == 0 && array_admits_element_proof(arr) {
             if let Some(class_id) = element_class_of_bits(value_bits) {
-                install(arr, class_id, 1);
+                establish(arr, class_id, 1);
             }
         }
         return;
@@ -442,7 +497,7 @@ pub(crate) unsafe fn note_element_store(arr: *mut ArrayHeader, index: usize, val
     if index == record.verified_len as usize {
         // Contiguous append. Callers bump `length` immediately after the
         // store, so the record leads it for exactly the store's duration.
-        install(arr, record.class_id, record.verified_len.saturating_add(1));
+        extend_verified_len(arr, record, record.verified_len.saturating_add(1));
     }
 }
 
@@ -458,28 +513,41 @@ pub(crate) fn transfer_element_shape(old_user: usize, new_user: usize) {
     if old_user == 0 || new_user == 0 || old_user == new_user {
         return;
     }
-    let moved = ELEMENT_SHAPES.with(|m| {
-        let mut map = m.borrow_mut();
-        map.remove(&new_user);
-        match map.remove(&old_user) {
-            Some(record) => {
-                map.insert(new_user, record);
-                true
-            }
-            None => false,
-        }
-    });
     unsafe {
         let Some(new_header) = array_gc_header(new_user as *const ArrayHeader) else {
             return;
         };
+        // Decide BEFORE touching the table. Moving the record first and then
+        // discovering the source had no bit would leave an ORPHAN record at
+        // `new_user`: the bit is the authority so no proof is readable, but a
+        // later `install` at that address inherits the orphan's `epoch` and
+        // silently continues a *different* array's proof identity — which is
+        // exactly the versioning a consumer guards on.
         let had_bit = array_gc_header(old_user as *const ArrayHeader)
             .is_some_and(|old_header| header_has_bit(old_header));
-        if moved && had_bit {
+        let moved = ELEMENT_SHAPES.with(|m| {
+            let mut map = m.borrow_mut();
+            map.remove(&new_user);
+            if !had_bit {
+                // The source proved nothing; drop its record too rather than
+                // leave it addressable under a new key.
+                map.remove(&old_user);
+                return false;
+            }
+            match map.remove(&old_user) {
+                Some(record) => {
+                    map.insert(new_user, record);
+                    true
+                }
+                None => false,
+            }
+        });
+        if moved {
             set_bit(new_header);
         } else {
-            // Fail closed. The epoch is deliberately NOT bumped for a plain
-            // move: no proof was retired, there was never one to retire.
+            // Fail closed, with no record left behind at `new_user`. The
+            // epoch is deliberately NOT bumped for a plain move: no proof was
+            // retired, there was never one to retire.
             clear_bit(new_header);
         }
     }
@@ -517,7 +585,7 @@ pub extern "C" fn js_array_element_shape_class(arr: *const ArrayHeader) -> i32 {
 /// The per-array proof identity a consumer pins alongside the class id.
 #[no_mangle]
 pub extern "C" fn js_array_element_shape_version(arr: *const ArrayHeader) -> i64 {
-    unsafe { element_shape_proof(arr).map_or(-1, |p| i64::from(p.epoch)) }
+    unsafe { element_shape_proof(arr).map_or(-1, |p| p.epoch as i64) }
 }
 
 /// The global "nothing was retired" word. One relaxed load; see module docs.
@@ -536,7 +604,7 @@ pub extern "C" fn js_array_element_shape_check(
 ) -> i32 {
     unsafe {
         match element_shape_proof(arr) {
-            Some(p) if p.class_id as i32 == class_id && i64::from(p.epoch) == epoch => 1,
+            Some(p) if p.class_id as i32 == class_id && p.epoch as i64 == epoch => 1,
             _ => 0,
         }
     }
