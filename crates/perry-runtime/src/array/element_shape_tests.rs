@@ -84,6 +84,11 @@ fn a_scan_establishes_the_invariant_for_an_array_built_outside_the_funnels() {
     unsafe {
         let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
         for i in 0..4 {
+            // GC_STORE_AUDIT(INIT): fresh `js_array_alloc(4)` slots, filled the
+            // way an inline array literal's codegen fills them — the point of
+            // this test is that NO funnel runs, so a barriered helper would
+            // defeat it. The array is nursery-fresh and never escapes this
+            // test, and `ensure_element_shape` below is what must self-heal.
             std::ptr::write(elements.add(i), instance(CLASS_A).to_bits());
         }
         (*arr).length = 4;
