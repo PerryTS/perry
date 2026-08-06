@@ -146,6 +146,18 @@ jobs:
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done
 
+      # GATING, and the reason hazard 4 is actually closed rather than asserted.
+      # The liveness check is a text matcher over the linker command line; a
+      # matcher that stops matching reports "no archive" (loud), but one that
+      # matches too much reports a PASS for a fallback run (silent). `--self-test`
+      # feeds it a canned log of exactly that shape — the `auto-optimize: built …`
+      # message followed by a link line naming the PREBUILT archive — and fails
+      # if it is accepted. It caught a real over-match while this gate was being
+      # written.
+      - name: Prove the liveness matcher can still fail
+        if: steps.relevance.outputs.run == 'true'
+        run: ./scripts/auto_opt_app_patterns.sh --self-test
+
       # GATING. No pipe, no `|| true`: this step's exit status IS the gate. The
       # liveness assertion (the link line must name a perry-auto archive) lives
       # inside the script so a local run gets it too.

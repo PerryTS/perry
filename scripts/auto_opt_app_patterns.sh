@@ -68,6 +68,60 @@ SKIPS=(
   "promise_all_chains:pre-existing promise-rejection failure, #7475"
 )
 
+# LIVENESS MATCHER. Reads the archive the linker was actually handed out of a
+# `perry -v` compile log. Deliberately reads the `[link] invoking:` command
+# line and NOT the `auto-optimize: built …` status message: the driver prints
+# that message and can still fall back afterwards, and the fallback is exactly
+# what this gate must not mistake for a pass.
+archive_from_log() {
+  grep '\[link\] invoking:' "$1" \
+    | grep -o '[^ ]*perry-auto-[^ ]*libperry_runtime\.a' \
+    | head -1 || true
+}
+
+# Guard the matcher against its own regressions. A matcher that silently stops
+# matching reports "no archive" forever (loud), but one that matches too much
+# reports a pass for a fallback run (silent) — so both directions are asserted.
+if [[ "${1:-}" == "--self-test" ]]; then
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+  fails=0
+
+  cat >"$tmp" <<'LOG'
+  auto-optimize: built /w/target/perry-auto-11d6bccda5436414/release/libperry_runtime.a (18.7 MB)
+[link] invoking: cc -o /tmp/k /tmp/k.o /w/target/perry-auto-11d6bccda5436414/release/libperry_runtime.a -dead_strip
+LOG
+  got="$(archive_from_log "$tmp")"
+  if [[ "$got" != "/w/target/perry-auto-11d6bccda5436414/release/libperry_runtime.a" ]]; then
+    echo "self-test FAILED: matcher missed a real auto-optimize link line (got '$got')" >&2
+    fails=1
+  fi
+
+  # THE ONE THAT MATTERS. The driver announced the rebuild and then linked the
+  # PREBUILT archive anyway — its documented behaviour when the cargo rebuild
+  # fails. A matcher keyed on the message would call this a pass.
+  cat >"$tmp" <<'LOG'
+  auto-optimize: built /w/target/perry-auto-11d6bccda5436414/release/libperry_runtime.a (18.7 MB)
+  auto-optimize: cargo build failed (exit status: 101), using prebuilt libraries.
+[link] invoking: cc -o /tmp/k /tmp/k.o /w/target/release/libperry_runtime.a -dead_strip
+LOG
+  if [[ -n "$(archive_from_log "$tmp")" ]]; then
+    echo "self-test FAILED: matcher accepted a run that linked the PREBUILT archive" >&2
+    fails=1
+  fi
+
+  : >"$tmp"
+  if [[ -n "$(archive_from_log "$tmp")" ]]; then
+    echo "self-test FAILED: matcher found an archive in an empty log" >&2
+    fails=1
+  fi
+
+  [[ $fails -eq 0 ]] || exit 1
+  echo "self-test ok: the liveness matcher accepts a real auto-optimize link,"
+  echo "              rejects a prebuilt-archive fallback, and rejects an empty log."
+  exit 0
+fi
+
 if [[ ! -x "$PERRY_BIN" ]]; then
   echo "error: perry binary not found at $PERRY_BIN (set PERRY_BIN)" >&2
   exit 2
@@ -147,8 +201,8 @@ for name in "${selected[@]}"; do
 
   # LIVENESS. Pull the auto-optimize archive out of the linker invocation, not
   # out of a status message: a message can be printed by a path that then falls
-  # back, the link line cannot.
-  archive="$(grep -o '[^ ]*perry-auto-[^ ]*libperry_runtime\.a' "$log" | head -1 || true)"
+  # back, the link line cannot. `--self-test` proves this can still fail.
+  archive="$(archive_from_log "$log")"
   if [[ -z "$archive" ]]; then
     echo "FAIL  $name — the link line names no perry-auto-*/libperry_runtime.a."
     echo "        The auto-optimizer fell back to a prebuilt archive, so this run"
