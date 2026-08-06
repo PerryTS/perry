@@ -14,9 +14,11 @@ use super::*;
 /// tower using the current `IMPLICIT_THIS` as the receiver. Returns `None` for
 /// any other closure so normal dispatch proceeds untouched.
 ///
-/// Gated on a recorded built-in `.length` so bare no-op-backed global
-/// constructors (`const O = SomeCtor; O()`), which never call
-/// `set_builtin_closure_length`, are excluded.
+/// Gated on a recorded built-in `.length` (a proto method always has one) AND on
+/// the recovered name not being a global CONSTRUCTOR. The `.length` gate alone
+/// used to imply the second — bare no-op-backed global constructors recorded no
+/// spec length — but that was an accident of an incomplete table, not an
+/// invariant, and it stopped holding (#7518). See the exclusion below.
 pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     closure: *const crate::closure::ClosureHeader,
     args_ptr: *const f64,
@@ -38,18 +40,34 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     // heap StringHeader so the byte read below is valid for inline-stored names.
     let name_hdr = crate::builtins::js_string_coerce(name_val);
     let name = super::has_own_helpers::str_from_string_header(name_hdr)?;
-    // #5588: Function-family constructors (Function, GeneratorFunction,
-    // AsyncGeneratorFunction) share the noop thunk and have builtin_closure_length
-    // set, so this dispatch fires when any of them is reached via js_native_call_value
-    // inside js_new_function_construct — treating the newly-allocated receiver as
-    // the dispatch target. Exclude them: the noop thunk's undefined return lets
-    // `new` fall back to the allocated object, which is what Object.seal tests
-    // expect (they don't care whether the result is callable, only that sealing
-    // doesn't throw).
-    if matches!(
-        name,
-        "Function" | "GeneratorFunction" | "AsyncGeneratorFunction"
-    ) {
+    // #7518: a global CONSTRUCTOR reached as a VALUE is never a prototype-method
+    // uncurry, so re-dispatching it as `IMPLICIT_THIS.<Name>(…)` is always wrong:
+    // the by-name tower has no such method and its catch-all throws
+    // `TypeError: <Name> is not a function`. Constructors share the no-op thunk
+    // with the proto methods this helper serves, and the `.length` gate above
+    // used to exclude them only by accident (they recorded no spec length).
+    // c6ed8175d (#6853) added `EventTarget` to `builtin_constructor_spec_length`
+    // for Node parity on `EventTarget.length`, which gave the EventTarget global
+    // a recorded length and opened the gate — re-breaking #6301: a
+    // `class Bus extends EventTarget {}` has no static parent class id, so its
+    // `super()` runs the parent VALUE through `js_fetch_or_value_super`, which
+    // binds `IMPLICIT_THIS` to the new instance before the value call. That then
+    // re-dispatched `bus.EventTarget()` and threw. Make the exclusion explicit
+    // and table-driven so growing the spec-length table cannot re-open it.
+    //
+    // `Function` is in that table. `GeneratorFunction` / `AsyncGeneratorFunction`
+    // are not globals but share the shape (#5588): they are reached via
+    // `js_native_call_value` inside `js_new_function_construct`, which would treat
+    // the newly-allocated receiver as the dispatch target — the no-op thunk's
+    // `undefined` return is what lets `new` fall back to that object, which is
+    // what the Object.seal tests expect.
+    //
+    // Global builtin FUNCTIONS (`parseInt`, `fetch`, …) are deliberately NOT
+    // excluded here: they are installed with their own thunks, never the no-op
+    // one, so they never reach this point at all.
+    if is_global_this_builtin_constructor_name(name)
+        || matches!(name, "GeneratorFunction" | "AsyncGeneratorFunction")
+    {
         return None;
     }
     let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));

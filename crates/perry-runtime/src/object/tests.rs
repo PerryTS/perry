@@ -1220,3 +1220,85 @@ fn map_size_by_name_does_not_oob_read_keys_array() {
         assert_eq!(v2.as_number(), 2.0, "populated Map .size");
     }
 }
+
+/// #7518: a `globalThis` built-in CONSTRUCTOR reached as a VALUE must never be
+/// re-dispatched as a method name on `IMPLICIT_THIS`.
+///
+/// `try_dispatch_value_called_proto_method` exists for the #3716 uncurry-this
+/// idiom: a built-in *prototype method* invoked as a value arrives backed by the
+/// shared `global_this_builtin_noop_thunk`, so the helper recovers its recorded
+/// `name` and re-dispatches `IMPLICIT_THIS.<name>(…)` through the real by-name
+/// tower. Global constructors share that same no-op thunk, and the only thing
+/// keeping them out was incidental — they recorded no builtin `.length`.
+///
+/// c6ed8175d (#6853) added `EventTarget` to `builtin_constructor_spec_length` so
+/// `EventTarget.length` reads `0` like Node. That gave the EventTarget global a
+/// recorded length, opened the gate, and re-broke #6301: `class Bus extends
+/// EventTarget {}` has no static parent class id, so its `super()` runs the
+/// parent VALUE through `js_fetch_or_value_super` — which binds `IMPLICIT_THIS`
+/// to the new instance before the value call — and the helper turned that into
+/// `bus.EventTarget()`, whose miss throws `TypeError: EventTarget is not a
+/// function`. `parity` is tag-gated, so the gap test that covers this sat red on
+/// `main` for a week unnoticed; this assertion lives in the per-PR `cargo-test`
+/// tier instead.
+///
+/// Walks the whole table so a future `builtin_constructor_spec_length` addition
+/// cannot silently re-open the hole for a different name.
+#[test]
+fn global_builtin_constructor_values_are_not_redispatched_by_name() {
+    // The closure `name` / `length` props these assertions read live in the
+    // PROCESS-global CLOSURE_PROPS table (#6965).
+    let _global = crate::gc::global_side_table_test_lock();
+    // Give the pre-fix failure mode a real receiver to miss on, so a regression
+    // surfaces as a clean catchable throw rather than a dispatch on whatever
+    // `IMPLICIT_THIS` happened to hold.
+    let receiver = crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+
+    let mut with_recorded_length = 0usize;
+    let mut offenders: Vec<String> = Vec::new();
+    for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
+        let ctor_raw = test_global_this_builtin_constructor_value(name);
+        let ctor = JSValue::from_bits(ctor_raw.to_bits());
+        assert!(ctor.is_pointer(), "{name} should be a closure-backed global");
+        let closure = ctor.as_pointer::<crate::closure::ClosureHeader>();
+        if super::native_module::builtin_closure_length(closure as usize).is_some() {
+            with_recorded_length += 1;
+        }
+        let verdict = catch_js(|| {
+            match unsafe {
+                crate::object::try_dispatch_value_called_proto_method(closure, std::ptr::null(), 0)
+            } {
+                None => 1.0,
+                Some(_) => 0.0,
+            }
+        });
+        match verdict {
+            Ok(v) if v == 1.0 => {}
+            Ok(_) => offenders.push(format!("{name} (re-dispatched by name)")),
+            Err(_) => offenders.push(format!("{name} (threw)")),
+        }
+    }
+
+    crate::object::js_implicit_this_set(prev_this);
+
+    assert!(
+        offenders.is_empty(),
+        "globalThis built-in constructors must not be value-dispatched as \
+         `IMPLICIT_THIS.<Name>(…)`; offenders: {offenders:?}"
+    );
+    // Non-vacuity: the bug needs the no-op thunk PLUS a recorded spec `.length`.
+    // If nothing in the table carries a length, every entry above declined at the
+    // `.length` gate and this test proved nothing about the exclusion.
+    assert!(
+        with_recorded_length > 0,
+        "no globalThis built-in constructor carries a recorded builtin `.length` — \
+         this test can no longer reach the shape it guards"
+    );
+    // And pin the specific input that regressed: the fix is the explicit
+    // constructor exclusion, NOT dropping the Node-parity `.length` #6853 added.
+    assert!(
+        crate::object::builtin_constructor_spec_length("EventTarget").is_some(),
+        "#7518: EventTarget must keep its spec `.length`"
+    );
+}
