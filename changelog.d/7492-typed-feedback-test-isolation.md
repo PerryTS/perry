@@ -58,8 +58,9 @@ multi-module build cannot pin the first module's decision.
 Validation: 16/16 green, three consecutive runs at default parallelism and
 three at `--test-threads=1`, and every test also passes run alone.
 
-The other suites named in the same sweep — `native_proof_buffer_views`,
-`native_proof_regressions`, `shadow_slot_hygiene`, `scalar_replaced_slot_roots`,
-`temp_root_argument_temporaries` — are a different root cause: every one of
-their failures reproduces run alone, so none is order-dependent, and they are
-tracked separately.
+The other suites named in the same sweep are a different root cause: every one
+of their failures reproduces run alone, so none is order-dependent. They split
+into the #7370 native-roots default (#7493 — `shadow_slot_hygiene` goes 0/12 to
+11/12 under `PERRY_RS4GC=0`, while `native_proof_regressions` *loses* 13 tests
+there, so the pin has to be per-test and `NativeRootsPin::shadow()` is
+`#[cfg(test)]`) and four lowering-independent assertion failures (#7494).
