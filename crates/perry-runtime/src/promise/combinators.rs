@@ -357,14 +357,21 @@ pub(crate) fn combinator_iterable_to_array(
     // (the overwhelming common case) pay one extra side-table probe and
     // keep the existing raw clone.
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        // #7497: `well_known_symbol` and `own_symbol_property` both allocate
+        // (and the latter can run a user getter), so the array being cloned is
+        // re-read from a root rather than carried across them in a register.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_h = scope.root_nanbox_f64(value);
         let iter_sym = crate::symbol::well_known_symbol("iterator");
         if !iter_sym.is_null() {
             let sym_f64 =
                 f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
-            let _ = unsafe { crate::symbol::own_symbol_property(value, sym_f64) };
+            let _ =
+                unsafe { crate::symbol::own_symbol_property(value_h.get_nanbox_f64(), sym_f64) };
         }
         return Ok(crate::array::js_array_clone(
-            crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader,
+            crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
+                as *const crate::array::ArrayHeader,
         ));
     }
     let jsval = JSValue::from_bits(value.to_bits());
@@ -671,23 +678,47 @@ pub(super) fn make_resolving_functions(
 ) {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
     ensure_native_resolving_arity_registered();
-    let guard = alloc_already_resolved_guard();
-    let resolve = js_closure_alloc(promise_resolve_fn as *const u8, 2);
-    js_closure_set_capture_ptr(resolve, 0, promise as i64);
-    js_closure_set_capture_ptr(resolve, 1, guard as i64);
-    let reject = js_closure_alloc(promise_reject_fn as *const u8, 2);
-    js_closure_set_capture_ptr(reject, 0, promise as i64);
-    js_closure_set_capture_ptr(reject, 1, guard as i64);
+    // #7497: four allocations follow, and `promise` / `guard` are STORED into
+    // capture slots after them. Pre-fix all three lived in bare Rust locals, so
+    // a copying minor here wrote pre-collection addresses into the two closures
+    // — the from-space-publishing shape, not merely a stale read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    let guard_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        alloc_already_resolved_guard() as i64,
+    ));
+    let resolve_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
+        promise_resolve_fn as *const u8,
+        2,
+    ) as i64));
+    let reject_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
+        promise_reject_fn as *const u8,
+        2,
+    ) as i64));
+    let ptr_of = |h: &crate::gc::RuntimeHandle<'_>| -> i64 {
+        crate::value::js_nanbox_get_pointer(h.get_nanbox_f64())
+    };
+    for handle in [&resolve_h, &reject_h] {
+        let f = ptr_of(handle) as *mut crate::closure::ClosureHeader;
+        js_closure_set_capture_ptr(f, 0, ptr_of(&promise_h));
+        js_closure_set_capture_ptr(f, 1, ptr_of(&guard_h));
+    }
     // Spec 27.2.1.3: the resolving functions are anonymous built-in functions
     // with own `length` = 1, `name` = "" (both non-writable, non-enumerable,
     // configurable), and NO `[[Construct]]` (`new resolve()` throws). test262
     // `resolve-function-*` / `reject-function-*` assert all four.
-    for f in [resolve, reject] {
-        crate::object::set_builtin_closure_length(f as usize, 1);
-        crate::object::set_bound_native_closure_name(f, "");
-        crate::object::set_builtin_closure_non_constructable(f as usize);
+    for handle in [&resolve_h, &reject_h] {
+        crate::object::set_builtin_closure_length(ptr_of(handle) as usize, 1);
+        crate::object::set_bound_native_closure_name(
+            ptr_of(handle) as *mut crate::closure::ClosureHeader,
+            "",
+        );
+        crate::object::set_builtin_closure_non_constructable(ptr_of(handle) as usize);
     }
-    (resolve, reject)
+    (
+        ptr_of(&resolve_h) as *mut crate::closure::ClosureHeader,
+        ptr_of(&reject_h) as *mut crate::closure::ClosureHeader,
+    )
 }
 
 /// Internal resolve function for Promise executor callbacks.
