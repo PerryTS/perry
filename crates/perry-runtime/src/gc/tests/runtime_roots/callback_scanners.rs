@@ -369,6 +369,19 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
             header_from_user_ptr(hdr as *const u8) as usize,
         )
     };
+    // #7549: assert the cache block is OLD-GEN before asserting anything about
+    // pages. `slot_is_external_to` short-circuits to `true` on generation
+    // BEFORE it reaches the containment test — so if an allocator change ever
+    // moved a 32 KiB sparse cache into the nursery, the containment branch this
+    // test exists to cover would quietly stop running and the test would still
+    // pass. That is the "a gate must assert its subject was live" hazard
+    // (CLAUDE.md) applied to this test itself. Raised by CodeRabbit on #7546.
+    assert!(
+        crate::arena::pointer_in_old_gen(cache_slot),
+        "the sparse cache must be born old, or `slot_is_external_to` \
+         short-circuits on generation and the containment branch under test \
+         never runs"
+    );
     assert_ne!(
         crate::arena::generation_page_for_addr(cache_slot),
         crate::arena::generation_page_for_addr(hdr as usize),
