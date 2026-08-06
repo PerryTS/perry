@@ -101,10 +101,8 @@ fn test_element_shape_invariant_keeps_growing_after_a_copying_minor() {
         "a matching push after the move must keep the proof, not retire it"
     );
     let mismatched = crate::object::js_object_alloc(CLASS_ELEM + 1, 1);
-    let grown = crate::array::js_array_push_f64(
-        grown,
-        crate::value::js_nanbox_pointer(mismatched as i64),
-    );
+    let grown =
+        crate::array::js_array_push_f64(grown, crate::value::js_nanbox_pointer(mismatched as i64));
     assert_eq!(
         crate::array::js_array_element_shape_class(grown),
         0,

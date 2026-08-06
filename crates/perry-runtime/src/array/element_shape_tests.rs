@@ -303,7 +303,11 @@ fn the_check_helper_pins_class_and_proof_identity() {
     let arr = built_from_pushes(CLASS_A, 3);
     let proof = proof(arr).expect("proven");
     assert_eq!(
-        crate::array::js_array_element_shape_check(arr, proof.class_id as i32, i64::from(proof.epoch)),
+        crate::array::js_array_element_shape_check(
+            arr,
+            proof.class_id as i32,
+            i64::from(proof.epoch)
+        ),
         1
     );
     assert_eq!(
