@@ -762,6 +762,24 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     if raw_ptr() == 0 {
         throw_not_iterable(value());
     }
+
+    // #7533: the overwhelmingly common spread — an ordinary dense array — is a
+    // straight element copy that nobody can observe as anything else. Take it
+    // before the classification probes and long before the `@@iterator` walk
+    // below: on the `object_deep_clone` app-pattern kernel that walk plus the
+    // `.next()` drain it feeds was 90% of the whole process, and the identical
+    // copy through `Array.from`'s memcpy was ~66x cheaper.
+    //
+    // `dense_spread_source` proves ordinariness (see its doc comment for each
+    // gate); anything it cannot prove falls through to the unchanged protocol.
+    // It runs before `entries_array_for_small_handle_id` / `is_registered_buffer`
+    // only because it never dereferences an unvalidated address itself —
+    // `try_read_gc_header` rejects the handle band and the header-less
+    // small-buffer slab without touching memory.
+    if crate::array::dense_spread_source(value()).is_some() {
+        return crate::array::dense_spread_copy(value());
+    }
+
     if let Some(entries) = entries_array_for_small_handle_id(raw_ptr() as i64) {
         return entries;
     }
