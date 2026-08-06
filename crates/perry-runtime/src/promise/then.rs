@@ -1369,24 +1369,38 @@ pub(crate) extern "C" fn promise_prototype_then_thunk(
         throw_promise_prototype_incompatible_receiver("then", receiver);
     };
 
+    // #7497: `promise_species_constructor` reads `receiver.constructor` and
+    // `is_default_promise_constructor` performs a `globalThis.Promise` lookup
+    // that allocates a fresh key string — the receiver promise and both handler
+    // arguments are live across both, and `promise` is the receiver of the
+    // `then` that follows.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    let on_fulfilled_h = scope.root_nanbox_f64(on_fulfilled);
+    let on_rejected_h = scope.root_nanbox_f64(on_rejected);
+
     // SpeciesConstructor(promise, %Promise%) — reads this.constructor once.
     let c = promise_species_constructor(receiver);
+    let c_h = scope.root_nanbox_f64(c);
 
-    if super::spec_combinators::is_default_promise_constructor(c) {
+    if super::spec_combinators::is_default_promise_constructor(c_h.get_nanbox_f64()) {
         // Fast path: native then.
+        let promise =
+            crate::value::js_nanbox_get_pointer(promise_h.get_nanbox_f64()) as *mut Promise;
         return box_promise_ptr(js_promise_then(
             promise,
-            arg_to_closure(on_fulfilled),
-            arg_to_closure(on_rejected),
+            arg_to_closure(on_fulfilled_h.get_nanbox_f64()),
+            arg_to_closure(on_rejected_h.get_nanbox_f64()),
         ));
     }
 
     // Slow path: NewPromiseCapability(C) + PerformPromiseThen.
-    let cap = super::spec_combinators::new_promise_capability(c);
+    let cap = super::spec_combinators::new_promise_capability(c_h.get_nanbox_f64());
+    let promise = crate::value::js_nanbox_get_pointer(promise_h.get_nanbox_f64()) as *mut Promise;
     perform_promise_then_with_cap(
         promise,
-        on_fulfilled,
-        on_rejected,
+        on_fulfilled_h.get_nanbox_f64(),
+        on_rejected_h.get_nanbox_f64(),
         cap.resolve,
         cap.reject,
         cap.promise,

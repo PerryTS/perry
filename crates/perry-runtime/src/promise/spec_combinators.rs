@@ -860,16 +860,23 @@ fn is_object_value(value: f64) -> bool {
 #[no_mangle]
 pub extern "C" fn js_promise_reject_spec(this_ctor: f64, reason: f64) -> f64 {
     ensure_arity_registered();
+    // #7497: `is_default_promise_constructor` reaches `globalThis.Promise`, which
+    // allocates a key string on every call — so neither argument may be carried
+    // across it in a register. See `js_promise_resolve_spec`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor_h = scope.root_nanbox_f64(this_ctor);
+    let reason_h = scope.root_nanbox_f64(reason);
     // Default `Promise`: the optimized native rejected-promise path.
-    if is_default_promise_constructor(this_ctor) {
-        let p = crate::promise::js_promise_rejected(reason);
+    if is_default_promise_constructor(ctor_h.get_nanbox_f64()) {
+        let p = crate::promise::js_promise_rejected(reason_h.get_nanbox_f64());
         return js_nanbox_pointer(p as i64);
     }
-    let cap = new_promise_capability(this_ctor);
-    if let Err(thrown) = call_with_this(cap.reject, undef(), &[reason]) {
+    let cap = new_promise_capability(ctor_h.get_nanbox_f64());
+    let cap_promise_h = scope.root_nanbox_f64(cap.promise);
+    if let Err(thrown) = call_with_this(cap.reject, undef(), &[reason_h.get_nanbox_f64()]) {
         crate::exception::js_throw(thrown);
     }
-    cap.promise
+    cap_promise_h.get_nanbox_f64()
 }
 
 /// `Promise.resolve(x)` (ECMA-262 27.2.4.7 → PromiseResolve) with `this` = C:
@@ -879,34 +886,45 @@ pub extern "C" fn js_promise_reject_spec(this_ctor: f64, reason: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_promise_resolve_spec(this_ctor: f64, value: f64) -> f64 {
     ensure_arity_registered();
-    if !is_object_value(this_ctor) {
+    // #7497, and this is THE hot one: `Promise.all` calls this once per element,
+    // and `is_default_promise_constructor` below reaches `globalThis.Promise`
+    // through a lookup that allocates a fresh key string EVERY time. `value` —
+    // the element, which for `Promise.all([...promises])` is itself a promise —
+    // used to sit in a register across that allocation and was then dereferenced
+    // by `js_promise_resolved`. `PERRY_GC_PROTECT_FROMSPACE=1` faults here on a
+    // 72-byte `GC_TYPE_PROMISE` at minor #0.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor_h = scope.root_nanbox_f64(this_ctor);
+    let value_h = scope.root_nanbox_f64(value);
+    if !is_object_value(ctor_h.get_nanbox_f64()) {
         throw_type_error("Promise.resolve called on non-object");
     }
     // Default `Promise`: keep the optimized native path — it preserves promise
     // identity AND assimilates thenables (object-literal `then`), which the
     // generic capability path below would not (its resolve just stores the
     // value). The per-element resolve of the combinators routes through here.
-    if is_default_promise_constructor(this_ctor) {
-        let p = crate::promise::js_promise_resolved(value);
+    if is_default_promise_constructor(ctor_h.get_nanbox_f64()) {
+        let p = crate::promise::js_promise_resolved(value_h.get_nanbox_f64());
         return js_nanbox_pointer(p as i64);
     }
-    if crate::promise::js_value_is_promise(value) != 0 {
+    if crate::promise::js_value_is_promise(value_h.get_nanbox_f64()) != 0 {
         let xctor = unsafe {
             crate::value::js_dynamic_object_get_property(
-                value,
+                value_h.get_nanbox_f64(),
                 b"constructor".as_ptr() as *const i8,
                 11,
             )
         };
-        if xctor.to_bits() == this_ctor.to_bits() {
-            return value;
+        if xctor.to_bits() == ctor_h.get_nanbox_f64().to_bits() {
+            return value_h.get_nanbox_f64();
         }
     }
-    let cap = new_promise_capability(this_ctor);
-    if let Err(thrown) = call_with_this(cap.resolve, undef(), &[value]) {
+    let cap = new_promise_capability(ctor_h.get_nanbox_f64());
+    let cap_promise_h = scope.root_nanbox_f64(cap.promise);
+    if let Err(thrown) = call_with_this(cap.resolve, undef(), &[value_h.get_nanbox_f64()]) {
         crate::exception::js_throw(thrown);
     }
-    cap.promise
+    cap_promise_h.get_nanbox_f64()
 }
 
 /// `Promise.withResolvers()` (ECMA-262 27.2.4.x) with `this` = C:
@@ -916,22 +934,43 @@ pub extern "C" fn js_promise_resolve_spec(this_ctor: f64, value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_promise_with_resolvers_spec(this_ctor: f64) -> f64 {
     ensure_arity_registered();
-    if is_default_promise_constructor(this_ctor) {
+    // #7497: see `js_promise_resolve_spec` — `is_default_promise_constructor`
+    // allocates, and the three capability slots below outlive the record
+    // allocation they are stored into.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor_h = scope.root_nanbox_f64(this_ctor);
+    if is_default_promise_constructor(ctor_h.get_nanbox_f64()) {
         let obj = crate::promise::js_promise_with_resolvers();
         return js_nanbox_pointer(obj as i64);
     }
-    let cap = new_promise_capability(this_ctor);
+    let cap = new_promise_capability(ctor_h.get_nanbox_f64());
+    let cap_promise_h = scope.root_nanbox_f64(cap.promise);
+    let cap_resolve_h = scope.root_nanbox_f64(cap.resolve);
+    let cap_reject_h = scope.root_nanbox_f64(cap.reject);
     let packed = b"promise\0resolve\0reject\0";
-    let obj = crate::object::js_object_alloc_with_shape(
+    let obj_h = scope.root_nanbox_f64(boxed_ptr(crate::object::js_object_alloc_with_shape(
         0xFFF0_0001,
         3,
         packed.as_ptr(),
         packed.len() as u32,
+    )));
+    let obj = unboxed_ptr(obj_h.get_nanbox_f64());
+    crate::object::js_object_set_field(
+        obj,
+        0,
+        JSValue::from_bits(cap_promise_h.get_nanbox_f64().to_bits()),
     );
-    crate::object::js_object_set_field(obj, 0, JSValue::from_bits(cap.promise.to_bits()));
-    crate::object::js_object_set_field(obj, 1, JSValue::from_bits(cap.resolve.to_bits()));
-    crate::object::js_object_set_field(obj, 2, JSValue::from_bits(cap.reject.to_bits()));
-    js_nanbox_pointer(obj as i64)
+    crate::object::js_object_set_field(
+        obj,
+        1,
+        JSValue::from_bits(cap_resolve_h.get_nanbox_f64().to_bits()),
+    );
+    crate::object::js_object_set_field(
+        obj,
+        2,
+        JSValue::from_bits(cap_reject_h.get_nanbox_f64().to_bits()),
+    );
+    obj_h.get_nanbox_f64()
 }
 
 /// `Promise.try(callbackfn, ...args)` (ECMA-262 27.2.4.x) with `this` = C:
@@ -941,23 +980,30 @@ pub extern "C" fn js_promise_with_resolvers_spec(this_ctor: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_promise_try_spec(this_ctor: f64, callback: f64, rest: f64) -> f64 {
     ensure_arity_registered();
-    if !is_object_value(this_ctor) {
+    // #7497: see `js_promise_resolve_spec` — `is_default_promise_constructor`
+    // allocates, and `callback` / `rest` are dereferenced after it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor_h = scope.root_nanbox_f64(this_ctor);
+    let callback_h = scope.root_nanbox_f64(callback);
+    let rest_h = scope.root_nanbox_f64(rest);
+    if !is_object_value(ctor_h.get_nanbox_f64()) {
         throw_type_error("Promise.try called on non-object");
     }
     // Default `Promise`: keep the optimized native path (synchronous call +
     // resolve/reject), which also assimilates a thenable return value.
-    if is_default_promise_constructor(this_ctor) {
-        let rest_v = JSValue::from_bits(rest.to_bits());
+    if is_default_promise_constructor(ctor_h.get_nanbox_f64()) {
+        let rest_v = JSValue::from_bits(rest_h.get_nanbox_f64().to_bits());
         let rest_ptr = if rest_v.is_pointer() {
             rest_v.as_pointer::<crate::array::ArrayHeader>()
         } else {
             std::ptr::null()
         };
-        let p = crate::promise::js_promise_try(callback, rest_ptr);
+        let p = crate::promise::js_promise_try(callback_h.get_nanbox_f64(), rest_ptr);
         return js_nanbox_pointer(p as i64);
     }
-    let cap = new_promise_capability(this_ctor);
-    let rest_v = JSValue::from_bits(rest.to_bits());
+    let cap = new_promise_capability(ctor_h.get_nanbox_f64());
+    let cap_promise_h = scope.root_nanbox_f64(cap.promise);
+    let rest_v = JSValue::from_bits(rest_h.get_nanbox_f64().to_bits());
     let args: Vec<f64> = if rest_v.is_pointer() {
         let arr = rest_v.as_pointer::<crate::array::ArrayHeader>();
         let n = unsafe { (*arr).length };
@@ -965,13 +1011,15 @@ pub extern "C" fn js_promise_try_spec(this_ctor: f64, callback: f64, rest: f64) 
     } else {
         Vec::new()
     };
-    match call_with_this(callback, undef(), &args) {
+    let cap_resolve_h = scope.root_nanbox_f64(cap.resolve);
+    let cap_reject_h = scope.root_nanbox_f64(cap.reject);
+    match call_with_this(callback_h.get_nanbox_f64(), undef(), &args) {
         Ok(value) => {
-            let _ = call_with_this(cap.resolve, undef(), &[value]);
+            let _ = call_with_this(cap_resolve_h.get_nanbox_f64(), undef(), &[value]);
         }
         Err(reason) => {
-            let _ = call_with_this(cap.reject, undef(), &[reason]);
+            let _ = call_with_this(cap_reject_h.get_nanbox_f64(), undef(), &[reason]);
         }
     }
-    cap.promise
+    cap_promise_h.get_nanbox_f64()
 }
