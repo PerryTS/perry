@@ -542,27 +542,11 @@ pub extern "C" fn js_array_element_shape_check(
     }
 }
 
-// `#[no_mangle]` exports for generated code, so release/LTO builds cannot
-// internalize and strip them in the window before a consumer exists.
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_JS_ARRAY_ENSURE_ELEMENT_SHAPE: extern "C" fn(*mut ArrayHeader) -> i32 =
-    js_array_ensure_element_shape;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_JS_ARRAY_ELEMENT_SHAPE_CLASS: extern "C" fn(*const ArrayHeader) -> i32 =
-    js_array_element_shape_class;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_JS_ARRAY_ELEMENT_SHAPE_VERSION: extern "C" fn(*const ArrayHeader) -> i64 =
-    js_array_element_shape_version;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_JS_ARRAY_ELEMENT_SHAPE_EPOCH: extern "C" fn() -> i64 = js_array_element_shape_epoch;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_JS_ARRAY_ELEMENT_SHAPE_CHECK: extern "C" fn(*const ArrayHeader, i32, i64) -> i32 =
-    js_array_element_shape_check;
+// NOTE — no `keepalive-anchors` `#[used]` statics here, deliberately.
+// `keepalive-anchors` is a DEFAULT feature, so an anchor would pin these
+// five functions into every shipped binary while nothing calls them: the
+// exact dead-strip defeat the hello-size campaign traced its regression to.
+// The consumer PR adds an anchor for whichever symbol it actually emits.
 
 #[cfg(test)]
 pub(crate) fn test_element_shape_record_exists(owner: usize) -> bool {
