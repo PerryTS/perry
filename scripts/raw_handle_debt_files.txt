@@ -61,7 +61,7 @@
 26 crates/perry-runtime/src/json/reviver.rs
 3 crates/perry-runtime/src/json/stringify.rs
 1 crates/perry-runtime/src/json/stringify_scalars.rs
-22 crates/perry-runtime/src/json_tape.rs
+21 crates/perry-runtime/src/json_tape.rs
 26 crates/perry-runtime/src/map.rs
 2 crates/perry-runtime/src/module_require.rs
 7 crates/perry-runtime/src/node_stream/async_iterator.rs
