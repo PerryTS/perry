@@ -12,7 +12,7 @@
 //! pin does not change what CI runs — it makes the assertion mean the same
 //! thing during a `PERRY_RS4GC=0` bisection, which is the sweep a GC engineer
 //! actually runs. The durable fix is to scope the search to the buffer-store
-//! site instead of the whole module; #7498.
+//! site instead of the whole module; #7505.
 
 use super::*;
 

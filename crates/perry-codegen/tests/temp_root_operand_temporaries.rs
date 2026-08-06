@@ -27,7 +27,7 @@
 //! the gate ran, its subject did not).
 //!
 //! The rest of this file is lowering-INDEPENDENT and deliberately unpinned —
-//! but READ #7496 BEFORE TRUSTING IT. #7487 re-lowered temp roots onto pooled
+//! but READ #7503 BEFORE TRUSTING IT. #7487 re-lowered temp roots onto pooled
 //! frame allocas, so `js_gc_temp_root_push` / `_get` / `_set` / `_truncate` are
 //! now emitted only on the FFI fallback arm, which neither lowering takes here.
 //! Every positive assertion spelled that way fails, and — worse — every

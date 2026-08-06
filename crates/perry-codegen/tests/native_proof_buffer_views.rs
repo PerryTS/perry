@@ -9,7 +9,7 @@
 // `!ir.contains("getelementptr inbounds i8")`, and the shadow-stack lowering's
 // own inline slot addressing emits that instruction for unrelated reasons, so
 // under `PERRY_RS4GC=0` it reports a proof leak that is not there. Same shape,
-// same reasoning and the same durable fix as the `invalidation` module: #7498.
+// same reasoning and the same durable fix as the `invalidation` module: #7505.
 #![allow(dead_code)]
 
 use perry_codegen::testing::NativeRootsPin;

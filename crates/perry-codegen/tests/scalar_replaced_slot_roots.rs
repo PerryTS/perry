@@ -30,14 +30,14 @@
 //! that count is zero for EVERY program, rooted or not — so they were passing
 //! vacuously, which is CLAUDE.md hazard 4 ("the gate runs but its subject never
 //! did"). Pinning them makes them assert their subject again; they now fail for
-//! a real reason, tracked in #7497 (since #7487 a pooled temp root also emits
+//! a real reason, tracked in #7504 (since #7487 a pooled temp root also emits
 //! `js_shadow_slot_bind`, so a whole-module bind count no longer isolates the
 //! scalar-replaced slots it means to measure). A red test that is measuring
 //! something beats a green one that is not.
 //!
 //! The native-roots side of this contract — that a scalar-replaced field
 //! holding a heap value becomes a relocatable `addrspace(1)` slot, and a
-//! numeric one does not — has NO equivalent assertion anywhere today. #7495.
+//! numeric one does not — has NO equivalent assertion anywhere today. #7502.
 
 use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};

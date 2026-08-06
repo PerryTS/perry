@@ -11680,7 +11680,7 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     // failures `PERRY_RS4GC=0` heals; run alone it fails under BOTH lowerings,
     // so that reading was an artifact of whole-suite ordering. It is a plain
     // drifted assertion — the caller no longer emits a `$generic` call on guard
-    // failure — and is tracked in #7499, not here.
+    // failure — and is tracked in #7506, not here.
     let ir = String::from_utf8(
         compile_module(&typed_f64_receiver_method_positive_module(), empty_opts()).unwrap(),
     )

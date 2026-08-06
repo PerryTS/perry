@@ -13,7 +13,7 @@
 //!
 //! LOWERING (#7493): nothing in this file is pinned, because nothing in it is
 //! lowering-dependent — `PERRY_RS4GC=0` moves it not at all (3/7 either way).
-//! Its failures are #7487's, not #7370's, and are tracked in #7496: temp roots
+//! Its failures are #7487's, not #7370's, and are tracked in #7503: temp roots
 //! were re-lowered onto pooled frame allocas, so `js_gc_temp_root_push` /
 //! `_get` / `_truncate` now appear only on the FFI fallback arm that neither
 //! lowering takes. The four positive assertions therefore fail, and all three

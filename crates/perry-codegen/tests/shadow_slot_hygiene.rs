@@ -23,7 +23,7 @@
 //! load-bearing: without them the file was 0/12 red on `main`. But note what
 //! that means for coverage — this suite now tests a lowering that no longer
 //! ships on aarch64/x86_64. The equivalent native-roots assertions are tracked
-//! in #7495; where a mechanic has no native-side counterpart today, that issue
+//! in #7502; where a mechanic has no native-side counterpart today, that issue
 //! names it.
 
 use perry_codegen::testing::NativeRootsPin;
