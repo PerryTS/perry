@@ -92,11 +92,23 @@ pub(crate) static FETCH_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
 /// `None` for any non-object / non-subclass receiver, so callers can fall
 /// through to their normal dispatch unchanged.
 pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
-    if obj < crate::gc::GC_HEADER_SIZE + 0x1000 || !is_valid_obj_ptr(obj as *const u8) {
+    // #7526: classify by BAND, not by magnitude. The old floor
+    // (`GC_HEADER_SIZE + 0x1000`) plus `is_valid_obj_ptr` is a magnitude test
+    // only — `is_valid_obj_ptr`'s `HEAP_MIN` is 0x1000 — so every Web Fetch
+    // handle id sailed through it: they live in `[0x40000, 0xE0000)`, well
+    // above the floor and well below `HANDLE_BAND_MAX` (0x100000). `new
+    // Response(...)` yields id 0x40000 exactly, and `r instanceof Request`
+    // reaches here, so the very first fetch handle a program allocates
+    // dereferenced 0x3fff8 and took a SIGSEGV. `is_plausible_heap_addr` is the
+    // canonical pairing (`is_above_handle_band && is_valid_obj_ptr`) and
+    // rejects every band without touching memory.
+    if !crate::value::addr_class::is_plausible_heap_addr(obj) {
         return None;
     }
-    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj) else {
+        return None;
+    };
+    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
     // #7498: the key allocation below can trigger a copying minor, which moves
@@ -327,6 +339,45 @@ mod buffer_ic_miss_tests {
                 let raw_len = js_object_get_field_ic_miss(raw_addr, key(b"length"), &mut cache);
                 assert_eq!(raw_len, len as f64);
             }
+        }
+    }
+
+    /// #7526: a Web Fetch handle id is NOT a heap address, and the subclass
+    /// probe must reject it by BAND before dereferencing `addr - 8`.
+    ///
+    /// `new Response(...)` yields handle id `FETCH_HANDLE_BAND_START` (0x40000)
+    /// exactly, so `r instanceof Request` — which reaches
+    /// `fetch_subclass_handle_id` — took a SIGSEGV on the first fetch handle a
+    /// program allocated. The old guard was a magnitude floor plus
+    /// `is_valid_obj_ptr`, whose own `HEAP_MIN` is 0x1000; every band sits
+    /// above that and below `HANDLE_BAND_MAX`, so none of them were excluded.
+    ///
+    /// This walks the band boundaries rather than one value, so a future band
+    /// added to `addr_class` without a matching guard here fails the test.
+    #[test]
+    fn fetch_subclass_probe_rejects_every_handle_band_without_dereferencing() {
+        use crate::value::addr_class::*;
+        let probes = [
+            (COMMON_HANDLE_BAND_END, "fetch band start (the #7526 crash)"),
+            (FETCH_HANDLE_BAND_START, "fetch band start"),
+            (FETCH_HANDLE_BAND_START + 1, "inside the fetch band"),
+            (FETCH_HANDLE_BAND_END - 1, "fetch band end"),
+            (PROXY_ID_BAND_START, "proxy id band"),
+            (HANDLE_BAND_MAX - 1, "last handle-band address"),
+            (1, "smallest handle"),
+        ];
+        for (addr, what) in probes {
+            assert!(
+                !is_plausible_heap_addr(addr),
+                "{what} ({addr:#x}) must not be classified as a heap address"
+            );
+            // The probe must return None WITHOUT faulting; reaching the
+            // assertion at all is half the test.
+            let got = unsafe { fetch_subclass_handle_id(addr) };
+            assert!(
+                got.is_none(),
+                "{what} ({addr:#x}) must not probe as a subclass handle"
+            );
         }
     }
 }

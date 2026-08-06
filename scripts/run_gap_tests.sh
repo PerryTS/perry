@@ -124,6 +124,36 @@ if [[ -s "$WORK/crashes.txt" ]]; then
   echo "" >&2
 fi
 
+# #7526: a crash may never be PARKED in the snapshot. The block above reports
+# crashes every run, but reporting is not gating -- a SIGSEGV sat in
+# `gap_snapshot.json` as `status: "crash"` for a month, against two CLOSED
+# issues (#5433, #5917), laundered through the channel meant for cosmetic
+# output gaps. The policy is stated four comments up; this enforces it.
+#
+# The snapshot is for known *output* divergences. A crash is a hard defect and
+# must be fixed or tracked as one, never accepted here. This starts green (the
+# one offending entry was removed with the fix in #7530), so it can only go red
+# on a NEW attempt to park a crash.
+parked_crashes="$("$PYTHON_CMD" - "$GAP_SNAPSHOT" <<'PYEOF'
+import json, sys
+snap = json.load(open(sys.argv[1]))
+print(" ".join(sorted(
+    name for name, e in (snap.get("tests") or {}).items()
+    if isinstance(e, dict) and e.get("status") == "crash"
+)))
+PYEOF
+)"
+if [[ -n "$parked_crashes" ]]; then
+  echo "" >&2
+  echo "ERROR: the gap snapshot accepts a CRASH, which it must never do:" >&2
+  for t in $parked_crashes; do echo "  - $t" >&2; done
+  echo "" >&2
+  echo "A crash is a hard defect (SIGSEGV/SIGABRT/timeout), not a cosmetic gap." >&2
+  echo "Fix it, or track it as an OPEN defect and remove the test from the" >&2
+  echo "snapshot -- do not launder it through the expected-output channel." >&2
+  exit 2
+fi
+
 # Snapshot ratchet. UPDATE_SNAPSHOT=1 accepts the current state instead of
 # gating on it; commit the resulting test-parity/gap_snapshot.json diff.
 if [[ "${UPDATE_SNAPSHOT:-0}" == "1" ]]; then
