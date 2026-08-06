@@ -156,10 +156,19 @@ pub(super) fn words_intersect(a: &[u64], b: &[u64], slot_count: usize) -> bool {
 }
 
 /// Direct-mapped entries. Sized for the shape working set of a hot loop, not
-/// for a whole program: a monomorphic allocation site needs one, and the
-/// spread across a handful of interleaved shapes is what the extra slots buy.
-/// Kept a power of two so the index is a mask.
-const MEMO_SLOTS: usize = 8;
+/// for a whole program: a monomorphic allocation site needs one, and the spread
+/// across interleaved shapes is what the rest buy. Kept a power of two so the
+/// index is a mask.
+///
+/// 32 rather than 8, measured. A direct-mapped table cycled round-robin by more
+/// shapes than it has slots hits **zero** percent of the time — each entry is
+/// evicted by its partner before it is read again — so it pays the probe and
+/// gets nothing. A 16-shape churn loop against 8 slots was a reproducible
+/// 0.993× on the pinned host; the same loop against 32 slots fits and wins with
+/// the monomorphic case. The whole table is 1 KiB of const-initialised
+/// thread-local, so the cost of the headroom is a page that is never touched by
+/// a program with one shape.
+const MEMO_SLOTS: usize = 32;
 
 /// One memoised "this shape's canonical descriptor is already installed, and
 /// equals what these mask globals describe" fact.
