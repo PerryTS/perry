@@ -601,6 +601,20 @@ test_gap_gc_optional_param_receiver_rooting
 # corrupt this file's result, so the file gates the drain and nothing else. When
 # #7498 lands, a protected run of this file should go silent — if it does not,
 # there is a third site.
+#
+# #7498 HAS LANDED AND THIS FILE DID NOT GO SILENT — so, per the sentence
+# above, THERE IS A THIRD SITE, and it is filed rather than absorbed. #7498's
+# two faults are gone from this file's protected run; what remains is
+# `js_native_call_method` reading its ROOTED receiver into a local ~330 lines
+# and a dozen allocating probes before `is_closure_ptr` dereferences it
+# (`array_from_spread_value` → `js_closure_call0` → `js_native_call_method +
+# 5604`). Measured on the #7498 branch, macOS/arm64: this file prints
+# `badLen 1` instead of `badLen 0` (5/5), and `PERRY_GEN_GC=0`,
+# `PERRY_GC_SCAVENGE=0` and `PERRY_WRITE_BARRIERS=0` each make it correct while
+# `PERRY_GEN_GC_EVACUATE=0` does not — the copying minor, not policy
+# evacuation. Patching the one faulting line was tried and REVERTED: the fault
+# simply moved 800 bytes further into the same function, which is the signal
+# that the whole receiver needs re-reading, not one arm of it.
 test_gap_gc_iterator_drain_rooting
 
 # --- #7497: the globalThis builtin-value lookup -----------------------------
@@ -633,3 +647,53 @@ test_gap_gc_iterator_drain_rooting
 # is registered here because the moving arms are what turn it into a fault with
 # an address instead of a wrong answer.
 test_gap_gc_global_builtin_lookup_rooting
+# --- #7498: the OTHER `[...obj.arr]` lowering (inlined → the symbol walk) ----
+#
+# The spread has two lowerings. Out of line it calls `js_iterator_to_array`
+# (above). Inlined, it routes through `array_from_spread_value`, which resolves
+# `[Symbol.iterator]` through the whole prototype-walk tower first — and three
+# frames on that walk held a GC value the collector cannot see:
+#
+#   * `req_handle_symbol_fallback` read the receiver into a `usize`, interned a
+#     `"_req"` key (an allocation), then read a field off the PRE-move address.
+#     It runs on every heap-object symbol read whose own-symbol lookup missed,
+#     so the window is unconditional — 5/5, not intermittent.
+#   * `array_prototype_property_value` and the array/object arms of
+#     `get_field_by_name_object_tail` took the property name as a `&str` / a
+#     `&[u8]` BORROWED OUT OF THE KEY'S `StringHeader`. No root fixes that: a
+#     borrow is not a slot the collector can rewrite. They copy the bytes off
+#     the heap before their first allocation now.
+#   * `array_from_spread_value` carried the spread receiver through a dozen
+#     probes and the entire walk, then used it to rebind `this` for the
+#     factory.
+#
+# LATENT BY CONSTRUCTION, like `10_store_receiver_across_alloc.ts`: evacuation
+# copies rather than zeroes, so the stale read returns the correct old bytes and
+# this file printed the RIGHT checksum before the fix, on both links. Only
+# unmapping retired from-space makes it a signal. Measured on this branch:
+#
+#   before, default link + default env      byte-exact with the oracle
+#   before, auto-optimize link              byte-exact with the oracle
+#   before, PROTECT_FROMSPACE=1 DEPTH=200   FAULT 5/5 on BOTH links, at
+#                                           array_from_spread_value →
+#                                           js_object_get_symbol_property →
+#                                           js_object_get_field_by_name_f64 →
+#                                           js_object_get_field_by_name, on a
+#                                           40-byte GC_TYPE_ARRAY (the pre-move
+#                                           copy's keys_array) at minor #1
+#   after,  both links                      byte-exact with the oracle
+#   after,  PROTECT_FROMSPACE=1 DEPTH=200   CLEAN 5/5 on BOTH links, with the
+#                                           instrument proved live: four
+#                                           `retired_set=#N` page-sets and
+#                                           `[gc-copy-minor] ran
+#                                           copied_objects=11794` on the first
+#                                           minor alone
+#
+# The auto-optimize arm was A/B'd with the runtime archive rebuilt from source
+# on both sides (`perry-auto-*`, asserted on the `[link] invoking:` line), so
+# the two rows are the same link with different runtime source, not two links.
+#
+# KEEP `clone` SMALL. Its size is the whole point: grow it and the spread goes
+# back out of line onto `js_iterator_to_array`, i.e. onto #7475's path, and this
+# file stops covering the walk.
+test_gap_gc_spread_symbol_iterator_rooting

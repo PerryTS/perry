@@ -1,5 +1,6 @@
 //! Iterator-protocol → array converter.
 use super::*;
+use crate::value::nanbox_string_key;
 
 /// Materialize an arbitrary iterable into a plain Array, used by the
 /// `for...of` desugar when the receiver's static type can NOT be proven
@@ -709,12 +710,39 @@ fn object_like_iterator_result(value: f64) -> bool {
 pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, POINTER_MASK};
 
-    let jsv = JSValue::from_bits(value.to_bits());
+    // #7498: the spread receiver is a GC-managed value, and this function
+    // carries it across a dozen classification probes AND the whole
+    // `[Symbol.iterator]` prototype walk. That walk allocates a key string on
+    // every hop (`array_prototype_property_value` →
+    // `default_object_prototype_property_value` → `js_object_get_field_by_name`
+    // is where `PERRY_GC_PROTECT_FROMSPACE=1` faults), so the copying minor can
+    // move the receiver while it exists only in this bare `value` argument —
+    // which the collector cannot see and therefore never rewrites.
+    //
+    // The uses AFTER the walk are the consequential ones:
+    //   * `clone_closure_rebind_this(method, value)` would bind a from-space
+    //     `this`, so a user `[Symbol.iterator]()` factory reads a dead
+    //     receiver and yields nothing;
+    //   * `js_implicit_this_set(value)` publishes the same dead receiver to
+    //     the canonical bound-method path;
+    //   * the `js_array_is_array(value)` fallback reads a recycled GcHeader
+    //     and reports a live array as "not iterable".
+    //
+    // Root it FIRST — before anything here allocates — and SHADOW the argument
+    // with readers, so the pre-collection address is not nameable below. Every
+    // handle is NaN-boxed, so a read-back is `get_nanbox_f64` and this module
+    // stays out of `scripts/raw_handle_debt.py`'s ledger.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_h = scope.root_nanbox_f64(value);
+    let value = || value_h.get_nanbox_f64();
+    let raw_ptr = || js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+
+    let jsv = JSValue::from_bits(value().to_bits());
     if jsv.is_null() || jsv.is_undefined() {
-        throw_not_iterable(value);
+        throw_not_iterable(value());
     }
     if jsv.is_any_string() {
-        let str_ptr = crate::value::js_get_string_pointer_unified(value);
+        let str_ptr = crate::value::js_get_string_pointer_unified(value());
         let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK);
         return crate::string::js_string_to_char_array(str_bits as i64) as *mut ArrayHeader;
     }
@@ -723,29 +751,28 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // INT32-tagged ClassRef. Drive its (possibly inherited) `[Symbol.iterator]`;
     // with none it is not iterable, like node. Must run before the raw-pointer
     // reads below, which would misread the class id as a heap address.
-    if crate::object::class_ref_id(value).is_some() {
-        if crate::symbol::class_ref_resolves_iterator(value) {
-            let iter = crate::symbol::js_get_iterator(value);
+    if crate::object::class_ref_id(value()).is_some() {
+        if crate::symbol::class_ref_resolves_iterator(value()) {
+            let iter = crate::symbol::js_get_iterator(value());
             return js_iterator_to_array(iter);
         }
-        throw_not_iterable(value);
+        throw_not_iterable(value());
     }
 
-    let raw_ptr = js_nanbox_get_pointer(value) as usize;
-    if raw_ptr == 0 {
-        throw_not_iterable(value);
+    if raw_ptr() == 0 {
+        throw_not_iterable(value());
     }
-    if let Some(entries) = entries_array_for_small_handle_id(raw_ptr as i64) {
+    if let Some(entries) = entries_array_for_small_handle_id(raw_ptr() as i64) {
         return entries;
     }
-    if crate::buffer::is_registered_buffer(raw_ptr) {
-        return crate::buffer::buffer_to_array(raw_ptr as *const crate::buffer::BufferHeader);
+    if crate::buffer::is_registered_buffer(raw_ptr()) {
+        return crate::buffer::buffer_to_array(raw_ptr() as *const crate::buffer::BufferHeader);
     }
-    if crate::set::is_registered_set(raw_ptr) {
-        return crate::set::js_set_to_array(raw_ptr as *const crate::set::SetHeader);
+    if crate::set::is_registered_set(raw_ptr()) {
+        return crate::set::js_set_to_array(raw_ptr() as *const crate::set::SetHeader);
     }
-    if crate::map::is_registered_map(raw_ptr) {
-        return crate::map::js_map_entries(raw_ptr as *const crate::map::MapHeader);
+    if crate::map::is_registered_map(raw_ptr()) {
+        return crate::map::js_map_entries(raw_ptr() as *const crate::map::MapHeader);
     }
     // `class X extends Map | Set` instance — spread (`[...container]`,
     // `Array.from(container)`, `fn(...container)`) over the hidden backing
@@ -754,7 +781,7 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // Map/Set value, so a subclass instance (a plain object with a backing
     // field) falls through to here. Skipped when the subclass overrides
     // `[Symbol.iterator]` so the override drives the spread.
-    match crate::object::map_set_subclass::subclass_backing_for_default_iteration(value) {
+    match crate::object::map_set_subclass::subclass_backing_for_default_iteration(value()) {
         Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
             return crate::map::js_map_entries(m as *const crate::map::MapHeader);
         }
@@ -770,27 +797,33 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // Matches the Map/Set-subclass branch above. Skipped when the subclass
     // declared its own `[Symbol.iterator]`, so the override drives the spread
     // via the generic symbol lookup below.
-    if crate::array::is_array_subclass_instance(value)
-        && !crate::array::array_subclass_has_iterator_override(value)
+    if crate::array::is_array_subclass_instance(value())
+        && !crate::array::array_subclass_has_iterator_override(value())
     {
-        let snap = crate::array::array_subclass_dense_snapshot(value);
+        let snap = crate::array::array_subclass_dense_snapshot(value());
         return crate::value::js_nanbox_get_pointer(snap) as *mut ArrayHeader;
     }
-    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+    if crate::typedarray::lookup_typed_array_kind(raw_ptr()).is_some() {
         return crate::typedarray::typed_array_to_array(
-            raw_ptr as *const crate::typedarray::TypedArrayHeader,
+            raw_ptr() as *const crate::typedarray::TypedArrayHeader
         );
     }
-    if raw_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if raw_ptr() >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         let obj_type = unsafe {
-            let hdr =
-                (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let hdr = (raw_ptr() as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
             (*hdr).obj_type
         };
         if obj_type == crate::gc::GC_TYPE_OBJECT {
-            let obj = raw_ptr as *mut crate::object::ObjectHeader;
-            if crate::url::try_read_as_search_params(obj).is_some() {
-                let boxed = crate::url::js_url_search_params_entries_arr(obj);
+            // `try_read_as_search_params` interns its own key string, so the
+            // receiver address is re-read from the root for the entries call
+            // rather than reused from before that probe.
+            if crate::url::try_read_as_search_params(raw_ptr() as *mut crate::object::ObjectHeader)
+                .is_some()
+            {
+                let boxed = crate::url::js_url_search_params_entries_arr(
+                    raw_ptr() as *mut crate::object::ObjectHeader
+                );
                 let ptr = crate::value::js_nanbox_get_pointer(boxed) as *mut ArrayHeader;
                 if !ptr.is_null() {
                     return ptr;
@@ -805,14 +838,14 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // inherited thunk and call it WITHOUT binding `this` — which yields a bad
     // result. Short-circuit here to keep `Array.from(arr.values())` / `[...it]`
     // working.
-    if is_builtin_iterator_class_id(raw_ptr) {
-        return js_iterator_to_array(value);
+    if is_builtin_iterator_class_id(raw_ptr()) {
+        return js_iterator_to_array(value());
     }
     // Arguments objects spread like arrays (spec:
     // `arguments[Symbol.iterator] === Array.prototype.values`).
-    if crate::object::is_arguments_object(raw_ptr as *const crate::object::ObjectHeader) {
+    if crate::object::is_arguments_object(raw_ptr() as *const crate::object::ObjectHeader) {
         if let Some(arr) = unsafe {
-            crate::object::arguments_object_to_array(raw_ptr as *const crate::object::ObjectHeader)
+            crate::object::arguments_object_to_array(raw_ptr() as *const crate::object::ObjectHeader)
         } {
             return arr;
         }
@@ -820,16 +853,26 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
 
     let iter_wk = crate::symbol::well_known_symbol("iterator");
     if !iter_wk.is_null() {
-        let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
-        let method = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
-        if method.to_bits() != crate::value::TAG_UNDEFINED {
-            if !is_callable_value(method) {
+        // The well-known symbol is itself a heap object, and the lookup it is
+        // about to key can collect, so it gets a root of its own rather than a
+        // raw `iter_wk` carried across the call.
+        let sym_h = scope.root_nanbox_f64(f64::from_bits(
+            crate::value::JSValue::pointer(iter_wk as *const u8).bits(),
+        ));
+        let method = unsafe {
+            crate::symbol::js_object_get_symbol_property(value(), sym_h.get_nanbox_f64())
+        };
+        // The resolved method is a fresh closure value that must survive
+        // `clone_closure_rebind_this` (an allocation) and the factory call.
+        let method_h = scope.root_nanbox_f64(method);
+        if method_h.get_nanbox_f64().to_bits() != crate::value::TAG_UNDEFINED {
+            if !is_callable_value(method_h.get_nanbox_f64()) {
                 throw_iterator_method_not_callable();
             }
-            let rebound = crate::closure::clone_closure_rebind_this(method.to_bits(), value);
-            let call_target = f64::from_bits(rebound);
-            let fn_ptr = js_nanbox_get_pointer(call_target) as *const crate::closure::ClosureHeader;
-            if fn_ptr.is_null() {
+            let rebound =
+                crate::closure::clone_closure_rebind_this(method_h.get_nanbox_u64(), value());
+            let rebound_h = scope.root_nanbox_u64(rebound);
+            if js_nanbox_get_pointer(rebound_h.get_nanbox_f64()) == 0 {
                 throw_iterator_method_not_callable();
             }
             // Spec `GetIterator(obj)` → `Call(method, obj)`: the
@@ -838,44 +881,57 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             // from IMPLICIT_THIS, so set it here too — mirroring `js_get_iterator`.
             // Without this the wrapper saw a stale `this` and the generator
             // yielded nothing (empty spread).
-            let prev_this = crate::object::js_implicit_this_set(value);
+            let prev_this = crate::object::js_implicit_this_set(value());
+            // The DISPLACED receiver rides through arbitrary user code before
+            // being republished, so it is rooted too — republishing a from-space
+            // `this` is the same defect one frame out.
+            let prev_this_h = scope.root_nanbox_f64(prev_this);
             let trap_buf = crate::exception::js_try_push();
             let jumped =
                 unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
+            // `js_try_push` captured the handle-stack depth AFTER these roots
+            // were pushed, so the `longjmp` restore below leaves them intact and
+            // reading them here is sound.
             let iter = if jumped == 0 {
-                crate::closure::js_closure_call0(fn_ptr)
+                crate::closure::js_closure_call0(js_nanbox_get_pointer(rebound_h.get_nanbox_f64())
+                    as *const crate::closure::ClosureHeader)
             } else {
                 // Factory threw: restore the receiver and unwind the trap frame
                 // before re-propagating, so IMPLICIT_THIS can't leak into later
                 // calls (mirrors `async_from_sync_call_cached_raw` above).
                 let exc = crate::exception::js_get_exception();
                 crate::exception::js_clear_exception();
-                crate::object::js_implicit_this_set(prev_this);
+                crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
                 crate::exception::js_try_end();
                 crate::exception::js_throw(exc)
             };
-            crate::object::js_implicit_this_set(prev_this);
+            let iter_h = scope.root_nanbox_f64(iter);
+            crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
             crate::exception::js_try_end();
-            if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
-                return js_iterator_to_array(crate::array::array_values_iter(iter));
+            if crate::array::js_array_is_array(iter_h.get_nanbox_f64()).to_bits()
+                == crate::value::TAG_TRUE
+            {
+                return js_iterator_to_array(crate::array::array_values_iter(
+                    iter_h.get_nanbox_f64(),
+                ));
             }
-            if !object_like_iterator_result(iter) {
+            if !object_like_iterator_result(iter_h.get_nanbox_f64()) {
                 let msg = b"Result of the Symbol.iterator method is not an object";
                 let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
                 let err = crate::error::js_typeerror_new(msg_str);
                 crate::exception::js_throw(js_nanbox_pointer(err as i64));
             }
-            return js_iterator_to_array(iter);
+            return js_iterator_to_array(iter_h.get_nanbox_f64());
         }
     }
 
-    if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
-        return js_iterator_to_array(crate::array::array_values_iter(value));
+    if crate::array::js_array_is_array(value()).to_bits() == crate::value::TAG_TRUE {
+        return js_iterator_to_array(crate::array::array_values_iter(value()));
     }
-    if has_named_next(value) {
-        return js_iterator_to_array(value);
+    if has_named_next(value()) {
+        return js_iterator_to_array(value());
     }
-    throw_not_iterable(value);
+    throw_not_iterable(value());
 }
 
 #[no_mangle]
@@ -1270,14 +1326,6 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     }
 
     read_result()
-}
-
-/// NaN-box a `StringHeader*` so it can live in a `RuntimeHandleScope` slot as
-/// an ordinary `Nanbox` root (marked AND rewritten) instead of a `RawTagged`
-/// one that would have to be read back through `get_raw_const_ptr`.
-#[inline]
-fn nanbox_string_key(ptr: *mut crate::StringHeader) -> f64 {
-    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
 }
 
 /// `BindingRestElement` / `AssignmentRestElement` iterator drain for

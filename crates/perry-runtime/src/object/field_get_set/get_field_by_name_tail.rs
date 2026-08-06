@@ -886,9 +886,13 @@ pub(crate) fn get_field_by_name_object_tail(
         // statically known, so this branch catches the dynamic case.
         if gc_type == crate::gc::GC_TYPE_ARRAY {
             if !key.is_null() {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                // #7498: OWNED — this is the `[...obj.arr]` arm, and it hands
+                // `key_bytes`/`name` to `array_prototype_property_value` and
+                // `js_get_global_this_builtin_value`, both of which allocate,
+                // before `is_array_method_value_name(key_bytes)` reads it again.
+                // See [`HeapKeyBytes`] for why a borrow cannot be rooted.
+                let key_copy = crate::object::field_get_set::HeapKeyBytes::copy_of_key(key);
+                let key_bytes = key_copy.as_bytes();
                 let arr = obj as *const crate::array::ArrayHeader;
                 if key_bytes == b"length" {
                     return JSValue::number(crate::array::js_array_length(arr) as f64);
@@ -1526,10 +1530,17 @@ pub(crate) fn get_field_by_name_object_tail(
 
         // Fast path: check field index cache (keys_array_ptr + key_hash → field_index)
         // Objects with the same shape share the same keys_array, so we cache per-shape lookups.
-        let key_bytes = std::slice::from_raw_parts(
-            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-            (*key).byte_len as usize,
-        );
+        //
+        // #7498: OWNED, not borrowed. This arm carries `key_bytes` across ~430
+        // lines of probes that allocate — `resolve_inherited_field`,
+        // `ordinary_object_prototype_property_value`, `fetch_subclass_handle_id`
+        // and `temporal_subclass_cell` each intern a key string — and a slice
+        // into the key's `StringHeader` is a borrow of the GC heap that no root
+        // can rewrite. `PERRY_GC_PROTECT_FROMSPACE=1` faults on the
+        // `key_bytes != TEMPORAL_SUBCLASS_CELL_FIELD` comparison below,
+        // reading a 56-byte retired-from-space `GC_TYPE_STRING`.
+        let key_copy = crate::object::field_get_set::HeapKeyBytes::copy_of_key(key);
+        let key_bytes = key_copy.as_bytes();
         // Gate-neutral builtin accessors mark only their owning object. Consult
         // the descriptor table before an accessor's empty backing slot is read;
         // unrelated objects pay only this already-loaded header-bit test.

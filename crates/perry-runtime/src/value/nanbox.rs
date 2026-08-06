@@ -121,6 +121,20 @@ pub extern "C" fn js_nanbox_string(ptr: i64) -> f64 {
     f64::from_bits(jsval.bits())
 }
 
+/// NaN-box a `StringHeader*` so a heap string key can live in a
+/// [`crate::gc::RuntimeHandleScope`] slot as an ordinary `Nanbox` root — marked
+/// AND rewritten — instead of a `RawTagged` one that would have to be read back
+/// through `get_raw_const_ptr` (which `scripts/raw_handle_debt.py` counts).
+///
+/// Unlike [`js_nanbox_string`] this NEVER allocates for a null pointer: it is
+/// used to root a value *before* the next collection point, so allocating here
+/// would reintroduce the very window the root exists to close. A null boxes to
+/// a tagged zero, which every root visitor ignores.
+#[inline]
+pub(crate) fn nanbox_string_key(ptr: *const crate::string::StringHeader) -> f64 {
+    f64::from_bits(JSValue::string_ptr(ptr as *mut crate::string::StringHeader).bits())
+}
+
 /// Debug checkpoint function: prints checkpoint number to stderr.
 /// Used to narrow down crash locations in generated code.
 #[no_mangle]
