@@ -1310,3 +1310,72 @@ fn global_builtin_constructor_values_are_not_redispatched_by_name() {
         "#7518: EventTarget must keep its spec `.length`"
     );
 }
+
+/// #7548: the array branches of `Object.*` reinterpreted the caller's
+/// `ObjectHeader` pointer as an `ArrayHeader` with a bare cast. When a JS
+/// binding still holds an array's PRE-GROW address, that pointer is a #233
+/// forwarding stub whose first 8 bytes — exactly `length` and `capacity` —
+/// have been overwritten with the forwarding POINTER, so `(*arr).length` read
+/// back a heap address (~6·10^8 in the wild) instead of the real length.
+///
+/// Two loops are driven by that value and became bounded-but-unreachable
+/// walks — one `to_string()` plus a side-table probe per index, hundreds of
+/// millions of iterations, which presents as a hang:
+///   * `mark_all_array_props`          — `Object.freeze` / `Object.seal`.
+///   * `array_set_length_from_descriptor` — ArraySetLength's shrink walk, the
+///     `Set(receiver, "length", …)` tail of a Proxy-receiver `splice` that grows.
+///
+/// The header read is asserted FIRST and directly: a regression must fail fast
+/// here rather than hang the suite in one of the walks below.
+#[test]
+fn stale_pre_grow_array_pointer_reads_the_real_length_in_object_ops() {
+    let mut arr = crate::array::js_array_alloc(0);
+    let stale = arr;
+    let capacity = unsafe { (*arr).capacity };
+    for i in 0..capacity {
+        arr = crate::array::js_array_push_f64(arr, i as f64);
+    }
+    // One more push exceeds the dense capacity: the array is reallocated and a
+    // forwarding stub is left behind at `stale`.
+    let grown = crate::array::js_array_push_f64(arr, capacity as f64);
+    assert_ne!(
+        grown as usize, stale as usize,
+        "pushing past capacity must reallocate — otherwise no stub exists and \
+         this test proves nothing"
+    );
+    let real_len = crate::array::js_array_length(grown);
+    assert_eq!(real_len, capacity + 1);
+
+    // Non-vacuity: the stub's payload must really be clobbered, or the bare
+    // cast below would have been harmless all along.
+    let raw_len = unsafe { (*(stale as *const crate::array::ArrayHeader)).length };
+    assert_ne!(
+        raw_len, real_len,
+        "the forwarding stub's length word must be clobbered for this test to \
+         exercise #7548"
+    );
+
+    // The fix: resolve the chain before reading the header.
+    let resolved = unsafe { super::array_object_ops::array_header(stale as *const ObjectHeader) };
+    assert_eq!(
+        unsafe { (*resolved).length },
+        real_len,
+        "#7548: a stale pre-grow array pointer must resolve to the array's \
+         current home before its length is read"
+    );
+
+    // `Object.freeze`'s index walk now terminates at the real length: it must
+    // record attrs for every real index and none beyond it.
+    unsafe {
+        super::array_object_ops::mark_all_array_props(stale as *mut ObjectHeader, true, true);
+    }
+    let addr = stale as usize;
+    assert!(
+        crate::object::get_property_attrs(addr, &(real_len - 1).to_string()).is_some(),
+        "the freeze walk must reach the array's last real index"
+    );
+    assert!(
+        crate::object::get_property_attrs(addr, &real_len.to_string()).is_none(),
+        "the freeze walk must not run past the array's real length"
+    );
+}
