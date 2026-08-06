@@ -23,9 +23,8 @@
 use super::barrier::{
     GC_BIRTH_EXTRA_FLAGS, INCREMENTAL_MARK_BARRIER_MINOR_ONLY, INCREMENTAL_MARK_BARRIER_VALID_PTRS,
 };
-use super::layout::{
-    LayoutSlotMask, TypedLayoutDescriptor, LAYOUT_SLOT_MASKS, SHAPE_LAYOUTS, TYPED_LAYOUTS,
-};
+use super::layout::{LayoutSlotMask, TypedLayoutDescriptor, SHAPE_LAYOUTS};
+use super::layout_tables::{LAYOUT_SLOT_MASKS, PER_OBJECT_LAYOUTS_NONEMPTY, TYPED_LAYOUTS};
 use super::malloc::{ARENA_FREE_LIST, ARENA_FREE_LIST_NONEMPTY};
 use super::trace::ValidPointerSet;
 use std::cell::{Cell, RefCell};
@@ -91,6 +90,11 @@ pub(crate) fn shape_layouts_hot_addr() -> *mut u8 {
     SHAPE_LAYOUTS.with(|m| m as *const _ as *mut u8)
 }
 
+/// Address of this thread's `PER_OBJECT_LAYOUTS_NONEMPTY`.
+pub(crate) fn per_object_layouts_nonempty_hot_addr() -> *mut u8 {
+    PER_OBJECT_LAYOUTS_NONEMPTY.with(|c| c as *const _ as *mut u8)
+}
+
 /// `LAYOUT_SLOT_MASKS` without a TLS resolution.
 #[inline(always)]
 pub(super) fn hot_layout_slot_masks() -> &'static RefCell<SlotMaskMap> {
@@ -110,6 +114,15 @@ pub(super) fn hot_typed_layouts() -> &'static RefCell<TypedLayoutMap> {
 pub(super) fn hot_shape_layouts() -> &'static RefCell<ShapeLayoutMap> {
     // SAFETY: paired with `shape_layouts_hot_addr` above.
     unsafe { &*(crate::tls_hot::hot().shape_layouts as *const RefCell<ShapeLayoutMap>) }
+}
+
+/// `PER_OBJECT_LAYOUTS_NONEMPTY` without a TLS resolution — the "is there any
+/// per-object layout record at all" question the allocation, store, death and
+/// trace paths all ask (#7510).
+#[inline(always)]
+pub(super) fn hot_per_object_layouts_nonempty() -> &'static Cell<bool> {
+    // SAFETY: paired with `per_object_layouts_nonempty_hot_addr` above.
+    unsafe { &*(crate::tls_hot::hot().per_object_layouts_nonempty as *const Cell<bool>) }
 }
 
 // --- gc::malloc -------------------------------------------------------------

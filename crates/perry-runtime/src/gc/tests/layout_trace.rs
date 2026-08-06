@@ -4,6 +4,7 @@ mod array_layout;
 mod element_shape;
 mod object_closure_slots;
 mod object_layout_invalidation;
+mod per_object_tables;
 mod typed_shape;
 
 #[test]
