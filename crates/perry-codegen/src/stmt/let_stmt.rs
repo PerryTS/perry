@@ -3,6 +3,10 @@
 use super::*;
 
 use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffer_view};
+use super::let_stmt_facts::{
+    buffer_local_alias_source, collect_scalar_class_data, native_i32_alias_source,
+    note_ptr_shape_scalar_replaced, pod_view_count_source, record_pod_rejection,
+};
 use super::unused_expr::lower_unused_expr;
 use crate::expr::{
     box_i1_for_compat_shadow, emit_root_nanbox_store_on_block,
@@ -1880,125 +1884,4 @@ pub(crate) fn lower_let(
         }
     }
     Ok(())
-}
-
-fn pod_view_count_source(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> String {
-    match expr {
-        perry_hir::Expr::Integer(n) => format!("constant:{n}"),
-        perry_hir::Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
-            format!("constant:{}", *n as i64)
-        }
-        perry_hir::Expr::LocalGet(id) => ctx
-            .local_id_to_name
-            .get(id)
-            .map(|name| format!("local:{name}"))
-            .unwrap_or_else(|| format!("local_id:{id}")),
-        _ => "dynamic".to_string(),
-    }
-}
-
-fn native_i32_alias_source(expr: &perry_hir::Expr) -> Option<u32> {
-    match expr {
-        perry_hir::Expr::Binary {
-            op: perry_hir::BinaryOp::BitOr,
-            left,
-            right,
-        } if matches!(right.as_ref(), perry_hir::Expr::Integer(0)) => match left.as_ref() {
-            perry_hir::Expr::LocalGet(id) => Some(*id),
-            _ => native_i32_alias_source(left),
-        },
-        perry_hir::Expr::LocalGet(id) => Some(*id),
-        _ => None,
-    }
-}
-
-fn buffer_local_alias_source(expr: &perry_hir::Expr) -> Option<u32> {
-    match expr {
-        perry_hir::Expr::LocalGet(id) => Some(*id),
-        _ => None,
-    }
-}
-
-/// Extract all field names (parent chain + own) and the constructor for
-/// a class, cloning everything out of `ctx.classes` so the immutable
-/// borrow is released before the caller mutates `ctx`.
-///
-/// Returns `None` if the class is not found in `ctx.classes`.
-pub(crate) fn collect_scalar_class_data(
-    ctx: &FnCtx<'_>,
-    class_name: &str,
-) -> Option<(Vec<String>, Option<perry_hir::Function>)> {
-    let class = ctx.classes.get(class_name)?;
-    let mut all_fields: Vec<String> = Vec::new();
-    let mut chain: Vec<String> = Vec::new();
-    let mut p = class.extends_name.clone();
-    while let Some(pname) = p {
-        chain.push(pname.clone());
-        if let Some(pc) = ctx.classes.get(pname.as_str()) {
-            p = pc.extends_name.clone();
-        } else {
-            break;
-        }
-    }
-    chain.reverse();
-    for pname in &chain {
-        if let Some(pc) = ctx.classes.get(pname.as_str()) {
-            for f in &pc.fields {
-                all_fields.push(f.name.clone());
-            }
-        }
-    }
-    for f in &class.fields {
-        all_fields.push(f.name.clone());
-    }
-    let ctor = class.constructor.clone();
-    Some((all_fields, ctor))
-}
-
-fn record_pod_rejection(ctx: &mut FnCtx<'_>, id: u32, reason: String) {
-    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    let lowered = LoweredValue::js_value(undef);
-    ctx.record_lowered_value_with_access_mode(
-        "PodRecordRejected",
-        Some(id),
-        "pod_record_fallback_to_js_object",
-        &lowered,
-        None,
-        None,
-        Some(BufferAccessMode::DynamicFallback),
-        Some(MaterializationReason::PodUnsupported),
-        false,
-        false,
-        vec![format!("reason={}", reason)],
-    );
-}
-
-/// #7106 follow-up: record that a `Ptr<Shape>`-proven local was scalar-replaced,
-/// so its promotion can never be consumed.
-///
-/// Report-only; the caller has already gated on `opt_report::enabled()`. The
-/// fact is read through the context-free accessor on purpose — whether the
-/// enclosing body would have ALLOWED consumption is a different mechanism with
-/// a different rule name, and a value can lose to both.
-fn note_ptr_shape_scalar_replaced(ctx: &crate::expr::FnCtx<'_>, id: u32, name: &str) {
-    let Some(fact) = ctx.native_facts.shape_proven_ptr_local(id) else {
-        return;
-    };
-    let (reason, issue) =
-        crate::expr::ptr_shape_context_rule_text(crate::expr::PTR_SHAPE_SCALAR_REPLACED);
-    crate::opt_report::unconsumed(crate::opt_report::Unconsumed {
-        position: crate::opt_report::Position::Local,
-        name,
-        local_id: Some(id),
-        analysis: crate::opt_report::Analysis::PtrShape,
-        rep: "Ptr<Shape>",
-        rule: crate::expr::PTR_SHAPE_SCALAR_REPLACED,
-        reason,
-        tier: crate::opt_report::Tier::CompilerLimitation,
-        issue: Some(issue),
-        detail: Some(format!(
-            "class {} scalar-replaced into per-field allocas; the allocation is gone",
-            fact.class_name
-        )),
-    });
 }

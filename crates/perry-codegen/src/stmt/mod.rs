@@ -17,6 +17,7 @@ mod counter_range;
 mod if_stmt;
 mod let_buffer_views;
 mod let_stmt;
+mod let_stmt_facts;
 mod loops;
 mod masked_window_region;
 mod switch_stmt;
