@@ -644,6 +644,9 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
         return;
     }
     crate::array::clear_array_numeric_layout_ptr(user_ptr);
+    // #7480: this runs on object death / address recycle, so drop the record
+    // outright rather than only clearing the bit.
+    crate::array::forget_element_shape(user_ptr);
     LAYOUT_SLOT_MASKS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
@@ -696,6 +699,23 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 layout_note_slot(new_user, slot_index, value_bits);
             }
             return;
+        }
+        // #7480: maintain the per-array homogeneous element-shape invariant.
+        // This is the one funnel BOTH the runtime's element-store helpers
+        // (`note_array_slot` and siblings) and codegen's inline element
+        // stores already pass through — `array_store_needs_layout_note`
+        // elides the note only for an array statically proven numeric and
+        // pointer-free, which an element-shape array can never be. It sits
+        // ahead of the `GC_LAYOUT_UNKNOWN` early return below because an
+        // all-pointer array is marked unknown on its first generic write,
+        // and costs one `obj_type` compare on the header word the next line
+        // reads anyway.
+        if (*header).obj_type == GC_TYPE_ARRAY {
+            crate::array::note_element_store(
+                parent_user as *mut crate::array::ArrayHeader,
+                slot_index,
+                value_bits,
+            );
         }
         if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
             return;
@@ -1069,8 +1089,13 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     }
     if (*old_header).obj_type == GC_TYPE_ARRAY && (*new_header).obj_type == GC_TYPE_ARRAY {
         crate::array::transfer_array_numeric_layout(old_user as usize, new_user as usize);
+        // #7480: the element-shape bit rides `_reserved` for free, but its
+        // record is address-keyed and has to follow the move — same split,
+        // and same call site, as `TYPED_LAYOUTS` below.
+        crate::array::transfer_element_shape(old_user as usize, new_user as usize);
     } else {
         crate::array::clear_array_numeric_layout_ptr(new_user as usize);
+        crate::array::clear_element_shape_ptr(new_user as usize);
     }
     // Read the source object's intact bit BEFORE the transfer clears it — it is
     // the per-object half of the shape-keyed resolution below. `_reserved` is

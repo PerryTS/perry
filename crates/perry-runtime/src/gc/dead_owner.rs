@@ -217,6 +217,7 @@ fn fan_out(
     // collection — flush every cached verdict.
     crate::object::prop_plan::prop_plan_epoch_bump();
     crate::array::prune_dead_array_named_property_owners(is_dead_owner);
+    crate::array::prune_dead_element_shape_owners(is_dead_owner);
     crate::map::prune_dead_map_iterator_array_owners(is_dead_owner);
     crate::set::prune_dead_set_iterator_array_owners(is_dead_owner);
     crate::object::prune_dead_descriptor_owner_entries(is_dead_owner);

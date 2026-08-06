@@ -957,7 +957,8 @@ pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
 // on this specific object — the dynamic-write fast path must take the full
 // descriptor-aware OrdinarySet walk. Bit 11; only meaningful for
 // `GC_TYPE_OBJECT`. Set-only (clearing a descriptor leaves it set; the slow
-// path is always correct).
+// path is always correct). #7480 reuses bit 11 for `GC_TYPE_ARRAY` as
+// `GC_ARRAY_ELEMENT_SHAPE`; the two are disjoint by `obj_type`.
 pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
@@ -983,6 +984,26 @@ pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
 /// bits 12..13 were the last free `_reserved` bits (see the bit map above).
 /// Only meaningful for `GC_TYPE_ARRAY`.
 pub(crate) const GC_ARRAY_RAW_F64_HOLES: u16 = 0x1000;
+/// #7480: every element slot in `[0, length)` holds a `POINTER_TAG`-boxed
+/// `GC_TYPE_OBJECT` whose `class_id` is the one recorded in the array's
+/// element-shape record — the *pointer* sibling of the two raw-f64 bits
+/// above, and the shared prerequisite of both element-shape routes.
+///
+/// This is the O(1) half of the proof and it exists for the same reason the
+/// raw-f64 bit does: it rides in `_reserved`, which the copying collector
+/// copies verbatim, so the invariant survives a move without a side-table
+/// walk. The *shape id* itself cannot fit here, so it lives in the
+/// address-keyed record `array::element_shape` maintains, moved on
+/// relocation by `layout_transfer` exactly like `TYPED_LAYOUTS`. The bit is
+/// the authority: a fresh allocation's `_reserved` is zero, so a stale
+/// record left behind at a recycled address is never consulted.
+///
+/// Bit 11 — shared with `OBJ_FLAG_HAS_DESCRIPTORS`, which is only
+/// meaningful for `GC_TYPE_OBJECT`, exactly as `GC_ARRAY_RAW_F64_HOLES`
+/// (bit 12) shares with `GC_OBJ_TYPED_LAYOUT_INTACT`. Only meaningful for
+/// `GC_TYPE_ARRAY`; every accessor goes through `array::element_shape`,
+/// which checks `obj_type` first.
+pub(crate) const GC_ARRAY_ELEMENT_SHAPE: u16 = 0x800;
 
 pub(super) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(super) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;

@@ -59,6 +59,14 @@ pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
 
 pub(crate) fn invalidate_class_prototype_fast_guards() {
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(true, std::sync::atomic::Ordering::Release);
+    // #7480: prototype surgery is the one event that retires an element-shape
+    // proof without touching any array — the class's shape stopped being a
+    // reliable description of its instances. This is the existing single
+    // latch all three prototype-write entry points funnel through
+    // (`js_register_prototype_method`, `class_prototype_method_root_store`,
+    // and the class-registry state path), so one generation bump here retires
+    // every outstanding record at O(1).
+    crate::array::invalidate_all_element_shapes();
 }
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {

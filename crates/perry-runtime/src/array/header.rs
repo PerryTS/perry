@@ -899,7 +899,7 @@ unsafe fn array_slots_are_numeric(arr: *const ArrayHeader) -> bool {
 }
 
 #[inline]
-unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
+pub(super) unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
     if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
     }
@@ -1233,6 +1233,12 @@ pub(crate) unsafe fn set_array_numeric_layout(arr: *mut ArrayHeader, layout: Num
     match layout {
         NumericArrayLayout::RawF64 => set_array_raw_f64_layout_flag(arr),
     }
+    // #7480: the numeric and element-shape invariants are mutually exclusive
+    // — an element-shape array's slots are NaN-boxed pointers, which no
+    // raw-f64 layout admits. This is also what covers the bulk numeric
+    // producers (`js_array_fill_f64_*_extend`) that write slots directly and
+    // then declare the layout.
+    super::element_shape::clear_element_shape(arr);
     crate::gc::layout_init_pointer_free(arr as *mut u8);
 }
 
@@ -1520,7 +1526,7 @@ pub(crate) fn array_byte_size(capacity: usize) -> usize {
 }
 
 #[inline]
-unsafe fn array_elements_ptr(arr: *mut ArrayHeader) -> *mut u64 {
+pub(super) unsafe fn array_elements_ptr(arr: *mut ArrayHeader) -> *mut u64 {
     (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64
 }
 
@@ -1604,6 +1610,13 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
     }
+    // #7480: this is the post-hoc funnel every bulk element mutator uses —
+    // `shift`, `unshift`, `splice`, `fill`, `copyWithin`, `reverse`, and the
+    // dense `sort` write-back all mutate slots with bare `ptr::write` /
+    // `ptr::copy` and then land here. They are permutations or arbitrary
+    // rewrites, so the element-shape proof is dropped conservatively; a
+    // still-homogeneous array re-earns it on the next `ensure`.
+    super::element_shape::clear_element_shape(arr);
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
     if length > capacity || length > 16_000_000 {
@@ -1627,6 +1640,8 @@ pub(crate) unsafe fn rebuild_array_layout_exact(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
     }
+    // #7480: same conservative drop as `rebuild_array_layout` — see there.
+    super::element_shape::clear_element_shape(arr);
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
     if length > capacity || length > 16_000_000 {

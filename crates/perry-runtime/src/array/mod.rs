@@ -1,6 +1,7 @@
 //! Array representation for Perry — split into topical sub-modules.
 mod alloc;
 mod concat_reverse;
+mod element_shape;
 mod fill_extend;
 mod flat_clone;
 mod from_concat;
@@ -63,6 +64,14 @@ pub use self::generic_object::{js_arraylike_concat, js_arraylike_sort, js_arrayl
 pub(crate) use self::generic_object::{
     object_pop as generic_object_pop, object_shift as generic_object_shift, object_sort,
     object_splice,
+};
+pub(crate) use self::element_shape::{
+    clear_element_shape_ptr, forget_element_shape, invalidate_all_element_shapes,
+    note_element_store, prune_dead_element_shape_owners, transfer_element_shape,
+};
+pub use self::element_shape::{
+    js_array_element_shape_check, js_array_element_shape_class, js_array_element_shape_epoch,
+    js_array_element_shape_version, js_array_ensure_element_shape,
 };
 pub(crate) use self::header::{
     array_has_arguments_object_flag, mark_array_as_arguments_object,

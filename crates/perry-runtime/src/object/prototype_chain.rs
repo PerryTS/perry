@@ -189,6 +189,12 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
     // object itself must never satisfy a class-keyed plan again.
     if instance_override {
         crate::object::prop_plan::prop_plan_epoch_bump();
+        // #7480: a `[[Prototype]]` swap on a live instance is prototype
+        // surgery — the same class of event as writing onto `C.prototype`, so
+        // it retires every outstanding element-shape proof. Deliberately
+        // inside the `instance_override` gate: the quiet sibling
+        // (`object_link_class_default_prototype`) fires on every `new F()`.
+        crate::array::invalidate_all_element_shapes();
     }
     // #6759 Phase B: shaped objects store the recorded prototype in their
     // own meta record; only non-object owners fall through to the residual
