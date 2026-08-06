@@ -20,10 +20,10 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
     class_field_store_needs_layout_note, class_field_store_needs_string_addref,
-    emit_jsvalue_slot_store_on_block, emit_jsvalue_slot_store_with_flags_on_block,
-    emit_typed_feedback_register_site, expr_produces_non_pointer_bits_by_construction, lower_expr,
-    lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx,
-    TypedFeedbackContract, TypedFeedbackKind,
+    emit_jsvalue_slot_store_with_flags_on_block, emit_typed_feedback_register_site,
+    expr_produces_non_pointer_bits_by_construction, lower_expr, lower_expr_native,
+    raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 
 fn canonicalize_raw_f64_numeric_store_value(
@@ -1037,6 +1037,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // as the array-store barrier elision.
                         let field_set_barrier_needed =
                             !expr_produces_non_pointer_bits_by_construction(ctx, value);
+                        // #7469: value-side elision of the addref and layout
+                        // note on the guarded arm — computed here because the
+                        // predicates take `&FnCtx` and the block builder is
+                        // borrowed below.
+                        let guarded_note_needed = class_field_store_needs_layout_note(ctx, value);
+                        let guarded_addref_needed =
+                            class_field_store_needs_string_addref(ctx, value);
                         let raw_stored_value = {
                             // arm64_32 watchOS: the object fields region begins at
                             // `size_of::<ObjectHeader>()` past the user pointer — 24 on
@@ -1065,15 +1072,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 Some(numeric_value)
                             } else {
                                 // #5334 lever D: skip the barrier when the value
-                                // is a non-pointer by construction.
+                                // is a non-pointer by construction. #7469 extends
+                                // the same value-expression gating to the addref
+                                // and layout note — the Phase 4b.1 predicates are
+                                // value-side-only proofs (see their docs: safe in
+                                // every layout state the receiver can be in), so
+                                // they apply on this guarded arm exactly as on
+                                // the ptr-shape-proven arm above. The guard
+                                // passing does not change what the VALUE can be;
+                                // `requires_raw_f64` is false here, which is the
+                                // precondition `class_field_store_needs_layout_note`
+                                // documents.
                                 let field_addr = blk.ptrtoint(&field_ptr, I64);
-                                emit_jsvalue_slot_store_on_block(
+                                emit_jsvalue_slot_store_with_flags_on_block(
                                     blk,
                                     &field_ptr,
                                     &val_double,
                                     &obj_handle,
                                     &field_idx_str,
-                                    true,
+                                    guarded_addref_needed,
+                                    guarded_note_needed,
                                     &obj_bits,
                                     &field_addr,
                                     field_set_barrier_needed,
