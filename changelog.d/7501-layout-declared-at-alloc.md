@@ -53,7 +53,11 @@ Witness coverage in `perry-runtime/src/gc/tests/copying/all_pointer_elements_746
 an array filled through the elided sequence survives a copying minor with every
 element relocated and every slot rewritten, and a permanent sabotage arm asserts
 the *undeclared* array enumerates zero child slots — so a green positive test
-means the declaration was load-bearing, not that nothing was tried.
+means the declaration was load-bearing, not that nothing was tried. End to end, a
+compiled smoke over these shapes is byte-identical to `node` both normally and
+under `PERRY_GC_MOVING_LOOP_POLLS=1` + `PERRY_GC_ZEAL=1
+PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_VERIFY_EVACUATION=1`, with `PERRY_GC_DIAG=1`
+confirming thousands of protected from-space retirements actually ran.
 
 Known non-firing shapes: both halves of a deforested producer/consumer pair (the
 producer's `const out = []` becomes a `__deforest_out` parameter; the consumer's
