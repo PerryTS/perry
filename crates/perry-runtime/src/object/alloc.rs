@@ -350,6 +350,25 @@ pub extern "C" fn js_build_class_keys_array(
             crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
         }
     }
+    // #7510: every slot in `0..length` now holds an interned key string, and a
+    // canonical keys array is immutable for the rest of the program (growing a
+    // shape builds a NEW array — `shape_keys_grown`). Say that in the header
+    // instead of leaving the per-element pointer mask behind.
+    //
+    // The mask is correct but permanent: the shape cache anchors this array for
+    // the program's lifetime (#179), so its `LAYOUT_SLOT_MASKS` entry never
+    // drains. One such entry is enough to keep the whole per-object side table
+    // non-empty — and every probe of it on the allocation, store, death and
+    // trace paths then has to hash instead of taking the emptiness fast path.
+    // Since ~every program builds at least one shape, that made the fast path
+    // essentially dead: on `churn_alloc` it fired once in 40 million calls.
+    //
+    // The per-element notes above stay. They are what keeps the already-stored
+    // prefix traceable if allocating the *next* key string triggers a GC; the
+    // declaration can only be made once the last slot is filled, which is here.
+    unsafe {
+        crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
+    }
     shape_cache_insert(shape_id, arr);
     remember_class_keys_array(class_id, field_count, arr);
     arr

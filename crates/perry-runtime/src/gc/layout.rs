@@ -763,9 +763,9 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                     }
                     SlotVerdict::Conforms
                 };
-                match with_per_object_descriptor(parent_user, &classify) {
+                match with_per_object_descriptor(parent_user, classify) {
                     Some(verdict) => Some(verdict),
-                    None => with_shape_shared_descriptor(parent_user, &classify),
+                    None => with_shape_shared_descriptor(parent_user, classify),
                 }
             };
             if let Some(verdict) = verdict {
@@ -838,13 +838,11 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 if mask.is_empty() {
                     masks.remove(&parent_user);
                     set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-                    emptied = masks.is_empty();
+                    emptied = true;
                 }
             }
         }
-        if emptied {
-            refresh_per_object_layouts_flag();
-        }
+        refresh_per_object_layouts_flag(emptied);
     }
 }
 

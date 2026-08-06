@@ -186,3 +186,58 @@ fn test_per_object_tables_flag_arms_on_a_pointer_store_into_a_pointer_free_objec
     clear_marks();
     clear_mark_seeds();
 }
+
+/// The canonical keys array of a shape is anchored by the shape cache for the
+/// program's lifetime (#179), so a per-element pointer mask on it never drains
+/// — and ~every program builds at least one shape. That single entry is what
+/// used to keep the emptiness fast path dead (`churn_alloc`: one hit in 40
+/// million calls), so the header declaration that replaces it is load-bearing
+/// for #7510, not a tidy-up.
+#[test]
+fn test_class_keys_array_declares_all_pointer_slots_instead_of_a_mask() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let packed: &[u8] = b"alpha\0beta\0gamma\0";
+    let keys =
+        crate::object::js_build_class_keys_array(0x7510, 3, packed.as_ptr(), packed.len() as u32);
+    assert!(!keys.is_null());
+
+    assert!(
+        !flag(),
+        "building a shape's keys array must not leave a permanent per-object \
+         mask behind — that entry alone disables the fast path process-wide"
+    );
+    assert!(test_per_object_tables_are_empty());
+
+    // The declaration has to be as precise as the mask it replaced: all three
+    // key strings are still enumerated as children, and each one still traces.
+    let key_headers: Vec<_> = (0..3)
+        .map(|i| unsafe {
+            let bits = *(keys as *const u8).add(8).cast::<u64>().add(i);
+            header_from_user_ptr((bits & POINTER_MASK) as *const u8)
+        })
+        .collect();
+    assert_eq!(test_layout_pointer_slot_count(keys as usize, 3), Some(3));
+    assert_eq!(test_heap_child_slot_count(keys as *mut u8), 3);
+
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (keys as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    trace_marked_objects(&valid_ptrs);
+    for (i, header) in key_headers.iter().enumerate() {
+        unsafe {
+            assert_ne!(
+                (**header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "key string {i} must still be traced through the declared \
+                 all-pointer layout"
+            );
+        }
+    }
+
+    clear_marks();
+    clear_mark_seeds();
+}

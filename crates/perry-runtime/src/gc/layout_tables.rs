@@ -66,11 +66,18 @@ pub(in crate::gc) fn mark_per_object_layouts_nonempty() {
     hot_per_object_layouts_nonempty().set(true);
 }
 
-/// Re-establish the flag after a removal: clear it once *both* maps are empty
-/// again. Only reached in the rare "something diverged" regime, so the two
-/// extra borrows never land on the monomorphic hot path.
+/// Re-establish the flag after a removal emptied one map: clear it once the
+/// *other* one is empty too.
+///
+/// Callers pass the emptiness of the map they just touched, so "removed one of
+/// many" never takes a second borrow. A workload that genuinely keeps
+/// per-object records (`tree`) removes far more often than it empties, and
+/// must not pay for a fast path it is not getting.
 #[inline]
-pub(in crate::gc) fn refresh_per_object_layouts_flag() {
+pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) {
+    if !touched_map_emptied {
+        return;
+    }
     if hot_layout_slot_masks().borrow().is_empty() && hot_typed_layouts().borrow().is_empty() {
         hot_per_object_layouts_nonempty().set(false);
     }
@@ -98,8 +105,11 @@ pub(in crate::gc) fn typed_layouts_remove(user_ptr: usize) {
     if !per_object_layouts_maybe_nonempty() {
         return;
     }
-    hot_typed_layouts().borrow_mut().remove(&user_ptr);
-    refresh_per_object_layouts_flag();
+    let emptied = {
+        let mut typed = hot_typed_layouts().borrow_mut();
+        typed.remove(&user_ptr).is_some() && typed.is_empty()
+    };
+    refresh_per_object_layouts_flag(emptied);
 }
 
 /// Drop `user_ptr`'s per-object pointer mask (only).
@@ -108,8 +118,11 @@ pub(in crate::gc) fn slot_masks_remove(user_ptr: usize) {
     if !per_object_layouts_maybe_nonempty() {
         return;
     }
-    hot_layout_slot_masks().borrow_mut().remove(&user_ptr);
-    refresh_per_object_layouts_flag();
+    let emptied = {
+        let mut masks = hot_layout_slot_masks().borrow_mut();
+        masks.remove(&user_ptr).is_some() && masks.is_empty()
+    };
+    refresh_per_object_layouts_flag(emptied);
 }
 
 /// Run `f` against `user_ptr`'s per-object typed descriptor, if it has one.
@@ -193,23 +206,21 @@ pub(in crate::gc) fn layout_forget_object(user_ptr: usize) {
     // One `borrow_mut` per map, not a `borrow` to test emptiness followed by a
     // second `borrow_mut` to remove: `RefCell`'s flag traffic is a measurable
     // share of a function this hot (#7469).
-    let masks_empty = {
+    //
+    // The `is_some()` on the removal is what keeps the armed regime — a
+    // workload like `tree` that genuinely holds per-object records — at the
+    // pre-#7510 instruction count. Almost every call there is a fresh address
+    // with nothing to remove, and a miss cannot have emptied anything, so the
+    // trailing `is_empty()` never runs.
+    let masks_emptied = {
         let mut masks = hot_layout_slot_masks().borrow_mut();
-        if !masks.is_empty() {
-            masks.remove(&user_ptr);
-        }
-        masks.is_empty()
+        !masks.is_empty() && masks.remove(&user_ptr).is_some() && masks.is_empty()
     };
-    let typed_empty = {
+    let typed_emptied = {
         let mut typed = hot_typed_layouts().borrow_mut();
-        if !typed.is_empty() {
-            typed.remove(&user_ptr);
-        }
-        typed.is_empty()
+        !typed.is_empty() && typed.remove(&user_ptr).is_some() && typed.is_empty()
     };
-    if masks_empty && typed_empty {
-        hot_per_object_layouts_nonempty().set(false);
-    }
+    refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
 }
 
 #[cfg(test)]
