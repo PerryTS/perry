@@ -1068,6 +1068,32 @@ pub(crate) fn scan_flip_threshold(cached_length: u32) -> u32 {
     core::cmp::max(64, cached_length / 64)
 }
 
+/// How many elements are currently in the sparse cache.
+///
+/// `lazy_get`'s scan-flip trigger and `force_materialize_lazy`'s choice of
+/// producer have to agree on this number — the trigger exists to ask for the
+/// batch reparse, and asking when the callee will decline just materializes
+/// the array early through the slow path. They therefore read it from one
+/// place. The trigger used to approximate it as `i + 1`, which is only the
+/// true count for a scan that starts at zero and touches nothing else.
+///
+/// # Safety
+///
+/// `hdr` must be a live `LazyArrayHeader`.
+#[inline]
+unsafe fn lazy_cached_count(hdr: *const LazyArrayHeader) -> u64 {
+    let bitmap = (*hdr).materialized_bitmap;
+    let cached_length = (*hdr).cached_length;
+    if bitmap.is_null() || (*hdr).materialized_elements.is_null() || cached_length == 0 {
+        return 0;
+    }
+    let mut count: u64 = 0;
+    for w in 0..(cached_length as usize).div_ceil(64) {
+        count += (*bitmap.add(w)).count_ones() as u64;
+    }
+    count
+}
+
 impl LazyArrayHeader {
     /// Slice view over the inline tape bytes. Caller must keep the
     /// header alive for the slice's lifetime.
@@ -1318,12 +1344,15 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     // that is not exactly one past the previous COLD read ends it. Cache
     // hits never reach here, so a re-scan of an already-materialized
     // prefix does not inflate the count.
-    let streak = if prev_walk == u32::MAX {
-        u32::from(i == 0)
-    } else if i == prev_walk + 1 {
+    let streak = if prev_walk != u32::MAX && i == prev_walk + 1 {
         (*hdr).sequential_streak.saturating_add(1)
     } else {
-        0
+        // A cold read that does not continue the previous run still IS a run
+        // — of length one. Recording zero here made the run lag by one, so a
+        // scan that began anywhere but index 0 needed 65 reads to trip a
+        // threshold of 64, and a lone read reported a shorter run than the
+        // very next read that continued it.
+        1
     };
     (*hdr).sequential_streak = streak;
     (*hdr).walk_idx = i;
@@ -1366,18 +1395,24 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     //    already filled the bitmap — is a no-op, which is exactly why
     //    #7499 alone did not move this benchmark.
     //
-    // The second signal carries the same "is the batch producer even
-    // going to be picked?" test that `force_materialize_lazy` applies
-    // (`cached_count * 2 < cached_length`), evaluated against this
-    // scan's cache count of `i + 1`. Tripping without it would fire on
-    // an array whose streak can only complete near the end — a 64- to
-    // 128-element array, where the flip lands on the last read and
-    // reparses a tree the merge walk was already holding. Keeping the
-    // two conditions in agreement means the trigger never asks for a
-    // producer the callee would decline.
+    // The second signal carries the SAME "is the batch producer even going
+    // to be picked?" test that `force_materialize_lazy` applies, read from
+    // the same `lazy_cached_count` helper. It used to approximate the cache
+    // count as `i + 1`, which is only true for a scan that starts at zero
+    // and touches nothing else: any earlier cold read outside the prefix
+    // made the trigger UNDERcount, so it could fire on an array the callee
+    // then declined to reparse — materializing the whole thing early
+    // through the element-wise merge walk, the exact path this is meant to
+    // avoid. The popcount is O(n/64) and only runs once the streak has
+    // already reached the threshold, which for a scan happens once.
+    //
+    // It is also what stops the flip firing on an array whose streak can
+    // only complete near the end — a 64- to 128-element one, where the
+    // flip would land on the last read and reparse a tree the merge walk
+    // was already holding.
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-    let scan_flip =
-        streak >= scan_flip_threshold(cached_length) && (i as u64 + 1) * 2 < cached_length as u64;
+    let scan_flip = streak >= scan_flip_threshold(cached_length)
+        && lazy_cached_count(hdr) * 2 < cached_length as u64;
     if (*hdr).cumulative_walk_steps > (cached_length as u64) * 2 || scan_flip {
         force_materialize_lazy(hdr);
     }
@@ -1554,16 +1589,9 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
     let cached_length = (*hdr).cached_length;
     let bitmap = (*hdr).materialized_bitmap;
     let cache = (*hdr).materialized_elements;
-    let cached_count = if !bitmap.is_null() && !cache.is_null() && cached_length > 0 {
-        let words = (cached_length as usize).div_ceil(64);
-        let mut count: u64 = 0;
-        for w in 0..words {
-            count += (*bitmap.add(w)).count_ones() as u64;
-        }
-        count
-    } else {
-        0
-    };
+    // Same helper `lazy_get`'s scan-flip trigger consults, so the trigger
+    // can never ask for a producer this function then declines.
+    let cached_count = lazy_cached_count(hdr);
     let has_cache_hits = cached_count > 0;
 
     // #7478: when most of the array still has to be built, re-parse the

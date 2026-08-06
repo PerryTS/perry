@@ -352,8 +352,9 @@ fn a_strided_walk_does_not_trip_the_scan_flip() {
     assert_eq!(reads, 61);
     assert_eq!(
         unsafe { (*lazy).sequential_streak },
-        0,
-        "a stride of 2 must never extend the consecutive run"
+        1,
+        "a stride of 2 must never EXTEND a run — each read starts its own run \
+         of length one, and 61 of them must not add up to a streak"
     );
     assert!(
         unsafe { (*lazy).materialized.is_null() },
@@ -371,8 +372,14 @@ fn a_strided_walk_does_not_trip_the_scan_flip() {
 fn element_identity_survives_the_scan_flip() {
     let n = 200usize;
     let lazy = unsafe { lazy_object_array(n) };
-    // Read index 5 before the flip and remember the exact JSValue.
-    let early = unsafe { lazy_get(lazy, 5) };
+    // Read index 5 before the flip and remember the exact JSValue. It has to
+    // be ROOTED, not just copied into a local: the scan below allocates 200
+    // records and then a whole reparsed tree, and a raw copy of a pointer
+    // JSValue held across that is exactly the stale-local shape the identity
+    // assertion is supposed to be testing for. Unrooted, a moving collection
+    // would fail this test for the wrong reason.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let early = scope.root_nanbox_u64(unsafe { lazy_get(lazy, 5) }.bits());
     assert!(
         unsafe { (*lazy).materialized.is_null() },
         "one read must not flip"
@@ -386,11 +393,57 @@ fn element_identity_survives_the_scan_flip() {
     );
     let late = unsafe { lazy_get(lazy, 5) };
     assert_eq!(
-        early.bits(),
+        early.get_nanbox_u64(),
         late.bits(),
         "the pre-flip element must stay identical across the flip"
     );
     // And the batch-produced elements must carry the right values.
+    let arr = unsafe { (*lazy).materialized };
+    assert_eq!(unsafe { (*arr).length }, n as u32);
+}
+
+/// The flip's eligibility test must count what is ACTUALLY in the sparse
+/// cache, not assume the cache is the scanned prefix. With a read outside the
+/// prefix already cached, approximating the count as `i + 1` undercounts, and
+/// the trigger can fire on an array `force_materialize_lazy` then declines to
+/// reparse — which does not merely waste the trigger, it materializes the
+/// whole array early through the element-wise merge walk, the exact path the
+/// flip exists to avoid.
+///
+/// 131 elements with index 130 read first: the streak completes at index 63,
+/// where the true cache count is 65 (0..=63 plus 130). `65 * 2 = 130 < 131`
+/// still admits the reparse by one, so the flip is correct here — and the
+/// test pins that it is decided on 65 and not on the 64 the old arithmetic
+/// would have used.
+#[test]
+fn the_flip_counts_the_whole_cache_not_just_the_scanned_prefix() {
+    let n = 131usize;
+    let lazy = unsafe { lazy_object_array(n) };
+    assert_eq!(scan_flip_threshold(n as u32), 64);
+
+    // A cold read well outside the prefix we are about to scan.
+    unsafe { lazy_get(lazy, 130) };
+    assert_eq!(
+        unsafe { (*lazy).sequential_streak },
+        1,
+        "a lone cold read is a run of length one"
+    );
+
+    let before = reparse_materializations();
+    for i in 0..64u32 {
+        unsafe { lazy_get(lazy, i) };
+    }
+    assert!(
+        unsafe { !(*lazy).materialized.is_null() },
+        "the streak completes at index 63 and the cache is still under half"
+    );
+    assert_eq!(
+        reparse_materializations(),
+        before + 1,
+        "the flip must have reached the batch reparse, not the merge walk"
+    );
+    // Every element still has to read back correctly, including the one that
+    // was cached before the flip and patched back over the reparsed slot.
     let arr = unsafe { (*lazy).materialized };
     assert_eq!(unsafe { (*arr).length }, n as u32);
 }
