@@ -38,11 +38,15 @@
 //! * `GcFinalizeHookKind::LazyArrayTape` covers the non-copying sweeps.
 //! * [`finalize_dead_copied_minor_from_space_lazy_arrays`] covers the copying
 //!   minor, whose bulk from-space reset skips per-object finalizers.
-//! * `GcMoveHookKind::LazyArraySideTables` rekeys an evacuated owner. The
-//!   header is ~88 bytes now, so it is born in the NURSERY and the copying
-//!   minor really does move it — unlike the old multi-megabyte header, which
-//!   was born old and never moved.
 //! * [`release_current_thread_lazy_tapes`] at thread teardown.
+//!
+//! There is deliberately no move hook and no copied-minor from-space pass: the
+//! owning header stays OLD-GEN and immovable (see
+//! `json_tape::alloc_lazy_header_bytes`), so its address is stable for its
+//! whole life and it never appears in a from-space. Shrinking the header into
+//! the nursery instead would have made it movable for the first time and broke
+//! `json::stringify_api::try_stringify_lazy_array`, which reads `blob_bytes`
+//! off a raw header and then allocates.
 //!
 //! On top of that the owner can disown its tape *deterministically*: once
 //! `force_materialize_lazy` installs `materialized`, the tape is provably
@@ -92,17 +96,9 @@ thread_local! {
     /// `LazyArrayHeader` address -> its tape bytes.
     static TAPE_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, TapeSideAllocation>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
-    /// Live tape bytes on this thread.
-    ///
-    /// Deliberately NOT routed through `gc_note_external_side_alloc`. That
-    /// counter feeds `external_side_live_bytes()`, which every
-    /// `old_reclaim_pressure_due` call site ADDS to old-generation pressure —
-    /// correct for a `Map`'s entries buffer, whose owner is typically tenured
-    /// so only a full reclaim can free it, and exactly wrong here. A tape's
-    /// owner is a nursery object that dies at any minor, and materialization
-    /// frees the tape with no collector at all. Counting tape bytes as old-gen
-    /// pressure would keep firing the very `old_gen_bytes` full collections
-    /// #7539 exists to stop, and the fix would have measured as a no-op.
+    /// Live tape bytes on this thread — a local mirror of what this module
+    /// has handed to `gc_note_external_side_alloc`, so tests can cross-check
+    /// the registry against the counter without reading global GC state.
     static TAPE_LIVE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Fast "this thread has never built a tape" gate, so the copying minor's
     /// from-space pass and the sweep's dead-owner pass cost a single `Cell`
@@ -199,32 +195,24 @@ fn note_allocated(bytes: usize) {
     TAPE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
 }
 
+/// Tape bytes are `external_side_live_bytes()` — the same old-generation
+/// pressure term a `Map`'s entries buffer contributes, and for the same
+/// reason: the owning header is old-gen, so only a FULL collection can prove a
+/// retained tape dead, and those bytes have to be able to escalate that
+/// reclaim or a `JSON.parse` loop that never materialises would grow without
+/// bound.
+///
+/// This does NOT reintroduce the pathology #7539 fixed. The old cost came from
+/// tape bytes sitting in the old generation *as dead arena capacity* at
+/// ~2.4 MB per parse; `field_access` now disowns each tape the moment
+/// `materialized` is installed, so the term never accumulates there at all —
+/// it holds one live tape at a time. `roundtrip`, which genuinely retains its
+/// tape until the lazy array dies, keeps exactly the bounded cadence it has
+/// today.
 #[inline]
 fn note_freed(bytes: usize) {
     TAPE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
-}
-
-/// Rekey after the copying minor evacuated an owner.
-pub(crate) fn owner_moved(old_addr: usize, new_addr: usize) {
-    if old_addr == 0 || new_addr == 0 || old_addr == new_addr {
-        return;
-    }
-    if !TAPE_REGISTRY_NONEMPTY.with(Cell::get) {
-        return;
-    }
-    TAPE_REGISTRY.with(|r| {
-        let mut registry = r.borrow_mut();
-        let Some(allocation) = registry.remove(&old_addr) else {
-            // Owner had no tape (empty tape, or already released after
-            // materialization) — nothing to rekey.
-            return;
-        };
-        if registry.contains_key(&new_addr) {
-            registry.insert(old_addr, allocation);
-            panic!("lazy array move destination already owns a tape");
-        }
-        registry.insert(new_addr, allocation);
-    });
+    crate::gc::gc_note_external_side_free(bytes);
 }
 
 /// True when this thread has never registered a tape, so the collector's

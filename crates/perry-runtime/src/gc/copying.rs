@@ -1306,45 +1306,8 @@ fn finalize_dead_copied_minor_from_space_side_allocations() {
     crate::map::finalize_dead_copied_minor_from_space_maps();
     crate::set::finalize_dead_copied_minor_from_space_sets();
     crate::node_submodules::diagnostics_gc::finalize_dead_copied_minor_from_space_errors();
-    // #7539: the tape bytes of a lazy JSON array that died in from-space. The
-    // bulk from-space reset below never runs a per-object finalizer, and the
-    // header is nursery-resident now (~88 bytes) so this is the ONLY pass that
-    // sees it die in the common case.
-    finalize_dead_copied_minor_from_space_lazy_arrays();
     // 2026-07-09 GC audit wave 2: the from-space flip runs no per-object
     // finalize hooks, so entries keyed by dead from-space owners in the
     // object-address-keyed side tables are pruned here (headers still intact).
     super::dead_owner::prune_dead_owner_side_tables_copied_minor();
-}
-
-/// Free the tapes of lazy JSON arrays that died in this copying minor's
-/// from-space. Deadness is the same predicate `map.rs` uses: the owner sits in
-/// eden or the active survivor half and was neither marked nor forwarded, so
-/// every live from-space object has already been evacuated past it.
-fn finalize_dead_copied_minor_from_space_lazy_arrays() {
-    if crate::json_tape_store::registry_is_empty() {
-        return;
-    }
-    let dead = crate::json_tape_store::collect_owners(&|addr| {
-        let space = crate::arena::classify_heap_space(addr);
-        if !matches!(space, crate::arena::HeapSpace::NurseryEden)
-            && space != crate::arena::active_survivor_space()
-        {
-            return false;
-        }
-        if addr < GC_HEADER_SIZE {
-            return false;
-        }
-        // The space classification is backed by this thread's live arena page
-        // ranges, so the header read is on mapped arena memory.
-        let header = unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) };
-        if header.obj_type != GC_TYPE_LAZY_ARRAY {
-            return false;
-        }
-        let flags = header.gc_flags;
-        flags & GC_FLAG_ARENA != 0 && flags & (GC_FLAG_MARKED | GC_FLAG_FORWARDED) == 0
-    });
-    for addr in dead {
-        crate::json_tape_store::release(addr);
-    }
 }

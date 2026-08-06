@@ -481,7 +481,10 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             arena_walkable: true,
             rewrite_descriptor_kind: GcRewriteDescriptorKind::LazyArray,
             layout_slot_kind: GcLayoutSlotKind::None,
-            movable: true,
+            // #7539: NOT movable. The tape registry is keyed by the header
+            // address, and callers outside `json_tape` hold raw header
+            // pointers across allocations.
+            movable: false,
             // #7539: the tape is a `json_tape_store` side allocation, not
             // inline payload. Inline, it made the header as large as the tape
             // (~2.4 MB on a 10k-record blob), which `arena_alloc_gc` routed
@@ -490,10 +493,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             external_byte_policy: GcExternalBytePolicy::SideAllocation,
             large_object_policy: GcLargeObjectPolicy::OldArenaWhenOverThreshold,
             pointer_free: false,
-            // The header is ~88 bytes now, so it is born in the nursery and
-            // the copying minor really does evacuate it; the tape registry is
-            // keyed by the header address and has to follow.
-            move_hook_kind: GcMoveHookKind::LazyArrayTape,
+            move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
             finalize_hook_kind: GcFinalizeHookKind::LazyArrayTape,
         },

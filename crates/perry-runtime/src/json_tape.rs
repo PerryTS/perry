@@ -1148,53 +1148,32 @@ impl LazyArrayHeader {
 /// old generation with `GC_FLAG_TENURED` and only a FULL collection could ever
 /// reclaim it. The header is ~88 bytes now and is born in the nursery like any
 /// other short-lived object; `json_tape_store` owns the tape bytes.
-/// Where the header's own bytes come from.
+/// The header's own bytes.
 ///
-/// Production always takes the nursery arm: the header is ~88 bytes, well
-/// under `LARGE_OBJECT_THRESHOLD_BYTES`. The old-gen arm exists for the #7538 /
-/// #7546 barrier tests, whose whole subject is a lazy owner that a MINOR trace
-/// treats as a black leaf — reachable in production only by tenuring, which is
-/// too timing-dependent to assert on. Before #7539 that shape was the *default*
-/// (a multi-megabyte inline tape put every real header in old-gen), so without
-/// this the coverage would silently stop exercising the containment branch it
-/// was written for.
+/// **Old generation, born tenured — and that is load-bearing, not incidental.**
+/// Before #7539 the header carried its tape inline, so it was multi-megabyte
+/// and `arena_alloc_gc`'s large-object arm put it here; every caller outside
+/// this module has therefore always been free to hold a raw
+/// `*mut LazyArrayHeader` across an allocation, and several do
+/// (`json::stringify_api::try_stringify_lazy_array` reads `blob_bytes` off a
+/// raw header and then allocates the result string; the array accessors pass
+/// raw headers into `force_materialize_lazy`).
+///
+/// Shrinking the header to ~88 bytes without pinning it here made it
+/// nursery-resident and therefore MOVABLE for the first time, and the copying
+/// minor promptly relocated it out from under those callers: `field_access`
+/// went non-deterministic, emitting a JSON string of NUL bytes for
+/// `JSON.stringify(parsed)` on 3 of 60 iterations (a stale `blob_str` read
+/// through a moved-from header). Keeping the header exactly where it has
+/// always been costs ~96 bytes of old generation per parse — the tape's
+/// ~2.4 MB is what had to leave — and keeps that contract intact.
 #[inline]
-unsafe fn alloc_lazy_header_bytes() -> *mut u8 {
-    let size = std::mem::size_of::<LazyArrayHeader>();
-    #[cfg(test)]
-    if FORCE_OLD_GEN_HEADER.with(std::cell::Cell::get) {
-        return crate::arena::arena_alloc_gc_old_born_tenured(
-            size,
-            8,
-            crate::gc::GC_TYPE_LAZY_ARRAY,
-        );
-    }
-    crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_LAZY_ARRAY)
-}
-
-#[cfg(test)]
-thread_local! {
-    static FORCE_OLD_GEN_HEADER: Cell<bool> = const { Cell::new(false) };
-}
-
-/// RAII: place the next `alloc_lazy_array` headers directly in the old
-/// generation. See [`alloc_lazy_header_bytes`].
-#[cfg(test)]
-pub(crate) struct ForceOldGenLazyHeaderGuard;
-
-#[cfg(test)]
-impl ForceOldGenLazyHeaderGuard {
-    pub(crate) fn new() -> Self {
-        FORCE_OLD_GEN_HEADER.with(|c| c.set(true));
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for ForceOldGenLazyHeaderGuard {
-    fn drop(&mut self) {
-        FORCE_OLD_GEN_HEADER.with(|c| c.set(false));
-    }
+fn alloc_lazy_header_bytes() -> *mut u8 {
+    crate::arena::arena_alloc_gc_old_born_tenured(
+        std::mem::size_of::<LazyArrayHeader>(),
+        8,
+        crate::gc::GC_TYPE_LAZY_ARRAY,
+    )
 }
 
 pub unsafe fn alloc_lazy_array(
@@ -1206,9 +1185,12 @@ pub unsafe fn alloc_lazy_array(
     let scope = crate::gc::RuntimeHandleScope::new();
     let blob_handle = scope.root_string_ptr(blob_str);
     // Detach the tape FIRST, while there is no header address to invalidate.
-    // This is a plain `std::alloc` call: it runs no collection and touches no
-    // arena or old-generation accounting at all.
+    // The `allocate` call itself is plain `std::alloc` — no collection, no
+    // arena accounting. `gc_note_external_side_alloc` may trigger, but only a
+    // conservative (non-moving) cycle, and the only live thing we hold here is
+    // `blob_handle`, which is rooted.
     let (tape_ptr, tape_allocation) = crate::json_tape_store::allocate(tape_entries);
+    crate::gc::gc_note_external_side_alloc(tape_allocation.byte_len());
     let raw = alloc_lazy_header_bytes();
     let hdr = raw as *mut LazyArrayHeader;
     (*hdr).cached_length = cached_length;
@@ -1249,7 +1231,24 @@ pub unsafe fn alloc_lazy_array(
     // tape itself.
     if cached_length > 0 {
         let cache_bytes = (cached_length as usize) * std::mem::size_of::<crate::value::JSValue>();
-        let cache_raw = crate::arena::arena_alloc_gc(cache_bytes, 8, crate::gc::GC_TYPE_STRING);
+        // Old-gen, like the header (#7539). Keeping the whole lazy-array
+        // cluster in ONE generation keeps every edge out of it the shape
+        // #7538/#7546 built and validated the external-slot barrier for:
+        // old owner → old cache block → young element, recorded by
+        // `note_lazy_cache_slot` and consumed by the minor's dirty scan
+        // through the owner's descriptor. A nursery cache under an old-gen
+        // header is a mixed shape nothing covers — the minor treats the old
+        // header as a black leaf, so it never visits the descriptor that can
+        // read the cache, while the cache block itself is a GC leaf whose
+        // contents no walker scans. That combination lost element identity
+        // (`parsed[i] === parsed[i]`) across a copying minor. It could not
+        // occur before: a big array's cache was already born old, and a small
+        // array's header was born young along with its cache.
+        let cache_raw = crate::arena::arena_alloc_gc_old_born_tenured(
+            cache_bytes,
+            8,
+            crate::gc::GC_TYPE_STRING,
+        );
         // arena_alloc_gc can reuse slots from the free list whose
         // bytes still hold whatever the previous occupant wrote.
         // Zero explicitly — the cache invariant relies on the
@@ -1267,7 +1266,14 @@ pub unsafe fn alloc_lazy_array(
         );
         let bitmap_words = (cached_length as usize).div_ceil(64);
         let bitmap_bytes = bitmap_words * 8;
-        let bitmap_raw = crate::arena::arena_alloc_gc(bitmap_bytes, 8, crate::gc::GC_TYPE_STRING);
+        // Same generation as the header and cache — see above. The bitmap
+        // holds no heap edges, but keeping it with its cluster keeps the
+        // page-liveness bookkeeping uniform.
+        let bitmap_raw = crate::arena::arena_alloc_gc_old_born_tenured(
+            bitmap_bytes,
+            8,
+            crate::gc::GC_TYPE_STRING,
+        );
         std::ptr::write_bytes(bitmap_raw, 0, bitmap_bytes);
         let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
         (*hdr).materialized_bitmap = bitmap_raw as *mut u64;
@@ -1277,9 +1283,10 @@ pub unsafe fn alloc_lazy_array(
             bitmap_raw as usize,
         );
     }
-    // Register LAST: the key is the header's address, and every allocation
-    // above could have relocated it. `hdr_handle` gives us the address the
-    // collector will actually see from here on.
+    // Register LAST, off the rooted handle. The header is old-gen and
+    // immovable (see `alloc_lazy_header_bytes`), so this address is stable for
+    // its whole life — which is what lets the registry be keyed by it with no
+    // move hook.
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     crate::json_tape_store::register(hdr as usize, tape_allocation);
     hdr

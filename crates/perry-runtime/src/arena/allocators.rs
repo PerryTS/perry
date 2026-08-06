@@ -154,16 +154,15 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
-/// Test-only: the old-gen + born-tenured shape `arena_alloc_gc` hands a LARGE
-/// object, for tests whose subject is an owner a MINOR trace must treat as a
-/// black leaf.
+/// The old-gen + born-tenured shape `arena_alloc_gc` hands a LARGE object, for
+/// a caller that wants it on size-independent grounds.
 ///
-/// #7539 moved the JSON tape into a side allocation, so a `LazyArrayHeader` is
-/// ~88 bytes and is born in the nursery; before that its multi-megabyte inline
-/// tape put every real one here. The #7538 / #7546 barrier tests exist for the
-/// old-gen shape, which production now reaches only by tenuring — too
-/// timing-dependent to assert on — so they place it directly.
-#[cfg(test)]
+/// #7539's `LazyArrayHeader` is the caller: it used to reach this arm by being
+/// multi-megabyte (its tape was inline), and every caller outside `json_tape`
+/// relies on the resulting header address being stable across allocations.
+/// Moving the tape out shrank the header to ~88 bytes, which would have made
+/// it nursery-resident and movable; asking for this shape explicitly keeps the
+/// invariant those callers were already written against.
 pub(crate) fn arena_alloc_gc_old_born_tenured(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_TENURED, GC_HEADER_SIZE};
 
