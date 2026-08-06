@@ -42,11 +42,7 @@ use crate::ir::*;
 /// rejects the non-double bits, falls back to the boxed setter, and
 /// `layout_note_slot` downgrades the descriptor to `GC_LAYOUT_UNKNOWN` so the
 /// collector scans the slot conservatively from then on.
-fn for_init_binding_type(
-    ctx: &mut LoweringContext,
-    decl: &ast::VarDeclarator,
-    name: &str,
-) -> Type {
+fn for_init_binding_type(ctx: &mut LoweringContext, decl: &ast::VarDeclarator, name: &str) -> Type {
     let ast::Pat::Ident(ident) = &decl.name else {
         return Type::Any;
     };
