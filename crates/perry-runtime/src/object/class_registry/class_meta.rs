@@ -319,6 +319,12 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     // after each allocation.
     let scope = crate::gc::RuntimeHandleScope::new();
     let global_handle = scope.root_nanbox_f64(js_get_global_this());
+    // #7497 (CodeRabbit): the SEARCHED value needs the same treatment. `jv` was
+    // computed at entry and never refreshed; if a key allocation evacuates the
+    // ClosureHeader, the `globalThis` field slot is rewritten to the new address
+    // while `jv.bits()` still names from-space, the equality below never matches,
+    // and the caller silently falls through to the generic construct tail.
+    let func_handle = scope.root_nanbox_f64(func_value);
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         let (key, global_this_f64) = global_handle.across_nanbox(|| {
             crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
@@ -329,7 +335,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             return None;
         }
         let v = js_object_get_field_by_name(global_obj, key);
-        if v.bits() == jv.bits() {
+        if v.bits() == func_handle.get_nanbox_f64().to_bits() {
             return Some(name);
         }
     }

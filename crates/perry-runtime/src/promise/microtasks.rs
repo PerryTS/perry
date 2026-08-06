@@ -666,8 +666,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     // `(*step_closure).func_ptr`, on a value re-read from a
                     // handle that had been seeded too late.
                     let trap_scope = crate::gc::RuntimeHandleScope::new();
-                    let step_handle = trap_scope
-                        .root_nanbox_f64(crate::value::js_nanbox_pointer(step_closure as i64));
+                    let step_handle = trap_scope.root_nanbox_f64(boxed_closure(step_closure));
                     let value_handle = trap_scope.root_nanbox_f64(value);
                     let next_handle = trap_scope.root_nanbox_f64(boxed_promise(next));
                     enter_microtask_context(&task_context);

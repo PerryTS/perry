@@ -416,6 +416,12 @@ pub(crate) fn combinator_iterable_to_array(
         (*hdr).obj_type
     };
     if obj_type == crate::gc::GC_TYPE_OBJECT {
+        // #7497 (CodeRabbit): `raw` was computed above and then carried across a
+        // user `[Symbol.iterator]` getter and a `"next"` key allocation before
+        // being dereferenced. Root the receiver and re-derive its address after
+        // each of those.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_h = scope.root_nanbox_f64(value);
         let has_iterator = {
             let iter_sym = crate::symbol::well_known_symbol("iterator");
             if iter_sym.is_null() {
@@ -423,15 +429,17 @@ pub(crate) fn combinator_iterable_to_array(
             } else {
                 let sym_f64 =
                     f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
-                let iter_fn =
-                    unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
+                let iter_fn = unsafe {
+                    crate::symbol::js_object_get_symbol_property(value_h.get_nanbox_f64(), sym_f64)
+                };
                 iter_fn.to_bits() != crate::value::TAG_UNDEFINED
             }
         };
         let has_next_field = {
             let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
             let next_val = crate::object::js_object_get_field_by_name(
-                raw as *const crate::object::ObjectHeader,
+                crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
+                    as *const crate::object::ObjectHeader,
                 next_key,
             );
             let next_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(next_val.bits()));
@@ -439,7 +447,8 @@ pub(crate) fn combinator_iterable_to_array(
         };
         if has_iterator || has_next_field {
             return Ok(crate::array::js_array_clone(
-                raw as *const crate::array::ArrayHeader,
+                crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
+                    as *const crate::array::ArrayHeader,
             ));
         }
     }

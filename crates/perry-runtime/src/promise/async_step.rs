@@ -69,6 +69,83 @@ pub(crate) fn trace_async_settle(promise: *const Promise, how: &str) {
 /// forwarded to `js_promise_then_checked`. Null (the "no handler" sentinel)
 /// becomes `undefined`, matching what `IsCallable(x) is false` resolves to
 /// on the `_checked` entry's own tag check.
+/// #7497: NaN-box a possibly-null promise / closure pointer so it can be parked
+/// in a `RuntimeHandleScope`, and read it back. NaN-boxed rather than
+/// `root_raw_*_ptr` because reading a raw handle back needs `get_raw_*_ptr`,
+/// which `scripts/raw_handle_debt.py` counts.
+#[inline]
+fn boxed_promise_or_undef(p: *mut Promise) -> f64 {
+    if p.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(p as i64)
+    }
+}
+
+#[inline]
+fn boxed_closure_or_undef(c: ClosurePtr) -> f64 {
+    if c.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(c as i64)
+    }
+}
+
+#[inline]
+fn unboxed_promise(h: &crate::gc::RuntimeHandle<'_>) -> *mut Promise {
+    let v = h.get_nanbox_f64();
+    if v.to_bits() == crate::value::TAG_UNDEFINED {
+        std::ptr::null_mut()
+    } else {
+        crate::value::js_nanbox_get_pointer(v) as *mut Promise
+    }
+}
+
+#[inline]
+fn unboxed_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
+    let v = h.get_nanbox_f64();
+    if v.to_bits() == crate::value::TAG_UNDEFINED {
+        std::ptr::null()
+    } else {
+        crate::value::js_nanbox_get_pointer(v) as ClosurePtr
+    }
+}
+
+/// #7497 (CodeRabbit): shared, rooted tail for `js_async_step_chain`'s three
+/// suspend paths. Each of them crosses `build_async_step_thunks` (two closure
+/// allocations) and, on two of them, `js_promise_resolved` as well, while
+/// holding the awaited promise, the two fresh thunks and `trap_next` — and
+/// `then_backpatch_result` both STORES into the thunks and RETURNS `trap_next`.
+/// `awaited_in` is the already-known awaited promise (the pending-inner path);
+/// pass null to have `make_awaited` produce it after the thunks exist.
+fn suspend_on_awaited(
+    step: ClosurePtr,
+    trap_next: *mut Promise,
+    awaited_in: *mut Promise,
+    make_awaited: impl FnOnce() -> *mut Promise,
+) -> *mut Promise {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let step_h = scope.root_nanbox_f64(boxed_closure_or_undef(step));
+    let trap_h = scope.root_nanbox_f64(boxed_promise_or_undef(trap_next));
+    let awaited_in_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited_in));
+    let (fulfill, reject) =
+        build_async_step_thunks(unboxed_closure(&step_h), unboxed_promise(&trap_h));
+    let fulfill_h = scope.root_nanbox_f64(boxed_closure_or_undef(fulfill));
+    let reject_h = scope.root_nanbox_f64(boxed_closure_or_undef(reject));
+    let awaited = if unboxed_promise(&awaited_in_h).is_null() {
+        make_awaited()
+    } else {
+        unboxed_promise(&awaited_in_h)
+    };
+    let awaited_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited));
+    then_backpatch_result(
+        unboxed_promise(&awaited_h),
+        unboxed_closure(&fulfill_h),
+        unboxed_closure(&reject_h),
+        unboxed_promise(&trap_h),
+    )
+}
+
 #[inline]
 fn closure_ptr_to_arg(ptr: ClosurePtr) -> f64 {
     if ptr.is_null() {
@@ -273,19 +350,35 @@ fn then_backpatch_result(
     trap_next: *mut Promise,
 ) -> *mut Promise {
     if trap_next.is_null() {
-        let result = super::then::js_promise_new_with_parent(awaited);
+        // #7497 (CodeRabbit): `js_promise_new_with_parent` allocates, and the two
+        // thunks it is about to be STORED into — plus the promise the handlers
+        // are attached to — are live across it. This is the publishing shape:
+        // without the re-read, a copying minor here writes a from-space `result`
+        // into two closures the collector goes on maintaining.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let awaited_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited));
+        let fulfill_h = scope.root_nanbox_f64(boxed_closure_or_undef(fulfill));
+        let reject_h = scope.root_nanbox_f64(boxed_closure_or_undef(reject));
+        let result_h = scope.root_nanbox_f64(boxed_promise_or_undef(
+            super::then::js_promise_new_with_parent(unboxed_promise(&awaited_h)),
+        ));
+        let result = unboxed_promise(&result_h);
         crate::closure::js_closure_set_capture_ptr(
-            fulfill as *mut crate::closure::ClosureHeader,
+            unboxed_closure(&fulfill_h) as *mut crate::closure::ClosureHeader,
             1,
             result as i64,
         );
         crate::closure::js_closure_set_capture_ptr(
-            reject as *mut crate::closure::ClosureHeader,
+            unboxed_closure(&reject_h) as *mut crate::closure::ClosureHeader,
             1,
             result as i64,
         );
-        super::then::js_promise_attach_handlers(awaited, fulfill, reject);
-        result
+        super::then::js_promise_attach_handlers(
+            unboxed_promise(&awaited_h),
+            unboxed_closure(&fulfill_h),
+            unboxed_closure(&reject_h),
+        );
+        unboxed_promise(&result_h)
     } else {
         // #6728: `trap_next` non-null means this is a SUBSEQUENT `await` (the
         // 2nd or later) in the activation — the result promise already exists
@@ -436,23 +529,24 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     // that will queue the right Task when called.
                     bump(&MT_STEP_CHAIN_REUSE_MISS);
                     trace_async_suspend(inner);
-                    let (fulfill, reject) = build_async_step_thunks(rooted_step(), trap_next);
-                    return then_backpatch_result(inner, fulfill, reject, trap_next);
+                    return suspend_on_awaited(rooted_step(), trap_next, inner, || {
+                        std::ptr::null_mut()
+                    });
                 }
             }
         } else {
             bump(&MT_STEP_CHAIN_REUSE_MISS);
-            let (fulfill, reject) = build_async_step_thunks(rooted_step(), trap_next);
-            let p = js_promise_resolved(value);
-            return then_backpatch_result(p, fulfill, reject, trap_next);
+            return suspend_on_awaited(rooted_step(), trap_next, std::ptr::null_mut(), || {
+                js_promise_resolved(value)
+            });
         }
     } else {
         // Pointer-tagged but not a Promise (thenable etc.). Take the
         // fully-general path so assimilation runs.
         bump(&MT_STEP_CHAIN_REUSE_MISS);
-        let (fulfill, reject) = build_async_step_thunks(rooted_step(), trap_next);
-        let p = js_promise_resolved(value);
-        return then_backpatch_result(p, fulfill, reject, trap_next);
+        return suspend_on_awaited(rooted_step(), trap_next, std::ptr::null_mut(), || {
+            js_promise_resolved(value)
+        });
     };
 
     // #7497: `capture_context()` allocates, and `next` / `queued_value` are the

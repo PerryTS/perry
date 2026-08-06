@@ -558,8 +558,16 @@ pub extern "C" fn js_array_values(arr: *const ArrayHeader) -> *mut ArrayHeader {
             }
             _ => {}
         }
+        // #7497 (CodeRabbit): the same shape `js_array_clone` had — `arr` is the
+        // memcpy SOURCE and `js_array_alloc` below can move it. Root and re-read.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let src_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(arr as i64));
         let len = (*arr).length;
-        let result = js_array_alloc(len);
+        let result_h =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
+        let arr = crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader;
+        let result =
+            crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
         if len > 0 {
             let src_elements =
                 (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
