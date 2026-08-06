@@ -103,6 +103,10 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_array_clear_numeric_layout"
         | "js_array_note_numeric_write"
         | "js_array_is_numeric_f64_layout"
+        // #7469: two header-bit writes plus the same `layout_forget_object`
+        // side-table remove `layout_init_pointer_free` already does on every
+        // allocation. No Perry allocation, no re-entry into generated code.
+        | "js_array_declare_all_pointer_elements"
         // TLS dynamic-call context only.
         | "js_implicit_this_set"
         | "js_new_target_get"

@@ -185,6 +185,15 @@ pub(crate) fn emit_jsvalue_slot_store_with_flags_on_block(
     )
 }
 
+/// As [`emit_jsvalue_slot_store_on_block`] with a caller-supplied `value_bits`,
+/// and — like [`emit_jsvalue_slot_store_with_flags_on_block`] — with the
+/// string-addref demote gated INDEPENDENTLY of the layout note.
+///
+/// The array push (#7469) needs both halves at once: it can retire the layout
+/// note on a header-proven all-pointer array while the pushed value is a
+/// `new C()` whose constructor return override could still make it a
+/// uniquely-owned heap string.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_jsvalue_slot_store_with_value_bits_on_block(
     blk: &mut LlBlock,
     slot_ptr: &str,
@@ -192,6 +201,7 @@ pub(crate) fn emit_jsvalue_slot_store_with_value_bits_on_block(
     value_bits: &str,
     layout_parent_bits: &str,
     slot_index: &str,
+    string_addref_needed: bool,
     layout_note_needed: bool,
     barrier_parent_bits: &str,
     slot_addr: &str,
@@ -203,7 +213,7 @@ pub(crate) fn emit_jsvalue_slot_store_with_value_bits_on_block(
         value_double,
         layout_parent_bits,
         slot_index,
-        layout_note_needed,
+        string_addref_needed,
         layout_note_needed,
         barrier_parent_bits,
         slot_addr,

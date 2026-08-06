@@ -146,6 +146,7 @@ const NON_COLLECTING: &[&str] = &[
     "js_tdz_suppress_begin",
     "js_tdz_suppress_end",
     "js_array_note_numeric_write",
+    "js_array_declare_all_pointer_elements",
     "js_array_length",
     "js_object_mark_class",
     "js_class_object_pin_parent",

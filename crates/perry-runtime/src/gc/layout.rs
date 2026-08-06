@@ -685,6 +685,36 @@ pub(super) unsafe fn layout_set_typed_unknown(header: *mut GcHeader, user_ptr: u
     crate::typed_feedback::invalidate_representation_change(user_ptr);
 }
 
+/// True when `slot_index` is the **append position** of an array whose live
+/// prefix is currently declared all-pointer.
+///
+/// Every array append protocol in the tree — `js_array_push_f64`,
+/// `js_array_push_f64_grow`, and the codegen-inlined push — writes the element
+/// slot and notes it BEFORE bumping `length`, so an append records
+/// `slot_index == length`. Writing a pointer there keeps
+/// "every slot in `0..length + 1` holds a pointer" exactly true, which is the
+/// whole content of [`GC_LAYOUT_ALL_POINTERS`]; a replace (`slot < length`) or
+/// a hole-creating jump (`slot > length`) does not, and downgrades.
+///
+/// Restricted to `GC_TYPE_ARRAY` on purpose: object fields and closure
+/// captures have a FIXED live prefix (`field_count` / `capture_count`), so
+/// they have no append position at all and nothing to preserve. `length <
+/// capacity` keeps the claim inside the allocation.
+#[inline]
+unsafe fn layout_all_pointer_array_append(
+    header: *const GcHeader,
+    parent_user: usize,
+    slot_index: usize,
+) -> bool {
+    if (*header).obj_type != GC_TYPE_ARRAY {
+        return false;
+    }
+    let arr = parent_user as *const crate::array::ArrayHeader;
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    slot_index == length && length < capacity
+}
+
 pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits: u64) {
     if slot_index > 16_000_000 {
         return;
@@ -767,8 +797,19 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         // this generic write path; any later ordinary array write may create
         // holes or replace an element, so conservatively fall back to the
         // generic scan path regardless of the stored value.
+        //
+        // ONE exception (#7469): an APPEND of a pointer at the array's current
+        // append position keeps the declaration exact rather than violating it,
+        // so it is preserved instead of downgraded. Without this a codegen
+        // `[]` + push-loop array (declared all-pointer at allocation) would be
+        // demoted by the very first growth — `js_array_push_f64_grow` routes
+        // through this function — and every later push would fall off the
+        // declared fast path for the rest of the array's life.
         let all_pointer_layout = (*header)._reserved & GC_LAYOUT_ALL_POINTERS != 0;
         if all_pointer_layout {
+            if pointer && layout_all_pointer_array_append(header, parent_user, slot_index) {
+                return;
+            }
             layout_mark_unknown(parent_user as *mut u8);
             return;
         }

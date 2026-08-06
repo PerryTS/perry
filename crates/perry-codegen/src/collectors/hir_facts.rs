@@ -90,6 +90,13 @@ pub(crate) struct ArrayFacts {
     pub local_kinds: HashMap<u32, ArrayKindFact>,
     pub length_stable_locals: HashSet<u32>,
     pub noalias_locals: HashSet<u32>,
+    /// #7469: array locals whose element layout is declarable **once, at the
+    /// allocation site**, as all-pointer — an `[]` literal binding whose every
+    /// store in this region is a push of a by-construction heap pointer. See
+    /// `collectors/all_pointer_arrays.rs` for the four admission terms and for
+    /// why this fact governs *profitability* rather than the soundness of the
+    /// elided per-store note (which the emitted header test owns).
+    pub all_pointer_element_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -244,6 +251,14 @@ impl TypeFacts {
 
     pub(crate) fn proves_noalias_array(&self, local_id: u32) -> bool {
         self.arrays.noalias_locals.contains(&local_id)
+    }
+
+    /// #7469: this array local's element layout may be declared all-pointer at
+    /// its allocation site, and its proven-pointer pushes may then elide the
+    /// per-store layout note behind the emitted header test. See
+    /// `collectors/all_pointer_arrays.rs`.
+    pub(crate) fn declares_all_pointer_elements(&self, local_id: u32) -> bool {
+        self.arrays.all_pointer_element_locals.contains(&local_id)
     }
 
     pub(crate) fn array_length_mutation_locals(&self) -> &HashSet<u32> {
@@ -462,8 +477,15 @@ pub(crate) fn collect_type_facts(
     };
     let not_bigint_locals =
         super::not_bigint_locals::collect_not_bigint_locals(stmts, params, binding_types);
-    let (array_facts, effect_facts, materialization_hazards) =
+    let (mut array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
+    // #7469: at-allocation all-pointer element-layout declaration candidates.
+    array_facts.all_pointer_element_locals =
+        super::all_pointer_arrays::collect_all_pointer_array_locals(
+            stmts,
+            boxed_vars,
+            module_globals,
+        );
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     // Repsel Phase 1: under `PERRY_CANONICAL_I32_LOCALS` (default on), a
     // proven in-window const int-typed-array element load counts as a STRICT
@@ -1381,6 +1403,9 @@ impl ArrayFactCollector {
                 local_kinds: self.local_kinds,
                 length_stable_locals,
                 noalias_locals,
+                // Filled in by `collect_type_facts` — its own walk, with its
+                // own admission terms, over the same statements.
+                all_pointer_element_locals: HashSet::new(),
             },
             EffectFacts {
                 unknown_call_escape: self.unknown_call_escape,

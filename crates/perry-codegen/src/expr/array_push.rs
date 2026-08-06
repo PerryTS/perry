@@ -16,7 +16,7 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier,
-    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
+    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_nanbox_store_on_block,
     emit_typed_feedback_register_site, emit_write_barrier,
     expr_has_numeric_pointer_free_array_layout, lower_expr, lower_expr_native,
@@ -77,7 +77,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // module-level global. The realloc-pointer write-back must
             // go to whichever storage we read from.
             let array_expr = Expr::LocalGet(*array_id);
-            let layout_note_needed = array_store_needs_layout_note(ctx, &array_expr, value);
+            // #7469: this local's element layout was declared all-pointer at
+            // its allocation site (`collectors/all_pointer_arrays.rs` proved
+            // every store into it is a push of a by-construction heap
+            // pointer), and THIS pushed value is one of them. The inline store
+            // below then needs neither the per-slot layout note nor the
+            // numeric-write note — but only behind the header test in the
+            // `nofwd` block, which re-validates the declaration at every single
+            // push. Any push that fails it falls through to `js_array_push_f64`
+            // and records the slot exactly as it always did.
+            let declared_all_pointer = ctx.native_facts.declares_all_pointer_elements(*array_id)
+                && crate::expr::expr_produces_fresh_heap_allocation(value);
+            let layout_note_needed =
+                !declared_all_pointer && array_store_needs_layout_note(ctx, &array_expr, value);
+            // The string-addref demote is a DIFFERENT question from the layout
+            // note and must not ride its gate here: `expr_produces_fresh_heap_
+            // allocation` admits `new C()`, whose constructor return override
+            // can hand back a uniquely-owned heap string. Every other push
+            // keeps the historical coupling exactly.
+            let string_addref_needed = if declared_all_pointer {
+                crate::expr::store_needs_string_addref(ctx, value)
+            } else {
+                layout_note_needed
+            };
             let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
             let value_is_numeric = is_numeric_expr(ctx, value);
             let require_numeric_layout =
@@ -333,9 +355,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let flags_addr = blk.sub(I64, &arr_handle, "6");
                     let flags_ptr = blk.inttoptr(I64, &flags_addr);
                     let obj_flags = blk.load(I16, &flags_ptr);
-                    // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4)|ARRAY_DESCRIPTORS(0x400).
-                    let integrity_bits = blk.and(I16, &obj_flags, "1031");
-                    let clean = blk.icmp_eq(I16, &integrity_bits, "0");
+                    let clean = if declared_all_pointer {
+                        // #7469 — the elided-bookkeeping admission test. Same
+                        // `_reserved` load, same one `and` + one `icmp` as the
+                        // integrity test it replaces, but it additionally
+                        // demands the array still carry the element-layout
+                        // declaration this push's elisions rest on. Bits, from
+                        // `gc/types.rs` + `gc/layout.rs` (GC_TYPE_ARRAY):
+                        //
+                        //   0x0407  FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS
+                        //           -> must be 0, exactly as below
+                        //   0x0080  GC_ARRAY_RAW_F64_LAYOUT   -> must be 0
+                        //   0x1000  GC_ARRAY_RAW_F64_HOLES    -> must be 0
+                        //   0x2000  GC_LAYOUT_ALL_POINTERS    -> must be 1
+                        //   0xC000  layout state              -> SIDE_MASK
+                        //
+                        // mask 0xF487 == 62599, expected 0xA000 == 40960.
+                        //
+                        // The two raw-f64 bits are what makes eliding
+                        // `js_array_note_numeric_write` sound: its whole body
+                        // is "clear the numeric layout when the value is not a
+                        // number", and with both bits already clear there is
+                        // nothing left for it to clear.
+                        //
+                        // `ALL_POINTERS | SIDE_MASK` is what makes eliding
+                        // `js_gc_note_slot_layout` sound: in that state the
+                        // collector visits every slot in `0..length`, so the
+                        // slot this push is about to write is scanned whether
+                        // or not a mask bit was ever recorded for it.
+                        //
+                        // Testing the LIVE header rather than trusting the
+                        // allocation-site declaration is deliberate. The
+                        // runtime can revoke it — `rebuild_array_layout`
+                        // (sort/splice) installs a precise mask,
+                        // `js_array_is_numeric_f64_layout` can re-publish a
+                        // still-empty array as RawF64 + POINTER_FREE — and an
+                        // elided pointer store into a POINTER_FREE array is a
+                        // stranded live child. Failing the test costs this push
+                        // the inline store (it takes `js_array_push_f64`, which
+                        // notes the slot); it can never cost correctness.
+                        let admitted_bits = blk.and(I16, &obj_flags, "62599");
+                        blk.icmp_eq(I16, &admitted_bits, "40960")
+                    } else {
+                        // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4)|ARRAY_DESCRIPTORS(0x400).
+                        let integrity_bits = blk.and(I16, &obj_flags, "1031");
+                        blk.icmp_eq(I16, &integrity_bits, "0")
+                    };
                     let length = blk.safe_load_i32_from_ptr(&arr_handle);
                     let cap_addr = blk.add(I64, &arr_handle, "4");
                     let cap_ptr = blk.inttoptr(I64, &cap_addr);
@@ -367,25 +432,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             value_bits,
                             &arr_handle,
                             &length,
+                            string_addref_needed,
                             layout_note_needed,
                             &arr_handle,
                             &element_addr,
                             write_barrier_needed,
                         )
                     } else {
-                        emit_jsvalue_slot_store_on_block(
+                        emit_jsvalue_slot_store_with_flags_on_block(
                             blk,
                             &element_ptr,
                             &v,
                             &arr_handle,
                             &length,
+                            string_addref_needed,
                             layout_note_needed,
                             &arr_handle,
                             &element_addr,
                             write_barrier_needed,
                         )
                     };
-                    if !value_is_numeric {
+                    // #7469: provably dead under `declared_all_pointer` — the
+                    // `nofwd` admission test proved both raw-f64 bits already
+                    // clear, and clearing them is this call's only effect.
+                    if !value_is_numeric && !declared_all_pointer {
                         let value_bits =
                             value_bits.unwrap_or_else(|| blk.bitcast_double_to_i64(&v));
                         emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);

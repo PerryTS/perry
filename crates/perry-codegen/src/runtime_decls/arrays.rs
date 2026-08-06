@@ -78,6 +78,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // re-boxed live head (identity for everything else).
     module.declare_function("js_array_refresh_local_head", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_note_numeric_write", VOID, &[I64, I64]);
+    // #7469: at-allocation all-pointer element-layout declaration for a
+    // proven `[]` + push-loop array. Emitted once per allocation site; the
+    // per-push layout note it retires is re-armed by the header test in
+    // `expr/array_push.rs` whenever the declaration is not (or no longer) live.
+    module.declare_function("js_array_declare_all_pointer_elements", VOID, &[I64]);
     module.declare_function("js_array_length", I32, &[I64]);
     // Array.isArray runtime dispatch for values with indeterminate
     // static type (e.g. JSON.parse results, closure captures, any/

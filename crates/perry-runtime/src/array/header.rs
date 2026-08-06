@@ -1453,6 +1453,55 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
     }
 }
 
+/// #7469 — declare ONCE, at allocation, that every element this array will
+/// hold is a heap pointer, so the per-store pointer-mask bookkeeping
+/// (`layout_note_slot`, and the `LAYOUT_SLOT_MASKS` entry it grows) is not
+/// needed for the stores codegen has proven pointer-valued.
+///
+/// Emitted by codegen at the `[]` literal that binds an array local whose every
+/// store it can prove pointer-by-construction; see
+/// `perry-codegen/src/collectors/all_pointer_arrays.rs` for the proof and
+/// `expr/array_push.rs` for the header test that re-validates the declaration
+/// at every elided store.
+///
+/// Two things happen here, and both are load-bearing:
+///
+/// 1. **The raw-f64 numeric layout is cleared.** `js_array_alloc` publishes
+///    every fresh array as `RawF64` + `POINTER_FREE` — the numeric fast paths
+///    read such an array's slots back as raw doubles, which for a pointer
+///    payload is a reinterpretation of a heap address as a number. The
+///    all-pointer declaration and the raw-f64 flag are mutually exclusive
+///    claims about the same bytes, and the codegen-side header test refuses the
+///    elided store unless BOTH raw-f64 bits are clear, so this clear is what
+///    keeps that test satisfiable.
+/// 2. **`GC_LAYOUT_SIDE_MASK | GC_LAYOUT_ALL_POINTERS` replaces
+///    `GC_LAYOUT_POINTER_FREE`.** For the collector that swaps "skip the whole
+///    payload" for "visit every slot in `0..length`" — the same set of slots
+///    `GC_LAYOUT_UNKNOWN` visits, so the declaration is conservative in the
+///    only direction that matters: a wrong element type costs a rejected slot
+///    read (`mark_field_into_worklist` re-validates every word), never a
+///    stranded live child.
+///
+/// Refused on a non-empty array: the claim covers `0..length`, and only on an
+/// empty array is it vacuously true of what is already stored. A refusal is
+/// silent and safe — the header keeps whatever layout it had, and the codegen
+/// header test then declines the elided store and routes the push through
+/// `js_array_push_f64`, which notes every slot as it always did.
+#[no_mangle]
+pub extern "C" fn js_array_declare_all_pointer_elements(arr: *mut ArrayHeader) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return;
+    }
+    unsafe {
+        if (*arr).length != 0 {
+            return;
+        }
+        clear_array_numeric_layout(arr);
+        crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32 {
     let arr = clean_arr_ptr(arr);
@@ -1511,6 +1560,10 @@ static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern "C" fn(*mut ArrayHeader) =
 #[used]
 static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern "C" fn(*mut ArrayHeader, u64) =
     js_array_note_numeric_write;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_ARRAY_DECLARE_ALL_POINTER_ELEMENTS: extern "C" fn(*mut ArrayHeader) =
+    js_array_declare_all_pointer_elements;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) -> i32 =

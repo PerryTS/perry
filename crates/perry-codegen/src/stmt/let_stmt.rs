@@ -1833,6 +1833,13 @@ pub(crate) fn lower_let(
             }
         }
         crate::expr::record_native_arena_owner_assignment(ctx, id, init_expr);
+        // #7469: `const out = []` whose every store this region proved a
+        // by-construction pointer push declares its element layout ONCE here,
+        // instead of maintaining a per-array pointer bitmap one
+        // `js_gc_note_slot_layout` call per push.
+        if !used_i32_init {
+            crate::expr::emit_all_pointer_array_declaration(ctx, id, init_expr, &v);
+        }
         // Buffer data-pointer slot for local (non-global) const buffers. The
         // HIR fact layer owns the source-shape decision; lowering only consumes
         // the stable local-id fact and emits the ptr slot used by

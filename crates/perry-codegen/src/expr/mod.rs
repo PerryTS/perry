@@ -73,10 +73,11 @@ pub(crate) use channel::{
 pub(crate) use helpers::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
     class_field_store_needs_layout_note, class_field_store_needs_string_addref,
-    expr_has_numeric_pointer_free_array_layout, expr_produces_non_pointer_bits_by_construction,
+    emit_all_pointer_array_declaration, expr_has_numeric_pointer_free_array_layout,
+    expr_produces_fresh_heap_allocation, expr_produces_non_pointer_bits_by_construction,
     is_global_this_builtin_function_name, is_global_this_builtin_name,
-    lower_expr_with_expected_type, lower_js_args_array, proxy_build_args_array, unbox_str_handle,
-    unbox_to_i64,
+    lower_expr_with_expected_type, lower_js_args_array, proxy_build_args_array,
+    store_needs_string_addref, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,

@@ -122,6 +122,62 @@ pub(crate) fn expr_produces_non_pointer_bits_by_construction(ctx: &FnCtx<'_>, ex
     }
 }
 
+/// The expression's shape IS an allocation site: an object / array / closure
+/// literal, or a `new`.
+///
+/// Read the claim precisely, because the `Expr::New` arm makes it weaker than
+/// [`expr_produces_non_pointer_bits_by_construction`]'s mirror image. What a
+/// `new C()` *evaluates to* is a runtime question — a constructor return
+/// override (`js_ctor_return_override`) can hand back anything, including a
+/// heap string. So this is **not** a proof that the stored bits carry
+/// `POINTER_TAG`; it is a proof that the expression's purpose is to allocate
+/// one.
+///
+/// That is exactly, and only, what its two consumers need:
+///
+/// - **Picking arrays worth declaring all-pointer**
+///   (`collectors/all_pointer_arrays.rs`). A wrong guess costs scan time —
+///   `GC_LAYOUT_ALL_POINTERS` visits the same slots `GC_LAYOUT_UNKNOWN` does,
+///   and a non-pointer word is re-validated and rejected — never a stranded
+///   child.
+/// - **Eliding the per-push layout / numeric-write notes**
+///   (`expr/array_push.rs`). Neither elision rests on this predicate at all:
+///   both are proven by the header test emitted at the store.
+///
+/// It must NEVER gate `js_string_addref_if_heap_string`. That demote is dead
+/// only when the value provably is not a heap string — a claim the `New` arm
+/// does not make, and whose absence is silent corruption rather than a crash
+/// (a refcount==1 string aliased from an array slot, rewritten in place by a
+/// later `+=` on the source local). `array_push.rs` gates it separately on
+/// [`store_needs_string_addref`].
+///
+/// The `New` arm is load-bearing rather than a widening for its own sake: HIR
+/// rewrites a closed-shape object literal into
+/// `New { class_name: "__AnonShape_<hash>", … }` before codegen ever sees it,
+/// so without it the predicate misses the object-literal push loop this whole
+/// analysis exists for.
+///
+/// Takes no `FnCtx`: the test is purely syntactic, so the per-region fact
+/// collector (which runs before any lowering context exists) and the lowering
+/// site consult the same function and can never disagree about a store.
+pub(crate) fn expr_produces_fresh_heap_allocation(expr: &Expr) -> bool {
+    match expr {
+        Expr::Object(_) | Expr::Array(_) | Expr::Closure { .. } | Expr::New { .. } => true,
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_produces_fresh_heap_allocation(then_expr)
+                && expr_produces_fresh_heap_allocation(else_expr)
+        }
+        Expr::Sequence(exprs) => exprs
+            .last()
+            .is_some_and(expr_produces_fresh_heap_allocation),
+        _ => false,
+    }
+}
+
 /// Stores into statically numeric arrays may preserve the initial
 /// pointer-free layout only when the stored value's bits are known from
 /// expression construction, not from TypeScript's local type alone. Other
@@ -187,6 +243,15 @@ pub(crate) fn class_field_store_needs_layout_note(ctx: &FnCtx<'_>, value: &Expr)
 /// in-place `+=` to rewrite underneath the stored slot — silent corruption
 /// with no crash to trace it back from.
 pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    store_needs_string_addref(ctx, value)
+}
+
+/// Receiver-independent form of [`class_field_store_needs_string_addref`]: the
+/// demote is keyed on the stored value alone, so an array element store asks
+/// exactly the same question. Used by the #7469 elided array push, which drops
+/// the layout note but must keep this call whenever the pushed value could be
+/// a heap string (a `new C()` with a constructor return override can be one).
+pub(crate) fn store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     !expr_cannot_produce_heap_string(ctx, value)
 }
 
@@ -213,6 +278,33 @@ fn expr_cannot_produce_heap_string(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
             .is_some_and(|last| expr_cannot_produce_heap_string(ctx, last)),
         _ => expr_produces_non_pointer_bits_by_construction(ctx, expr),
     }
+}
+
+/// #7469 — emit the at-allocation all-pointer element-layout declaration for
+/// `id`, when this region's fact graph admits it and `init_expr` really is the
+/// array literal the fact was proven against.
+///
+/// Called from the `Stmt::Let` tail with the lowered (NaN-boxed) initializer,
+/// which for an array literal is the fresh array's pointer. Re-testing
+/// `Expr::Array` here rather than trusting the id alone keeps the emission
+/// pinned to the single binding the collector proved: a fact that somehow named
+/// an id bound by something else emits nothing, instead of declaring an element
+/// layout for the wrong object.
+pub(crate) fn emit_all_pointer_array_declaration(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    init_expr: &Expr,
+    init_value: &str,
+) {
+    if init_value.is_empty()
+        || !matches!(init_expr, Expr::Array(_))
+        || !ctx.native_facts.declares_all_pointer_elements(id)
+    {
+        return;
+    }
+    let blk = ctx.block();
+    let handle = super::unbox_to_i64(blk, init_value);
+    blk.call_void("js_array_declare_all_pointer_elements", &[(I64, &handle)]);
 }
 
 /// `lower_expr` variant that hands an expected-type hint down to the
