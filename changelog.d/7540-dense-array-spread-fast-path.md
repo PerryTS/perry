@@ -135,4 +135,4 @@ matrix for this change. **Both predate this work and are unchanged by it**
 stack): `[...MyArr.from([1,2,3])]` on a `class MyArr extends Array` throws
 `value is not iterable`, and a replaced `Array.prototype[Symbol.iterator]` is
 ignored by spread (`[...[1,2,3]]` yields `[1,2,3]` where node yields the patched
-iterator's output). Filed separately rather than folded in here.
+iterator's output). Filed as #7541 and #7542 rather than folded in here.
