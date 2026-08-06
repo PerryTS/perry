@@ -225,14 +225,23 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // Lazy parse is a win on workloads that touch only a subset of
     // a parsed top-level array — the tape build cost is ~one-shot
     // O(n) but each unread element saves the full subtree
-    // materialization. For workloads that iterate the whole array
-    // (the canonical "filter all records, stringify the result"
-    // shape — `benchmarks/honest_bench/workloads/1_json_pipeline`
-    // for example), lazy is strictly slower than direct: tape walk
-    // + sparse-cache management on every access plus a forced
-    // materialize at the end is more work than the direct parser's
-    // single tree build. The cumulative walk-steps trigger in
-    // `lazy_get` only catches *random* access, not sequential.
+    // materialization. Workloads that iterate the WHOLE array (the
+    // canonical "filter all records, stringify the result" shape —
+    // `benchmarks/honest_bench/workloads/1_json_pipeline`, and
+    // `benchmarks/json_polyglot`'s `field_access`) used to be strictly
+    // slower than direct, because the only adaptive signal was
+    // `lazy_get`'s cumulative walk-steps counter and that counter
+    // provably cannot see a scan: a sequential walk costs one tape
+    // step per element, so it accumulates `n` against a `2n`
+    // threshold and never trips. Every element was materialized one
+    // at a time at ~2.3× the batch parser's per-element rate, then
+    // merged. #7478 adds the missing signal — a consecutive-ascending
+    // streak (`LazyArrayHeader::sequential_streak`) that trips
+    // `json_tape::scan_flip_threshold` EARLY, while the sparse cache
+    // is still nearly empty, so `force_materialize_lazy` takes
+    // #7499's batch reparse for the whole remainder instead of
+    // finishing element-wise. The tape build itself is still additive
+    // on this shape; see #7478 for the measured decomposition.
     //
     // The auto-mode size window: lazy fires at 1 KB and above (tiny
     // parses don't pay the tape build) and below 16 MB (very large

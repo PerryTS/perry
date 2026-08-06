@@ -908,261 +908,8 @@ fn parse_string_bytes_slow(bytes: &[u8], start_pos: usize, start: usize) -> Opti
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Tape structure invariants on a simple object — exercises the
-    /// OBJ_START → KEY → scalar → OBJ_END chain and the backfilled
-    /// `link` for skip-over.
-    #[test]
-    fn tape_simple_object() {
-        let input = br#"{"a":1,"b":"x"}"#;
-        let tape = build_tape(input).unwrap();
-        let kinds: Vec<u8> = tape.entries.iter().map(|e| e.kind).collect();
-        assert_eq!(
-            kinds,
-            vec![
-                KIND_OBJ_START,
-                KIND_KEY,
-                KIND_NUMBER,
-                KIND_KEY,
-                KIND_STRING,
-                KIND_OBJ_END
-            ]
-        );
-        // OBJ_START.link points at the matching OBJ_END (last entry).
-        assert_eq!(tape.entries[0].link as usize, tape.entries.len() - 1);
-        // OBJ_END.link points back at OBJ_START.
-        assert_eq!(
-            *tape.entries.last().unwrap(),
-            TapeEntry {
-                offset: tape.entries.last().unwrap().offset,
-                kind: KIND_OBJ_END,
-                link: 0
-            }
-        );
-    }
-
-    /// Nested structure — an array of objects. Each inner OBJ_START
-    /// must have its link pointing at its OWN OBJ_END, not the outer
-    /// ARR_END. This is the invariant Phase 3 (lazy indexed access)
-    /// relies on to skip past unwanted elements.
-    #[test]
-    fn tape_nested_array_of_objects() {
-        let input = br#"[{"a":1},{"b":2},{"c":3}]"#;
-        let tape = build_tape(input).unwrap();
-        // ARR_START ... ARR_END outer
-        assert_eq!(tape.entries[0].kind, KIND_ARR_START);
-        assert_eq!(tape.entries.last().unwrap().kind, KIND_ARR_END);
-        // Three object children — count OBJ_START entries.
-        let n_objs = tape
-            .entries
-            .iter()
-            .filter(|e| e.kind == KIND_OBJ_START)
-            .count();
-        assert_eq!(n_objs, 3);
-        // Each OBJ_START's link points at an OBJ_END strictly before ARR_END.
-        for (i, e) in tape.entries.iter().enumerate() {
-            if e.kind == KIND_OBJ_START {
-                let end = e.link as usize;
-                assert!(end > i, "OBJ_START.link must point forward");
-                assert!(
-                    end < tape.entries.len() - 1,
-                    "OBJ_END must precede outer ARR_END"
-                );
-                assert_eq!(tape.entries[end].kind, KIND_OBJ_END);
-                assert_eq!(
-                    tape.entries[end].link as usize, i,
-                    "OBJ_END.link must point back"
-                );
-            }
-        }
-    }
-
-    /// Escaped string in a key and value — tape should still emit
-    /// one KEY and one STRING entry; string decoding is deferred to
-    /// materialization and doesn't perturb the tape shape.
-    #[test]
-    fn tape_escaped_strings() {
-        let input = br#"{"a\"b":"x\\y"}"#;
-        let tape = build_tape(input).unwrap();
-        assert_eq!(
-            tape.entries.iter().map(|e| e.kind).collect::<Vec<_>>(),
-            vec![KIND_OBJ_START, KIND_KEY, KIND_STRING, KIND_OBJ_END]
-        );
-    }
-
-    /// Malformed inputs must return None (caller falls back to
-    /// direct parser with richer error messages).
-    #[test]
-    fn tape_malformed_returns_none() {
-        assert!(build_tape(b"{").is_none(), "unclosed object");
-        assert!(build_tape(b"[").is_none(), "unclosed array");
-        assert!(build_tape(b"{a:1}").is_none(), "unquoted key");
-        assert!(build_tape(b"{\"a\"}").is_none(), "missing colon");
-        assert!(build_tape(b"").is_none(), "empty input");
-    }
-
-    /// Top-level scalar (allowed by JSON spec).
-    #[test]
-    fn tape_top_level_scalars() {
-        assert_eq!(build_tape(b"42").unwrap().entries.len(), 1);
-        assert_eq!(build_tape(b"true").unwrap().entries.len(), 1);
-        assert_eq!(build_tape(br#""hi""#).unwrap().entries.len(), 1);
-        assert_eq!(build_tape(b"null").unwrap().entries.len(), 1);
-    }
-
-    /// `TapeEntry` is 12 bytes (u32 + u8 + padding + u32). Keeping
-    /// this compact matters for tape-size parity with parse output:
-    /// a 1 MB JSON blob with ~20k tokens should build a ~240 KB tape,
-    /// not a megabyte.
-    #[test]
-    fn tape_entry_layout() {
-        assert!(
-            std::mem::size_of::<TapeEntry>() <= 12,
-            "TapeEntry grew beyond 12 bytes — check padding"
-        );
-    }
-
-    #[test]
-    fn force_materialize_numeric_lazy_array_preserves_raw_payload() {
-        let input = br#"[1,2.5,3]"#;
-        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
-        let lazy = with_built_tape(input, |tape| unsafe {
-            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
-        })
-        .expect("valid JSON should build a tape");
-
-        let before = reparse_materializations();
-        let arr = unsafe { force_materialize_lazy(lazy) };
-        assert_eq!(
-            reparse_materializations(),
-            before + 1,
-            "an uncached lazy array must batch-materialize via the #7478 reparse"
-        );
-
-        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
-        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 0), 1.0);
-        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 1), 2.5);
-        assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 2), 3.0);
-        assert_eq!(
-            crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
-            Some(0)
-        );
-    }
-
-    #[test]
-    fn force_materialize_lazy_array_cache_downgrades_for_pointer_values() {
-        let input = br#"[1,2,3]"#;
-        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
-        let lazy = with_built_tape(input, |tape| unsafe {
-            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
-        })
-        .expect("valid JSON should build a tape");
-
-        unsafe {
-            let cached = crate::string::js_string_from_bytes(b"cached".as_ptr(), 6);
-            *(*lazy).materialized_elements.add(1) =
-                JSValue::string_ptr(cached as *mut crate::StringHeader);
-            *(*lazy).materialized_bitmap |= 1u64 << 1;
-        }
-
-        let before = reparse_materializations();
-        let arr = unsafe { force_materialize_lazy(lazy) };
-        assert_eq!(
-            reparse_materializations(),
-            before + 1,
-            "1-of-3 cached is below the crossover, so this must reparse"
-        );
-
-        // The reparse produces a RawF64-layout array for `[1,2,3]`; patching
-        // a STRING into slot 1 has to downgrade it, or the tracer would skip
-        // a live pointer in an array flagged pointer-free.
-        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
-        assert_eq!(
-            crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
-            Some(1)
-        );
-    }
-
-    /// #7478 crossover. Once MOST elements are already in the sparse cache
-    /// the element-wise merge is the cheap producer — it copies the cached
-    /// JSValues and materializes only the remainder — so a reparse would
-    /// rebuild subtrees it is about to throw away. This pins the decision,
-    /// not just the values: without the counter assertion the test passes
-    /// either way and the crossover could silently invert.
-    #[test]
-    fn force_materialize_majority_cached_uses_the_merge_walk_not_a_reparse() {
-        let input = br#"[10,20,30,40]"#;
-        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
-        let lazy = with_built_tape(input, |tape| unsafe {
-            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
-        })
-        .expect("valid JSON should build a tape");
-
-        unsafe {
-            *(*lazy).materialized_elements.add(0) = JSValue::number(1.5);
-            *(*lazy).materialized_elements.add(1) = JSValue::number(2.5);
-            *(*lazy).materialized_bitmap |= 0b11;
-        }
-
-        let before = reparse_materializations();
-        let arr = unsafe { force_materialize_lazy(lazy) };
-        assert_eq!(
-            reparse_materializations(),
-            before,
-            "2-of-4 cached is at the crossover — the walk, not a reparse"
-        );
-
-        assert_eq!(
-            crate::array::js_array_get(arr, 0).bits(),
-            JSValue::number(1.5).bits()
-        );
-        assert_eq!(
-            crate::array::js_array_get(arr, 1).bits(),
-            JSValue::number(2.5).bits()
-        );
-        assert_eq!(
-            crate::array::js_array_get(arr, 2).bits(),
-            JSValue::number(30.0).bits()
-        );
-        assert_eq!(
-            crate::array::js_array_get(arr, 3).bits(),
-            JSValue::number(40.0).bits()
-        );
-    }
-
-    /// A lazy header whose tape root is not the blob's first value cannot
-    /// have its blob re-parsed (the blob is not that array's source), so the
-    /// reparse must decline and the tape walk must still produce the array.
-    #[test]
-    fn force_materialize_declines_reparse_when_the_tape_root_is_not_the_blob_root() {
-        let input = br#"[[7,8],[9]]"#;
-        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
-        // root_idx 1 = the inner `[7,8]`, whose source is NOT the whole blob.
-        let lazy = with_built_tape(input, |tape| unsafe {
-            alloc_lazy_array(tape, 1, count_array_length(tape, 1), text)
-        })
-        .expect("valid JSON should build a tape");
-
-        let before = reparse_materializations();
-        let arr = unsafe { force_materialize_lazy(lazy) };
-        assert_eq!(
-            reparse_materializations(),
-            before,
-            "a non-root tape index must decline the reparse"
-        );
-        assert_eq!(unsafe { (*arr).length }, 2);
-        assert_eq!(
-            crate::array::js_array_get(arr, 0).bits(),
-            JSValue::number(7.0).bits()
-        );
-        assert_eq!(
-            crate::array::js_array_get(arr, 1).bits(),
-            JSValue::number(8.0).bits()
-        );
-    }
-}
+#[path = "json_tape_tests.rs"]
+mod tests;
 
 impl PartialEq for TapeEntry {
     fn eq(&self, other: &Self) -> bool {
@@ -1264,7 +1011,39 @@ pub struct LazyArrayHeader {
     /// ~4 accesses on a 10k-element array, flipping to O(1) access
     /// and saving 50-100× on the rest of the workload.
     pub cumulative_walk_steps: u64,
+    /// #7478: length of the current run of *consecutive ascending* cold
+    /// reads (`parsed[k]`, `parsed[k+1]`, …). Reset to zero by any read
+    /// that is not one past the previous one.
+    ///
+    /// `cumulative_walk_steps` provably cannot see a scan: a sequential
+    /// walk costs exactly one tape step per element, so it accumulates
+    /// `n` against a threshold of `2n` and never trips. A scan is
+    /// therefore invisible to the only adaptive signal the header had,
+    /// which is why `field_access` pays 10 000 element-wise
+    /// materializations at ~2.3× the batch parser's rate. This counter
+    /// is the missing signal; `scan_flip_threshold` is where it trips.
+    pub sequential_streak: u32,
     // Followed by `tape_len` `TapeEntry` elements inline.
+}
+
+/// #7478: how long a run of consecutive ascending cold reads has to get
+/// before we stop materializing element-by-element and hand the whole
+/// array to the batch parser.
+///
+/// The batch producer costs ~1/2.3 of the element-wise one per element,
+/// so flipping pays as soon as more than ~43% of the array is going to
+/// be touched. A streak is evidence for that, and the threshold scales
+/// with the array so the evidence stays proportional: 1/64th of the
+/// elements, floored at 64 so small arrays are not flipped on a glance.
+///
+/// The floor is what protects the "peek at a handful of records" shape —
+/// `parsed[0]`..`parsed[9]` on a 10k array must NOT drag in a full parse.
+/// The ceiling on the waste is symmetrical: if the scan stops right after
+/// the flip we have done one batch parse, which is still cheaper than the
+/// element-wise walk it replaced.
+#[inline]
+pub(crate) fn scan_flip_threshold(cached_length: u32) -> u32 {
+    core::cmp::max(64, cached_length / 64)
 }
 
 impl LazyArrayHeader {
@@ -1314,6 +1093,7 @@ pub unsafe fn alloc_lazy_array(
     (*hdr).walk_idx = u32::MAX;
     (*hdr).walk_tape_pos = 0;
     (*hdr).cumulative_walk_steps = 0;
+    (*hdr).sequential_streak = 0;
     let hdr_handle = scope.root_raw_mut_ptr(hdr);
     json_tape_safepoint(JsonTapeSafepoint::LazyArrayRooted, hdr as usize);
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
@@ -1511,6 +1291,19 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     // regardless of subtree size, so this bound matches the actual
     // work done.
     let step_cost = (i - start_count) as u64;
+    // #7478: extend the consecutive-ascending run, or start a new one. A
+    // cold read of index 0 with no prior walk opens a streak; any read
+    // that is not exactly one past the previous COLD read ends it. Cache
+    // hits never reach here, so a re-scan of an already-materialized
+    // prefix does not inflate the count.
+    let streak = if prev_walk == u32::MAX {
+        u32::from(i == 0)
+    } else if i == prev_walk + 1 {
+        (*hdr).sequential_streak.saturating_add(1)
+    } else {
+        0
+    };
+    (*hdr).sequential_streak = streak;
     (*hdr).walk_idx = i;
     (*hdr).walk_tape_pos = idx as u32;
     (*hdr).cumulative_walk_steps = (*hdr).cumulative_walk_steps.saturating_add(step_cost);
@@ -1533,15 +1326,37 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
         *bitmap.add(word_idx) |= 1u64 << bit_idx;
     }
 
-    // Adaptive threshold: if cumulative walk steps exceed 2× the
-    // array length, future per-element walks cost more than a
-    // single full-materialize — trigger it now. Sequential access
-    // (1 step per element) never trips; random access (n/2 per
-    // step) trips after ~4 accesses on a 10k array. Post-trip,
-    // every subsequent `lazy_get` hits the fast path at the top of
-    // the function (materialized != null → direct ArrayHeader read).
+    // Adaptive thresholds. Either signal means future per-element walks
+    // cost more than one full materialize, so trigger it now; afterwards
+    // every `lazy_get` hits fast path 1 at the top of the function
+    // (materialized != null → direct ArrayHeader read).
+    //
+    // 1. Cumulative walk steps past 2× the array length. Random access
+    //    averages n/2 steps per read, so this trips after ~4 reads on a
+    //    10k array. Sequential access costs 1 step per element and
+    //    provably never trips it — which is the #7478 hole.
+    // 2. A consecutive-ascending streak past `scan_flip_threshold`. This
+    //    is the scan-shaped signal the first one cannot see. It fires
+    //    while the sparse cache is still nearly empty, which is what
+    //    makes `force_materialize_lazy` take #7499's batch reparse
+    //    (gated on `cached_count * 2 < cached_length`) instead of the
+    //    element-wise merge walk. Firing it late — after the scan has
+    //    already filled the bitmap — is a no-op, which is exactly why
+    //    #7499 alone did not move this benchmark.
+    //
+    // The second signal carries the same "is the batch producer even
+    // going to be picked?" test that `force_materialize_lazy` applies
+    // (`cached_count * 2 < cached_length`), evaluated against this
+    // scan's cache count of `i + 1`. Tripping without it would fire on
+    // an array whose streak can only complete near the end — a 64- to
+    // 128-element array, where the flip lands on the last read and
+    // reparses a tree the merge walk was already holding. Keeping the
+    // two conditions in agreement means the trigger never asks for a
+    // producer the callee would decline.
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-    if (*hdr).cumulative_walk_steps > (cached_length as u64) * 2 {
+    let scan_flip =
+        streak >= scan_flip_threshold(cached_length) && (i as u64 + 1) * 2 < cached_length as u64;
+    if (*hdr).cumulative_walk_steps > (cached_length as u64) * 2 || scan_flip {
         force_materialize_lazy(hdr);
     }
 
