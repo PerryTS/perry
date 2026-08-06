@@ -1033,7 +1033,13 @@ mod tests {
         })
         .expect("valid JSON should build a tape");
 
+        let before = reparse_materializations();
         let arr = unsafe { force_materialize_lazy(lazy) };
+        assert_eq!(
+            reparse_materializations(),
+            before + 1,
+            "an uncached lazy array must batch-materialize via the #7478 reparse"
+        );
 
         assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
         assert_eq!(crate::array::js_array_numeric_get_f64_unboxed(arr, 0), 1.0);
@@ -1061,12 +1067,99 @@ mod tests {
             *(*lazy).materialized_bitmap |= 1u64 << 1;
         }
 
+        let before = reparse_materializations();
         let arr = unsafe { force_materialize_lazy(lazy) };
+        assert_eq!(
+            reparse_materializations(),
+            before + 1,
+            "1-of-3 cached is below the crossover, so this must reparse"
+        );
 
+        // The reparse produces a RawF64-layout array for `[1,2,3]`; patching
+        // a STRING into slot 1 has to downgrade it, or the tracer would skip
+        // a live pointer in an array flagged pointer-free.
         assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
         assert_eq!(
             crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
             Some(1)
+        );
+    }
+
+    /// #7478 crossover. Once MOST elements are already in the sparse cache
+    /// the element-wise merge is the cheap producer — it copies the cached
+    /// JSValues and materializes only the remainder — so a reparse would
+    /// rebuild subtrees it is about to throw away. This pins the decision,
+    /// not just the values: without the counter assertion the test passes
+    /// either way and the crossover could silently invert.
+    #[test]
+    fn force_materialize_majority_cached_uses_the_merge_walk_not_a_reparse() {
+        let input = br#"[10,20,30,40]"#;
+        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let lazy = with_built_tape(input, |tape| unsafe {
+            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
+        })
+        .expect("valid JSON should build a tape");
+
+        unsafe {
+            *(*lazy).materialized_elements.add(0) = JSValue::number(1.5);
+            *(*lazy).materialized_elements.add(1) = JSValue::number(2.5);
+            *(*lazy).materialized_bitmap |= 0b11;
+        }
+
+        let before = reparse_materializations();
+        let arr = unsafe { force_materialize_lazy(lazy) };
+        assert_eq!(
+            reparse_materializations(),
+            before,
+            "2-of-4 cached is at the crossover — the walk, not a reparse"
+        );
+
+        assert_eq!(
+            crate::array::js_array_get(arr, 0).bits(),
+            JSValue::number(1.5).bits()
+        );
+        assert_eq!(
+            crate::array::js_array_get(arr, 1).bits(),
+            JSValue::number(2.5).bits()
+        );
+        assert_eq!(
+            crate::array::js_array_get(arr, 2).bits(),
+            JSValue::number(30.0).bits()
+        );
+        assert_eq!(
+            crate::array::js_array_get(arr, 3).bits(),
+            JSValue::number(40.0).bits()
+        );
+    }
+
+    /// A lazy header whose tape root is not the blob's first value cannot
+    /// have its blob re-parsed (the blob is not that array's source), so the
+    /// reparse must decline and the tape walk must still produce the array.
+    #[test]
+    fn force_materialize_declines_reparse_when_the_tape_root_is_not_the_blob_root() {
+        let input = br#"[[7,8],[9]]"#;
+        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        // root_idx 1 = the inner `[7,8]`, whose source is NOT the whole blob.
+        let lazy = with_built_tape(input, |tape| unsafe {
+            alloc_lazy_array(tape, 1, count_array_length(tape, 1), text)
+        })
+        .expect("valid JSON should build a tape");
+
+        let before = reparse_materializations();
+        let arr = unsafe { force_materialize_lazy(lazy) };
+        assert_eq!(
+            reparse_materializations(),
+            before,
+            "a non-root tape index must decline the reparse"
+        );
+        assert_eq!(unsafe { (*arr).length }, 2);
+        assert_eq!(
+            crate::array::js_array_get(arr, 0).bits(),
+            JSValue::number(7.0).bits()
+        );
+        assert_eq!(
+            crate::array::js_array_get(arr, 1).bits(),
+            JSValue::number(8.0).bits()
         );
     }
 }
@@ -1455,6 +1548,150 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     JSValue::from_bits(value_handle.get_nanbox_u64())
 }
 
+thread_local! {
+    /// #7478 witness: how many lazy arrays this thread batch-materialized
+    /// by RE-PARSING the retained blob rather than walking the tape. A
+    /// test that only asserts "the values came out right" cannot tell the
+    /// two producers apart — this is what lets it assert its subject ran.
+    static REPARSE_MATERIALIZATIONS: Cell<u64> = const { Cell::new(0) };
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn reparse_materializations() -> u64 {
+    REPARSE_MATERIALIZATIONS.with(|c| c.get())
+}
+
+/// #7478: batch-materialize a lazy array by RE-PARSING its retained blob
+/// with the `DirectParser`, instead of walking the tape element by
+/// element.
+///
+/// A lazy array only ever stands for a TOP-LEVEL array — `try_parse_via_tape`
+/// builds one only when `tape_entries[0].kind == KIND_ARR_START`, and always
+/// with `root_idx = 0` — so `blob_str` is exactly this array's source text
+/// and a fresh `DirectParser::parse_value()` over it reproduces the identical
+/// tree. Identical includes the numbers: #7483 put the DirectParser's decimal
+/// fast path on one correctly-rounded division, so it now agrees bit-for-bit
+/// with `str::parse::<f64>` (what `materialize_number` uses) and with node.
+/// That divergence (#7477) is what blocked this change the first time.
+///
+/// The batch parser builds the same tree ~2.3× faster than the per-element
+/// materializer (#7478's decomposition: 24 ms/iter vs 56 ms/iter on the 10k-
+/// record fixture), because it makes one linear pass instead of re-entering
+/// the walk, the sparse cache and a fresh handle scope per element.
+///
+/// GC contract — this is the part the first attempt got wrong, and it
+/// SIGSEGV'd intermittently for it. `DirectParser` is only sound inside a
+/// no-move window, in three separate ways:
+///   * it holds `input: &'a [u8]` derived from the blob's `StringHeader`
+///     payload for the whole parse and cannot re-derive it;
+///   * it carries an UNROOTED one-entry shape cache (`hot_shape_keys`,
+///     `hot_shape_array`) — raw heap pointers the collector cannot see, the
+///     "runtime-side cache of a raw heap pointer" shape;
+///   * `array_push_parse_fast` fills fresh arrays through
+///     `note_array_slot_layout_only`, which deliberately skips the
+///     generational barrier on the strength of that same suppression.
+/// `js_json_parse` buys all three with `gc_suppress()`; so must this. The
+/// window here is a nesting-safe `GcSuppressScope`, because
+/// `force_materialize_lazy` is reachable from inside stringify and the flat
+/// `gc_unsuppress()` would end an outer window early.
+///
+/// Returns the refreshed header alongside the result: this function
+/// allocates, so the caller's `hdr` is stale on EVERY exit, including the
+/// declining ones.
+unsafe fn reparse_materialize(
+    scope: &crate::gc::RuntimeHandleScope,
+    hdr_handle: &crate::gc::RuntimeHandle<'_>,
+    hdr: *mut LazyArrayHeader,
+    cached_length: u32,
+) -> (Option<*mut crate::array::ArrayHeader>, *mut LazyArrayHeader) {
+    // The blob is this array's own source only when the tape root is the
+    // blob's first value. Every production lazy array is built that way;
+    // anything else declines rather than guessing.
+    if (*hdr).root_idx != 0 {
+        return (None, hdr);
+    }
+    let blob = (*hdr).blob_str;
+    if blob.is_null() {
+        return (None, hdr);
+    }
+    let blob_len = (*blob).byte_len as usize;
+    if blob_len == 0 {
+        return (None, hdr);
+    }
+
+    // Nothing between this read of `blob` and the suppression window can
+    // collect, so the slice derived inside it names the live payload.
+    let saved_roots = crate::json::parse_root_save_len();
+    let (parsed_bits, hdr) = hdr_handle.across_mut::<LazyArrayHeader, _>(|| {
+        let _suppress = crate::gc::GcSuppressScope::new();
+        let data = (blob as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, blob_len);
+        let mut parser = crate::json::DirectParser::new(bytes);
+        let parsed = parser.parse_value();
+        // Hand the tree to PARSE_ROOTS before the window closes — the
+        // handle-scope root below is pushed after it has already closed.
+        crate::json::parse_root_push(parsed);
+        parsed.bits()
+    });
+    let arr_handle = scope.root_nanbox_u64(parsed_bits);
+    crate::json::parse_root_restore(saved_roots);
+
+    // `clean_arr_ptr_mut` re-checks `obj_type == GC_TYPE_ARRAY`, so a
+    // non-array or failed parse declines here instead of publishing a
+    // bogus `materialized`. The length check is the same guard for a blob
+    // whose tape and text somehow disagree.
+    let arr_ptr = crate::array::clean_arr_ptr_mut(array_from_nanbox_handle(&arr_handle));
+    if arr_ptr.is_null() || (*arr_ptr).length != cached_length {
+        return (None, hdr);
+    }
+
+    let arr_addr = arr_ptr as usize;
+    let (_, hdr) = hdr_handle.across_mut::<LazyArrayHeader, _>(|| {
+        json_tape_safepoint(JsonTapeSafepoint::ForceLazyArrayRooted, arr_addr)
+    });
+    let arr_ptr = array_from_nanbox_handle(&arr_handle);
+
+    // Patch the sparse cache back over the fresh slots. A cached slot holds
+    // the JSValue user code already has a reference to and may have MUTATED
+    // through it, so the cache — not the reparsed subtree — is authoritative
+    // there, and its identity has to survive (`parsed[i] === parsed[i]`).
+    //
+    // `store_array_slot` is the store that knows how to downgrade a
+    // RawF64-layout array when a pointer lands in it; a raw
+    // `*elements.add(i) = bits` would leave the array flagged pointer-free
+    // with a pointer inside it, which the tracer would never scan.
+    //
+    // The loop only stores, and runs inside a nesting-safe suppression
+    // window, so `hdr` / `bitmap` / `cache` / `arr_ptr` stay valid for its
+    // duration without a per-element re-read.
+    {
+        let _suppress = crate::gc::GcSuppressScope::new();
+        let bitmap = (*hdr).materialized_bitmap;
+        let cache = (*hdr).materialized_elements;
+        if !bitmap.is_null() && !cache.is_null() {
+            for w in 0..(cached_length as usize).div_ceil(64) {
+                let mut word = *bitmap.add(w);
+                while word != 0 {
+                    let i = w * 64 + word.trailing_zeros() as usize;
+                    word &= word - 1;
+                    if i >= cached_length as usize {
+                        break;
+                    }
+                    crate::array::store_array_slot(arr_ptr, i, (*cache.add(i)).bits());
+                }
+            }
+        }
+        (*hdr).materialized = arr_ptr;
+        note_lazy_raw_slot(
+            hdr,
+            &(*hdr).materialized as *const _ as usize,
+            arr_ptr as usize,
+        );
+    }
+    REPARSE_MATERIALIZATIONS.with(|c| c.set(c.get().wrapping_add(1)));
+    (Some(arr_ptr), hdr)
+}
+
 /// Force-materialize a lazy array into an `ArrayHeader`-backed tree.
 /// Idempotent: subsequent calls return the cached `materialized`
 /// pointer. Callers of array accessors that don't have a lazy path
@@ -1466,7 +1703,7 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
     let scope = crate::gc::RuntimeHandleScope::new();
     let hdr_handle = scope.root_raw_mut_ptr(hdr);
     json_tape_safepoint(JsonTapeSafepoint::ForceLazyHeaderRooted, hdr as usize);
-    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+    let mut hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     if hdr.is_null() {
         return std::ptr::null_mut();
     }
@@ -1476,19 +1713,35 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
     let cached_length = (*hdr).cached_length;
     let bitmap = (*hdr).materialized_bitmap;
     let cache = (*hdr).materialized_elements;
-    let has_cache_hits = if !bitmap.is_null() && !cache.is_null() && cached_length > 0 {
+    let cached_count = if !bitmap.is_null() && !cache.is_null() && cached_length > 0 {
         let words = (cached_length as usize).div_ceil(64);
-        let mut any = false;
+        let mut count: u64 = 0;
         for w in 0..words {
-            if *bitmap.add(w) != 0 {
-                any = true;
-                break;
-            }
+            count += (*bitmap.add(w)).count_ones() as u64;
         }
-        any
+        count
     } else {
-        false
+        0
     };
+    let has_cache_hits = cached_count > 0;
+
+    // #7478: when most of the array still has to be built, re-parse the
+    // retained blob with the batch DirectParser instead of walking the
+    // tape element-by-element — same tree, ~2.3× the rate. When MOST
+    // elements are already cached the walk is the cheap producer (it
+    // copies cached JSValues and materializes only the remainder), and a
+    // reparse would rebuild subtrees it is about to throw away. The
+    // measured crossover is at ~43% uncached; `cached_count * 2 <
+    // cached_length` sits on the conservative side of it.
+    if cached_count * 2 < cached_length as u64 {
+        let (reparsed, refreshed) = reparse_materialize(&scope, &hdr_handle, hdr, cached_length);
+        if let Some(arr) = reparsed {
+            return arr;
+        }
+        // Declining still allocated, so take the refreshed header into the
+        // tape walk below.
+        hdr = refreshed;
+    }
 
     // Fast path: no cache hits — the tape is authoritative for
     // every element, walk it top-to-bottom.

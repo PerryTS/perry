@@ -319,7 +319,16 @@ fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc
 
     let hook =
         JsonTapeSafepointHookGuard::new(crate::json_tape::JsonTapeSafepoint::ForceLazyArrayRooted);
+    let before_reparses = crate::json_tape::reparse_materializations();
     let arr = unsafe { crate::json_tape::force_materialize_lazy(hdr_handle.get_raw_mut_ptr()) };
+    // #7478: 1-of-4 cached is below the crossover, so the array under this
+    // instrument is the RE-PARSED one. Pin that — if the crossover ever
+    // inverts, the sabotage below silently changes subject.
+    assert_eq!(
+        crate::json_tape::reparse_materializations(),
+        before_reparses + 1,
+        "force materialization here must be the #7478 reparse path"
+    );
     let original_arr = hook.fired_ptr();
     let hdr_after = hdr_handle.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
     assert_ne!(
@@ -344,6 +353,58 @@ fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc
         unsafe { crate::json::js_json_stringify(f64::from_bits(arr_handle.get_nanbox_u64()), 0) };
     unsafe {
         assert_string_bytes(output, br#"[{"id":0},{"id":1},{"id":2},{"id":3}]"#);
+    }
+}
+
+/// #7478 cache-merge semantics under the reparse producer.
+///
+/// The reparse rebuilds EVERY element from the blob's source text, so the
+/// only thing keeping a handed-out element alive is the patch loop that
+/// stores the sparse cache back over the fresh slots. That element may have
+/// been MUTATED through the reference user code holds (`parsed[2].id = 99`),
+/// and the blob still says `0` — a reparse that forgets the patch silently
+/// reverts the mutation and hands back a different object for the same index.
+/// Both are asserted here: the value (`99`) and the identity (same JSValue).
+#[test]
+fn test_json_tape_reparse_materialize_preserves_a_mutated_cache_entry() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    let input = br#"[{"id":0},{"id":1},{"id":2},{"id":3}]"#;
+    let hdr = unsafe { test_alloc_lazy_json_array(input) };
+    let scope = RuntimeHandleScope::new();
+    let hdr_handle = scope.root_raw_mut_ptr(hdr);
+
+    // Hand element 2 out (caching it), then mutate it — `parsed[2].id = 99`.
+    let cached = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 2) };
+    let cached_handle = scope.root_nanbox_u64(cached.bits());
+    let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
+    let key_handle = scope.root_string_ptr(key);
+    crate::object::js_object_set_field_by_name(
+        (cached_handle.get_nanbox_u64() & POINTER_MASK) as *mut crate::ObjectHeader,
+        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
+        99.0,
+    );
+
+    let before_reparses = crate::json_tape::reparse_materializations();
+    let arr = unsafe { crate::json_tape::force_materialize_lazy(hdr_handle.get_raw_mut_ptr()) };
+    assert_eq!(
+        crate::json_tape::reparse_materializations(),
+        before_reparses + 1,
+        "1-of-4 cached must batch-materialize via the reparse"
+    );
+    assert_eq!(
+        crate::array::js_array_get(arr, 2).bits(),
+        cached_handle.get_nanbox_u64(),
+        "the reparse must patch the handed-out element back, not a fresh copy"
+    );
+
+    let arr_handle = scope.root_nanbox_u64(ptr_bits(arr as usize));
+    let output =
+        unsafe { crate::json::js_json_stringify(f64::from_bits(arr_handle.get_nanbox_u64()), 0) };
+    unsafe {
+        assert_string_bytes(output, br#"[{"id":0},{"id":1},{"id":99},{"id":3}]"#);
     }
 }
 
