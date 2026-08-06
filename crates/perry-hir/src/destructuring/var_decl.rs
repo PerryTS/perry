@@ -8,7 +8,7 @@ mod alias_tracking;
 mod binding_guards;
 mod native_fetch;
 mod native_new;
-mod type_infer;
+pub(crate) mod type_infer;
 
 use alias_tracking::track_decl_aliases;
 use binding_guards::apply_binding_guards;

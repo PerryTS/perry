@@ -27,7 +27,7 @@ mod assignment_expr;
 mod assignment_stmt;
 mod helpers;
 mod pattern_binding;
-mod var_decl;
+pub(crate) mod var_decl;
 mod var_decl_sources;
 
 pub(crate) use assignment_expr::lower_destructuring_assignment;

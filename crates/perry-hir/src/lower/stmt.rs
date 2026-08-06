@@ -11,6 +11,48 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+/// #7544: the type of a `for (let|const <ident> = <init>; …)` head binding.
+///
+/// Delegates to the SAME `infer_decl_type` a statement-level `let x = <init>`
+/// uses, instead of the hardcoded `Type::Any` this site carried. The two forms
+/// declare the same thing and differ only in where the declarator sits, so
+/// there was never a reason for `for (let i = 0; …)` to type `i` as `Any`
+/// while `let i = 0;` types it `Number`.
+///
+/// **Why this is a GC-visible fix, not a cosmetic one.** A closed-shape object
+/// literal lowers to `new __AnonShape_<hash>(…)` whose synthesized
+/// `ClassField::ty` comes from `infer_type_from_expr` over each property's
+/// value. Inside a `for` loop, that value is almost always the counter or
+/// arithmetic over it, so `Any` at the head propagated to `Any` fields — and
+/// `Any` is pointer-bearing, so `{ v: i, w: i + 1 }` was declared to the
+/// collector as **two POINTER slots** (`class_layout_declarable_at_allocation`
+/// refuses, `js_gc_init_typed_shape_layout` installs a pointer mask). Typing
+/// the head makes the same literal mint `Number` fields, which is what
+/// #7532's allocation-site declaration needs to fire. See #7544.
+///
+/// Restricted to `let`/`const`: a `var` head binding is function-scoped and
+/// var-hoisted, so its declarator is not the only writer of the name and the
+/// statement-level parity argument does not carry over. `var` heads keep
+/// `Type::Any`.
+///
+/// **This is not a runtime type assertion.** Perry validates no declared type
+/// (CLAUDE.md, "No runtime type *validation*"), so a `Number`-typed field can
+/// still receive a pointer through a later dynamic write. That is discharged
+/// where every other typed-shape contradiction is: the raw-f64 store guard
+/// rejects the non-double bits, falls back to the boxed setter, and
+/// `layout_note_slot` downgrades the descriptor to `GC_LAYOUT_UNKNOWN` so the
+/// collector scans the slot conservatively from then on.
+fn for_init_binding_type(
+    ctx: &mut LoweringContext,
+    decl: &ast::VarDeclarator,
+    name: &str,
+) -> Type {
+    let ast::Pat::Ident(ident) = &decl.name else {
+        return Type::Any;
+    };
+    crate::destructuring::var_decl::type_infer::infer_decl_type(ctx, decl, ident, name)
+}
+
 fn emit_class_expression_value_binding(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -1513,13 +1555,14 @@ pub(crate) fn lower_stmt(
                                     continue;
                                 }
                                 let name = get_binding_name(&decl.name)?;
+                                let ty = for_init_binding_type(ctx, decl, &name);
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-                                let id = ctx.define_local(name.clone(), Type::Any);
+                                let id = ctx.define_local(name.clone(), ty.clone());
                                 module.init.push(Stmt::Let {
                                     id,
                                     name,
-                                    ty: Type::Any,
+                                    ty,
                                     mutable: true,
                                     init: init_expr,
                                 });
@@ -1551,16 +1594,17 @@ pub(crate) fn lower_stmt(
                                     None
                                 } else {
                                     let name = get_binding_name(&decl.name)?;
+                                    let ty = for_init_binding_type(ctx, decl, &name);
                                     let init_expr = decl
                                         .init
                                         .as_ref()
                                         .map(|e| lower_expr(ctx, e))
                                         .transpose()?;
-                                    let id = ctx.define_local(name.clone(), Type::Any);
+                                    let id = ctx.define_local(name.clone(), ty.clone());
                                     Some(Box::new(Stmt::Let {
                                         id,
                                         name,
-                                        ty: Type::Any,
+                                        ty,
                                         mutable: true,
                                         init: init_expr,
                                     }))
