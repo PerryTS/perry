@@ -327,7 +327,7 @@ pub(super) fn record(keys: usize, slot_count: usize, raw_words: &[u64], pointer_
 /// Called from the one transition that can falsify a memo: `SHAPE_LAYOUTS`
 /// poisoning a shape to ambiguous. Clearing the whole table rather than the
 /// one affected slot keeps this correct without having to reason about index
-/// collisions, and costs one 256-byte store on a branch that fires when a
+/// collisions, and costs one 1 KiB clear on a branch that fires when a
 /// program's shape *stops* being monomorphic — i.e. rarely, and never twice
 /// for the same shape.
 #[inline]
