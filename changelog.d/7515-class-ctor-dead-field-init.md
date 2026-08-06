@@ -45,12 +45,21 @@ requires a constant string key and a `This` receiver. Every existing refusal
 still applies — derived classes, field initializers, computed keys, parameter
 defaults, setter-shadowed fields, and any statement that breaks the leading run.
 
-Behaviour is unchanged: an 11-case semantics probe (unassigned fields still read
-`undefined`, `Object.keys`/JSON shape, prototype-setter shadowing, derived
-classes, post-construction reassignment, 200-instance shared-shape consistency)
-produces byte-identical output before and after, and matches Node on 10 of 11 —
-the eleventh is a pre-existing, unrelated divergence in how a declared field
-interacts with a same-named prototype accessor, identical on both compilers.
+The elided write is not an observable `[[Set]]`, so it cannot change how many
+times an accessor runs. A class field declaration is a `CreateDataProperty` — a
+DEFINE — so it never consults an inherited accessor, and it installs an own data
+property that the prologue assignment then writes directly.
+`test-files/test_class_field_init_proto_setter.ts` pins that at the execution
+level for the case the compile-time `class.setters` check structurally cannot
+see: a setter installed on `C.prototype` *after* compilation runs **zero** times,
+byte-identical to Node, both before and after this change.
+
+Behaviour is unchanged elsewhere too: an 11-case semantics probe (unassigned
+fields still read `undefined`, `Object.keys`/JSON shape, declared-accessor
+shadowing, derived classes, interrupted prologues, post-construction
+reassignment, 200-instance shared-shape consistency) produces byte-identical
+output before and after, and an A/B of every `test-files/*.ts` containing a
+`constructor(` finds no drift between the two compilers.
 
 **Not fixed here, and worth its own ticket:** the residual gap is an ordering
 one. `lower_call/new.rs` emits `js_gc_init_typed_shape_layout` *after* the

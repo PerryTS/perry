@@ -41,10 +41,23 @@ use crate::types::{DOUBLE, I32, I64};
 /// The proof obligation is identical for both shapes and is entirely about the
 /// *operand* expressions, not the store opcode: `This` and `LocalGet(<plain
 /// param>)` cannot throw, allocate, or observe `this`, so the assignment is
-/// reached before any other effect of the constructor. Both nodes' misses
-/// route through a `[[Set]]` that honours an inherited setter, so neither adds
-/// prototype-chain exposure the other lacks — and the caller separately
-/// refuses any field the class itself declares a setter for.
+/// reached before any other effect of the constructor.
+///
+/// **What the elided write is NOT** (the obvious objection, and it is
+/// measurably wrong — `test-files/test_class_field_init_proto_setter.ts`): it
+/// is not an observable `[[Set]]`, so eliding it cannot change how many times
+/// an accessor runs. A class field declaration is a `CreateDataProperty` — a
+/// DEFINE — per `ClassFieldDefinitionRecord` evaluation, so it never consults
+/// an inherited accessor, and it installs an OWN data property that the
+/// prologue's assignment then writes directly rather than dispatching past.
+/// A setter installed on the prototype *after* compilation (which the
+/// `class.setters` check below cannot see, by construction) runs **zero**
+/// times either way, matching Node exactly. The reading in which the field
+/// init is a `[[Set]]` and the setter therefore fires twice is the legacy
+/// `useDefineForClassFields: false` behaviour, which neither this compiler nor
+/// Node implements. The `class.setters` refusal below exists for the separate
+/// case of a setter the class DECLARES, where Perry's own class-field-set
+/// lowering does dispatch to the synthesized `__set_<name>` method.
 ///
 /// `PutValueSet` additionally requires a constant string key (a computed key
 /// is an arbitrary expression that can run user code) and `receiver` to be
