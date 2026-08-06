@@ -1029,7 +1029,11 @@ unsafe fn init_typed_shape_layout(
     // gates this and therefore also gates the memo above: the memo is only
     // ever populated from a successful install here, so with the knob off the
     // table stays empty and every lookup misses.
-    let keys = if shape_layout_keyed_enabled() { keys } else { 0 };
+    let keys = if shape_layout_keyed_enabled() {
+        keys
+    } else {
+        0
+    };
     if keys != 0 && shape_install_shared(keys, header, &descriptor) {
         // The common path for every object literal: the shape already owns a
         // canonical descriptor, so this object needs no per-object record at

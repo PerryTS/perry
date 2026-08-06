@@ -208,11 +208,24 @@ fn pack_dims(slot_count: usize, raw_len: usize, pointer_len: usize) -> Option<u6
     )
 }
 
+/// Which entry a `(shape, mask globals)` tuple lives in.
+///
+/// The mask-global addresses are mixed in, not just the shape. Two object
+/// literal sites with the same key names share one `keys_array` but get
+/// separate mask globals unless LLVM's constant merger folds them (they are
+/// `private unnamed_addr constant`, so it may — but the table must not depend
+/// on that). Keying the slot on the shape alone would put both sites in one
+/// entry and let them evict each other on every iteration of a loop that
+/// builds both. Any index function is *correct* — the full tuple is compared
+/// on the way out — so this is purely about not colliding.
+///
+/// The low bits of a heap address are allocation-granularity noise, hence the
+/// shifts; the two mask pointers use different ones so a shape whose masks are
+/// both empty (one shared dangling `&[]` address) does not cancel itself out.
 #[inline(always)]
-fn slot_index(keys: usize) -> usize {
-    // The low bits of a heap address are allocation-granularity noise; shift
-    // past them before masking so sibling shapes do not collide.
-    (keys >> 4) & (MEMO_SLOTS - 1)
+fn slot_index(keys: usize, raw_words: *const u64, pointer_words: *const u64) -> usize {
+    let mixed = (keys >> 4) ^ (raw_words as usize >> 4) ^ (pointer_words as usize >> 3);
+    mixed & (MEMO_SLOTS - 1)
 }
 
 thread_local! {
@@ -261,7 +274,8 @@ pub(super) fn hit(
     };
     // SAFETY: `table()` is this thread's own storage; the reference does not
     // escape and nothing re-enters between the read and its use.
-    let entry = unsafe { (*table().get())[slot_index(keys)] };
+    let entry =
+        unsafe { (*table().get())[slot_index(keys, raw_words.as_ptr(), pointer_words.as_ptr())] };
     let matched = entry.keys == keys
         && entry.dims == dims
         && std::ptr::eq(entry.raw_words, raw_words.as_ptr())
@@ -290,7 +304,7 @@ pub(super) fn record(keys: usize, slot_count: usize, raw_words: &[u64], pointer_
     counters::note_record();
     // SAFETY: as in `hit` — this thread's own storage, no escaping reference.
     unsafe {
-        (*table().get())[slot_index(keys)] = Entry {
+        (*table().get())[slot_index(keys, raw_words.as_ptr(), pointer_words.as_ptr())] = Entry {
             keys,
             raw_words: raw_words.as_ptr(),
             pointer_words: pointer_words.as_ptr(),
@@ -433,7 +447,10 @@ mod tests {
         assert!(!hit(keys, 2, &raw, &[]), "a different pointer word count");
 
         invalidate();
-        assert!(!hit(keys, 2, &raw, &pointers), "invalidate must drop entries");
+        assert!(
+            !hit(keys, 2, &raw, &pointers),
+            "invalidate must drop entries"
+        );
     }
 
     /// A `slot_count` that overflows the packed key is refused by both halves,

@@ -157,7 +157,10 @@ fn a_memo_hit_produces_the_same_header_state_as_the_install() {
     let (via_memo, _) = build_instance(CLASS_STATE, keys, 2.5, b"memo");
     install(via_memo);
     let (hits_after_second, _) = shape_install::counters::snapshot();
-    assert_eq!(hits_after_second, 1, "the second construction must be a hit");
+    assert_eq!(
+        hits_after_second, 1,
+        "the second construction must be a hit"
+    );
 
     unsafe {
         assert_eq!(
@@ -200,7 +203,11 @@ fn a_contradicting_field_is_refused_even_with_the_memo_warm() {
     // Same shape, but slot 0 — declared raw-f64 — holds a heap string.
     let (bad, _) = build_instance(CLASS_DIVERGE, keys, 0.0, b"child");
     let boxed = crate::string::js_string_from_bytes(b"not-a-double".as_ptr(), 12) as usize;
-    crate::object::js_object_set_field(bad, 0, crate::value::JSValue::from_bits(string_bits(boxed)));
+    crate::object::js_object_set_field(
+        bad,
+        0,
+        crate::value::JSValue::from_bits(string_bits(boxed)),
+    );
     install(bad);
 
     assert!(
@@ -253,8 +260,16 @@ fn ambiguity_poison_invalidates_the_memo() {
     let ambiguous = crate::object::js_object_alloc_class_inline_keys(CLASS_AMBIGUOUS, 0, 2, keys);
     let a = crate::string::js_string_from_bytes(b"a".as_ptr(), 1) as usize;
     let b = crate::string::js_string_from_bytes(b"b".as_ptr(), 1) as usize;
-    crate::object::js_object_set_field(ambiguous, 0, crate::value::JSValue::from_bits(string_bits(a)));
-    crate::object::js_object_set_field(ambiguous, 1, crate::value::JSValue::from_bits(string_bits(b)));
+    crate::object::js_object_set_field(
+        ambiguous,
+        0,
+        crate::value::JSValue::from_bits(string_bits(a)),
+    );
+    crate::object::js_object_set_field(
+        ambiguous,
+        1,
+        crate::value::JSValue::from_bits(string_bits(b)),
+    );
     let both_pointers: [u64; 1] = [0b11];
     js_gc_init_typed_shape_layout(
         ambiguous as u64,

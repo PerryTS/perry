@@ -74,8 +74,8 @@ mod layout_tables;
 /// typed shape into two header bit-writes instead of a descriptor build plus a
 /// `SHAPE_LAYOUTS` round-trip.
 mod shape_install;
-pub(crate) use shape_install::shape_install_memo_hot_addr;
 pub use layout::*;
+pub(crate) use shape_install::shape_install_memo_hot_addr;
 mod trace;
 pub(crate) use trace::*;
 mod barrier;
