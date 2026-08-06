@@ -407,9 +407,22 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     if src.is_null() {
         return js_array_alloc(0);
     }
+    // #7497: `js_array_alloc` below can trigger the copying minor, which MOVES
+    // `src`. Pre-fix, `src_elements` was derived from the pre-collection address
+    // and `copy_nonoverlapping` read retired from-space — so `[...arr]`,
+    // `Array.from(arr)` and every combinator's iterable snapshot could copy
+    // whatever the recycled bytes now hold. `PERRY_GC_PROTECT_FROMSPACE=1` faults
+    // here on the `Promise.all` snapshot at minor #0. Root the source across the
+    // allocation and re-read both addresses from their handles afterwards.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(src as i64));
     unsafe {
         let len = (*src).length;
-        let result = js_array_alloc(len);
+        let result_h =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
+        let src = crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader;
+        let result =
+            crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
         if len > 0 {
             let src_elements =
                 (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
