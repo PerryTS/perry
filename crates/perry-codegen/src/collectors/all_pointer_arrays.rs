@@ -67,6 +67,17 @@
 //!
 //! This proof's job is therefore *profitability*: it picks arrays where the
 //! declaration will stick, so the fast path is actually taken.
+//!
+//! That is also the standard the kill list below is written to. It enumerates
+//! the write forms that reach an array local in lowered HIR — rebinds, keyed
+//! stores (`IndexSet` / `IndexUpdate` / `PropertySet` / `PropertyUpdate` /
+//! `PutValueSet`), and the in-place `Array*` mutators — and a form it MISSES
+//! cannot produce a wrong layout: the missed store either carries its own note
+//! (every un-elided store path does) or fails the header test and routes
+//! through `js_array_push_f64`. The cost of a miss is that the array is
+//! downgraded to a conservative scan earlier than predicted, which for an
+//! all-pointer array is the same set of slots the precise mask would have
+//! visited.
 
 use std::collections::{HashMap, HashSet};
 
@@ -113,11 +124,32 @@ pub(crate) fn collect_all_pointer_array_locals(
         Expr::Update { id, .. } => {
             killed.insert(*id);
         }
-        // An indexed store is not an append: `a[10] = x` on a length-2 array
-        // is a different layout claim than the push protocol's
-        // `slot_index == length`.
-        Expr::IndexSet { object, .. } | Expr::IndexUpdate { object, .. } => {
+        // A keyed store is not an append: `a[10] = x` on a length-2 array is a
+        // different layout claim than the push protocol's
+        // `slot_index == length`, and `a.length = 0` is not a store at all.
+        // `PutValueSet` is the form a lowered `a[i] = x` actually takes when
+        // the receiver is not statically an array-typed local.
+        Expr::IndexSet { object, .. }
+        | Expr::IndexUpdate { object, .. }
+        | Expr::PropertySet { object, .. }
+        | Expr::PropertyUpdate { object, .. } => {
             if let Expr::LocalGet(id) = object.as_ref() {
+                killed.insert(*id);
+            }
+        }
+        Expr::PutValueSet {
+            target, receiver, ..
+        } => {
+            for expr in [target, receiver] {
+                if let Expr::LocalGet(id) = expr.as_ref() {
+                    killed.insert(*id);
+                }
+            }
+        }
+        Expr::ArraySort { array, .. } => {
+            // `sort` routes through `rebuild_array_layout`, which installs a
+            // PRECISE mask in place of the declaration.
+            if let Expr::LocalGet(id) = array.as_ref() {
                 killed.insert(*id);
             }
         }
@@ -328,6 +360,39 @@ mod tests {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(4)),
                 value: Box::new(object_literal()),
+            }),
+        ];
+        assert!(!collect(&stmts).contains(&1));
+    }
+
+    /// `out[0] = {...}` on an array-typed local lowers to `PutValueSet`, not
+    /// `IndexSet` — the form the kill list originally missed, caught by the
+    /// probe in the #7469 PR.
+    #[test]
+    fn a_put_value_store_refuses_the_local() {
+        let stmts = vec![
+            let_array(1, vec![]),
+            push(1, object_literal()),
+            Stmt::Expr(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(1)),
+                key: Box::new(Expr::Integer(0)),
+                value: Box::new(object_literal()),
+                receiver: Box::new(Expr::LocalGet(1)),
+                strict: false,
+            }),
+        ];
+        assert!(!collect(&stmts).contains(&1));
+    }
+
+    #[test]
+    fn a_length_write_refuses_the_local() {
+        let stmts = vec![
+            let_array(1, vec![]),
+            push(1, object_literal()),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "length".to_string(),
+                value: Box::new(Expr::Integer(0)),
             }),
         ];
         assert!(!collect(&stmts).contains(&1));
