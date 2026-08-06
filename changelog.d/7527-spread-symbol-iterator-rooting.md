@@ -55,9 +55,9 @@ copied_objects=11794` on the first minor.
 
 **The protected run is not clean everywhere, and the remainder is filed rather
 than absorbed.** `test_gap_gc_iterator_drain_rooting` — the out-of-line sibling
-— still faults, in `js_native_call_method`, which reads its *rooted* receiver
-into a local reused across a dozen allocating probes before `is_closure_ptr`
-dereferences it. Patching the one faulting line was tried and reverted: the
+— still faults, in `js_native_call_method` (#7528), which reads its *rooted*
+receiver into a local reused across a dozen allocating probes before
+`is_closure_ptr` dereferences it. Patching the one faulting line was tried and reverted: the
 fault moved 800 bytes further into the same function, which is the signal that
 the whole receiver needs re-reading rather than one arm of it. That file's
 corpus note is updated to say so — its own text asked for exactly this check.

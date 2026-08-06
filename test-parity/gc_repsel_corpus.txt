@@ -603,7 +603,7 @@ test_gap_gc_optional_param_receiver_rooting
 # there is a third site.
 #
 # #7498 HAS LANDED AND THIS FILE DID NOT GO SILENT — so, per the sentence
-# above, THERE IS A THIRD SITE, and it is filed rather than absorbed. #7498's
+# above, THERE IS A THIRD SITE, and it is filed as #7528. #7498's
 # two faults are gone from this file's protected run; what remains is
 # `js_native_call_method` reading its ROOTED receiver into a local ~330 lines
 # and a dozen allocating probes before `is_closure_ptr` dereferences it
