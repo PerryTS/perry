@@ -379,7 +379,10 @@ fn test_json_tape_reparse_materialize_preserves_a_mutated_cache_entry() {
     // Hand element 2 out (caching it), then mutate it — `parsed[2].id = 99`.
     // Every step allocates, so the header comes back out of `across_mut`
     // rather than being carried across the call.
-    let (cached, hdr) = hdr_handle.across_mut::<crate::json_tape::LazyArrayHeader, _>(|| unsafe {
+    // The refreshed header from this first pairing is discarded on purpose:
+    // the mutation below allocates too, so the pairing after it is the one
+    // that supplies the pointer `force_materialize_lazy` is called with.
+    let (cached, _) = hdr_handle.across_mut::<crate::json_tape::LazyArrayHeader, _>(|| unsafe {
         crate::json_tape::lazy_get(hdr, 2)
     });
     let cached_handle = scope.root_nanbox_u64(cached.bits());
