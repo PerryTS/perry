@@ -769,8 +769,21 @@ impl<'a> DirectParser<'a> {
 
         // Small fixed-point fast path: JSON API feeds often contain
         // `"score": 123.5`-style values. Avoid the general decimal
-        // parser for short non-exponent decimals by accumulating the
-        // integer and fractional digits once and scaling by a tiny table.
+        // parser for short non-exponent decimals by accumulating ALL
+        // the digits into one integer mantissa and dividing once by an
+        // exact power of ten.
+        //
+        // #7477: this must be bit-identical to `str::parse::<f64>` (the
+        // tape materializer's and V8-strtod's answer). The previous form
+        // `int as f64 + (frac as f64 / 10^k)` rounded TWICE — the
+        // division rounds, then the addition rounds again — and was one
+        // ulp off for literals like `260.75197`. The single-division
+        // form is the classic Clinger fast path: when the decimal
+        // mantissa m fits in 2^53 (exactly representable) and 10^k is an
+        // exact f64 (all powers up to 10^22 are), `m as f64 / 10^k` is
+        // ONE correctly-rounded IEEE operation on the exact rational
+        // m/10^k — the same double a correct decimal parser produces.
+        // Anything wider falls through to `str::parse` below.
         if has_dot {
             self.pos += 1;
             let frac_start = self.pos;
@@ -782,30 +795,38 @@ impl<'a> DirectParser<'a> {
                 && (self.input[self.pos] == b'e' || self.input[self.pos] == b'E');
             let int_len = int_end - int_start;
             let frac_len = frac_end - frac_start;
-            if !exp_after_frac && int_len > 0 && int_len <= 15 && frac_len > 0 && frac_len <= 9 {
-                let mut int_acc: u64 = 0;
+            if !exp_after_frac
+                && int_len > 0
+                && frac_len > 0
+                && frac_len <= 9
+                && int_len + frac_len <= 17
+            {
+                // ≤ 17 digits always fits u64 (10^17 < 2^63); the ≤ 2^53
+                // check below is the exact-representability gate.
+                let mut mantissa: u64 = 0;
                 for &b in &self.input[int_start..int_end] {
-                    int_acc = int_acc * 10 + (b - b'0') as u64;
+                    mantissa = mantissa * 10 + (b - b'0') as u64;
                 }
-                let mut frac_acc: u64 = 0;
                 for &b in &self.input[frac_start..frac_end] {
-                    frac_acc = frac_acc * 10 + (b - b'0') as u64;
+                    mantissa = mantissa * 10 + (b - b'0') as u64;
                 }
-                const POW10: [f64; 10] = [
-                    1.0,
-                    10.0,
-                    100.0,
-                    1_000.0,
-                    10_000.0,
-                    100_000.0,
-                    1_000_000.0,
-                    10_000_000.0,
-                    100_000_000.0,
-                    1_000_000_000.0,
-                ];
-                let magnitude = int_acc as f64 + (frac_acc as f64 / POW10[frac_len]);
-                let value = if neg { -magnitude } else { magnitude };
-                return JSValue::number(value);
+                if mantissa <= (1u64 << 53) {
+                    const POW10: [f64; 10] = [
+                        1.0,
+                        10.0,
+                        100.0,
+                        1_000.0,
+                        10_000.0,
+                        100_000.0,
+                        1_000_000.0,
+                        10_000_000.0,
+                        100_000_000.0,
+                        1_000_000_000.0,
+                    ];
+                    let magnitude = mantissa as f64 / POW10[frac_len];
+                    let value = if neg { -magnitude } else { magnitude };
+                    return JSValue::number(value);
+                }
             }
         }
         if self.pos < self.input.len()
