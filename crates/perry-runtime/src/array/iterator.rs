@@ -1186,10 +1186,8 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     let next_h = scope.root_nanbox_f64(next_f64);
 
     // Iterate: call next() until done
-    let done_key_h = scope.root_nanbox_f64(nanbox_string_key(js_string_from_bytes(
-        b"done".as_ptr(),
-        4,
-    )));
+    let done_key_h =
+        scope.root_nanbox_f64(nanbox_string_key(js_string_from_bytes(b"done".as_ptr(), 4)));
     let value_key_h = scope.root_nanbox_f64(nanbox_string_key(js_string_from_bytes(
         b"value".as_ptr(),
         5,
@@ -1236,13 +1234,16 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
         step_h.set_nanbox_f64(result_f64);
         let result_obj = js_nanbox_get_pointer(result_f64) as *const ObjectHeader;
 
-        // Check .done
-        let (done_val, result_obj) = step_h.across_const::<ObjectHeader, _>(|| {
+        // Check .done. `across_nanbox` runs the (allocating) read and hands
+        // back the POST-collection address of the result object, so the pre-
+        // call copy is never nameable afterwards.
+        let (done_val, result_after) = step_h.across_nanbox(|| {
             js_object_get_field_by_name(
                 result_obj,
                 js_nanbox_get_pointer(done_key_h.get_nanbox_f64()) as *const crate::StringHeader,
             )
         });
+        let result_obj = js_nanbox_get_pointer(result_after) as *const ObjectHeader;
         let done_bits = unsafe { std::mem::transmute::<_, u64>(done_val) };
         // done is true when it's TAG_TRUE (0x7FFC_0000_0000_0004) or truthy number
         if done_bits == 0x7FFC_0000_0000_0004 {

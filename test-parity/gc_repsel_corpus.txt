@@ -561,3 +561,31 @@ test_gap_gc_dynamic_construct_receiver_rooting
 # `PROTECT_FROMSPACE=1 DEPTH=800 POLLS=1` (no zeal): 10/10 FAULT before,
 # 40/40 clean after.
 test_gap_gc_optional_param_receiver_rooting
+
+# --- #7475: the array-iterator drain (`[...obj.arr]` / Array.from) ----------
+#
+# The FIRST witness in this corpus that fails on the SHIPPED DEFAULT, not only
+# on a `requires=move` arm. It is registered here anyway, because the moving
+# arms are what make its failure a fault instead of a wrong answer.
+#
+# `js_iterator_to_array` held five live values in bare Rust locals across a
+# `.next()` call that allocates the `{ value, done }` object: the iterator, the
+# accumulator array, the `next` closure, and the two key strings — and one
+# level down `make_iter_result` held the element value and its own freshly
+# allocated result object across four more allocations. A copying minor moved
+# them and rewrote only the slots it can see. The iterator's pre-move copy then
+# handed `dispatch_array_iterator_method` a from-space backing array, which is
+# where `js_array_length` faulted.
+#
+# Found through the auto-optimize link (#7475): `object_deep_clone` threw
+# `TypeError: next is not a function` there while printing the right checksum
+# under `PERRY_NO_AUTO_OPTIMIZE=1`. The feature-stripped runtime did not have a
+# different bug — `PERRY_GC_PROTECT_FROMSPACE=1` faults on BOTH links, at the
+# same minor #0 — it allocated in the order that made the stale read visible.
+#
+# Measured on this branch:
+#   before, default link + default env     TypeError: next is not a function
+#   before, auto-optimize link             TypeError: next is not a function
+#   before, PROTECT_FROMSPACE=1 DEPTH=200  FAULT in retired from-space, both links
+#   after,  both links                     byte-exact with the oracle
+test_gap_gc_iterator_drain_rooting

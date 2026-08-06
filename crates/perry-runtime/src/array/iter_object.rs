@@ -660,9 +660,9 @@ pub unsafe fn dispatch_array_iterator_method(
             // from-space. Re-derive the backing array from the iterator's
             // field 0, which the collector DOES rewrite, instead of reusing
             // the pre-store copy.
-            let arr_ptr = js_nanbox_get_pointer(f64::from_bits(
-                js_object_get_field(iter_obj, 0).bits(),
-            )) as *const ArrayHeader;
+            let arr_ptr =
+                js_nanbox_get_pointer(f64::from_bits(js_object_get_field(iter_obj, 0).bits()))
+                    as *const ArrayHeader;
             let elem = if arr_ptr.is_null() {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
