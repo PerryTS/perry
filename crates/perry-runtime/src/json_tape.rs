@@ -1029,6 +1029,20 @@ pub struct LazyArrayHeader {
     // Followed by `tape_len` `TapeEntry` elements inline.
 }
 
+// `cached_length` at offset 0 is a CODEGEN contract, not a layout preference:
+// Perry inlines `.length` as a raw u32 load at offset 0 rather than calling
+// `js_array_length`, so an unmaterialized lazy array only reports the right
+// length because this field sits first. Nothing else in the tree enforced
+// that — the guarantee lived in a doc comment — so a field reordered into
+// the front would have produced silently wrong `.length` values with every
+// test still green. Adding a field to this struct is the moment that can
+// happen, so pin it here.
+const _: () = assert!(
+    std::mem::offset_of!(LazyArrayHeader, cached_length) == 0,
+    "LazyArrayHeader::cached_length must stay at offset 0 — codegen inlines \
+     `.length` as a raw u32 load there"
+);
+
 /// #7478: how long a run of consecutive ascending cold reads has to get
 /// before we stop materializing element-by-element and hand the whole
 /// array to the batch parser.
