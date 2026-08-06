@@ -205,29 +205,43 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
     let Some(local_slot) = ctx.locals.get(&local_id).cloned() else {
         return;
     };
+    emit_shadow_slot_bind_ptr(ctx, slot_idx, &local_slot);
+}
+
+/// Bind frame slot `slot_idx` to the root alloca `slot_ptr` — the raw form of
+/// [`emit_shadow_slot_bind_for_local`], for roots that are not named locals
+/// (#7469: the pooled temp-root allocas in `temp_root.rs`).
+///
+/// The caller owns the pairing of `slot_idx` and `slot_ptr`; everything else
+/// — the stack-map textual marker, the #7088 inline frame write, the FFI
+/// fallback, and the incremental root-shading barrier — is identical to a
+/// named local's bind, which is the point: a temp rooted through here is
+/// indistinguishable to the collector and to the RS4GC/stack-map lowering
+/// from a local.
+pub(crate) fn emit_shadow_slot_bind_ptr(ctx: &mut FnCtx<'_>, slot_idx: u32, slot_ptr: &str) {
     ctx.shadow_slots_bound.insert(slot_idx);
     if crate::codegen::helpers::native_stack_roots_enabled() {
         // Kept temporarily as a textual marker: LlFunction's final stack-map
-        // lowering records `slot_idx -> local_slot` and removes this call.
+        // lowering records `slot_idx -> slot_ptr` and removes this call.
         // The incremental root barrier remains real because the native slot
         // can be updated after an in-flight cycle scanned this frame.
         ctx.block().call_void(
             "js_shadow_slot_bind",
-            &[(I32, &slot_idx.to_string()), (PTR, &local_slot)],
+            &[(I32, &slot_idx.to_string()), (PTR, slot_ptr)],
         );
-        let value_bits = ctx.block().load(I64, &local_slot);
+        let value_bits = ctx.block().load(I64, slot_ptr);
         emit_persistent_shadow_root_barrier(ctx, &value_bits);
         return;
     }
     // #7088: the hot per-store root write. Emitted inline against this
     // activation's cached `ShadowStackState` pointer when it has one; falls
     // through to the call otherwise.
-    if super::shadow_inline::emit_inline_slot_bind(ctx, slot_idx, &local_slot) {
+    if super::shadow_inline::emit_inline_slot_bind(ctx, slot_idx, slot_ptr) {
         return;
     }
     ctx.block().call_void(
         "js_shadow_slot_bind",
-        &[(I32, &slot_idx.to_string()), (PTR, &local_slot)],
+        &[(I32, &slot_idx.to_string()), (PTR, slot_ptr)],
     );
 }
 

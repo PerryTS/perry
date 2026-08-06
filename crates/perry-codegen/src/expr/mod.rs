@@ -701,6 +701,11 @@ pub(crate) struct FnCtx<'a> {
     /// Seeded at construction with the entry-bound parameter slots.
     pub shadow_slots_bound: std::collections::HashSet<u32>,
 
+    /// #7469: pooled frame-rooted allocas for expression temporaries — see
+    /// [`temp_root::TempRootPool`]. Starts empty; grows on the first
+    /// protected temporary this function lowers.
+    pub temp_roots: temp_root::TempRootPool,
+
     /// Cached pointer to this function's `InlineArenaState` slot —
     /// allocated lazily on the first `new ClassName()` site that uses
     /// the inline bump-allocator path. The slot lives in the function

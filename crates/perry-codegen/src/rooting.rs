@@ -260,7 +260,6 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 use crate::expr::FnCtx;
-use crate::types::{I32, I64};
 
 /// A slot holding a GC-managed pointer for the duration of a lowering.
 #[derive(Debug, Clone)]
@@ -273,14 +272,12 @@ impl RootedSlot {
     /// only valid until the next emission that can collect, and re-reading is
     /// cheaper than reasoning about whether one has happened.
     pub fn read(&self, ctx: &mut FnCtx<'_>) -> String {
-        ctx.block()
-            .call(I64, "js_gc_temp_root_get", &[(I32, &self.idx)])
+        crate::expr::temp_root::temp_root_get_i64(ctx, &self.idx)
     }
 
     /// Release the slot. Call after the last [`RootedSlot::read`].
     pub fn release(self, ctx: &mut FnCtx<'_>) {
-        ctx.block()
-            .call_void("js_gc_temp_root_truncate", &[(I32, &self.idx)]);
+        crate::expr::temp_root::temp_root_truncate(ctx, &self.idx);
     }
 }
 
@@ -297,8 +294,6 @@ pub fn call_rooted(
     args: &[(crate::types::LlvmType, &str)],
 ) -> RootedSlot {
     let reg = ctx.block().call(ret_ty, callee, args);
-    let idx = ctx
-        .block()
-        .call(I32, "js_gc_temp_root_push", &[(I64, &reg)]);
+    let idx = crate::expr::temp_root::temp_root_push_i64(ctx, &reg);
     RootedSlot { idx }
 }

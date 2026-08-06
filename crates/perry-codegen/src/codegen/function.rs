@@ -770,6 +770,7 @@ pub(super) fn compile_function(
         persistent_shadow_slots: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         shadow_slots_bound: bound_param_slots,
+        temp_roots: crate::expr::temp_root::TempRootPool::default(),
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),

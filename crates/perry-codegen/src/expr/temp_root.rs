@@ -52,9 +52,119 @@ use crate::types::{DOUBLE, I32, I64};
 
 use super::FnCtx;
 
+/// Per-function pool of frame-rooted temp allocas (#7469).
+///
+/// The FFI contract above cost three runtime calls per protected temporary —
+/// push, mandatory re-read, truncate — and on `churn.ts` those three were 206
+/// of the 542 remaining `_tlv_get_addr`-attributed samples after #7474. But
+/// the function's *named* locals already demonstrate the cheap form of the
+/// same root: an entry alloca bound to a shadow-frame slot, written and
+/// re-read with plain stores and loads, upgraded by the RS4GC / stack-map
+/// lowering into a relocated `addrspace(1)` slot. A temp needs nothing a
+/// local doesn't; this pool gives temps the identical mechanism.
+///
+/// The pool is **compile-time bookkeeping only** — at runtime there is no
+/// stack to balance, no depth to restore on `longjmp` (the slots die with the
+/// shadow frame like every local slot), and nothing for
+/// `ShadowSavepoint`'s temp-depth restore to do (the FFI stack it snapshots
+/// simply stays empty).
+///
+/// Slot handles keep the same `String` currency the FFI version used, so
+/// every caller — including the nested `RootedOperands` /
+/// `StoreOperandGuard` machinery — compiles unchanged. In alloca mode the
+/// string is the entry-alloca register; in fallback mode it is the FFI
+/// index register, exactly as before.
+///
+/// Reuse is a stack watermark, mirroring `js_gc_temp_root_truncate`'s
+/// "drop `base` and everything above it" contract: releasing a handle frees
+/// it AND every handle acquired after it. That is the discipline the FFI
+/// API already imposed on callers (a truncate at index N invalidated all
+/// higher indexes), so no caller can observe the difference.
+#[derive(Default)]
+pub(crate) struct TempRootPool {
+    /// `(entry alloca register, reserved frame slot index)` in acquisition
+    /// order. Entries at positions `>= active` are free for reuse.
+    slots: Vec<(String, u32)>,
+    /// Stack watermark: the number of live handles.
+    active: usize,
+    /// `Some(true)` — this function lowers temps onto frame-rooted allocas.
+    /// `Some(false)` — shadow-stack emission is off for this build (
+    /// `reserve_shadow_slot` returned `None`); every temp uses the runtime
+    /// FFI stack, byte-for-byte the pre-#7469 emission. Decided at the first
+    /// acquisition and uniform for the whole function, so `get`/`set`/
+    /// `truncate` can interpret handles without per-handle tags.
+    alloca_mode: Option<bool>,
+}
+
+impl TempRootPool {
+    /// Frame slot index for a live alloca handle. Panics on an unknown
+    /// handle — that would mean a caller invented a slot string or used one
+    /// across functions, both of which were equally broken under the FFI
+    /// contract (a stale index addressed someone else's slot silently; this
+    /// at least fails loudly at compile time).
+    fn frame_idx(&self, handle: &str) -> u32 {
+        self.slots
+            .iter()
+            .find(|(alloca, _)| alloca == handle)
+            .map(|(_, idx)| *idx)
+            .unwrap_or_else(|| panic!("temp-root handle {handle} not in this function's pool"))
+    }
+
+    /// Watermark position of a live handle, for release.
+    fn position(&self, handle: &str) -> Option<usize> {
+        self.slots[..self.active]
+            .iter()
+            .position(|(alloca, _)| alloca == handle)
+    }
+}
+
+/// Acquire a pooled frame-rooted slot, or `None` when this build lowers
+/// temps through the runtime FFI stack.
+fn temp_pool_acquire(ctx: &mut FnCtx<'_>) -> Option<String> {
+    if ctx.temp_roots.alloca_mode == Some(false) {
+        return None;
+    }
+    let pos = ctx.temp_roots.active;
+    if let Some((alloca, _)) = ctx.temp_roots.slots.get(pos) {
+        let alloca = alloca.clone();
+        ctx.temp_roots.active += 1;
+        return Some(alloca);
+    }
+    // Grow the pool: entry alloca + on-demand frame slot. `reserve_shadow_slot`
+    // rewrites the emitted `js_shadow_frame_enter` slot count in place, so the
+    // #7184 hazard (slot index outside the pushed frame) cannot arise.
+    let Some(slot_idx) = ctx.func.reserve_shadow_slot() else {
+        ctx.temp_roots.alloca_mode = Some(false);
+        return None;
+    };
+    ctx.temp_roots.alloca_mode = Some(true);
+    let alloca = ctx.func.alloca_entry(I64);
+    // Null-init at entry: the slot is scanned from bind onward, and the
+    // RS4GC retype pass re-emits exactly this `store i64 0` as a null
+    // `addrspace(1)` store.
+    ctx.func.entry_allocas_push_store(I64, "0", &alloca);
+    ctx.temp_roots.slots.push((alloca.clone(), slot_idx));
+    ctx.temp_roots.active += 1;
+    Some(alloca)
+}
+
+/// Root-store for an alloca-mode handle: plain store, then the same
+/// bind + root-shading emission every named-local store uses. The bind must
+/// be emitted here — after the store, before whatever collects — so the
+/// rooted location dominates the collection point (#7192's invariant).
+fn temp_slot_store(ctx: &mut FnCtx<'_>, handle: &str, value_i64: &str) {
+    ctx.block().store(I64, value_i64, handle);
+    let idx = ctx.temp_roots.frame_idx(handle);
+    super::shadow_slot::emit_shadow_slot_bind_ptr(ctx, idx, handle);
+}
+
 /// Push `value_i64` (a bare heap pointer or NaN-boxed bits) and return the
-/// slot-index register.
+/// slot handle.
 pub(crate) fn temp_root_push_i64(ctx: &mut FnCtx<'_>, value_i64: &str) -> String {
+    if let Some(handle) = temp_pool_acquire(ctx) {
+        temp_slot_store(ctx, &handle, value_i64);
+        return handle;
+    }
     ctx.block()
         .call(I32, "js_gc_temp_root_push", &[(I64, value_i64)])
 }
@@ -66,7 +176,14 @@ pub(crate) fn temp_root_push_double(ctx: &mut FnCtx<'_>, value: &str) -> String 
 }
 
 /// Re-read slot `idx` as a raw `i64`.
+///
+/// In alloca mode the re-read is a plain load — the collector rewrote the
+/// alloca (shadow scan or statepoint relocation), so the load IS the
+/// post-collection value, same as a named local's re-read.
 pub(crate) fn temp_root_get_i64(ctx: &mut FnCtx<'_>, idx: &str) -> String {
+    if ctx.temp_roots.alloca_mode == Some(true) {
+        return ctx.block().load(I64, idx);
+    }
     ctx.block().call(I64, "js_gc_temp_root_get", &[(I32, idx)])
 }
 
@@ -82,6 +199,10 @@ pub(crate) fn temp_root_get_double(ctx: &mut FnCtx<'_>, idx: &str) -> String {
 /// `concat` accumulator (#6971), where every `js_string_concat` yields a new
 /// string and the old one stops being the value that must stay alive.
 pub(crate) fn temp_root_set_i64(ctx: &mut FnCtx<'_>, idx: &str, value_i64: &str) {
+    if ctx.temp_roots.alloca_mode == Some(true) {
+        temp_slot_store(ctx, idx, value_i64);
+        return;
+    }
     ctx.block()
         .call_void("js_gc_temp_root_set", &[(I32, idx), (I64, value_i64)]);
 }
@@ -98,6 +219,27 @@ pub(crate) fn temp_root_set_double(ctx: &mut FnCtx<'_>, idx: &str, value: &str) 
 
 /// Drop slot `idx` and everything pushed above it.
 pub(crate) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
+    if ctx.temp_roots.alloca_mode == Some(true) {
+        // Mirror the FFI contract exactly: drop `idx` and everything acquired
+        // above it. Each released slot is zeroed (dropping its retention) and
+        // its frame mirror cleared; the pool entry becomes reusable.
+        //
+        // A repeated release of an already-released handle (the documented
+        // `implicit_this_restore` → outer-group interleaving) finds no
+        // watermark position and is the same harmless no-op the FFI's
+        // `base < len` guard made it.
+        let Some(pos) = ctx.temp_roots.position(idx) else {
+            return;
+        };
+        let released: Vec<(String, u32)> =
+            ctx.temp_roots.slots[pos..ctx.temp_roots.active].to_vec();
+        ctx.temp_roots.active = pos;
+        for (alloca, slot_idx) in released {
+            ctx.block().store(I64, "0", &alloca);
+            super::shadow_slot::emit_shadow_slot_clear(ctx, slot_idx);
+        }
+        return;
+    }
     ctx.block()
         .call_void("js_gc_temp_root_truncate", &[(I32, idx)]);
 }
@@ -160,7 +302,21 @@ pub(crate) fn implicit_this_restore(ctx: &mut FnCtx<'_>, save: ImplicitThisSave)
 
 /// Push `value` onto the array held in temp-root slot `idx`, writing the
 /// possibly-reallocated array pointer back into the slot.
+///
+/// The fused `js_array_push_f64_temp_rooted` runtime helper exists only to
+/// collapse the FFI stack's get+push+set triple into one call; in alloca mode
+/// the triple is a load, the push itself, and a store — so the plain
+/// `js_array_push_f64` (which roots `value` internally on its grow path) is
+/// the cheaper form and the fused helper stays FFI-fallback-only.
 pub(crate) fn temp_rooted_array_push(ctx: &mut FnCtx<'_>, idx: &str, value: &str) {
+    if ctx.temp_roots.alloca_mode == Some(true) {
+        let arr = ctx.block().load(I64, idx);
+        let new_arr = ctx
+            .block()
+            .call(I64, "js_array_push_f64", &[(I64, &arr), (DOUBLE, value)]);
+        temp_slot_store(ctx, idx, &new_arr);
+        return;
+    }
     ctx.block().call_void(
         "js_array_push_f64_temp_rooted",
         &[(I32, idx), (DOUBLE, value)],
