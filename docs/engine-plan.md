@@ -742,12 +742,45 @@ landed (#7314) and became *reachable* (#7339) and *selectable* (#7340). The spin
    default-on for **peak RSS −69%**. What remains is the re-derivation under the
    statepoint default rather than the shadow stack.
 
-7. **Performance now has a measured starting point, and two traps in front of
-   it.** `bench_fibonacci`/`bench_bitwise` measure nothing (#7395) — fix or
-   retire them before any performance claim cites them. `bench_array_ops` is
-   4.5× behind Node with the array-store guard and growth path dominating
-   (#7396). **Measure on a quiet host**: a first fix attempt was reverted because
-   host load hit 55 and its disassembly check matched an absent symbol.
+7. **Performance now has a MEASURED BACKLOG, not a starting point** (updated
+   2026-08-06). The earlier traps are resolved: #7395 closed, #7396 closed as
+   already-fixed by #7421 (re-measured at 2.32×, and the inline write tier
+   A/B'd at 13.8× via prototype pollution). The public-baseline sweep
+   (quiet host, pinned Node v22.23.1 / Bun 1.3.14, 11 runs/cell) produced the
+   backlog, worst-first vs bun:
+
+   | row | ratio | workstream |
+   |---|--:|---|
+   | `json_parse_1mb` | 6.27× | **JSON parser speed** (shared with tape) |
+   | `map_1m` | 5.74× | Map internals |
+   | `batch` | 5.29× | app-pattern batch |
+   | `field_access` (json_polyglot) | 13× vs bun | **JSON tape scan** (#7478) |
+   | `string_template_interp` | 3.09× | string building |
+   | `json_stringify_1mb` | 2.62× | JSON stringify |
+
+   And one **win to protect**: JSON roundtrip 194 ms vs bun 221 / node 384 —
+   the tape's memcpy path. Any tape change must keep it (#7476 pins the
+   numbers).
+
+   **The JSON workstream is sequenced, with a correctness gate in front:**
+   #7477 first — the DirectParser parses floats differently from the tape
+   materializer *and node agrees with the tape*, which is silently wrong for
+   every <1 KB and >16 MB parse today and hard-blocks the tape fix. Then
+   #7478 — reparse-on-materialize inside `force_materialize_lazy` (projected
+   ~1500 ms field_access from 2981 while keeping the roundtrip win). The
+   dead ends are recorded in #7478 so they are not re-walked: batch-flip
+   trigger tuning measured time-neutral and RSS-negative (180→213 MB);
+   per-element merge-scope overhead measured neutral. The per-element
+   materializer being ~2.3× the batch parser is the entire cost.
+
+   This workstream runs **in parallel** with the GC-correctness layers — no
+   dependency in either direction — and is agent-delegable because every
+   claim in it is checkable against the node oracle (`PERRY_JSON_TAPE=0/1`
+   checksum parity).
+
+   **Measure on a quiet host**: a first fix attempt was reverted because
+   host load hit 55 and its disassembly check matched an absent symbol; the
+   sweep's own gate (≤25% CPU for 60 s, AC power) is the standard.
 
 8. **CI hygiene is a correctness input, not housekeeping.** Three of four RS4GC
    arms had never executed (#7393). Before citing any matrix as platform
