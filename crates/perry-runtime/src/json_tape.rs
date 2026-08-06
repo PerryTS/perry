@@ -1185,12 +1185,11 @@ pub unsafe fn alloc_lazy_array(
     let scope = crate::gc::RuntimeHandleScope::new();
     let blob_handle = scope.root_string_ptr(blob_str);
     // Detach the tape FIRST, while there is no header address to invalidate.
-    // The `allocate` call itself is plain `std::alloc` — no collection, no
-    // arena accounting. `gc_note_external_side_alloc` may trigger, but only a
-    // conservative (non-moving) cycle, and the only live thing we hold here is
+    // The buffer itself is plain `std::alloc` memory — no arena accounting, no
+    // collection. `allocate` does account the bytes as external side pressure,
+    // which can trigger, but the only live thing we hold across it is
     // `blob_handle`, which is rooted.
     let (tape_ptr, tape_allocation) = crate::json_tape_store::allocate(tape_entries);
-    crate::gc::gc_note_external_side_alloc(tape_allocation.byte_len());
     let raw = alloc_lazy_header_bytes();
     let hdr = raw as *mut LazyArrayHeader;
     (*hdr).cached_length = cached_length;

@@ -160,17 +160,17 @@ pub(crate) fn register(header_addr: usize, allocation: TapeSideAllocation) {
     TAPE_REGISTRY_NONEMPTY.with(|c| c.set(true));
 }
 
-/// Live tape bytes owned by this thread. Diagnostic/test accounting only — see
-/// `TAPE_LIVE_BYTES` for why this is not old-generation pressure.
+/// Live tape bytes owned by this thread, as this module has accounted them.
+#[cfg(test)]
 #[inline]
-pub(crate) fn live_bytes() -> usize {
+fn live_bytes() -> usize {
     TAPE_LIVE_BYTES.with(Cell::get)
 }
 
 /// Drop the tape owned by `header_addr`, if any. Idempotent: the finalize
-/// hook, the copied-minor from-space pass, and the deterministic
-/// post-materialize release all funnel through here and any of them may run
-/// first.
+/// hook, the sweep-entry dead-owner pass, thread teardown, and the
+/// deterministic post-materialize release all funnel through here, and any of
+/// them may run first.
 pub(crate) fn release(header_addr: usize) {
     if !TAPE_REGISTRY_NONEMPTY.with(Cell::get) {
         return;
@@ -190,9 +190,17 @@ pub(crate) fn release(header_addr: usize) {
     drop(allocation);
 }
 
+/// Paired with [`note_freed`], and deliberately called from [`allocate`] —
+/// BEFORE the owning header exists.
+///
+/// `gc_note_external_side_alloc` can trigger a collection. At that point this
+/// module holds nothing a collector can invalidate (the tape buffer is plain
+/// `std::alloc` memory), and the caller holds only its rooted blob handle, so
+/// there is no window where a live raw header could go stale across it.
 #[inline]
 fn note_allocated(bytes: usize) {
     TAPE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
+    crate::gc::gc_note_external_side_alloc(bytes);
 }
 
 /// Tape bytes are `external_side_live_bytes()` — the same old-generation
