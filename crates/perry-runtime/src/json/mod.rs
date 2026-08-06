@@ -1228,4 +1228,78 @@ mod tests {
             );
         }
     }
+
+    /// #7477: the DirectParser must produce bit-identical f64s to the tape
+    /// materializer, whose number path is `str::parse::<f64>()` (correctly
+    /// rounded, matches V8's strtod for round-trippable inputs). The
+    /// DirectParser's small fixed-point fast path computed
+    /// `int as f64 + (frac as f64 / 10^k)` — TWO IEEE roundings (the division
+    /// rounds, then the addition rounds again), which is off by one ulp for
+    /// some literals. Node agrees with the tape, so the DirectParser is the
+    /// wrong one.
+    ///
+    /// `260.75197` (= 83 * 3.14159 in f64) is the minimal diverging literal
+    /// from `bench_field_access`: correct bits 0x1.04c0811b1d92bp+8, the
+    /// double-rounded fast path returned 0x1.04c0811b1d92cp+8 — whose
+    /// shortest round-trip stringification is "260.75197000000004", which is
+    /// how a pure parse divergence surfaced as a stringify-length checksum
+    /// mismatch (2552986400 vs node's 2552985550).
+    #[test]
+    fn direct_parser_number_bits_match_strtod() {
+        let parse_direct = |s: &str| -> u64 {
+            let bytes = s.as_bytes();
+            let mut parser = DirectParser::new(bytes);
+            let value = unsafe { parser.parse_number() };
+            assert!(
+                !parser.has_trailing_content(),
+                "parse_number left trailing input on {s:?}"
+            );
+            value.bits()
+        };
+        let mut cases: Vec<String> = vec![
+            // The two bench_field_access literals that diverged (#7477),
+            // plus their negations.
+            "260.75197".to_string(),
+            "521.50394".to_string(),
+            "-260.75197".to_string(),
+            "-521.50394".to_string(),
+            // Assorted shapes through every parse_number arm: integer fast
+            // path, fixed-point fast path, exponent / long-token fallback.
+            "0".to_string(),
+            "-0".to_string(),
+            "0.1".to_string(),
+            "-0.1".to_string(),
+            "0.3".to_string(),
+            "3.14159".to_string(),
+            "1.0000001".to_string(),
+            "123.456".to_string(),
+            "999999999999999.9".to_string(),
+            "9007199254740993.1".to_string(),
+            "0.000000001".to_string(),
+            "12345678901234567890".to_string(),
+            "1e10".to_string(),
+            "-2.5e-3".to_string(),
+            "1.7976931348623157e308".to_string(),
+        ];
+        // The full bench_field_access value space: shortest round-trip
+        // renderings of i * 3.14159. Two of these (i = 83, 166) diverged
+        // under the double-rounding fast path.
+        for i in 0..10000 {
+            cases.push(format!("{}", i as f64 * 3.14159));
+        }
+        for s in &cases {
+            let want: f64 = s.parse().unwrap();
+            let got = parse_direct(s);
+            assert_eq!(
+                got,
+                want.to_bits(),
+                "DirectParser::parse_number({s:?}) = {:#018x} ({}), \
+                 str::parse (tape/node) = {:#018x} ({})",
+                got,
+                f64::from_bits(got),
+                want.to_bits(),
+                want,
+            );
+        }
+    }
 }
