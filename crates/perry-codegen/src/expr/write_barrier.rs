@@ -380,7 +380,14 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
         // bits carry no heap pointer, which is the barrier's own first test.
         blk.store(DOUBLE, value_double, slot_ptr);
     }
-    if !string_addref_needed && !layout_note_needed && !write_barrier_needed {
+    // `emit_write_barrier_slot_on_block` emits nothing when barrier emission is
+    // compile-time disabled, so counting `write_barrier_needed` alone would put
+    // a predicate, a `cond_br` and two blocks around an arm holding only a
+    // `br` under `PERRY_WRITE_BARRIERS=0`. That knob exists to A/B the barrier's
+    // cost; leaving dead IR in one arm of the A/B is exactly the kind of thing
+    // that makes such a comparison lie.
+    let write_barrier_emitted = write_barrier_needed && crate::codegen::write_barriers_enabled();
+    if !string_addref_needed && !layout_note_needed && !write_barrier_emitted {
         return None;
     }
     let value_bits = ctx.block().bitcast_double_to_i64(value_double);
@@ -402,7 +409,7 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
         if layout_note_needed {
             emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
         }
-        if write_barrier_needed {
+        if write_barrier_emitted {
             emit_write_barrier_slot_on_block(blk, barrier_parent_bits, slot_addr, &value_bits);
         }
         blk.br(&done_label);

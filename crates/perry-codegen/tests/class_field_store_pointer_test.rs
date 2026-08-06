@@ -411,11 +411,18 @@ fn guarded_store_leaves_every_block_terminated() {
             || trimmed.starts_with("ret ")
             || trimmed.starts_with("unreachable")
             || trimmed.starts_with("switch ")
-            || trimmed == "}"
         {
             open_block = None;
         }
     }
+    // A closing `}` is deliberately NOT treated as a terminator: the last block
+    // of a function is exactly where a fall-through arm leaves a dangling
+    // merge block, and accepting `}` would let that pass.
+    assert!(
+        open_block.is_none(),
+        "block {:?} was left unterminated at the end of the module",
+        open_block.unwrap()
+    );
 }
 
 /// A `number`-declared field takes the raw-f64 store path, which is proven

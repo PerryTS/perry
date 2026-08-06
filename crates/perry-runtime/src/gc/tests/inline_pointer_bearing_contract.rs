@@ -47,12 +47,20 @@ fn codegen_may_carry_heap_pointer(bits: u64) -> bool {
     CODEGEN_HEAP_TAG_TOP16.contains(&top16) || (top16 == 0 && bits >= CODEGEN_BARE_ADDR_FLOOR)
 }
 
-/// Payload patterns exercised under every tag: a plausible heap address, an
-/// 8-aligned address inside the handle band, a misaligned one, zero, and an
-/// all-ones payload.
-const PAYLOADS: [u64; 6] = [
+/// Payload patterns exercised under every tag: zero, an 8-aligned address below
+/// every floor, one **between the two runtime floors** (`0x1000 ≤ p < 0x10000`),
+/// an 8-aligned address above both, a misaligned one, a plausible heap address,
+/// and an all-ones payload.
+///
+/// The `0x2000` entry is the one that earns `CODEGEN_BARE_ADDR_FLOOR`'s value:
+/// it is the band where `layout_pointer_bearing_bits` (floor `0x1000`) and
+/// `decode_heap_addr` (floor `0x10000`) disagree, so without it the enumeration
+/// would pass for either choice of floor and prove nothing about picking the
+/// lower one.
+const PAYLOADS: [u64; 7] = [
     0x0000_0000_0000_0000,
     0x0000_0000_0000_0008,
+    0x0000_0000_0000_2000,
     0x0000_0001_0000_0000,
     0x0000_0001_0000_0007,
     0x0000_1234_5678_9AB0,
@@ -98,16 +106,20 @@ fn codegen_top16_test_is_a_superset_of_layout_pointer_bearing_bits() {
     }
 }
 
-/// **Sabotage check — proves the two tests above can fail.**
+/// **Non-vacuity check for the two enumerations above.**
 ///
-/// Drop `POINTER_TAG` from the comparand set (the single most likely way to
-/// get this wrong) and assert that a real NaN-boxed object pointer is then
-/// classified as "no bookkeeping needed" while the runtime still resolves it
-/// to a heap address. Without this, a green run could mean "the enumeration
-/// found nothing" *or* "the enumeration never looked at a pointer".
+/// A green enumeration could mean "nothing violated the superset property" or
+/// "the enumeration never looked at a real pointer". This pins the second
+/// reading shut: an ordinary NaN-boxed object pointer is a value the runtime
+/// really does resolve to a heap address, and the shipped comparand set really
+/// does keep its bookkeeping.
+///
+/// The MUTATIONAL half — what actually happens when the set is wrong — is
+/// `sabotaged_guard_strands_a_young_child_the_shipped_guard_keeps` below, which
+/// runs a sabotaged guard through the real barrier and remembered-set
+/// machinery rather than comparing literals.
 #[test]
-fn dropping_pointer_tag_from_the_set_would_strand_a_child() {
-    const SABOTAGED: [u64; 2] = [0x7FFA, 0x7FFF];
+fn an_object_pointer_keeps_its_bookkeeping() {
     let object_bits = crate::value::POINTER_TAG | 0x0000_1234_5678_9AB0;
     assert_ne!(
         decode_heap_addr(object_bits),
@@ -115,13 +127,12 @@ fn dropping_pointer_tag_from_the_set_would_strand_a_child() {
         "the witness must be a value the runtime really does resolve to a heap address"
     );
     assert!(
-        codegen_may_carry_heap_pointer(object_bits),
-        "the shipped comparand set must keep the barrier for an object pointer"
+        layout_pointer_bearing_bits(object_bits),
+        "the witness must also be pointer-bearing to the layout machinery"
     );
     assert!(
-        !SABOTAGED.contains(&(object_bits >> 48)),
-        "a comparand set missing POINTER_TAG must classify an object pointer as barrier-free — \
-         if this assertion fails the superset tests above cannot detect a dropped tag either"
+        codegen_may_carry_heap_pointer(object_bits),
+        "the shipped comparand set must keep the barrier for an object pointer"
     );
 }
 
@@ -195,10 +206,16 @@ fn sabotaged_guard_strands_a_young_child_the_shipped_guard_keeps() {
     let _guard = GcTestIsolationGuard::new();
 
     // (1) shipped guard, pointer child — barrier runs, edge covered, marked.
+    //
+    // The OLD parent is allocated FIRST in every phase below. `young` is a bare
+    // Rust `usize`, which production mode neither roots nor pins (the
+    // conservative stack scan resolves to `SkipDisabled`), so an allocation
+    // after it could collect and leave it naming freed or relocated memory.
+    // Old-gen first means no allocation ever follows the young child.
     reset_remembered_set();
     clear_marks();
-    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let old_header = unsafe { header_from_user_ptr(old_obj as *const u8) };
     unsafe { (*old_header).gc_flags |= GC_FLAG_MARKED };
     let child_bits = ptr_bits(young);
@@ -222,8 +239,8 @@ fn sabotaged_guard_strands_a_young_child_the_shipped_guard_keeps() {
     }
     reset_remembered_set();
     clear_marks();
-    let young2 = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let (old_obj2, fields2) = unsafe { alloc_old_test_object(1) };
+    let young2 = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let old_header2 = unsafe { header_from_user_ptr(old_obj2 as *const u8) };
     unsafe { (*old_header2).gc_flags |= GC_FLAG_MARKED };
     assert!(
