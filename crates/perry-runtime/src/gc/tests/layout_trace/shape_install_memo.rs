@@ -39,8 +39,14 @@ const CLASS_WITNESS: u32 = 0x7510_05;
 /// A two-field shape, `{ n: number; s: string }`: slot 0 raw-f64, slot 1
 /// pointer-bearing. The pointer half is what makes the GC witness meaningful —
 /// a pointer-free shape would survive any declaration.
-const RAW_MASK: [u64; 1] = [0b01];
-const POINTER_MASK_WORDS: [u64; 1] = [0b10];
+///
+/// `static`, not `const`, and that matters here: the memo keys on the *address*
+/// of the mask words, and a `const` is inlined at each use site rather than
+/// having one. These stand in for the `private unnamed_addr constant` globals
+/// codegen emits per class, which do have one address, so a `static` is the
+/// faithful model as well as the stable one.
+static RAW_MASK: [u64; 1] = [0b01];
+static POINTER_MASK_WORDS: [u64; 1] = [0b10];
 
 fn keys_for(class_id: u32) -> *mut crate::array::ArrayHeader {
     let packed: &[u8] = b"n\0s\0";
