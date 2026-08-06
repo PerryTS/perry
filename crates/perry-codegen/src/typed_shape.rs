@@ -79,6 +79,80 @@ pub(crate) fn type_is_raw_f64_candidate(ty: &Type) -> bool {
     matches!(ty, Type::Number)
 }
 
+/// #7510: may this class's canonical layout be declared at **allocation**,
+/// before its constructor runs, rather than validated after it?
+///
+/// The motivating defect is #7512: `js_gc_init_typed_shape_layout` is emitted
+/// after the constructor call, so no raw-f64 class-field store *inside* a
+/// constructor can pass its `GC_OBJ_TYPED_LAYOUT_INTACT` guard, and every one
+/// falls back to `js_put_value_set`. Declaring the fields `number` is what
+/// makes the class slower — more type information selects a representation
+/// whose guard the construction path has made unsatisfiable.
+///
+/// Moving the existing call earlier does not work: it validates that each
+/// raw-f64 slot holds a plain double, and a fresh slot holds `TAG_UNDEFINED`
+/// (tag `0x7FFC`, inside `layout_raw_f64_bits`' reject range), so an early call
+/// downgrades every instance. `js_gc_declare_typed_shape_layout` skips that
+/// validation, which shifts the burden of proof here.
+///
+/// Two obligations, and both are discharged by conditions, not by hope:
+///
+/// 1. **No read may observe a raw-f64 slot before its first write** — it would
+///    read `undefined`'s NaN-box bits as a double and see a NaN. `prologue`
+///    is #7486's `ctor_prologue_param_assigned_fields`: the maximal leading run
+///    of `this.<f> = <plain param>` statements, non-empty only for a class with
+///    no heritage, no field initializers or computed keys, no decorators, plain
+///    parameters, and no setter shadowing an assigned field. A `LocalGet` of a
+///    plain parameter cannot throw, allocate, or observe `this`, so every field
+///    it assigns is written before ANY other effect of the constructor. We
+///    require **every** raw-f64 field to be in that set — one field assigned
+///    later would still be exposed.
+///
+/// 2. **The collector's view must be true at birth.** We require the pointer
+///    mask to be EMPTY, which makes the declared state `GC_LAYOUT_POINTER_FREE`
+///    — byte-identical to what `layout_init_pointer_free` already sets on every
+///    fresh instance. So the only delta this emits is the intact bit and the
+///    shape-shared descriptor install; the collector sees exactly what it saw
+///    before. A class with pointer fields would install `SIDE_MASK` and hand the
+///    collector slots holding the allocator's fill — sound on the
+///    `js_object_alloc_class_inline_keys` path, which pre-fills with
+///    `undefined`, but it would rest on that pre-fill rather than on nothing,
+///    so it is out of scope here.
+///
+/// Nothing rests on the *values* being numbers. A constructor that stores a
+/// string into a `number`-declared field is rejected by the store guard
+/// (`is_plain_number_bits`, and the inline path's finite-exponent test), falls
+/// back to the boxed setter, and downgrades the descriptor through
+/// `layout_note_slot` — the same path any post-install contradiction takes.
+pub(crate) fn class_layout_declarable_at_allocation(
+    class: &perry_hir::Class,
+    prologue: &std::collections::HashSet<String>,
+) -> bool {
+    if prologue.is_empty() {
+        return false;
+    }
+    let mut has_raw_f64 = false;
+    for field in &class.fields {
+        if field.key_expr.is_some() {
+            continue;
+        }
+        // An untyped field lands on `Any`/`Unknown`, which
+        // `type_is_pointer_bearing` answers `true` for — so it is rejected
+        // here, by the same condition and for the same reason as a declared
+        // `string`.
+        if type_is_pointer_bearing(&field.ty) {
+            return false;
+        }
+        if type_is_raw_f64_candidate(&field.ty) {
+            has_raw_f64 = true;
+            if !prologue.contains(&field.name) {
+                return false;
+            }
+        }
+    }
+    has_raw_f64
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypedShapeLayout {
     pub(crate) slot_count: u32,

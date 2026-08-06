@@ -159,6 +159,14 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         VOID,
         &[I64, I32, PTR, I32, PTR, I32],
     );
+    // #7510: same signature, but for a FRESHLY ALLOCATED instance whose slots
+    // are still the allocator's fill — it declares the layout instead of
+    // validating it, so a constructor's own field stores can see it.
+    module.declare_function(
+        "js_gc_declare_typed_shape_layout",
+        VOID,
+        &[I64, I32, PTR, I32, PTR, I32],
+    );
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)
     // - js_array_join(arr, sep) -> *mut StringHeader (i64)

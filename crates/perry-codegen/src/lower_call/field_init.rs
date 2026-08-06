@@ -146,7 +146,7 @@ fn prologue_assigned_field<'a>(
 /// so every field it assigns is written before ANY other effect of the
 /// constructor — which is exactly the guarantee that makes the earlier
 /// `undefined` write dead.
-fn ctor_prologue_param_assigned_fields(
+pub(crate) fn ctor_prologue_param_assigned_fields(
     class: &perry_hir::Class,
 ) -> std::collections::HashSet<String> {
     let empty = std::collections::HashSet::new();

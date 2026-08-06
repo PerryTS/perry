@@ -85,60 +85,8 @@ fn reload_instance(
     (handle, boxed)
 }
 
-/// Emit the `js_gc_init_typed_shape_layout` call that registers the freshly
-/// constructed instance's raw-f64 / pointer slot masks with the GC so the
-/// typed-feedback class-field fast path engages. Must run AFTER the constructor
-/// body has set the declared fields to their numeric values (the runtime
-/// validates each raw-f64 slot currently holds a plain double before promoting).
-/// No-op for classes without an inline-keys shape global. Refs the standalone
-/// `<class>_constructor` symbol path, which previously returned before reaching
-/// this — leaving every numeric class field permanently on the by-name hashmap
-/// fallback (10M `counter.increment()` ran ~640ns/call instead of slot-direct).
-fn emit_typed_shape_layout_init(ctx: &mut FnCtx<'_>, class_name: &str, obj_handle: &str) {
-    let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() else {
-        return;
-    };
-    // Refs #5094: prefer the prefix-disambiguated chain so slot/word counts
-    // agree with the mask globals emitted in compile_module (same-named
-    // cross-module parents mis-resolve in the name-keyed walk).
-    let typed_layout = ctx
-        .class_init_chains
-        .get(class_name)
-        .map(|chain| crate::typed_shape::class_typed_layout_from_chain(chain))
-        .unwrap_or_else(|| crate::typed_shape::class_typed_layout(ctx.classes, class_name));
-    let slot_count_str = typed_layout.slot_count.to_string();
-    let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
-    let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();
-    let raw_mask_ref = if typed_layout.raw_f64_mask_words.is_empty() {
-        "null".to_string()
-    } else {
-        format!(
-            "@{}",
-            crate::typed_shape::raw_f64_mask_global_name_from_keys_global(&keys_global_name)
-        )
-    };
-    let pointer_mask_ref = if typed_layout.pointer_mask_words.is_empty() {
-        "null".to_string()
-    } else {
-        format!(
-            "@{}",
-            crate::typed_shape::mask_global_name_from_keys_global(&keys_global_name)
-        )
-    };
-    ctx.block().call_void(
-        "js_gc_init_typed_shape_layout",
-        &[
-            (I64, obj_handle),
-            (I32, &slot_count_str),
-            (PTR, &raw_mask_ref),
-            (I32, &raw_mask_word_count_str),
-            (PTR, &pointer_mask_ref),
-            (I32, &pointer_mask_word_count_str),
-        ],
-    );
-}
-
 pub(crate) use super::capture_writeback::emit_class_capture_writeback;
+use super::typed_shape_init::{emit_typed_shape_layout_declare, emit_typed_shape_layout_init};
 
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
@@ -931,6 +879,17 @@ fn lower_new_impl_inner(
     //
     // The slot is released by the scope cut in `lower_new_impl`, which covers
     // all ~20 return paths below.
+    // #7510: declare the canonical layout HERE — the instance is allocated, its
+    // slots still hold the allocator's `undefined` fill, and the constructor
+    // has not run. That ordering is the whole point: the post-constructor
+    // `emit_typed_shape_layout_init` arrives after the only stores that wanted
+    // the descriptor, so a `number`-declared class field could never pass its
+    // intact-bit guard (#7512). Gated and suppressed as one — see
+    // `layout_declared_at_allocation`.
+    //
+    // Before the temp-root push, so the handle this names is the one the
+    // allocator returned: nothing between here and there can collect.
+    emit_typed_shape_layout_declare(ctx, class_name, &obj_handle);
     let instance_root = construction_runs_user_code(ctx, class_name)
         .then(|| temp_root::temp_root_push_i64(ctx, &obj_handle));
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);

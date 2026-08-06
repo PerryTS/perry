@@ -82,6 +82,7 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_gc_note_slot_layout"
         | "js_gc_note_slot_layout_aware"
         | "js_gc_init_typed_shape_layout"
+        | "js_gc_declare_typed_shape_layout"
         // `typed_feedback.rs`: counters/registries only. This intentionally
         // does not include feedback wrappers that perform the actual object
         // get/set operation.

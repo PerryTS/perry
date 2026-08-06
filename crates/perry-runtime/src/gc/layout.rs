@@ -935,11 +935,43 @@ pub extern "C" fn js_gc_note_slot_layout_aware(
     layout_note_slot(parent_user, slot_index as usize, value_bits);
 }
 
+/// How `init_typed_shape_layout` establishes the descriptor's truth.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TypedShapeProof {
+    /// **Observe.** The object's fields already hold their final values, so
+    /// check every one against the declared masks and refuse the descriptor if
+    /// any disagrees. This is the post-constructor call site.
+    ValidateSlots,
+    /// **Construct.** The object was allocated moments ago and its slots are
+    /// still the allocator's `TAG_UNDEFINED` fill, so there is nothing to
+    /// observe yet — validating would reject every raw-f64 slot (`undefined`
+    /// carries a `0x7FFC` tag, inside `layout_raw_f64_bits`' reject range) and
+    /// downgrade the object it was asked to describe.
+    ///
+    /// The caller carries the proof instead, and it is a codegen one: #7510
+    /// emits this form only for a class whose constructor prologue provably
+    /// assigns **every** raw-f64 field from a plain parameter before any other
+    /// statement runs (`lower_call::field_init`'s #7486 predicate), so no read
+    /// can observe a raw-f64 slot between here and its first write.
+    ///
+    /// The *collector's* half needs no proof at all: `TAG_UNDEFINED` is a
+    /// non-pointer in every slot, which is consistent with both the
+    /// `POINTER_FREE` and the `SIDE_MASK` state this installs.
+    ///
+    /// And the descriptor stays honest afterwards without the loop: a store
+    /// that contradicts it is rejected by the guard's `is_plain_number_bits` /
+    /// the inline path's finite-exponent test, falls back to the boxed setter,
+    /// and downgrades through [`layout_note_slot`] exactly as a post-install
+    /// contradiction always has.
+    FreshlyAllocated,
+}
+
 unsafe fn init_typed_shape_layout(
     user_ptr: usize,
     slot_count: usize,
     raw_f64_words: &[u64],
     pointer_words: &[u64],
+    proof: TypedShapeProof,
 ) {
     let Some(header) = layout_header_for_user(user_ptr) else {
         return;
@@ -965,7 +997,7 @@ unsafe fn init_typed_shape_layout(
         return;
     }
 
-    if slot_count != 0 {
+    if slot_count != 0 && proof == TypedShapeProof::ValidateSlots {
         let fields = (obj_header as *const u8)
             .add(std::mem::size_of::<crate::object::ObjectHeader>())
             as *const u64;
@@ -1054,14 +1086,15 @@ unsafe fn init_typed_shape_layout(
     }
 }
 
-#[no_mangle]
-pub extern "C" fn js_gc_init_typed_shape_layout(
+#[inline]
+fn typed_shape_layout_entry(
     obj: u64,
     slot_count: u32,
     raw_f64_mask_words: *const u64,
     raw_f64_mask_word_count: u32,
     pointer_mask_words: *const u64,
     pointer_mask_word_count: u32,
+    proof: TypedShapeProof,
 ) {
     let user_ptr = strip_nanbox_user_ptr(obj);
     let slot_count = slot_count as usize;
@@ -1080,8 +1113,66 @@ pub extern "C" fn js_gc_init_typed_shape_layout(
         } else {
             std::slice::from_raw_parts(pointer_mask_words, pointer_mask_word_count as usize)
         };
-        init_typed_shape_layout(user_ptr, slot_count, raw_words, pointer_words);
+        init_typed_shape_layout(user_ptr, slot_count, raw_words, pointer_words, proof);
     }
+}
+
+/// Register a constructed instance's canonical layout **after** its fields hold
+/// their final values. Validates every slot before promoting.
+#[no_mangle]
+pub extern "C" fn js_gc_init_typed_shape_layout(
+    obj: u64,
+    slot_count: u32,
+    raw_f64_mask_words: *const u64,
+    raw_f64_mask_word_count: u32,
+    pointer_mask_words: *const u64,
+    pointer_mask_word_count: u32,
+) {
+    typed_shape_layout_entry(
+        obj,
+        slot_count,
+        raw_f64_mask_words,
+        raw_f64_mask_word_count,
+        pointer_mask_words,
+        pointer_mask_word_count,
+        TypedShapeProof::ValidateSlots,
+    );
+}
+
+/// #7510: register a **freshly allocated** instance's canonical layout, before
+/// its constructor runs, so the constructor's own field stores can pass the
+/// `GC_OBJ_TYPED_LAYOUT_INTACT` guard.
+///
+/// `js_gc_init_typed_shape_layout` cannot be moved earlier: it validates that
+/// each raw-f64 slot already holds a plain double, and a fresh slot holds
+/// `TAG_UNDEFINED`, so an early call downgrades every instance it touches. That
+/// is why a declared-`number` class field was *slower* than the equivalent
+/// object literal (#7512) — the descriptor arrived after the only stores that
+/// wanted it, so every one fell back to `js_put_value_set`.
+///
+/// This form carries the proof on the codegen side instead; see
+/// [`TypedShapeProof::FreshlyAllocated`] for what it rests on and why the
+/// collector's half is unconditional. **Callers must invoke it only on an
+/// instance whose slots are still the allocator's fill** — the whole contract
+/// is "nothing has been written yet", and it is not checkable from here.
+#[no_mangle]
+pub extern "C" fn js_gc_declare_typed_shape_layout(
+    obj: u64,
+    slot_count: u32,
+    raw_f64_mask_words: *const u64,
+    raw_f64_mask_word_count: u32,
+    pointer_mask_words: *const u64,
+    pointer_mask_word_count: u32,
+) {
+    typed_shape_layout_entry(
+        obj,
+        slot_count,
+        raw_f64_mask_words,
+        raw_f64_mask_word_count,
+        pointer_mask_words,
+        pointer_mask_word_count,
+        TypedShapeProof::FreshlyAllocated,
+    );
 }
 
 pub(super) unsafe fn layout_rebuild_from_slots_with_policy(

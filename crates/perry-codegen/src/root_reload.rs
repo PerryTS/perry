@@ -118,6 +118,7 @@ const NON_COLLECTING: &[&str] = &[
     "js_gc_temp_root_truncate",
     // layout / barrier bookkeeping
     "js_gc_init_typed_shape_layout",
+    "js_gc_declare_typed_shape_layout",
     "js_gc_layout_note_slot",
     "js_write_barrier",
     "js_write_barrier_root_nanbox",
