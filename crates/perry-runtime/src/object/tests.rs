@@ -1244,6 +1244,11 @@ fn map_size_by_name_does_not_oob_read_keys_array() {
 ///
 /// Walks the whole table so a future `builtin_constructor_spec_length` addition
 /// cannot silently re-open the hole for a different name.
+/// `test_global_this_builtin_constructor_value` builds the no-op-thunk shape for
+/// every name, including the ones `populate_global_this_builtins` currently gives
+/// a dedicated thunk — deliberately: the assertion is about the helper's contract
+/// for a constructor NAME, so it stays meaningful if a name is later moved onto
+/// the shared thunk. Reverting the exclusion fails this on all ~70 entries.
 #[test]
 fn global_builtin_constructor_values_are_not_redispatched_by_name() {
     // The closure `name` / `length` props these assertions read live in the
@@ -1260,7 +1265,10 @@ fn global_builtin_constructor_values_are_not_redispatched_by_name() {
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         let ctor_raw = test_global_this_builtin_constructor_value(name);
         let ctor = JSValue::from_bits(ctor_raw.to_bits());
-        assert!(ctor.is_pointer(), "{name} should be a closure-backed global");
+        assert!(
+            ctor.is_pointer(),
+            "{name} should be a closure-backed global"
+        );
         let closure = ctor.as_pointer::<crate::closure::ClosureHeader>();
         if super::native_module::builtin_closure_length(closure as usize).is_some() {
             with_recorded_length += 1;
