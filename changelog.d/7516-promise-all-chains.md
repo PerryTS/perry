@@ -126,11 +126,15 @@ frame rather than in a table.
 
 **What is still open, stated rather than papered over.** A protected run of the
 *auto-optimize* binary is not silent: it prints the correct checksum and then
-faults inside `js_async_step_done` on another 72-byte `GC_TYPE_PROMISE`. That is
-a ninth site of the same family, after the program's observable output, and the
-kernel matches the oracle byte for byte with and without the instrument. The
-`PERRY_NO_AUTO_OPTIMIZE=1` binary and the new gap test are both silent under the
-instrument. Separately, `test_gap_gc_iterator_drain_rooting` and
+faults inside `js_async_step_done` on another 72-byte `GC_TYPE_PROMISE`. Three
+separate attempts at it are in this PR and all three are correct on their own
+terms — returning the re-read address instead of the pre-call copy, rooting the
+receiver across `js_assimilate_thenable`, and seeding `INLINE_TRAP` from the
+handles rather than from the arm's locals — and **none of them cleared it**, so
+the holder is somewhere I have not found. It is after the program's observable
+output; the kernel matches the oracle byte for byte with and without the
+instrument, and the `PERRY_NO_AUTO_OPTIMIZE=1` binary and the new gap test are
+both silent under it. Separately, `test_gap_gc_iterator_drain_rooting` and
 `test_gap_iterator_helpers_2874` fail on `origin/main` too — verified by building
 `origin/main`'s runtime from a clean `git archive` export and running both
 against it — and belong to #7498's `array_from_spread_value` prototype walk.

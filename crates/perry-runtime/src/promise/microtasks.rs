@@ -800,6 +800,14 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
                         prev_trap.current_step as *const crate::closure::ClosureHeader,
                     );
+                    // #7497: seed the trap from the HANDLES, not from the locals.
+                    // Between the re-read at the top of this arm and here sit the
+                    // runaway-reentry guard (which allocates a TypeError on its
+                    // bounded path) and two handle pushes; a stale `next` stored
+                    // into the trap is what `js_async_step_done` later settles
+                    // and RETURNS as the async function's own result promise.
+                    let next = rooted_promise(&next_handle);
+                    let step_closure = rooted_closure(&step_handle);
                     INLINE_TRAP.with(|c| {
                         c.set(InlineTrap {
                             trap_next: next,

@@ -649,11 +649,13 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
         // `PERRY_GC_PROTECT_FROMSPACE=1` faults on it here under the
         // auto-optimize link.
         let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h =
-            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(trap.trap_next as i64));
+        let target_h = scope.root_nanbox_f64(boxed_promise_or_undef(trap.trap_next));
         let value_h = scope.root_nanbox_f64(value);
-        resolve_trap_next_with_adoption(trap.trap_next, value_h.get_nanbox_f64());
-        crate::value::js_nanbox_get_pointer(target_h.get_nanbox_f64()) as *mut Promise
+        // Pass the RE-READ address, not `trap.trap_next`: leaving the pre-root
+        // copy nameable is exactly the shape this whole PR is about, and the
+        // rooting above is not a licence to keep using the old binding.
+        resolve_trap_next_with_adoption(unboxed_promise(&target_h), value_h.get_nanbox_f64());
+        unboxed_promise(&target_h)
     } else {
         bump(&MT_STEP_DONE_REUSE_MISS);
         // An async fn always returns a FRESH promise — `js_promise_resolved`'s
@@ -708,7 +710,16 @@ fn resolve_trap_next_with_adoption(target: *mut Promise, value: f64) {
     }
     // User thenable (e.g. Drizzle QueryPromise, #586): assimilate, then
     // chain the wrapper promise into `target`.
-    let assim = js_assimilate_thenable(value);
+    //
+    // #7497: `js_assimilate_thenable` runs the user `then` getter and allocates,
+    // and `target` is the RECEIVER of both settlements below. Root it (and the
+    // value) across the call and re-read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(boxed_promise_or_undef(target));
+    let value_h = scope.root_nanbox_f64(value);
+    let assim = js_assimilate_thenable(value_h.get_nanbox_f64());
+    let target = unboxed_promise(&target_h);
+    let value = value_h.get_nanbox_f64();
     if assim.to_bits() != value.to_bits() && js_value_is_promise(assim) != 0 {
         let inner = crate::value::js_nanbox_get_pointer(assim) as *mut Promise;
         if !inner.is_null() && inner != target {
