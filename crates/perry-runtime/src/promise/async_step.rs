@@ -327,7 +327,30 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     // string) observes `[object Promise]` instead. The other arms of
     // this function already handle native pending Promises correctly
     // via the `js_value_is_promise` + thunk path.
+    // #7497: `step_closure` is a GC-heap closure that this function stores into
+    // a `Task::AsyncStep` at the end, after `adapt_foreign_promise_value`,
+    // `js_promise_new`, `build_async_step_thunks` and `js_promise_resolved` have
+    // all had a chance to collect. Pre-fix it rode through all of them in a
+    // register, so the ENQUEUED task could carry a pre-collection address — and
+    // the microtask runner, which correctly re-reads everything it pops, then
+    // faithfully dispatched that dead pointer. `PERRY_GC_PROTECT_FROMSPACE=1`
+    // reports it at `call_async_step_direct`, one frame away from the producer.
+    let step_scope = crate::gc::RuntimeHandleScope::new();
+    let step_handle = step_scope.root_nanbox_f64(if step_closure.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(step_closure as i64)
+    });
+    let rooted_step = || -> ClosurePtr {
+        let v = step_handle.get_nanbox_f64();
+        if v.to_bits() == crate::value::TAG_UNDEFINED {
+            std::ptr::null()
+        } else {
+            crate::value::js_nanbox_get_pointer(v) as ClosurePtr
+        }
+    };
     let value = adapt_foreign_promise_value(value);
+    let step_closure = rooted_step();
 
     // Reuse predicate. `next` reuse is sound only when AsyncStepChain
     // is being called from the body of the SAME step closure that the
@@ -413,13 +436,13 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     // that will queue the right Task when called.
                     bump(&MT_STEP_CHAIN_REUSE_MISS);
                     trace_async_suspend(inner);
-                    let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
+                    let (fulfill, reject) = build_async_step_thunks(rooted_step(), trap_next);
                     return then_backpatch_result(inner, fulfill, reject, trap_next);
                 }
             }
         } else {
             bump(&MT_STEP_CHAIN_REUSE_MISS);
-            let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
+            let (fulfill, reject) = build_async_step_thunks(rooted_step(), trap_next);
             let p = js_promise_resolved(value);
             return then_backpatch_result(p, fulfill, reject, trap_next);
         }
@@ -427,18 +450,36 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
         // Pointer-tagged but not a Promise (thenable etc.). Take the
         // fully-general path so assimilation runs.
         bump(&MT_STEP_CHAIN_REUSE_MISS);
-        let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
+        let (fulfill, reject) = build_async_step_thunks(rooted_step(), trap_next);
         let p = js_promise_resolved(value);
         return then_backpatch_result(p, fulfill, reject, trap_next);
     };
 
+    // #7497: `capture_context()` allocates, and `next` / `queued_value` are the
+    // OTHER two GC values this task carries, so root them across it too and take
+    // every address from a handle at the push.
+    let next_handle = step_scope.root_nanbox_f64(if next.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(next as i64)
+    });
+    let queued_value_handle = step_scope.root_nanbox_f64(queued_value);
+    let context = capture_context();
+    let next = {
+        let v = next_handle.get_nanbox_f64();
+        if v.to_bits() == crate::value::TAG_UNDEFINED {
+            std::ptr::null_mut()
+        } else {
+            crate::value::js_nanbox_get_pointer(v) as *mut Promise
+        }
+    };
     TASK_QUEUE.with(|q| {
         q.borrow_mut().push_back(Task::AsyncStep(
-            step_closure,
-            queued_value,
+            rooted_step(),
+            queued_value_handle.get_nanbox_f64(),
             next,
             is_error,
-            capture_context(),
+            context,
         ));
     });
     crate::event_pump::js_notify_main_thread();
