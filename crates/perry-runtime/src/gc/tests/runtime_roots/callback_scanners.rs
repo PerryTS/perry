@@ -344,9 +344,10 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
         "the lazy header must be born old, or this test exercises nothing"
     );
 
-    let scope = RuntimeHandleScope::new();
-    let hdr_handle = scope.root_raw_mut_ptr(hdr);
-    let first = unsafe { crate::json_tape::lazy_get(hdr_handle.get_raw_mut_ptr(), 7) };
+    // No handle scope: the header is old-gen (asserted above), automatic
+    // triggers are suppressed, and nothing here collects — so `hdr` cannot
+    // move for the length of this test.
+    let first = unsafe { crate::json_tape::lazy_get(hdr, 7) };
     let element_addr = first.bits() & POINTER_MASK;
     assert_ne!(
         element_addr, 0,
@@ -357,21 +358,20 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
         "the materialized element must be young, or no old→young edge exists"
     );
 
-    let hdr_after = hdr_handle.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
     let (cache_slot, header_addr) = unsafe {
-        let cache = (*hdr_after).materialized_elements;
+        let cache = (*hdr).materialized_elements;
         assert!(
             !cache.is_null(),
             "cold lazy_get should allocate the sparse cache"
         );
         (
             cache.add(7) as usize,
-            header_from_user_ptr(hdr_after as *const u8) as usize,
+            header_from_user_ptr(hdr as *const u8) as usize,
         )
     };
     assert_ne!(
         crate::arena::generation_page_for_addr(cache_slot),
-        crate::arena::generation_page_for_addr(hdr_after as usize),
+        crate::arena::generation_page_for_addr(hdr as usize),
         "cache and header must land on different pages, or the in-object barrier \
          would have covered the slot by accident"
     );

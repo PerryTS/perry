@@ -218,7 +218,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         // reason, as `json_tape::json_tape_safepoint`: the window is one
         // allocation wide, so a test that waits for the arena trigger to land
         // in it is a coin flip. Compiles to nothing outside `cfg(test)`.
-        spill_safepoint(obj_handle.get_raw_mut_ptr::<ObjectHeader>() as usize);
+        spill_safepoint(obj_ptr);
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let meta = (*obj).meta;
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;

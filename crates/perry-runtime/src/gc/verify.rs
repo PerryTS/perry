@@ -121,11 +121,44 @@ pub(super) unsafe fn remember_evacuated_old_to_young_slot(
     if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
         return;
     }
-    let external = !matches!(
+    sticky.remember_slot(
+        parent_header,
+        slot,
+        slot_is_external_to(parent_header, slot),
+    );
+}
+
+/// Is `slot` outside `parent_header`'s own allocation, or on a page the
+/// old-page modbuf cannot describe?
+///
+/// #7538: this decides whether the re-arm records a bare page (found again by
+/// walking the objects ON that page) or a `(page → owner header)` pair (found
+/// again by re-entering the OWNER's descriptor). Deciding it by GENERATION —
+/// "not old ⟹ external" — is right for a malloc side buffer and wrong for
+/// every old-gen buffer a GC object owns but does not contain. The lazy JSON
+/// array's sparse element cache is exactly that: a separate `GC_TYPE_STRING`
+/// block, born old at ≥2049 elements, whose slots only
+/// `GcRewriteDescriptorKind::LazyArray` on the owning `LazyArrayHeader` can
+/// read. Re-armed as a bare old page, the next minor's dirty scan walked that
+/// page, found the cache's own leaf header, and scanned nothing — so a cached
+/// element pointer went stale one collection AFTER the store's own barrier
+/// entry had been consumed and cleared. Containment is the question the
+/// modbuf is actually asking.
+#[inline]
+unsafe fn slot_is_external_to(parent_header: *mut GcHeader, slot: *mut u64) -> bool {
+    if !matches!(
         crate::arena::classify_heap_generation(slot as usize),
         crate::arena::HeapGeneration::Old
-    );
-    sticky.remember_slot(parent_header, slot, external);
+    ) {
+        return true;
+    }
+    let start = parent_header as usize;
+    let total_size = (*parent_header).size as usize;
+    if total_size == 0 {
+        return true;
+    }
+    let slot_addr = slot as usize;
+    slot_addr < start || slot_addr >= start + total_size
 }
 
 pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
@@ -389,21 +422,40 @@ pub(super) fn old_young_external_slot_covered(
         .any(|&(entry_page, entry_header)| entry_page == page && entry_header == parent_header)
 }
 
+/// Can the next minor's dirty scan actually REACH `slot`?
+///
+/// Two coverage forms, and which one applies is a question of CONTAINMENT,
+/// not of generation (#7538). A bare dirty old page is found again by walking
+/// the objects on it, so it only proves reachability for a slot that lives
+/// inside a heap object whose own descriptor enumerates it. A slot in a buffer
+/// the parent merely POINTS AT is reachable only through the parent's
+/// descriptor, which needs the `(page → owner header)` external pair.
+///
+/// Dispatching on generation instead accepted a bare page mark for any old-gen
+/// external buffer. The lazy JSON array's sparse element cache is exactly
+/// that — a separate `GC_TYPE_STRING` block, born old at ≥2049 elements,
+/// readable only by `GcRewriteDescriptorKind::LazyArray` on the owning
+/// `LazyArrayHeader` — so the verifier's own predicate agreed with the
+/// producer's wrong barrier and neither could see the hole.
+///
+/// An external pair is accepted for an in-object slot too: it strictly
+/// implies reachability, and the malloc-parent barrier
+/// (`runtime_write_barrier_gc_slot`) legitimately emits it.
 #[inline]
-pub(super) fn old_young_slot_covered(
+pub(super) unsafe fn old_young_slot_covered(
     snapshot: &RememberedDirtySnapshot,
     parent_header: usize,
     slot: *mut u64,
 ) -> bool {
-    let page = crate::arena::generation_page_for_addr(slot as usize);
-    if matches!(
-        crate::arena::classify_heap_generation(slot as usize),
-        crate::arena::HeapGeneration::Old
-    ) {
-        snapshot.dirty_old_pages.contains(&page)
-    } else {
-        old_young_external_slot_covered(snapshot, parent_header, slot)
+    if old_young_external_slot_covered(snapshot, parent_header, slot) {
+        return true;
     }
+    if slot_is_external_to(parent_header as *mut GcHeader, slot) {
+        return false;
+    }
+    snapshot
+        .dirty_old_pages
+        .contains(&crate::arena::generation_page_for_addr(slot as usize))
 }
 
 #[inline]
