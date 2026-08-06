@@ -59,11 +59,27 @@ unsafe fn receiver_gc_type(ptr: *const ArrayHeader) -> u8 {
 ///    once, as the spec requires.
 pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
     let raw = crate::value::js_nanbox_get_pointer(value) as usize;
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(raw)? };
+    // Band/slab validation BEFORE any deref: rejects handle ids and the
+    // header-less small-buffer slab without touching memory.
+    unsafe { crate::value::addr_class::try_read_gc_header(raw)? };
+    // Only THEN follow the forwarding chain. `js_array_grow` (issue #233) leaves
+    // a `GC_FLAG_FORWARDED` header at the OLD address whose first eight bytes —
+    // where `length`/`capacity` used to live — now hold the forwarding pointer.
+    // Reading `length` off the stale header yields a garbage element count, and
+    // the copy below then memcpy'd from an address derived from it: `[...sparse]`
+    // after `sparse.length = 5`, and `[...beyond]` after `beyond[9] = 9`, both
+    // took EXC_BAD_ACCESS in `_platform_memmove`. Every other array helper cleans
+    // first, including `js_array_clone`'s own memcpy tail; this one must too.
+    let arr = crate::array::clean_arr_ptr(raw as *const ArrayHeader);
+    if arr.is_null() {
+        return None;
+    }
+    // Re-read the type off the POST-forwarding header: the stale one is the
+    // address the caller named, the live one is the array we would copy.
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize)? };
     if header.obj_type != crate::gc::GC_TYPE_ARRAY {
         return None;
     }
-    let arr = raw as *const ArrayHeader;
     if crate::array::array_iteration_is_exotic(arr) {
         return None;
     }
@@ -93,18 +109,34 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
 /// reads `arr[i]`, which yields `undefined` for a hole, while the slot itself
 /// holds `TAG_HOLE`. Normalize on the way out so `[...[1, , 3]]` stays
 /// `[1, undefined, 3]` and `1 in [...[1, , 3]]` stays `true`.
+///
+/// Both reads of the source go through `clean_arr_ptr`, so a `js_array_grow`
+/// forwarding header (#233) is followed rather than mistaken for the array.
 pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let src_h = scope.root_nanbox_f64(value);
+    let read_src = || {
+        clean_arr_ptr(
+            crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader
+        )
+    };
     unsafe {
-        let len = (*(crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64())
-            as *const ArrayHeader))
-            .length;
+        let src = read_src();
+        if src.is_null() {
+            return js_array_alloc(0);
+        }
+        let len = (*src).length;
         let result_h =
             scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
-        let src = crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader;
+        // Re-read AFTER the allocation: `js_array_alloc` is a collection point,
+        // and pre-#7497 the sibling `js_array_clone` memcpy'd from the
+        // pre-collection address, i.e. out of retired from-space.
+        let src = read_src();
         let result =
             crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
+        if src.is_null() || result.is_null() {
+            return js_array_alloc(0);
+        }
         if len > 0 {
             let src_elements =
                 (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;

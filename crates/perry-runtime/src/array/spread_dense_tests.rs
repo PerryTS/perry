@@ -175,6 +175,46 @@ fn a_handle_band_id_is_rejected_without_dereferencing_it() {
 }
 
 #[test]
+fn a_grown_arrays_forwarding_header_is_followed_not_copied() {
+    // `js_array_grow` leaves a GC_FLAG_FORWARDED header at the OLD address, and
+    // its first eight bytes — where length/capacity used to live — now hold the
+    // forwarding pointer. Reading `length` off the stale header yields a garbage
+    // element count, and the memcpy derived from it took EXC_BAD_ACCESS. The JS
+    // shapes were `[...sparse]` after `sparse.length = 5` and `[...beyond]` after
+    // `beyond[9] = 9`; both grow past capacity while the caller still names the
+    // pre-grow address.
+    let src = dense(&[1.0, 2.0]);
+    let stale = boxed(src);
+    js_array_set_length(src, 40.0);
+
+    let cleaned = clean_arr_ptr(src as *const ArrayHeader);
+    assert_ne!(
+        cleaned as usize, src as usize,
+        "probe must really force a grow-and-forward, or it proves nothing"
+    );
+
+    // Everything below is driven from the STALE value the caller would hold.
+    assert_eq!(
+        dense_spread_source(stale).map(|p| p as usize),
+        Some(cleaned as usize),
+        "the guard must report the forwarded array, not the retired header"
+    );
+    let copy = dense_spread_copy(stale);
+    unsafe {
+        assert_eq!((*copy).length, 40);
+        assert_eq!(slot_bits(copy, 0), 1.0f64.to_bits());
+        assert_eq!(slot_bits(copy, 1), 2.0f64.to_bits());
+        for i in 2..40 {
+            assert_eq!(
+                slot_bits(copy, i),
+                TAG_UNDEFINED,
+                "slot {i} past the original length reads undefined, like arr[i]"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_sparse_array_whose_length_outruns_its_storage_is_not_eligible() {
     // Live indices past the dense backing store live in the named-property map,
     // which the element copy never reads — `array_iteration_is_exotic`'s third
