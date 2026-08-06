@@ -60,12 +60,12 @@ fi
 # `scripts/gc_root_dominance_allowlist.json` uses, so a fixed kernel cannot keep
 # its exemption by inertia.
 SKIPS=(
-  # #7475: fails under BOTH link modes, differently ("Uncaught (in promise) 0"
-  # with PERRY_NO_AUTO_OPTIMIZE=1, a rooting-shaped TypeError without). The
-  # promise-rejection half is a separate defect from the iterator-drain rooting
-  # bug this gate was created for; it is tracked on #7475 and this line comes
-  # out with it.
-  "promise_all_chains:pre-existing promise-rejection failure, #7475"
+  # #7497: fails under BOTH link modes, differently ("Uncaught (in promise) 0"
+  # with PERRY_NO_AUTO_OPTIMIZE=1, a rooting-shaped TypeError without), and was
+  # unchanged by #7495's iterator-drain rooting fix in both — which is the
+  # evidence that it is a separate promise-rejection defect rather than the
+  # rooting family this gate was created for.
+  "promise_all_chains:promise rejects with a resolution value at scale, #7497"
 )
 
 # LIVENESS MATCHER. Reads the archive the linker was actually handed out of a

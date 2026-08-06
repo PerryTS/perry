@@ -22,8 +22,8 @@
 // line, and an out-of-line spread behind two property hops is the lowering
 // that calls `js_iterator_to_array` directly. Shrink the function and the
 // spread re-routes through `array_from_spread_value` instead, which has its
-// own separate stale-root defect (reported on #7475) and would make this file
-// red for the wrong reason.
+// own separate stale-root defect (#7498) and would make this file red for the
+// wrong reason.
 //
 // LIVE BY CONSTRUCTION AND ONLY WHEN SOMETHING MOVES. A non-moving collection
 // cannot expose it — the stale address still names the same bytes — which is

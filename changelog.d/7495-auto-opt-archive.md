@@ -31,7 +31,10 @@ All handles are NaN-boxed rather than `root_raw_*_ptr`, so
 `PERRY_GC_PROTECT_FROMSPACE=1` faults on both binaries at the same retiring
 minor. Rebuilding the runtime archive one axis at a time showed the auto-opt
 RUSTFLAGS (`-C panic=abort`) are irrelevant and the stripped feature set only
-changes allocation timing enough to make the stale read observable.
+changes allocation timing enough to make the stale read observable. So this was
+a latent correctness bug for **every** user of array spread / `Array.from`, not
+an auto-optimize-only one — the auto-optimize link was the trigger that made it
+visible.
 
 ### Added
 
@@ -47,8 +50,10 @@ It asserts its subject was live rather than assuming it: the linker command line
 disk. The auto-optimizer falls back to the prebuilt archives by design when its
 cargo rebuild fails, and such a run would pass every output comparison while
 exercising the wrong binary. Its one skip (`promise_all_chains`, a separate
-promise-rejection defect still open on #7475) carries a reason, and a skip entry
-matching no kernel fails the script.
+promise-rejection defect tracked as #7497) carries a reason, and a skip entry
+matching no kernel fails the script. The remaining eleven kernels pass. A
+`--self-test` mode proves the liveness matcher can still fail; it caught a real
+over-match while the gate was being written.
 
 Not yet in branch protection's required contexts — a new gate has never been
 green; promote after its first green run on `main`.
