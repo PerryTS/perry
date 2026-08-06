@@ -59,14 +59,15 @@ fi
 # names a kernel which no longer exists FAILS below — the same rule
 # `scripts/gc_root_dominance_allowlist.json` uses, so a fixed kernel cannot keep
 # its exemption by inertia.
-SKIPS=(
-  # #7497: fails under BOTH link modes, differently ("Uncaught (in promise) 0"
-  # with PERRY_NO_AUTO_OPTIMIZE=1, a rooting-shaped TypeError without), and was
-  # unchanged by #7495's iterator-drain rooting fix in both — which is the
-  # evidence that it is a separate promise-rejection defect rather than the
-  # rooting family this gate was created for.
-  "promise_all_chains:promise rejects with a resolution value at scale, #7497"
-)
+#
+# EMPTY IS THE INTENDED STEADY STATE. `promise_all_chains` was the only entry;
+# #7497 fixed it (the `globalThis` builtin lookup read its receiver out of a root
+# and only then allocated the key, so every `Promise.resolve` inside a wide
+# combinator was a chance to deref retired from-space). Every array expansion
+# below is guarded on `${#…[@]}` because macOS ships bash 3.2, where `set -u`
+# makes `"${EMPTY[@]}"` an "unbound variable" error — an empty skip list must
+# leave the gate RUNNING, not abort it before the first kernel.
+SKIPS=()
 
 # LIVENESS MATCHER. Reads the archive the linker was actually handed out of a
 # `perry -v` compile log. Deliberately reads the `[link] invoking:` command
@@ -158,22 +159,26 @@ if [[ ${#all_kernels[@]} -eq 0 ]]; then
 fi
 
 skip_names=()
-for entry in "${SKIPS[@]}"; do
-  skip_names+=("${entry%%:*}")
-done
+if [[ ${#SKIPS[@]} -gt 0 ]]; then
+  for entry in "${SKIPS[@]}"; do
+    skip_names+=("${entry%%:*}")
+  done
+fi
 
 # A skip entry that matches nothing is a failure, not a no-op.
 rotted=0
-for name in "${skip_names[@]}"; do
-  found=0
-  for k in "${all_kernels[@]}"; do
-    [[ "$k" == "$name" ]] && found=1
+if [[ ${#skip_names[@]} -gt 0 ]]; then
+  for name in "${skip_names[@]}"; do
+    found=0
+    for k in "${all_kernels[@]}"; do
+      [[ "$k" == "$name" ]] && found=1
+    done
+    if [[ $found -eq 0 ]]; then
+      echo "error: skip entry '$name' matches no kernel in $KERNEL_DIR — delete its line." >&2
+      rotted=1
+    fi
   done
-  if [[ $found -eq 0 ]]; then
-    echo "error: skip entry '$name' matches no kernel in $KERNEL_DIR — delete its line." >&2
-    rotted=1
-  fi
-done
+fi
 [[ $rotted -eq 0 ]] || exit 1
 
 requested=("$@")
@@ -183,9 +188,11 @@ if [[ ${#requested[@]} -gt 0 ]]; then
 else
   for k in "${all_kernels[@]}"; do
     skip=0
-    for name in "${skip_names[@]}"; do
-      [[ "$k" == "$name" ]] && skip=1
-    done
+    if [[ ${#skip_names[@]} -gt 0 ]]; then
+      for name in "${skip_names[@]}"; do
+        [[ "$k" == "$name" ]] && skip=1
+      done
+    fi
     [[ $skip -eq 1 ]] || selected+=("$k")
   done
 fi
@@ -262,9 +269,13 @@ for name in "${selected[@]}"; do
 done
 
 echo
-for entry in "${SKIPS[@]}"; do
-  echo "SKIP  ${entry%%:*} — ${entry#*:}"
-done
+if [[ ${#SKIPS[@]} -gt 0 ]]; then
+  for entry in "${SKIPS[@]}"; do
+    echo "SKIP  ${entry%%:*} — ${entry#*:}"
+  done
+else
+  echo "SKIP  (none — every kernel in $KERNEL_DIR is gated)"
+fi
 
 if [[ $failures -gt 0 ]]; then
   echo

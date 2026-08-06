@@ -40,8 +40,10 @@ name: Auto-Optimize App Patterns
 #      every output comparison while testing the exact configuration this job
 #      does not care about.
 #
-# The one skip (`promise_all_chains`) is named with a reason inside the script,
-# and a skip entry that matches no kernel FAILS, so it cannot outlive its fix.
+# The skip list inside the script is EMPTY as of #7497 — every kernel in
+# `benchmarks/app-patterns/kernels` is gated. A skip entry that matches no kernel
+# FAILS, so an exemption cannot outlive its fix; that rule is what took
+# `promise_all_chains` out of the list in the same PR that fixed it.
 
 on:
   pull_request:
