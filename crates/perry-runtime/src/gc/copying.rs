@@ -356,7 +356,17 @@ impl StickyRememberedSet {
         }
         let page = crate::arena::generation_page_for_addr(slot as usize);
         if external {
-            self.external_pages.push((parent_header as usize, page));
+            // #7538: an owner's external buffer can contribute thousands of
+            // slots (a lazy JSON array's sparse element cache is one 8-byte
+            // slot per element), and they are visited in address order — so
+            // one adjacent-duplicate check collapses a whole page's worth of
+            // pushes into a single entry. `restore` dedupes again inside
+            // `mark_dirty_external_slot_page`; this keeps the intermediate
+            // Vec from growing with the element count.
+            let entry = (parent_header as usize, page);
+            if self.external_pages.last() != Some(&entry) {
+                self.external_pages.push(entry);
+            }
         } else {
             self.old_pages.insert(page);
         }
