@@ -25,6 +25,8 @@ mod tests;
 // Cross-sibling shared types/thread-locals (used by sibling modules via
 // `use super::*;`). These are not part of the crate-public surface
 // individually; the public re-exports below are explicit and named.
+#[cfg(test)]
+pub(crate) use allocators::arena_alloc_gc_old_born_tenured;
 pub(crate) use allocators::{
     inactive_survivor_index, with_survivor_arena, with_survivor_arena_mut,
 };

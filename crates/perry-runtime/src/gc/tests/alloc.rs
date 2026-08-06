@@ -482,12 +482,20 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             rewrite_descriptor_kind: GcRewriteDescriptorKind::LazyArray,
             layout_slot_kind: GcLayoutSlotKind::None,
             movable: true,
-            external_byte_policy: GcExternalBytePolicy::InlinePayload,
+            // #7539: the tape is a `json_tape_store` side allocation, not
+            // inline payload. Inline, it made the header as large as the tape
+            // (~2.4 MB on a 10k-record blob), which `arena_alloc_gc` routed
+            // into the old generation with GC_FLAG_TENURED — reclaimable only
+            // by a FULL collection.
+            external_byte_policy: GcExternalBytePolicy::SideAllocation,
             large_object_policy: GcLargeObjectPolicy::OldArenaWhenOverThreshold,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::None,
+            // The header is ~88 bytes now, so it is born in the nursery and
+            // the copying minor really does evacuate it; the tape registry is
+            // keyed by the header address and has to follow.
+            move_hook_kind: GcMoveHookKind::LazyArrayTape,
             rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::None,
+            finalize_hook_kind: GcFinalizeHookKind::LazyArrayTape,
         },
         GcTypeInfo {
             type_id: GC_TYPE_BUFFER,

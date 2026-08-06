@@ -41,13 +41,13 @@ fn build_lazy(input: &[u8]) -> *mut crate::json_tape::LazyArrayHeader {
     .expect("valid JSON should build a tape")
 }
 
-/// A blob big enough that its tape crosses `LARGE_OBJECT_THRESHOLD_BYTES`
-/// several times over — the regime the bug lived in. 20 000 scalars is
-/// ~20 002 tape entries ≈ 240 KB, 15× the threshold.
-fn big_blob() -> Vec<u8> {
-    let mut blob = Vec::with_capacity(128 * 1024);
+const ELEMENTS: u32 = 20_000;
+
+/// `[0,1,...,N-1]` — one tape entry per element.
+fn flat_blob() -> Vec<u8> {
+    let mut blob = Vec::with_capacity(256 * 1024);
     blob.push(b'[');
-    for i in 0..20_000u32 {
+    for i in 0..ELEMENTS {
         if i > 0 {
             blob.push(b',');
         }
@@ -57,38 +57,94 @@ fn big_blob() -> Vec<u8> {
     blob
 }
 
-/// The load-bearing claim: a tape far over the large-object threshold adds
-/// nothing to the old generation, because it is not a GC allocation at all.
-///
-/// This is the assertion that would have failed before the fix — the old
-/// inline layout grew `old_gen_in_use_bytes` by the full tape size on every
-/// single parse, and only a FULL collection could ever take it back.
-#[test]
-fn test_large_tape_adds_no_old_generation_bytes() {
-    let _guard = GcTestIsolationGuard::new();
-    let blob = big_blob();
-    let tape_entries = crate::json_tape::build_tape(&blob)
+/// `[[0],[1],...,[N-1]]` — same element COUNT (so the same sparse-cache size)
+/// and nearly the same blob length, but three tape entries per element.
+fn nested_blob() -> Vec<u8> {
+    let mut blob = Vec::with_capacity(256 * 1024);
+    blob.push(b'[');
+    for i in 0..ELEMENTS {
+        if i > 0 {
+            blob.push(b',');
+        }
+        blob.push(b'[');
+        blob.extend_from_slice(i.to_string().as_bytes());
+        blob.push(b']');
+    }
+    blob.push(b']');
+    blob
+}
+
+fn big_blob() -> Vec<u8> {
+    flat_blob()
+}
+
+fn tape_bytes_of(blob: &[u8]) -> usize {
+    crate::json_tape::build_tape(blob)
         .expect("valid JSON")
         .entries
-        .len();
-    let tape_bytes = tape_entries * std::mem::size_of::<crate::json_tape::TapeEntry>();
-    assert!(
-        tape_bytes > 4 * crate::gc::LARGE_OBJECT_THRESHOLD_BYTES,
-        "test premise: the tape ({tape_bytes} B) must be well over the \
-         large-object threshold, or this test proves nothing"
-    );
+        .len()
+        * std::mem::size_of::<crate::json_tape::TapeEntry>()
+}
 
-    let old_before = crate::arena::old_gen_in_use_bytes();
+/// The load-bearing claim: old-generation growth no longer SCALES with the
+/// tape, because the tape is not a GC allocation at all.
+///
+/// Measuring one parse against zero would only prove that old-gen grew by less
+/// than the tape — but a parse legitimately puts other things there (the
+/// retained blob string and the sparse element cache are both well over
+/// `LARGE_OBJECT_THRESHOLD_BYTES` at this size). So compare two blobs with the
+/// SAME element count, and therefore the same cache and near-identical blob
+/// bytes, whose tapes differ by ~3×. Before the fix the extra tape entries
+/// landed in old-gen one-for-one; now the difference is only the few extra
+/// bracket characters in the blob.
+#[test]
+fn test_old_generation_growth_does_not_scale_with_tape_size() {
+    let _guard = GcTestIsolationGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let flat = flat_blob();
+    let nested = nested_blob();
+    let flat_tape = tape_bytes_of(&flat);
+    let nested_tape = tape_bytes_of(&nested);
+    let tape_delta = nested_tape - flat_tape;
+    assert!(
+        flat_tape > 4 * crate::gc::LARGE_OBJECT_THRESHOLD_BYTES
+            && tape_delta > 4 * crate::gc::LARGE_OBJECT_THRESHOLD_BYTES,
+        "test premise: both tapes ({flat_tape} B, {nested_tape} B) and their \
+         difference must be well over the large-object threshold, or this \
+         test proves nothing"
+    );
+    let blob_delta = nested.len() - flat.len();
+
+    let before_flat = crate::arena::old_gen_in_use_bytes();
+    let _flat_lazy = build_lazy(&flat);
+    let flat_growth = crate::arena::old_gen_in_use_bytes() - before_flat;
+
+    let before_nested = crate::arena::old_gen_in_use_bytes();
+    let _nested_lazy = build_lazy(&nested);
+    let nested_growth = crate::arena::old_gen_in_use_bytes() - before_nested;
+
+    let growth_delta = nested_growth.saturating_sub(flat_growth);
+    assert!(
+        growth_delta < tape_delta / 2,
+        "old-gen growth tracked the tape: {tape_delta} B more tape produced \
+         {growth_delta} B more old-gen (blob grew only {blob_delta} B, and \
+         the sparse cache is identical at {ELEMENTS} elements)"
+    );
+}
+
+/// The header itself is a small, untenured nursery object now — the property
+/// that keeps it out of `arena_alloc_gc`'s large-object arm no matter how big
+/// the blob is.
+#[test]
+fn test_lazy_header_is_a_small_nursery_object_for_a_huge_tape() {
+    let _guard = GcTestIsolationGuard::new();
+    let blob = big_blob();
+    let tape_bytes = tape_bytes_of(&blob);
+    assert!(tape_bytes > 4 * crate::gc::LARGE_OBJECT_THRESHOLD_BYTES);
+
     let lazy = build_lazy(&blob);
-    let old_after = crate::arena::old_gen_in_use_bytes();
 
-    assert!(
-        old_after - old_before < tape_bytes,
-        "a {tape_bytes}-byte tape must not land in the old generation \
-         (grew {} B)",
-        old_after - old_before
-    );
-    // And the owner itself is an ordinary small nursery object now.
     assert!(
         crate::arena::pointer_in_nursery(lazy as usize),
         "the header should be nursery-resident once the tape moved out"
@@ -98,14 +154,24 @@ fn test_large_tape_adds_no_old_generation_bytes() {
         assert_eq!(
             (*header).gc_flags & GC_FLAG_TENURED,
             0,
-            "a small header must not be born tenured"
+            "a small header must not be born tenured — being born tenured is \
+             what made a per-iteration-dead tape reclaimable only by a full \
+             collection"
         );
         assert!(
             ((*header).size as usize) < crate::gc::LARGE_OBJECT_THRESHOLD_BYTES,
-            "header allocation should no longer scale with the tape"
+            "the header allocation must not scale with the tape"
         );
-        assert_eq!((*lazy).tape_len as usize, tape_entries);
+        assert_eq!(
+            (*lazy).tape_len as usize,
+            tape_bytes / std::mem::size_of::<crate::json_tape::TapeEntry>()
+        );
     }
+    assert_eq!(
+        crate::json_tape_store::registered_bytes(),
+        tape_bytes,
+        "the tape bytes must be accounted to the side-allocation store"
+    );
 }
 
 /// Installing `materialized` disowns the tape immediately. No collector runs

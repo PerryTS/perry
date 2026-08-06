@@ -324,10 +324,17 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    // Born-old header: >16 KB of inline tape. That is the shape the #7538
-    // workload had and the only one where the in-object/external distinction
-    // bites — a nursery header is traced directly and its descriptor reaches
-    // the cache without any remembered-set entry at all.
+    // Old-gen header. That is the shape the #7538 workload had and the only
+    // one where the in-object/external distinction bites — a nursery header is
+    // traced directly and its descriptor reaches the cache without any
+    // remembered-set entry at all.
+    //
+    // #7539 moved the tape into a side allocation, so the header no longer
+    // reaches old-gen by being multi-megabyte; in production it gets there by
+    // TENURING, which is too timing-dependent to assert on. The guard places
+    // it there directly so this test keeps driving the branch it was written
+    // for instead of quietly becoming a nursery-header test.
+    let _old_gen_header = crate::json_tape::ForceOldGenLazyHeaderGuard::new();
     let elements = 4096;
     let mut input = String::with_capacity(elements * 8 + 2);
     input.push('[');
@@ -344,14 +351,24 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
         "the lazy header must be born old, or this test exercises nothing"
     );
 
+    // Read an element far enough into the array that its cache slot is
+    // GUARANTEED to sit on a different 4 KiB page from the header: slot 2048
+    // is 16 KiB into the cache block. The test used to read element 7, whose
+    // slot happened to be pages away only because the header itself was
+    // multi-megabyte (the inline tape). Once #7539 shrank the header to
+    // ~88 bytes the cache landed immediately after it and the two shared a
+    // page, which would have made the containment assertion below fail for a
+    // reason that has nothing to do with the barrier under test.
+    //
     // No handle scope: the header is old-gen (asserted above), automatic
     // triggers are suppressed, and nothing here collects — so `hdr` cannot
     // move for the length of this test.
-    let first = unsafe { crate::json_tape::lazy_get(hdr, 7) };
+    const PROBE: u32 = 2048;
+    let first = unsafe { crate::json_tape::lazy_get(hdr, PROBE) };
     let element_addr = first.bits() & POINTER_MASK;
     assert_ne!(
         element_addr, 0,
-        "element 7 should materialize to a heap object"
+        "the probed element should materialize to a heap object"
     );
     assert!(
         crate::arena::pointer_in_nursery(element_addr as usize),
@@ -365,7 +382,7 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
             "cold lazy_get should allocate the sparse cache"
         );
         (
-            cache.add(7) as usize,
+            cache.add(PROBE as usize) as usize,
             header_from_user_ptr(hdr as *const u8) as usize,
         )
     };

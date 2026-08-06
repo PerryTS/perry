@@ -137,21 +137,32 @@ fn tape_entry_layout() {
 /// tracing, and an untraced one would be a use-after-free.
 #[test]
 fn tape_entry_is_pointer_free_by_construction() {
+    // On every 64-bit target a struct with a pointer-sized field has
+    // alignment 8. `TapeEntry`'s alignment is 4, so no field it has — present
+    // or future — can hold a `*mut`/`usize`/`u64`. That is the whole proof,
+    // and it is checked by the compiler's own layout rules rather than by
+    // reading the field list and trusting it.
+    assert_eq!(
+        std::mem::align_of::<TapeEntry>(),
+        4,
+        "TapeEntry gained a pointer-aligned field — it can no longer be \
+         assumed pointer-free, and json_tape_store's untraced side \
+         allocation would become a use-after-free"
+    );
+    assert!(
+        std::mem::size_of::<TapeEntry>() <= 12,
+        "TapeEntry grew — recheck the pointer-free claim above"
+    );
+    // Field widths, restated so a `u32 -> u64` widening fails here with a
+    // message that says why rather than only at the alignment assert.
     let probe = TapeEntry {
         offset: u32::MAX,
         kind: u8::MAX,
         link: u32::MAX,
     };
-    // Saturating every field cannot produce a plausible heap address in ANY
-    // 8-byte window of the entry: the widest field is 32 bits.
-    let bytes: [u8; std::mem::size_of::<TapeEntry>()] = unsafe { std::mem::transmute(probe) };
-    for window in bytes.windows(8) {
-        let word = u64::from_ne_bytes(window.try_into().unwrap());
-        assert!(
-            !crate::value::addr_class::is_plausible_heap_addr(word as usize),
-            "a saturated TapeEntry must not read as a heap address anywhere"
-        );
-    }
+    assert_eq!(std::mem::size_of_val(&probe.offset), 4);
+    assert_eq!(std::mem::size_of_val(&probe.kind), 1);
+    assert_eq!(std::mem::size_of_val(&probe.link), 4);
 }
 
 /// The tape lives outside the header allocation now, so the header stays small
