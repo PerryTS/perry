@@ -288,6 +288,46 @@ is `delta == -allowance` and scored `ok`. The largest regression this ratchet
 exists to catch — a collector that stops running copying minors — was being
 reported as passing.
 
+## A defect in the artifact costs one cell, not the whole gate (#7554)
+
+Artifact validation used to abort on the first problem it found, and it runs
+*before* the measurement step. So one cell — `12_large_live_set.heap_used_bytes`,
+spread 6,768 bytes — meant none of the twelve probes executed on any branch for
+three days. Two GC pacing changes (#7594, #7596) merged inside that window and
+each had to hand-run a both-arms A/B in place of the gate. The claim that caused
+it was about **one cell**; nothing about it voided the other 143 or made the
+probes unrunnable.
+
+Defects now carry a scope, and the scope is the blast radius:
+
+| scope | examples | what it voids |
+|---|---|---|
+| `artifact` | wrong schema, missing metric, a summary that disagrees with its own samples | everything — still fatal, still in preflight |
+| `probe` | pinned without an oracle diff, pinned with no collection | that probe's rows |
+| `cell` | spread ≠ 0 on a metric whose band's premise is bit-identity | that one cell |
+
+A `probe`- or `cell`-scoped defect **demotes** its subject out of the gating
+family for the run and is reported as a failure. So `check` still measures all
+twelve probes, still evaluates the other cells, and still names a regression
+elsewhere in the matrix — while the defect itself keeps the job red. Fail-open
+per cell, fail-closed on the verdict.
+
+The CI preflight runs `validate --scope structural`, which fails only on the
+fatal kind. That is not a hole: `check` re-derives the same defect list and fails
+on every entry, and
+`tests/test_gc_ratchet.py::FailOpenPerCellTests::test_structural_preflight_defers_every_defect_it_waves_through`
+asserts that coupling one planted defect shape at a time. Without it the flag
+would be indistinguishable from suppression.
+
+`assemble` is deliberately *not* fail-open: pinning refuses any defect outright,
+so a maintainer cannot freeze an unfit artifact. The lenient path exists only for
+an artifact already in the tree, where the alternative is measuring nothing.
+
+```bash
+python3 benchmarks/gc_ratchet/gc_ratchet.py validate               # strict: any defect fails
+python3 benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural   # what CI preflight runs
+```
+
 ## Running it
 
 Checking on the pinned quiet host, with memory and time gated:
