@@ -912,6 +912,33 @@ pub extern "C" fn js_gc_pause_stats(
     });
 }
 
+/// Stamp a freshly built, runtime-owned keys array as copy-on-write shared.
+///
+/// The `*mut GcHeader` cast lives HERE, in `gc/`, rather than at the call site.
+/// `scripts/addr_class_inventory.py` refuses a bare `as *mut GcHeader` outside
+/// `gc/` and `value/addr_class.rs`, and every one of the ~126 grandfathered
+/// entries in `scripts/addr_class_allowlist.txt` carries the same promise —
+/// "migrate to a helper in a follow-up". This is that helper for the one thing
+/// those call sites actually do: set a flag.
+///
+/// `addr_class::try_read_gc_header` cannot serve them, and that is not an
+/// oversight — it returns `&'static GcHeader`, a SHARED reference, precisely so
+/// that a probe of an untrusted address can never write through it. A flag
+/// write needs `*mut`, so it needs a separate, narrower entry point with a
+/// stronger precondition, which is what this is.
+///
+/// # Safety
+/// `user_ptr` must be the user pointer of a live GC object this thread has just
+/// allocated — never an address decoded from a NaN-box payload. That is the
+/// same discipline the arena walkers are allowlisted under: an address obtained
+/// from allocation or block iteration cannot be in the handle band, so there is
+/// nothing for `try_read_gc_header`'s band check to reject.
+#[inline]
+pub(crate) unsafe fn mark_shape_shared(user_ptr: *mut u8) {
+    let header = layout::header_from_user_ptr(user_ptr);
+    (*header).gc_flags |= GC_FLAG_SHAPE_SHARED;
+}
+
 #[cfg(test)]
 mod tests;
 

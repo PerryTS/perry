@@ -234,7 +234,6 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/class_meta.r
 lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/construct.rs | 6
 lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/prototype_objects.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/descriptors.rs | 2
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/accessors.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 3
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 1

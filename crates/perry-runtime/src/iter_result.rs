@@ -136,8 +136,7 @@ unsafe fn build_shared_keys(order: IterResultOrder) {
 
     // Copy-on-write marker. Without it, `result.extra = 1` on ONE result
     // object would append to the array every other result shares.
-    let gc_header = (keys as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+    crate::gc::mark_shape_shared(keys as *mut u8);
 
     ITER_RESULT_KEYS.with(|c| (*c.get())[order as usize] = keys);
     crate::gc::runtime_write_barrier_root_raw_ptr(keys);
