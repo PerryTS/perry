@@ -966,16 +966,43 @@ enum TypedShapeProof {
     FreshlyAllocated,
 }
 
+/// Rebuild a mask slice from the raw `(pointer, word count)` pair the FFI
+/// signature carries.
+///
+/// #7578 keeps the construction path on the raw pair and materialises a slice
+/// only where one is actually indexed. `slice::from_raw_parts` requires a
+/// non-null aligned pointer, so every call used to open with two
+/// null-to-`NonNull::dangling()` `csel` chains — twelve instructions to
+/// normalise two arguments that the fast path below then never dereferences.
+#[inline(always)]
+unsafe fn mask_words<'a>(words: *const u64, word_count: u32) -> &'a [u64] {
+    if words.is_null() || word_count == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(words, word_count as usize)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 unsafe fn init_typed_shape_layout(
     user_ptr: usize,
     slot_count: usize,
-    raw_f64_words: &[u64],
-    pointer_words: &[u64],
+    raw_f64_words: *const u64,
+    raw_f64_word_count: u32,
+    pointer_words: *const u64,
+    pointer_word_count: u32,
     proof: TypedShapeProof,
 ) {
-    let Some(header) = layout_header_for_user(user_ptr) else {
+    // One `gc_type_layout_slot_kind`, not two. `layout_header_for_user`
+    // computes the kind and accepts three of them; the line that used to follow
+    // it recomputed the same kind — a second load through the 32-byte-strided
+    // type table — to narrow those three to one. Requiring `ObjectFields`
+    // directly is exactly equivalent, because `ObjectFields` is one of the
+    // three `layout_header_for_user` admits (#7578).
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
         return;
-    };
+    }
+    let header = header_from_user_ptr(user_ptr as *const u8);
     if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
         return;
     }
@@ -986,18 +1013,9 @@ unsafe fn init_typed_shape_layout(
         return;
     }
 
-    // The two soundness checks, straight off the caller's mask words. Building
-    // a `LayoutSlotMask` here would be a 32-byte enum with a destructor —
-    // ×2, plus drop glue at every early return below, plus an allocation each
-    // for any shape wider than 64 slots — to answer two predicates. The
-    // descriptor that genuinely needs the type is built further down, only
-    // when a shape is actually installed.
-    if super::shape_install::words_intersect(raw_f64_words, pointer_words, slot_count) {
-        layout_set_typed_unknown(header, user_ptr);
-        return;
-    }
-
     if slot_count != 0 && proof == TypedShapeProof::ValidateSlots {
+        let raw_f64_words = mask_words(raw_f64_words, raw_f64_word_count);
+        let pointer_words = mask_words(pointer_words, pointer_word_count);
         let fields = (obj_header as *const u8)
             .add(std::mem::size_of::<crate::object::ObjectHeader>())
             as *const u64;
@@ -1029,19 +1047,32 @@ unsafe fn init_typed_shape_layout(
     // no `TypedLayoutDescriptor` built, cloned and dropped, no `RefCell`
     // borrow, no hash of `keys`, no field-by-field descriptor comparison.
     //
-    // The memo carries no header state: `POINTER_FREE` vs `SIDE_MASK` is
-    // recomputed from the pointer mask exactly as the slow path computes it,
-    // so a stale entry can only cost work. See `gc::shape_install` for the
-    // full staleness argument.
+    // The memo carries no state about the OBJECT. The one bit it carries about
+    // the *masks* — whether the pointer mask is empty, which selects
+    // `POINTER_FREE` vs `SIDE_MASK` — is a pure function of bytes the entry has
+    // already matched by address and length, and those bytes are immutable
+    // program constants. See `gc::shape_install` for the full staleness
+    // argument.
     //
-    // `object_keys_array_ptr`'s two guards are already discharged above
-    // (`layout_header_for_user` rejected the low addresses,
-    // `GcLayoutSlotKind::ObjectFields` was checked), so read the field
-    // directly rather than re-walking the header.
+    // `object_keys_array_ptr`'s two guards are already discharged above (the
+    // low addresses were rejected, `GcLayoutSlotKind::ObjectFields` was
+    // checked), so read the field directly rather than re-walking the header.
     let keys = (*obj_header).keys_array as usize;
-    if keys != 0 && super::shape_install::hit(keys, slot_count, raw_f64_words, pointer_words) {
+    let memo = if keys == 0 {
+        None
+    } else {
+        super::shape_install::hit(
+            keys,
+            slot_count,
+            raw_f64_words,
+            raw_f64_word_count,
+            pointer_words,
+            pointer_word_count,
+        )
+    };
+    if let Some(pointer_mask_empty) = memo {
         header_set_typed_layout_intact(header);
-        if super::shape_install::words_are_empty(pointer_words) {
+        if pointer_mask_empty {
             set_layout_state(header, GC_LAYOUT_POINTER_FREE);
         } else {
             set_layout_state(header, GC_LAYOUT_SIDE_MASK);
@@ -1050,10 +1081,27 @@ unsafe fn init_typed_shape_layout(
         return;
     }
 
-    let pointer_mask = LayoutSlotMask::from_words(pointer_words);
+    let raw_f64_slice = mask_words(raw_f64_words, raw_f64_word_count);
+    let pointer_slice = mask_words(pointer_words, pointer_word_count);
+
+    // #7578: the mask-disjointness check moved down here, off the hit path.
+    //
+    // It is a pure function of the two mask globals, and a memo hit proves an
+    // install already ran it over the *same* globals and passed — a shape whose
+    // masks intersect is downgraded here and never reaches `record`, so no
+    // intersecting tuple can be in the table to hit. Running it above the probe
+    // charged every construction of every shape for a compile-time property of
+    // the class. It stays ahead of every install, which is the only place its
+    // answer is used.
+    if super::shape_install::words_intersect(raw_f64_slice, pointer_slice, slot_count) {
+        layout_set_typed_unknown(header, user_ptr);
+        return;
+    }
+
+    let pointer_mask = LayoutSlotMask::from_words(pointer_slice);
     let descriptor = TypedLayoutDescriptor {
         slot_count,
-        raw_f64_mask: LayoutSlotMask::from_words(raw_f64_words),
+        raw_f64_mask: LayoutSlotMask::from_words(raw_f64_slice),
         pointer_mask: pointer_mask.clone(),
     };
     // #6893: try the O(shapes) shared shape descriptor (keyed by the canonical
@@ -1071,7 +1119,19 @@ unsafe fn init_typed_shape_layout(
         // canonical descriptor, so this object needs no per-object record at
         // all. `layout_forget_object` skips the hash entirely when the maps
         // are empty, which on a monomorphic workload they are.
-        super::shape_install::record(keys, slot_count, raw_f64_words, pointer_words);
+        //
+        // `pointer_mask.is_empty()` is what the hit path above will replay from
+        // the memo; `words_are_empty` is pinned equal to it by
+        // `shape_install::tests::mask_word_helpers_agree_with_layout_slot_mask`.
+        super::shape_install::record(
+            keys,
+            slot_count,
+            raw_f64_words,
+            raw_f64_word_count,
+            pointer_words,
+            pointer_word_count,
+            pointer_mask.is_empty(),
+        );
         layout_forget_object(user_ptr);
         return;
     }
@@ -1102,18 +1162,15 @@ fn typed_shape_layout_entry(
         return;
     }
     unsafe {
-        let raw_words: &[u64] = if raw_f64_mask_words.is_null() || raw_f64_mask_word_count == 0 {
-            &[]
-        } else {
-            std::slice::from_raw_parts(raw_f64_mask_words, raw_f64_mask_word_count as usize)
-        };
-        let pointer_words: &[u64] = if pointer_mask_words.is_null() || pointer_mask_word_count == 0
-        {
-            &[]
-        } else {
-            std::slice::from_raw_parts(pointer_mask_words, pointer_mask_word_count as usize)
-        };
-        init_typed_shape_layout(user_ptr, slot_count, raw_words, pointer_words, proof);
+        init_typed_shape_layout(
+            user_ptr,
+            slot_count,
+            raw_f64_mask_words,
+            raw_f64_mask_word_count,
+            pointer_mask_words,
+            pointer_mask_word_count,
+            proof,
+        );
     }
 }
 

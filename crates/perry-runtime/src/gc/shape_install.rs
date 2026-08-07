@@ -34,19 +34,41 @@
 //!
 //! # What the memo deliberately does NOT assert
 //!
-//! **Anything about the object.** The caller still re-derives, from the mask
-//! words themselves, every fact that its header declaration rests on:
-//! `field_count == slot_count`, raw-f64/pointer mask disjointness, and the
-//! per-slot validation that each raw-f64 slot holds a plain double and no
-//! pointer-bearing slot sits outside the pointer mask. The
-//! `POINTER_FREE`/`SIDE_MASK` choice is recomputed from the pointer mask, not
-//! read back from the memo — the memo carries no header state at all.
+//! **Anything about the object.** The caller still re-derives, per instance,
+//! every fact its header declaration rests on that depends on the *object*:
+//! `field_count == slot_count`, and — for the validating entry point — the
+//! per-slot check that each raw-f64 slot holds a plain double and no
+//! pointer-bearing slot sits outside the pointer mask.
 //!
 //! This split is the soundness bar. A wrong `POINTER_FREE` is a
 //! use-after-free factory: `heap_payload_slot_selection` skips the whole
-//! payload without consulting any mask. Keeping that decision on data the
-//! caller re-derives per object means a stale memo can only cost work, never
-//! correctness.
+//! payload without consulting any mask. Keeping every object-dependent
+//! decision on data the caller re-derives per object means a stale memo can
+//! only cost work, never correctness.
+//!
+//! # What the memo DOES replay, and why that is not the same thing (#7578)
+//!
+//! Two predicates over the mask words alone: their disjointness, and whether
+//! the pointer mask is empty (the `POINTER_FREE`/`SIDE_MASK` choice). Both used
+//! to be recomputed on every construction of every shape.
+//!
+//! Replaying them is sound for a reason that does not extend to anything about
+//! the object. An entry matches on the mask globals' **addresses and lengths**,
+//! and those globals are codegen-emitted `private unnamed_addr constant`s: they
+//! live in the read-only image, are never written and are never freed. So a
+//! matching address *is* a matching byte string, for the life of the process,
+//! and a pure function of those bytes has one answer forever. Contrast a header
+//! bit, which belongs to an object whose contents change under the mutator —
+//! which is why every object-dependent check above stays per-instance.
+//!
+//! Disjointness needs no stored bit at all: a shape whose masks intersect is
+//! downgraded before it can reach [`record`], so no intersecting tuple can be
+//! in the table to hit. Emptiness is stored, in `dims` bit 62.
+//!
+//! The failure mode this leaves is a *miss*, not a wrong hit: two globals
+//! holding equal words that LLVM declined to merge get separate entries, and
+//! anything that fails the address, length or slot-count comparison falls
+//! through to the install, which re-derives everything.
 //!
 //! # Self-healing
 //!
@@ -175,9 +197,9 @@ const MEMO_SLOTS: usize = 32;
 ///
 /// `dims` packs `slot_count` (low 24 bits — `js_gc_init_typed_shape_layout`
 /// rejects anything ≥ 16_000_000 before reaching here), the raw-f64 mask word
-/// count (bits 24..44) and the pointer mask word count (bits 44..64).
-/// [`record`] refuses to store a tuple that does not fit, so a packed value is
-/// never ambiguous.
+/// count (bits 24..43), the pointer mask word count (bits 43..62) and, in bit
+/// 62, whether the pointer mask is empty. [`record`] refuses to store a tuple
+/// that does not fit, so a packed value is never ambiguous.
 #[derive(Clone, Copy)]
 struct Entry {
     keys: usize,
@@ -197,13 +219,25 @@ const EMPTY: Entry = Entry {
 };
 
 const SLOT_COUNT_BITS: u32 = 24;
-const WORD_COUNT_BITS: u32 = 20;
+const WORD_COUNT_BITS: u32 = 19;
+/// Bit 62 of `dims`: this shape's pointer mask is empty, so its install
+/// selected `GC_LAYOUT_POINTER_FREE` rather than `GC_LAYOUT_SIDE_MASK` (#7578).
+///
+/// Payload, not key: [`hit`] probes with it clear and reads the stored one back
+/// out of the matched entry.
+const POINTER_MASK_EMPTY_BIT: u64 = 1 << 62;
 
-/// Pack the dimension triple, or `None` when it does not fit (a pathological
-/// shape: > 16M slots, or > 1M mask words). An unpackable tuple is simply
-/// never memoised.
+/// Pack the dimension triple plus the pointer-mask-empty bit, or `None` when it
+/// does not fit (a pathological shape: > 16M slots, or > 512K mask words —
+/// 33.5M slots, twice the ceiling the entry point already enforces). An
+/// unpackable tuple is simply never memoised.
 #[inline]
-fn pack_dims(slot_count: usize, raw_len: usize, pointer_len: usize) -> Option<u64> {
+fn pack_dims(
+    slot_count: usize,
+    raw_len: usize,
+    pointer_len: usize,
+    pointer_mask_empty: bool,
+) -> Option<u64> {
     if slot_count >= 1 << SLOT_COUNT_BITS
         || raw_len >= 1 << WORD_COUNT_BITS
         || pointer_len >= 1 << WORD_COUNT_BITS
@@ -213,7 +247,12 @@ fn pack_dims(slot_count: usize, raw_len: usize, pointer_len: usize) -> Option<u6
     Some(
         slot_count as u64
             | (raw_len as u64) << SLOT_COUNT_BITS
-            | (pointer_len as u64) << (SLOT_COUNT_BITS + WORD_COUNT_BITS),
+            | (pointer_len as u64) << (SLOT_COUNT_BITS + WORD_COUNT_BITS)
+            | if pointer_mask_empty {
+                POINTER_MASK_EMPTY_BIT
+            } else {
+                0
+            },
     )
 }
 
@@ -265,58 +304,83 @@ fn table() -> &'static UnsafeCell<[Entry; MEMO_SLOTS]> {
     }
 }
 
-/// True when `SHAPE_LAYOUTS[keys]` is already known to hold exactly the
-/// descriptor that `(slot_count, raw_words, pointer_words)` describes.
+/// `Some(pointer_mask_empty)` when `SHAPE_LAYOUTS[keys]` is already known to
+/// hold exactly the descriptor that `(slot_count, raw_words, pointer_words)`
+/// describes; `None` otherwise.
 ///
-/// `false` is never an error — it just means the caller must take the ordinary
+/// `None` is never an error — it just means the caller must take the ordinary
 /// `shape_install_shared` path, which is what establishes the entry.
+///
+/// **Takes the raw `(pointer, word count)` pairs, not slices** (#7578). The
+/// caller receives them that way across the FFI boundary, and normalising a
+/// null pointer into `NonNull::dangling()` so that `slice::from_raw_parts` is
+/// legal cost twelve instructions per construction to build two slices this
+/// function only ever compares as integers. [`record`] takes the same pairs, so
+/// the two agree on the empty-mask representation by construction.
 #[inline(always)]
 pub(super) fn hit(
     keys: usize,
     slot_count: usize,
-    raw_words: &[u64],
-    pointer_words: &[u64],
-) -> bool {
+    raw_words: *const u64,
+    raw_word_count: u32,
+    pointer_words: *const u64,
+    pointer_word_count: u32,
+) -> Option<bool> {
     debug_assert!(keys != 0, "the null keys_array is the empty-slot marker");
-    let Some(dims) = pack_dims(slot_count, raw_words.len(), pointer_words.len()) else {
-        return false;
-    };
+    let dims = pack_dims(
+        slot_count,
+        raw_word_count as usize,
+        pointer_word_count as usize,
+        false,
+    )?;
     // SAFETY: `table()` is this thread's own storage; the reference does not
     // escape and nothing re-enters between the read and its use.
-    let entry =
-        unsafe { (*table().get())[slot_index(keys, raw_words.as_ptr(), pointer_words.as_ptr())] };
+    let entry = unsafe { (*table().get())[slot_index(keys, raw_words, pointer_words)] };
     let matched = entry.keys == keys
-        && entry.dims == dims
-        && std::ptr::eq(entry.raw_words, raw_words.as_ptr())
-        && std::ptr::eq(entry.pointer_words, pointer_words.as_ptr());
-    #[cfg(test)]
-    {
-        if matched {
-            counters::note_hit();
-        }
+        && entry.dims & !POINTER_MASK_EMPTY_BIT == dims
+        && std::ptr::eq(entry.raw_words, raw_words)
+        && std::ptr::eq(entry.pointer_words, pointer_words);
+    if !matched {
+        return None;
     }
-    matched
+    #[cfg(test)]
+    counters::note_hit();
+    Some(entry.dims & POINTER_MASK_EMPTY_BIT != 0)
 }
 
 /// Record that `shape_install_shared` just confirmed (or established)
 /// `SHAPE_LAYOUTS[keys] == Some(D)` for the descriptor these mask words
-/// describe.
+/// describe, together with the `POINTER_FREE`/`SIDE_MASK` choice that
+/// descriptor's pointer mask selects.
 #[inline]
-pub(super) fn record(keys: usize, slot_count: usize, raw_words: &[u64], pointer_words: &[u64]) {
+pub(super) fn record(
+    keys: usize,
+    slot_count: usize,
+    raw_words: *const u64,
+    raw_word_count: u32,
+    pointer_words: *const u64,
+    pointer_word_count: u32,
+    pointer_mask_empty: bool,
+) {
     if keys == 0 {
         return;
     }
-    let Some(dims) = pack_dims(slot_count, raw_words.len(), pointer_words.len()) else {
+    let Some(dims) = pack_dims(
+        slot_count,
+        raw_word_count as usize,
+        pointer_word_count as usize,
+        pointer_mask_empty,
+    ) else {
         return;
     };
     #[cfg(test)]
     counters::note_record();
     // SAFETY: as in `hit` — this thread's own storage, no escaping reference.
     unsafe {
-        (*table().get())[slot_index(keys, raw_words.as_ptr(), pointer_words.as_ptr())] = Entry {
+        (*table().get())[slot_index(keys, raw_words, pointer_words)] = Entry {
             keys,
-            raw_words: raw_words.as_ptr(),
-            pointer_words: pointer_words.as_ptr(),
+            raw_words,
+            pointer_words,
             dims,
         };
     }
@@ -436,6 +500,30 @@ mod tests {
         }
     }
 
+    /// `record`/`hit` take raw `(pointer, word count)` pairs (#7578); these two
+    /// keep the tests reading like the slice API they replaced.
+    fn put(keys: usize, slot_count: usize, raw: &[u64], pointers: &[u64], empty: bool) {
+        record(
+            keys,
+            slot_count,
+            raw.as_ptr(),
+            raw.len() as u32,
+            pointers.as_ptr(),
+            pointers.len() as u32,
+            empty,
+        );
+    }
+    fn get(keys: usize, slot_count: usize, raw: &[u64], pointers: &[u64]) -> Option<bool> {
+        hit(
+            keys,
+            slot_count,
+            raw.as_ptr(),
+            raw.len() as u32,
+            pointers.as_ptr(),
+            pointers.len() as u32,
+        )
+    }
+
     /// Distinct shapes must not alias into one entry, and a shape whose
     /// dimensions do not fit the packed key must simply never memoise rather
     /// than collide with one that does.
@@ -447,19 +535,70 @@ mod tests {
         let keys = 0x4000usize;
 
         invalidate();
-        record(keys, 2, &raw, &pointers);
-        assert!(hit(keys, 2, &raw, &pointers));
-        assert!(!hit(keys + 16, 2, &raw, &pointers), "a different shape");
-        assert!(!hit(keys, 3, &raw, &pointers), "a different slot count");
-        assert!(!hit(keys, 2, &other_raw, &pointers), "a different raw mask");
-        assert!(!hit(keys, 2, &raw, &raw), "a different pointer mask");
-        assert!(!hit(keys, 2, &raw, &[]), "a different pointer word count");
+        put(keys, 2, &raw, &pointers, false);
+        assert!(get(keys, 2, &raw, &pointers).is_some());
+        assert!(
+            get(keys + 16, 2, &raw, &pointers).is_none(),
+            "a different shape"
+        );
+        assert!(
+            get(keys, 3, &raw, &pointers).is_none(),
+            "a different slot count"
+        );
+        assert!(
+            get(keys, 2, &other_raw, &pointers).is_none(),
+            "a different raw mask"
+        );
+        assert!(
+            get(keys, 2, &raw, &raw).is_none(),
+            "a different pointer mask"
+        );
+        assert!(
+            get(keys, 2, &raw, &[]).is_none(),
+            "a different pointer word count"
+        );
 
         invalidate();
         assert!(
-            !hit(keys, 2, &raw, &pointers),
+            get(keys, 2, &raw, &pointers).is_none(),
             "invalidate must drop entries"
         );
+    }
+
+    /// #7578: the memo now replays the `POINTER_FREE`/`SIDE_MASK` choice, so it
+    /// has to carry that bit **per entry** and hand back the one that was
+    /// recorded — not a default, and not the neighbouring shape's.
+    ///
+    /// The dangerous direction is a spurious `true`: `POINTER_FREE` makes
+    /// `heap_payload_slot_selection` skip the payload without consulting any
+    /// mask, so a shape with live pointer slots would have its children dropped.
+    #[test]
+    fn the_pointer_mask_empty_bit_round_trips_per_entry() {
+        let raw: [u64; 1] = [0b01];
+        let pointers: [u64; 1] = [0b10];
+        let empty_pointers: [u64; 1] = [0];
+        let keys_masked = 0xC000usize;
+        let keys_free = 0xD000usize;
+
+        invalidate();
+        put(keys_masked, 2, &raw, &pointers, false);
+        put(keys_free, 2, &raw, &empty_pointers, true);
+
+        assert_eq!(
+            get(keys_masked, 2, &raw, &pointers),
+            Some(false),
+            "a shape with a live pointer mask must replay SIDE_MASK"
+        );
+        assert_eq!(
+            get(keys_free, 2, &raw, &empty_pointers),
+            Some(true),
+            "a shape with an empty pointer mask must replay POINTER_FREE"
+        );
+
+        // The bit is payload, not key: it must not make a matching tuple miss.
+        invalidate();
+        put(keys_free, 2, &raw, &empty_pointers, true);
+        assert_eq!(get(keys_free, 2, &raw, &empty_pointers), Some(true));
     }
 
     /// A `slot_count` that overflows the packed key is refused by both halves,
@@ -472,9 +611,40 @@ mod tests {
         let huge = 1usize << SLOT_COUNT_BITS;
 
         invalidate();
-        record(keys, huge, &raw, &[]);
-        assert!(!hit(keys, huge, &raw, &[]));
+        put(keys, huge, &raw, &[], true);
+        assert!(get(keys, huge, &raw, &[]).is_none());
         // …and it did not land in the slot a packable shape would use.
-        assert!(!hit(keys, 0, &raw, &[]));
+        assert!(get(keys, 0, &raw, &[]).is_none());
+    }
+
+    /// The word-count fields narrowed from 20 bits to 19 to make room for
+    /// [`POINTER_MASK_EMPTY_BIT`] (#7578). Pin the packing so a future widening
+    /// of any field cannot silently overlap that bit: an overlap would make a
+    /// wide-mask shape read back as `POINTER_FREE`, and the collector would
+    /// then skip payload slots that hold live pointers.
+    #[test]
+    fn packed_dims_fields_do_not_overlap_the_empty_bit() {
+        let max_slots = (1usize << SLOT_COUNT_BITS) - 1;
+        let max_words = (1usize << WORD_COUNT_BITS) - 1;
+        let packed = pack_dims(max_slots, max_words, max_words, false)
+            .expect("the maximum packable tuple must pack");
+        assert_eq!(
+            packed & POINTER_MASK_EMPTY_BIT,
+            0,
+            "a maximal dimension triple must leave the empty bit clear"
+        );
+        assert_eq!(
+            pack_dims(max_slots, max_words, max_words, true),
+            Some(packed | POINTER_MASK_EMPTY_BIT),
+            "setting the empty bit must be the only difference"
+        );
+        assert!(
+            pack_dims(max_slots, 1 << WORD_COUNT_BITS, 0, false).is_none(),
+            "an unpackable raw word count must be refused, not truncated"
+        );
+        assert!(
+            pack_dims(max_slots, 0, 1 << WORD_COUNT_BITS, false).is_none(),
+            "an unpackable pointer word count must be refused, not truncated"
+        );
     }
 }
