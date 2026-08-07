@@ -283,7 +283,7 @@
             "observed_runs": 36,
             "observed_spread": 9072,
             "measured_on": "2026-08-06/07, three independent reproductions at main @ be1fc80f8 (0.5.1315): pinned quiet host perry-macos (Mac mini M1, 8 GB, load 2.2) spread 2,304 over 7 harness repeats while all eleven other probes were spread 0; a MacBook Pro under load 21 spread 9,072 over 7 (59943752 59943752 59943896 59951744 59949656 59952824 59950520); 22 ad-hoc runs of the same binary spanning 59,943,080 to 59,952,824. The 2026-08-05 pin saw the same effect as one outlier in seven (+6,768 B).",
-            "issue": "https://github.com/PerryTS/perry/issues/7554"
+            "issue": "https://github.com/PerryTS/perry/issues/7554 (the gate), https://github.com/PerryTS/perry/issues/7558 (the conservative-scan cause)"
           }
         }
       }
