@@ -414,14 +414,25 @@ pub(super) fn full_seed_promotes_on_first_copy(
 /// native-stack scan — see the module header for why those two inputs are not
 /// sound liveness measurements.
 pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_bytes: usize) {
-    if PROMOTE_LOCK.with(Cell::get) {
-        return;
+    let already_locked = PROMOTE_LOCK.with(Cell::get);
+    let desired = desired_survivor_bytes();
+    let seeds = full_seed_promotes_on_first_copy(eden_live_bytes, eden_dead_bytes, desired);
+    // Diagnostic, not a knob: print the census AND the verdict on every
+    // mark-sweep, including refusals. A policy that silently declines is
+    // indistinguishable from one that never ran (#7024/#7025), and the
+    // refusal reason is the number a future tuning decision needs.
+    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+        let classified = eden_live_bytes.saturating_add(eden_dead_bytes);
+        let pct = if classified == 0 {
+            0
+        } else {
+            eden_live_bytes * 100 / classified
+        };
+        eprintln!(
+            "[gc-tenuring] sweep-seed eden_live_bytes={eden_live_bytes} eden_dead_bytes={eden_dead_bytes} live_pct={pct} desired={desired} seeds={seeds} already_locked={already_locked}"
+        );
     }
-    if !full_seed_promotes_on_first_copy(
-        eden_live_bytes,
-        eden_dead_bytes,
-        desired_survivor_bytes(),
-    ) {
+    if already_locked || !seeds {
         return;
     }
     let current = TENURING_SURVIVALS.with(Cell::get);
