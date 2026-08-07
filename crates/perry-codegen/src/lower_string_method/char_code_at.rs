@@ -12,8 +12,6 @@ use crate::types::{DOUBLE, I1, I32, I64};
 
 use super::str_operand_handle_tag_dispatched;
 
-// ── Inline `charCodeAt` on an ASCII heap string (#7592) ──────────────────
-//
 // `StringHeader` layout the fast path reads, from
 // `crates/perry-runtime/src/string/mod.rs`. That struct is `#[repr(C)]` with
 // five `u32` fields; the runtime carries a `const` assertion
