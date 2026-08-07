@@ -1354,29 +1354,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 Some(Type::Union(variants)) => variants.iter().any(type_contains_map),
                 _ => false,
             };
-            // Map fast path also fires for the single-binding shapes
-            //   for (const [k] of map)        — only key
-            //   for (const [, v] of map)      — only value
-            // Each non-empty slot must be a plain Ident; nested patterns
-            // / object patterns / defaults fall through to the materialized
-            // MapEntries path so destructuring stays correct.
-            let map_kv_fastpath = is_iterable_map
-                && match &for_of_stmt.left {
-                    ast::ForHead::VarDecl(var_decl) => match var_decl.decls.first() {
-                        Some(decl) => match &decl.name {
-                            ast::Pat::Array(arr_pat) => {
-                                let len = arr_pat.elems.len();
-                                (len == 1 || len == 2)
-                                    && arr_pat.elems.iter().all(|e| {
-                                        e.is_none() || matches!(e, Some(ast::Pat::Ident(_)))
-                                    })
-                            }
-                            _ => false,
-                        },
-                        None => false,
-                    },
-                    _ => false,
-                };
+            // The head shapes the index fast path accepts — and why the
+            // single-ident one is a correctness fix, not just a faster route —
+            // live in `for_head::map_index_fast_path_head`.
+            let map_kv_fastpath =
+                is_iterable_map && crate::lower::map_index_fast_path_head(&for_of_stmt.left);
             // Fast path: `for (const x of setExpr)` reads elements directly
             // via `SetValueAt` (→ `js_set_value_at`) instead of materializing
             // the buffer with `js_set_to_array`.
@@ -1686,6 +1668,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                         set: Box::new(Expr::LocalGet(arr_id)),
                                         idx: Box::new(Expr::LocalGet(idx_id)),
                                     }
+                                } else if map_kv_fastpath {
+                                    crate::lower::map_entry_pair(arr_id, idx_id)
                                 } else {
                                     item_expr
                                 };

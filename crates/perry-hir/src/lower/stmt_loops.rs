@@ -1309,37 +1309,12 @@ pub(crate) fn lower_stmt_for_of(
         Some(Type::Union(variants)) => variants.iter().any(type_contains_map),
         _ => false,
     };
-    // Fast path: `for (const [k, v] of mapExpr)` with an exact two-element
-    // identifier destructure can iterate the Map's flat entries buffer
-    // directly via `MapEntryKeyAt` / `MapEntryValueAt`, skipping the N+1
-    // small Array allocations that `MapEntries` would do per iteration.
-    // Detected here so we can keep the iterable expression unwrapped
-    // and emit a different binding/bound shape below.
-    // Map fast path also fires for the single-binding shapes
-    //   for (const [k] of map)        — only key
-    //   for (const [, v] of map)      — only value
-    // Each non-empty slot must be a plain Ident (no nested patterns).
-    // Anything else falls through to the MapEntries materialization
-    // path so destructuring semantics for objects / nested arrays
-    // / defaults stay correct.
-    let map_kv_fastpath = is_iterable_map
-        && match &for_of_stmt.left {
-            ast::ForHead::VarDecl(var_decl) => match var_decl.decls.first() {
-                Some(decl) => match &decl.name {
-                    ast::Pat::Array(arr_pat) => {
-                        let len = arr_pat.elems.len();
-                        (len == 1 || len == 2)
-                            && arr_pat
-                                .elems
-                                .iter()
-                                .all(|e| e.is_none() || matches!(e, Some(ast::Pat::Ident(_))))
-                    }
-                    _ => false,
-                },
-                None => false,
-            },
-            _ => false,
-        };
+    // Fast path: iterate the Map's flat entries buffer directly instead of
+    // materializing it — see `for_head::map_index_fast_path_head` for the head
+    // shapes it accepts and why the single-ident one is a correctness fix.
+    // Detected here so the iterable expression stays unwrapped and a different
+    // binding/bound shape is emitted below.
+    let map_kv_fastpath = is_iterable_map && map_index_fast_path_head(&for_of_stmt.left);
     // Fast path: `for (const x of setExpr)` with a single-Ident
     // binding. Reads elements directly via `SetValueAt` (→
     // `js_set_value_at`) instead of materializing the buffer with
@@ -1683,6 +1658,8 @@ pub(crate) fn lower_stmt_for_of(
                                 set: Box::new(Expr::LocalGet(arr_id)),
                                 idx: Box::new(Expr::LocalGet(idx_id)),
                             }
+                        } else if map_kv_fastpath {
+                            map_entry_pair(arr_id, idx_id)
                         } else {
                             item_expr
                         };

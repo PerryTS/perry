@@ -310,6 +310,61 @@ fn type_proves_collection(ty: Option<&Type>, base_name: &str) -> bool {
     }
 }
 
+/// Head shapes the Map index fast path can bind directly out of the flat
+/// entries buffer, skipping the `MapEntries` materialisation.
+///
+/// Shared by the two for-of desugars, which carried identical copies.
+///
+/// * `for (const [k, v] of m)`, `for (const [k] of m)`, `for (const [, v] of m)`
+///   — each non-empty slot read with `MapEntryKeyAt` / `MapEntryValueAt`.
+/// * `for (const e of m)` — one fresh `[k, v]` pair per step, exactly what the
+///   language says the default Map iterator yields.
+///
+/// The single-ident arm is a **correctness** fix as much as a performance one:
+/// `MapEntries` snapshots the whole Map up front, so before it was accepted
+/// here `for (const e of m) { m.set(…) }` never saw its own append and
+/// `m.delete(…)` never removed an entry the loop had not reached, both of
+/// which node observes. Nested patterns, object patterns and defaults still
+/// fall through so their destructuring semantics stay correct.
+pub(crate) fn map_index_fast_path_head(left: &ast::ForHead) -> bool {
+    let ast::ForHead::VarDecl(var_decl) = left else {
+        return false;
+    };
+    let Some(decl) = var_decl.decls.first() else {
+        return false;
+    };
+    match &decl.name {
+        ast::Pat::Ident(_) => true,
+        ast::Pat::Array(pat) => {
+            (pat.elems.len() == 1 || pat.elems.len() == 2)
+                && pat
+                    .elems
+                    .iter()
+                    .all(|e| e.is_none() || matches!(e, Some(ast::Pat::Ident(_))))
+        }
+        _ => false,
+    }
+}
+
+/// The `[key, value]` pair a single-ident Map for-of head binds each step.
+///
+/// One fresh 2-element Array per iteration, read out of the entries buffer at
+/// the (delete-corrected) loop index — the same allocation node's Map iterator
+/// makes, and live where the `MapEntries` materialisation it replaces was a
+/// snapshot.
+pub(crate) fn map_entry_pair(arr_id: LocalId, idx_id: LocalId) -> Expr {
+    Expr::Array(vec![
+        Expr::MapEntryKeyAt {
+            map: Box::new(Expr::LocalGet(arr_id)),
+            idx: Box::new(Expr::LocalGet(idx_id)),
+        },
+        Expr::MapEntryValueAt {
+            map: Box::new(Expr::LocalGet(arr_id)),
+            idx: Box::new(Expr::LocalGet(idx_id)),
+        },
+    ])
+}
+
 /// Rewrite `for (… of m.values() / m.keys() / m.entries())` into the
 /// equivalent direct-collection `for-of` so it reaches the delete-safe index
 /// fast path below instead of the generic iterator protocol.
@@ -333,7 +388,7 @@ fn type_proves_collection(ty: Option<&Type>, base_name: &str) -> bool {
 ///
 /// | subject | head | becomes |
 /// |---|---|---|
-/// | `m.entries()` | 1–2 slot all-ident array pattern | `for (<head> of m)` |
+/// | `m.entries()` | any [`map_index_fast_path_head`] shape | `for (<head> of m)` |
 /// | `m.keys()` | plain ident `k` | `for (const [k] of m)` |
 /// | `m.values()` | plain ident `v` | `for (const [, v] of m)` |
 /// | `s.values()` / `s.keys()` | plain ident | `for (<head> of s)` |
@@ -411,18 +466,10 @@ pub(crate) fn rewrite_collection_view_for_of(
     } else if is_map {
         match view {
             // `for (… of m.entries())` and `for (… of m)` are the same
-            // iteration in the language. Restricted to the 1–2 slot all-ident
-            // array patterns the Map fast path handles.
+            // iteration in the language, for every head the index fast path
+            // accepts.
             "entries" => {
-                let ast::Pat::Array(pat) = &decl.name else {
-                    return None;
-                };
-                let slots_ok = (pat.elems.len() == 1 || pat.elems.len() == 2)
-                    && pat
-                        .elems
-                        .iter()
-                        .all(|e| e.is_none() || matches!(e, Some(ast::Pat::Ident(_))));
-                if !slots_ok {
+                if !map_index_fast_path_head(&stmt.left) {
                     return None;
                 }
                 stmt.left.clone()
