@@ -88,6 +88,32 @@ fn reload_instance(
 pub(crate) use super::capture_writeback::emit_class_capture_writeback;
 use super::typed_shape_init::{emit_typed_shape_layout_declare, emit_typed_shape_layout_init};
 
+/// #7469: is the `new` site being lowered inside a **loop body**?
+///
+/// This is the gate on the inline bump allocator. Inlining removes the
+/// `js_object_alloc_class_inline_keys` FFI call and, with it, the thread-local
+/// resolutions that call performs — measured 1.81× on `churn_alloc`, 1.78× on
+/// `push_cls`. But it costs ~268 bytes of machine code **per site** (measured
+/// over 10 / 200 / 800-site programs: +0, +49,536, +214,656 bytes), so it
+/// cannot be the unconditional default against this repo's binary-size
+/// campaign — a 5,000-site application would pay ~1.3 MB.
+///
+/// Loop membership is the cheapest sound proxy for "this site runs many
+/// times", and it bounds the size cost to loop bodies. A `new` executed once
+/// keeps the outlined call and contributes nothing to binary growth.
+///
+/// `loop_targets` is reused rather than a new counter added, because it is
+/// already maintained by all three loop lowerings. It also carries `switch`
+/// frames, which push an EMPTY continue label (`switch_stmt.rs`) while every
+/// loop pushes a real one — the same discriminator `Stmt::Continue`'s
+/// scan-outward-past-switch-frames logic uses. A `new` inside a bare `switch`
+/// is therefore correctly treated as not-in-a-loop.
+fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
+    ctx.loop_targets
+        .iter()
+        .any(|(continue_label, _, _)| !continue_label.is_empty())
+}
+
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
 /// Strategy: allocate an anonymous object via `js_object_alloc(0, N)`
@@ -566,18 +592,40 @@ fn lower_new_impl_inner(
             ],
         )
     } else if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-        if std::env::var_os("PERRY_INLINE_NEW").is_none() {
-            // [#bloat] Default: outline the per-`new`-site allocator. Opt back
-            // into the old inline bump-allocator with PERRY_INLINE_NEW=1.
-            // Measured win-win vs inline: −45 IR lines/site AND ~17% faster on an
-            // 8M-allocation loop (the inline bump bloated the hot loop, hurting
-            // icache/regalloc more than the saved call). Outline the per-`new`-site
-            // inline bump-allocator (~145 lines of per-class-constant IR) into a
-            // single call to the runtime `js_object_alloc_class_inline_keys`,
-            // which performs the identical bump alloc + header init + slot
-            // zero-fill and returns the same user pointer (as i64). Cuts ~145 IR
-            // lines per `new` site to ~3. Only the per-class keys-array global is
-            // loaded (cached per function, same as the inline path).
+        // [#bloat] Outline the per-`new`-site allocator EXCEPT inside a loop.
+        //
+        // Outlining collapses ~145 lines of per-class-constant IR per site into
+        // a single `js_object_alloc_class_inline_keys` call (~3 lines), which
+        // performs the identical bump alloc + header init + slot zero-fill and
+        // returns the same user pointer. That is the right default for code
+        // size, and the size half of the original measurement still holds:
+        // ~268 bytes of machine code per site, +214,656 bytes over an 800-site
+        // program.
+        //
+        // The SPEED half of that measurement has since inverted. It read
+        // "~17% faster on an 8M-allocation loop (the inline bump bloated the
+        // hot loop, hurting icache/regalloc more than the saved call)"; today
+        // the outlined form is **1.81× SLOWER** on `churn_alloc` and 1.78× on
+        // `push_cls`. Nothing about the inline bump changed — everything
+        // *around* the allocation got cheaper (#7474, #7486, #7487, #7501,
+        // #7525, #7532, #7535, #7536, #7552), so the surviving FFI call and
+        // the thread-local resolutions it performs now dominate what the
+        // inline bump's code bloat costs. On Darwin those resolutions cannot
+        // be made cheaper — Mach-O has no local-exec TLS model, and building
+        // the runtime with `-Ztls-model=local-exec` leaves the `blr` through
+        // the TLV descriptor byte-identical (measured: 1.02×). Only their
+        // COUNT can be reduced, and inlining removes them outright.
+        //
+        // So the choice is per site, not global: a `new` inside a loop takes
+        // the inline bump (it runs many times, and the size cost is bounded to
+        // loop bodies); everything else keeps the outlined call and
+        // contributes nothing to binary growth. `PERRY_INLINE_NEW=1` still
+        // forces the inline form everywhere, for A/B measurement.
+        //
+        // NOTE the env test is `is_none()`: `PERRY_INLINE_NEW=""` *enables*
+        // the inline path, because an empty string is `Some("")`.
+        let force_inline_new = std::env::var_os("PERRY_INLINE_NEW").is_some();
+        if !force_inline_new && !new_site_is_in_loop(ctx) {
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
             } else {
