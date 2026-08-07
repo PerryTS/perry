@@ -18,11 +18,10 @@ use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier,
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_nanbox_store_on_block,
-    emit_write_barrier_slot_generation_tested,
     emit_typed_feedback_register_site, emit_write_barrier,
-    expr_has_numeric_pointer_free_array_layout, lower_expr, lower_expr_native,
-    nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
+    emit_write_barrier_slot_generation_tested, expr_has_numeric_pointer_free_array_layout,
+    lower_expr, lower_expr_native, nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn emit_array_handle_length(ctx: &mut FnCtx<'_>, array_handle: &str) -> String {
@@ -704,5 +703,138 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (`perry_closure_<modprefix>__<func_id>`) earlier in
         // `compile_module` via the `compile_closure` pass.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}
+
+#[cfg(test)]
+mod parent_gate_tests {
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Function, Module as HirModule, Stmt};
+
+    /// `const a = []; a.push({v: 1});` — a pointer-valued push into a local
+    /// array, which is the shape whose barrier #7511 gates.
+    fn pushing_ir() -> String {
+        let mut hir = HirModule::new("apush_parent_gate_test");
+        hir.functions.push(Function {
+            id: 0,
+            name: "pushes".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 0,
+                    name: "a".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Array(Vec::new())),
+                },
+                Stmt::Expr(Expr::ArrayPush {
+                    array_id: 0,
+                    value: Box::new(Expr::Object(vec![("v".to_string(), Expr::Number(1.0))])),
+                }),
+                Stmt::Return(Some(Expr::LocalGet(0))),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let opts = crate::CompileOptions {
+            emit_ir_only: true,
+            ..Default::default()
+        };
+        let bytes = crate::compile_module(&hir, opts).expect("test module compiles");
+        String::from_utf8(bytes).expect("LLVM IR is UTF-8")
+    }
+
+    fn assert_default_barrier_env_not_disabled() {
+        assert!(
+            !matches!(
+                std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            ),
+            "this test describes DEFAULT barrier emission; PERRY_WRITE_BARRIERS must be unset or on"
+        );
+    }
+
+    /// Block labels carry a uniquing suffix (`apush.barrier.21:`), so collect
+    /// the gated block's body by walking labels rather than by substring —
+    /// `apush.barrier.done.22:` would otherwise match a `apush.barrier.` prefix
+    /// test and silently hand back the WRONG block, which is exactly the block
+    /// the store is supposed to be in.
+    fn gated_barrier_block(ir: &str) -> String {
+        let mut body = Vec::new();
+        let mut inside = false;
+        for line in ir.lines() {
+            if let Some(label) = line.strip_suffix(':') {
+                if !label.starts_with(char::is_whitespace) {
+                    inside = label.starts_with("apush.barrier.")
+                        && !label.starts_with("apush.barrier.done");
+                    continue;
+                }
+            }
+            if inside {
+                body.push(line);
+            }
+        }
+        assert!(
+            !body.is_empty(),
+            "no `apush.barrier.<n>` block in the emitted IR — the push did not take the \
+             gated inline tier, so this test would be vacuous:\n{ir}"
+        );
+        body.join("\n")
+    }
+
+    /// The barrier call must sit in its own block, reached only through the
+    /// parent-generation `cond_br`, and both clauses of the gate must be
+    /// present.
+    #[test]
+    fn array_push_barrier_is_gated_on_the_parent_header() {
+        assert_default_barrier_env_not_disabled();
+        let ir = pushing_ir();
+        assert!(
+            ir.contains("js_write_barrier_slot"),
+            "the pointer-valued push must still emit a barrier at all:\n{ir}"
+        );
+        let gated = gated_barrier_block(&ir);
+        assert!(
+            gated.contains("js_write_barrier_slot"),
+            "the gated block must be the one holding the barrier call:\n{gated}"
+        );
+        // Count CALL sites only — the module's `declare` line names the symbol
+        // too, and counting it would make this compare 2 against 1 forever.
+        assert_eq!(
+            ir.matches("call void @js_write_barrier_slot").count(),
+            gated.matches("call void @js_write_barrier_slot").count(),
+            "every array-push barrier must be inside the gate — an ungated one would be the \
+             cost this ticket exists to remove:\n{ir}"
+        );
+        assert!(
+            ir.contains("and i8") && ir.contains(", 32"),
+            "the gate must test GC_FLAG_TENURED (0x20) on the parent's header byte:\n{ir}"
+        );
+        assert!(
+            ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),
+            "dropping the incremental clause would skip the insertion barrier's shading:\n{ir}"
+        );
+    }
+
+    /// The SLOT STORE is unconditional: it must NOT be inside the gated block.
+    /// Only the bookkeeping moves.
+    #[test]
+    fn array_push_slot_store_stays_outside_the_gate() {
+        assert_default_barrier_env_not_disabled();
+        let ir = pushing_ir();
+        let gated = gated_barrier_block(&ir);
+        assert!(
+            !gated.contains("store double"),
+            "the element store must stay OUTSIDE the gate — a store that only happens when the \
+             parent is tenured would drop the value entirely:\n{gated}"
+        );
     }
 }

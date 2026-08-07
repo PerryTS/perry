@@ -19,6 +19,7 @@ mod global_bootstrap;
 mod helper_stores;
 mod host_safepoints;
 mod incremental_sweep_reclaim;
+mod inline_generation_gate_contract;
 mod inline_pointer_bearing_contract;
 mod layout_trace;
 mod lazy_tape_side_alloc;

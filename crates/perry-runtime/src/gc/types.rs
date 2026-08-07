@@ -913,6 +913,26 @@ pub const GC_FLAG_HAS_SURVIVED: u8 = 0x40;
 /// genuinely needs more bits).
 pub const GC_FLAG_FORWARDED: u8 = 0x80;
 
+/// #7511 — the `Old ⟹ TENURED` invariant the codegen-side inline barrier gate
+/// rests on, as a predicate over one header's flags.
+///
+/// True when the object at `user_ptr` may legitimately sit at an address
+/// `classify_heap_generation` calls `Old`. A *live* old-gen object always
+/// carries `GC_FLAG_TENURED` (every old-gen birth path sets it); the exemptions
+/// are headers that are not live arena objects at all — swept-dead ones, which
+/// `invalidate_dead_old_arena_header` zeroes wholesale, and forwarded ones,
+/// whose flags describe a corpse rather than the object.
+///
+/// # Safety
+/// `user_ptr` must be a readable GC user pointer.
+pub(crate) unsafe fn old_parent_tenured_or_dead(user_ptr: usize) -> bool {
+    let flags = (*crate::gc::header_from_user_ptr(user_ptr as *const u8)).gc_flags;
+    flags == 0
+        || flags & GC_FLAG_ARENA == 0
+        || flags & GC_FLAG_FORWARDED != 0
+        || flags & GC_FLAG_TENURED != 0
+}
+
 /// Read the forwarding address embedded in a forwarded object's user
 /// payload. Caller must verify `gc_flags & GC_FLAG_FORWARDED` is set;
 /// reading otherwise returns garbage. The forwarded address is the
