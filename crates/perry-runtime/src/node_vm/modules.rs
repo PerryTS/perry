@@ -57,7 +57,9 @@ fn evaluate_source_module(module: *mut ObjectHeader) -> f64 {
 }
 
 fn evaluate_synthetic_module(module: *mut ObjectHeader) -> f64 {
-    let status = module_status(module);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let module = scope.root_raw_mut_ptr(module);
+    let status = module_status(hmut::<ObjectHeader>(&module));
     if status == STATUS_EVALUATED {
         return undefined_value();
     }
@@ -65,15 +67,25 @@ fn evaluate_synthetic_module(module: *mut ObjectHeader) -> f64 {
         return throw_vm_status("Module status must be linked");
     }
 
-    set_status(module, STATUS_EVALUATING);
-    let callback = get_field(module, FIELD_EVALUATE_CALLBACK);
-    let js = JSValue::from_bits(callback.to_bits());
+    set_status(hmut::<ObjectHeader>(&module), STATUS_EVALUATING);
+    let callback = scope.root_nanbox_f64(get_field(
+        hmut::<ObjectHeader>(&module),
+        FIELD_EVALUATE_CALLBACK,
+    ));
+    let js = JSValue::from_bits(callback.get_nanbox_f64().to_bits());
     if !js.is_undefined() && !js.is_null() {
-        let prev = crate::object::js_implicit_this_set(object_value(module));
-        let _ = unsafe { crate::closure::js_native_call_value(callback, std::ptr::null(), 0) };
+        let prev = crate::object::js_implicit_this_set(object_value(hmut::<ObjectHeader>(&module)));
+        let outcome = crate::exception::js_call_catching(|| unsafe {
+            crate::closure::js_native_call_value(callback.get_nanbox_f64(), std::ptr::null(), 0)
+        });
         crate::object::js_implicit_this_set(prev);
+        if let Err(error) = outcome {
+            set_field(hmut::<ObjectHeader>(&module), FIELD_ERROR, error);
+            set_status(hmut::<ObjectHeader>(&module), STATUS_ERRORED);
+            return error;
+        }
     }
-    set_status(module, STATUS_EVALUATED);
+    set_status(hmut::<ObjectHeader>(&module), STATUS_EVALUATED);
     undefined_value()
 }
 
@@ -85,6 +97,17 @@ fn module_has_tla(module: *mut ObjectHeader) -> bool {
 }
 
 fn module_has_async_graph(module: *mut ObjectHeader) -> bool {
+    let mut visited = std::collections::HashSet::new();
+    module_has_async_graph_inner(module, &mut visited)
+}
+
+fn module_has_async_graph_inner(
+    module: *mut ObjectHeader,
+    visited: &mut std::collections::HashSet<usize>,
+) -> bool {
+    if !visited.insert(module as usize) {
+        return false;
+    }
     if module_has_tla(module) {
         return true;
     }
@@ -95,7 +118,7 @@ fn module_has_async_graph(module: *mut ObjectHeader) -> bool {
     for idx in 0..len {
         let value = crate::array::js_array_get_f64(linked, idx);
         if let Some(dep) = object_ptr_from_value(value) {
-            if module_has_async_graph(dep) {
+            if module_has_async_graph_inner(dep, visited) {
                 return true;
             }
         }
@@ -362,39 +385,50 @@ pub extern "C" fn js_vm_module_namespace(module_value: f64) -> f64 {
     let Some(module) = object_ptr_from_value(module_value) else {
         return undefined_value();
     };
-    if module_kind(module) == KIND_SOURCE && module_status(module) == STATUS_UNLINKED {
+    let status = module_status(module);
+    if module_kind(module) == KIND_SOURCE && (status == STATUS_UNLINKED || status == STATUS_LINKING)
+    {
         return throw_vm_status("Module status must be linked");
     }
     get_field(module, FIELD_NAMESPACE)
 }
 
 pub extern "C" fn js_vm_module_link(module_value: f64, linker: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
     let Some(module) = object_ptr_from_value(module_value) else {
         return undefined_value();
     };
-    if module_kind(module) == KIND_SYNTHETIC {
-        set_status(module, STATUS_LINKED);
+    let module = scope.root_raw_mut_ptr(module);
+    let module_value = scope.root_nanbox_f64(module_value);
+    let linker = scope.root_nanbox_f64(linker);
+    if module_kind(hmut::<ObjectHeader>(&module)) == KIND_SYNTHETIC {
+        set_status(hmut::<ObjectHeader>(&module), STATUS_LINKED);
         return undefined_value();
     }
-    if module_status(module) != STATUS_UNLINKED {
+    if module_status(hmut::<ObjectHeader>(&module)) != STATUS_UNLINKED {
         return undefined_value();
     }
 
-    set_status(module, STATUS_LINKING);
-    let requests = read_requests(module);
+    set_status(hmut::<ObjectHeader>(&module), STATUS_LINKING);
+    let requests = read_requests(hmut::<ObjectHeader>(&module));
     let mut linked = crate::array::js_array_alloc(requests.len() as u32);
     for specifier in &requests {
         let args = [
             string_value(specifier),
-            module_value,
+            module_value.get_nanbox_f64(),
             module_request_extra(),
         ];
-        let dep =
-            unsafe { crate::closure::js_native_call_value(linker, args.as_ptr(), args.len()) };
+        let dep = unsafe {
+            crate::closure::js_native_call_value(linker.get_nanbox_f64(), args.as_ptr(), args.len())
+        };
         linked = crate::array::js_array_push_f64(linked, dep);
     }
-    set_field(module, FIELD_LINKED_MODULES, array_value(linked));
-    set_status(module, STATUS_LINKED);
+    set_field(
+        hmut::<ObjectHeader>(&module),
+        FIELD_LINKED_MODULES,
+        array_value(linked),
+    );
+    set_status(hmut::<ObjectHeader>(&module), STATUS_LINKED);
     undefined_value()
 }
 
@@ -493,16 +527,22 @@ pub extern "C" fn js_vm_synthetic_module_set_export(
     let Some(module) = object_ptr_from_value(module_value) else {
         return undefined_value();
     };
+    if module_kind(module) != KIND_SYNTHETIC {
+        return throw_vm_type("setExport is only supported on SyntheticModule");
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let module = scope.root_raw_mut_ptr(module);
+    let value = scope.root_nanbox_f64(value);
     let Some(name) = string_from_value(name_value) else {
         return throw_vm_type("SyntheticModule export name must be a string");
     };
-    let exports = read_exports(module);
+    let exports = read_exports(hmut::<ObjectHeader>(&module));
     if !exports.iter().any(|export| export.name == name) {
         return throw_reference_error_no_code(&format!("Export '{name}' is not defined in module"));
     }
-    let Some(namespace) = namespace_for_module(module) else {
+    let Some(namespace) = namespace_for_module(hmut::<ObjectHeader>(&module)) else {
         return throw_vm_status("SyntheticModule namespace is unavailable");
     };
-    set_field(namespace, &name, value);
+    set_field(namespace, &name, value.get_nanbox_f64());
     undefined_value()
 }
