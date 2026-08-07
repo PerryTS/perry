@@ -255,6 +255,29 @@ be committed and only wedge CI afterwards.
 `freed_bytes` on `12_large_live_set` all remain gating, so a real over-retention
 regression on that probe still goes red.
 
+### What that probe's non-determinism actually is
+
+Worth knowing, because it is a property of the *metric* rather than of the
+collector's steady state. Every probe reads `process.memoryUsage()` after an
+explicit `gc()`, and an explicit `gc()` runs a full mark-sweep with a **forced
+conservative stack scan** — `PERRY_GC_DIAG` prints `[gc-scan-fallback]
+site=manual_collect automatic=false` on every run. A conservative scan retains
+whatever the native stack happens to look like a pointer to, and the stack
+residue at that moment differs between runs.
+
+Diffing two full traces that disagree shows this directly: the minors, the
+tenuring decisions, the step cycles and every copy/promote counter match
+exactly, and the only difference is in the *last* collection's `freed_bytes`.
+And with `PERRY_CONSERVATIVE_STACK_SCAN=off` the probe reports **51,668,688
+bytes on 8 consecutive runs, bit-identical**.
+
+Two things follow. The variance is entirely false roots, so it is bounded by
+how much a handful of stale stack words can pin — a few kilobytes here. And
+the conservative scan is retaining **8.28 MB, 16% of this probe's reported
+retention**, systematically. The eleven small probes stay bit-identical because
+their live sets are one to two orders of magnitude smaller, so a stale stack
+word is far less likely to alias a plausible heap address at all.
+
 ### The measurement must show the collector ran
 
 `check` fails a probe whose current run reports `minor_cycles == 0` or
