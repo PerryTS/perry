@@ -174,6 +174,25 @@ direct `for (… of m)` fast path has the same property. A `Map` subclass types 
 `Type::Named`, never `Type::Generic`, so an overriding subclass method is never
 bypassed.
 
+**One shape had to be excluded after it was measured, not before.** The
+single-ident pair head initially fired for `for await (const e of m)` too, and
+the array-pattern arms have always dropped the per-iteration `Await`, so that
+looked consistent. It is not: the pair head *replaces* a binding that was
+`Await(<materialised>[i])`, and dropping that stopped the loop draining
+microtasks at all —
+
+```
+node    micro-0|pair:a=1|micro-a|pair:b=2|micro-b|pair:c=3|micro-c|after-direct
+before  micro-0|pair:a=1|micro-a|pair:b=2|micro-b|pair:c=3|after-direct|…|micro-c
+after   pair:a=1|pair:b=2|pair:c=3|after-direct|…|micro-0|micro-a|micro-b|micro-c
+```
+
+`map_index_fast_path_head` now takes an `allow_pair_head` flag that the two
+desugars pass as `!is_await`, so a `for await` Map loop keeps exactly the
+lowering it had. `for_await_is_never_rewritten` covers both the view call and
+the direct head, and a sibling case proves the gate is per-loop — a synchronous
+single-ident head in the same function still gets the fast path.
+
 **Measurement trap worth recording.** The first A/B ran all nine loop shapes in
 one process and reported two apparent 2× regressions in shapes this change does
 not touch (`for (const e of m.entries())` 570 → 1180 ms, `[...m.values()]`
