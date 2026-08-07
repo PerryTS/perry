@@ -74,9 +74,51 @@ and feedback bookkeeping and 7.7% is the allocation itself**:
 | **the actual allocation** | **7.7%** | — |
 | user code | 3.7% | — |
 
-A declared class costing **63% more than an object literal** is backwards and
-is tracked as a suspected defect (**#7512**), with an explicit off-ramp: if the
-cause lands in the layout or barrier subsystems it closes as a duplicate.
+That table is the **v0.5.1299 decomposition and is now superseded** — three of
+its rows are closed. Re-profiled on v0.5.1325 (#7578, two independent `sample`
+runs of `push_cls`, leaf shares):
+
+| item | then | **now** |
+|---|--:|--:|
+| **`gc::layout::typed_shape_layout_entry`** | — | **~25%** ← new top lever |
+| **write barriers** (4 symbols) | 16.1% | **~25%** (#7511) |
+| user code | 3.7% | ~21% |
+| `_tlv_get_addr` | 27.0% | **1.0%** ✅ #7565 |
+| `gc::layout_tables::layout_forget_object` | 14.5% | **1.7–2.9%** ✅ #7525/#7532 |
+
+**Nothing regressed** — the two survivors grew as *shares* because the rows
+around them collapsed. `_tlv_get_addr` and `layout_forget_object` are no longer
+levers and should not be worked.
+
+**The new top lever, `typed_shape_layout_entry` (~25%)**, is not the
+`ValidateSlots` loop: `push_cls` takes the `js_gc_declare_typed_shape_layout`
+path (confirmed in the emitted IR — one call to `declare`, zero to `init`), so
+#7515/#7532 are working. It is the install itself, whose hit path
+`layout.rs:1022` documents as reducing to "the two header bit-writes
+`shape_install_shared` would have performed". Every argument to that call but the
+object pointer is a **compile-time constant for the class** — which is exactly
+the shape #7566 just won 1.81× on, so the same remedy (emit the hit path inline,
+keep the call as the slow path, gate it so non-hot sites pay no bytes) is the
+obvious first thing to try.
+
+**A declared class is no longer slower than an object literal.** #7512 is
+**closed**: `churn_alloc` and `push_cls` both measure 0.75 s. The cause was not
+diffuse — **#7515** fixed it, and the root cause is worth carrying forward
+because it generalises: the dead-field-init elision matched `Expr::PropertySet`,
+which the compiler *synthesizes* for anon-shape literal constructors, while
+every source-level `this.v = v` lowers to `Expr::PutValueSet`. **Nothing a user
+can type produces `PropertySet`**, so the elision was structurally unreachable
+for the declared class it was documented as covering. *An unreachable predicate
+passes every soundness test there is* — #7486 was correct in everything it
+asserted and did nothing on the case it named.
+
+One row in #7578 is **unexplained and should not be acted on as written**:
+`js_array_length` at 10–15%, against a single call site executing 20,000 times
+in a 20,000,000-push workload. Two isolation attempts failed — varying array
+size moved the workload into a different GC regime, and a `.length`-only
+microbenchmark measured 1.00 ns/iter for both a 1,000- and a 10-element array,
+which is an empty loop (the read is loop-invariant and was hoisted). Both dead
+ends are recorded on the issue.
 
 **Workstream A has landed (#7566, v0.5.1324): the inline bump allocator is back
 at `new` sites inside loop bodies**, outlined everywhere else.
