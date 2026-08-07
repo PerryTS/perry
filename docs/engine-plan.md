@@ -6,7 +6,10 @@
 every dated status section, incident narrative and superseded sequencing lives
 in [`engine-plan-history.md`](engine-plan-history.md); this file holds only the
 current state and the remaining work so it stays readable across context loads.
-Last synced **2026-08-06**, after the v0.5.1299 public-baseline sweep.
+Last synced **2026-08-07** (v0.5.1324). The v0.5.1299 public-baseline sweep is
+kept as the baseline measurement event; rows fixed since are annotated in place
+rather than overwritten, because they were measured individually rather than in
+a fresh sweep.
 
 | Concern | Detail lives in |
 |---|---|
@@ -75,6 +78,36 @@ A declared class costing **63% more than an object literal** is backwards and
 is tracked as a suspected defect (**#7512**), with an explicit off-ramp: if the
 cause lands in the layout or barrier subsystems it closes as a duplicate.
 
+**Workstream A has landed (#7566, v0.5.1324): the inline bump allocator is back
+at `new` sites inside loop bodies**, outlined everywhere else.
+
+| bench | outlined | gated | ceiling (all-inline) |
+|---|--:|--:|--:|
+| `churn_alloc` | 1.32 s | 0.73 s (**1.81x**) | 1.81x |
+| `push_cls` | 1.30 s | 0.72 s (**1.81x**) | 1.78x |
+| `churn` | 1.62 s | 1.04 s (**1.56x**) | 1.56x |
+| `tree` | 8.97 s | 9.10 s (**0.986x**) | 1.05x |
+
+It reaches the full unconditional-inline ceiling on the allocation-heavy shapes
+at **+0 bytes for every site not in a loop** (verified by per-function IR
+differential, not by assertion). `tree` pays **1.4%** — it allocates in loops so
+it inlines, but its time is dominated by copying and promotion, so it takes the
+bloat without the win. That is the honest cost of a static proxy.
+
+**The measurement that justified the previous default had inverted, and nobody
+had re-checked it.** The outlined form was made default on "−45 IR lines/site
+AND ~17% faster"; the size half still holds (~268 bytes/site) but the speed half
+is now **1.81x the wrong way**, because everything *around* the allocation got
+cheaper (#7474, #7486, #7487, #7501, #7525, #7532, #7535, #7536, #7552) until
+the surviving FFI call dominated what the inline bump's bloat costs. A default
+chosen on a measurement is only as current as that measurement.
+
+Recorded so it is not re-attempted: **Mach-O has no local-exec TLS model.**
+Building the entire runtime with `-Ztls-model=local-exec` leaves the `blr`
+through the TLV descriptor byte-identical (1.02x). Per-call cost is already at
+the plain-global floor — only the *count* of resolutions can be reduced, which
+is what inlining does and what #7565 did structurally.
+
 **Two traps recorded here because they cost real time.** `PERRY_WRITE_BARRIERS=0`
 **cannot** bound barrier cost — it makes `churn_alloc` *slower* (2.44 → 5.21 s)
 because it also switches the collector out of evacuating mode; the 16.1% is
@@ -92,11 +125,11 @@ which topped out at 6.27x and predated two kernels running at all:
 
 | kernel | perry | bun | node | perry/bun | owner |
 |---|--:|--:|--:|--:|---|
-| **object_deep_clone** | 657.0 ms | 17.5 | 56.9 | **37.5x** | **#7533** |
+| **object_deep_clone** | 657.0 ms | 17.5 | 56.9 | **37.5x** | ✅ **fixed — see below** |
 | **promise_all_chains** | 259.7 ms | 22.7 | 64.0 | **11.4x** | unowned |
 | json_parse_1mb | 438.2 ms | 68.1 | 127.1 | 6.4x | unowned |
 | batch | 127.8 ms | 26.5 | 74.8 | 4.8x | unowned |
-| map_1m | 1233.7 ms | 256.5 | 320.1 | 4.8x | unowned (largest absolute) |
+| map_1m | 1233.7 ms | 256.5 | 320.1 | 4.8x | ✅ **fixed — see below** |
 | string_template_interp | 106.9 ms | 41.6 | 100.6 | 2.6x | unowned |
 | json_stringify_1mb | 97.3 ms | 38.5 | 95.1 | 2.5x | unowned |
 | string_concat_csv | 51.3 ms | 27.1 | 82.3 | 1.9x | borderline |
@@ -106,10 +139,38 @@ which topped out at 6.27x and predated two kernels running at all:
 | **date_format_parse** | 36.0 ms | 44.8 | 116.3 | **0.80x** | **win** |
 
 **`object_deep_clone` and `promise_all_chains` are new to this table because
-they were CRASHING, not slow** — fixed today by #7495 and #7516/#7529. Their
-first-ever measurement makes deep clone the worst cell by 3x over the next.
-#7533 carries the profile-first instruction and an explicit A/B against
-`f06270d06` to establish how much predates today's rooting stack.
+they were CRASHING, not slow** — fixed by #7495 and #7516/#7529. Their
+first-ever measurement made deep clone the worst cell by 3x over the next.
+
+#### Landed since that sweep — the two worst rows are gone
+
+The table above is a single measurement *event* (v0.5.1299, 11 runs per cell)
+and is kept intact as the baseline. The rows below were re-measured
+individually on the same pinned quiet mini as part of the fix that moved them,
+so they are **not** interchangeable with a fresh sweep — the artifact still owes
+one, tracked under the #7475 blocker further down.
+
+| kernel | sweep | now | vs bun | vs node | landed |
+|---|--:|--:|--:|--:|---|
+| **object_deep_clone** | 657.0 ms | **40 ms** | 37.5x → **~2.3x** | 11.5x → **0.67x (win)** | #7540 (closes #7533) |
+| **map_1m** | 1233.7 ms | **309.1 ms** | 4.8x → **1.40x** | 3.9x → **0.96x (win)** | #7561 |
+
+Both were single structural defects rather than broad slowness, which is why
+each moved by an order of magnitude instead of a few percent:
+
+- **deep clone** — `[...arr]` on an ordinary dense array ran the full iterator
+  protocol. 90.45% of the whole process sat in `array_from_spread_value`, and
+  the identical copy spelled `Array.from(tags)` cost **66x less**. A 3-element
+  spread was ~25 allocations against bun's one allocation and a 24-byte memcpy.
+- **map_1m** — `for (const v of m.values())` was 512 ms of the kernel; as a
+  delete-safe index walk over the flat entries it is **5 ms**. Perry already won
+  lookup before the fix (76 ms vs node 115, bun 103).
+
+**Read this section before picking up any row above.** Three times this campaign
+a ticket was worked from a headline number that had already collapsed — #7510
+(33.6% → 11%), `layout_forget_object` (14.5% → 3.0% → 1.7%), and `layout_note_slot`
+(7.5% → 0.03%, correctly closed with **no code at all**). Re-measure the row
+before profiling it.
 
 ### JSON polyglot legs — the tape is a net negative on scans
 
@@ -121,12 +182,32 @@ Same run. `roundtrip` is the crown jewel and `field_access` is the problem:
 | field_access | **2984 ms** (219 MB, sigma 136) | **1350 ms** (61 MB) | 218 | 380 | 183 |
 
 Perry **wins roundtrip** against both JS runtimes and lands within ~8% of Rust
-serde_json. But on `field_access` the **optimized configuration is 2.2x SLOWER
-than the unoptimized one** and carries 3.6x the RSS — the lazy tape is a net
-negative on scan-shaped access, and its sigma of 136 (against every other row's
-under 5) says the cost is data-dependently variable. The 1350 ms idiomatic row
-is the floor any fix must beat: simply declining the tape for this shape would
-already be 2.2x better. Tracked in **#7478**.
+serde_json. `field_access` was the standing problem: the optimized configuration
+was 2.2x SLOWER than the unoptimized one at 3.6x the RSS, with a sigma of 136
+against every other row's under 5.
+
+**That inversion is now closed** (#7478 → #7537 early batch flip, then #7539
+tape side-allocation), measured on the same host:
+
+| `field_access` | median | sigma | peak RSS |
+|---|--:|--:|--:|
+| sweep (v0.5.1299) | 2984 ms | 136 | 219 MB |
+| after #7537 | 2043 ms | 146 | 195 MB |
+| **after #7539** | **1809 ms** | **17.3** | **155 MB** |
+
+Sigma collapses **8.3x** — that was the headline symptom, not the median — and
+the decisive result is that **turning the tape ON is no longer worse than
+turning it OFF**. The tape-off arm still carries sigma 117.2 and 168 MB, so the
+residual variance and footprint belong to the generational collector's behaviour
+on this workload and have nothing left to do with the tape. The GC trace agrees
+to the cycle: 19 cycles / 9 full / 6 `old_gen_bytes` becomes **14 / 5 / 2**,
+which is the `PERRY_JSON_TAPE=0` arm's profile exactly.
+
+`roundtrip` — the memcpy path this must not regress — **improved**, 201 → 193 ms,
+with peak old-generation in-use down 39.6 → 14.1 MB.
+
+Still open: 1809 ms has not reached the 1350 ms idiomatic floor, and the gap is
+now collector behaviour rather than tape design.
 
 ### Gates and blockers
 
