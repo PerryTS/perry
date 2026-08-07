@@ -99,6 +99,54 @@ pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
     }
 }
 
+/// #7570 — resolve a raw Map/Set RECEIVER address that is NOT a genuine
+/// `MapHeader`/`SetHeader` to the collection the operation must actually run
+/// on. `want` selects which backing kind the caller can use.
+///
+/// Why this exists: codegen decides "this receiver is a Map" from the
+/// **declared** TypeScript type of the binding (`is_map_expr` /
+/// `Type::Generic { base: "Map" }`), then emits a raw `js_map_*` call whose
+/// first act is to dereference the receiver as a `MapHeader`. A declared type
+/// is a hint, never a layout fact (CLAUDE.md, *Known Limitations*: annotations
+/// are erased, nothing validates them at runtime), so any binding annotated
+/// with the BASE type — `const m: Map<K, V> = new MyMap()`, a parameter, a
+/// class field, a return type, an `as Map<…>` cast — can be holding a
+/// SUBCLASS instance, which perry models as a plain `ObjectHeader`. The two
+/// headers overlay field-for-field, so `entries: *mut f64` reads
+/// `parent_class_id ‖ field_count` — two `u32` class ids glued into a pointer
+/// — and the first `.set()` stores through it (SIGBUS).
+///
+/// The unannotated path never had this problem because it dispatches through
+/// [`subclass_backing_of`]. This is the same redirect, performed at the raw
+/// runtime entry points so it is **fail-closed**: it covers every binding form
+/// and every future caller, rather than one predicate at a time.
+///
+/// Returns `0` for an object that is not a Map/Set subclass instance (a plain
+/// object mis-annotated as a native collection), so the caller degrades to its
+/// existing null handling — `undefined` / `0` / `false` — instead of
+/// dereferencing a forged pointer.
+///
+/// Marked `#[cold]`/`#[inline(never)]`: the genuine-header fast path never
+/// reaches here, and keeping the body out of line preserves the inlined
+/// receiver check at the ~57 `js_map_*` / `js_set_*` entry points.
+#[cold]
+#[inline(never)]
+pub(crate) fn redirect_collection_receiver(addr: usize, want: CollectionKind) -> usize {
+    let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+    match (subclass_backing_of(boxed), want) {
+        (Some(CollectionBacking::Map(m)), CollectionKind::Map) => m as usize,
+        (Some(CollectionBacking::Set(s)), CollectionKind::Set) => s as usize,
+        _ => 0,
+    }
+}
+
+/// Which backing kind a [`redirect_collection_receiver`] caller can use.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CollectionKind {
+    Map,
+    Set,
+}
+
 /// True when a Map/Set subclass INSTANCE carries a USER `[Symbol.iterator]`
 /// override anywhere on its class/prototype chain — an own
 /// `inst[Symbol.iterator] = …`, a symbol accessor, or a class method
@@ -282,4 +330,190 @@ pub extern "C" fn js_map_set_subclass_init(this: f64, kind: i32, iterable: f64) 
     let backing_bits = JSValue::pointer(backing_ptr as *const u8).bits();
     js_object_set_field_by_name(obj, key, f64::from_bits(backing_bits));
     this
+}
+
+/// #7570 — the receiver-resolution contract for the raw `js_map_*` / `js_set_*`
+/// entry points.
+///
+/// These are *sabotage* tests, not smoke tests: each one first asserts that the
+/// header byte the pre-fix code would have misread is still sitting there
+/// (`object_type == 1` at `MapHeader.size`'s offset), and only then that the
+/// entry point returns the resolved answer instead. A green run therefore
+/// proves the redirect fired, not merely that nothing crashed.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::OBJECT_TYPE_REGULAR;
+    use crate::object::js_object_alloc;
+
+    fn boxed(obj: *mut ObjectHeader) -> f64 {
+        f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    }
+
+    fn undefined() -> f64 {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+
+    /// A `class X extends Map {}` instance, built the way `super()` builds it.
+    fn map_subclass_instance() -> *mut ObjectHeader {
+        let obj = js_object_alloc(9001, 2);
+        js_map_set_subclass_init(boxed(obj), 0, undefined());
+        obj
+    }
+
+    /// A `class X extends Set {}` instance.
+    fn set_subclass_instance() -> *mut ObjectHeader {
+        let obj = js_object_alloc(9002, 2);
+        js_map_set_subclass_init(boxed(obj), 1, undefined());
+        obj
+    }
+
+    #[test]
+    fn a_genuine_map_takes_the_fast_path_and_is_never_redirected() {
+        let map = crate::map::js_map_alloc(4);
+        assert_eq!(
+            crate::map::resolve_map_receiver(map) as usize,
+            map as usize,
+            "a real MapHeader must resolve to itself"
+        );
+        // Assert the subject was live: the redirect is what would have to have
+        // produced this answer if the GC_TYPE_MAP fast path had NOT fired, and
+        // it cannot — it yields 0 for a non-object. So the identity above came
+        // from the fast path, not from a redirect that happened to agree.
+        assert_eq!(
+            redirect_collection_receiver(map as usize, CollectionKind::Map),
+            0,
+            "the redirect must not claim a genuine Map"
+        );
+
+        let set = crate::set::js_set_alloc(4);
+        assert_eq!(
+            crate::set::resolve_set_receiver(set) as usize,
+            set as usize,
+            "a real SetHeader must resolve to itself"
+        );
+        assert_eq!(
+            redirect_collection_receiver(set as usize, CollectionKind::Set),
+            0,
+            "the redirect must not claim a genuine Set"
+        );
+    }
+
+    #[test]
+    fn a_map_subclass_instance_is_redirected_onto_its_backing() {
+        let obj = map_subclass_instance();
+        let backing = match subclass_backing_of(boxed(obj)) {
+            Some(CollectionBacking::Map(m)) => m,
+            _ => panic!("super() should have installed a Map backing"),
+        };
+        assert_ne!(backing as usize, obj as usize);
+
+        // The pre-fix hazard, still present in the bytes: `MapHeader.size`
+        // overlays `ObjectHeader.object_type`, so `js_map_size` used to report
+        // 1 for an EMPTY subclass instance and `MapHeader.entries` was
+        // `parent_class_id ‖ field_count`.
+        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
+        assert_eq!(
+            js_map_size_of(obj),
+            0,
+            "an empty Map subclass instance must report size 0, not object_type"
+        );
+
+        // Writes land in the backing; the receiver is what comes back.
+        let returned = crate::map::js_map_set(obj as *mut crate::map::MapHeader, 1.0, 2.0);
+        assert_eq!(
+            returned as usize, obj as usize,
+            "Map.prototype.set returns the RECEIVER, not the hidden backing"
+        );
+        assert_eq!(crate::map::js_map_size(backing), 1);
+        assert_eq!(js_map_size_of(obj), 1);
+        assert_eq!(
+            crate::map::js_map_get(obj as *const crate::map::MapHeader, 1.0),
+            2.0
+        );
+        // The instance header is untouched — no forged-pointer store landed in
+        // it, and it is still an ordinary object.
+        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
+        assert_eq!(unsafe { (*obj).class_id }, 9001);
+    }
+
+    #[test]
+    fn a_set_subclass_instance_is_redirected_onto_its_backing() {
+        let obj = set_subclass_instance();
+        let backing = match subclass_backing_of(boxed(obj)) {
+            Some(CollectionBacking::Set(s)) => s,
+            _ => panic!("super() should have installed a Set backing"),
+        };
+        assert_ne!(backing as usize, obj as usize);
+        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
+        assert_eq!(
+            crate::set::js_set_size(obj as *const crate::set::SetHeader),
+            0,
+            "an empty Set subclass instance must report size 0, not object_type"
+        );
+
+        let returned = crate::set::js_set_add(obj as *mut crate::set::SetHeader, 7.0);
+        assert_eq!(
+            returned as usize, obj as usize,
+            "Set.prototype.add returns the RECEIVER, not the hidden backing"
+        );
+        assert_eq!(crate::set::js_set_size(backing), 1);
+        assert_eq!(
+            crate::set::js_set_has(obj as *const crate::set::SetHeader, 7.0),
+            1
+        );
+        assert_eq!(
+            crate::set::js_set_has(obj as *const crate::set::SetHeader, 8.0),
+            0
+        );
+        assert_eq!(unsafe { (*obj).class_id }, 9002);
+    }
+
+    /// A plain object merely ANNOTATED `Map<K, V>` / `Set<T>` — the second way
+    /// a declared type lies about layout. There is nothing to redirect to, so
+    /// the entry points must degrade through their null branch rather than
+    /// treat `parent_class_id ‖ field_count` as an `entries` pointer.
+    #[test]
+    fn a_plain_object_annotated_as_a_collection_forges_no_pointer() {
+        let obj = js_object_alloc(9003, 3);
+        assert!(subclass_backing_of(boxed(obj)).is_none());
+        assert_eq!(
+            redirect_collection_receiver(obj as usize, CollectionKind::Map),
+            0
+        );
+        assert_eq!(
+            redirect_collection_receiver(obj as usize, CollectionKind::Set),
+            0
+        );
+
+        // Pre-fix these read the ObjectHeader as a MapHeader: `size` was
+        // `object_type` (= 1) and the very next `.set()` stored through
+        // `parent_class_id ‖ field_count`.
+        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
+        assert_eq!(js_map_size_of(obj), 0);
+        assert_eq!(
+            crate::map::js_map_get(obj as *const crate::map::MapHeader, 1.0).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+        let returned = crate::map::js_map_set(obj as *mut crate::map::MapHeader, 1.0, 2.0);
+        assert_eq!(returned as usize, obj as usize);
+        assert_eq!(
+            crate::set::js_set_size(obj as *const crate::set::SetHeader),
+            0
+        );
+        assert_eq!(
+            crate::set::js_set_has(obj as *const crate::set::SetHeader, 1.0),
+            0
+        );
+        crate::set::js_set_clear(obj as *mut crate::set::SetHeader);
+
+        // Nothing wrote into the object's header.
+        assert_eq!(unsafe { (*obj).object_type }, OBJECT_TYPE_REGULAR);
+        assert_eq!(unsafe { (*obj).class_id }, 9003);
+        assert_eq!(unsafe { (*obj).field_count }, 3);
+    }
+
+    fn js_map_size_of(obj: *mut ObjectHeader) -> u32 {
+        crate::map::js_map_size(obj as *const crate::map::MapHeader)
+    }
 }

@@ -845,9 +845,13 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
     }
 }
 
-/// Clean a set pointer that might have NaN-box tag bits
+/// Clean a set pointer that might have NaN-box tag bits.
+///
+/// *Identity* only — "what value did the caller pass?", not "which `SetHeader`
+/// does the operation run on". Use [`clean_set_ptr`] for the latter; the two
+/// differ for a `class X extends Set` instance (#7570).
 #[inline(always)]
-fn clean_set_ptr(set: *const SetHeader) -> *const SetHeader {
+fn set_receiver_identity(set: *const SetHeader) -> *const SetHeader {
     let bits = set as u64;
     let top16 = bits >> 48;
     if top16 >= 0x7FF8 {
@@ -858,6 +862,64 @@ fn clean_set_ptr(set: *const SetHeader) -> *const SetHeader {
     } else {
         set
     }
+}
+
+/// Resolve a `Set` receiver to the `SetHeader` the operation must run on.
+///
+/// The `Set` twin of `map::clean_map_ptr` — see its doc comment for why a
+/// *declared* TypeScript type cannot be trusted as a layout fact, and what each
+/// arm means. Briefly: genuine `SetHeader` (`GC_TYPE_SET`) passes through, a
+/// `class X extends Set` instance is redirected onto its hidden backing, a
+/// plain object merely annotated `Set<T>` resolves to null, and anything with
+/// no readable `GcHeader` is left exactly as it was pre-#7570.
+#[inline(always)]
+fn clean_set_ptr(set: *const SetHeader) -> *const SetHeader {
+    let set = set_receiver_identity(set);
+    let addr = set as usize;
+    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_SET => set,
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            crate::object::map_set_subclass::redirect_collection_receiver(
+                addr,
+                crate::object::map_set_subclass::CollectionKind::Set,
+            ) as *const SetHeader
+        }
+        _ => set,
+    }
+}
+
+/// [`clean_set_ptr`] for entry points OUTSIDE this module — see
+/// `map::resolve_map_receiver` (#7570).
+#[inline(always)]
+pub(crate) fn resolve_set_receiver(set: *const SetHeader) -> *const SetHeader {
+    clean_set_ptr(set)
+}
+
+/// Run `op` on the RESOLVED collection and return the RECEIVER.
+///
+/// `Set.prototype.add` returns its receiver; for a `class X extends Set`
+/// instance that is the INSTANCE, not the hidden backing (#7570). The
+/// `map::map_op_returning_receiver` twin — same zero-extra-cost common case
+/// (one pointer compare), same rooting of the movable instance in the subclass
+/// case.
+#[inline]
+fn set_op_returning_receiver(
+    set: *mut SetHeader,
+    op: impl FnOnce(*mut SetHeader),
+) -> *mut SetHeader {
+    let receiver = set_receiver_identity(set as *const SetHeader) as *mut SetHeader;
+    let resolved = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if resolved.is_null() {
+        return receiver;
+    }
+    if std::ptr::eq(resolved, receiver) {
+        op(resolved);
+        return receiver;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_raw_mut_ptr(receiver);
+    let ((), receiver) = handle.across_mut::<SetHeader, _>(|| op(resolved));
+    receiver
 }
 
 /// Get the number of elements in the set
@@ -874,6 +936,11 @@ pub extern "C" fn js_set_size(set: *const SetHeader) -> u32 {
 /// Returns the set pointer (always the same, stable address)
 #[no_mangle]
 pub extern "C" fn js_set_add(set: *mut SetHeader, value: f64) -> *mut SetHeader {
+    set_op_returning_receiver(set, |set| set_add_resolved(set, value))
+}
+
+/// `js_set_add`'s body, on a receiver already resolved to a genuine `SetHeader`.
+fn set_add_resolved(set: *mut SetHeader, value: f64) {
     let value = normalize_zero(value);
     unsafe {
         // Check if value already exists
@@ -881,7 +948,7 @@ pub extern "C" fn js_set_add(set: *mut SetHeader, value: f64) -> *mut SetHeader 
 
         if idx >= 0 {
             // Value already exists, nothing to do
-            return set;
+            return;
         }
 
         // Value doesn't exist, need to add it
@@ -913,7 +980,6 @@ pub extern "C" fn js_set_add(set: *mut SetHeader, value: f64) -> *mut SetHeader 
         });
 
         (*set).size = size + 1;
-        set
     }
 }
 
@@ -930,16 +996,17 @@ pub extern "C" fn js_set_add_string(
     set: *mut SetHeader,
     value: *const StringHeader,
 ) -> *mut SetHeader {
-    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
-    if set.is_null() {
-        return set;
-    }
+    set_op_returning_receiver(set, |set| set_add_string_resolved(set, value))
+}
+
+/// `js_set_add_string`'s body, on a resolved `SetHeader`.
+fn set_add_string_resolved(set: *mut SetHeader, value: *const StringHeader) {
     let value = boxed_heap_string_value(value);
     unsafe {
         let idx = find_value_index(set, value);
 
         if idx >= 0 {
-            return set;
+            return;
         }
 
         let grew = ensure_capacity(set);
@@ -968,7 +1035,6 @@ pub extern "C" fn js_set_add_string(
         });
 
         (*set).size = size + 1;
-        set
     }
 }
 
@@ -977,39 +1043,28 @@ fn boxed_i32_value(value: i32) -> f64 {
     f64::from_bits(crate::value::JSValue::int32(value).bits())
 }
 
+// The `_i32`/`_u32`/`_f32`/`_bool` specializations delegate to `js_set_add`,
+// which now performs the receiver resolution AND returns the receiver identity
+// (#7570); pre-resolving here would hand `js_set_add` the backing and lose the
+// instance a `class X extends Set` receiver must return.
+
 #[no_mangle]
 pub extern "C" fn js_set_add_i32(set: *mut SetHeader, value: i32) -> *mut SetHeader {
-    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
-    if set.is_null() {
-        return set;
-    }
     js_set_add(set, boxed_i32_value(value))
 }
 
 #[no_mangle]
 pub extern "C" fn js_set_add_u32(set: *mut SetHeader, value: u32) -> *mut SetHeader {
-    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
-    if set.is_null() {
-        return set;
-    }
     js_set_add(set, f64::from(value))
 }
 
 #[no_mangle]
 pub extern "C" fn js_set_add_f32(set: *mut SetHeader, value: f32) -> *mut SetHeader {
-    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
-    if set.is_null() {
-        return set;
-    }
     js_set_add(set, f64::from(value))
 }
 
 #[no_mangle]
 pub extern "C" fn js_set_add_bool(set: *mut SetHeader, value: i32) -> *mut SetHeader {
-    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
-    if set.is_null() {
-        return set;
-    }
     let boxed = if value != 0 {
         f64::from_bits(crate::value::TAG_TRUE)
     } else {
@@ -1022,6 +1077,12 @@ pub extern "C" fn js_set_add_bool(set: *mut SetHeader, value: i32) -> *mut SetHe
 /// Returns 1 if found, 0 if not found
 #[no_mangle]
 pub extern "C" fn js_set_has(set: *const SetHeader, value: f64) -> i32 {
+    // #7570: a `Set<T>`-annotated binding can be holding a `class X extends
+    // Set` instance (a plain ObjectHeader), or a plain object.
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return 0;
+    }
     let value = normalize_zero(value);
     unsafe {
         if find_value_index(set, value) >= 0 {
@@ -1101,6 +1162,11 @@ pub extern "C" fn js_set_has_bool(set: *const SetHeader, value: i32) -> i32 {
 /// Returns 1 if deleted, 0 if value not found
 #[no_mangle]
 pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
+    // #7570: resolve a `class X extends Set` receiver onto its backing.
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return 0;
+    }
     let value = normalize_zero(value);
     unsafe {
         let idx = find_value_index(set, value);
@@ -1262,6 +1328,11 @@ static KEEP_JS_SET_DELETE_BOOL: extern "C" fn(*mut SetHeader, i32) -> i32 = js_s
 /// Clear all elements from the set
 #[no_mangle]
 pub extern "C" fn js_set_clear(set: *mut SetHeader) {
+    // #7570: resolve a `class X extends Set` receiver onto its backing.
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return;
+    }
     unsafe {
         (*set).size = 0;
     }
@@ -1306,6 +1377,8 @@ pub extern "C" fn js_set_value_at(set: *const SetHeader, i: u32) -> f64 {
 /// no concurrent modification, capacity is exact.
 #[no_mangle]
 pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::ArrayHeader {
+    // #7570: resolve a `class X extends Set` receiver onto its backing.
+    let set = clean_set_ptr(set);
     if set.is_null() {
         return crate::array::js_array_alloc(0);
     }

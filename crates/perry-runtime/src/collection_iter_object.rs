@@ -83,6 +83,15 @@ unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
 /// Build a fresh Map iterator object for `map` (raw pointer) of the given
 /// kind. Returns the RAW iterator-object pointer as i64 (caller NaN-boxes).
 unsafe fn map_iter_obj_raw(map: *const MapHeader, kind: i32) -> i64 {
+    // #7570: these entries are reached from the DECLARED-type lowering of
+    // `m.entries()`/`.keys()`/`.values()`, so `map` can be a `class X extends
+    // Map` instance (a plain ObjectHeader) rather than a `MapHeader`. Every
+    // `next()` would then read `parent_class_id ‖ field_count` as the entries
+    // pointer. Resolve onto the hidden backing before the iterator captures it.
+    // Unlike the `js_map_*` entries this is not a `clean_map_ptr` caller — it
+    // stores the raw pointer into the iterator object, so the redirect has to
+    // happen here.
+    let map = crate::map::resolve_map_receiver(map);
     if map.is_null() {
         return 0;
     }
@@ -91,6 +100,8 @@ unsafe fn map_iter_obj_raw(map: *const MapHeader, kind: i32) -> i64 {
 }
 
 unsafe fn set_iter_obj_raw(set: *const SetHeader, kind: i32) -> i64 {
+    // #7570 — see `map_iter_obj_raw`.
+    let set = crate::set::resolve_set_receiver(set);
     if set.is_null() {
         return 0;
     }
