@@ -92,10 +92,22 @@ failed. All three probes under
 `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
 exit 0 with 110 `[gc-fromspace-protect] mode=ProtectPages retired_set=#N` lines
 each — the count is quoted rather than the exit code, because a run with zero
-copying minors protects nothing. The GC ratchet reports exactly the ten gating
-breaches #7559 already records on `main`, cell for cell, including
-`05_closure_capture` +16.44% and `02_survivor_promotion` +2.77%; this change
-moves none of them in either direction.
+copying minors protects nothing.
+
+The GC ratchet was measured against a **same-session `main` build** rather than
+argued from the filed numbers: both arms out of one target directory with the
+identical `-p` set, back to back with the same harness. Both report the same ten
+gating breaches with the same values, #7559's `05_closure_capture` +16.44% and
+`02_survivor_promotion` +2.77% among them — this change moves none of them in
+either direction. Cell by cell that is **156 cells over 12 probes with exactly
+one semantic difference**, `12_large_live_set.heap_used_bytes` at +0.004%
+(2,304 B), which is the single cell the ratchet's own `probe_override` excludes
+as conservative-stack-scan noise (#7554/#7558, spread 9,072 B over 36 runs).
+Every other retention and evacuation counter is bit-identical and every probe
+checksum matches; `wall_ms` is faster on all twelve. The diff tool asserts it
+compared a non-zero number of cells before printing a verdict, because the
+metrics are `{samples, median, …}` dicts and a naive numeric read compares zero
+of them and reports a vacuous "identical".
 
 **This closes the lever, not the ticket.** What is left of `_tlv_get_addr` is
 `RuntimeHandleScope`, not the allocation path, so further thread-local work
