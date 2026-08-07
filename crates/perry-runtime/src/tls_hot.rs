@@ -230,24 +230,37 @@ pub(crate) mod darwin_tsd {
     #[inline(always)]
     pub(super) unsafe fn get(slot: usize) -> *mut u8 {
         let base: usize;
-        // `pure` + `nomem` is deliberate. Stripped of its CPU-number bits the
-        // register is a per-thread constant, so LLVM may CSE it across a whole
-        // function and hoist it out of loops. Without `pure` every reader
-        // re-issues the `mrs` and the change buys far less than the call it
-        // replaces.
+        // **NOT `pure`. This is load-bearing and was learned the hard way.**
         //
-        // This grants LLVM exactly the freedom it already has over the thing
-        // being replaced: `@llvm.threadlocal.address` is `speculatable` and
-        // `memory(none)`, so a `thread_local!` read was already CSE-able and
-        // hoistable on the same terms. The one shape that is unsound under
-        // either is holding the result across a point where execution can
-        // resume on a *different* thread — an `.await` in a work-stealing
-        // executor. Nothing on the allocation path is `async`, and this is a
-        // pre-existing constraint on `hot()` rather than one introduced here.
+        // `options(pure, nomem)` is the obvious choice — masked of its
+        // CPU-number bits the register is a per-thread constant, so `pure`
+        // lets LLVM CSE the read across a whole function and hoist it out of
+        // loops, and it costs one `mrs` per reader to give that up. It is also
+        // **wrong**, and the first version of this change shipped it.
+        //
+        // `pure` promises the result depends only on the inputs, and this asm
+        // has none — so LLVM is free to compute it once and reuse the value
+        // anywhere in the function, *including across a point where execution
+        // resumes on a different thread*. `perry-stdlib`'s async bridge is
+        // exactly that shape: `hot()` is `#[inline(always)]` and LTO inlines it
+        // into futures that tokio polls, so a hoisted thread pointer outlives
+        // the thread it was read on. The observable was every `node:net` /
+        // `node:http` server aborting with tokio's "there is no reactor
+        // running" — five out of five runs, against five out of five clean on
+        // `main`, and it did not reproduce in any unit test or in the whole
+        // allocation-benchmark set. Deleting `pure` fixes it.
+        //
+        // The tempting counter-argument — that `@llvm.threadlocal.address` is
+        // already `speculatable` and `memory(none)`, so a `thread_local!` read
+        // had the same freedom — does not hold: on Darwin that intrinsic
+        // lowers to a *call* through the TLV descriptor, which LLVM will not
+        // hoist across arbitrary code. Replacing the call with inline asm is
+        // what made the hoist possible, so this is a constraint introduced
+        // here, not inherited.
         core::arch::asm!(
             "mrs {b}, tpidrro_el0",
             b = out(reg) base,
-            options(nomem, nostack, preserves_flags, pure)
+            options(nomem, nostack, preserves_flags)
         );
         // SAFETY: the caller guarantees `slot` is a live pthread key.
         unsafe { *((base & !0b111) as *const *mut u8).add(slot) }
