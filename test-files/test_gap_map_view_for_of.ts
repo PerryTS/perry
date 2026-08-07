@@ -285,6 +285,31 @@ function mkMap(n: number): Map<string, number> {
   line("letHead", b.join(","));
 }
 
+// --- `for await` over a Map: values and order.
+//
+// The microtask INTERLEAVING of a `for await` Map loop is a separate,
+// pre-existing divergence and is deliberately not asserted here; the lowering
+// it depends on is pinned instead by
+// `perry-hir::lower::collection_view_tests::for_await_is_never_rewritten`,
+// because a `.ts` assertion on it would be red for reasons this file is not
+// about.
+async function forAwaitOrder(): Promise<void> {
+  const m = new Map<string, number>([["a", 1], ["b", 2], ["c", 3]]);
+  const log: string[] = [];
+  for await (const e of m) log.push("pair:" + e[0] + "=" + e[1]);
+  for await (const [k, v] of m) log.push("kv:" + k + "=" + v);
+  for await (const v of m.values()) log.push("v:" + v);
+
+  // values that ARE promises: for-await must unwrap them
+  const pm = new Map<string, Promise<number>>([
+    ["p", Promise.resolve(10)],
+    ["q", Promise.resolve(20)],
+  ]);
+  for await (const v of pm.values()) log.push("pv:" + v);
+
+  line("forAwait", log.join("|"));
+}
+
 // --- scale: the shape `benchmarks/app-patterns/kernels/map_1m.ts` runs ---
 {
   const N = 20000;
@@ -301,3 +326,6 @@ function mkMap(n: number): Map<string, number> {
   line("scale.pairs", pairSum);
   line("scale.size", m.size);
 }
+
+// Runs last so its `line()` output lands after every synchronous case.
+forAwaitOrder();
