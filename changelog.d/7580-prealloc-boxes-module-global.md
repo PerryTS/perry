@@ -51,9 +51,10 @@ arithmetic instead of throwing a `ReferenceError`.
 Regression coverage is an in-`src` unit module
 (`crates/perry-codegen/src/stmt/prealloc_module_global_tests.rs`), not a
 `crates/*/tests/*.rs` suite, so it runs in the per-PR `cargo-test` gate rather
-than only nightly (#5960) — the gap test that surfaced this is in neither
-`gap_snapshot.json` nor `known_failures.json`, and `parity` is tag-gated, which
-is why it sat unnoticed from 2026-07-30. The two positive tests are
+than only nightly (#5960) — the gap test that surfaced this is absent from
+`gap_snapshot.json` and *suppressed* by a stale `known_failures.json` entry (see
+below), and `parity` is tag-gated, which is why it sat unnoticed from
+2026-07-30. The two positive tests are
 sabotage-checked: reverting the `ctx.module_globals` guard takes both red while
 the fixture-premise test and the "#569/#6044 still gets its box" test stay
 green. The store assertion counts `store … ptr @perry_global_…` lines inside
