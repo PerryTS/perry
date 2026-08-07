@@ -129,6 +129,31 @@ pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
 /// Marked `#[cold]`/`#[inline(never)]`: the genuine-header fast path never
 /// reaches here, and keeping the body out of line preserves the inlined
 /// receiver check at the ~57 `js_map_*` / `js_set_*` entry points.
+///
+/// # This ALLOCATES, and its callers hold unrooted JSValue args
+///
+/// [`subclass_backing_of`] builds the hidden field's key with
+/// `js_string_from_bytes`, so reaching this arm is a collection point — and it
+/// runs at the TOP of e.g. `js_map_set`, before that function roots its `key` /
+/// `value` params. The exposure is the #7213 shape, and it is closed by the same
+/// accident described in `string/alloc.rs`: an allocation here reaches the
+/// alloc-point arm of `gc_check_trigger`, which takes
+/// `ManualGcScanGuard::force_full_scan`, and a forced conservative stack scan
+/// makes the copying minor ineligible. So the collection this can cause never
+/// MOVES anything, and the same conservative scan finds the raw args on the
+/// native stack.
+///
+/// Recorded rather than pre-emptively fixed, for two reasons. The shape is
+/// already load-bearing on hotter paths — `native_call_method`'s
+/// `collection_methods.rs` calls `subclass_backing_of` on every native method
+/// call on an object, and `field_get_set/get_field_by_name.rs` on every `.size`
+/// read — so this adds no NEW class of exposure. And the obvious fix (a
+/// thread-local caching the interned key `StringHeader`) is itself an unrooted
+/// runtime cache of a heap pointer, the invisible-root hazard CLAUDE.md warns
+/// about, which would have to be registered with
+/// `gc_register_mutable_root_scanner` to be sound. If #7213's premise ever
+/// changes — if the alloc-point arm stops forcing a conservative scan — this
+/// call site must be revisited together with the two above.
 #[cold]
 #[inline(never)]
 pub(crate) fn redirect_collection_receiver(addr: usize, want: CollectionKind) -> usize {
