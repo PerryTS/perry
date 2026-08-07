@@ -1301,7 +1301,12 @@ pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
     captured
 }
 
-fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
+/// The `class_id` of `instance`, when `instance` really is a class instance.
+///
+/// `pub(super)` so `object::tests` can assert the #7563 invariant directly: a
+/// non-object allocation (an array, above all) must resolve to `None` rather
+/// than to whatever its bytes happen to hold at the `class_id` offset.
+pub(super) fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
     if let Some(cid) = class_ref_id(instance) {
         return Some(cid);
     }
@@ -1323,7 +1328,27 @@ fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
             if crate::closure::is_closure_ptr(obj as usize) {
                 return None;
             }
-            let cid = unsafe { (*obj).class_id };
+            // #7563: the closure guard above fixed ONE instance of that type
+            // confusion; a bare `(*obj).class_id` read has it for every other
+            // non-object allocation too. `ObjectHeader` is `{ object_type: u32,
+            // class_id: u32, … }` while `ArrayHeader` is `{ length: u32,
+            // capacity: u32 }`, so the `class_id` slot of an ARRAY overlays its
+            // **capacity** — an N-capacity array literal was read back as
+            // "class id N". Reached from `arr[Symbol.iterator]`, which resolves via
+            // `js_class_method_bind(arr, "values")` (`symbol/get.rs`): whenever
+            // class id N happened to own a `values` method, the array's
+            // iterator resolved to THAT class's method. With `class Plain {
+            // values() { return [777][Symbol.iterator](); } }` the one-element
+            // literal read back as class id 1 — `Plain` itself — so `values`
+            // called `values` until the stack guard page: a SIGSEGV with no
+            // `Map` anywhere in the program.
+            //
+            // `js_object_get_class_id` is the guarded accessor for exactly this
+            // read: it rejects the handle band, the std::alloc'd Map/Set/Regex
+            // headers (which have no `GcHeader` to probe), and — the part that
+            // matters here — any allocation whose `GcHeader.obj_type` is not
+            // `GC_TYPE_OBJECT`. Reading the field directly bypassed all three.
+            let cid = crate::object::js_object_get_class_id(obj);
             if cid != 0 {
                 return Some(cid);
             }

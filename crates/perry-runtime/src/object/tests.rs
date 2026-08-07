@@ -1379,3 +1379,48 @@ fn stale_pre_grow_array_pointer_reads_the_real_length_in_object_ops() {
         "the freeze walk must not run past the array's real length"
     );
 }
+
+/// #7563: an ARRAY receiver must never be read back as a class instance.
+///
+/// `ObjectHeader` is `{ object_type: u32, class_id: u32, … }` and `ArrayHeader`
+/// is `{ length: u32, capacity: u32 }`, so the two u32s at offset 4 alias — an
+/// array read as an `ObjectHeader` reports its **capacity** as a `class_id`.
+///
+/// That mattered because `arr[Symbol.iterator]` resolves through
+/// `js_class_method_bind(arr, "values")`, whose receiver→class step used a bare
+/// `(*obj).class_id` read instead of the guarded `js_object_get_class_id`. Any
+/// class whose id equalled the array's capacity and which owned a `values`
+/// method therefore captured the array's iterator. When that class was the
+/// *calling* class — `class C { values() { return [x][Symbol.iterator](); } }`
+/// — `values` re-entered `values` until the stack guard page, i.e. a SIGSEGV
+/// with no `Map` anywhere in the program.
+#[test]
+fn array_receiver_is_never_read_as_a_class_id() {
+    let arr = crate::array::js_array_alloc(3);
+    assert!(!arr.is_null());
+    // Impersonate exactly the class id this array's bytes would have yielded.
+    let impersonated = unsafe { (*arr).capacity };
+    assert_ne!(
+        impersonated, 0,
+        "the test is vacuous unless the capacity is a non-zero (i.e. lookup-able) class id"
+    );
+
+    let arr_value = crate::value::js_nanbox_pointer(arr as i64);
+    assert_eq!(
+        super::native_module::class_id_from_method_receiver(arr_value),
+        None,
+        "an array is not a class instance: its capacity must not be read as a class id"
+    );
+
+    // The guard must not over-narrow. A genuine class instance carrying the
+    // very same id still resolves, so the bound-method identity path (#446)
+    // keeps working.
+    let obj = js_object_alloc(impersonated, 0);
+    assert!(!obj.is_null());
+    let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+    assert_eq!(
+        super::native_module::class_id_from_method_receiver(obj_value),
+        Some(impersonated),
+        "a real class instance must still resolve to its class id"
+    );
+}
