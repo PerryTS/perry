@@ -39,10 +39,10 @@ Charts: [image convolution](charts/image_convolution.png),
 | OS  | macOS 26.5 (Darwin) |
 | Rust | `rustc 1.97.1 (8bab26f4f 2026-07-14)` |
 | Zig | `0.15.2` |
-| Perry | `perry 0.5.1279` |
+| Perry | `perry 0.5.1335` |
 | Python | `Python 3.14.6` |
 | Runs | 5 warmup + 20 measured, median reported |
-| Generated | 2026-08-03T05:25:59.733855+00:00 |
+| Generated | 2026-08-07T11:11:40.175711+00:00 |
 
 ## 3. Image convolution (5×5 Gaussian, 3840×2160 RGB)
 
@@ -50,13 +50,13 @@ _In-memory input + output checksum (no PPM I/O) — see the workload README for 
 
 | Language | Wall median (ms) | Wall σ | Peak RSS | Binary size | Source LoC | Runs OK |
 |---|---:|---:|---:|---:|---:|---:|
-| rust | 406.4 | 2.0 | 48.9 MB | 295.5 KB | 112 | 20/20 |
-| zig | 266.6 | 5.9 | 48.9 MB | 227.0 KB | 113 | 20/20 |
-| perry | 278.8 | 4.7 | 56.0 MB | 4.3 MB | 92 | 20/20 |
-| node | 1,232.2 | 3.3 | 117.9 MB | — | 86 | 20/20 |
-| bun | 909.7 | 34.9 | 83.1 MB | — | 86 | 20/20 |
+| rust | 429.8 | 4.2 | 48.9 MB | 295.5 KB | 112 | 20/20 |
+| zig | 279.8 | 5.0 | 48.9 MB | 227.0 KB | 113 | 20/20 |
+| perry | 302.5 | 4.1 | 56.2 MB | 4.6 MB | 92 | 20/20 |
+| node | 1,284.8 | 7.5 | 118.2 MB | — | 86 | 20/20 |
+| bun | 947.2 | 26.0 | 83.1 MB | — | 86 | 20/20 |
 
-_Ratios vs fastest: rust = 1.52×, zig = 1.00×, perry = 1.05×, node = 4.62×, bun = 3.41×_
+_Ratios vs fastest: rust = 1.54×, zig = 1.00×, perry = 1.08×, node = 4.59×, bun = 3.39×_
 
 ## 1a. JSON pipeline — small fixture (100 records, 21 KB)
 
@@ -64,13 +64,13 @@ _All three languages produce byte-identical output at this scale (hash `7fc66fa8
 
 | Language | Wall median (ms) | Wall σ | Peak RSS | Binary size | Source LoC | Runs OK |
 |---|---:|---:|---:|---:|---:|---:|
-| rust | 59.4 | 1.9 | 1.7 MB | 360.2 KB | 99 | 20/20 |
-| zig | 58.9 | 2.0 | 2.0 MB | 309.2 KB | 112 | 20/20 |
-| perry | 64.1 | 3.1 | 8.5 MB | 4.3 MB | 52 | 20/20 |
-| node | 110.6 | 2.4 | 64.2 MB | — | 40 | 20/20 |
-| bun | 76.5 | 1.2 | 30.3 MB | — | 40 | 20/20 |
+| rust | 73.4 | 5.6 | 1.7 MB | 360.2 KB | 99 | 20/20 |
+| zig | 72.8 | 5.5 | 2.0 MB | 309.2 KB | 112 | 20/20 |
+| perry | 77.0 | 4.5 | 8.5 MB | 4.7 MB | 52 | 20/20 |
+| node | 128.1 | 6.1 | 64.4 MB | — | 40 | 20/20 |
+| bun | 90.8 | 5.7 | 30.3 MB | — | 40 | 20/20 |
 
-_Ratios vs fastest: rust = 1.01×, zig = 1.00×, perry = 1.09×, node = 1.88×, bun = 1.30×_
+_Ratios vs fastest: rust = 1.01×, zig = 1.00×, perry = 1.06×, node = 1.76×, bun = 1.25×_
 
 ## 1b. JSON pipeline — full fixture (500k records, 108 MB)
 
@@ -78,13 +78,13 @@ _All five implementations complete this workload against the same 108 MB fixture
 
 | Language | Wall median (ms) | Wall σ | Peak RSS | Binary size | Source LoC | Runs OK |
 |---|---:|---:|---:|---:|---:|---:|
-| rust | 634.6 | 26.0 | 430.9 MB | 360.2 KB | 99 | 20/20 |
-| zig | 839.8 | 13.3 | 576.9 MB | 309.2 KB | 112 | 20/20 |
-| perry | 2,591.2 | 16.5 | 731.8 MB | 4.3 MB | 52 | 20/20 |
-| node | 889.6 | 6.1 | 775.1 MB | — | 40 | 20/20 |
-| bun | 570.3 | 2.9 | 579.8 MB | — | 40 | 20/20 |
+| rust | 650.0 | 31.1 | 428.7 MB | 360.2 KB | 99 | 20/20 |
+| zig | 875.5 | 21.3 | 576.9 MB | 309.2 KB | 112 | 20/20 |
+| perry | 60,358.5 | 266.3 | 1,064.5 MB | 4.7 MB | 52 | 20/20 |
+| node | 1,004.3 | 29.2 | 778.2 MB | — | 40 | 20/20 |
+| bun | 618.1 | 6.6 | 579.4 MB | — | 40 | 20/20 |
 
-_Ratios vs fastest: rust = 1.11×, zig = 1.47×, perry = 4.54×, node = 1.56×, bun = 1.00×_
+_Ratios vs fastest: rust = 1.05×, zig = 1.42×, perry = 97.65×, node = 1.62×, bun = 1.00×_
 
 ## Honest findings — Perry gaps surfaced by this benchmark
 
