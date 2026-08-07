@@ -814,9 +814,65 @@ mod parent_gate_tests {
             "every array-push barrier must be inside the gate — an ungated one would be the \
              cost this ticket exists to remove:\n{ir}"
         );
+        assert_gate_condition_is_both_clauses(&ir);
+    }
+
+    /// Follow the `cond_br`'s condition back to its definition and require it to
+    /// be the `or` of a `GC_FLAG_TENURED` header test and the incremental-count
+    /// test.
+    ///
+    /// Checking only that the IR *contains* `and i8 …, 32` and the global's name
+    /// is not enough, and this is not hypothetical: replacing the `or` with a
+    /// constant-true left both of those substrings in place (the clauses are
+    /// still computed, just no longer consulted) and the test stayed green while
+    /// the gate had stopped gating. A branch that is always taken is precisely
+    /// the failure this ticket's perf claim rests on not happening.
+    fn assert_gate_condition_is_both_clauses(ir: &str) {
+        let br = ir
+            .lines()
+            .find(|l| l.contains("br i1") && l.contains("label %apush.barrier."))
+            .unwrap_or_else(|| panic!("no gated branch in the emitted IR:\n{ir}"));
+        let cond = br
+            .split_whitespace()
+            .nth(2)
+            .and_then(|c| c.strip_suffix(','))
+            .unwrap_or_else(|| panic!("cannot read the branch condition from {br:?}"));
+        let def = ir
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{cond} = ")))
+            .unwrap_or_else(|| panic!("no definition of {cond} in:\n{ir}"));
+        assert!(
+            def.contains("or i1"),
+            "the gate's branch condition must be the OR of both clauses, not {def:?} — a \
+             condition that is not an `or` of the two tests is a gate that never skips"
+        );
+        let mut operands = def
+            .split("or i1 ")
+            .nth(1)
+            .expect("or operands")
+            .split(", ")
+            .map(str::trim);
+        let tenured = operands.next().expect("tenured operand");
+        let incremental = operands.next().expect("incremental operand");
+        let def_of = |name: &str| {
+            ir.lines()
+                .find(|l| l.trim_start().starts_with(&format!("{name} = ")))
+                .unwrap_or_else(|| panic!("no definition of {name} in:\n{ir}"))
+                .to_string()
+        };
+        assert!(
+            def_of(tenured).contains("icmp ne i8"),
+            "the first clause must be the parent's header-byte test, got {:?}",
+            def_of(tenured)
+        );
+        assert!(
+            def_of(incremental).contains("icmp ne i32"),
+            "the second clause must be the incremental-count test, got {:?}",
+            def_of(incremental)
+        );
         assert!(
             ir.contains("and i8") && ir.contains(", 32"),
-            "the gate must test GC_FLAG_TENURED (0x20) on the parent's header byte:\n{ir}"
+            "the header test must mask GC_FLAG_TENURED (0x20):\n{ir}"
         );
         assert!(
             ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),
