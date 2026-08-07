@@ -95,11 +95,57 @@ levers and should not be worked.
 path (confirmed in the emitted IR — one call to `declare`, zero to `init`), so
 #7515/#7532 are working. It is the install itself, whose hit path
 `layout.rs:1022` documents as reducing to "the two header bit-writes
-`shape_install_shared` would have performed". Every argument to that call but the
-object pointer is a **compile-time constant for the class** — which is exactly
-the shape #7566 just won 1.81× on, so the same remedy (emit the hit path inline,
-keep the call as the slow path, gate it so non-hot sites pay no bytes) is the
-obvious first thing to try.
+`shape_install_shared` would have performed".
+
+**Partly addressed by #7586** (v0.5.1332): `push_cls` **1.091×**, `churn_alloc`
+1.075×, `churn` 1.042×, at **+0 bytes by construction** (no codegen crate is
+touched, so emitted IR cannot change). `deeplist` pays 0.7–1.3%, reproducible —
+pointer fields put it on the validating entry point. The cost was never the call
+overhead: **~30 of the ~70 hit-path instructions re-derived compile-time
+constants of the class**, because the FFI boundary makes them opaque — 12
+normalising two `(pointer, length)` pairs into slices only ever compared as
+integers, ~11 of `words_intersect` setup over two immutable globals, ~6
+recomputing the slot kind.
+
+### ⛔ Two remedies that look obvious and are wrong. Do not rebuild them.
+
+An earlier revision of this section proposed inlining the hit path at the `new`
+site, reasoning that every argument but the object pointer is a compile-time
+constant and that this is the shape #7566 won 1.81× on. **Both halves of that
+were tested in #7586 and both are wrong.**
+
+1. **Outlining/inlining the frame is not the lever — it is a regression.** The
+   prologue does look like #7566's shape (`sub sp, sp, #0x150`, six `stp` pairs
+   — a 336-byte frame and twelve callee-saved spills per construction, sized by
+   LLVM for a descriptor build that runs once per shape). Outlining it behind
+   `#[cold] #[inline(never)]` cut the frame to 80 bytes and the spills to zero,
+   and made things **slower**: `push_cls` 0.72 → 0.75 s, `churn_alloc`
+   0.72 → 0.79 s. Those spills are cheap dual-issued stores off the critical
+   path, and keeping six arguments live to forward to the outlined call costs
+   more in register moves than the prologue saves. **This function is bound by
+   instruction count, not frame size.**
+
+2. **⛔ Having codegen OR `GC_OBJ_TYPED_LAYOUT_INTACT` into the inline `new`'s
+   header word is a use-after-free factory.** It is seductive because it is
+   genuinely free — `declare`-path classes must have an empty pointer mask, so
+   since #7566 the inline `new` already writes its `GcHeader` as one i64
+   constant, and OR-ing one more bit costs +0 instructions and +0 bytes.
+
+   It breaks the unwritten invariant **"intact ⟹ a descriptor is reachable"**,
+   which `layout_note_slot` silently depends on. On a contradicting store to an
+   object that is intact but descriptor-less, the probe resolves `None`;
+   `layout_set_typed_unknown` — the only thing that clears the intact bit — is
+   reached **only from the `Some(verdict)` arm** (`gc/layout.rs:782–788`), so
+   control falls through to the pointer-mask path and **the bit is never
+   cleared**. The object is thereafter `SIDE_MASK` to the collector and *intact*
+   to the class-field inline guard, which consults no map by design. The raw-store
+   fast path then writes a double over a pointer slot with no barrier and no
+   layout note, and the next collection walks it as a heap pointer.
+
+   Note the comment at `layout.rs:742` says a `None` verdict "can only cost an
+   extra fall-through, never mis-track a slot". That is true **only while the
+   invariant holds** — it is a consequence of it, not an independent guarantee,
+   and it reads like reassurance to anyone implementing this.
 
 **A declared class is no longer slower than an object literal.** #7512 is
 **closed**: `churn_alloc` and `push_cls` both measure 0.75 s. The cause was not
