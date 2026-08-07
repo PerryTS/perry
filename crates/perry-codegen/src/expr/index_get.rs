@@ -542,16 +542,32 @@ fn lower_bounded_array_index_get(
     // bytes at `arr + 8 + idx*8`, so route through the slow path only when
     // the receiver is lazy. Issue #233: also detect FORWARDED arrays; the
     // slow path's `clean_arr_ptr` follows the chain.
+    //
+    // #7574: the test is now POSITIVE — `obj_type == GC_TYPE_ARRAY` — instead
+    // of "not lazy". `is_array_expr` is satisfied by a DECLARED `Type::Array`,
+    // and a declared type is a hint, never a layout fact (CLAUDE.md, *Known
+    // Limitations*), so `const a: number[] = new MyArr()` (a `class X extends
+    // Array` instance — a plain `ObjectHeader`) reached the raw
+    // `gep + load double` at `handle + 8 + idx*8`, i.e. straight into
+    // `parent_class_id ‖ field_count`, then the `keys_array` and `meta`
+    // POINTERS — reading two live GC child edges out as user doubles. The
+    // sibling tier in `index_get/guarded_array.rs` has always tested
+    // `GC_TYPE_ARRAY` here; this one only excluded lazy arrays.
+    //
+    // Strictly more restrictive than the old test (`GC_TYPE_LAZY_ARRAY` is 9,
+    // so `!= GC_TYPE_ARRAY` subsumes `== GC_TYPE_LAZY_ARRAY`): no receiver that
+    // used to take the slow path now takes the fast one. It is also one
+    // instruction CHEAPER — a single `icmp ne` replaces `icmp eq` + `or`.
     let gc_type_addr = blk.sub(I64, &arr_handle, "8");
     let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
     let gc_type = blk.load(I8, &gc_type_ptr);
-    let is_lazy = blk.icmp_eq(I8, &gc_type, "9"); // GC_TYPE_LAZY_ARRAY
+    let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
     let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
     let gc_flags = blk.load(I8, &gc_flags_ptr);
     let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
     let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
-    let needs_slow = blk.or(I1, &is_lazy, &is_fwd);
+    let needs_slow = blk.or(I1, &not_array, &is_fwd);
     // Index accessors / custom attribute descriptors (`Object.defineProperty
     // (arr, i, { get })`) divert element reads through the descriptor tables —
     // the raw slot load below would bypass them (test262 sort/precise-*).

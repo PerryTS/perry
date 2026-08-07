@@ -27,6 +27,8 @@ mod subclass;
 #[cfg(test)]
 mod spread_dense_tests;
 #[cfg(test)]
+mod subclass_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use self::alloc::{array_length_range_error, js_array_alloc_pointer_elements};
@@ -140,6 +142,13 @@ pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
 pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
+};
+// #7574 — array-like OBJECT receiver resolution for the raw `js_array_*` entry
+// points, plus the Array-exotic `length` maintenance the generic OBJECT index
+// store needs for a `class X extends Array` receiver.
+pub(crate) use self::subclass::{
+    array_object_set_length, is_array_subclass_class_id, is_array_subclass_value,
+    maintain_array_exotic_length, note_array_subclass_index_write,
 };
 // Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
 // so an `async function*` mapper return is driven through the iterator

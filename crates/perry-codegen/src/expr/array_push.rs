@@ -324,11 +324,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                 // head — the inline path's offset-0 length read would
                 // otherwise pick up the lower 32 bits of the
                 // forwarding pointer (garbage).
+                //
+                // #7574: the same load also has to prove the receiver IS an
+                // array. `Expr::ArrayPush` is folded from the receiver's
+                // DECLARED type, and a declared type is a hint, never a layout
+                // fact (CLAUDE.md, *Known Limitations*), so
+                // `const a: number[] = new MyArr()` — a `class X extends Array`
+                // instance, which perry models as a plain `ObjectHeader` —
+                // reached the inline store below. `ObjectHeader` overlays
+                // `ArrayHeader` field for field, so `length` read
+                // `object_type` (= 1) and `capacity` read `class_id` (large):
+                // `1 < class_id` passed the in-bounds test and the value was
+                // stored at `handle + 8 + 1*8` — i.e. over `ObjectHeader
+                // .keys_array`, a live GC child edge — while `length + 1`
+                // overwrote `object_type`. The SECOND push then SIGSEGVed
+                // (exit 139) dereferencing `keys_array`, whose bytes were now
+                // the double `1.0` (fault address `0x3ff0000000000000`).
+                //
+                // Route any non-`GC_TYPE_ARRAY` receiver to `js_array_push_f64`
+                // — the same slow arm forwarding already uses — which resolves
+                // an array-like object receiver onto the spec-generic engine.
+                // Strictly more restrictive than the old test: nothing that
+                // used to take the slow arm now takes the inline store.
+                let gc_type_addr = blk.sub(I64, &arr_handle, "8");
+                let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+                let gc_type = blk.load(I8, &gc_type_ptr);
+                let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
                 let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
                 let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
                 let gc_flags = blk.load(I8, &gc_flags_ptr);
                 let fwd_bits = blk.and(I8, &gc_flags, "128");
-                let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
+                let fwd_set = blk.icmp_ne(I8, &fwd_bits, "0");
+                let is_fwd = blk.or(I1, &not_array, &fwd_set);
 
                 let fwd_idx = ctx.new_block("apush.fwd");
                 let nofwd_idx = ctx.new_block("apush.nofwd");

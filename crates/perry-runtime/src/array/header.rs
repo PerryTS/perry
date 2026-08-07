@@ -620,11 +620,49 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         if (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            let obj_type = (*gc_header).obj_type;
+            if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let lazy = cleaned as *mut crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
                     let materialized = crate::json_tape::force_materialize_lazy(lazy);
                     return materialized as *const ArrayHeader;
+                }
+            }
+            // #7574: a `GC_TYPE_OBJECT` / `GC_TYPE_CLOSURE` allocation is NOT
+            // an `ArrayHeader`, and the two layouts overlay field for field —
+            // `ArrayHeader.length` reads `ObjectHeader.object_type` (= 1),
+            // `.capacity` reads `class_id`, and the element slots at +8/+16/+24
+            // are `parent_class_id ‖ field_count`, `keys_array` and `meta`. The
+            // sanity check below waves that through (1 <= class_id <= 100M), so
+            // an element WRITE overwrites two live GC child edges with
+            // arbitrary doubles and the collector then traces them: `class X
+            // extends Array` in a `T[]`-annotated binding SIGSEGVs on its
+            // second `.push()`.
+            //
+            // A declared TypeScript type is a hint, never a layout fact
+            // (CLAUDE.md, *Known Limitations*), so this is reachable from every
+            // binding form. Refusing it here makes ALL ~190 `clean_arr_ptr`
+            // call sites fail-closed at once — each degrades through its
+            // existing null branch instead of dereferencing a forged header —
+            // and it is the same "resolve at the shared runtime funnel, not at
+            // one codegen predicate at a time" shape #7573 used for Map/Set.
+            //
+            // Correctness (rather than mere safety) for the entry points the
+            // declared-type tiers actually reach is layered on top: those null
+            // branches re-enter through `array::subclass::array_object_*`,
+            // which runs the operation on the spec-generic array-like engine.
+            //
+            // Costs one compare on a byte this block already loaded. Buffers
+            // and typed arrays are `std::alloc`-backed with no `GcHeader`, so
+            // their preceding bytes are allocator bookkeeping that can read as
+            // any value — confirm against the registries before nulling, in the
+            // cold arm only.
+            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+                let addr = cleaned as usize;
+                if !crate::buffer::is_registered_buffer(addr)
+                    && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+                {
+                    return std::ptr::null();
                 }
             }
         }

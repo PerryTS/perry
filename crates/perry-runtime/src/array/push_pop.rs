@@ -589,10 +589,23 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
         }
         return arr;
     }
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        // #7574: a `class X extends Array` instance (or any array-like object)
+        // in a `T[]`-annotated binding. Pre-fix `clean_arr_ptr` waved its
+        // `ObjectHeader` through and the store below overwrote `keys_array` /
+        // `meta` — the SECOND push SIGSEGVed (exit 139). Run the spec-generic
+        // `Array.prototype.push` on the object instead, and return the ORIGINAL
+        // receiver so codegen's realloc write-back leaves the binding pointing
+        // at the instance (returning a fresh empty array here is what made the
+        // push look silently dropped).
+        if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
+            crate::array::subclass::array_object_method(recv, "push", &[value]);
+            return arr;
+        }
         return js_array_alloc(0);
     }
+    let arr = cleaned;
     if array_is_frozen(arr) {
         throw_frozen_array_mutation();
     }
@@ -786,10 +799,18 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 /// here. test262 built-ins/Array length-write-on-frozen.
 #[no_mangle]
 pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: f64) {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        // #7574: `a.length = n` on a `class X extends Array` instance reached
+        // here through the `is_array_expr`-keyed `property_set` lowering and
+        // wrote `ObjectHeader.object_type`. Perform the Array-exotic
+        // `Set(O, "length", n, true)` on the object instead.
+        if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
+            crate::array::subclass::array_object_set_length(recv, new_length);
+        }
         return;
     }
+    let arr = cleaned;
     if array_object_flags(arr) & crate::gc::OBJ_FLAG_FROZEN != 0 {
         throw_non_writable_length();
     }

@@ -660,10 +660,15 @@ pub extern "C" fn js_array_get_element_f64(arr: i64, index: i64) -> f64 {
 /// Use when the codegen KNOWS the pointer is a plain Array (not Map/Set/Buffer).
 #[no_mangle]
 pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32) -> f64 {
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr(arr);
+    if cleaned.is_null() {
+        // #7574: array-like OBJECT receiver — see `js_array_get_f64`.
+        if crate::array::subclass::array_object_receiver(arr).is_some() {
+            return js_array_get_f64(arr, index);
+        }
         return f64::NAN;
     }
+    let arr = cleaned;
     // Index accessors / custom attrs installed via `Object.defineProperty`
     // need the descriptor-aware getter.
     if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
@@ -763,10 +768,17 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             }
         }
     }
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr(arr);
+    if cleaned.is_null() {
+        // #7574: `a[i]` on a `class X extends Array` instance held in a
+        // `T[]`-annotated binding. Read the object's indexed property through
+        // the spec-generic `Get`, not the `ObjectHeader` words.
+        if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
+            return crate::array::subclass::array_object_index_get(recv, index);
+        }
         return f64::NAN;
     }
+    let arr = cleaned;
     // Check if this is actually a TypedArray — dispatch through typed array helper
     if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
         return crate::typedarray::js_typed_array_get(
@@ -1074,10 +1086,20 @@ pub extern "C" fn js_array_set_f64_extend(
 ) -> *mut ArrayHeader {
     // Demote a uniquely-owned string source — see `js_array_set_f64`.
     crate::string::js_string_addref_if_heap_string(value);
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        // #7574: `a[i] = v` on a `class X extends Array` instance held in a
+        // `T[]`-annotated binding. Pre-fix this stored the value into
+        // `ObjectHeader.keys_array` / `.meta`. Run the object `[[Set]]` plus
+        // the Array-exotic `length` maintenance, and return the ORIGINAL
+        // receiver so the caller's realloc write-back keeps the binding.
+        if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
+            crate::array::subclass::array_object_index_set(recv, index, value);
+            return arr;
+        }
         return js_array_alloc(0);
     }
+    let arr = cleaned;
     // If this write targets `Array.prototype`, mark the prototype as carrying an
     // indexed property so out-of-bounds element reads on ordinary arrays consult
     // it (ECMA-262 OrdinaryGet → prototype chain). Cheap no-op otherwise.

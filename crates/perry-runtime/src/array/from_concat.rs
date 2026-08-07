@@ -781,6 +781,15 @@ unsafe fn peek_plain_array_len(arr: *const ArrayHeader) -> Option<u32> {
     if crate::array::array_ptr_as_proxy(arr).is_some() {
         return None;
     }
+    // #7574: `clean_arr_ptr` now REFUSES a `GC_TYPE_OBJECT` allocation, so an
+    // array-like object — a `class X extends Array` instance among them — would
+    // fall into the null arm below and be mis-sized as an EMPTY array. It used
+    // to reach the `obj_type != GC_TYPE_ARRAY` test and answer `None`
+    // ("un-peekable, size it as 1 and take the spec-shaped per-source flow").
+    // Keep that answer: classify BEFORE the null shortcut.
+    if crate::array::subclass::raw_receiver_is_heap_object(arr) {
+        return None;
+    }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return Some(0);
@@ -823,6 +832,16 @@ unsafe fn concat_capacity_hint(recv: *const ArrayHeader, args_ptr: *const f64, c
 /// Pure reads — runs no user code, allocates nothing.
 unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const ArrayHeader, u32)> {
     if crate::array::array_ptr_as_proxy(src).is_some() {
+        return None;
+    }
+    // #7574: same hazard as `peek_plain_array_len` — but here mis-classifying a
+    // `class X extends Array` argument as an empty dense source would SILENTLY
+    // DROP its elements, because this bulk path returns `Some(out)` and the
+    // spec-shaped `append_concat_arg` flow (which has the subclass snapshot
+    // arm) never runs. `[1, 2].concat(sub)` yielded `1,2`. Reject it here so
+    // the caller falls through, exactly as it did before `clean_arr_ptr`
+    // started refusing object receivers.
+    if crate::array::subclass::raw_receiver_is_heap_object(src) {
         return None;
     }
     let src = clean_arr_ptr(src);

@@ -394,6 +394,21 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         // which handles shape transitions, frozen/sealed/extensible checks,
         // overflow into out-of-line storage, and accessor descriptors.
         unsafe { rooted_property_key_set(raw, idx, value) };
+        // #7574: a `class X extends Array` instance IS an Array in JavaScript,
+        // so `sub[3] = v` runs the Array-exotic `[[DefineOwnProperty]]` and
+        // bumps `length` to 4 (ECMA-262 §10.4.2.1). Perry models the instance
+        // as a plain object, whose `[[DefineOwnProperty]]` has no such step —
+        // pre-fix `sub[0] = 10; sub.length` read back `0` (node: `1`), which
+        // then made the next `sub.push(v)` append at index 0 and overwrite it.
+        // Ordinary objects and object literals never reach the chain walk: the
+        // `class_id == 0` test short-circuits first.
+        let class_id = crate::object::js_object_get_class_id(raw as *const ObjectHeader);
+        if class_id != 0 && crate::array::is_array_subclass_class_id(class_id) {
+            if let Some(index) = numeric_key_u32_index(idx) {
+                let recv = f64::from_bits(crate::value::POINTER_TAG | raw);
+                crate::array::maintain_array_exotic_length(recv, index);
+            }
+        }
         return;
     }
     // Buffer / typed-array were handled above. Map / Set are collection

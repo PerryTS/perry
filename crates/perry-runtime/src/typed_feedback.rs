@@ -2478,6 +2478,19 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                         key_ptr,
                         value_handle.get_nanbox_f64(),
                     );
+                    // #7574: this is the arm a `T[]`-annotated binding holding a
+                    // `class X extends Array` instance reaches — the inline and
+                    // out-of-line index-set guards both reject a non-
+                    // `GC_TYPE_ARRAY` receiver and land here. The instance is a
+                    // real Array in JavaScript, so `sub[3] = v` must leave
+                    // `length == 4`; the plain-object store above never touches
+                    // it. Cheap no-op for every other object receiver.
+                    let key_value =
+                        f64::from_bits(crate::value::js_nanbox_string(key_ptr as i64).to_bits());
+                    crate::array::note_array_subclass_index_write(
+                        f64::from_bits(receiver_handle.get_heap_word_u64()),
+                        key_value,
+                    );
                 }
                 f64::from_bits(receiver_handle.get_heap_word_u64())
             }

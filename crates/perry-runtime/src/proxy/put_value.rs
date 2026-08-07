@@ -207,6 +207,20 @@ pub extern "C" fn js_put_value_set(
             }
         }
         if target.to_bits() == receiver.to_bits() && key_is_length(property_key) {
+            // #7574: `sub.length = n` on a `class X extends Array` instance.
+            // `array_ptr_from_value` rightly answers `None` (the instance is an
+            // `ObjectHeader`, not an `ArrayHeader`), so this fell through to the
+            // ordinary set, which recorded the new `length` but left every
+            // element at or above it in place — `sub[1]` still read its old
+            // value after `sub.length = 1`. Run the Array-exotic
+            // `Set(O, "length", n, true)`, which deletes the truncated indices.
+            if crate::array::is_array_subclass_value(target) {
+                crate::array::array_object_set_length(
+                    target,
+                    crate::builtins::js_number_coerce(value),
+                );
+                return value;
+            }
             if let Some(arr) = array_ptr_from_value(target) {
                 // PutValue(`arr.length = v`) is `Set(O, "length", v, Throw)`. In
                 // strict mode a frozen array's non-writable `length` makes the
@@ -229,7 +243,19 @@ pub extern "C" fn js_put_value_set(
     let ok = if lookup(target).is_some() {
         js_proxy_set(target, property_key, value).to_bits() == TAG_TRUE
     } else {
-        ordinary_set_with_receiver(target, property_key, value, receiver)
+        let stored = ordinary_set_with_receiver(target, property_key, value, receiver);
+        // #7574: `sub[3] = v` on a `class X extends Array` instance is an
+        // Array-exotic `[[DefineOwnProperty]]` and must leave `length == 4`.
+        // Perry models the instance as a plain object, so the ordinary set
+        // above records the index but never touches `length` — pre-fix
+        // `sub[0] = 10; sub.length` read back `0` (node: `1`), on the
+        // `T[]`-annotated and the unannotated path alike (both land here
+        // through `js_put_value_set_ic_miss`). Cheap no-op for every other
+        // receiver: an object literal short-circuits on `class_id == 0`.
+        if stored {
+            crate::array::note_array_subclass_index_write(receiver, property_key);
+        }
+        stored
     };
     if !ok && strict != 0 {
         let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
