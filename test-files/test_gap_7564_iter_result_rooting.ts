@@ -98,22 +98,52 @@ for (let i = 0; i < N; i++) {
     }
 }
 
-// ── 4. Iterator helpers (`Iterator.from(...).map(...).filter(...)`) ─────────
-function* small(n: number): Generator<number, void, undefined> {
-    for (let k = 0; k < n; k++) yield k + n;
+// ── 4. A user-supplied `next` driven by hand ────────────────────────────────
+// The user's `next` is arbitrary JS, so it is an arbitrary collection point in
+// the middle of the protocol — the shape that made the constructor's unrooted
+// locals reachable from user code.
+//
+// NOT `Iterator.from(...)`, even though `iterator_helpers::make_iter_result`
+// is where the original bus error landed. Three SEPARATE pre-existing defects
+// sit on that path today and each would make this file red for the wrong
+// reason:
+//
+//   * #7576 — `Iterator.from(x)` returns an immediately-exhausted iterator
+//     (and `.map`/`.filter` return `undefined`), so the surface yields the
+//     wrong answer before GC is involved at all;
+//   * #7577 — generator CONSTRUCTION faults in
+//     `js_generator_attach_prototype` under these same instruments;
+//   * `js_get_iterator` → `url_search_params_backing_of` →
+//     `get_field_by_name_object_tail` derefs retired from-space memory when
+//     `Iterator.from` probes its argument.
+//
+// None is touched by this change. The `iterator_helpers` constructor is still
+// fixed and still covered by the unit tests in
+// `gc/tests/runtime_roots/iter_result_keys.rs`; end-to-end coverage of it from
+// TypeScript is blocked on #7576.
+function makeCounter(n: number): Iterator<number> {
+    let i = 0;
+    return {
+        next(): IteratorResult<number> {
+            // Allocating inside the user callback is the point: it is what
+            // makes a collection land mid-protocol.
+            churn(i);
+            return i < n ? { value: i++, done: false } : { value: undefined, done: true };
+        },
+    };
 }
 for (let i = 0; i < N; i++) {
-    const chain = Iterator.from(small(6))
-        .map((x: number) => {
-            churn(x + i);
-            return x * 2;
-        })
-        .filter((x: number) => x % 3 !== 0);
-    let c = chain.next();
-    while (!c.done) {
-        acc += c.value as number;
-        c = chain.next();
+    const raw = makeCounter(6);
+    let rs = raw.next();
+    while (!rs.done) {
+        if (Object.keys(rs).join(",") !== "value,done") bad++;
+        acc += rs.value as number;
+        rs = raw.next();
     }
+    // Spread over a user iterable — `js_iterator_to_array`'s drain, which
+    // reads `.value`/`.done` straight back off the freshly built result.
+    const spread = [...{ [Symbol.iterator]: () => makeCounter(4) }];
+    acc += spread.length;
 }
 
 // ── 5. Results retained across many later collections ───────────────────────
