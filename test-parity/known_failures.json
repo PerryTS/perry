@@ -1,14 +1,14 @@
 {
   "_schema": {
-    "description": "Each entry maps a parity-suite test name to a structured record. The CI gate in .github/workflows/test.yml reads `keys[]` from this file — a test that fails AND is not a key here breaks CI. Add entries here only with full provenance (issue + added date) so we can revalidate.",
+    "description": "Each entry maps a parity-suite test name to a structured record. This is a RATCHET, not a suppression list (#7582): scripts/parity_known_failures.py fails on a failure that is not listed here for the running platform, AND on an entry whose test ran on that platform and PASSED — naming the entry to delete. Delete it in the same PR that fixes the test. An entry that outlives its bug is a permanent suppression of that test's next regression: test_gap_diagchannel_3082_3084_3085_3086 was listed on 2026-07-04 for a shipped feature cluster, absorbed an unrelated data-loss regression when #7105 landed, and hid it for six days (#7580).",
     "fields": {
-      "issue": "Open GitHub issue number tracking this failure (e.g. \"793\"), or null when the failure is environmental / pending triage. Closed issues must be re-evaluated — flag the entry as `category: bug-stale` until a new tracking issue is filed.",
-      "added": "ISO date (YYYY-MM-DD) when the test was first skip-listed. Use 2026-05-15 for entries inherited from the pre-audit format where the historical date is unknown.",
-      "category": "ci-env | module-inventory | bug-open | bug-stale | gap-categorical | gap-bisect — see test-parity/README.md for definitions.",
-      "reason": "Free-text explanation. Keep the most-actionable signal first — what changes the verdict (a fixture, a Perry fix, a Node spec change).",
-      "platforms": "Optional non-empty array of linux, macos, windows, or other. Omit when the failure is accepted on every platform."
+      "issue": "REQUIRED. GitHub issue number tracking this failure, as a string (e.g. \"793\"). Closed issues must be re-evaluated — flag the entry as `category: bug-stale` until a new tracking issue is filed. The checker rejects a missing/null/non-numeric value.",
+      "added": "REQUIRED. ISO date (YYYY-MM-DD) when the test was first skip-listed. Use 2026-05-15 for entries inherited from the pre-audit format where the historical date is unknown.",
+      "category": "REQUIRED, and validated against the enum: ci-env | module-inventory | bug-open | bug-stale | gap-categorical | gap-bisect | untriaged — see test-parity/README.md for definitions. An undocumented value is a schema error.",
+      "reason": "REQUIRED. Free-text explanation. Keep the most-actionable signal first — what changes the verdict (a fixture, a Perry fix, a Node spec change).",
+      "platforms": "Optional non-empty array of linux, macos, windows, or other. Omit when the failure is accepted on every platform. An entry scoped to other platforms is neither honoured nor judged stale on this host — 'now passes' is a per-platform verdict."
     },
-    "scope": "Consumed by the TAG-GATED `parity` job (full test-files/*.ts suite) only. The per-PR gap-suite gate moved to test-parity/gap_snapshot.json, which is generated and checked in BOTH directions (see test-parity/README.md); the test_gap_* entries below are redundant with it and kept only so the tag-gated job keeps passing. Migrating this file to a generated snapshot needs a full-suite baseline from a tag run — follow-up to #797."
+    "scope": "Consumed by the TAG-GATED `parity` job (full test-files/*.ts suite). Because that job runs after the merges it would judge, the OFFLINE half of the ratchet runs on `lint` (a required per-PR context) via `python3 scripts/parity_known_failures.py --audit`: it enforces the provenance fields above, rejects an entry naming a test file that no longer exists, and cross-checks every test_gap_* entry against test-parity/gap_snapshot.json — a generated, bidirectional baseline, so a gap entry absent from it is one the snapshot asserts passes. Migrating this whole file to a generated snapshot needs a full-suite baseline from a tag run — follow-up to #797."
   },
   "test_parity_stream": {
     "issue": "793",

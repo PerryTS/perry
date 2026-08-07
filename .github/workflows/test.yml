@@ -222,9 +222,29 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/gap_snapshot.py --self-test
 
+      # Two halves of the same gate (#7582).
+      #
+      # `--self-test` unit-checks the checker. `--audit` runs the checker's
+      # OFFLINE half against the committed files: every known_failures.json
+      # entry must carry provenance (issue + date, #797), name a test that
+      # still exists, and — for gap-suite entries — be corroborated by
+      # `test-parity/gap_snapshot.json`, which is GENERATED and bidirectional.
+      # An entry absent from that snapshot is one the snapshot asserts passes,
+      # i.e. a suppression that has outlived its bug.
+      #
+      # This belongs on `lint` rather than only on `parity` because `parity` is
+      # TAG-gated: the live half of the ratchet fires after every merge it was
+      # meant to judge. `test_gap_diagchannel_3082_3084_3085_3086` sat here from
+      # 2026-07-04 and absorbed a real data-loss regression for six days (#7580);
+      # this step would have named it on the day it was added. Costs ~0.1s and
+      # runs no tests.
       - name: Platform-aware parity allowlist self-test
         if: ${{ !cancelled() }}
         run: python3 scripts/parity_known_failures.py --self-test
+
+      - name: Parity allowlist ratchet (provenance + stale entries)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/parity_known_failures.py --audit
 
       # Moving-GC gate wiring. The GC gates are the ones this repo has most
       # often found unable to fail (CLAUDE.md's four hazards), and every miss so
@@ -1739,7 +1759,12 @@ jobs:
           cat test-parity/reports/parity_threshold_latest.md >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
-      - name: Check for new failures
+      # Bidirectional since #7582: red on a failure that is not allowed here,
+      # AND red on an allowlist entry whose test ran on this platform and
+      # PASSED. The second direction is the one that matters — the file was a
+      # pure suppression list, so a fixed test kept its entry forever and the
+      # entry silently absorbed that test's next regression (#7580).
+      - name: Check for new and stale failures
         run: >-
           python3 scripts/parity_known_failures.py
           --report test-parity/reports/latest.json
