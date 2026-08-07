@@ -93,6 +93,35 @@ the iteration's garbage is gone — and both arms still run copying minors with
 
 ### Fixed
 
+**`for (const k of m.keys())` could hand the loop body a moved string
+(#7561).** The route it took, `make_iter_result`, allocates the strings
+`"value"` and `"done"` on every `.next()` while the caller's `value: JSValue`
+sits in a bare register the collector cannot see or rewrite. A probe over
+40 000 heap-string Map keys that allocates inside the loop body already gets a
+**wrong answer with no instruments at all** (one mismatched key, and a `chars`
+total of 3,944,095,011 where 1,548,890 is correct); under
+`PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1
+PERRY_GC_PROTECT_FROMSPACE_DEPTH=800` on a `PERRY_GC_MOVING_LOOP_POLLS=1`
+build, with the instrument proven live by its
+`[gc-fromspace-protect] mode=ProtectPages retired_set=#0 blocks=17` line, it
+takes a bus error whose reporter names the site exactly:
+
+```
+[gc-fromspace-protect] FAULT: signal 10 at 0x5b6f1f8ffe4
+  This address is RETIRED FROM-SPACE. …
+  last-known object: user_ptr=0x5b6f1f8ffd8 obj_type=3 size=40
+2  perry_runtime::iterator_helpers::make_iter_result + 172
+4  object::native_call_method::handle_methods::dispatch_handle + 4376
+```
+
+The index walk does not build a result object, so the defect is unreachable for
+`for (… of map/set …)` after this change: the same probe under the same flags
+is `mismatch: 0` with **zero faults** and the instrument still live
+(`retired_set=#5`), and a 150 000-key variant is clean across 4 copying minors
+— one moving 150,014 objects — plus a `PERRY_GC_VERIFY_EVACUATION=1` pass. It
+is **not** fixed for generators, custom iterators, `yield*` or spread, which
+still drive `make_iter_result`; that half is #7564.
+
 **A single-ident Map for-of head bound a snapshot, not the Map (#7561).**
 `for (const e of m)` went through `MapEntries`, which materialises the whole Map
 up front, so the loop could not see its own body's writes:
@@ -159,4 +188,5 @@ silently truncating at 100,000 elements (#7562), a SIGSEGV iterating a
 `values()` override on a `class X extends Map` (#7563), and `make_iter_result`
 allocating five objects per `.next()` where four are the same constant every
 call (#7564) — the general form of what this change routes around for Map and
-Set, still paid by every generator and custom iterator.
+Set, still paid by every generator and custom iterator, and carrying the
+rooting defect above on that path too.
