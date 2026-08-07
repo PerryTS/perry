@@ -2,6 +2,7 @@ use super::super::*;
 use super::support::*;
 use std::cell::Cell;
 mod callback_scanners;
+mod generator_attach_prototype;
 mod hook_dispatch_handles;
 mod interned_string_caches;
 mod iter_result_keys;

@@ -88,18 +88,32 @@ pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64>
         return Some(f64::from_bits(existing.to_bits()));
     }
     ensure_generator_intrinsics();
-    let gen_proto = generator_prototype_ptr(matches!(kind, GeneratorKind::Async));
+    // #7577: `js_object_alloc` below can run a copying minor, which moves both
+    // `%Generator.prototype%` (an ordinary heap object reached through a
+    // GC-rooted atomic the collector rewrites) and, once it exists, `obj`
+    // itself. `object_set_static_prototype` allocates too — `object_meta_ensure`
+    // mints a meta record — so `obj` was stale again by the time it was
+    // NaN-boxed for `closure_set_dynamic_prop`, and the `g.prototype` this
+    // returned was a from-space address. So: allocate first, root, and re-read
+    // the prototype from its rooted slot rather than caching it across.
     let obj = js_object_alloc(0, 0);
     if obj.is_null() {
         return None;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+
+    let gen_proto = generator_prototype_ptr(matches!(kind, GeneratorKind::Async));
     if !gen_proto.is_null() {
         let proto_bits = crate::value::js_nanbox_pointer(gen_proto as i64).to_bits();
-        super::super::prototype_chain::object_set_static_prototype(obj as usize, proto_bits);
+        super::super::prototype_chain::object_set_static_prototype(
+            handle_object_ptr(&obj_h) as usize,
+            proto_bits,
+        );
     }
-    let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+    let obj_value = obj_h.get_nanbox_f64();
     crate::closure::closure_set_dynamic_prop(closure_ptr, "prototype", obj_value);
-    Some(obj_value)
+    Some(obj_h.get_nanbox_f64())
 }
 
 /// `%Generator.prototype%` / `%AsyncGenerator.prototype%` pointer (the object
@@ -377,43 +391,101 @@ fn mark_generator_step_closures_no_rebind(obj: f64) {
 /// GC: both links go through `object_set_static_prototype`, whose side-table is
 /// traced + pointer-rewritten by the collector (see `prototype_chain.rs`), so
 /// the intermediate stays live as long as the instance does and dies with it.
+///
+/// # Rooting (#7577)
+///
+/// **This frame owns the only reference to the receiver.** Codegen nulls the
+/// statepoint slot immediately before the call:
+///
+/// ```llvm
+/// %r67 = bitcast i64 %r66 to double
+/// store ptr addrspace(1) null, ptr %r28              ; the caller's root, dropped
+/// %r68 = call double @js_generator_attach_prototype(double %r67, i32 0)
+/// ```
+///
+/// That is the ordinary contract — a runtime helper roots its own arguments —
+/// but every call below allocates, so the entry-time address goes stale inside
+/// this function and nothing else can rewrite it:
+///
+/// * `wrap_async_generator_instance` allocates three closures and sets three
+///   fields;
+/// * `generator_prototype_ptr` lazily builds the entire generator intrinsic
+///   tower on its first call;
+/// * `js_object_alloc` is an allocation by definition;
+/// * `object_set_static_prototype` allocates too — `object_meta_ensure` mints
+///   the object's meta record out of the arena.
+///
+/// Pre-fix, a copying minor in any of those windows produced *two* wrong
+/// answers with no diagnostic: the `[[Prototype]]` link was installed on the
+/// **pre-move** address, so `Object.getPrototypeOf(gen())` on the live object
+/// found nothing; and the function **returned** that pre-move address, so the
+/// caller's generator was a dangling pointer into retired from-space. That is
+/// the SIGBUS in #7577, and without the instruments it is a wrong answer and
+/// exit 0.
+///
+/// Every pointer below is therefore re-read from a handle after the call that
+/// could have moved it, per `docs/src/internals/gc-rooting-invariant.md`.
+/// `generator_prototype_ptr` is deliberately called a second time rather than
+/// cached: it reads a GC-rooted atomic slot the collector rewrites, so a fresh
+/// call is the re-read.
 #[no_mangle]
 pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 {
     let jv = JSValue::from_bits(obj.to_bits());
     if !jv.is_pointer() {
         return obj;
     }
-    let obj_ptr = jv.as_pointer::<u8>() as usize;
-    if obj_ptr == 0 {
+    if jv.as_pointer::<u8>() as usize == 0 {
         return obj;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(obj);
+
     // Pin each step closure's lexical generator-body `this` so `yield*`
     // delegation (`next.call(iter, v)`) can't rebind it to the iterator object.
-    mark_generator_step_closures_no_rebind(obj);
+    mark_generator_step_closures_no_rebind(obj_h.get_nanbox_f64());
     if is_async != 0 {
-        super::super::async_generator_queue::wrap_async_generator_instance(
-            obj_ptr as *mut ObjectHeader,
-        );
+        let async_target = handle_object_ptr(&obj_h);
+        super::super::async_generator_queue::wrap_async_generator_instance(async_target);
     }
-    let gen_proto = generator_prototype_ptr(is_async != 0);
-    if gen_proto.is_null() {
-        return obj;
+    // First call may build the whole tower; only its NULL-ness is used here, so
+    // the pointer itself is re-read after the allocation below.
+    if generator_prototype_ptr(is_async != 0).is_null() {
+        return obj_h.get_nanbox_f64();
     }
     // Intermediate object stands in for `g.prototype`: own `[[Prototype]]` is
     // `%Generator.prototype%`, carries no own methods (the instance inherits
     // `next`/`return`/`throw` from the brand-checked prototype two hops up).
     let intermediate = js_object_alloc(0, 0);
     if intermediate.is_null() {
-        return obj;
+        return obj_h.get_nanbox_f64();
     }
-    let gen_proto_bits = crate::value::js_nanbox_pointer(gen_proto as i64).to_bits();
+    let intermediate_h =
+        scope.root_nanbox_f64(crate::value::js_nanbox_pointer(intermediate as i64));
+
+    let gen_proto_bits =
+        crate::value::js_nanbox_pointer(generator_prototype_ptr(is_async != 0) as i64).to_bits();
     super::super::prototype_chain::object_set_static_prototype(
-        intermediate as usize,
+        handle_object_ptr(&intermediate_h) as usize,
         gen_proto_bits,
     );
-    let intermediate_bits = crate::value::js_nanbox_pointer(intermediate as i64).to_bits();
-    super::super::prototype_chain::object_set_static_prototype(obj_ptr, intermediate_bits);
-    obj
+    // `object_set_static_prototype` above allocated the intermediate's meta
+    // record, so BOTH operands are re-read here.
+    let intermediate_bits = intermediate_h.get_nanbox_u64();
+    super::super::prototype_chain::object_set_static_prototype(
+        handle_object_ptr(&obj_h) as usize,
+        intermediate_bits,
+    );
+    obj_h.get_nanbox_f64()
+}
+
+/// The current address of a NaN-boxed object held in `handle`.
+///
+/// #7577: reading it through this helper rather than binding a `usize` at the
+/// top of a function is the point — the pre-collection address is never
+/// nameable. See `RuntimeHandle::across_mut`'s docs.
+#[inline]
+fn handle_object_ptr(handle: &crate::gc::RuntimeHandle<'_>) -> *mut ObjectHeader {
+    crate::value::js_nanbox_get_pointer(handle.get_nanbox_f64()) as *mut ObjectHeader
 }
 
 /// Link a generator/async-generator instance to the concrete generator
@@ -421,6 +493,14 @@ pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 
 /// Node exposes for `Object.getPrototypeOf(g()) === g.prototype`; the
 /// fallback `js_generator_attach_prototype` above is used when codegen cannot
 /// see the owning closure.
+/// # Rooting (#7577)
+///
+/// Same hazard, same shape as [`js_generator_attach_prototype`]: the caller has
+/// already dropped its root by the time this is entered, and both
+/// `wrap_async_generator_instance` and `generator_function_prototype_of`
+/// allocate — the latter mints a fresh `g.prototype` object on its first call
+/// per generator function. Binding `obj_ptr` at entry and using it at the tail
+/// linked the prototype onto a pre-move address and returned it.
 #[no_mangle]
 pub extern "C" fn js_generator_attach_closure_prototype(
     obj: f64,
@@ -430,18 +510,19 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     if !jv.is_pointer() {
         return obj;
     }
-    let obj_ptr = jv.as_pointer::<u8>() as usize;
-    if obj_ptr == 0 {
+    if jv.as_pointer::<u8>() as usize == 0 {
         return obj;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(obj);
 
     // Pin the step closures' lexical generator-body `this` (see the fallback
     // `js_generator_attach_prototype`); this is the closure-identity wiring path.
-    mark_generator_step_closures_no_rebind(obj);
+    mark_generator_step_closures_no_rebind(obj_h.get_nanbox_f64());
 
     let closure = crate::closure::clean_closure_ptr(closure_ptr);
     if closure.is_null() || crate::closure::get_valid_func_ptr(closure).is_null() {
-        return obj;
+        return obj_h.get_nanbox_f64();
     }
 
     // Async-generator instances need the request-queue wrapper installed on
@@ -454,21 +535,24 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     if crate::closure::is_registered_async_generator_function(crate::closure::get_valid_func_ptr(
         closure,
     )) {
-        super::super::async_generator_queue::wrap_async_generator_instance(
-            obj_ptr as *mut ObjectHeader,
-        );
+        let async_target = handle_object_ptr(&obj_h);
+        super::super::async_generator_queue::wrap_async_generator_instance(async_target);
     }
 
+    // Allocates a fresh `g.prototype` on the first call for this function, so
+    // the receiver is re-read from its handle AFTER it, not before.
     let Some(proto) = generator_function_prototype_of(closure as usize) else {
-        return obj;
+        return obj_h.get_nanbox_f64();
     };
-    let proto_jv = JSValue::from_bits(proto.to_bits());
-    if !proto_jv.is_pointer() {
-        return obj;
+    if !JSValue::from_bits(proto.to_bits()).is_pointer() {
+        return obj_h.get_nanbox_f64();
     }
 
-    super::super::prototype_chain::object_set_static_prototype(obj_ptr, proto.to_bits());
-    obj
+    super::super::prototype_chain::object_set_static_prototype(
+        handle_object_ptr(&obj_h) as usize,
+        proto.to_bits(),
+    );
+    obj_h.get_nanbox_f64()
 }
 
 /// Build one generator-intrinsic tower (sync or async) and store its three
