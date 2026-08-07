@@ -9,7 +9,7 @@ use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 /// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
 /// by default. Only explicit `PERRY_WRITE_BARRIERS=0`/`off`/`false`
@@ -51,6 +51,136 @@ pub(crate) fn emit_write_barrier_slot_on_block(
         "js_write_barrier_slot",
         &[(I64, parent_bits), (I64, slot_addr), (I64, child_bits)],
     );
+}
+
+/// #7511 — `GC_FLAG_TENURED`, the one header bit that decides whether a
+/// parent's slot store can possibly need remembering.
+///
+/// Pinned against the runtime constant by
+/// `perry-runtime`'s `gc::tests::inline_generation_gate_contract`; codegen
+/// cannot `use` the runtime crate, so the value is duplicated and the test is
+/// what keeps the two from drifting.
+const GC_FLAG_TENURED_I8: &str = "32"; // 0x20
+
+/// #7511 — emit the `i1` predicate "this store may need remembered-set work",
+/// as a **superset** of the condition the runtime barrier itself acts on.
+///
+/// ## What the barrier actually does on these workloads
+///
+/// On `push_cls` / `churn_alloc` / `churn` the array push is the only surviving
+/// barrier call site, and `PERRY_GC_TRACE` counts 19,945,222 calls of which
+/// 19,743,573 (99.0%) end in `parent_not_old_skips` — with
+/// `old_to_young_slow_hits == 0` and `new_inserts == 0`. The remembered set is
+/// **never inserted into, not once**, yet the call is made 20 million times and
+/// costs ~30% of leaf profile. #7536's value-side test cannot reach any of it:
+/// `non_pointer_child_skips == 0`, because the pushed value genuinely *is* a
+/// heap pointer. The waste is entirely parent-side.
+///
+/// ## The two clauses
+///
+/// The call is skipped only when BOTH are false.
+///
+/// 1. **`gc_flags & GC_FLAG_TENURED`** — the remembered set exists so a minor
+///    GC can skip retracing parents it treats as black leaves. Those are
+///    exactly the objects that are physically old-gen
+///    (`barrier_parent_needs_remembering`'s `classify_heap_generation == Old`)
+///    or logically tenured (`GC_FLAG_TENURED`, whose doc records that a tenured
+///    object may stay physically in the nursery while "the trace pretends
+///    they're old-gen" — `gc/trace.rs:747`). A parent that is neither is
+///    **fully traced by every minor GC**, so the edge is rediscovered and needs
+///    no record.
+///
+///    Soundness rests on `Old ⟹ TENURED`, i.e. `!TENURED ⟹ !Old`, so this
+///    predicate can only skip a subset of what the runtime already skips — the
+///    same superset discipline `emit_may_carry_heap_pointer_check` uses. Every
+///    path that places an object into an old-gen block sets the bit in the same
+///    breath, and nothing ever clears it:
+///      * `gc/copying.rs:612–637` — one `promote` expression selects
+///        `arena_alloc_gc_old` AND `GC_FLAG_TENURED`.
+///      * `gc/oldgen.rs:1740`, `gc/oldgen.rs:1838` — evacuation / old-page
+///        defrag both OR the bit onto the destination header.
+///      * `buffer/header.rs:486`, `typedarray/mod.rs:722` — direct old-gen
+///        allocations set it immediately after allocating.
+///      * `json_tape.rs` allocates through `arena_alloc_gc_old_born_tenured`.
+///    The three sites that write the bit all OR it in; none masks it out.
+///
+/// 2. **`PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT != 0`** — skipping the
+///    call also skips `barrier_child_prologue`'s
+///    `incremental_mark_barrier_value`, the insertion/SATB shading, which is
+///    NOT a generational question and must never be dropped while a cycle is
+///    live. A zero count *proves* this thread's
+///    `INCREMENTAL_MARK_BARRIER_VALID_PTRS` is null, because
+///    `incremental_mark_barrier_enable` installs the thread-local BEFORE
+///    incrementing the count (`gc/barrier.rs:676–693`, where that ordering is
+///    documented as load-bearing for exactly this reason). This is the same
+///    gate, on the same global, that `expr/shadow_inline.rs` and
+///    `expr/shadow_slot.rs` already emit for the root shading barrier.
+///
+/// ## Why a live test and not a static claim
+///
+/// #7501: even a static layout *declaration* is revoked at runtime. Generation
+/// is strictly worse — an object's generation changes underneath any static
+/// proof the moment a collection promotes it, and `keep` in `chunk()` crosses
+/// hundreds of collections between its allocation and its last push. There is
+/// no by-construction proof that a parent is young, which is precisely why this
+/// reads the live header at the store instead.
+///
+/// `parent_handle` must be a **validated, non-forwarded GC user pointer** —
+/// the caller is responsible for having tested that, because this dereferences
+/// `parent_handle - 7`.
+pub(crate) fn emit_parent_may_need_remembering_check(
+    blk: &mut LlBlock,
+    parent_handle: &str,
+) -> String {
+    let gc_flags_addr = blk.sub(I64, parent_handle, "7");
+    let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
+    let gc_flags = blk.load(I8, &gc_flags_ptr);
+    let tenured_bits = blk.and(I8, &gc_flags, GC_FLAG_TENURED_I8);
+    let is_tenured = blk.icmp_ne(I8, &tenured_bits, "0");
+    let active = blk.load_atomic_seq_cst(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
+    let incremental_active = blk.icmp_ne(I32, &active, "0");
+    blk.or(I1, &is_tenured, &incremental_active)
+}
+
+/// #7511 — `js_write_barrier_slot` behind
+/// [`emit_parent_may_need_remembering_check`].
+///
+/// Terminates the current block. On return `ctx.current_block` is the
+/// continuation, which every path reaches, so the caller goes on emitting
+/// exactly as before.
+///
+/// Emits nothing at all when barrier emission is compile-time disabled, so
+/// `PERRY_WRITE_BARRIERS=0` does not leave a predicate and two blocks wrapped
+/// around an empty arm — that knob exists to A/B the barrier's cost, and dead
+/// IR in one arm makes the comparison lie (the same reasoning
+/// `emit_jsvalue_slot_store_pointer_tested` records).
+pub(crate) fn emit_write_barrier_slot_generation_tested(
+    ctx: &mut FnCtx<'_>,
+    parent_handle: &str,
+    parent_bits: &str,
+    slot_addr: &str,
+    child_bits: &str,
+    stem: &str,
+) {
+    if !crate::codegen::write_barriers_enabled() {
+        return;
+    }
+    let barrier_idx = ctx.new_block(&format!("{}.barrier", stem));
+    let done_idx = ctx.new_block(&format!("{}.barrier.done", stem));
+    let barrier_label = ctx.block_label(barrier_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let needed = emit_parent_may_need_remembering_check(blk, parent_handle);
+        blk.cond_br(&needed, &barrier_label, &done_label);
+    }
+    ctx.current_block = barrier_idx;
+    {
+        let blk = ctx.block();
+        emit_write_barrier_slot_on_block(blk, parent_bits, slot_addr, child_bits);
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
 }
 
 pub(crate) fn emit_root_nanbox_store_on_block(blk: &mut LlBlock, value: &str, root_slot: &str) {

@@ -1234,6 +1234,34 @@ pub(super) fn barrier_parent_needs_remembering(parent_addr: usize, external_slot
         crate::arena::classify_heap_generation(parent_addr),
         crate::arena::HeapGeneration::Old
     ) {
+        // #7511: generated code may skip this whole call when the parent's
+        // header has no `GC_FLAG_TENURED`
+        // (`emit_parent_may_need_remembering_check`). That elision is sound
+        // only while `Old ⟹ TENURED`, and NOTHING in the allocator enforces
+        // it: `arena_alloc_gc_old` writes `GC_FLAG_ARENA | birth_extra` and
+        // leaves the bit to its eight callers. A ninth caller that forgets it
+        // would not fail to compile, would not fail a test, and would strand a
+        // live child in generated code only — the shape this repo's gate
+        // doctrine exists to refuse.
+        //
+        // Assert it where the classification is actually made, so every
+        // debug/test execution of every old parent store checks it. Skipped for
+        // a forwarded or swept-dead header: `invalidate_dead_old_arena_header`
+        // deliberately zeroes `gc_flags` on reclaimed old objects, so a dead
+        // header legitimately reads TENURED-clear at an Old address.
+        debug_assert!(
+            {
+                let flags = unsafe {
+                    let header = header_from_user_ptr(parent_addr as *const u8);
+                    (*header).gc_flags
+                };
+                let dead_or_moving =
+                    flags & (GC_FLAG_FORWARDED | GC_FLAG_ARENA) != GC_FLAG_ARENA || flags == 0;
+                dead_or_moving || flags & GC_FLAG_TENURED != 0
+            },
+            "old-gen parent {parent_addr:#x} lacks GC_FLAG_TENURED: the #7511 \
+             inline barrier gate would skip a real old->young edge"
+        );
         return true;
     }
     external_slot && malloc_gc_parent_addr(parent_addr)

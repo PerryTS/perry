@@ -18,6 +18,7 @@ use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier,
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_nanbox_store_on_block,
+    emit_write_barrier_slot_generation_tested,
     emit_typed_feedback_register_site, emit_write_barrier,
     expr_has_numeric_pointer_free_array_layout, lower_expr, lower_expr_native,
     nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx, TypedFeedbackContract,
@@ -416,7 +417,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
                 // Inline store: arr+8+length*8 = value, length++.
                 ctx.current_block = inbounds_idx;
-                {
+                // #7511: the barrier is emitted separately, behind an inline
+                // live test of the PARENT's generation, so the store emitter
+                // below is told not to emit it. Everything else about the store
+                // — the slot write, the string addref, the layout note, and
+                // their ordering — is unchanged.
+                //
+                // `js_write_barrier_slot` still lands in exactly the position it
+                // did before (after the layout note, before the numeric-write
+                // note and the length bump), because a collection reached
+                // between the store and the barrier would run with the
+                // old→young edge unrecorded. The block is split here rather
+                // than the call being sunk to the end of the block.
+                let (length, element_addr, barrier_value_bits) = {
                     let blk = ctx.block();
                     let length = blk.safe_load_i32_from_ptr(&arr_handle);
                     let length_i64 = blk.zext(I32, &length, I64);
@@ -436,7 +449,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             layout_note_needed,
                             &arr_handle,
                             &element_addr,
-                            write_barrier_needed,
+                            false,
                         )
                     } else {
                         emit_jsvalue_slot_store_with_flags_on_block(
@@ -449,17 +462,48 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             layout_note_needed,
                             &arr_handle,
                             &element_addr,
-                            write_barrier_needed,
+                            false,
                         )
+                    };
+                    // The store emitter only hands back the bits when it needed
+                    // them itself; the barrier needs them whenever it is
+                    // emitted, so materialize them here otherwise.
+                    let barrier_value_bits = if write_barrier_needed {
+                        Some(
+                            value_bits
+                                .clone()
+                                .unwrap_or_else(|| blk.bitcast_double_to_i64(&v)),
+                        )
+                    } else {
+                        None
                     };
                     // #7469: provably dead under `declared_all_pointer` — the
                     // `nofwd` admission test proved both raw-f64 bits already
                     // clear, and clearing them is this call's only effect.
                     if !value_is_numeric && !declared_all_pointer {
-                        let value_bits =
-                            value_bits.unwrap_or_else(|| blk.bitcast_double_to_i64(&v));
+                        let value_bits = barrier_value_bits
+                            .clone()
+                            .or(value_bits)
+                            .unwrap_or_else(|| blk.bitcast_double_to_i64(&v));
                         emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
                     }
+                    (length, element_addr, barrier_value_bits)
+                };
+                if let Some(child_bits) = barrier_value_bits {
+                    // `arr_handle` reached this block through the `nofwd` header
+                    // test, so it is a live, non-forwarded GC array user
+                    // pointer — the precondition for reading its header byte.
+                    emit_write_barrier_slot_generation_tested(
+                        ctx,
+                        &arr_handle,
+                        &arr_handle,
+                        &element_addr,
+                        &child_bits,
+                        "apush",
+                    );
+                }
+                {
+                    let blk = ctx.block();
                     let new_length = blk.add(I32, &length, "1");
                     let arr_ptr = blk.inttoptr(I64, &arr_handle);
                     // GC_STORE_AUDIT(POINTER_FREE): array length header update has no child pointer.
