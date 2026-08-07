@@ -634,3 +634,10 @@ pub(crate) unsafe fn test_element_shape_bit_set(arr: *const ArrayHeader) -> bool
 #[cfg(test)]
 #[path = "element_shape_tests.rs"]
 mod tests;
+
+/// The end-to-end revocation matrix: every mutator family driven through its
+/// real FFI entry point. Separate from `tests` because it asserts a different
+/// thing — not that the funnels work, but that the mutators *reach* them.
+#[cfg(test)]
+#[path = "element_shape_matrix_tests.rs"]
+mod matrix_tests;
