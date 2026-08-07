@@ -1009,6 +1009,20 @@ fn is_object_like_value(value: f64) -> bool {
     raw >= 0x10000 && !crate::symbol::is_registered_symbol(raw)
 }
 
+/// #7562: the drain hit [`MAX_ITERATOR_DRAIN`] without the iterator finishing.
+///
+/// Throwing is the point. The previous behaviour was to fall out of the loop
+/// and return whatever had accumulated, so `[...it]` handed back a short array
+/// that looked entirely valid — a `RangeError` is recoverable and visible,
+/// silent truncation is neither.
+#[cold]
+fn throw_iterator_too_long() -> ! {
+    let msg = b"Iterator produced more than the maximum supported number of elements";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 #[cold]
 fn throw_iterator_result_not_object() -> ! {
     iter_bt_dump(
@@ -1037,6 +1051,21 @@ pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
     }
     result
 }
+
+/// Convert any iterator-protocol object (has `.next()` method) to an array.
+/// #7562: the drain loops below were bounded at a hardcoded 100,000 and
+/// **silently returned a short array** when a longer iterator hit it —
+/// `[...m.values()]` on a 250,000-entry Map produced 100,000 elements with no
+/// error, no warning, and a plausible-looking result. Wrong data a caller
+/// would ship, which is strictly worse than either hanging or throwing.
+///
+/// Node applies no such limit: `[...it]` runs until the iterator finishes or
+/// the process runs out of memory. Matching that exactly would trade silent
+/// truncation for an unbounded loop, so the bound stays — but it is raised to
+/// JavaScript's own maximum array length and **throws** on exhaustion instead
+/// of truncating. Every real workload is unaffected; a runaway iterator now
+/// reports itself rather than corrupting a result.
+const MAX_ITERATOR_DRAIN: usize = u32::MAX as usize - 1;
 
 /// `IteratorClose(iterator)` when destructuring exits before the iterator is done.
 #[no_mangle]
@@ -1106,7 +1135,12 @@ pub(crate) fn sync_iterator_to_array_if_not_async(iter_f64: f64) -> Option<*mut 
     let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
     let mut result = arr;
 
-    for _ in 0..100_000 {
+    for drained in 0..MAX_ITERATOR_DRAIN {
+        if drained == MAX_ITERATOR_DRAIN - 1 {
+            // Reached the cap with the iterator still producing: refuse rather
+            // than return a short array (#7562).
+            throw_iterator_too_long();
+        }
         let step = if use_method_dispatch {
             unsafe {
                 crate::object::js_native_call_method(
@@ -1187,7 +1221,6 @@ fn settled_promise_value(value: f64) -> Option<f64> {
     }
 }
 
-/// Convert any iterator-protocol object (has `.next()` method) to an array.
 /// Used by spread on generators, Array.from on generators, etc.
 /// Calls `.next()` in a loop until `.done` is true, collecting `.value` entries.
 #[no_mangle]
@@ -1278,7 +1311,12 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     // Reusable scratch slot for the `{ value, done }` object `.next()` returns.
     let step_h = scope.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
 
-    for _ in 0..100_000 {
+    for drained in 0..MAX_ITERATOR_DRAIN {
+        if drained == MAX_ITERATOR_DRAIN - 1 {
+            // Reached the cap with the iterator still producing: refuse rather
+            // than return a short array (#7562).
+            throw_iterator_too_long();
+        }
         // safety limit
         // Call next() — stored-closure fast path, or class-id method dispatch.
         // Both addresses are read fresh from their roots at the callsite: the
@@ -1390,7 +1428,12 @@ fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
     let mut result = arr;
 
-    for _ in 0..100_000 {
+    for drained in 0..MAX_ITERATOR_DRAIN {
+        if drained == MAX_ITERATOR_DRAIN - 1 {
+            // Reached the cap with the iterator still producing: refuse rather
+            // than return a short array (#7562).
+            throw_iterator_too_long();
+        }
         let step = if use_method_dispatch {
             unsafe {
                 crate::object::js_native_call_method(
