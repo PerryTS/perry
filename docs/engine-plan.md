@@ -158,11 +158,24 @@ already be 2.2x better. Tracked in **#7478**.
    them — they close real use-after-frees.
 2. **#7478 — the JSON tape's scan path**, where our optimized build is 2.2x
    slower than our unoptimized one. The 1350 ms idiomatic row is the floor.
-3. **#7510 — `gc::layout` side tables**, whose real remaining lever is
-   `js_gc_init_typed_shape_layout` + `shape_install_shared` (~13%), rebuilding
-   both masks on every construction of an already-installed shape. #7525 landed
-   the emptiness prerequisite and corrected the ticket's stale premise
-   (`layout_forget_object` is 3.0%, not the 14.5% it was filed on).
+3. **`_tlv_get_addr` — thread-local addressing, now 30.5% of `churn_alloc`**
+   and the largest single line in the profile. This is #7469's structural half
+   (a context pointer, or inlined bump-allocation in generated code); #7474's
+   hot-TLS cache took it from 34% to ~14–17%, and it has climbed back as a
+   *share* because everything around it shrank, not because it regressed.
+
+   **#7510 is effectively closed.** All three items were measured out rather
+   than argued away: item 1 shipped (#7535, install now 1x per 20M
+   constructions), item 2 shipped (#7525), and **item 3 collapsed to 0.03%** —
+   2 samples of 5,869, with codegen emitting *zero* `js_gc_note_slot_layout`
+   sites for `churn_alloc` and a stub-it-entirely ceiling of 1.016x. The
+   type-propagation work (#7550/#7552) plus declaration-at-allocation
+   (#7501/#7532) removed the calls before anyone optimised them.
+
+   **Three times this campaign a ticket's headline number was stale by the time
+   it was worked** (#7510's 33.6% -> 11%, `layout_forget_object`'s 14.5% ->
+   3.0% -> 1.7%, item 3's 7.5% -> 0.03%). Re-measure before scoping; a profile
+   more than a few merges old sends people at the wrong thing.
 4. **#7511 — write barriers (16.1%)**. Correctness-first: acceptance requires
    `PERRY_GC_VERIFY_EVACUATION=1` / `PERRY_GC_VERIFY_MARK=1` and the ratchet
    probes, because a wrong answer here corrupts memory rather than slowing it.
