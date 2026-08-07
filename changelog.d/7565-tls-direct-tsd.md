@@ -40,13 +40,31 @@ from `TPIDRRO_EL0` — that is how `pthread_getspecific` itself is implemented,
 and what mimalloc (already linked into this runtime) does on this platform.
 `tls_hot` publishes the cache's address into one `pthread_key_create` slot and
 reads it back inline: `mrs` plus two loads, no call, no caller-saved-register
-clobber, and `pure`+`nomem` so LLVM CSEs it across a whole function. That is
-exactly the freedom LLVM already had over `@llvm.threadlocal.address`
-(`speculatable`, `memory(none)`), so it introduces no hazard the `thread_local!`
-read did not already carry — written down at the site, along with the one shape
-unsound under either (holding the result across an `.await` in a work-stealing
-executor; nothing on the allocation path is `async`). Every other target keeps
-the previous path unchanged.
+clobber. Every other target keeps the previous path unchanged.
+
+**The asm must not be `pure`, and that was learned the hard way — recorded
+here because the reasoning that produced the bug was persuasive.** Marking it
+`options(pure, nomem)` is the obvious move: masked of its CPU-number bits the
+register is a per-thread constant, so `pure` lets LLVM CSE the read across a
+whole function. It is also wrong. `pure` promises the result depends only on
+the inputs, and this asm has none, so LLVM may compute it once and reuse the
+value anywhere in the function — *including across a point where execution
+resumes on a different thread*. `perry-stdlib`'s async bridge is exactly that
+shape: `hot()` is `#[inline(always)]` and LTO inlines it into futures tokio
+polls, so a hoisted thread pointer outlives the thread it was read on. Every
+`node:net` / `node:http` server aborted with tokio's "there is no reactor
+running" — 5/5 against 5/5 clean on `main`.
+
+The tempting counter-argument, that `@llvm.threadlocal.address` is already
+`speculatable` + `memory(none)` so a `thread_local!` read had the same freedom,
+does **not** hold: on Darwin that intrinsic lowers to a *call* through the TLV
+descriptor, which LLVM will not hoist across arbitrary code. Replacing the call
+with inline asm is what made the hoist possible. Two further notes for whoever
+meets this next: nothing cheaper than the gap suite found it — 1811 runtime
+unit tests, 12 GC-ratchet probes, and the whole allocation benchmark set are
+all green with the bug present — and dropping `pure` costs **nothing
+measurable**, with all three probes landing on the same millisecond as the
+`pure` build.
 
 **It cannot silently read a wrong address.** The publishing thread reads its
 slot back *through the direct path* and compares it against what
@@ -108,6 +126,21 @@ checksum matches; `wall_ms` is faster on all twelve. The diff tool asserts it
 compared a non-zero number of cells before printing a verdict, because the
 metrics are `{samples, median, …}` dicts and a naive numeric read compares zero
 of them and reports a vacuous "identical".
+
+The gap suite (466/491 on this host) was what caught the `pure` bug, and it is
+also how the rest of the divergence set was cleared: after the fix, five of the
+six network aborts pass, and the sixth
+(`test_gap_http_client_no_redirect_follow`) fails **byte-identically on
+`main`**. The seventh crash,
+`test_gap_gc_same_module_call_argument_rooting`, is a harness timeout rather
+than a defect: standalone under its own `parity-env`
+(`PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1`) it exits 0 in 13.5 s with
+output byte-identical to node, against the harness's 10 s cap. Worth recording
+separately: **the gap gate cannot render a verdict on macOS at all** —
+`run_gap_tests.sh` selects `test-parity/gap_snapshot.${platform}.json` for
+non-Linux hosts and `gap_snapshot.macos.json` is not in the repo, so the run
+ends in `FileNotFoundError` and its exit 1 is a missing baseline, not a
+regression list.
 
 **This closes the lever, not the ticket.** What is left of `_tlv_get_addr` is
 `RuntimeHandleScope`, not the allocation path, so further thread-local work
