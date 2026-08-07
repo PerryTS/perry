@@ -1172,13 +1172,59 @@ pub(super) fn old_gen_reclaimable_pressure_bytes() -> usize {
     crate::arena::old_gen_in_use_bytes().saturating_sub(super::old_free_bytes())
 }
 
+/// #7592: divisor for the proportional old-reclaim growth band — the next
+/// full reclaim fires when old-gen has grown `baseline / 2` (50%) past the
+/// post-reclaim baseline, Go's GOGC shape.
+const OLD_RECLAIM_GROWTH_DIVISOR: usize = 2;
+
+/// #7592: how much old-gen may grow past the post-reclaim baseline before the
+/// next full reclaim is due. The constant `gc_old_gen_reclaim_growth_dyn_bytes`
+/// band survives as the floor, but a *constant* band cannot be the whole
+/// answer: each full reclaim costs O(live), so a fixed-bytes cadence makes
+/// total major-GC work quadratic in the live set — the same shape #7594
+/// removed one generation down, just paced by promotion instead of
+/// allocation. A band proportional to the baseline makes the major count
+/// logarithmic in heap growth (`∫ dL/(L/2) = 2·ln(Lmax/L0)`), so total major
+/// work stays linear in the final live set.
+///
+/// This is also strictly better on the #7437 failure mode (a reclaim that
+/// cannot actually lower the number it watches, e.g. pinned survivors): the
+/// futile reclaim resets the baseline to the still-high value, so the next
+/// band is *larger*, spacing futile repeats out instead of re-firing every
+/// constant step.
+///
+/// Shared by `old_reclaim_pressure_due` and `gc_old_reclaim_debt_bytes` so
+/// the "is it due" predicate and the debt arithmetic cannot diverge (#7024's
+/// two-predicates-collapse family).
+pub(super) fn gc_old_reclaim_growth_band_bytes(baseline: usize) -> usize {
+    gc_old_gen_reclaim_growth_dyn_bytes().max(baseline / OLD_RECLAIM_GROWTH_DIVISOR)
+}
+
 #[inline]
 pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bool {
     (old_in_use >= gc_old_gen_reclaim_threshold_dyn_bytes()
         && baseline < gc_old_gen_reclaim_threshold_dyn_bytes())
-        || old_in_use.saturating_sub(baseline) >= gc_old_gen_reclaim_growth_dyn_bytes()
+        || old_in_use.saturating_sub(baseline) >= gc_old_reclaim_growth_band_bytes(baseline)
 }
 
+/// Whether an imminent promotion justifies a full old reclaim FIRST.
+///
+/// #7592: the pressure test is on the CURRENT old-gen occupancy only. It used
+/// to be `old_reclaim_pressure_due(old_in_use + promotable_bytes, _)` — a
+/// *prediction* of where old-gen would land after the promotion — which is
+/// the #7594 mistake in another coat: the promotable bytes are in the
+/// survivor space, where a full mark-sweep can neither reclaim them (they are
+/// live) nor reclaim the old-gen space they have not yet occupied. A handoff
+/// scheduled on predicted pressure over a near-empty old-gen is guaranteed
+/// futile — measured on #7592's `json_pipeline` at 500k records as a 1,015 ms
+/// full over 4.2 MB of old-gen that freed nothing. The only useful work a
+/// handoff can do is clear CURRENT old garbage so the promotion lands in
+/// reused holes; when old-gen has no reclaimable pressure of its own, the
+/// promotion should simply proceed and grow it.
+///
+/// `promotable_bytes` remains the reason to *bother* checking: below the
+/// handoff minimum the upcoming promotion is too small to be worth a full
+/// collection under any old-gen state.
 #[inline]
 pub(super) fn copied_minor_promotion_handoff_pressure_due(
     promotable_bytes: usize,
@@ -1186,7 +1232,7 @@ pub(super) fn copied_minor_promotion_handoff_pressure_due(
     baseline: usize,
 ) -> bool {
     promotable_bytes >= gc_copy_promotion_handoff_min_dyn_bytes()
-        && old_reclaim_pressure_due(old_in_use.saturating_add(promotable_bytes), baseline)
+        && old_reclaim_pressure_due(old_in_use, baseline)
 }
 
 pub(super) fn copied_minor_promotable_active_survivor_bytes() -> usize {
@@ -1285,6 +1331,31 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
         old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     copied_minor_promotion_handoff_pressure_due(promotable, old_in_use, baseline)
+}
+
+/// #7592: credit a copying minor's promoted bytes to the old-reclaim
+/// baseline.
+///
+/// Promoted bytes are live *by construction* — only marked-live objects get
+/// copied — so a full mark-sweep fired the moment promotion pushes old-gen
+/// over a threshold is guaranteed to find them all live and free nothing
+/// (measured: a 2,100 ms full over 274 MB of just-promoted objects, 0.0 MB
+/// freed). Treating the promotion delta as part of the "clean" baseline means
+/// the next reclaim fires only after old-gen has *grown or churned* past it —
+/// the proportional band (`gc_old_reclaim_growth_band_bytes`) then prices the
+/// reclaim off the real live set. Pre-existing old garbage is unaffected: the
+/// credit is exactly the promoted delta, never a resync to current in-use.
+///
+/// The trade is the standard GOGC one: bytes that are promoted and then die
+/// quickly now wait for the growth band instead of the next threshold
+/// crossing. That is deliberate — a promoted-then-dead cohort big enough to
+/// matter moves the band by its own size.
+pub(super) fn credit_promoted_bytes_to_old_baseline(promoted_bytes: usize) {
+    if promoted_bytes == 0 {
+        return;
+    }
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES
+        .with(|bytes| bytes.set(bytes.get().saturating_add(promoted_bytes)));
 }
 
 pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
@@ -1924,7 +1995,9 @@ pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u
     let trigger = if baseline < gc_old_gen_reclaim_threshold_dyn_bytes() {
         gc_old_gen_reclaim_threshold_dyn_bytes()
     } else {
-        baseline.saturating_add(gc_old_gen_reclaim_growth_dyn_bytes())
+        // Same proportional band as `old_reclaim_pressure_due` (#7592) —
+        // debt and dueness must share one trigger or they diverge.
+        baseline.saturating_add(gc_old_reclaim_growth_band_bytes(baseline))
     };
     old_in_use.saturating_sub(trigger) as u64
 }

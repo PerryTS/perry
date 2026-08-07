@@ -200,28 +200,92 @@ fn test_old_reclaim_pressure_uses_threshold_and_growth() {
     ));
 }
 
+/// #7592: the handoff full fires on CURRENT old-gen pressure only. It used to
+/// add `promotable_bytes` into the pressure estimate — a prediction of where
+/// old-gen would land after the promotion — but promotable bytes sit in the
+/// survivor space, where a full mark-sweep can neither reclaim them nor the
+/// old-gen space they have not yet occupied. A handoff over a near-empty
+/// old-gen is guaranteed futile (measured: 1,015 ms over 4.2 MB, 0 freed).
 #[test]
-fn test_copying_minor_promotion_handoff_uses_predicted_old_pressure() {
+fn test_copying_minor_promotion_handoff_requires_current_old_pressure() {
+    // Below the handoff minimum: never due, whatever old-gen looks like.
     assert!(!copied_minor_promotion_handoff_pressure_due(
         GC_COPY_PROMOTION_HANDOFF_MIN_BYTES - 1,
         GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
         0,
     ));
-    assert!(copied_minor_promotion_handoff_pressure_due(
-        GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES - GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
+    // The #7592 shape: a huge imminent promotion over a near-empty old-gen.
+    // Predicted pressure said "due" here; a full over 4 MB frees nothing.
+    assert!(!copied_minor_promotion_handoff_pressure_due(
+        108 * 1024 * 1024,
+        4 * 1024 * 1024,
         0,
     ));
+    // Current old-gen pressure is real (threshold crossing): due.
+    assert!(copied_minor_promotion_handoff_pressure_due(
+        GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
+        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
+        0,
+    ));
+    // Current growth past the baseline exceeds the proportional band: due.
     assert!(copied_minor_promotion_handoff_pressure_due(
         26 * 1024 * 1024,
-        20 * 1024 * 1024,
+        60 * 1024 * 1024,
         8 * 1024 * 1024,
     ));
+    // Same growth, but the baseline's proportional band swallows it: not due.
     assert!(!copied_minor_promotion_handoff_pressure_due(
         26 * 1024 * 1024,
-        20 * 1024 * 1024,
-        20 * 1024 * 1024,
+        160 * 1024 * 1024,
+        120 * 1024 * 1024,
     ));
+}
+
+/// #7592: the proportional old-reclaim growth band and the promoted-bytes
+/// baseline credit.
+#[test]
+fn test_old_reclaim_band_is_proportional_and_promotion_credits_baseline() {
+    // Small baselines keep the constant floor.
+    assert_eq!(
+        gc_old_reclaim_growth_band_bytes(0),
+        gc_old_gen_reclaim_growth_dyn_bytes()
+    );
+    // Large baselines scale: the band is baseline/2 once that exceeds the
+    // floor, so major count is logarithmic in heap growth.
+    let big = 400 * 1024 * 1024;
+    assert_eq!(gc_old_reclaim_growth_band_bytes(big), big / 2);
+    // Dueness and debt share the band: at exactly band-1 past the baseline,
+    // not due and zero debt; at band, due and debt begins.
+    let baseline = big;
+    let band = gc_old_reclaim_growth_band_bytes(baseline);
+    assert!(!old_reclaim_pressure_due(baseline + band - 1, baseline));
+    assert!(old_reclaim_pressure_due(baseline + band, baseline));
+    // Debt counts bytes strictly PAST the trigger (pre-existing convention:
+    // due at the trigger with zero debt), but both must derive the trigger
+    // from the same proportional band.
+    assert_eq!(gc_old_reclaim_debt_bytes(baseline + band - 1, baseline), 0);
+    assert_eq!(gc_old_reclaim_debt_bytes(baseline + band + 1, baseline), 1);
+
+    // Promotion credit: promoted bytes are live by construction, so a reclaim
+    // must not become due merely because promotion crossed a threshold.
+    let _guard = GcTestIsolationGuard::new();
+    let prev = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(4 * 1024 * 1024));
+    credit_promoted_bytes_to_old_baseline(270 * 1024 * 1024);
+    let credited = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
+    assert_eq!(credited, 274 * 1024 * 1024);
+    // The #7592 cycle-6 shape: old-gen jumped to 274 MB purely by promotion.
+    assert!(
+        !old_reclaim_pressure_due(274 * 1024 * 1024, credited),
+        "a reclaim right after promotion is guaranteed to free nothing"
+    );
+    credit_promoted_bytes_to_old_baseline(0);
+    assert_eq!(
+        GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get()),
+        credited,
+        "zero promotion must not move the baseline"
+    );
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(prev));
 }
 
 /// #7592: a handoff full must not repeat without the copying minor it exists to

@@ -1279,6 +1279,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // #7592: this is the promotion the survivor-promotion handoff exists to
     // enable, so it releases the latch that suppressed a repeat handoff.
     note_copying_minor_completed();
+    // #7592: promoted bytes are live by construction — credit them to the
+    // old-reclaim baseline BEFORE the pressure check below, or the check reads
+    // the stale baseline and schedules a full that is guaranteed to free
+    // nothing (see `credit_promoted_bytes_to_old_baseline`).
+    credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
     maybe_schedule_old_reclaim_after_copied_minor();
     retune_after_scavenge(
         collector.stats.eden_live_bytes,

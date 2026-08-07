@@ -109,9 +109,38 @@ pub(super) fn tenuring_survivals() -> u8 {
 /// count AND promotes objects that a larger Eden would have let die young.
 /// The scale grows only while survivor influx stays a heavy fraction of
 /// Eden, so the small-live-set workloads #7377 fixed never leave 16 MB.
+///
+/// #7592: the influx-driven product is the floor, not the whole answer — it
+/// is bounded by `base × NURSERY_CAP_SCALE_MAX` (64 MB), and any *constant*
+/// cap sets collection cadence independently of how much is live while each
+/// collection's fixed cost is O(old-gen) (#6181: full-region sweep walk,
+/// whole-heap remembered-set rebuild). Total young-GC work is then
+/// `(alloc / cap) × O(live)` — quadratic in the live set. The effective cap
+/// is therefore also proportional to the TENURED live set, which keeps work
+/// per allocated byte bounded as the heap grows.
+///
+/// The proportional term deliberately keys on old-gen occupancy, NOT total
+/// arena in-use: the cap gates `young_scavenge_cap_due()` against from-space
+/// occupancy, and from-space is part of arena in-use — a cap defined by a
+/// total that includes the young generation is a fixed point from-space can
+/// never cross, and scavenging stops entirely (measured on #7592: 0 copying
+/// minors at 200k records, the nursery never evacuated). Old-gen is outside
+/// the young generation, so no self-reference. Reclaimable pressure (in-use
+/// minus free-list holes, #7437) rather than raw in-use, so dead-but-swept
+/// old bytes do not inflate Eden.
 pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
-    gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize)
+    let influx_driven =
+        gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize);
+    let tenured_proportional = old_gen_reclaimable_pressure_bytes() / TENURED_EDEN_DIVISOR;
+    influx_driven.max(tenured_proportional)
 }
+
+/// #7592: divisor for the tenured-proportional nursery cap — Eden may grow to
+/// half the tenured live set before a scavenge is forced. Peak young-gen RSS
+/// contribution is therefore bounded at `tenured / 2`; the young collection
+/// count is logarithmic in heap growth on promote-heavy workloads
+/// (`old_{n+1} ≈ old_n × (1 + 1/2)`) instead of linear in bytes allocated.
+const TENURED_EDEN_DIVISOR: usize = 2;
 
 /// Target steady-state survivor occupancy: 1/16 of the effective nursery
 /// cap, so the tenuring dials track both the configured base and the
