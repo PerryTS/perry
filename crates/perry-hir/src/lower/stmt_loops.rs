@@ -1314,7 +1314,8 @@ pub(crate) fn lower_stmt_for_of(
     // shapes it accepts and why the single-ident one is a correctness fix.
     // Detected here so the iterable expression stays unwrapped and a different
     // binding/bound shape is emitted below.
-    let map_kv_fastpath = is_iterable_map && map_index_fast_path_head(&for_of_stmt.left);
+    let map_kv_fastpath =
+        is_iterable_map && map_index_fast_path_head(&for_of_stmt.left, !for_of_stmt.is_await);
     // Fast path: `for (const x of setExpr)` with a single-Ident
     // binding. Reads elements directly via `SetValueAt` (→
     // `js_set_value_at`) instead of materializing the buffer with

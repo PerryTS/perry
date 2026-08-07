@@ -326,7 +326,14 @@ fn type_proves_collection(ty: Option<&Type>, base_name: &str) -> bool {
 /// `m.delete(…)` never removed an entry the loop had not reached, both of
 /// which node observes. Nested patterns, object patterns and defaults still
 /// fall through so their destructuring semantics stay correct.
-pub(crate) fn map_index_fast_path_head(left: &ast::ForHead) -> bool {
+///
+/// `allow_pair_head` must be `false` for a `for await` loop. The array-pattern
+/// arms already drop the per-iteration `Await` (a `MapEntryKeyAt` read is not
+/// wrapped in one), but the single-ident arm *replaces* a binding that was
+/// `Await(<materialised>[i])`, and dropping that changes the loop's microtask
+/// interleaving: `for await (const e of m)` with a `queueMicrotask` in the body
+/// stops draining anything until the loop is over.
+pub(crate) fn map_index_fast_path_head(left: &ast::ForHead, allow_pair_head: bool) -> bool {
     let ast::ForHead::VarDecl(var_decl) = left else {
         return false;
     };
@@ -334,7 +341,7 @@ pub(crate) fn map_index_fast_path_head(left: &ast::ForHead) -> bool {
         return false;
     };
     match &decl.name {
-        ast::Pat::Ident(_) => true,
+        ast::Pat::Ident(_) => allow_pair_head,
         ast::Pat::Array(pat) => {
             (pat.elems.len() == 1 || pat.elems.len() == 2)
                 && pat
@@ -469,7 +476,8 @@ pub(crate) fn rewrite_collection_view_for_of(
             // iteration in the language, for every head the index fast path
             // accepts.
             "entries" => {
-                if !map_index_fast_path_head(&stmt.left) {
+                // `is_await` was rejected above, so the pair head is allowed.
+                if !map_index_fast_path_head(&stmt.left, true) {
                     return None;
                 }
                 stmt.left.clone()

@@ -171,25 +171,51 @@ fn an_unproven_receiver_is_never_rewritten() {
     );
 }
 
-/// `for await` is left alone: the fast path emits no `Await` around the
-/// element read, so rewriting onto it would drop the per-iteration await.
+/// `for await` is left alone: the fast path emits no `Await` around the element
+/// read, so rewriting onto it would drop the per-iteration await — measurably,
+/// as a loop that stops draining microtasks until it is over.
 ///
 /// Asserted on the rewrite's own footprint rather than through `route_of` —
 /// the async desugar replaces the loop wholesale, so none of the three route
 /// markers survives it either way.
 #[test]
 fn for_await_is_never_rewritten() {
+    for loop_src in [
+        // the view call — declined by `rewrite_collection_view_for_of`
+        "for await (const v of m.values()) { console.log(v); }",
+        // the direct single-ident head — declined by `allow_pair_head`
+        "for await (const e of m) { console.log(e); }",
+    ] {
+        let hir = format!(
+            "{:?}",
+            lower(&format!(
+                "async function f(m: Map<string, number>) {{\n{loop_src}\n}}\n\
+                 f(new Map<string, number>());"
+            ))
+        );
+        assert!(
+            !hir.contains("MapEntryValueAt") && !hir.contains("MapEntryKeyAt"),
+            "for await must not be routed onto the index fast path: {loop_src}"
+        );
+    }
+}
+
+/// The `allow_pair_head` gate is per-loop, not per-module: a synchronous
+/// single-ident head in the same file still gets the pair fast path.
+#[test]
+fn a_sync_pair_head_beside_a_for_await_still_takes_the_fast_path() {
     let hir = format!(
         "{:?}",
         lower(
             "async function f(m: Map<string, number>) {\n\
-             for await (const v of m.values()) { console.log(v); }\n\
+             for await (const e of m) { console.log(e); }\n\
+             for (const e2 of m) { console.log(e2); }\n\
              }\nf(new Map<string, number>());"
         )
     );
     assert!(
-        !hir.contains("MapEntryValueAt"),
-        "for await must not be routed onto the index fast path"
+        hir.contains("MapEntryKeyAt"),
+        "the synchronous loop should still reach the index fast path"
     );
 }
 

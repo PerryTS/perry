@@ -1357,8 +1357,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             // The head shapes the index fast path accepts — and why the
             // single-ident one is a correctness fix, not just a faster route —
             // live in `for_head::map_index_fast_path_head`.
-            let map_kv_fastpath =
-                is_iterable_map && crate::lower::map_index_fast_path_head(&for_of_stmt.left);
+            let map_kv_fastpath = is_iterable_map
+                && crate::lower::map_index_fast_path_head(&for_of_stmt.left, !for_of_stmt.is_await);
             // Fast path: `for (const x of setExpr)` reads elements directly
             // via `SetValueAt` (→ `js_set_value_at`) instead of materializing
             // the buffer with `js_set_to_array`.
