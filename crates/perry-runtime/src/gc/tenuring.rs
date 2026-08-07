@@ -60,6 +60,81 @@
 //! loop is always on, and its neutral state — influx below `desired`,
 //! survivor cohorts that die in place — computes S=4, which is
 //! bit-for-bit the previous fixed behaviour.
+//!
+//! ## Seeding the lock from a non-copying collection (#7598)
+//!
+//! The survival-rate lock above is correct but **one cycle late by
+//! construction**: it keys on `prev_copied`, so a *previous copying minor*
+//! must already have filled the survivor space. On a workload with one
+//! long-lived burst (`json_pipeline`: `out.push({…})` 500k times) the first
+//! copying minor therefore always pays the wasted copy — measured 268 MB
+//! Eden→survivor on cycle 3 and the same 268 MB survivor→old on cycle 4,
+//! ~3.9 s of a 5.1 s phase spent copying one cohort twice.
+//!
+//! Both blind spots named on #7592 are the same shape: `retune_after_scavenge`
+//! is fed **only** by copying minors, so full mark-sweeps and non-copying
+//! minor fallbacks feed the loop nothing, and once a workload escalates to
+//! those the loop goes blind exactly when it is needed.
+//!
+//! [`seed_promote_lock_from_sweep`] closes that. Every cycle that reaches the
+//! mark-sweep path — a full, or a non-copying minor fallback — already walks
+//! every Eden header and classifies it live or dead. That walk yields the two
+//! numbers the lock wants, one collection *earlier* than the survivor
+//! round-trip can produce them.
+//!
+//! ### Why this signal is not a fixed point of the policy reading it
+//!
+//! This issue has already produced three self-referential signals, so the
+//! argument is spelled out rather than assumed:
+//!
+//! * The Eden-side probe reached for `promoted_bytes`, which is **zero by
+//!   construction at S=4** — "was the promotion rate high?" can never answer
+//!   yes while S=4 holds, so it could never leave S=4.
+//! * #7596's first nursery cap gated from-space occupancy on a total that
+//!   *included* from-space, so the cap was a bound from-space could never
+//!   cross and scavenging stopped entirely.
+//! * #7594's handoff scheduled a *non-moving* full to relieve pressure only a
+//!   *moving* cycle can relieve, so the predicate was true again next cycle.
+//!
+//! The Eden live/dead split has none of that structure. It is produced by the
+//! mark-sweep's own arena walk: marks come from reachability from roots, and
+//! neither the mark phase nor the walk reads `tenuring_survivals()` — the
+//! threshold is consulted only by `copying.rs`'s per-object move, which this
+//! path does not run. Concretely, at both endpoints the signal stays
+//! measurable and keeps its meaning:
+//!
+//! | state | what Eden holds at the sweep | signal |
+//! |---|---|---|
+//! | S=4 (state to leave) | everything that has not aged out | high live fraction on a retaining workload ⇒ says "lock" |
+//! | S=1 (state to stay in) | only Eden allocated since the last promotion | still the mutator's retention of recent Eden ⇒ still measurable |
+//!
+//! Exit is deliberately **not** this signal. Entering hands over to the
+//! existing `PROMOTE_LOCK`, whose unlock condition (Eden influx below
+//! `desired/4` for two consecutive copying minors) is already
+//! threshold-invariant and already tested — so the seed cannot introduce an
+//! enter/exit oscillation of its own.
+//!
+//! ### Determinism (#7432)
+//!
+//! #7432 forbids re-deciding S *while objects are being moved*: the
+//! copied/promoted split would then depend on root traversal order. The seed
+//! is written at the END of a completed sweep and read at the ENTRY of a later
+//! copying minor (`CopyingNurseryCollector::new` snapshots it once), so every
+//! object in a cycle still sees exactly one threshold and the counters stay a
+//! pure function of (heap state at entry, threshold at entry).
+//!
+//! Two exclusions at the callsite keep the *input* deterministic too, and both
+//! are refusals rather than tuning:
+//!
+//! * **Budgeted cycles.** Whole-cycle allocate-black marks every mid-cycle
+//!   birth, and this walk reads MARKED as live — a churn workload's births
+//!   would read as a ~100% live Eden. Same reason the age-bump is suppressed
+//!   there (`cycle.rs`).
+//! * **Cycles that ran the conservative native-stack scan.** That scan retains
+//!   whatever the stack happens to look like a pointer to, by an amount that
+//!   varies run to run (`benchmarks/gc_ratchet/README.md`). A liveness
+//!   *measurement* taken under it is not sound, and feeding it into a policy
+//!   would make the gated copy/promote counters non-deterministic.
 
 use super::*;
 
@@ -287,6 +362,75 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
         CAP_GROW_STREAK.with(|s| s.set(0));
         CAP_SHRINK_STREAK.with(|s| s.set(0));
     }
+}
+
+/// Minimum Eden survival rate, in tenths, for a mark-sweep to seed the
+/// promote-on-first-copy lock: ≥90% of the Eden bytes the sweep classified
+/// must have been live. That is the "the aging round would filter nothing"
+/// proof, measured directly instead of inferred from a survivor round-trip.
+const FULL_SEED_LIVE_TENTHS: usize = 9;
+
+/// Would a completed mark-sweep's Eden census justify promote-on-first-copy?
+///
+/// Pure function of the census and the survivor target so the policy is
+/// testable without arranging a heap (the #7024 shape: a green test whose
+/// subject never ran — see the sibling `scavenge_nursery_cap_from`).
+///
+/// Two independent conditions, both required, each answering a different
+/// question:
+///
+/// 1. **Occupancy** — `compute_target_survivals(...) == 1`, i.e. the surviving
+///    cohort alone already exceeds the desired survivor occupancy, so at any
+///    S ≥ 2 it cannot fit and would be re-copied. This is deliberately the
+///    module's *existing* rule; the only new thing is where the number is read
+///    from.
+/// 2. **Survival rate** — nearly nothing in Eden died, so a survivor round
+///    would filter nothing. Without this an Eden that merely happens to be
+///    large would promote its garbage too.
+///
+/// The stated failure mode (design note on #7592): a normally churn-heavy
+/// program whose nursery is atypically mostly-live at one sweep promotes one
+/// Eden's worth of short-lived objects and pays an old-gen reclaim to get them
+/// back. Exposure is bounded by one nursery cap and by the existing unlock
+/// path; requiring BOTH conditions is what keeps it narrow.
+pub(super) fn full_seed_promotes_on_first_copy(
+    eden_live_bytes: usize,
+    eden_dead_bytes: usize,
+    desired_bytes: usize,
+) -> bool {
+    if compute_target_survivals(eden_live_bytes, desired_bytes) != 1 {
+        return false;
+    }
+    let classified = eden_live_bytes.saturating_add(eden_dead_bytes);
+    classified > 0
+        && eden_live_bytes.saturating_mul(10) >= classified.saturating_mul(FULL_SEED_LIVE_TENTHS)
+}
+
+/// Feed one finished mark-sweep's Eden census into the loop. `eden_live_bytes`
+/// and `eden_dead_bytes` are the bytes the sweep walk classified live and dead
+/// in the general (Eden) blocks.
+///
+/// Callers must exclude budgeted cycles and cycles that ran the conservative
+/// native-stack scan — see the module header for why those two inputs are not
+/// sound liveness measurements.
+pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_bytes: usize) {
+    if PROMOTE_LOCK.with(Cell::get) {
+        return;
+    }
+    if !full_seed_promotes_on_first_copy(
+        eden_live_bytes,
+        eden_dead_bytes,
+        desired_survivor_bytes(),
+    ) {
+        return;
+    }
+    let current = TENURING_SURVIVALS.with(Cell::get);
+    PROMOTE_LOCK.with(|l| l.set(true));
+    UNLOCK_STREAK.with(|s| s.set(0));
+    RAISE_STREAK.with(|s| s.set(0));
+    // PREV_COPIED_BYTES is deliberately untouched: it is the survival-rate
+    // lock's denominator, owned by the copying path.
+    set_survivals(current, 1, eden_live_bytes, "sweep-seed");
 }
 
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
@@ -544,6 +688,120 @@ mod tests {
             tenured,
             "the proportional term must never LOWER the cap"
         );
+    }
+
+    // ── #7598's mark-sweep seed ─────────────────────────────────────────
+    //
+    // The lock above cannot engage before the SECOND copying minor. These
+    // exercise the seed that reads the same proof off a completed mark-sweep,
+    // one collection earlier.
+
+    #[test]
+    fn sweep_seed_decides_before_the_first_copying_minor_snapshots_the_threshold() {
+        // `copying.rs` snapshots `tenuring_survivals()` in
+        // `CopyingNurseryCollector::new`, so the only value that can change
+        // what the first big minor does is the one standing BEFORE any
+        // `retune_after_scavenge` for that cycle has run. That is precisely
+        // what the survival-rate lock cannot reach and this seed can.
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        let eden_live = d * 4;
+        assert_eq!(
+            tenuring_survivals(),
+            4,
+            "with no input the loop is at the ceiling: the wasted copy state"
+        );
+
+        seed_promote_lock_from_sweep(eden_live, eden_live / 50);
+        assert_eq!(
+            tenuring_survivals(),
+            1,
+            "the copying minor must ENTER at S=1, not be retuned to it afterwards"
+        );
+        reset_for_test();
+    }
+
+    #[test]
+    fn sweep_seed_refuses_a_churn_eden() {
+        // The stated failure mode, guarded: a big Eden is not a survival
+        // signal. #7592 recorded exactly this trap ("Eden in-use at cycle
+        // start is not a survival signal — churn workloads also overshoot
+        // Eden, with ~0% survival"). Occupancy alone would say S=1 here.
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        let eden_live = d * 4;
+        let eden_dead = eden_live * 9;
+        assert_eq!(
+            compute_target_survivals(eden_live, d),
+            1,
+            "precondition: occupancy alone says lock here, so this test is \
+             exercising the survival-rate half and not passing vacuously"
+        );
+        seed_promote_lock_from_sweep(eden_live, eden_dead);
+        assert_eq!(
+            tenuring_survivals(),
+            4,
+            "10% Eden survival must not seed promote-on-first-copy"
+        );
+        reset_for_test();
+    }
+
+    #[test]
+    fn sweep_seed_refuses_a_small_fully_live_eden() {
+        // The other half: a nursery that is 100% live but far under the
+        // survivor target fits the survivor space, so aging still filters and
+        // the ladder must decide. Right after a scavenge this is the NORMAL
+        // reading, and seeding off it would lock every program at S=1.
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        seed_promote_lock_from_sweep(d / 8, 0);
+        assert_eq!(tenuring_survivals(), 4);
+        reset_for_test();
+    }
+
+    #[test]
+    fn sweep_seed_rule_is_a_pure_function_of_the_census() {
+        // Table over the policy itself, with no heap state involved — the
+        // sibling `scavenge_nursery_cap_from` exists for the same reason
+        // (#7024: a test whose subject never ran).
+        let d = 1024 * 1024;
+        // Both conditions met.
+        assert!(full_seed_promotes_on_first_copy(4 * d, d / 10, d));
+        // Exactly at the 90% survival boundary: 9 live, 1 dead.
+        assert!(full_seed_promotes_on_first_copy(9 * d, d, d));
+        // One byte under it.
+        assert!(!full_seed_promotes_on_first_copy(9 * d - 1, d + 1, d));
+        // Occupancy says the cohort fits the survivor space.
+        assert!(!full_seed_promotes_on_first_copy(d / 2, 0, d));
+        // An empty census decides nothing (and must not divide by zero).
+        assert!(!full_seed_promotes_on_first_copy(0, 0, d));
+        assert!(!full_seed_promotes_on_first_copy(0, 4 * d, d));
+    }
+
+    #[test]
+    fn sweep_seed_hands_over_to_the_existing_unlock_path() {
+        // The seed sets the lock and nothing else: exit stays the influx
+        // signal, which is measurable at S=1 (survivor occupancy is not).
+        // Without this the seed would need an exit condition of its own, and
+        // the obvious one — "Eden stopped being mostly live" — reads
+        // differently at S=1 than at S=4 and would oscillate.
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        seed_promote_lock_from_sweep(d * 4, 0);
+        assert_eq!(tenuring_survivals(), 1);
+
+        // Substantial influx holds the lock, exactly as if it had been set by
+        // the survivor round-trip.
+        for _ in 0..4 {
+            retune_after_scavenge(d * 4, 0, 0);
+            assert_eq!(tenuring_survivals(), 1);
+        }
+        // Quiet influx exits after the same debounce, to the same S=2.
+        retune_after_scavenge(0, 0, 0);
+        assert_eq!(tenuring_survivals(), 1);
+        retune_after_scavenge(0, 0, 0);
+        assert_eq!(tenuring_survivals(), 2);
+        reset_for_test();
     }
 
     #[test]

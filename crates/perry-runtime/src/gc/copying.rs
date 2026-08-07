@@ -1272,6 +1272,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             deallocated_bytes: reset.deallocated_bytes,
             retained_forwarded_stub_objects: 0,
             retained_forwarded_stub_bytes: 0,
+            // The copying minor's Eden census is `stats.eden_live_bytes`, fed
+            // to `retune_after_scavenge` directly; the #7598 sweep seed covers
+            // the collections that run NO copying minor.
+            eden_live_bytes: 0,
+            eden_dead_bytes: 0,
         };
         trace.pause_us = start.elapsed().as_micros() as u64;
         trace.capture_layout_scans();

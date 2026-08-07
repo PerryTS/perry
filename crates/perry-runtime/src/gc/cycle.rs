@@ -1738,6 +1738,24 @@ impl GcCycleState {
             trace.old_pages = crate::arena::old_page_summary();
         }
         self.sweep = Some(sweep);
+        // #7598: seed promote-on-first-copy from THIS completed collection.
+        // Every cycle reaching here is a full or a non-copying minor — the two
+        // blind spots of `retune_after_scavenge`, which only copying minors
+        // feed. Policy, the self-reference argument and the two exclusions
+        // below all live in `tenuring.rs`: allocate-black makes a budgeted
+        // cycle's Eden read as ~100% live, and a conservative-scan cycle's
+        // mark set is not a sound liveness measurement.
+        if !self.progress_kind.is_budgeted()
+            && matches!(
+                super::roots::conservative_stack_scan_decision(),
+                super::roots::ConservativeStackScanDecision::SkipDisabled
+            )
+        {
+            super::tenuring::seed_promote_lock_from_sweep(
+                sweep.eden_live_bytes as usize,
+                sweep.eden_dead_bytes as usize,
+            );
+        }
         self.phase = GcCyclePhase::Reclaim;
     }
 
