@@ -111,6 +111,8 @@ pub(crate) struct HotTls {
     pub(crate) per_object_layouts_nonempty: *mut u8,
     // gc/shape_install.rs
     pub(crate) shape_install_memo: *mut u8,
+    // object/spill.rs
+    pub(crate) learned_inline_fields: *mut u8,
     // gc/roots/temp_roots.rs
     pub(crate) temp_roots: *mut u8,
 }
@@ -131,6 +133,7 @@ impl HotTls {
         shape_layouts: std::ptr::null_mut(),
         per_object_layouts_nonempty: std::ptr::null_mut(),
         shape_install_memo: std::ptr::null_mut(),
+        learned_inline_fields: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
     };
 }
@@ -169,6 +172,7 @@ fn fill(slots: *mut HotTls) {
         (*slots).shape_layouts = crate::gc::shape_layouts_hot_addr();
         (*slots).per_object_layouts_nonempty = crate::gc::per_object_layouts_nonempty_hot_addr();
         (*slots).shape_install_memo = crate::gc::shape_install_memo_hot_addr();
+        (*slots).learned_inline_fields = crate::object::learned_inline_fields_hot_addr();
         // Last, and the field `hot()` tests: every other slot is already
         // written by the time this one is non-null, so a re-entrant call from
         // inside one of the providers above cannot observe a half-filled cache
@@ -231,6 +235,15 @@ pub(crate) mod darwin_tsd {
         // function and hoist it out of loops. Without `pure` every reader
         // re-issues the `mrs` and the change buys far less than the call it
         // replaces.
+        //
+        // This grants LLVM exactly the freedom it already has over the thing
+        // being replaced: `@llvm.threadlocal.address` is `speculatable` and
+        // `memory(none)`, so a `thread_local!` read was already CSE-able and
+        // hoistable on the same terms. The one shape that is unsound under
+        // either is holding the result across a point where execution can
+        // resume on a *different* thread — an `.await` in a work-stealing
+        // executor. Nothing on the allocation path is `async`, and this is a
+        // pre-existing constraint on `hot()` rather than one introduced here.
         core::arch::asm!(
             "mrs {b}, tpidrro_el0",
             b = out(reg) base,
@@ -428,6 +441,11 @@ mod tests {
             "shape_install_memo"
         );
         assert_eq!(
+            hot.learned_inline_fields,
+            crate::object::learned_inline_fields_hot_addr(),
+            "learned_inline_fields"
+        );
+        assert_eq!(
             hot.temp_roots,
             crate::gc::temp_roots_hot_addr(),
             "temp_roots"
@@ -463,6 +481,7 @@ mod tests {
                 hot.per_object_layouts_nonempty,
             ),
             ("shape_install_memo", hot.shape_install_memo),
+            ("learned_inline_fields", hot.learned_inline_fields),
             ("temp_roots", hot.temp_roots),
         ] {
             assert!(!ptr.is_null(), "{name} slot was left null by fill()");
