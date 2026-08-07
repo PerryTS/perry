@@ -774,6 +774,10 @@ thread_local! {
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
     pub(super) static GC_OLD_RECLAIM_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
+    /// #7592: a survivor-promotion handoff full has run and the copying minor
+    /// it was scheduled for has not. See
+    /// `survivor_promotion_handoff_awaiting_minor`.
+    static SURVIVOR_HANDOFF_AWAITING_MINOR: Cell<bool> = const { Cell::new(false) };
     /// Phase 2/3 of the moving-GC project: set when an alloc-point nursery
     /// trigger fires while moving mode is on, deferring the collection to the
     /// next precise-root safepoint (event-loop boundary or a codegen loop
@@ -1214,11 +1218,46 @@ pub(super) fn copied_minor_promotable_active_survivor_bytes() -> usize {
     promotable
 }
 
+/// #7592: whether a survivor-promotion handoff full has run without the copying
+/// minor it exists to enable having run since.
+///
+/// The handoff replaces a minor with a full mark-sweep to make room in old-gen
+/// for survivors that are about to be promoted. But a full mark-sweep is
+/// **non-moving — it promotes nothing**, so it cannot itself relieve the
+/// pressure it was scheduled for: the survivor space still holds the same
+/// bytes, the reclaim baseline it resets does not count them, and the predicate
+/// is immediately true again. Without this latch the next minor is intercepted
+/// too, and the collector livelocks on full collections that free nothing —
+/// measured on #7592's `json_pipeline` as 19 consecutive fulls, each freeing
+/// 0.0 MB at ~400 ms, which was 7.6 s of an 8.6 s phase.
+///
+/// One handoff per copying minor is the invariant: the handoff makes room, the
+/// minor does the promotion that consumes it.
+pub(super) fn survivor_promotion_handoff_awaiting_minor() -> bool {
+    SURVIVOR_HANDOFF_AWAITING_MINOR.with(Cell::get)
+}
+
+pub(super) fn note_survivor_promotion_handoff_full() {
+    SURVIVOR_HANDOFF_AWAITING_MINOR.with(|flag| flag.set(true));
+}
+
+/// Clear the latch — called only when a *copying* minor completes, since only
+/// that collector promotes. A non-moving minor fallback promotes nothing, so
+/// re-arming on one would reinstate the livelock at half rate.
+pub(super) fn note_copying_minor_completed() {
+    SURVIVOR_HANDOFF_AWAITING_MINOR.with(|flag| flag.set(false));
+}
+
 pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) -> bool {
     if !matches!(
         trigger_kind,
         GcTriggerKind::ArenaBytes | GcTriggerKind::MallocCount
     ) {
+        return false;
+    }
+    // A handoff full has already run and promoted nothing; let the copying
+    // minor it was scheduled for actually happen (#7592).
+    if survivor_promotion_handoff_awaiting_minor() {
         return false;
     }
     if crate::arena::copying_active_survivor_in_use_bytes()

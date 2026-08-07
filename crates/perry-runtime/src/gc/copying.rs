@@ -1276,6 +1276,9 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         trace.pause_us = start.elapsed().as_micros() as u64;
         trace.capture_layout_scans();
     }
+    // #7592: this is the promotion the survivor-promotion handoff exists to
+    // enable, so it releases the latch that suppressed a repeat handoff.
+    note_copying_minor_completed();
     maybe_schedule_old_reclaim_after_copied_minor();
     retune_after_scavenge(
         collector.stats.eden_live_bytes,

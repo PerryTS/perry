@@ -176,6 +176,11 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
         prev & GC_FLAG_IN_ALLOC
     });
     if copied_minor_promotion_handoff_due(trigger.kind) {
+        // #7592: latch before running it. This full is non-moving and promotes
+        // nothing, so it cannot relieve the survivor pressure that scheduled
+        // it; without the latch the predicate is still true at the next minor
+        // and the collector livelocks on fulls that free nothing.
+        note_survivor_promotion_handoff_full();
         let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
             GcTriggerKind::SurvivorPromotionBytes,
         ));
