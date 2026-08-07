@@ -1538,12 +1538,18 @@ pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
 /// omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64, this_arg: f64) {
-    js_set_foreach_impl(
-        set,
-        callback,
-        this_arg,
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-    );
+    js_set_foreach_impl(set, callback, this_arg, collection_override(set));
+}
+
+/// The `Set` twin of `map::collection_override` — see its doc (#7570).
+#[inline(always)]
+fn collection_override(set: *const SetHeader) -> f64 {
+    let receiver = set_receiver_identity(set);
+    let resolved = clean_set_ptr(set);
+    if resolved.is_null() || std::ptr::eq(resolved, receiver) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_pointer(receiver as i64)
 }
 
 /// `Set.prototype.forEach` for a `class … extends Set` subclass instance: the

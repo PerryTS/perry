@@ -109,10 +109,13 @@ console.log("6 entries:", JSON.stringify([...m6.entries()]));
 console.log("6 spread:", JSON.stringify([...m6]));
 console.log("6 Array.from:", JSON.stringify(Array.from(m6.keys())));
 let acc6 = 0;
-m6.forEach((v, k) => {
+// The 3rd callback argument is the RECEIVER, not the hidden backing collection.
+let sameMap6 = true;
+m6.forEach((v, k, self) => {
   acc6 += v + k.length;
+  if (self !== m6) sameMap6 = false;
 });
-console.log("6 forEach:", acc6);
+console.log("6 forEach:", acc6, sameMap6);
 const seen6: string[] = [];
 for (const [k, v] of m6) seen6.push(`${k}=${v}`);
 console.log("6 for-of:", seen6.join("|"));
@@ -122,10 +125,12 @@ console.log("6 set values:", [...s6.values()].join(","));
 console.log("6 set keys:", [...s6.keys()].join(","));
 console.log("6 set spread:", [...s6].join(","));
 let acc6s = 0;
-s6.forEach((v) => {
+let sameSet6 = true;
+s6.forEach((v, _k, self) => {
   acc6s += v;
+  if (self !== s6) sameSet6 = false;
 });
-console.log("6 set forEach:", acc6s);
+console.log("6 set forEach:", acc6s, sameSet6);
 const seen6s: number[] = [];
 for (const v of s6) seen6s.push(v);
 console.log("6 set for-of:", seen6s.join(","));
@@ -182,6 +187,11 @@ const plain: Map<string, number> = new Map<string, number>([["p", 1]]);
 plain.set("p2", 2);
 console.log("10 plain:", plain.get("p"), plain.size, [...plain.keys()].join(","));
 console.log("10 plain identity:", plain.set("p3", 3) === plain, plain.size);
+let plainSelf = true;
+plain.forEach((_v, _k, self) => {
+  if (self !== plain) plainSelf = false;
+});
+console.log("10 plain forEach self:", plainSelf);
 const plainSet: Set<number> = new Set<number>([1, 2]);
 plainSet.add(3);
 console.log("10 plainSet:", plainSet.size, plainSet.has(3), [...plainSet].join(","));

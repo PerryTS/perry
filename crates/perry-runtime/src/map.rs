@@ -2360,12 +2360,27 @@ static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_
 /// when omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg: f64) {
-    js_map_foreach_impl(
-        map,
-        callback,
-        this_arg,
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-    );
+    js_map_foreach_impl(map, callback, this_arg, collection_override(map));
+}
+
+/// The `collection` argument `js_map_foreach_impl` should report as the 3rd
+/// callback parameter and the `self === m` identity.
+///
+/// `undefined` — meaning "derive it from the map being iterated" — unless the
+/// receiver resolved to something else, i.e. it is a `class X extends Map`
+/// instance reached through a base-typed binding (#7570). Iteration then runs
+/// over the hidden backing, but the observable collection is still the
+/// INSTANCE. This is the same contract `js_map_foreach_with_collection` already
+/// serves for the unannotated path; without it, `m.forEach((v, k, self) => …)`
+/// would hand user code the backing and `self === m` would be false.
+#[inline(always)]
+fn collection_override(map: *const MapHeader) -> f64 {
+    let receiver = map_receiver_identity(map);
+    let resolved = clean_map_ptr(map);
+    if resolved.is_null() || std::ptr::eq(resolved, receiver) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_pointer(receiver as i64)
 }
 
 /// `Map.prototype.forEach` for a `class … extends Map` subclass instance: the
