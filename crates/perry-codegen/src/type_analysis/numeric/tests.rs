@@ -433,7 +433,7 @@ fn char_code_at_on_a_string_receiver_is_statically_numeric() {
     // `js_dynamic_bitxor` FFI call to compute an integer xor.
     let ir = hash_loop_ir(Type::String);
     assert!(
-        !ir.contains("@js_dynamic_bitxor"),
+        !ir.contains("call double @js_dynamic_bitxor"),
         "a xor against String.prototype.charCodeAt must not route through \
          the BigInt-aware dynamic helper — charCodeAt is a Number:\n{ir}"
     );
@@ -466,7 +466,8 @@ fn char_code_at_on_a_string_receiver_emits_the_inline_ascii_read() {
     // is the proof that the fast path did NOT replace the correct lowering,
     // only shortcut it.
     assert!(
-        ir.contains("@js_string_char_code_at") && ir.contains("@js_string_index_to_i32"),
+        ir.contains("call double @js_string_char_code_at")
+            && ir.contains("call i32 @js_string_index_to_i32"),
         "the inline path must keep the runtime helpers as its fallback \
          arm:\n{ir}"
     );
@@ -485,7 +486,7 @@ fn char_code_at_on_an_unproven_receiver_keeps_the_runtime_lowering() {
         "an unproven receiver must not read a StringHeader inline:\n{ir}"
     );
     assert!(
-        ir.contains("@js_dynamic_bitxor"),
+        ir.contains("call double @js_dynamic_bitxor"),
         "an unproven receiver's method result may still be a BigInt, so the \
          xor must keep the dynamic helper:\n{ir}"
     );

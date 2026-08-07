@@ -1,30 +1,19 @@
 // JSON pipeline: read input JSON, filter active records, add 2 derived fields,
 // serialize, write output. Perry stdlib JSON + fs (utf-8 text).
 //
-// PERRY GAP NOTES (honest-benchmark findings, all in v0.5.29):
+// This file used to carry a block of "PERRY GAP NOTES (all in v0.5.29)"
+// claiming that `process.argv.slice(2)` returned garbage, that iterating a
+// large `JSON.parse` result corrupted records above ~200 of them, and that the
+// driver therefore ran Perry on the 100-record fixture only. **Every one of
+// those claims is false as of v0.5.1338** and they were deleted rather than
+// left to mislead: `run.sh` runs Perry on the full 500k-record / 107.5 MB
+// fixture like every other language, the output matched the Bun reference on
+// 20 of 20 runs during the v0.5.1335 baseline regeneration, and an argv probe
+// returns two proper strings. The correctness half was fixed at some point
+// without the comment being updated (#7592).
 //
-// 1. process.argv.slice(2) returns an array whose elements come back as
-//    garbage numbers. Indexing argv directly works.
-//
-// 2. Iterating over a large `JSON.parse` result and accessing .fields on each
-//    record triggers a GC-scan issue at scale — records allocated by the JSON
-//    parser get swept mid-iteration, yielding fewer .active===true matches
-//    than exist, or corrupting fields in the serialized output. Observed
-//    break-point is ~200 records; above that, output is non-deterministic.
-//
-// 3. Mutating a parsed-record object (`r.display_name = …`) then
-//    `JSON.stringify(r)` also trips the same issue — stringify sometimes
-//    panics inside `perry-runtime/src/json.rs:427` with "byte index … is not
-//    a char boundary" reading corrupted strings. Constructing a fresh object
-//    literal and stringifying *that* is reliable, so we do that here.
-//
-// 4. Reading a ~108 MB file into a string via fs.readFileSync works, but
-//    JSON.parse on 500k objects tips the same GC issues even before we get
-//    to iteration.
-//
-// The driver runs this binary on the 100-record fixture only. Rust and Zig
-// also run on the full 108 MB / 500k-record fixture; the report calls out
-// the scale gap explicitly.
+// What IS true at 500k is a performance gap, tracked in #7592 — see the issue
+// for the per-phase split. Nothing about the code below is a workaround.
 
 import * as fs from 'fs';
 
