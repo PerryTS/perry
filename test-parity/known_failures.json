@@ -63,5 +63,14 @@
     "added": "2026-07-04",
     "category": "bug-stale",
     "reason": "RE-TRIAGE: tracking issue #3680 is CLOSED but this still fails (audited 2026-08-07, #7582) — needs a new issue. node:v8 Serializer / Deserializer classes still absent from the surface."
+  },
+  "test_gap_zlib_4917_level": {
+    "issue": "6847",
+    "added": "2026-07-26",
+    "category": "bug-stale",
+    "reason": "RE-TRIAGE, macOS only: #6847 was closed COMPLETED on 2026-07-30 (fixed by #7021, verified on a cold cache) but this test still reproduces its exact signature on macOS/arm64 — `Undefined symbols: _js_zlib_deflate_raw_sync, _js_zlib_inflate_raw_sync` when auto-optimize pairs the ext-zlib provider archive with a feature-stripped stdlib rebuild. Reproduced 3/3 on 2026-08-07 (#7582 audit), so not a flake; its zlib siblings test_gap_zlib_3285_params and test_gap_zlib_fs_assert_2935_2752_2971 both PASS, so it is specific to the raw-sync entry points. Linux passes it (test-parity/gap_snapshot.json), which is why this is scoped rather than global — unscoped it would suppress a passing test on the platform the gate actually runs on. Needs #6847 reopened for macOS, or a new issue.",
+    "platforms": [
+      "macos"
+    ]
   }
 }
