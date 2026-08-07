@@ -61,3 +61,11 @@ green. The store assertion counts `store … ptr @perry_global_…` lines inside
 for `js_gc_register_global_root`, which is emitted whether or not the
 declaration ever writes the cell, and that reference made the first draft of the
 test pass under sabotage.
+
+The stale `test-parity/known_failures.json` entry for
+`test_gap_diagchannel_3082_3084_3085_3086` (added 2026-07-04 for the original
+`#3082/#3084/#3085/#3086` feature cluster, long since implemented) is retired in
+the same change — that list is a pure suppression, so an entry whose test has
+started passing silences the regression forever rather than failing the way the
+`gc_root_dominance_allowlist` ratchet does. The test now byte-matches
+`node --experimental-strip-types` with exit 0 across all four blocks.

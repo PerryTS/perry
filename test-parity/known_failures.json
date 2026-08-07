@@ -82,12 +82,6 @@
     "category": "gap-categorical",
     "reason": "console write validation — categorical console gap; standing per #5917."
   },
-  "test_gap_diagchannel_3082_3084_3085_3086": {
-    "issue": "3082",
-    "added": "2026-07-04",
-    "category": "bug-open",
-    "reason": "diagnostics_channel cluster (#3082/#3084/#3085/#3086); standing per #5917."
-  },
   "test_gap_dyn_index_get_denormal_safe": {
     "issue": "5917",
     "added": "2026-07-04",
