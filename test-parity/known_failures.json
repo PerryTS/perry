@@ -106,12 +106,6 @@
     "category": "module-inventory",
     "reason": "global API surface inventory; standing per #5917."
   },
-  "test_gap_iterator_helpers_2874": {
-    "issue": "2874",
-    "added": "2026-07-04",
-    "category": "bug-open",
-    "reason": "iterator helpers (#2874); standing per #5917."
-  },
   "test_gap_module_const_local_shadow": {
     "issue": "5917",
     "added": "2026-07-04",

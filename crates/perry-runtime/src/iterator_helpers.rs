@@ -40,9 +40,31 @@ use crate::object::{
 use crate::string::js_string_from_bytes;
 use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_TRUE, TAG_UNDEFINED};
 
-/// Class id reserved for lazy iterator-helper objects. Sits just past the
-/// Set iterator id (0xFFFF0008).
-pub const ITERATOR_HELPER_CLASS_ID: u32 = 0xFFFF_0009;
+#[cfg(test)]
+mod tests;
+
+/// Class id reserved for lazy iterator-helper objects.
+///
+/// #7576: this was `0xFFFF_0009`, which is [`STRING_ITERATOR_CLASS_ID`]. The
+/// two constants were introduced independently, each with a comment reading
+/// "sits just past the Set iterator id (0xFFFF0008)", and neither author
+/// checked whether the slot was taken. Every dispatch tower tests the String
+/// arm before the helper arm, so EVERY helper object was dispatched as a
+/// String iterator: `.next()` read the helper's op-kind field as a cursor
+/// index against a null backing array and answered `{ done: true }` on the
+/// first step, and every other helper method (`map`/`filter`/`take`/`drop`/
+/// `flatMap`/`toArray`/`reduce`/…) fell into that dispatcher's `_ =>
+/// undefined` arm. The whole proposal surface was dead — silently for
+/// `Iterator.from`, loudly (`Cannot read properties of undefined`) for the
+/// combinators.
+///
+/// `0xFFFF_000A` is the RegExp-string iterator, so this takes the next free
+/// slot. [`iterator_class_ids_are_pairwise_distinct`] pins the whole family so
+/// a third collision cannot be introduced silently.
+///
+/// [`STRING_ITERATOR_CLASS_ID`]: crate::string::STRING_ITERATOR_CLASS_ID
+/// [`iterator_class_ids_are_pairwise_distinct`]: tests::iterator_class_ids_are_pairwise_distinct
+pub const ITERATOR_HELPER_CLASS_ID: u32 = 0xFFFF_000B;
 
 // Op kinds stored in field 1.
 const OP_IDENTITY: i32 = 0; // `Iterator.from(x)` — yields the source unchanged.
@@ -68,18 +90,38 @@ pub fn is_iterator_helper_addr(addr: usize) -> bool {
 
 /// Drive one `.next()` step on ANY iterator object. Returns `(value, done)`.
 /// Mirrors the dual dispatch in `array/iterator.rs::js_iterator_to_array`:
-/// prefer a stored `next` closure FIELD (generators / bare `{next}` objects),
+/// prefer an OWN `next` closure FIELD (generators / bare `{next}` objects),
 /// else fall back to class-id method dispatch (array / Map / Set / helper
 /// iterators).
 ///
+/// #7576: the own-vs-inherited distinction is the whole ballgame, and reading
+/// it with the INHERITING getter is what killed the entire helper surface.
+/// Every built-in iterator now inherits `.next` from its shared
+/// `%…IteratorPrototype%` singleton (`object/iterator_prototypes.rs`), and that
+/// inherited `next` is a THUNK that resolves its receiver from
+/// `js_implicit_this_get()` and dispatches by class id. So
+/// `js_object_get_field_by_name` found a perfectly callable closure for an
+/// array / Map / Set / String iterator, this function took the closure-call
+/// branch, and the thunk ran with whatever `this` happened to be left in the
+/// thread-local — reporting `done` on the first step for every source kind, or
+/// throwing `Method %IteratorPrototype%.next called on incompatible receiver`.
+/// `js_iterator_to_array` already carries the own-field version of this fix
+/// (#321); this is the same fix for the helper chain.
+///
+/// The call itself binds `this` to the iterator per `IteratorNext`'s
+/// `Call(next, iterator)`. That matters for the own-field case too: a `next()`
+/// method written as `next() { return this.#impl.next(); }` gets the receiver
+/// it is entitled to instead of `undefined`.
+///
 /// #7564: the READ side of the protocol had the same defect as the WRITE side.
-/// It allocated the three constant key strings `"next"` / `"done"` / `"value"`
-/// on EVERY step, and held `iter_obj`, `result_obj` and the earlier keys in
-/// bare Rust locals across those allocations — plus, in the middle, a call
-/// into the user's own `next`, which can run arbitrary JS and collect
-/// anything. The keys are now interned (allocation-free after the first call
-/// per thread) and every pointer is re-read from a handle after each call that
-/// can collect, so no pre-collection address is nameable.
+/// It allocated the constant key strings on EVERY step, and held `iter_obj`,
+/// `result_obj` and the earlier keys in bare Rust locals across those
+/// allocations — plus, in the middle, a call into the user's own `next`, which
+/// can run arbitrary JS and collect anything. The keys are now interned
+/// (allocation-free after the first call per thread) or read by byte slice
+/// (`js_object_get_own_field_or_undef`, which allocates nothing at all), and
+/// every pointer is re-read from a handle after each call that can collect, so
+/// no pre-collection address is nameable.
 unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
     if js_nanbox_get_pointer(iter_f64) == 0 {
         return (f64::from_bits(TAG_UNDEFINED), true);
@@ -88,15 +130,15 @@ unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter_h = scope.root_nanbox_f64(iter_f64);
 
-    // `intern_ascii_literal` allocates on a first-call-per-thread miss, so the
-    // receiver comes back out of its handle ACROSS that call — the pre-call
-    // address is never bound. The key itself is the call's own return value,
-    // so it is current by construction.
-    let (next_key, iter_now) =
-        iter_h.across_nanbox(|| crate::string::intern_ascii_literal(b"next"));
-    let next_val = js_object_get_field_by_name(
-        js_nanbox_get_pointer(iter_now) as *const ObjectHeader,
-        next_key,
+    // OWN field only — see the `#7576` note above. Allocation-free (it matches
+    // the key by byte slice), so no `across_*` is needed to reach it.
+    let next_val = JSValue::from_bits(
+        crate::object::js_object_get_own_field_or_undef(
+            iter_h.get_nanbox_f64(),
+            b"next".as_ptr(),
+            4,
+        )
+        .to_bits(),
     );
     let next_ptr = if next_val.is_undefined() {
         std::ptr::null::<ClosureHeader>()
@@ -105,11 +147,16 @@ unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
     };
     let use_field = !next_ptr.is_null() && is_closure_ptr(next_ptr as usize);
 
-    // The user's `next` runs here and can collect anything. `next_ptr` is used
-    // immediately — nothing between its read and the call allocates — and the
-    // receiver for the fallback comes from its handle.
+    // The user's `next` runs here and can collect anything, so the receiver and
+    // the saved implicit-`this` both come out of handles rather than out of
+    // bare locals that predate the call.
     let result_f64 = if use_field {
-        js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED))
+        let next_h = scope.root_nanbox_f64(f64::from_bits(next_val.bits()));
+        let prev_this_h =
+            scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter_h.get_nanbox_f64()));
+        let r = crate::closure::js_native_call_value(next_h.get_nanbox_f64(), std::ptr::null(), 0);
+        crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
+        r
     } else {
         crate::object::js_native_call_method(
             iter_h.get_nanbox_f64(),

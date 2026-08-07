@@ -20,8 +20,19 @@ use crate::object::{js_object_alloc, js_object_get_field, js_object_set_field, O
 use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
 use crate::StringHeader;
 
-/// Class id reserved for String iterators. Sits just past the Set iterator id
-/// (0xFFFF0008) in the 0xFFFF prefix reserved for runtime-defined classes.
+/// Class id reserved for String iterators, in the 0xFFFF prefix reserved for
+/// runtime-defined classes.
+///
+/// #7576: "sits just past the Set iterator id (0xFFFF0008)" was this comment's
+/// original wording, and it was copied verbatim onto
+/// [`ITERATOR_HELPER_CLASS_ID`], which then claimed the same value. Every
+/// dispatch tower matches these ids in a fixed order, so the later arm went
+/// unreachable and the whole iterator-helper surface died silently. **The next
+/// free id is not "one past the id in the comment above" — check the family**:
+/// `iterator_helpers::tests::iterator_class_ids_are_pairwise_distinct`
+/// enumerates every one of them and fails on a duplicate.
+///
+/// [`ITERATOR_HELPER_CLASS_ID`]: crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID
 pub const STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_0009;
 
 unsafe fn alloc_iterator(cp_array: *mut ArrayHeader) -> f64 {
