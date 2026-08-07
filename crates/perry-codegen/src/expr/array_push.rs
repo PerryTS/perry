@@ -7,6 +7,7 @@
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
+use crate::nanbox::double_literal;
 use crate::native_value::{
     BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
     NativeRep, SemanticKind,
@@ -24,16 +25,37 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
-fn emit_array_handle_length(ctx: &mut FnCtx<'_>, array_handle: &str) -> String {
+/// The expression's result: the new length per ES2024 `Array.prototype.push`.
+///
+/// `js_array_length` is NOT a field read — it resolves Proxy arrays through
+/// the `get` trap and probes the registered-Set/Map side tables — and a
+/// statement-position `arr.push(x);` discards its result, so on push-heavy
+/// workloads it was 8–13% of the run computing a number nobody reads.
+/// `value_discarded` is the `mem::take`n per-expression signal from
+/// `dispatch::lower_expr` (#7590: it reaches exactly the statement's own
+/// expression, never an operand — a consumed `n = arr.push(x)` always
+/// computes the real length). When set, the placeholder constant is returned
+/// without emitting the call.
+fn emit_array_handle_length(
+    ctx: &mut FnCtx<'_>,
+    array_handle: &str,
+    value_discarded: bool,
+) -> String {
+    if value_discarded {
+        return double_literal(0.0);
+    }
     let blk = ctx.block();
     let len_i32 = blk.call(I32, "js_array_length", &[(I64, array_handle)]);
     blk.sitofp(I32, &len_i32, DOUBLE)
 }
 
-fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str) -> String {
+fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str, value_discarded: bool) -> String {
+    if value_discarded {
+        return double_literal(0.0);
+    }
     let blk = ctx.block();
     let array_handle = unbox_to_i64(blk, array_box);
-    emit_array_handle_length(ctx, &array_handle)
+    emit_array_handle_length(ctx, &array_handle, false)
 }
 
 fn lower_array_push_value(
@@ -69,7 +91,7 @@ fn lower_array_push_value(
     Ok((value_double, Some(value_bits)))
 }
 
-pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Result<String> {
     match expr {
         Expr::ArrayPush { array_id, value } => {
             // Resolve the array storage in priority order: closure
@@ -254,8 +276,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
 
                 ctx.current_block = merge_idx;
+                if value_discarded {
+                    // Skip the slot reload too — it only feeds the length.
+                    return Ok(double_literal(0.0));
+                }
                 let current_box = ctx.block().load(DOUBLE, &slot);
-                return Ok(emit_array_box_length(ctx, &current_box));
+                return Ok(emit_array_box_length(ctx, &current_box, false));
             }
 
             // Fast path: local-bound, non-captured, non-boxed array.
@@ -527,8 +553,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
 
                 ctx.current_block = merge_idx;
+                if value_discarded {
+                    // Skip the slot reload too — it only feeds the length.
+                    return Ok(double_literal(0.0));
+                }
                 let current_box = ctx.block().load(DOUBLE, &slot);
-                return Ok(emit_array_box_length(ctx, &current_box));
+                return Ok(emit_array_box_length(ctx, &current_box, false));
             }
 
             let blk = ctx.block();
@@ -566,7 +596,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // which would clobber the box pointer in the capture slot with
                     // the array pointer, so the next push would treat the array as
                     // the box and silently lose the realloc write-back.
-                    return Ok(emit_array_handle_length(ctx, &new_handle));
+                    return Ok(emit_array_handle_length(ctx, &new_handle, value_discarded));
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
@@ -577,7 +607,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // The slot holds the BOX pointer — the box is the shared
                     // storage. Return so the slot keeps pointing at the box (see
                     // the captured branch above).
-                    return Ok(emit_array_handle_length(ctx, &new_handle));
+                    return Ok(emit_array_handle_length(ctx, &new_handle, value_discarded));
                 }
                 // #5459: `array_id` is in `boxed_vars` but has no box location in
                 // THIS context — it's a module-level global accessed directly from
@@ -609,7 +639,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 return Err(anyhow!("ArrayPush({}): local not in scope", array_id));
             }
-            Ok(emit_array_handle_length(ctx, &new_handle))
+            Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
         }
 
         // `arr.push(...src)` — HIR variant carrying the destination
@@ -654,7 +684,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // pointing at the box. Return so we don't fall through to the
                     // capture-slot store, which would clobber the box pointer (see
                     // the matching note in `Expr::ArrayPush`).
-                    return Ok(emit_array_handle_length(ctx, &new_handle));
+                    return Ok(emit_array_handle_length(ctx, &new_handle, value_discarded));
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
@@ -662,7 +692,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                     // Gen-GC Phase C2: barrier the box parent (see capture path).
                     emit_write_barrier(ctx, &box_ptr, &new_bits);
-                    return Ok(emit_array_handle_length(ctx, &new_handle));
+                    return Ok(emit_array_handle_length(ctx, &new_handle, value_discarded));
                 }
                 // #5459: in `boxed_vars` but no box location here — a module-level
                 // global accessed directly from a nested function. Fall through to
@@ -691,7 +721,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 return Err(anyhow!("ArrayPushSpread({}): local not in scope", array_id));
             }
-            Ok(emit_array_handle_length(ctx, &new_handle))
+            Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
         }
 
         // -------- Closures (Phase D.1) --------

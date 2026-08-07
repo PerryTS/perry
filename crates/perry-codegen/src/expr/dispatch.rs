@@ -64,7 +64,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PropertyGet { .. } => super::property_get::lower(ctx, expr),
         Expr::Conditional { .. } => super::conditional::lower(ctx, expr),
         Expr::ArrayPush { .. } | Expr::ArrayPushSpread { .. } => {
-            super::array_push::lower(ctx, expr)
+            super::array_push::lower(ctx, expr, value_discarded)
         }
         Expr::Closure { .. } => super::closure::lower(ctx, expr),
         Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => {
