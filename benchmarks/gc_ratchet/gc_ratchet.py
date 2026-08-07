@@ -1006,6 +1006,28 @@ def evaluate(
             reason = correctness.get("reason") or "no correctness report"
             failures.append(f"{name}: correctness was not verified against the Node oracle ({reason})")
 
+        # Liveness, asserted rather than inferred from the bands. A ratchet over
+        # the evacuating minor is meaningless if the evacuating minor did not
+        # run, and the tolerance arithmetic cannot be relied on to notice: six
+        # of the twelve probes pin `minor_cycles` at 1, where the allowance
+        # floor is also 1, so a collapse from 1 to 0 is `delta == -allowance`
+        # and scores "ok". A probe that stopped collecting would have been
+        # reported as passing — CLAUDE.md's fourth failure mode (the gate runs
+        # but its subject never did) sitting inside the gate meant to close it.
+        for metric, what in (
+            ("minor_cycles", "ran no minor collection"),
+            ("copied_objects", "evacuated nothing"),
+        ):
+            if base_entry["metrics"][metric]["median"] > 0 and (
+                cur_entry["metrics"][metric]["median"] <= 0
+            ):
+                failures.append(
+                    f"{name}: {what} in this run ({metric} "
+                    f"{base_entry['metrics'][metric]['median']:,.0f} -> 0). The baseline it is "
+                    "being compared against measures a collector that did; there is nothing "
+                    "here to compare."
+                )
+
         for metric in ALL_METRICS:
             tolerance = resolve_tolerance(tolerances, overrides, name, metric)
             base_median = float(base_entry["metrics"][metric]["median"])

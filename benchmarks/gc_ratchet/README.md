@@ -190,6 +190,81 @@ collector, not a score. A collector that suddenly copies fewer objects has
 changed — plausibly because objects are now pinned — and must be re-pinned
 deliberately rather than silently congratulated.
 
+## Taking one cell out of the gating family (`probe_overrides`)
+
+`tolerances.json` is keyed per metric per profile. That is the right
+granularity for a *band*, which expresses a machine class's noise floor. It is
+the wrong granularity for "can this metric carry a gate at all on this
+workload", which is a property of the workload — and the two were conflated
+until #7554.
+
+The symptom: `12_large_live_set` retention stopped being bit-identical, the
+pinned artifact recorded a non-zero spread, and the assertion that refuses to
+gate a metric on a spread it cannot support fired — **in the CI step that runs
+before the measurement step**, so all twelve probes stopped running on every
+branch for two days. The prescribed fix, "take this metric out of the gating
+family for this probe", could not be expressed: the only lever turned
+`heap_used_bytes` gating off for all twelve.
+
+So `tolerances.json` has a `probe_overrides` section:
+
+```json
+"probe_overrides": {
+  "12_large_live_set": {
+    "heap_used_bytes": {
+      "gating": false,
+      "rationale": "NOT GATED ON THIS PROBE. …why…",
+      "evidence": {
+        "observed_runs": 21,
+        "observed_spread": 4536,
+        "measured_on": "…host, commit, build…",
+        "issue": "https://github.com/PerryTS/perry/issues/7554"
+      }
+    }
+  }
+}
+```
+
+Deliberate properties, each of them a refusal:
+
+- **It may only set `gating` to `false`.** An override exists to remove a cell
+  from a gating family. Putting one back is the profile's job, where a reader
+  looking for what is gated will find it.
+- **It never touches the band.** An excluded cell is still measured, still
+  compared, and still printed — a breach shows as `drift (informational)`
+  rather than vanishing. `check` also prints every override with its reason
+  under the table, so a `no` in the Gating column can be explained without
+  opening another file.
+- **The evidence is checked, not merely stored.** At least 21 runs — the same
+  number every band in the file is justified by — and a spread that is
+  actually non-zero. You cannot exclude a metric you have not shown is
+  ungateable.
+- **An override that matches no probe fails**, the same rule
+  `scripts/gc_root_dominance_allowlist.json` carries. Fixing the
+  non-determinism means deleting the entry, not leaving it to outlive its
+  reason.
+- **Overriding every probe for a metric fails.** Assembled one cell at a time,
+  that is a profile-level `"gating": false` with nowhere to read the reason.
+
+The bit-identity rule itself now lives in `validate_artifact`, so an artifact
+carrying a non-deterministic gating cell cannot be *pinned*. Before #7554 the
+rule existed only in `tests/test_gc_ratchet.py`, which is why a bad pin could
+be committed and only wedge CI afterwards.
+
+`heap_total_bytes`, `minor_cycles`, `copied_objects`, `promoted_bytes` and
+`freed_bytes` on `12_large_live_set` all remain gating, so a real over-retention
+regression on that probe still goes red.
+
+### The measurement must show the collector ran
+
+`check` fails a probe whose current run reports `minor_cycles == 0` or
+`copied_objects == 0` where the baseline reports more, rather than leaving that
+to the tolerance arithmetic. The arithmetic could not catch it: six probes pin
+`minor_cycles` at 1 and the allowance floor is also 1, so a collapse from 1 to 0
+is `delta == -allowance` and scored `ok`. The largest regression this ratchet
+exists to catch — a collector that stops running copying minors — was being
+reported as passing.
+
 ## Running it
 
 Checking on the pinned quiet host, with memory and time gated:

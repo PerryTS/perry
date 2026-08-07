@@ -288,6 +288,29 @@ class GateFailTests(unittest.TestCase):
         _, failures = evaluate(baseline, current, profile="shared_ci")
         self.assertTrue(any("freed_bytes" in failure for failure in _hard(failures)))
 
+    def test_a_probe_that_stopped_collecting_fails(self):
+        """The bands alone could not catch this, which is why it is asserted.
+
+        Six of the twelve shipped probes pin ``minor_cycles`` at 1 and the
+        allowance floor is also 1, so a collapse from 1 to 0 lands exactly on
+        ``delta == -allowance`` and scored "ok". A collector that stopped
+        running copying minors — the largest regression this ratchet exists to
+        catch — was reported as passing.
+        """
+        baseline = _baseline(_probe(overrides={"minor_cycles": 1.0}))
+        current = _measurement(_probe(overrides={"minor_cycles": 0.0}))
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        self.assertTrue(
+            any("ran no minor collection" in failure for failure in _hard(failures)),
+            "a probe that ran no collection at all was not reported",
+        )
+
+    def test_a_probe_that_evacuated_nothing_fails(self):
+        baseline = _baseline()
+        current = _measurement(_probe(overrides={"copied_objects": 0.0}))
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        self.assertTrue(any("evacuated nothing" in failure for failure in _hard(failures)))
+
     def test_missing_probe_fails_instead_of_being_skipped(self):
         baseline = _baseline()
         current = _measurement({})
