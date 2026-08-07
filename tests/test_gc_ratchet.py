@@ -19,19 +19,65 @@ from pathlib import Path
 from benchmarks.gc_ratchet.gc_ratchet import (
     ALL_METRICS,
     DEFAULT_ARTIFACT,
+    DETERMINISTIC_METRICS,
     GC_METRICS,
+    MIN_EXCLUSION_RUNS,
     PROFILES,
     RatchetError,
     distribution,
     evaluate,
+    gated_anywhere,
     parse_gc_diag,
     parse_gcmetrics,
+    probe_overrides_from_json,
+    render,
     tolerances_from_json,
     validate_artifact,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOLERANCES_PATH = REPO_ROOT / "benchmarks" / "gc_ratchet" / "tolerances.json"
+
+
+def _shipped_tolerances():
+    return json.loads(TOLERANCES_PATH.read_text(encoding="utf-8"))
+
+
+def _tolerances():
+    """The shipped bands without the shipped probe overrides.
+
+    An override that names a probe the artifact does not contain is a hard
+    failure by design, so the synthetic single-probe fixtures below cannot carry
+    the real ``12_large_live_set`` entry. The override machinery is exercised
+    explicitly in ``ProbeOverrideTests`` instead, against fixtures whose probe
+    names match.
+    """
+    payload = _shipped_tolerances()
+    payload.pop("probe_overrides", None)
+    return payload
+
+
+def _override_entry():
+    return {
+        "gating": False,
+        "rationale": "measured non-deterministic on this workload; see the issue",
+        "evidence": {
+            "observed_runs": 21,
+            "observed_spread": 4536,
+            "measured_on": "2026-08-06, pinned quiet host",
+            "issue": "https://github.com/PerryTS/perry/issues/7554",
+        },
+    }
+
+
+def _with_override(probe="01_probe", metric="heap_used_bytes", entry=None):
+    """Shipped bands plus one probe override, ready to hand to a fixture."""
+    payload = _tolerances()
+    payload["probe_overrides"] = {
+        probe: {metric: entry if entry is not None else _override_entry()}
+    }
+    return payload
+
 
 BASE_VALUES = {
     "heap_used_bytes": 1_000_000.0,
@@ -65,7 +111,7 @@ def _probe(name="01_probe", overrides=None, correctness="pass"):
     }
 
 
-def _baseline(probes=None):
+def _baseline(probes=None, tolerances=None):
     probes = probes if probes is not None else _probe()
     return {
         "schema_version": 1,
@@ -76,9 +122,19 @@ def _baseline(probes=None):
         "platform": "darwin-arm64",
         "host": {"cpu_count": 8, "load_average": {"1m": 1.0}},
         "run_config": {"repeats": 7, "warmup": 1, "traced_runs": 2, "probes": sorted(probes)},
-        "tolerances": json.loads(TOLERANCES_PATH.read_text(encoding="utf-8")),
+        "tolerances": tolerances if tolerances is not None else _tolerances(),
         "probes": probes,
     }
+
+
+def _pair(overrides=None, other_overrides=None):
+    """Two probes.
+
+    An override that covers every probe of a metric is refused (it would be a
+    profile-level ``"gating": false`` assembled out of parts), so any fixture
+    exercising an override needs at least one probe the override does not touch.
+    """
+    return _probe("01_probe", overrides) | _probe("02_other", other_overrides)
 
 
 def _measurement(probes=None, platform="darwin-arm64", repeats=7):
@@ -137,12 +193,12 @@ class ParsingTests(unittest.TestCase):
 
 class ToleranceTests(unittest.TestCase):
     def test_shipped_tolerances_parse_and_cover_every_metric(self):
-        profiles = tolerances_from_json(json.loads(TOLERANCES_PATH.read_text(encoding="utf-8")))
+        profiles = tolerances_from_json(_shipped_tolerances())
         for profile in PROFILES:
             self.assertEqual(set(profiles[profile]), set(ALL_METRICS))
 
     def test_every_tolerance_states_a_rationale(self):
-        profiles = tolerances_from_json(json.loads(TOLERANCES_PATH.read_text(encoding="utf-8")))
+        profiles = tolerances_from_json(_shipped_tolerances())
         for profile, entries in profiles.items():
             for metric, tolerance in entries.items():
                 self.assertTrue(
@@ -151,7 +207,7 @@ class ToleranceTests(unittest.TestCase):
                 )
 
     def test_profile_with_nothing_gating_is_rejected(self):
-        payload = json.loads(TOLERANCES_PATH.read_text(encoding="utf-8"))
+        payload = _shipped_tolerances()
         for entry in payload["shared_ci"].values():
             entry["gating"] = False
         with self.assertRaises(RatchetError) as caught:
@@ -159,13 +215,13 @@ class ToleranceTests(unittest.TestCase):
         self.assertIn("could never fail", str(caught.exception))
 
     def test_rationale_may_not_be_blank(self):
-        payload = json.loads(TOLERANCES_PATH.read_text(encoding="utf-8"))
+        payload = _shipped_tolerances()
         payload["shared_ci"]["heap_used_bytes"]["rationale"] = "   "
         with self.assertRaises(RatchetError):
             tolerances_from_json(payload)
 
     def test_gc_counters_are_two_sided(self):
-        profiles = tolerances_from_json(json.loads(TOLERANCES_PATH.read_text(encoding="utf-8")))
+        profiles = tolerances_from_json(_shipped_tolerances())
         for profile in PROFILES:
             for metric in GC_METRICS:
                 self.assertEqual(
@@ -310,7 +366,7 @@ class GateFailTests(unittest.TestCase):
         Without this, a band could quietly be set wide enough that the metric is
         gating in name only, and nothing would ever notice.
         """
-        payload = json.loads(TOLERANCES_PATH.read_text(encoding="utf-8"))
+        payload = _shipped_tolerances()
         profiles = tolerances_from_json(payload)
         for profile in PROFILES:
             for metric, tolerance in profiles[profile].items():
@@ -363,15 +419,59 @@ class ArtifactValidationTests(unittest.TestCase):
             )
 
     def test_pinned_artifact_retention_is_deterministic(self):
+        """Every *gating* retention cell in the pinned artifact must be bit-identical.
+
+        The band on these metrics is justified in tolerances.json as pure
+        anti-brittleness margin over an observed spread of 0.000%, not as a noise
+        allowance, so a gating cell whose own samples disagree contradicts the
+        reason its band is that tight.
+
+        The exemption is narrow on purpose: a cell is skipped only when a
+        ``probe_overrides`` entry has already taken it out of the gating family
+        under *every* profile, which the override schema forces to carry checked
+        evidence with it. Anything else still fails, and
+        ``ProbeOverrideTests.test_a_nondeterministic_gating_cell_cannot_be_pinned``
+        proves this rule can still refuse an artifact.
+        """
         artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        profiles = tolerances_from_json(artifact["tolerances"])
+        overrides = probe_overrides_from_json(artifact["tolerances"])
+        checked = 0
         for name, entry in artifact["probes"].items():
             for metric in ("heap_used_bytes", "heap_total_bytes"):
+                if not gated_anywhere(profiles, overrides, name, metric):
+                    continue
+                checked += 1
                 self.assertEqual(
                     entry["metrics"][metric]["spread"],
                     0,
                     f"{name}.{metric} was not deterministic when pinned; "
                     "it must not be in a gating family",
                 )
+        self.assertGreater(checked, 0, "no gating retention cell was checked at all")
+
+    def test_shipped_overrides_name_probes_that_exist(self):
+        # An exclusion that matches nothing must be deleted, not left behind to
+        # outlive its reason.
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        for probe in probe_overrides_from_json(_shipped_tolerances()):
+            self.assertIn(probe, artifact["probes"])
+
+    def test_artifact_embeds_the_shipped_tolerances(self):
+        """The gate reads the artifact's copy, so a drifted tolerances.json is a lie.
+
+        ``evaluate`` takes its bands from ``baseline["tolerances"]``, not from
+        the file. Editing the file without re-pinning would leave the gate
+        running the old bands while the file claims otherwise — a gate measuring
+        something other than what its configuration says.
+        """
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            artifact["tolerances"],
+            _shipped_tolerances(),
+            "benchmarks/gc_ratchet/tolerances.json and the copy embedded in the pinned "
+            "artifact disagree; re-pin, or sync the artifact deliberately",
+        )
 
     def test_tampered_summary_is_rejected(self):
         artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
@@ -388,6 +488,150 @@ class ArtifactValidationTests(unittest.TestCase):
         tampered["probes"][name]["metrics"]["minor_cycles"] = distribution([0, 0])
         with self.assertRaises(RatchetError):
             validate_artifact(tampered)
+
+
+class ProbeOverrideTests(unittest.TestCase):
+    """Per-probe exclusions: they must work, and they must not become a back door.
+
+    The mechanism exists because ``tolerances.json`` was keyed per metric per
+    profile, so the only way to stop gating one non-deterministic cell was to
+    stop gating that metric on all twelve probes (#7554). The risk it introduces
+    is obvious — an exclusion is a hole in a gate — so most of these tests are
+    about the ways an exclusion is refused.
+    """
+
+    def test_an_overridden_cell_cannot_fail_the_job(self):
+        baseline = _baseline(_pair(), _with_override())
+        current = _measurement(_pair({"heap_used_bytes": 9_000_000.0}))
+        rows, failures = evaluate(baseline, current, profile="shared_ci")
+        self.assertEqual(_hard(failures), [])
+        row = next(r for r in rows if r.probe == "01_probe" and r.metric == "heap_used_bytes")
+        self.assertFalse(row.gating)
+        # Excluded, not dropped: the breach is still measured and still shown.
+        self.assertEqual(row.status, "drift (informational)")
+
+    def test_an_overridden_cell_is_still_reported_with_its_reason(self):
+        baseline = _baseline(_pair(), _with_override())
+        rows, _ = evaluate(baseline, _measurement(_pair()), profile="shared_ci")
+        report = render(rows, baseline, "shared_ci")
+        self.assertIn("excluded from the gating family", report)
+        self.assertIn("01_probe`.heap_used_bytes", report)
+        self.assertIn("measured non-deterministic on this workload", report)
+        self.assertIn("21 runs", report)
+
+    def test_an_override_does_not_leak_to_other_probes(self):
+        # The whole point: the other probes keep gating the same metric.
+        baseline = _baseline(_pair(), _with_override())
+        current = _measurement(_pair(other_overrides={"heap_used_bytes": 9_000_000.0}))
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        joined = " ".join(_hard(failures))
+        self.assertIn("02_other", joined)
+        self.assertIn("heap_used_bytes", joined)
+
+    def test_an_override_does_not_leak_to_other_metrics(self):
+        baseline = _baseline(_pair(), _with_override())
+        current = _measurement(_pair({"heap_total_bytes": 90_000_000.0}))
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        self.assertTrue(any("heap_total_bytes" in failure for failure in _hard(failures)))
+
+    def test_an_override_may_not_re_gate(self):
+        entry = _override_entry()
+        entry["gating"] = True
+        with self.assertRaises(RatchetError) as caught:
+            tolerances_from_json(_with_override(entry=entry))
+        self.assertIn("only set gating to false", str(caught.exception))
+
+    def test_an_override_needs_a_rationale(self):
+        entry = _override_entry()
+        entry["rationale"] = "  "
+        with self.assertRaises(RatchetError) as caught:
+            tolerances_from_json(_with_override(entry=entry))
+        self.assertIn("silent exclusion", str(caught.exception))
+
+    def test_an_override_needs_evidence(self):
+        entry = _override_entry()
+        del entry["evidence"]
+        with self.assertRaises(RatchetError):
+            tolerances_from_json(_with_override(entry=entry))
+
+    def test_an_override_needs_enough_runs_behind_it(self):
+        entry = _override_entry()
+        entry["evidence"]["observed_runs"] = MIN_EXCLUSION_RUNS - 1
+        with self.assertRaises(RatchetError) as caught:
+            tolerances_from_json(_with_override(entry=entry))
+        self.assertIn("cannot distinguish", str(caught.exception))
+
+    def test_an_override_needs_a_non_zero_observed_spread(self):
+        # Excluding a metric that was measured as deterministic is unjustified:
+        # nothing has been shown to be ungateable.
+        entry = _override_entry()
+        entry["evidence"]["observed_spread"] = 0
+        with self.assertRaises(RatchetError) as caught:
+            tolerances_from_json(_with_override(entry=entry))
+        self.assertIn("must stay gated", str(caught.exception))
+
+    def test_an_override_for_an_unknown_metric_is_rejected(self):
+        with self.assertRaises(RatchetError):
+            tolerances_from_json(_with_override(metric="heap_used_byte"))
+
+    def test_an_override_that_matches_no_probe_is_rejected(self):
+        artifact = _baseline(tolerances=_with_override(probe="99_does_not_exist"))
+        with self.assertRaises(RatchetError) as caught:
+            validate_artifact(artifact)
+        self.assertIn("must be deleted", str(caught.exception))
+
+    def test_overriding_every_probe_is_rejected(self):
+        # One cell at a time, this would achieve exactly what "gating": false at
+        # profile level does, without saying so where a reader would look.
+        payload = _tolerances()
+        payload["probe_overrides"] = {
+            probe: {"heap_used_bytes": _override_entry()} for probe in ("01_probe", "02_other")
+        }
+        with self.assertRaises(RatchetError) as caught:
+            validate_artifact(_baseline(_pair(), payload))
+        self.assertIn("can never fail", str(caught.exception))
+
+    def test_a_mistyped_section_is_rejected_rather_than_ignored(self):
+        payload = _tolerances()
+        payload["probe_override"] = {"01_probe": {"heap_used_bytes": _override_entry()}}
+        with self.assertRaises(RatchetError) as caught:
+            tolerances_from_json(payload)
+        self.assertIn("unknown top-level section", str(caught.exception))
+
+    def test_a_nondeterministic_gating_cell_cannot_be_pinned(self):
+        """The assertion that caught #7554, now enforced at pinning time.
+
+        It used to live only in the unit tests, so an artifact carrying a
+        non-deterministic gating cell could be written and committed; the test
+        then failed in the CI step that runs *before* the measurement step, and
+        the ratchet measured nothing for two days.
+        """
+        for metric in DETERMINISTIC_METRICS:
+            with self.subTest(metric=metric):
+                probes = _probe()
+                probes["01_probe"]["metrics"][metric] = distribution(
+                    [BASE_VALUES[metric]] * 6 + [BASE_VALUES[metric] + 6768]
+                )
+                with self.assertRaises(RatchetError) as caught:
+                    validate_artifact(_baseline(probes))
+                self.assertIn("bit-identity", str(caught.exception))
+
+    def test_the_same_cell_may_be_pinned_once_it_is_excluded(self):
+        probes = _pair()
+        probes["01_probe"]["metrics"]["heap_used_bytes"] = distribution(
+            [BASE_VALUES["heap_used_bytes"]] * 6 + [BASE_VALUES["heap_used_bytes"] + 6768]
+        )
+        validate_artifact(_baseline(probes, _with_override()))
+
+    def test_memory_and_timing_spread_is_still_allowed(self):
+        # Only the bit-identical families are held to spread 0; RSS and wall
+        # time have declared noise floors and must not be caught by this rule.
+        probes = _probe()
+        for metric in ("rss_bytes", "peak_rss_bytes", "wall_ms"):
+            probes["01_probe"]["metrics"][metric] = distribution(
+                [BASE_VALUES[metric]] * 6 + [BASE_VALUES[metric] * 1.01]
+            )
+        validate_artifact(_baseline(probes))
 
 
 if __name__ == "__main__":

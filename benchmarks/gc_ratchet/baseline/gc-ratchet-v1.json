@@ -90,7 +90,17 @@
       "class from the host the baseline was captured on: retention and GC counters",
       "transfer because they are semantic, memory and time do not. 'pinned_host' is",
       "for a maintainer re-running the suite on the same quiet box, where memory and",
-      "time are comparable and are gated."
+      "time are comparable and are gated.",
+      "",
+      "'probe_overrides' takes ONE (probe, metric) cell out of the gating family.",
+      "A profile band answers 'what is this machine class's noise floor'; whether a",
+      "metric is deterministic enough to gate at all is a property of the WORKLOAD,",
+      "and those two questions were conflated until #7554. It may only ever set",
+      "gating to false, never true, and never touches the band: an excluded cell is",
+      "still measured, still compared, and still printed, it just cannot turn the",
+      "job red. Every entry carries evidence that is checked, not merely stored --",
+      "at least 21 runs (the same number every band above is justified by) and a",
+      "spread that is actually non-zero, so a cell cannot be excluded on a hunch."
     ],
     "shared_ci": {
       "heap_used_bytes": {
@@ -262,6 +272,20 @@
         "direction": "increase",
         "gating": true,
         "rationale": "GATED HERE ONLY. Worst cross-session spread of medians-of-7 was 0.751% on an idle box (load 1.7-2.0); worst raw within-session spread was 5.3%, which the median-of-7 damps out. 10% is ~13x the cross-session figure and ~2x the worst raw spread, so it will not fire on scheduler jitter but will catch the tens-of-percent slowdown a whole-stack conservative scan would introduce. The 15 ms floor covers the fastest probe (126 ms)."
+      }
+    },
+    "probe_overrides": {
+      "12_large_live_set": {
+        "heap_used_bytes": {
+          "gating": false,
+          "rationale": "NOT GATED ON THIS PROBE. Retention here is genuinely sample-dependent, so it cannot carry a band whose premise is bit-identity. The cause is in the collector, not the harness: the evacuation policy (crates/perry-runtime/src/gc/oldgen.rs) thresholds on two measured, machine-dependent inputs -- process RSS read from the OS at decision time, and the previous cycle's pause in microseconds against MAX_PREVIOUS_PAUSE_US. Both are step functions, so a run that lands on the other side of a threshold compacts a different amount and retains a different amount. The other eleven probes hold small live sets and never approach either threshold, which is why they remain bit-identical and stay gated; 12_large_live_set is the only probe with a ~100 MB live set and multi-millisecond pauses. Retention on this probe is still measured, still compared against the baseline, and still printed as an informational drift row -- and heap_total_bytes, minor_cycles, copied_objects, promoted_bytes and freed_bytes on this same probe remain gating, so a real over-retention regression here still goes red.",
+          "evidence": {
+            "observed_runs": 21,
+            "observed_spread": 4536,
+            "measured_on": "2026-08-06, pinned quiet host perry-macos (Mac mini M1, 8 GB, Spotlight disabled), main @ 52f7dae1f, release build: 5 distinct values across 21 runs (42612752 42613184 42613328 42614048 42617288). The 2026-08-05 pin saw the same effect as one outlier in seven (+6768 B).",
+            "issue": "https://github.com/PerryTS/perry/issues/7554"
+          }
+        }
       }
     }
   },

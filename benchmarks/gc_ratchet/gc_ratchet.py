@@ -101,7 +101,25 @@ ALL_METRICS = RETENTION_METRICS + GC_METRICS + MEMORY_METRICS + TIMING_METRICS
 #: Metrics collected once per repeat from a normal (untraced) run.
 SAMPLED_METRICS = RETENTION_METRICS + MEMORY_METRICS + TIMING_METRICS
 
+#: Metrics whose gating premise is *bit-identity*, not a noise allowance. Their
+#: bands in ``tolerances.json`` are justified by an observed spread of 0.000%
+#: over 21 runs, so a pinned probe whose samples disagree is not merely noisy:
+#: it contradicts the reason its band is that tight. Such a cell may not be
+#: gating (see ``validate_artifact`` and ``probe_overrides``).
+DETERMINISTIC_METRICS = RETENTION_METRICS + GC_METRICS
+
 PROFILES = ("shared_ci", "pinned_host")
+
+#: Top-level keys ``tolerances.json`` may contain. Anything else is refused
+#: rather than ignored: a mistyped ``probe_override`` section would silently not
+#: apply, which is a gate quietly measuring something other than what its file
+#: says it measures.
+TOLERANCE_SECTIONS = frozenset(("_readme", "probe_overrides", *PROFILES))
+
+#: Minimum repeats behind a probe-override exclusion. ``tolerances.json``
+#: justifies every *inclusion* on 21 runs (3 sessions x 7); an *exclusion* is
+#: the same claim with the opposite sign and is held to the same evidence.
+MIN_EXCLUSION_RUNS = 21
 
 
 class RatchetError(RuntimeError):
@@ -580,7 +598,158 @@ def _tolerance_from_json(metric: str, raw: Mapping[str, Any]) -> Tolerance:
     )
 
 
+@dataclass(frozen=True)
+class ProbeOverride:
+    """One (probe, metric) cell removed from the gating family, with its reason.
+
+    ``tolerances.json`` is keyed per metric per profile, which is the right
+    granularity for a *band*: the band expresses a machine class's noise floor.
+    It is the wrong granularity for the question "can this metric carry a gate
+    at all on this workload", because that is a property of the workload. When
+    those two got conflated the only available lever was to stop gating a metric
+    on all twelve probes because one of them had become sample-dependent (#7554).
+
+    So an override may only ever *remove* a cell from the gating family, never
+    add one — re-gating is the profile's job — and it may not touch the band.
+    A non-gating row is still measured, still compared, and still printed; it
+    just cannot turn the job red.
+
+    ``evidence`` is mandatory and is checked, not merely stored. An exclusion
+    claims a metric is not deterministic on this probe; that claim needs at
+    least as many runs behind it as the inclusion it overrules, and a spread
+    that is actually non-zero. A silent exclusion is how gates rot.
+    """
+
+    probe: str
+    metric: str
+    rationale: str
+    observed_runs: int
+    observed_spread: float
+    measured_on: str
+    issue: str
+
+    def applied_to(self, base: Tolerance) -> Tolerance:
+        """The profile's band, with gating removed and the reason substituted."""
+        return Tolerance(
+            pct=base.pct,
+            abs=base.abs,
+            direction=base.direction,
+            gating=False,
+            rationale=self.rationale,
+        )
+
+
+def _probe_override_from_json(probe: str, metric: str, raw: Mapping[str, Any]) -> ProbeOverride:
+    where = f"probe_overrides.{probe}.{metric}"
+    if metric not in ALL_METRICS:
+        raise RatchetError(f"{where}: unknown metric")
+    unknown = sorted(set(raw) - {"gating", "rationale", "evidence"})
+    if unknown:
+        raise RatchetError(f"{where}: unexpected field(s) {unknown}")
+    if raw.get("gating") is not False:
+        raise RatchetError(
+            f"{where}: an override may only set gating to false. It exists to take a cell "
+            "out of a gating family; putting one back is the profile's job, and a band that "
+            "gates on one probe but not another belongs in the profile where it can be read."
+        )
+    rationale = str(raw.get("rationale", "")).strip()
+    if not rationale:
+        raise RatchetError(
+            f"{where}: has no rationale. Recording that a cell is non-gating without "
+            "recording why is a silent exclusion, which is how gates rot."
+        )
+    evidence = raw.get("evidence")
+    if not isinstance(evidence, Mapping):
+        raise RatchetError(f"{where}: has no evidence block")
+    unknown_evidence = sorted(
+        set(evidence) - {"observed_runs", "observed_spread", "measured_on", "issue"}
+    )
+    if unknown_evidence:
+        raise RatchetError(f"{where}: evidence has unexpected field(s) {unknown_evidence}")
+    for field in ("observed_runs", "observed_spread", "measured_on", "issue"):
+        if field not in evidence:
+            raise RatchetError(f"{where}: evidence is missing {field}")
+    runs = int(evidence["observed_runs"])
+    if runs < MIN_EXCLUSION_RUNS:
+        raise RatchetError(
+            f"{where}: evidence rests on {runs} runs; at least {MIN_EXCLUSION_RUNS} are "
+            "required, the same number every band in this file is justified by. Fewer runs "
+            "cannot distinguish a non-deterministic metric from one bad sample."
+        )
+    spread = float(evidence["observed_spread"])
+    if spread <= 0:
+        raise RatchetError(
+            f"{where}: evidence records a spread of {spread:g}. A metric that was observed "
+            "to be deterministic has not been shown to be ungateable; it must stay gated."
+        )
+    for field in ("measured_on", "issue"):
+        if not str(evidence[field]).strip():
+            raise RatchetError(f"{where}: evidence.{field} is blank")
+    return ProbeOverride(
+        probe=probe,
+        metric=metric,
+        rationale=rationale,
+        observed_runs=runs,
+        observed_spread=spread,
+        measured_on=str(evidence["measured_on"]).strip(),
+        issue=str(evidence["issue"]).strip(),
+    )
+
+
+def probe_overrides_from_json(payload: Mapping[str, Any]) -> dict[str, dict[str, ProbeOverride]]:
+    """Parse the optional ``probe_overrides`` section.
+
+    Deliberately *not* nested per profile. An override answers "is this metric
+    deterministic enough to gate on this workload", which is a property of the
+    probe and the collector, not of the machine the numbers were taken on. Bands
+    stay per profile; gateability does not.
+    """
+    raw = payload.get("probe_overrides", {})
+    if not isinstance(raw, Mapping):
+        raise RatchetError("probe_overrides must be an object keyed by probe name")
+    overrides: dict[str, dict[str, ProbeOverride]] = {}
+    for probe, metrics in raw.items():
+        if not isinstance(metrics, Mapping) or not metrics:
+            raise RatchetError(f"probe_overrides.{probe} must be a non-empty object")
+        overrides[probe] = {
+            metric: _probe_override_from_json(probe, metric, entry)
+            for metric, entry in metrics.items()
+        }
+    return overrides
+
+
+def resolve_tolerance(
+    profile_tolerances: Mapping[str, Tolerance],
+    overrides: Mapping[str, Mapping[str, ProbeOverride]],
+    probe: str,
+    metric: str,
+) -> Tolerance:
+    override = overrides.get(probe, {}).get(metric)
+    base = profile_tolerances[metric]
+    return override.applied_to(base) if override else base
+
+
+def gated_anywhere(
+    profiles: Mapping[str, Mapping[str, Tolerance]],
+    overrides: Mapping[str, Mapping[str, ProbeOverride]],
+    probe: str,
+    metric: str,
+) -> bool:
+    """True when this cell can turn the job red under at least one profile."""
+    return any(
+        resolve_tolerance(profiles[profile], overrides, probe, metric).gating
+        for profile in profiles
+    )
+
+
 def tolerances_from_json(payload: Mapping[str, Any]) -> dict[str, dict[str, Tolerance]]:
+    unknown_sections = sorted(set(payload) - TOLERANCE_SECTIONS)
+    if unknown_sections:
+        raise RatchetError(
+            f"tolerances have unknown top-level section(s) {unknown_sections}; a mistyped "
+            "section would be silently ignored and the gate would not do what the file says"
+        )
+    probe_overrides_from_json(payload)
     profiles: dict[str, dict[str, Tolerance]] = {}
     for profile in PROFILES:
         if profile not in payload:
@@ -645,6 +814,46 @@ def assemble(
     return artifact
 
 
+def _validate_probe_overrides(
+    profiles: Mapping[str, Mapping[str, Tolerance]],
+    overrides: Mapping[str, Mapping[str, ProbeOverride]],
+    probes: Mapping[str, Any],
+) -> None:
+    """Cross-check the override set against the probes it claims to describe.
+
+    Two rules, both aimed at the same rot. An override that matches nothing is a
+    failure, not a no-op — the same rule ``scripts/gc_root_dominance_allowlist.json``
+    carries, so deleting a probe (or fixing the non-determinism and renaming it)
+    forces the exclusion to be revisited instead of outliving its reason. And an
+    override set that covers every probe for a metric has achieved, one cell at a
+    time, exactly what ``"gating": false`` at profile level would have done, only
+    without saying so anywhere a reader would look.
+    """
+    for probe, metrics in sorted(overrides.items()):
+        if probe not in probes:
+            raise RatchetError(
+                f"probe_overrides names {probe!r}, which is not in this artifact "
+                f"(probes: {', '.join(sorted(probes))}). An exclusion that matches nothing "
+                "must be deleted, not left behind to outlive its reason."
+            )
+        for metric in sorted(metrics):
+            if metric not in probes[probe].get("metrics", {}):
+                raise RatchetError(f"probe_overrides.{probe}.{metric} is not a recorded metric")
+
+    for profile, entries in sorted(profiles.items()):
+        for metric, tolerance in sorted(entries.items()):
+            if not tolerance.gating:
+                continue
+            if not any(
+                resolve_tolerance(entries, overrides, probe, metric).gating for probe in probes
+            ):
+                raise RatchetError(
+                    f"{profile}: {metric} is marked gating but every probe overrides it to "
+                    "non-gating, so it can never fail. Say that once at profile level, with "
+                    "the reason, instead of assembling it out of per-probe exclusions."
+                )
+
+
 def validate_artifact(artifact: Mapping[str, Any]) -> None:
     if artifact.get("schema_version") != SCHEMA_VERSION:
         raise RatchetError(f"unsupported schema_version {artifact.get('schema_version')!r}")
@@ -659,7 +868,10 @@ def validate_artifact(artifact: Mapping[str, Any]) -> None:
     expected = artifact.get("run_config", {}).get("probes")
     if not isinstance(expected, list) or sorted(expected) != sorted(probes):
         raise RatchetError("artifact probe set does not match its run_config")
-    tolerances_from_json(artifact.get("tolerances", {}))
+    tolerance_payload = artifact.get("tolerances", {})
+    profiles = tolerances_from_json(tolerance_payload)
+    overrides = probe_overrides_from_json(tolerance_payload)
+    _validate_probe_overrides(profiles, overrides, probes)
     for name, entry in probes.items():
         metrics = entry.get("metrics")
         if not isinstance(metrics, Mapping):
@@ -684,6 +896,23 @@ def validate_artifact(artifact: Mapping[str, Any]) -> None:
             )
         if metrics["minor_cycles"]["median"] < 1:
             raise RatchetError(f"{name}: baseline pinned a probe that ran no minor collection")
+        # The bit-identity rule, enforced at PINNING time rather than only in
+        # the unit tests. It used to live only in tests/test_gc_ratchet.py, so
+        # #7446 was able to write an artifact whose 12_large_live_set retention
+        # spread was 6,768 bytes; the test then failed in the CI step that runs
+        # *before* the measurement step, and the ratchet measured nothing at all
+        # for two days (#7554). Refusing to assemble such an artifact turns that
+        # into a loud failure on the maintainer's machine, at the moment the
+        # judgement is being made, instead of a silent one in CI afterwards.
+        for metric in DETERMINISTIC_METRICS:
+            spread = metrics[metric]["spread"]
+            if spread and gated_anywhere(profiles, overrides, name, metric):
+                raise RatchetError(
+                    f"{name}: {metric} spread {spread:g} when pinned, but its band is "
+                    "justified by bit-identity, not by a noise allowance. Either re-pin on a "
+                    "quiet host, or take this one cell out of the gating family with a "
+                    "probe_overrides entry that records the evidence."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -729,6 +958,7 @@ def evaluate(
     failures: list[str] = []
     rows: list[Row] = []
     tolerances = tolerances_from_json(baseline["tolerances"])[profile]
+    overrides = probe_overrides_from_json(baseline["tolerances"])
 
     if baseline["platform"] != current.get("platform"):
         message = (
@@ -777,7 +1007,7 @@ def evaluate(
             failures.append(f"{name}: correctness was not verified against the Node oracle ({reason})")
 
         for metric in ALL_METRICS:
-            tolerance = tolerances[metric]
+            tolerance = resolve_tolerance(tolerances, overrides, name, metric)
             base_median = float(base_entry["metrics"][metric]["median"])
             cur_median = float(cur_entry["metrics"][metric]["median"])
             delta = cur_median - base_median
@@ -845,6 +1075,20 @@ def render(rows: Iterable[Row], baseline: Mapping[str, Any], profile: str) -> st
             f"| `{row.probe}` | {row.metric} | {row.baseline:,.0f} | {row.current:,.0f} | "
             f"{delta} | {row.allowance:,.0f} | {'yes' if row.gating else 'no'} | {row.status} |"
         )
+    # Print the exclusions with their reasons on every run. A reader who sees a
+    # "no" in the Gating column must be able to find out why it is a no without
+    # opening another file, or the exclusion is effectively invisible.
+    overrides = probe_overrides_from_json(baseline.get("tolerances", {}))
+    if overrides:
+        lines += ["", "### Cells excluded from the gating family by probe override", ""]
+        for probe in sorted(overrides):
+            for metric in sorted(overrides[probe]):
+                override = overrides[probe][metric]
+                lines.append(
+                    f"- `{probe}`.{metric} — {override.rationale} "
+                    f"(observed spread {override.observed_spread:,.0f} over "
+                    f"{override.observed_runs} runs, {override.measured_on}; {override.issue})"
+                )
     return "\n".join(lines) + "\n"
 
 
