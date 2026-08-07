@@ -80,6 +80,50 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// `String.prototype` methods whose lowering in `lower_string_method.rs`
+/// produces a **real f64** on every input — either `sitofp` of an `i32`
+/// helper result, or a helper documented to return a plain double.
+///
+/// Deliberately excluded, and why each one would be wrong here:
+/// * `codePointAt` — returns `undefined` (a NaN-BOX tag, not a number) for an
+///   out-of-range index; `js_string_code_point_at` is documented as
+///   "NaN-boxed number **or undefined**".
+/// * `at` / `charAt` — string results.
+/// * `startsWith` / `endsWith` / `includes` — booleans (NaN-boxed tags).
+///
+/// `charCodeAt` IS admitted: its out-of-range result is `f64::NAN`
+/// (`0x7FF8_0000_0000_0000`), a hardware quiet NaN outside the NaN-box tag
+/// band `0x7FF9..=0x7FFF`, so it is a genuine Number in exactly the sense
+/// `is_numeric_expr` promises.
+fn string_method_returns_number(name: &str) -> bool {
+    matches!(
+        name,
+        "charCodeAt" | "indexOf" | "lastIndexOf" | "search" | "localeCompare"
+    )
+}
+
+/// True when `<object>.<property>(…)` is one of the Number-returning
+/// `String.prototype` methods AND the receiver takes codegen's proven-string
+/// lowering path.
+///
+/// The receiver test mirrors `lower_call/property_get.rs`'s static-String
+/// dispatch condition exactly (`is_string_expr && !is_array_only_method_name
+/// && is_known_string_method_name`), so the predicate can only answer `true`
+/// for a call that really is lowered by `lower_string_method` — the
+/// Any-typed-receiver fallback, which routes to `js_native_call_method` and
+/// can return `undefined` for a non-string runtime value, is not claimed.
+///
+/// #7592: without this, `h ^ s.charCodeAt(i)` fails the "both operands are
+/// statically primitive" test in `expr/binary.rs` and every iteration of an
+/// FNV-style hash loop pays a `js_dynamic_bitxor` FFI call — 31% of the leaf
+/// profile of `json_pipeline`'s hash phase, for an integer xor.
+fn string_method_call_returns_number(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
+    string_method_returns_number(property)
+        && crate::type_analysis::is_string_expr(ctx, object)
+        && !crate::lower_call::property_get::is_array_only_method_name(property)
+        && crate::lower_string_method::is_known_string_method_name(property)
+}
+
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_)
@@ -335,6 +379,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 object, property, ..
             } = callee.as_ref()
             {
+                if string_method_call_returns_number(ctx, object, property) {
+                    return true;
+                }
                 if is_fixed_width_buffer_numeric_read(property)
                     && receiver_class_name(ctx, object)
                         .as_deref()

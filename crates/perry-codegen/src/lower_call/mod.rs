@@ -56,7 +56,11 @@ mod new_ctor_args;
 mod new_helpers;
 mod omitted_native_params;
 mod options;
-mod property_get;
+/// `pub(crate)` so `type_analysis` can reuse the exact receiver/method
+/// predicates that decide whether a `PropertyGet` call takes the static
+/// String lowering — a static type claim about such a call must be gated on
+/// the same condition that routes it (#7592).
+pub(crate) mod property_get;
 mod scalar_method;
 /// #7510: which of the two typed-shape layout entry points a `new` site emits,
 /// and where. Split out of `new.rs` to keep it under the 2000-line cap.
