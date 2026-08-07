@@ -280,6 +280,18 @@ pub(crate) fn materialize_dispatch_key(key: PerryStringRef) -> *const StringHead
     }
 }
 
+/// Intern a short ASCII literal into the current thread's intern table.
+///
+/// Allocates only on the first call per thread per content; afterwards it is a
+/// hash probe returning the canonical pointer, which the intern table's root
+/// scanner already keeps marked and rewritten. Used for runtime-owned constant
+/// property names (`"value"` / `"done"` — see [`crate::iter_result`]) so they
+/// are pointer-identical to the same literals elsewhere in the program.
+#[inline]
+pub(crate) fn intern_ascii_literal(bytes: &[u8]) -> *const StringHeader {
+    intern::intern_dispatch_bytes(0, bytes.as_ptr(), bytes.len(), 0, false)
+}
+
 /// Header for heap-allocated strings
 ///
 /// `utf16_len` is at offset 0 so codegen can inline `.length` as a single i32 load.

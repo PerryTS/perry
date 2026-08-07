@@ -82,6 +82,7 @@ pub mod frame;
 pub mod fs;
 pub mod gc;
 pub mod intl;
+pub mod iter_result;
 pub mod iterator_helpers;
 pub mod macos_bundle;
 pub mod map;

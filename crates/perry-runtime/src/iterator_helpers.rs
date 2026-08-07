@@ -27,6 +27,12 @@
 //! to the Map/Set iterator ones.
 
 use crate::closure::{is_closure_ptr, js_closure_call1, js_closure_call2, ClosureHeader};
+// #7564: `make_iter_result` used to be a local five-allocation copy whose
+// intermediates were all bare Rust locals. It was the copy that faulted under
+// `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1` — `make_iter_result + 188`, a
+// retired from-space object — and it now comes from the one rooted,
+// shared-shape constructor in `crate::iter_result`.
+use crate::iter_result::make_iter_result;
 use crate::object::{
     js_object_alloc, js_object_get_field, js_object_get_field_by_name, js_object_set_field,
     ObjectHeader,
@@ -60,43 +66,38 @@ pub fn is_iterator_helper_addr(addr: usize) -> bool {
     }
 }
 
-/// Build the `{ value, done }` iterator-result object. Mirrors
-/// `collection_iter_object.rs::make_iter_result`.
-unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-    let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::object::js_object_set_keys(obj, keys);
-    js_object_set_field(obj, 0, value);
-    js_object_set_field(
-        obj,
-        1,
-        if done {
-            JSValue::from_bits(TAG_TRUE)
-        } else {
-            JSValue::from_bits(crate::value::TAG_FALSE)
-        },
-    );
-    js_nanbox_pointer(obj as i64)
-}
-
 /// Drive one `.next()` step on ANY iterator object. Returns `(value, done)`.
 /// Mirrors the dual dispatch in `array/iterator.rs::js_iterator_to_array`:
 /// prefer a stored `next` closure FIELD (generators / bare `{next}` objects),
 /// else fall back to class-id method dispatch (array / Map / Set / helper
 /// iterators).
+///
+/// #7564: the READ side of the protocol had the same defect as the WRITE side.
+/// It allocated the three constant key strings `"next"` / `"done"` / `"value"`
+/// on EVERY step, and held `iter_obj`, `result_obj` and the earlier keys in
+/// bare Rust locals across those allocations — plus, in the middle, a call
+/// into the user's own `next`, which can run arbitrary JS and collect
+/// anything. The keys are now interned (allocation-free after the first call
+/// per thread) and every pointer is re-read from a handle after each call that
+/// can collect, so no pre-collection address is nameable.
 unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
-    let iter_ptr = js_nanbox_get_pointer(iter_f64);
-    if iter_ptr == 0 {
+    if js_nanbox_get_pointer(iter_f64) == 0 {
         return (f64::from_bits(TAG_UNDEFINED), true);
     }
-    let iter_obj = iter_ptr as *const ObjectHeader;
 
-    let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
-    let next_val = js_object_get_field_by_name(iter_obj, next_key);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(iter_f64);
+
+    // `intern_ascii_literal` allocates on a first-call-per-thread miss, so the
+    // receiver comes back out of its handle ACROSS that call — the pre-call
+    // address is never bound. The key itself is the call's own return value,
+    // so it is current by construction.
+    let (next_key, iter_now) =
+        iter_h.across_nanbox(|| crate::string::intern_ascii_literal(b"next"));
+    let next_val = js_object_get_field_by_name(
+        js_nanbox_get_pointer(iter_now) as *const ObjectHeader,
+        next_key,
+    );
     let next_ptr = if next_val.is_undefined() {
         std::ptr::null::<ClosureHeader>()
     } else {
@@ -104,11 +105,14 @@ unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
     };
     let use_field = !next_ptr.is_null() && is_closure_ptr(next_ptr as usize);
 
+    // The user's `next` runs here and can collect anything. `next_ptr` is used
+    // immediately — nothing between its read and the call allocates — and the
+    // receiver for the fallback comes from its handle.
     let result_f64 = if use_field {
         js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED))
     } else {
         crate::object::js_native_call_method(
-            iter_f64,
+            iter_h.get_nanbox_f64(),
             b"next".as_ptr() as *const i8,
             4,
             std::ptr::null(),
@@ -116,16 +120,26 @@ unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
         )
     };
 
-    let result_ptr = js_nanbox_get_pointer(result_f64);
-    if result_ptr == 0 {
+    if js_nanbox_get_pointer(result_f64) == 0 {
         return (f64::from_bits(TAG_UNDEFINED), true);
     }
-    let result_obj = result_ptr as *const ObjectHeader;
-    let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
-    let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_val = js_object_get_field_by_name(result_obj, done_key);
+    // Both reads below re-take the result's address across their own intern,
+    // and `js_object_get_field_by_name` (getters, shape work) can collect
+    // between them — so the second read does not reuse the first's address.
+    let result_h = scope.root_nanbox_f64(result_f64);
+    let (done_key, result_now) =
+        result_h.across_nanbox(|| crate::string::intern_ascii_literal(b"done"));
+    let done_val = js_object_get_field_by_name(
+        js_nanbox_get_pointer(result_now) as *const ObjectHeader,
+        done_key,
+    );
     let done = crate::value::js_is_truthy(f64::from_bits(done_val.bits())) != 0;
-    let val = js_object_get_field_by_name(result_obj, value_key);
+    let (value_key, result_now) =
+        result_h.across_nanbox(|| crate::string::intern_ascii_literal(b"value"));
+    let val = js_object_get_field_by_name(
+        js_nanbox_get_pointer(result_now) as *const ObjectHeader,
+        value_key,
+    );
     (f64::from_bits(val.bits()), done)
 }
 

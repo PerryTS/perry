@@ -4,6 +4,7 @@ use std::cell::Cell;
 mod callback_scanners;
 mod hook_dispatch_handles;
 mod interned_string_caches;
+mod iter_result_keys;
 mod prototype_addr_cache;
 mod side_table_scanners;
 mod string_slice;

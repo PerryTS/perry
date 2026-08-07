@@ -648,6 +648,14 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::dgram_reactor::scan_roots_mut);
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
+    // #7564: the per-thread `{ value, done }` / `{ done, value }` keys arrays
+    // shared by every iterator result the runtime builds. Nothing else in the
+    // heap references them — the result objects that use them are short-lived
+    // while the cache outlives them — so without this scanner they would be
+    // swept and the next `.next()` would install a freed keys array. It also
+    // REWRITES: an evacuating collection moves them like any other array, and
+    // the thread-local slot is the only place the new address can be recorded.
+    gc_register_mutable_root_scanner(crate::iter_result::scan_iter_result_keys_roots_mut);
     gc_register_mutable_root_scanner(small_int_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
     gc_register_mutable_root_scanner(crate::builtins::scan_boxed_primitive_payload_roots_mut);
