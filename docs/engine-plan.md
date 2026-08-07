@@ -64,7 +64,7 @@ and feedback bookkeeping and 7.7% is the allocation itself**:
 | group | share | ticket |
 |---|--:|---|
 | `gc::layout` side tables (`layout_forget_*` 14.5%, `layout_note_slot` 7.9%, `js_gc_init_typed_shape_layout` 7.7%, …) | **33.6%** | **#7510** (construction/death half of #5094) |
-| `_tlv_get_addr` | 17.0% | #7469 structural half (partly the same thread-locals as #7510) |
+| `_tlv_get_addr` | 17.0% → 27.0% → **1.1%** | closed by **#7565** (it grew as a *share* while everything round it shrank) |
 | write barriers | 16.1% | **#7511** — *correctness-first: a missed barrier is a use-after-free, not a slowdown* |
 | typed-feedback guards | 9.2% | repsel 3b |
 | array helpers | 6.2% | partly closed by #7501 |
@@ -158,11 +158,21 @@ already be 2.2x better. Tracked in **#7478**.
    them — they close real use-after-frees.
 2. **#7478 — the JSON tape's scan path**, where our optimized build is 2.2x
    slower than our unoptimized one. The 1350 ms idiomatic row is the floor.
-3. **`_tlv_get_addr` — thread-local addressing, now 30.5% of `churn_alloc`**
-   and the largest single line in the profile. This is #7469's structural half
-   (a context pointer, or inlined bump-allocation in generated code); #7474's
-   hot-TLS cache took it from 34% to ~14–17%, and it has climbed back as a
-   *share* because everything around it shrank, not because it regressed.
+3. ~~**`_tlv_get_addr` — thread-local addressing**~~ — **measured out (#7565).**
+   Re-measuring first is what decided the design: the 27.0% was real, but the
+   ticket's "41 distinct call-graph sites, this is diffuse" was not — **seven
+   functions carried 98% of it and every one resolved `tls_hot::HOT`**, two of
+   them resolving nothing else. So the lever was the accessor, not the call
+   graph. Publishing the address cache into a pthread TSD slot and reading it
+   inline off `TPIDRRO_EL0` (how `pthread_getspecific` itself works; what
+   mimalloc does here) took `_tlv_get_addr` to **1.1%** and bought
+   `churn_alloc` **1.167x**, `churn` **1.175x**, `push_cls` **1.144x** on the
+   pinned host, without touching a line of generated code — the ticket's
+   "thread a context pointer through generated code" would have crossed every
+   FFI boundary against 2994 `.with()` sites. What remains is
+   `RuntimeHandleScope`, not the allocation path, so **the ceiling on further
+   thread-local work here is ~1%**. #7469's other workstreams (codegen emitting
+   the bump allocation inline; per-object footprint) are untouched.
 
    **#7510 is effectively closed.** All three items were measured out rather
    than argued away: item 1 shipped (#7535, install now 1x per 20M
