@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import copy
 import json
+import stat
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,14 +26,18 @@ from benchmarks.gc_ratchet.gc_ratchet import (
     GC_METRICS,
     MIN_EXCLUSION_RUNS,
     PROFILES,
+    SCAN_MODE_ENV,
     RatchetError,
+    classify,
     distribution,
     evaluate,
     gated_anywhere,
     parse_gc_diag,
     parse_gcmetrics,
+    parse_scan_fallbacks,
     probe_overrides_from_json,
     render,
+    render_classification,
     tolerances_from_json,
     validate_artifact,
 )
@@ -655,6 +662,192 @@ class ProbeOverrideTests(unittest.TestCase):
                 [BASE_VALUES[metric]] * 6 + [BASE_VALUES[metric] * 1.01]
             )
         validate_artifact(_baseline(probes))
+
+
+# ---------------------------------------------------------------------------
+# classify (#7559)
+# ---------------------------------------------------------------------------
+
+#: A stand-in for `perry`. `compile_probe` invokes it as
+#: `<perry> <source-name> -o <binary>`; it writes a Python script that plays a
+#: probe: fixed stdout, `#gcmetric` lines on stderr, and a `heap_used_bytes`
+#: that depends on the conservative-scan knob exactly the way a real probe's
+#: does. That is what makes `classify` testable without a compiler.
+_STUB_PERRY = """#!{python}
+import os, stat, sys
+source = sys.argv[1]
+out = sys.argv[sys.argv.index("-o") + 1]
+body = open(os.path.join(os.path.dirname(os.path.abspath(source)) or ".", source)).read()
+with open(out, "w") as handle:
+    handle.write("#!{python}\\n" + body)
+os.chmod(out, os.stat(out).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+"""
+
+#: The stub probe. `precise` is the retention the collector's roots account
+#: for; the conservative scan adds one whole 1 MiB block on top, which is the
+#: #7559 shape.
+_STUB_PROBE = """
+import os, sys
+precise = {precise}
+excess = 0 if os.environ.get("PERRY_CONSERVATIVE_STACK_SCAN") == "off" else {excess}
+sys.stdout.write("probe:stub\\nchecksum:{checksum}\\n")
+sys.stderr.write("#gcmetric heap_used_bytes=%d\\n" % (precise + excess))
+sys.stderr.write("#gcmetric heap_total_bytes=20971520\\n")
+sys.stderr.write("#gcmetric rss_bytes=30000000\\n")
+if os.environ.get("PERRY_GC_DIAG"):
+    sys.stderr.write("[gc-scan-fallback] site=manual_collect automatic=false count=1\\n")
+"""
+
+
+class ScanFallbackParsingTests(unittest.TestCase):
+    def test_parses_sites_and_keeps_the_highest_running_count(self):
+        stderr = "\n".join(
+            [
+                "[gc-copy-minor] eligible=true fallback=none",
+                "[gc-scan-fallback] site=manual_collect automatic=false count=1",
+                "[gc-scan-fallback] site=manual_collect automatic=false count=2",
+                "[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=1",
+                "not a diag line",
+            ]
+        )
+        self.assertEqual(
+            parse_scan_fallbacks(stderr),
+            {
+                "manual_collect": {"automatic": False, "count": 2},
+                "old_reclaim_alloc_point": {"automatic": True, "count": 1},
+            },
+        )
+
+    def test_a_run_with_no_conservative_scan_reports_no_sites(self):
+        self.assertEqual(parse_scan_fallbacks("[gc-step] pre_in_use=1 post_in_use=1"), {})
+
+
+class ClassifyTests(unittest.TestCase):
+    """`classify` splits a retention reading into real retention and residue.
+
+    The gate compares `heap_used_bytes`, which is read after the probe's own
+    `gc()` — the one site in Perry that *forces* the conservative native-stack
+    scan. #7559 was a +16.44% breach on `05_closure_capture` whose precise
+    retention was byte-identical (5,329,880) at both endpoints: one extra stale
+    stack word, amplified to a whole 1 MiB block because `heap_used_bytes` sums
+    arena block offsets. These tests pin the tool that makes that difference a
+    one-command answer instead of two compiler builds.
+    """
+
+    def _fixture(self, tmp, *, precise=5_329_880, excess=1_048_576, checksum=1, probes=("05_stub",)):
+        root = Path(tmp)
+        perry = root / "stub-perry"
+        perry.write_text(_STUB_PERRY.format(python=sys.executable), encoding="utf-8")
+        perry.chmod(perry.stat().st_mode | stat.S_IEXEC)
+        probes_dir = root / "probes"
+        probes_dir.mkdir()
+        for name in probes:
+            (probes_dir / f"{name}.ts").write_text(
+                _STUB_PROBE.format(precise=precise, excess=excess, checksum=checksum),
+                encoding="utf-8",
+            )
+        return perry, probes_dir
+
+    def test_reports_the_false_root_excess_and_the_scan_site(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp)
+            payload = classify(perry=perry, probes_dir=probes_dir, repeats=3, warmup=0)
+        (row,) = payload["probes"]
+        self.assertEqual(row["heap_used_bytes"], 5_329_880 + 1_048_576)
+        self.assertEqual(row["heap_used_precise_bytes"], 5_329_880)
+        self.assertEqual(row["false_root_excess_bytes"], 1_048_576)
+        self.assertEqual(row["scan_fallback_sites"]["manual_collect"]["automatic"], False)
+        self.assertEqual(row["automatic_scan_sites"], [])
+
+    def test_a_probe_with_no_residue_reports_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp, excess=0)
+            payload = classify(perry=perry, probes_dir=probes_dir, repeats=3, warmup=0)
+        self.assertEqual(payload["probes"][0]["false_root_excess_bytes"], 0)
+        self.assertEqual(payload["probes"][0]["false_root_excess_pct"], 0)
+
+    def test_a_non_deterministic_precise_reading_is_an_error(self):
+        # The precise number is the one this tool asks the reader to believe.
+        # Reporting it as a spread would make "the collector retained the same
+        # bytes" a claim nobody checked.
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp)
+            (probes_dir / "05_stub.ts").write_text(
+                "import os, random, sys\n"
+                'sys.stdout.write("probe:stub\\nchecksum:1\\n")\n'
+                'sys.stderr.write("#gcmetric heap_used_bytes=%d\\n" % (5000000 + random.randrange(1, 99)))\n'
+                'sys.stderr.write("#gcmetric heap_total_bytes=20971520\\n")\n'
+                'sys.stderr.write("#gcmetric rss_bytes=30000000\\n")\n',
+                encoding="utf-8",
+            )
+            with self.assertRaises(RatchetError) as caught:
+                classify(perry=perry, probes_dir=probes_dir, repeats=5, warmup=0)
+        self.assertIn("not bit-identical", str(caught.exception))
+
+    def test_a_probe_whose_output_depends_on_the_scan_is_an_error(self):
+        # If disabling the scan changes what the probe computes, the scan was
+        # load-bearing for its correctness and its precise retention is not
+        # evidence about the collector. That must not be quietly tabulated.
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp)
+            (probes_dir / "05_stub.ts").write_text(
+                "import os, sys\n"
+                'off = os.environ.get("PERRY_CONSERVATIVE_STACK_SCAN") == "off"\n'
+                'sys.stdout.write("probe:stub\\nchecksum:%d\\n" % (0 if off else 1))\n'
+                'sys.stderr.write("#gcmetric heap_used_bytes=5000000\\n")\n'
+                'sys.stderr.write("#gcmetric heap_total_bytes=20971520\\n")\n'
+                'sys.stderr.write("#gcmetric rss_bytes=30000000\\n")\n',
+                encoding="utf-8",
+            )
+            with self.assertRaises(RatchetError) as caught:
+                classify(perry=perry, probes_dir=probes_dir, repeats=2, warmup=0)
+        self.assertIn("load-bearing", str(caught.exception))
+
+    def test_the_conservative_reading_may_vary_and_its_spread_is_reported(self):
+        # 12_large_live_set's conservative reading is genuinely unstable — that
+        # spread is why #7554 had to stop gating the cell. Raising on it would
+        # delete the evidence instead of reporting it.
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp)
+            (probes_dir / "05_stub.ts").write_text(
+                "import os, sys\n"
+                'off = os.environ.get("PERRY_CONSERVATIVE_STACK_SCAN") == "off"\n'
+                "state = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'n')\n"
+                "n = 0\n"
+                "if not off:\n"
+                "    try:\n"
+                "        n = int(open(state).read())\n"
+                "    except Exception:\n"
+                "        n = 0\n"
+                "    open(state, 'w').write(str(n + 1))\n"
+                'sys.stdout.write("probe:stub\\nchecksum:1\\n")\n'
+                'sys.stderr.write("#gcmetric heap_used_bytes=%d\\n" % (5000000 + n * 1000))\n'
+                'sys.stderr.write("#gcmetric heap_total_bytes=20971520\\n")\n'
+                'sys.stderr.write("#gcmetric rss_bytes=30000000\\n")\n',
+                encoding="utf-8",
+            )
+            payload = classify(perry=perry, probes_dir=probes_dir, repeats=3, warmup=0)
+        row = payload["probes"][0]
+        self.assertEqual(row["heap_used_spread_bytes"], 2000)
+        self.assertEqual(row["heap_used_precise_bytes"], 5_000_000)
+
+    def test_rendered_table_names_the_explicit_gc_site(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp)
+            payload = classify(perry=perry, probes_dir=probes_dir, repeats=2, warmup=0)
+        report = render_classification(payload)
+        self.assertIn("explicit gc()", report)
+        self.assertIn("1,048,576", report)
+
+    def test_scan_mode_env_is_the_documented_knob(self):
+        # The whole tool rests on this being the knob that disables the scan.
+        # A rename in the runtime must break a test, not silently make every
+        # `precise` column equal to its `conservative` one.
+        self.assertEqual(SCAN_MODE_ENV, "PERRY_CONSERVATIVE_STACK_SCAN")
+        runtime = (
+            REPO_ROOT / "crates" / "perry-runtime" / "src" / "gc" / "roots" / "scan_mode.rs"
+        ).read_text(encoding="utf-8")
+        self.assertIn(f'std::env::var("{SCAN_MODE_ENV}")', runtime)
 
 
 if __name__ == "__main__":

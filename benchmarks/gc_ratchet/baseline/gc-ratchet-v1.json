@@ -100,7 +100,17 @@
       "still measured, still compared, and still printed, it just cannot turn the",
       "job red. Every entry carries evidence that is checked, not merely stored --",
       "at least 21 runs (the same number every band above is justified by) and a",
-      "spread that is actually non-zero, so a cell cannot be excluded on a hunch."
+      "spread that is actually non-zero, so a cell cannot be excluded on a hunch.",
+      "",
+      "#7559 -- A heap_used_bytes band is NOT a statement about how much the",
+      "collector retained. The reading is taken after the probe's own gc(), the",
+      "one site that forces the conservative native-stack scan, and js_arena_stats",
+      "sums arena block OFFSETS, so one stale stack word pins a whole 1 MiB block.",
+      "Across the 74 commits from the 2026-08-05 pin to v0.5.1321 this metric moved",
+      "on five probes, always by whole blocks, while the same probes' scan-off",
+      "retention was byte-identical on ten of twelve and fell on the other two.",
+      "Run `gc_ratchet.py classify` before treating a breach here as a collector",
+      "regression; see benchmarks/gc_ratchet/README.md."
     ],
     "shared_ci": {
       "heap_used_bytes": {

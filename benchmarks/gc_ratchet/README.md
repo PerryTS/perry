@@ -314,15 +314,80 @@ python3 benchmarks/gc_ratchet/gc_ratchet.py measure \
 python3 benchmarks/gc_ratchet/gc_ratchet.py check --current /tmp/current.json
 ```
 
+## What `heap_used_bytes` actually contains (#7559)
+
+**A retention row is not evidence of a collector regression until it has been
+classified.** Two properties of the measurement point make this metric move for
+reasons that have nothing to do with what the collector retained:
+
+1. **The measurement forces the conservative native-stack scan.** Every probe
+   reads `process.memoryUsage()` immediately after an explicit `gc()`, and an
+   explicit `gc()` is the one site in Perry that forces that scan
+   (`ManualGcScanGuard`, #4977 — the production default is `Auto`, which skips
+   it). So the reading is taken under a root set nothing else in the language
+   uses, and it includes whatever the native stack happened to look like a heap
+   pointer to at that instant.
+2. **`js_arena_stats` sums block *offsets*, not live bytes.** A block's
+   bump pointer never moves backwards, and a block holding one marked object
+   cannot be reset — so a single stale stack word costs a whole **1 MiB nursery
+   block**, an amplification of roughly 26,000x. (This is the nursery's version
+   of the old-generation accounting bug #7437/#7443 fixed by subtracting swept
+   holes.)
+
+Measured across the 74 commits between the 2026-08-05 pin (`5e236e6e2`) and
+v0.5.1321, both endpoints built identically and both reproducing the pinned
+artifact byte-for-byte on all twelve probes:
+
+| | probes moved | direction |
+|---|---|---|
+| `heap_used_bytes` (what the gate compares) | **5 of 12**, always by whole blocks | 3 down, 2 up |
+| retention with the scan off (what the collector kept) | **2 of 12** | both **down** |
+
+`05_closure_capture`'s `+16.44%` breach is the extreme case: its precise
+retention was **5,329,880 bytes at both endpoints, to the byte**, while its
+false-root residue went from one 1 MiB block to two. `02_survivor_promotion`'s
+`+2.77%` is the same shape one survivor block down (256 KiB), and its precise
+retention *fell* by 1,600 bytes. Neither is a collector regression.
+
+The probe's own live set is not what is being reported either: sweeping
+`05_closure_capture`'s `BATCHES` from 690 to 710 — a workload whose live set is
+approximately zero at the measurement point for every value — moves
+`heap_used_bytes` between 6,501,264 and 7,426,960 in a 1 MiB sawtooth, because
+what is left over is the un-reset tail blocks' bump pointers.
+
+### `classify` — split residue from retention in one command
+
+```bash
+PERRY_RUNTIME_DIR=$PWD/target/release PERRY_NO_AUTO_OPTIMIZE=1 \
+python3 benchmarks/gc_ratchet/gc_ratchet.py classify --perry target/release/perry
+```
+
+It runs every probe twice — once as the gate does, once with
+`PERRY_CONSERVATIVE_STACK_SCAN=off` — and prints the split, plus the census of
+which conservative-scan sites actually fired. It refuses to tabulate a probe
+whose *output* changes when the scan is disabled (the scan was load-bearing for
+that probe's correctness, so its precise number is not evidence), and it refuses
+to report a precise reading that is not bit-identical across repeats. The
+conservative reading is allowed to vary and its spread is reported instead —
+that spread on `12_large_live_set` is why #7554 had to stop gating the cell.
+
+A row whose `excess` moved and whose `precise` did not is a false-root artifact.
+A row whose `precise` moved is a real retention change and the rest of this
+document applies to it.
+
 ## When the gate goes red
 
 1. **Read the table.** The failing rows name the probe and the metric. Retention
    up means something is being kept alive that used to be collected.
    `copied_objects` down means objects that used to be evacuated no longer are.
    `freed_bytes` down means the same allocation sequence reclaimed less.
-2. **Reproduce locally** with the ad-hoc commands above. Retention and GC
+2. **Classify a retention row before believing it** — `gc_ratchet.py classify`,
+   above. This step is not optional: #7559 was a `+16.44%` retention breach with
+   every collector counter at `+0.00%`, and the answer was that nothing was
+   retained that had not been retained before.
+3. **Reproduce locally** with the ad-hoc commands above. Retention and GC
    counters do not need a quiet box — they are load-independent.
-3. **Fix it, or accept it.** If the shift is intentional and reviewed, re-pin:
+4. **Fix it, or accept it.** If the shift is intentional and reviewed, re-pin:
 
    ```bash
    PERRY_BIN=... PERRY_RUNTIME_DIR=... \
@@ -348,7 +413,7 @@ must trigger at least one minor collection or the harness refuses to pin it.
 | Path | Purpose |
 |---|---|
 | `probes/*.ts` | the workloads |
-| `gc_ratchet.py` | measure / assemble / check / validate |
+| `gc_ratchet.py` | measure / classify / assemble / check / validate |
 | `tolerances.json` | every band, with the variance it was derived from |
 | `baseline/gc-ratchet-v1.json` | the pinned artifact |
 | `run_gc_ratchet_baseline.sh` | quiet-host driver (`--check` / `--pin`) |

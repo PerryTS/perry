@@ -28,6 +28,22 @@ Measured on the pinned quiet host, 3 independent sessions x 7 repeats:
     allocation sequence and collector policy, independent of CPU speed, core
     count, and machine load.
 
+    ★ **Deterministic is not the same as semantic (#7559).** An explicit
+    ``gc()`` is the one site in Perry that *forces* the conservative
+    native-stack scan (``ManualGcScanGuard``, #4977; production resolves to
+    ``SkipDisabled``), so this reading is taken under a root set nothing else in
+    the language uses, and it includes whatever the native stack happened to
+    look like a heap pointer to. ``js_arena_stats`` then sums each block's
+    **bump-pointer offset**, and a block cannot be reset while it holds one
+    marked object — so one stale stack word costs a whole 1 MiB nursery block.
+    Measured across the 74 commits between the 2026-08-05 pin and v0.5.1321:
+    the precise (scan-off) retention was byte-identical on 10 of 12 probes and
+    fell on the other two, while this number moved on five, always by whole
+    blocks. ``05_closure_capture``'s +16.44% breach was precisely that: precise
+    retention 5,329,880 at *both* endpoints, false-root residue 1 -> 2 blocks.
+    Run ``gc_ratchet.py classify`` before treating a retention row as a
+    collector regression.
+
 ``gc``  ``minor_cycles``, ``copied_objects``, ``copied_bytes``,
         ``promoted_objects``, ``promoted_bytes``, ``freed_bytes``, ``step_cycles``
     Parsed from ``PERRY_GC_DIAG=1`` output in a separate, untimed pass.
@@ -81,7 +97,14 @@ DEFAULT_TOLERANCES = HERE / "tolerances.json"
 
 GCMETRIC_RE = re.compile(r"^#gcmetric\s+([a-z0-9_]+)=(-?[0-9]+)\s*$")
 COPY_MINOR_RE = re.compile(r"^\[gc-copy-minor\]\s+ran\s+(.*)$")
+SCAN_FALLBACK_RE = re.compile(
+    r"^\[gc-scan-fallback\]\s+site=(\w+)\s+automatic=(true|false)\s+count=(\d+)\s*$"
+)
 GC_STEP_PREFIX = "[gc-step]"
+
+#: Runtime knob that turns the conservative native-stack scan off. See
+#: ``classify`` for why this harness cares.
+SCAN_MODE_ENV = "PERRY_CONSERVATIVE_STACK_SCAN"
 
 RETENTION_METRICS = ("heap_used_bytes", "heap_total_bytes")
 GC_METRICS = (
@@ -302,6 +325,10 @@ def run_once(
         _, status, usage = os.wait4(process.pid, 0)
         wall_ms = (time.monotonic() - started) * 1000.0
         returncode = os.waitstatus_to_exitcode(status)
+        # os.wait4 reaped the child behind Popen's back, so Popen still thinks
+        # it is running and its finalizer emits a ResourceWarning per probe run.
+        # Tell it the outcome instead: this is bookkeeping, not a second wait.
+        process.returncode = returncode
         out_file.seek(0)
         err_file.seek(0)
         stdout, stderr = out_file.read(), err_file.read()
@@ -351,6 +378,27 @@ def parse_gc_diag(stderr: str) -> dict[str, int]:
         elif line.startswith(GC_STEP_PREFIX):
             counters["step_cycles"] += 1
     return {metric: int(counters.get(metric, 0)) for metric in GC_METRICS}
+
+
+def parse_scan_fallbacks(stderr: str) -> dict[str, dict[str, Any]]:
+    """Which conservative native-stack scans a traced run actually performed.
+
+    ``[gc-scan-fallback] site=<name> automatic=<bool> count=<n>`` is printed
+    once per scan, with ``count`` running per site, so the largest ``count`` for
+    a site is how often it fired. ``automatic`` separates the scans a program
+    pays for without asking (allocation-point old-gen reclaim, the nursery-churn
+    slack valve, emergency reclaim) from the ones user code requested by calling
+    ``gc()`` — which is the distinction ``classify`` exists to surface.
+    """
+    sites: dict[str, dict[str, Any]] = {}
+    for line in stderr.splitlines():
+        match = SCAN_FALLBACK_RE.match(line.strip())
+        if not match:
+            continue
+        name, automatic, count = match.group(1), match.group(2) == "true", int(match.group(3))
+        entry = sites.setdefault(name, {"automatic": automatic, "count": 0})
+        entry["count"] = max(entry["count"], count)
+    return sites
 
 
 def distribution(values: Sequence[float]) -> dict[str, Any]:
@@ -531,6 +579,165 @@ def measure(
         },
         "probes": results,
     }
+
+
+# ---------------------------------------------------------------------------
+# Classifying a retention breach (#7559)
+# ---------------------------------------------------------------------------
+
+
+def classify(
+    *, perry: Path, probes_dir: Path, repeats: int = 3, warmup: int = 1
+) -> dict[str, Any]:
+    """Split each probe's retention into real retention and false-root residue.
+
+    WHY THIS EXISTS
+    ---------------
+    ``heap_used_bytes`` is read from ``process.memoryUsage()`` immediately after
+    the probe's own explicit ``gc()``, and an explicit ``gc()`` is the one place
+    in Perry that *forces* the conservative native-stack scan (``#4977``'s
+    ``ManualGcScanGuard``; the production default is ``Auto``, which skips it).
+    So every probe's headline retention number is measured under a root set
+    nothing else in the language uses, and it includes whatever the native stack
+    happened to look like a heap pointer to at that instant.
+
+    That residue is not small and it is not proportional. ``js_arena_stats``
+    sums each arena block's **bump-pointer offset**, and a block cannot be reset
+    while it holds one marked object, so a single stale stack word costs a whole
+    1 MiB nursery block. Measured on ``05_closure_capture`` (#7559): the false
+    residue moved 1 MiB across a 74-commit window in which the same probe's
+    precise retention was byte-identical — 5,329,880 at both endpoints — which
+    is a +16.44% "regression" with every collector counter at +0.00%.
+
+    So: ``conservative`` is what the gate compares, ``precise`` is what the
+    collector actually retained, and ``excess`` is the difference. A retention
+    breach whose ``excess`` moved and whose ``precise`` did not is a false-root
+    artifact, not a collector regression.
+
+    WHAT IT ASSERTS
+    ---------------
+    Turning the scan off must not change what a probe computes. If it does, the
+    scan was load-bearing for that probe's correctness and its precise number is
+    not evidence about anything — so a stdout difference is an error, not a row.
+
+    The *precise* reading must additionally be bit-identical across repeats: it
+    is the number this tool asks the reader to believe, so a run-to-run spread
+    in it is an error rather than a row. The *conservative* reading is allowed
+    to vary and its spread is reported instead — on ``12_large_live_set`` that
+    spread is the whole reason #7554 had to stop gating the cell, and hiding it
+    behind an exception would remove the evidence.
+    """
+    if repeats < 1:
+        raise RatchetError("classify needs at least one repeat per scan mode")
+
+    sources = probe_sources(probes_dir)
+    rows: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="gc-ratchet-classify-") as tmp:
+        out_dir = Path(tmp)
+        for source in sources:
+            name = source.stem
+            binary = compile_probe(perry, source, out_dir)
+            for _ in range(warmup):
+                run_once([str(binary)])
+
+            modes: dict[str, list[dict[str, int]]] = {}
+            stdouts: dict[str, str] = {}
+            for label, env in (("conservative", None), ("precise", {SCAN_MODE_ENV: "off"})):
+                seen: list[dict[str, int]] = []
+                for _ in range(repeats):
+                    run = run_once([str(binary)], extra_env=env)
+                    if run["returncode"] != 0:
+                        raise RatchetError(
+                            f"{name}: probe exited {run['returncode']} with "
+                            f"{SCAN_MODE_ENV}={'off' if env else '<default>'}\n{run['stderr']}"
+                        )
+                    emitted = parse_gcmetrics(run["stderr"])
+                    for metric in RETENTION_METRICS:
+                        if emitted.get(metric, 0) <= 0:
+                            raise RatchetError(f"{name}: probe emitted no {metric} ({label})")
+                    seen.append({metric: emitted[metric] for metric in RETENTION_METRICS})
+                    stdouts.setdefault(label, run["stdout"])
+                modes[label] = seen
+
+            precise_samples = [sample["heap_used_bytes"] for sample in modes["precise"]]
+            if len(set(precise_samples)) != 1:
+                raise RatchetError(
+                    f"{name}: precise retention is not bit-identical across {repeats} runs "
+                    f"({precise_samples}); it is the number this tool asks the reader to "
+                    f"believe, so it may not be reported as a spread"
+                )
+
+            if stdouts["conservative"] != stdouts["precise"]:
+                raise RatchetError(
+                    f"{name}: probe output changes when the conservative stack scan is "
+                    f"disabled, so the scan is load-bearing for this probe and its precise "
+                    f"retention is not evidence about the collector"
+                )
+
+            sites = parse_scan_fallbacks(
+                run_once([str(binary)], extra_env={"PERRY_GC_DIAG": "1"})["stderr"]
+            )
+            conservative_samples = [sample["heap_used_bytes"] for sample in modes["conservative"]]
+            conservative = int(statistics.median(conservative_samples))
+            precise = precise_samples[0]
+            rows.append(
+                {
+                    "probe": name,
+                    "heap_used_bytes": conservative,
+                    "heap_used_samples": conservative_samples,
+                    "heap_used_spread_bytes": max(conservative_samples) - min(conservative_samples),
+                    "heap_used_precise_bytes": precise,
+                    "false_root_excess_bytes": conservative - precise,
+                    "false_root_excess_pct": _clean(
+                        100.0 * (conservative - precise) / conservative if conservative else 0.0
+                    ),
+                    "heap_total_bytes": modes["conservative"][0]["heap_total_bytes"],
+                    "heap_total_precise_bytes": modes["precise"][0]["heap_total_bytes"],
+                    "scan_fallback_sites": sites,
+                    "automatic_scan_sites": sorted(
+                        site for site, entry in sites.items() if entry["automatic"]
+                    ),
+                }
+            )
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "gc-ratchet-classification",
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "platform": platform_key(),
+        "host": host_description(),
+        "run_config": {"repeats": repeats, "warmup": warmup, "scan_mode_env": SCAN_MODE_ENV},
+        "probes": rows,
+    }
+
+
+def render_classification(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "## GC ratchet retention classification",
+        "",
+        "`conservative` is what `heap_used_bytes` gates on: measured after the probe's",
+        f"own `gc()`, which forces the conservative native-stack scan. `precise` is the",
+        f"same reading with `{SCAN_MODE_ENV}=off`, i.e. the retention the",
+        "collector's own roots account for. `excess` is false-root residue, and it is",
+        "quantised to whole arena blocks because `heap_used_bytes` sums block offsets:",
+        "one stale stack word pins a whole 1 MiB nursery block.",
+        "",
+        "| Probe | conservative | spread | precise | excess | excess % | scan sites |",
+        "|-------|-------------:|-------:|--------:|-------:|---------:|------------|",
+    ]
+    for row in payload["probes"]:
+        sites = ", ".join(
+            f"{site}×{entry['count']}{'' if entry['automatic'] else ' (explicit gc())'}"
+            for site, entry in sorted(row["scan_fallback_sites"].items())
+        )
+        lines.append(
+            f"| `{row['probe']}` | {row['heap_used_bytes']:,} | "
+            f"{row['heap_used_spread_bytes']:,} | "
+            f"{row['heap_used_precise_bytes']:,} | {row['false_root_excess_bytes']:,} | "
+            f"{row['false_root_excess_pct']:.2f}% | {sites or 'none'} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1175,6 +1382,23 @@ def cmd_measure(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_classify(args: argparse.Namespace) -> int:
+    perry = Path(args.perry).resolve()
+    if not perry.exists():
+        raise RatchetError(f"perry binary not found at {perry}")
+    payload = classify(
+        perry=perry,
+        probes_dir=Path(args.probes_dir).resolve(),
+        repeats=args.repeats,
+        warmup=args.warmup,
+    )
+    if args.output:
+        _write(Path(args.output), payload)
+        print(f"gc-ratchet: wrote classification to {args.output}")
+    print(render_classification(payload))
+    return 0
+
+
 def cmd_assemble(args: argparse.Namespace) -> int:
     artifact = assemble(
         measurement=_load(Path(args.measurement)),
@@ -1243,6 +1467,17 @@ def build_parser() -> argparse.ArgumentParser:
     measure_cmd.add_argument("--node", default=None)
     measure_cmd.add_argument("--output", required=True)
     measure_cmd.set_defaults(func=cmd_measure)
+
+    classify_cmd = sub.add_parser(
+        "classify",
+        help="split each probe's retention into real retention and false-root residue",
+    )
+    classify_cmd.add_argument("--perry", required=True)
+    classify_cmd.add_argument("--probes-dir", default=str(PROBES_DIR))
+    classify_cmd.add_argument("--repeats", type=int, default=3)
+    classify_cmd.add_argument("--warmup", type=int, default=1)
+    classify_cmd.add_argument("--output", default=None)
+    classify_cmd.set_defaults(func=cmd_classify)
 
     assemble_cmd = sub.add_parser("assemble", help="build the pinned baseline artifact")
     assemble_cmd.add_argument("--measurement", required=True)
