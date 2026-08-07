@@ -217,7 +217,12 @@ pub(crate) fn lower_buffer_index_get_i32(
     Ok(slow)
 }
 
-pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+pub(crate) fn lower(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    // #7590: THIS expression's value is discarded (not merely the statement's).
+    value_discarded: bool,
+) -> Result<String> {
     match expr {
         Expr::BoxedPrimitiveNew {
             kind,
@@ -785,7 +790,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(store) =
                 lower_buffer_store(ctx, array, index, value, BufferAccessSpec::uint8array_set())?
             {
-                if ctx.discard_expr_value {
+                if value_discarded {
                     return Ok(double_literal(0.0));
                 }
                 return Ok(materialize_js_value(
@@ -821,7 +826,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
                     )
                 };
-                if ctx.discard_expr_value {
+                if value_discarded {
                     return Ok(double_literal(0.0));
                 }
                 return Ok(result);
@@ -892,7 +897,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 false,
                 Vec::new(),
             );
-            if ctx.discard_expr_value {
+            if value_discarded {
                 return Ok(double_literal(0.0));
             }
             Ok(materialize_js_value(ctx, slow, reason))
@@ -909,7 +914,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 value,
                 BufferAccessSpec::buffer_index_set(),
             )? {
-                if ctx.discard_expr_value {
+                if value_discarded {
                     return Ok(double_literal(0.0));
                 }
                 return Ok(materialize_js_value(
@@ -982,7 +987,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 false,
                 Vec::new(),
             );
-            if ctx.discard_expr_value {
+            if value_discarded {
                 return Ok(double_literal(0.0));
             }
             Ok(materialize_js_value(ctx, slow, reason))

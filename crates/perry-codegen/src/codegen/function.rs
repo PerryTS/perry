@@ -694,6 +694,7 @@ pub(super) fn compile_function(
         const_number_locals: std::collections::HashMap::new(),
         current_block: 0,
         discard_expr_value: false,
+        discard_this_expr: false,
         func_names,
         strings,
         loop_targets: Vec::new(),

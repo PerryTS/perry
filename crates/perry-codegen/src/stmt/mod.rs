@@ -260,7 +260,12 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         Stmt::Expr(e) => {
             let prev_discard = ctx.discard_expr_value;
             ctx.discard_expr_value = true;
+            // #7590: the non-leaking companion. `lower_expr` takes this at the
+            // top of its dispatch, so only `e` itself sees it — an operand of
+            // `e` (`sink(a.push(10))`) reads `false` and keeps its value.
+            ctx.discard_this_expr = true;
             let result = lower_expr(ctx, e);
+            ctx.discard_this_expr = false;
             ctx.discard_expr_value = prev_discard;
             let _ = result?;
             Ok(())

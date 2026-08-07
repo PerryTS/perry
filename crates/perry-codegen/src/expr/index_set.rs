@@ -683,7 +683,12 @@ fn lower_packed_numeric_loop_index_set(
     Ok(val_double)
 }
 
-pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+pub(crate) fn lower(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    // #7590: THIS expression's value is discarded (not merely the statement's).
+    value_discarded: bool,
+) -> Result<String> {
     match expr {
         Expr::IndexSet {
             object,
@@ -751,7 +756,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
                 if let Some(store) = lower_typed_array_store(ctx, object, index, value)? {
-                    if ctx.discard_expr_value {
+                    if value_discarded {
                         return Ok(double_literal(0.0));
                     }
                     return Ok(materialize_js_value(
@@ -766,7 +771,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(stored) =
                     super::try_lower_proven_view_checked_store(ctx, object, index, value)?
                 {
-                    if ctx.discard_expr_value {
+                    if value_discarded {
                         return Ok(double_literal(0.0));
                     }
                     return Ok(materialize_js_value(
@@ -845,7 +850,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     value,
                     BufferAccessSpec::uint8array_set(),
                 )? {
-                    if ctx.discard_expr_value {
+                    if value_discarded {
                         return Ok(double_literal(0.0));
                     }
                     return Ok(materialize_js_value(

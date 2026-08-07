@@ -1270,6 +1270,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         index: key.clone(),
                         value: value.clone(),
                     },
+                    // #7590: a `PutValue` routed through the index-set fast
+                    // path returns the assigned value to ITS caller, which may
+                    // well consume it. Never the discarded form.
+                    false,
                 );
             }
             if let Some(result) =

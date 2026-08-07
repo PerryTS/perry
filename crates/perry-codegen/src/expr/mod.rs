@@ -229,6 +229,26 @@ pub(crate) struct FnCtx<'a> {
     /// True while lowering an expression statement whose resulting JS value
     /// will be discarded.
     pub discard_expr_value: bool,
+
+    /// #7590: is the expression **currently being dispatched** one whose value
+    /// is discarded — as opposed to [`Self::discard_expr_value`], which says
+    /// only that the enclosing STATEMENT's value is discarded?
+    ///
+    /// The two are not the same, and reading the wrong one is a silent
+    /// wrong-value bug. `discard_expr_value` is set once per `Stmt::Expr` and
+    /// is never cleared as `lower_expr` recurses, so it is still set while
+    /// lowering the operands of `sink(buf[0] = 5);` — where the store's value
+    /// is very much consumed. Four sites read it as if it meant this field and
+    /// returned `0.0`, making a typed-array store used as an expression
+    /// evaluate to `0` instead of the assigned value (ES2024 §13.15.2).
+    ///
+    /// This one is **taken** (`mem::take`) at the top of
+    /// [`dispatch::lower_expr`], so it reaches exactly one expression — the one
+    /// the statement is made of — and every operand lowered beneath it reads
+    /// `false`. Handlers that need it receive it as a parameter rather than
+    /// reading the field, because they consult it *after* lowering their
+    /// operands, by which point the field has been taken again.
+    pub discard_this_expr: bool,
     /// HIR FuncId → LLVM function name. Resolved at the top of
     /// `compile_module` so `FuncRef(id)` calls know what to emit.
     pub func_names: &'a std::collections::HashMap<u32, String>,

@@ -21,6 +21,13 @@ use crate::types::DOUBLE;
 /// here is a dispatch table; each module's `lower(ctx, expr)` contains the
 /// original arm bodies verbatim.
 pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // #7590: TAKE the "this expression's value is discarded" flag before doing
+    // anything else. `lower_stmt` set it for the statement's own expression;
+    // taking it here means every operand lowered below reads `false`, so a
+    // consumed store (`sink(buf[0] = 5);`) is never mistaken for a discarded
+    // one. Handlers that care receive it as an argument, because they consult
+    // it after lowering their operands — by which point the field is gone.
+    let value_discarded = std::mem::take(&mut ctx.discard_this_expr);
     if let Some(lowered) = lower_expr_value(ctx, expr)? {
         if ctx.discard_expr_value {
             return Ok(materialize_js_value_without_record(ctx, lowered));
@@ -52,7 +59,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             super::objects_arrays_lit::lower(ctx, expr)
         }
         Expr::IndexGet { .. } => super::index_get::lower(ctx, expr),
-        Expr::IndexSet { .. } => super::index_set::lower(ctx, expr),
+        Expr::IndexSet { .. } => super::index_set::lower(ctx, expr, value_discarded),
         Expr::PropertySet { .. } => super::property_set::lower(ctx, expr),
         Expr::PropertyGet { .. } => super::property_get::lower(ctx, expr),
         Expr::Conditional { .. } => super::conditional::lower(ctx, expr),
@@ -233,7 +240,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArrayEntries(..)
         | Expr::ArrayKeys(..)
         | Expr::ArrayValues(..)
-        | Expr::ClassRef(..) => super::arrays_finds::lower(ctx, expr),
+        | Expr::ClassRef(..) => super::arrays_finds::lower(ctx, expr, value_discarded),
         Expr::NativeMemoryFillU32 { .. } | Expr::NativeMemoryCopy { .. } => {
             super::native_memory::lower(ctx, expr)
         }
