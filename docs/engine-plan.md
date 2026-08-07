@@ -6,7 +6,7 @@
 every dated status section, incident narrative and superseded sequencing lives
 in [`engine-plan-history.md`](engine-plan-history.md); this file holds only the
 current state and the remaining work so it stays readable across context loads.
-Last synced **2026-08-07** (v0.5.1324). The v0.5.1299 public-baseline sweep is
+Last synced **2026-08-08** (v0.5.1345). The v0.5.1299 public-baseline sweep is
 kept as the baseline measurement event; rows fixed since are annotated in place
 rather than overwritten, because they were measured individually rather than in
 a fresh sweep.
@@ -21,6 +21,49 @@ a fresh sweep.
 ---
 
 ## Status quo
+
+### 2026-08-07/08 in one table — what closed, what opened
+
+Twenty-two merges, v0.5.1324 → v0.5.1345. The construction campaign's measured
+levers are now **all worked or retired**, and the day's dominant discovery —
+`json_pipeline` at 500k records, found by the first published baseline sweep in
+five days — went **97.6× → ~8× bun** in four PRs:
+
+| item | closed by | result |
+|---|---|--:|
+| survivor-promotion handoff livelock | #7594 | 57.2 s → 12.1 s |
+| constant pacing bands (both generations) | #7596 | → 5.8 s; 4 cycles, none futile |
+| `charCodeAt` through the dynamic-bitwise helper | #7601 | fnv1a 11.2× |
+| statement-position `push` length computation | #7600 | 2.77× pure-push |
+| array-push write barrier (parent-side gate) | #7602 | `push_cls` 1.33–1.38× |
+| typed-shape install re-derivation | #7586 | `push_cls` 1.091× |
+| **Map/Set subclass as raw header (SIGBUS)** | #7573 | memory safety |
+| **Array subclass as raw header (SIGSEGV)** | #7603 | memory safety |
+| inherited Array statics on a subclass | #7605 | `MyArr.from` works |
+| iterator-helpers surface dead (class-id collision) | #7583 | whole TC39 surface |
+| second class-id collision (JSX/rawJSON) + scanning gate | #7589 | gate in `lint` |
+| `known_failures.json` suppression → ratchet | #7599 | 37 entries → 10 |
+| public baseline unpublishable (2 independent causes) | #7593 | `check` exits 0 |
+
+**The `declared type as layout proof` bug class now has a named fix pattern**
+(#7573/#7603): brand-check on `GcHeader.obj_type` at the shared runtime
+funnels, redirect subclass receivers onto the spec-generic engine, PLUS guards
+at any codegen tier that never calls into the runtime — #7603 proved the
+runtime funnel alone cannot stop the inline-store tiers. Remaining known member
+of the family: none filed. Adjacent leftovers: `ArraySpeciesCreate` on
+subclasses, static-method GET form, `instanceof` a subclass (#7575).
+
+**Remaining top levers, in order:** the #7592 remainder (~8× bun: two-hop
+promotion copies 268 MB twice — promote-on-first-copy design is on the issue
+with the fixed-point trap named; and `JSON.parse` 742 ms); class-field-store
+barriers (the half #7602 could not reach); #7480 repsel element-shape proofs;
+Layer-1 emitter migration (not started).
+
+**Gate debt still open:** #7554 (gc-ratchet CI has measured nothing since
+2026-08-05 — REPAIR THIS BEFORE the next GC-pacing change, which needs it),
+#7502–#7507 (root-lowering suites partly vacuous), #7300 (flaky codegen tests),
+#7604 (zeal can arm without firing on compute-only benches), #7606 (two macOS
+gc-rooting gap crashes, untriaged), #6847 reopened (zlib link on macOS).
 
 ### GC correctness — the four layers
 
