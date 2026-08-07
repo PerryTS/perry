@@ -8,14 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1344
+**Current Version:** 0.5.1345
 
 
 ## TypeScript Parity Status
 
 Tracked via the gap test suite (`test-files/test_gap_*.ts`). Compared byte-for-byte against `node --experimental-strip-types`. Run via `./scripts/run_gap_tests.sh` (a thin wrapper over `run_parity_tests.sh --filter test_gap_` that builds the compiler itself and gates on no new untriaged failures).
 
-**The oracle is Node `26.5.0`, pinned in `.node-version` at the repo root** — the single source of truth every CI workflow reads via `setup-node`'s `node-version-file`. **Run the gap suite against that exact version locally**, or your results won't match CI. The version is a *correctness input*, not an incidental toolchain detail: when node can't run a test (a feature newer than the pinned node), node exits non-zero, the harness classifies it `node_fail`, and the test is **silently dropped from the gate** rather than going red. CI sat on Node 22 while the suite grew Node 24/26 features, which hid 14 tests — all of Temporal, plus DisposableStack, Float16Array, and `Uint8Array` base64/hex (#6364). Node patch releases also change observable output (error-message text, `v8` heap fields), which is why the pin is exact. Raising it is a deliberate act: measure the failure delta under both oracles first, then triage what it exposes.
+**The oracle is Node `26.5.1`, pinned in `.node-version` at the repo root** (the FILE is authoritative — this prose drifted once, #7599) — the single source of truth every CI workflow reads via `setup-node`'s `node-version-file`. **Run the gap suite against that exact version locally**, or your results won't match CI. The version is a *correctness input*, not an incidental toolchain detail: when node can't run a test (a feature newer than the pinned node), node exits non-zero, the harness classifies it `node_fail`, and the test is **silently dropped from the gate** rather than going red. CI sat on Node 22 while the suite grew Node 24/26 features, which hid 14 tests — all of Temporal, plus DisposableStack, Float16Array, and `Uint8Array` base64/hex (#6364). Node patch releases also change observable output (error-message text, `v8` heap fields), which is why the pin is exact. Raising it is a deliberate act: measure the failure delta under both oracles first, then triage what it exposes.
 
 Two workflows are deliberately exempt and say so inline: `node-core-subset.yml` derives its Node from `test-compat/node-core/pinned-version.txt` (it runs Node's *own* test corpus, which must match its own Node line), and the two release workflows use Node purely as an npm *publishing* toolchain.
 
