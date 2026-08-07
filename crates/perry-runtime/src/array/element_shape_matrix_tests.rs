@@ -90,9 +90,13 @@ fn assert_revoked(arr: *mut ArrayHeader, before: u64, family: &str) {
 /// Assert the array is still homogeneous underneath, so the conservative
 /// revoke self-heals — and that healing mints a **fresh** identity.
 fn assert_reproves(arr: *mut ArrayHeader, retired: u64, family: &str) {
-    let healed = unsafe { ensure_element_shape(arr) }
-        .unwrap_or_else(|| panic!("{family} is a permutation/same-class rewrite; it must re-prove"));
-    assert_eq!(healed.class_id, CLASS_A, "{family} re-proved the wrong class");
+    let healed = unsafe { ensure_element_shape(arr) }.unwrap_or_else(|| {
+        panic!("{family} is a permutation/same-class rewrite; it must re-prove")
+    });
+    assert_eq!(
+        healed.class_id, CLASS_A,
+        "{family} re-proved the wrong class"
+    );
     assert_ne!(
         healed.epoch, retired,
         "{family} re-proved but reused the retired identity — a consumer that pinned it would ride through a break"
@@ -198,26 +202,45 @@ fn matrix_delete_revokes() {
 // having genuinely stopped being homogeneous.
 // ---------------------------------------------------------------------------
 
+/// The three tests below additionally pin **pointer identity**. None of these
+/// operations can reallocate, so the receiver they return must be the array
+/// that was proven — without that assertion, an implementation that returned a
+/// fresh (and therefore trivially unproven) array would satisfy `assert_revoked`
+/// while revoking nothing, which is the vacuous-pass shape this whole file
+/// exists to rule out.
 #[test]
 fn matrix_reverse_revokes_and_reproves() {
     let _serialized = test_serialize();
     let arr = shaped(4);
     let retired = proof(arr).unwrap().epoch;
     let before = element_shape_epoch();
-    let arr = js_array_reverse(arr);
-    assert_revoked(arr, before, "`reverse`");
-    assert_reproves(arr, retired, "`reverse`");
+    let out = js_array_reverse(arr);
+    assert!(
+        std::ptr::eq(out, arr),
+        "`reverse` is in-place; a fresh array would make the verdict vacuous"
+    );
+    assert_revoked(out, before, "`reverse`");
+    assert_reproves(out, retired, "`reverse`");
 }
 
+/// `sort`'s default path is a rank permutation written back through
+/// `RootedArrayElems::set`, so it revokes via the **store** funnel rather than
+/// `rebuild_array_layout` — verified by sabotage: removing the revoke from
+/// `rebuild_array_layout` leaves this test green, removing it from
+/// `layout_note_slot` turns it red. Defence in depth, not redundancy.
 #[test]
 fn matrix_sort_revokes_and_reproves() {
     let _serialized = test_serialize();
     let arr = shaped(4);
     let retired = proof(arr).unwrap().epoch;
     let before = element_shape_epoch();
-    let arr = js_array_sort_default(arr);
-    assert_revoked(arr, before, "`sort`");
-    assert_reproves(arr, retired, "`sort`");
+    let out = js_array_sort_default(arr);
+    assert!(
+        std::ptr::eq(out, arr),
+        "`sort` returns its receiver; a fresh array would make the verdict vacuous"
+    );
+    assert_revoked(out, before, "`sort`");
+    assert_reproves(out, retired, "`sort`");
 }
 
 #[test]
@@ -226,9 +249,13 @@ fn matrix_copy_within_revokes_and_reproves() {
     let arr = shaped(4);
     let retired = proof(arr).unwrap().epoch;
     let before = element_shape_epoch();
-    let arr = js_array_copy_within(arr, 0.0, 2.0, 0, 0.0);
-    assert_revoked(arr, before, "`copyWithin`");
-    assert_reproves(arr, retired, "`copyWithin`");
+    let out = js_array_copy_within(arr, 0.0, 2.0, 0, 0.0);
+    assert!(
+        std::ptr::eq(out, arr),
+        "`copyWithin` is in-place; a fresh array would make the verdict vacuous"
+    );
+    assert_revoked(out, before, "`copyWithin`");
+    assert_reproves(out, retired, "`copyWithin`");
 }
 
 /// `fill` overwrites every slot, so the proof must go — and because the filler
@@ -388,7 +415,9 @@ fn matrix_spread_build_never_inherits_the_sources_proof() {
     let src = shaped(4);
     let src_proof = proof(src).expect("source is proven");
 
-    let clone = crate::array::flat_clone::js_array_clone_for_spread(crate::value::js_nanbox_pointer(src as i64));
+    let clone = crate::array::flat_clone::js_array_clone_for_spread(
+        crate::value::js_nanbox_pointer(src as i64),
+    );
 
     if let Some(cloned) = proof(clone) {
         assert_ne!(
@@ -452,7 +481,10 @@ fn matrix_from_values_builder_establishes_or_heals_but_never_lies() {
     ];
     let built = crate::array::alloc::js_array_from_values(values.as_ptr(), values.len() as u32);
     if let Some(p) = proof(built) {
-        assert_eq!(p.class_id, CLASS_A, "a builder must never prove a wrong class");
+        assert_eq!(
+            p.class_id, CLASS_A,
+            "a builder must never prove a wrong class"
+        );
     }
     assert_eq!(
         unsafe { ensure_element_shape(built) }.map(|p| p.class_id),
