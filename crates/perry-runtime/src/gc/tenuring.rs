@@ -129,10 +129,30 @@ pub(super) fn tenuring_survivals() -> u8 {
 /// minus free-list holes, #7437) rather than raw in-use, so dead-but-swept
 /// old bytes do not inflate Eden.
 pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
-    let influx_driven =
-        gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize);
-    let tenured_proportional = old_gen_reclaimable_pressure_bytes() / TENURED_EDEN_DIVISOR;
-    influx_driven.max(tenured_proportional)
+    scavenge_nursery_cap_from(
+        influx_driven_nursery_cap_bytes(),
+        old_gen_reclaimable_pressure_bytes(),
+    )
+}
+
+/// The influx-driven half of the cap on its own: the configured base times
+/// the debounced `NURSERY_CAP_SCALE`. Named so the composition below reads as
+/// the two-term policy it is.
+fn influx_driven_nursery_cap_bytes() -> usize {
+    gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize)
+}
+
+/// The cap policy as a **pure function of its two inputs**, so it is testable
+/// without arranging a heap state.
+///
+/// Splitting this out is not cosmetic. `old_gen_reclaimable_pressure_bytes()`
+/// reads live arena state, and in a unit-test thread old-gen is ~empty — so
+/// every assertion made against `scavenge_nursery_cap_effective_bytes()`
+/// directly would pass with the proportional term deleted. That is the #7024
+/// shape: a green test whose subject never ran. The two terms are exercised
+/// here explicitly instead.
+pub(super) fn scavenge_nursery_cap_from(influx_driven: usize, tenured_reclaimable: usize) -> usize {
+    influx_driven.max(tenured_reclaimable / TENURED_EDEN_DIVISOR)
 }
 
 /// #7592: divisor for the tenured-proportional nursery cap — Eden may grow to
@@ -457,6 +477,92 @@ mod tests {
                 tenuring_survivals()
             );
         }
+        reset_for_test();
+    }
+
+    // ── #7596's tenured-proportional cap term ───────────────────────────
+    //
+    // #7596 added `max(influx_driven, old_gen_reclaimable / 2)` to
+    // `scavenge_nursery_cap_effective_bytes` with no test of its own. The
+    // sibling `cap_scale_grows_on_heavy_influx_and_shrinks_when_quiet` looks
+    // like coverage but is not: it asserts against the effective cap in a
+    // unit-test thread whose old-gen is ~empty, so the proportional term
+    // contributes 0 and the test stays green with that term deleted. These
+    // two exercise the policy directly.
+
+    #[test]
+    fn nursery_cap_keeps_the_influx_floor_below_the_crossover() {
+        // #7377's guarantee: a program whose tenured live set is small keeps
+        // the configured 16 MB base. If the `.max()` were dropped — leaving
+        // only `tenured / 2` — a small-live-set program would collect on a
+        // near-zero cap, which is the regression #7377 fixed.
+        let base = gc_scavenge_nursery_cap_bytes();
+        assert_eq!(scavenge_nursery_cap_from(base, 0), base);
+        assert_eq!(scavenge_nursery_cap_from(base, 1), base);
+        // Just below the crossover the floor still decides.
+        assert_eq!(
+            scavenge_nursery_cap_from(base, base * TENURED_EDEN_DIVISOR - 1),
+            base
+        );
+        // Exactly at it the two terms coincide.
+        assert_eq!(
+            scavenge_nursery_cap_from(base, base * TENURED_EDEN_DIVISOR),
+            base
+        );
+        // The floor tracks the influx-driven scale, not the raw base: at the
+        // ×4 ceiling a 3×base tenured set is still below the crossover.
+        assert_eq!(scavenge_nursery_cap_from(base * 4, base * 3), base * 4);
+    }
+
+    #[test]
+    fn nursery_cap_becomes_tenured_proportional_above_the_crossover() {
+        // The #7592 shape: `json_pipeline` at 500k promotes ~400 MB. With a
+        // constant cap the young collection count is linear in bytes
+        // allocated and each collection is O(live) — quadratic total. Above
+        // the crossover the cap must BE `tenured / 2`, so `old_{n+1} ≈
+        // old_n × 1.5` and the count is logarithmic instead.
+        //
+        // If the proportional term were deleted, every assertion here would
+        // read `base` and fail.
+        let base = gc_scavenge_nursery_cap_bytes();
+        let tenured = base * 50;
+        assert_eq!(
+            scavenge_nursery_cap_from(base, tenured),
+            tenured / TENURED_EDEN_DIVISOR
+        );
+        // Strictly above the floor, and exactly the divisor — not merely
+        // "bigger than base", which a wrong divisor would also satisfy.
+        assert!(scavenge_nursery_cap_from(base, tenured) > base);
+        assert_eq!(
+            scavenge_nursery_cap_from(base, 400 * 1024 * 1024),
+            200 * 1024 * 1024
+        );
+        // A larger influx-driven term still wins when it is the bigger of
+        // the two: the policy is a max, not a takeover.
+        assert_eq!(
+            scavenge_nursery_cap_from(tenured, tenured),
+            tenured,
+            "the proportional term must never LOWER the cap"
+        );
+    }
+
+    #[test]
+    fn effective_nursery_cap_is_the_two_term_policy() {
+        // Wiring pin: the effective accessor must be the composition, so a
+        // future edit that inlines one term and drops the other cannot pass
+        // the two policy tests above while shipping a different cap.
+        //
+        // Honest about its limits: on a quiescent test thread old-gen is
+        // ~empty, so this cannot distinguish the two terms by value — it only
+        // proves the accessor and the policy agree on the live inputs, and
+        // that the #7377 floor survives whatever old-gen happens to be.
+        reset_for_test();
+        let expected = scavenge_nursery_cap_from(
+            influx_driven_nursery_cap_bytes(),
+            old_gen_reclaimable_pressure_bytes(),
+        );
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), expected);
+        assert!(scavenge_nursery_cap_effective_bytes() >= gc_scavenge_nursery_cap_bytes());
         reset_for_test();
     }
 }
