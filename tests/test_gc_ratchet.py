@@ -32,6 +32,8 @@ from benchmarks.gc_ratchet.gc_ratchet import (
     distribution,
     evaluate,
     gated_anywhere,
+    inspect_artifact,
+    main,
     parse_gc_diag,
     parse_gcmetrics,
     parse_scan_fallbacks,
@@ -848,6 +850,165 @@ class ClassifyTests(unittest.TestCase):
             REPO_ROOT / "crates" / "perry-runtime" / "src" / "gc" / "roots" / "scan_mode.rs"
         ).read_text(encoding="utf-8")
         self.assertIn(f'std::env::var("{SCAN_MODE_ENV}")', runtime)
+
+
+class FailOpenPerCellTests(unittest.TestCase):
+    """One unfit cell must cost one cell, not the whole gate's coverage (#7554).
+
+    The failure this class exists to prevent already happened, and it is the
+    most expensive kind: not a gate that passed when it should have failed, but
+    a gate that *measured nothing at all* while looking busy. One cell of the
+    pinned artifact — ``12_large_live_set.heap_used_bytes``, spread 6,768 bytes —
+    failed the artifact-validation step, that step runs before the measurement
+    step, and so for three days none of the twelve probes executed on any
+    branch. Two GC pacing changes (#7594, #7596) merged inside that window and
+    each had to hand-run a both-arms A/B in place of the gate.
+
+    So the assertions here are about **blast radius**, and the load-bearing one
+    is ``test_an_unfit_cell_does_not_hide_a_regression_elsewhere``: it plants a
+    real, gating regression on a *different* probe in the same run and requires
+    that it still be named. Under the old behaviour that regression was
+    invisible, because nothing ran.
+    """
+
+    def _unfit_cell_baseline(self):
+        """Two probes; ``01_probe``'s retention cell carries the #7554 defect."""
+        probes = _pair()
+        base = BASE_VALUES["heap_used_bytes"]
+        probes["01_probe"]["metrics"]["heap_used_bytes"] = distribution([base] * 6 + [base + 6768])
+        return _baseline(probes)
+
+    def test_an_unfit_cell_is_demoted_rather_than_aborting_the_run(self):
+        baseline = self._unfit_cell_baseline()
+        rows, failures = evaluate(baseline, _measurement(_pair()), profile="shared_ci")
+        # Every cell of both probes was still evaluated.
+        self.assertEqual(len(rows), 2 * len(ALL_METRICS))
+        row = next(r for r in rows if r.probe == "01_probe" and r.metric == "heap_used_bytes")
+        self.assertFalse(row.gating, "an unfit cell must not stay in the gating family")
+        self.assertIn("unfit", row.status)
+        # Demoted, but NOT waved through: the defect is still a hard failure.
+        self.assertTrue(
+            any("UNFIT PINNED CELL" in failure for failure in _hard(failures)),
+            f"the defect must still fail the job, got {failures}",
+        )
+
+    def test_an_unfit_cell_does_not_hide_a_regression_elsewhere(self):
+        """The #7554 assertion. A bad cell must not cost the rest of the matrix."""
+        baseline = self._unfit_cell_baseline()
+        # A real, gating regression on the OTHER probe: half the heap reclaimed.
+        current = _measurement(_pair(other_overrides={"freed_bytes": 50_000_000.0}))
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        hard = _hard(failures)
+        self.assertTrue(
+            any("02_other: freed_bytes" in failure for failure in hard),
+            f"the unrelated regression must still be named, got {hard}",
+        )
+        self.assertTrue(any("UNFIT PINNED CELL" in failure for failure in hard))
+
+    def test_an_unfit_probe_demotes_only_that_probe(self):
+        probes = _pair()
+        probes["01_probe"]["correctness"]["status"] = "unchecked"
+        baseline = _baseline(probes)
+        current = _measurement(_pair(other_overrides={"copied_objects": 1.0}))
+        rows, failures = evaluate(baseline, current, profile="shared_ci")
+        for row in rows:
+            if row.probe == "01_probe":
+                self.assertFalse(row.gating, f"{row.metric} on an unfit probe must be demoted")
+        self.assertTrue(
+            any("02_other" in failure for failure in _hard(failures)),
+            "the fit probe must still be able to fail the job",
+        )
+
+    def test_structural_preflight_defers_every_defect_it_waves_through(self):
+        """`--scope structural` may DEFER a defect; it may never DROP one.
+
+        This is the test that keeps the flag from being suppression. For each
+        non-fatal defect shape, preflight passes (so the probes get to run) and
+        ``check`` then fails on that same defect (so the job still goes red).
+        A change that made ``check`` forgiving would break this, not just make
+        the gate quieter.
+        """
+        shapes = {
+            "nondeterministic cell": self._unfit_cell_baseline(),
+        }
+        probes = _pair()
+        probes["01_probe"]["correctness"]["status"] = "unchecked"
+        shapes["unverified probe"] = _baseline(probes)
+        probes = _pair()
+        probes["01_probe"]["metrics"]["minor_cycles"] = distribution([0.0] * 7)
+        shapes["probe that never collected"] = _baseline(probes)
+
+        for label, baseline in shapes.items():
+            with self.subTest(shape=label):
+                defects = inspect_artifact(baseline)
+                self.assertTrue(defects, "the shape must actually be a defect")
+                self.assertFalse(
+                    any(defect.fatal for defect in defects),
+                    "this shape is meant to be non-fatal",
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "artifact.json"
+                    path.write_text(json.dumps(baseline), encoding="utf-8")
+                    # Preflight lets it through, so the probes run...
+                    self.assertEqual(
+                        main(["validate", "--artifact", str(path), "--scope", "structural"]),
+                        0,
+                        "structural preflight must not zero the run's coverage",
+                    )
+                    # ...and the maintainer default still refuses it outright.
+                    self.assertEqual(
+                        main(["validate", "--artifact", str(path), "--scope", "all"]), 1
+                    )
+                # ...but check still turns the job red on the very same defect.
+                _, failures = evaluate(baseline, _measurement(_pair()), profile="shared_ci")
+                self.assertTrue(
+                    any("UNFIT PINNED" in failure for failure in _hard(failures)),
+                    f"{label}: deferred by preflight and then dropped by check",
+                )
+
+    def test_a_tampered_artifact_is_still_fatal_at_structural_scope(self):
+        """Integrity is not fitness. A tampered artifact must still stop everything."""
+        probes = _probe()
+        probes["01_probe"]["metrics"]["heap_used_bytes"]["median"] = 1
+        baseline = _baseline(probes)
+        self.assertTrue(any(defect.fatal for defect in inspect_artifact(baseline)))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.json"
+            path.write_text(json.dumps(baseline), encoding="utf-8")
+            self.assertEqual(
+                main(["validate", "--artifact", str(path), "--scope", "structural"]),
+                2,
+                "a tampered artifact must not be deferred to check",
+            )
+        with self.assertRaises(RatchetError):
+            evaluate(baseline, _measurement(), profile="shared_ci")
+
+    def test_validate_defaults_to_the_strict_scope(self):
+        # The lenient scope must be opt-in. A maintainer running `validate` by
+        # hand gets the full refusal; only the CI preflight asks for less.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.json"
+            path.write_text(json.dumps(self._unfit_cell_baseline()), encoding="utf-8")
+            self.assertEqual(main(["validate", "--artifact", str(path)]), 1)
+
+    def test_pinning_an_unfit_artifact_is_still_refused(self):
+        # `assemble` calls validate_artifact, which is raise-on-any-defect. The
+        # fail-open path is for artifacts already in the tree; it must not make
+        # it possible to freeze a new one that is unfit.
+        with self.assertRaises(RatchetError) as caught:
+            validate_artifact(self._unfit_cell_baseline())
+        self.assertIn("bit-identity", str(caught.exception))
+
+    def test_the_shipped_artifact_has_no_deferred_defects(self):
+        # The fail-open path exists for emergencies. If the artifact in the tree
+        # is relying on it, the ratchet is running degraded and someone should
+        # know.
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [defect.describe() for defect in inspect_artifact(artifact)],
+            [],
+            "the pinned artifact should be fit, not merely tolerated",
+        )
 
 
 if __name__ == "__main__":

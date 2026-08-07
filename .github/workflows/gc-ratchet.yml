@@ -78,10 +78,27 @@ jobs:
 
       # Fast structural failure first: a broken harness or a tampered artifact
       # should not cost a 20-minute compiler build to discover.
+      #
+      # `--scope structural` is load-bearing and is the #7554 repair. This step
+      # runs BEFORE the measurement step, so anything it fails on costs the
+      # entire run's coverage — twelve probes that never execute. That price is
+      # correct for "this artifact is unreadable or tampered with" and badly
+      # wrong for "one of its 144 cells is not bit-identical", which is what
+      # actually happened: one cell's 6,768-byte spread failed this step and the
+      # ratchet measured NOTHING on any branch for three days, while two GC
+      # pacing changes (#7594, #7596) merged with hand-run A/Bs in its place.
+      #
+      # Under `structural` a per-cell defect is printed loudly and deferred; the
+      # `check` step below re-derives the same defect list and fails on it, after
+      # the probes have run and with the full table attached. So this cannot
+      # wave a defect through to a green job — `check` is where the verdict is,
+      # and tests/test_gc_ratchet.py's
+      # `test_structural_preflight_defers_every_defect_it_waves_through` asserts
+      # that coupling one planted defect shape at a time.
       - name: Harness unit tests and artifact validation
         run: |
           python3 -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
-          python3 benchmarks/gc_ratchet/gc_ratchet.py validate
+          python3 benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
 
       - name: Decide whether this change can affect the collector
         id: relevance

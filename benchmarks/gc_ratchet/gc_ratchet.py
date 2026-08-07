@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import dataclasses
 import json
 import math
 import os
@@ -147,6 +148,74 @@ MIN_EXCLUSION_RUNS = 21
 
 class RatchetError(RuntimeError):
     """Raised when measurement, artifact validation, or comparison fails."""
+
+
+@dataclass(frozen=True)
+class ArtifactDefect:
+    """One thing wrong with the pinned artifact, and how much of it that voids.
+
+    WHY THIS IS A TYPE AND NOT AN EXCEPTION
+    ---------------------------------------
+    Artifact defects used to be raised one at a time from ``validate_artifact``,
+    which meant the *first* one aborted everything. That is how #7554 cost three
+    days of coverage: one cell — ``12_large_live_set.heap_used_bytes``, spread
+    6,768 bytes — failed the artifact-validation step, and because that step runs
+    *before* the measurement step, none of the twelve probes executed on any
+    branch for three days. Two GC pacing changes (#7594, #7596) merged in that
+    window and each had to substitute a hand-run both-arms A/B for the gate.
+
+    The defect that caused it was a statement about **one cell**: this metric on
+    this workload is not bit-identical, so the band whose premise is bit-identity
+    cannot rest on it. Nothing about that claim voids the other 143 cells, and
+    nothing about it makes the probes unrunnable. Collapsing the whole gate on it
+    was a blast radius nobody chose.
+
+    So a defect now carries its own scope, and the scope decides the blast
+    radius:
+
+    ``artifact``
+        The artifact cannot be interpreted or has been tampered with: wrong
+        schema, missing metric, a summary that disagrees with its own samples.
+        Comparing anything against it would be meaningless, so this stays fatal
+        and stays in preflight.
+    ``probe``
+        One probe was pinned unfit — no oracle diff, or no collection. Its rows
+        are not evidence; the other probes' still are. The probe is demoted out
+        of the gating family for the run and named as a failure.
+    ``cell``
+        One (probe, metric) cell contradicts the premise of its own band. The
+        cell is demoted; every other cell is still gated.
+
+    A demotion is NOT an excuse. Every non-fatal defect is still reported and
+    still turns ``check`` red — it just does so *after* the probes have run, with
+    the full table attached, so a regression somewhere else in the matrix is
+    named in the same run instead of being hidden behind the abort. Fail-open per
+    cell, fail-closed on the verdict.
+    """
+
+    scope: str
+    message: str
+    probe: str | None = None
+    metric: str | None = None
+
+    #: Scopes in widening order of blast radius.
+    SCOPES = ("cell", "probe", "artifact")
+
+    @property
+    def fatal(self) -> bool:
+        """True when the defect voids the whole artifact rather than part of it."""
+        return self.scope == "artifact"
+
+    @property
+    def where(self) -> str:
+        if self.scope == "cell":
+            return f"{self.probe}.{self.metric}"
+        if self.scope == "probe":
+            return str(self.probe)
+        return "artifact"
+
+    def describe(self) -> str:
+        return f"UNFIT PINNED {self.scope.upper()} `{self.where}` — {self.message}"
 
 
 # ---------------------------------------------------------------------------
@@ -1061,65 +1130,145 @@ def _validate_probe_overrides(
                 )
 
 
-def validate_artifact(artifact: Mapping[str, Any]) -> None:
+def inspect_artifact(artifact: Mapping[str, Any]) -> list[ArtifactDefect]:
+    """Collect *every* defect in the pinned artifact, each tagged with its scope.
+
+    This never stops at the first problem. Two reasons, and the second is the
+    one that cost real coverage.
+
+    A maintainer re-pinning an artifact wants the whole list, not a fixpoint loop
+    where each run reveals one more thing. And, more importantly, an aborting
+    validator cannot distinguish "this artifact is unusable" from "one cell of
+    this artifact is unusable" — so it treated the second as the first, and
+    #7554's single bad cell zeroed the gate's coverage for three days. See
+    ``ArtifactDefect`` for the scope taxonomy and what each scope voids.
+
+    Unreadable *tolerances* are the one thing that still raises rather than
+    returning a defect: without parseable bands there is no gating family to
+    scope a defect against, so there is nothing to be partial about.
+    """
+    defects: list[ArtifactDefect] = []
+
+    def artifact_defect(message: str) -> None:
+        defects.append(ArtifactDefect(scope="artifact", message=message))
+
+    def probe_defect(probe: str, message: str) -> None:
+        defects.append(ArtifactDefect(scope="probe", message=message, probe=probe))
+
+    def cell_defect(probe: str, metric: str, message: str) -> None:
+        defects.append(ArtifactDefect(scope="cell", message=message, probe=probe, metric=metric))
+
+    # Identity and shape. Each of these makes everything below it unreadable, so
+    # they short-circuit — a defect list built from a payload that is not even a
+    # baseline would be noise, not information.
     if artifact.get("schema_version") != SCHEMA_VERSION:
-        raise RatchetError(f"unsupported schema_version {artifact.get('schema_version')!r}")
+        artifact_defect(f"unsupported schema_version {artifact.get('schema_version')!r}")
+        return defects
     if artifact.get("kind") != "gc-ratchet-baseline":
-        raise RatchetError("artifact is not a gc-ratchet baseline")
+        artifact_defect("artifact is not a gc-ratchet baseline")
+        return defects
     for field in ("commit", "generated_at", "platform"):
         if not isinstance(artifact.get(field), str) or not artifact[field].strip():
-            raise RatchetError(f"artifact has an invalid {field}")
+            artifact_defect(f"artifact has an invalid {field}")
     probes = artifact.get("probes")
     if not isinstance(probes, Mapping) or not probes:
-        raise RatchetError("artifact records no probes")
+        artifact_defect("artifact records no probes")
+        return defects
     expected = artifact.get("run_config", {}).get("probes")
     if not isinstance(expected, list) or sorted(expected) != sorted(probes):
-        raise RatchetError("artifact probe set does not match its run_config")
+        artifact_defect("artifact probe set does not match its run_config")
+
     tolerance_payload = artifact.get("tolerances", {})
     profiles = tolerances_from_json(tolerance_payload)
     overrides = probe_overrides_from_json(tolerance_payload)
     _validate_probe_overrides(profiles, overrides, probes)
+
     for name, entry in probes.items():
         metrics = entry.get("metrics")
         if not isinstance(metrics, Mapping):
-            raise RatchetError(f"{name}: no metrics recorded")
+            artifact_defect(f"{name}: no metrics recorded")
+            continue
+
+        # Integrity of the recorded numbers. A missing metric or a summary that
+        # disagrees with its own samples is tampering or corruption, not
+        # unfitness: it stays fatal, because a partially-trusted artifact is not
+        # a thing this gate should ever compare against.
+        unreadable = False
         for metric in ALL_METRICS:
             if metric not in metrics:
-                raise RatchetError(f"{name}: baseline is missing {metric}")
+                artifact_defect(f"{name}: baseline is missing {metric}")
+                unreadable = True
+                continue
             recorded = metrics[metric]
             samples = recorded.get("samples")
             if not isinstance(samples, list) or len(samples) < 2:
-                raise RatchetError(f"{name}: {metric} has too few samples")
+                artifact_defect(f"{name}: {metric} has too few samples")
+                unreadable = True
+                continue
             if recorded != distribution(samples):
-                raise RatchetError(f"{name}: {metric} summary is inconsistent with its samples")
+                artifact_defect(f"{name}: {metric} summary is inconsistent with its samples")
+                unreadable = True
+        if unreadable:
+            continue
+
         # A baseline may only be pinned from an oracle-verified run: "unchecked"
         # is as unacceptable here as "fail", because the whole artifact's
         # authority rests on the probes having been shown to compute the right
-        # thing at the moment they were frozen.
+        # thing at the moment they were frozen. Scoped to the probe: an
+        # unverified probe is not evidence, but it says nothing about the other
+        # eleven.
         if entry.get("correctness", {}).get("status") != "pass":
-            raise RatchetError(
-                f"{name}: baseline was pinned without a passing Node oracle diff "
-                f"(status={entry.get('correctness', {}).get('status')!r})"
+            probe_defect(
+                name,
+                "baseline was pinned without a passing Node oracle diff "
+                f"(status={entry.get('correctness', {}).get('status')!r}), so this probe's "
+                "rows are not evidence about the collector",
             )
         if metrics["minor_cycles"]["median"] < 1:
-            raise RatchetError(f"{name}: baseline pinned a probe that ran no minor collection")
+            probe_defect(
+                name,
+                "baseline pinned a probe that ran no minor collection, so there is no "
+                "evacuating-minor behaviour here to ratchet against",
+            )
+
         # The bit-identity rule, enforced at PINNING time rather than only in
         # the unit tests. It used to live only in tests/test_gc_ratchet.py, so
         # #7446 was able to write an artifact whose 12_large_live_set retention
         # spread was 6,768 bytes; the test then failed in the CI step that runs
         # *before* the measurement step, and the ratchet measured nothing at all
-        # for two days (#7554). Refusing to assemble such an artifact turns that
-        # into a loud failure on the maintainer's machine, at the moment the
-        # judgement is being made, instead of a silent one in CI afterwards.
+        # for three days (#7554). It is scoped to the CELL because that is the
+        # size of the claim: this metric on this workload is not bit-identical.
+        # `assemble` still refuses outright (see `validate_artifact`), so a
+        # maintainer cannot pin one by accident; `check` demotes it and carries
+        # on, so an artifact that is already in the tree cannot zero the gate.
         for metric in DETERMINISTIC_METRICS:
             spread = metrics[metric]["spread"]
             if spread and gated_anywhere(profiles, overrides, name, metric):
-                raise RatchetError(
-                    f"{name}: {metric} spread {spread:g} when pinned, but its band is "
-                    "justified by bit-identity, not by a noise allowance. Either re-pin on a "
-                    "quiet host, or take this one cell out of the gating family with a "
-                    "probe_overrides entry that records the evidence."
+                cell_defect(
+                    name,
+                    metric,
+                    f"spread {spread:g} when pinned, but its band is justified by "
+                    "bit-identity, not by a noise allowance. Either re-pin on a quiet host, "
+                    "or take this one cell out of the gating family with a probe_overrides "
+                    "entry that records the evidence.",
                 )
+
+    return defects
+
+
+def validate_artifact(artifact: Mapping[str, Any]) -> None:
+    """Refuse an artifact with ANY defect. This is the PIN-time contract.
+
+    ``assemble`` calls this, so a maintainer cannot freeze an unfit artifact:
+    the failure lands on their machine at the moment the judgement is being
+    made. ``check`` deliberately does not call it — an artifact already in the
+    tree must not be able to zero the gate's coverage, so there the non-fatal
+    defects demote cells instead of aborting the run. Same defects, different
+    blast radius, because pinning and comparing are different acts.
+    """
+    defects = inspect_artifact(artifact)
+    if defects:
+        raise RatchetError("; ".join(defect.message for defect in defects))
 
 
 # ---------------------------------------------------------------------------
@@ -1155,8 +1304,23 @@ def evaluate(
     drops the workload it was watching is exactly the shape of the ``gc-stress``
     hole this ratchet exists to close — that job was ``continue-on-error: true``
     and a regression sat behind it through three merges.
+
+    An unfit *pinned* cell is handled differently from an unfit measurement, and
+    this is the #7554 repair. It does not abort: it demotes that cell (or probe)
+    out of the gating family for this run and is reported as a failure like any
+    other. So the run still measures all twelve probes, still evaluates the other
+    143 cells, and still names a regression anywhere else in the matrix — while
+    the defect itself keeps the job red. Aborting instead is what made one bad
+    cell cost three days of total coverage.
     """
-    validate_artifact(baseline)
+    defects = inspect_artifact(baseline)
+    fatal = [defect for defect in defects if defect.fatal]
+    if fatal:
+        raise RatchetError("; ".join(defect.message for defect in fatal))
+    unfit = [defect for defect in defects if not defect.fatal]
+    unfit_probes = {defect.probe for defect in unfit if defect.scope == "probe"}
+    unfit_cells = {(defect.probe, defect.metric) for defect in unfit if defect.scope == "cell"}
+
     if profile not in PROFILES:
         raise RatchetError(f"unknown profile {profile!r}; expected one of {PROFILES}")
     if current.get("kind") != "gc-ratchet-measurement":
@@ -1166,6 +1330,11 @@ def evaluate(
     rows: list[Row] = []
     tolerances = tolerances_from_json(baseline["tolerances"])[profile]
     overrides = probe_overrides_from_json(baseline["tolerances"])
+
+    # Reported first, so the reason a cell shows up demoted in the table is
+    # already on screen by the time the reader reaches it.
+    for defect in unfit:
+        failures.append(defect.describe())
 
     if baseline["platform"] != current.get("platform"):
         message = (
@@ -1237,6 +1406,13 @@ def evaluate(
 
         for metric in ALL_METRICS:
             tolerance = resolve_tolerance(tolerances, overrides, name, metric)
+            # A cell the pinned artifact cannot support is demoted rather than
+            # trusted: comparing against a number whose own premise failed would
+            # dress a defect up as a verdict. The defect is already in
+            # `failures`, so demoting it here loses no red.
+            quarantined = name in unfit_probes or (name, metric) in unfit_cells
+            if quarantined:
+                tolerance = dataclasses.replace(tolerance, gating=False)
             base_median = float(base_entry["metrics"][metric]["median"])
             cur_median = float(cur_entry["metrics"][metric]["median"])
             delta = cur_median - base_median
@@ -1250,8 +1426,12 @@ def evaluate(
             else:
                 breach = False
 
-            if breach:
+            if breach and quarantined:
+                status = "UNFIT (pinned cell unusable)"
+            elif breach:
                 status = "REGRESSION" if tolerance.gating else "drift (informational)"
+            elif quarantined:
+                status = "unfit (pinned cell unusable)"
             elif delta < -allowance:
                 status = "improvement"
             else:
@@ -1304,6 +1484,23 @@ def render(rows: Iterable[Row], baseline: Mapping[str, Any], profile: str) -> st
             f"| `{row.probe}` | {row.metric} | {row.baseline:,.0f} | {row.current:,.0f} | "
             f"{delta} | {row.allowance:,.0f} | {'yes' if row.gating else 'no'} | {row.status} |"
         )
+    # An "unfit" row is a *defect in the baseline*, not a property of this run,
+    # and the two are easy to confuse in a 144-row table. Name them separately
+    # with what has to happen to clear them.
+    unfit = [defect for defect in inspect_artifact(baseline) if not defect.fatal]
+    if unfit:
+        lines += [
+            "",
+            "### Pinned cells that could not be gated (baseline defects)",
+            "",
+            "These are demoted for this run so one bad cell cannot zero the gate's",
+            "coverage (#7554). They still fail the job — fix by re-pinning on a quiet",
+            "host, or by recording a `probe_overrides` entry with its evidence.",
+            "",
+        ]
+        for defect in sorted(unfit, key=lambda d: (d.scope, d.where)):
+            lines.append(f"- {defect.describe()}")
+
     # Print the exclusions with their reasons on every run. A reader who sees a
     # "no" in the Gating column must be able to find out why it is a no without
     # opening another file, or the exclusion is effectively invisible.
@@ -1450,8 +1647,48 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    validate_artifact(_load(Path(args.artifact)))
-    print(f"gc-ratchet: {args.artifact} is a valid pinned baseline")
+    """Report artifact defects, at a scope the caller chooses.
+
+    ``--scope all`` (the default, and what a maintainer wants) fails on any
+    defect. ``--scope structural`` fails only on defects that void the whole
+    artifact, and is what the CI preflight uses.
+
+    The distinction is the #7554 repair. Preflight runs BEFORE the measurement
+    step, so anything it fails on costs the entire run's coverage — twelve
+    probes that never execute. That price is right for "this artifact is
+    unreadable or tampered with" and wrong for "one of its 144 cells is not
+    bit-identical". Under ``structural`` the latter is printed loudly and passed
+    over, and ``check`` then fails on it *after* the probes have run.
+
+    This is not a hole: ``check`` re-derives the same defect list and reports
+    every one of them as a failure, so nothing ``structural`` waves through can
+    reach a green job. ``test_structural_preflight_defers_every_defect_it_waves_through``
+    asserts exactly that coupling, one planted defect at a time — without it,
+    this flag would be indistinguishable from suppression.
+    """
+    artifact = _load(Path(args.artifact))
+    defects = inspect_artifact(artifact)
+    fatal = [defect for defect in defects if defect.fatal]
+    unfit = [defect for defect in defects if not defect.fatal]
+
+    for defect in unfit:
+        print(f"gc-ratchet: {defect.describe()}", file=sys.stderr)
+    if fatal:
+        raise RatchetError("; ".join(defect.message for defect in fatal))
+    if unfit and args.scope == "all":
+        print(
+            f"gc-ratchet: {args.artifact} has {len(unfit)} unfit cell(s); "
+            "re-pin them or record a probe_overrides entry",
+            file=sys.stderr,
+        )
+        return 1
+    if unfit:
+        print(
+            f"gc-ratchet: {len(unfit)} unfit cell(s) deferred to `check` "
+            "(--scope structural); they will fail the job there, after the probes run",
+            file=sys.stderr,
+        )
+    print(f"gc-ratchet: {args.artifact} is structurally valid")
     return 0
 
 
@@ -1498,6 +1735,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_cmd = sub.add_parser("validate", help="structural check of the pinned artifact")
     validate_cmd.add_argument("--artifact", default=str(DEFAULT_ARTIFACT))
+    validate_cmd.add_argument(
+        "--scope",
+        choices=("all", "structural"),
+        default="all",
+        help=(
+            "'all' fails on any artifact defect (default; what a maintainer wants). "
+            "'structural' fails only on defects that void the whole artifact, leaving "
+            "per-cell defects for `check` to report after the probes have run — so one "
+            "unfit cell cannot zero the gate's coverage (#7554)."
+        ),
+    )
     validate_cmd.set_defaults(func=cmd_validate)
 
     return parser
