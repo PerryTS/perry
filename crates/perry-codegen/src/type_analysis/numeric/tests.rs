@@ -351,3 +351,195 @@ fn i64_range_local_is_refused_as_a_modulo_divisor() {
          (srem by 0 is UB; JS requires NaN):\n{ir}"
     );
 }
+
+// ── #7592: `s.charCodeAt(i)` in a hash loop ─────────────────────────────
+//
+// `honest_bench`'s `json_pipeline` FNV-1a phase hashes a 68 MB string one
+// `charCodeAt` at a time. Its leaf profile was 85% opaque runtime calls:
+// `js_string_char_code_at` 31.5%, `js_dynamic_bitxor` 31.0%,
+// `js_string_index_to_i32` 13.1%, `js_get_string_pointer_unified` 9.0% —
+// only 15% was the JS loop. Two independent defects produced that, and each
+// assertion below pins exactly one of them.
+
+fn typed_param(id: u32, name: &str, ty: Type) -> Param {
+    Param {
+        id,
+        name: name.to_string(),
+        ty,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    }
+}
+
+/// `recv.charCodeAt(index)`
+fn char_code_at(recv: Expr, index: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(recv),
+            property: "charCodeAt".to_string(),
+            byte_offset: 0,
+        }),
+        args: vec![index],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }
+}
+
+/// `for (let i = 0; i < 64; i++) h = (h ^ recv.charCodeAt(i)) | 0;`
+fn hash_loop_ir(param_ty: Type) -> String {
+    let recv = Expr::LocalGet(1);
+    emitted_ir(probe_module(
+        "char_code_at_unit.ts",
+        vec![typed_param(1, "s", param_ty)],
+        vec![
+            number_let(10, "h", true, Expr::Integer(0)),
+            Stmt::For {
+                init: Some(Box::new(number_let(11, "i", true, Expr::Integer(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(11)),
+                    right: Box::new(Expr::Integer(64)),
+                }),
+                update: Some(Expr::Update {
+                    id: 11,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    10,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::BitOr,
+                        left: Box::new(Expr::Binary {
+                            op: BinaryOp::BitXor,
+                            left: Box::new(Expr::LocalGet(10)),
+                            right: Box::new(char_code_at(recv, Expr::LocalGet(11))),
+                        }),
+                        right: Box::new(Expr::Integer(0)),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(10))),
+        ],
+    ))
+}
+
+#[test]
+fn char_code_at_on_a_string_receiver_is_statically_numeric() {
+    // Defect 1: `is_numeric_expr` had no arm for a String-method call, so
+    // `h ^ s.charCodeAt(i)` failed `expr/binary.rs`'s "both operands are
+    // statically primitive" test and every iteration paid a
+    // `js_dynamic_bitxor` FFI call to compute an integer xor.
+    let ir = hash_loop_ir(Type::String);
+    assert!(
+        !ir.contains("@js_dynamic_bitxor"),
+        "a xor against String.prototype.charCodeAt must not route through \
+         the BigInt-aware dynamic helper — charCodeAt is a Number:\n{ir}"
+    );
+    assert!(
+        ir.contains("xor i32"),
+        "the xor must lower inline once both operands are proven \
+         non-BigInt primitives:\n{ir}"
+    );
+}
+
+#[test]
+fn char_code_at_on_a_string_receiver_emits_the_inline_ascii_read() {
+    // Defect 2: even with the receiver handle resolved, each character cost
+    // two more opaque calls (`js_string_index_to_i32` +
+    // `js_string_char_code_at`), which also pinned the loop-invariant header
+    // loads inside the loop because LICM cannot hoist across an opaque call.
+    let ir = hash_loop_ir(Type::String);
+    assert!(
+        ir.contains("cca.fast"),
+        "a string-typed receiver must get the inline ASCII charCodeAt fast \
+         path:\n{ir}"
+    );
+    assert!(
+        ir.contains("load i8"),
+        "the ASCII fast path must read the character as a single byte \
+         load:\n{ir}"
+    );
+    // The slow arm is still emitted — it is what services SSO receivers,
+    // non-ASCII payloads, out-of-range and non-numeric indices. Its presence
+    // is the proof that the fast path did NOT replace the correct lowering,
+    // only shortcut it.
+    assert!(
+        ir.contains("@js_string_char_code_at") && ir.contains("@js_string_index_to_i32"),
+        "the inline path must keep the runtime helpers as its fallback \
+         arm:\n{ir}"
+    );
+}
+
+#[test]
+fn char_code_at_on_an_unproven_receiver_keeps_the_runtime_lowering() {
+    // The negative control. An `any`-typed receiver may be a user object with
+    // its own `charCodeAt`, so neither the static Number claim nor the inline
+    // header read is admissible — and this assertion is what makes the two
+    // tests above meaningful rather than tautological (both would pass on a
+    // build that fired the fast path unconditionally).
+    let ir = hash_loop_ir(Type::Any);
+    assert!(
+        !ir.contains("cca.fast"),
+        "an unproven receiver must not read a StringHeader inline:\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_dynamic_bitxor"),
+        "an unproven receiver's method result may still be a BigInt, so the \
+         xor must keep the dynamic helper:\n{ir}"
+    );
+}
+
+#[test]
+fn only_number_returning_string_methods_are_claimed_numeric() {
+    // `codePointAt` returns `undefined` (a NaN-BOX tag) for an out-of-range
+    // index and `at`/`charAt` return strings, so claiming them numeric would
+    // hand a tagged value to an `fadd`/inline-xor. Pinning the exact set here
+    // means widening it is a deliberate edit, not a copy-paste from
+    // `is_known_string_method_name`.
+    const CLAIMED: [&str; 5] = [
+        "charCodeAt",
+        "indexOf",
+        "lastIndexOf",
+        "search",
+        "localeCompare",
+    ];
+    for name in CLAIMED {
+        assert!(
+            super::string_method_returns_number(name),
+            "{name} lowers to a raw double and must be claimed numeric"
+        );
+    }
+    for name in [
+        "codePointAt",
+        "at",
+        "charAt",
+        "startsWith",
+        "endsWith",
+        "includes",
+        "slice",
+        "split",
+        "match",
+    ] {
+        assert!(
+            !super::string_method_returns_number(name),
+            "{name} does not always evaluate to a Number and must not be claimed"
+        );
+    }
+    // The claim mirrors `lower_call/property_get.rs`'s static-String routing
+    // condition; an admitted name that is ALSO array-only would never reach
+    // `lower_string_method`, and the claim would be about a call that lowers
+    // somewhere else entirely.
+    for name in CLAIMED {
+        assert!(
+            !crate::lower_call::property_get::is_array_only_method_name(name),
+            "{name} must not be array-only, or the routing mirror is wrong"
+        );
+        assert!(
+            crate::lower_string_method::is_known_string_method_name(name),
+            "{name} must be a known String method, or it never routes to \
+             lower_string_method"
+        );
+    }
+}
