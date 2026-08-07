@@ -115,7 +115,18 @@ Four sites needed more than the funnel:
   (`diff` on `--trace llvm` output, 8,910 lines, zero differences) — plain
   `new Map()` still lowers to `js_map_set_string_number` / `js_map_get_string_key`
   / `js_map_size` exactly as before.
-* `cargo test -p perry-runtime`: 1816 passed, 0 failed.
+* Collection-family parity A/B, rebased onto `main` at v0.5.1334: the
+  `map` / `set` / `iter` / `weak` / `collection` / `foreach` / `spread` parity
+  sweeps (~110 tests) produce the **identical failure set** with the fix and with
+  `crates/perry-runtime/` reverted in full — `test_effect_pipe_map`,
+  `test_gap_2514_settracesigint`, `test_phase2v3_3_show_toast_set_text`,
+  `test_gap_ratelimiter_memory`, `test_issue_4034_object_literal_semantics`,
+  `test_issue_2656_weakref_finalization_gc`, `test_issue_610_foreach`. All
+  pre-existing; none references `Map`/`Set`.
+* `cargo test -p perry-runtime`: 1842 passed, 0 failed.
+  `cargo test -p perry-codegen --lib`: 672 passed, 0 failed.
+* Lint gates: `raw_handle_debt.py` 998 (baseline 998), `addr_class_inventory.py`,
+  `class_id_collisions.py`, `check_file_size.sh`, `cargo fmt --check` — all clean.
 
 #### Not fixed here
 
