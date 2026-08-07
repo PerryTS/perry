@@ -781,6 +781,13 @@ pub(crate) fn lower_stmt_for_of(
     module: &mut Module,
     for_of_stmt: &ast::ForOfStmt,
 ) -> Result<()> {
+    // `for (… of m.values()/keys()/entries())` on a statically-proven Map/Set
+    // is the direct-collection loop written another way; rewrite it to that
+    // form so it reaches the delete-safe index fast path instead of building a
+    // `{ value, done }` object per element.
+    let view_rewrite = rewrite_collection_view_for_of(ctx, for_of_stmt);
+    let for_of_stmt = view_rewrite.as_ref().unwrap_or(for_of_stmt);
+
     // --- Iterator protocol path for generators ---
     // Detect: for (const x of genFunc(...)) where genFunc is function*
     let is_generator_call = if let ast::Expr::Call(call) = &*for_of_stmt.right {
@@ -1283,40 +1290,10 @@ pub(crate) fn lower_stmt_for_of(
     };
 
     // Issue #302: resolve iterable type from either local var or
-    // class instance field (`this.someMap`). Was limited to
-    // `Ident` only. Issue #311 extends to plain object property
-    // access (`obj.m` where `obj` is a local with an inferred
-    // `Type::Object` shape) — without this arm `for (const x of
-    // obj.m)` fell through to `None`, the loop read `.length` on
-    // a raw Map handle (returns 0), and silently iterated zero
-    // times.
-    let iterable_type: Option<Type> = match &*for_of_stmt.right {
-        ast::Expr::Ident(ident) => ctx.lookup_local_type(ident.sym.as_ref()).cloned(),
-        ast::Expr::Member(m) => {
-            if matches!(m.obj.as_ref(), ast::Expr::This(_)) {
-                if let (Some(cls), ast::MemberProp::Ident(p)) = (ctx.current_class.clone(), &m.prop)
-                {
-                    ctx.lookup_class_field_type(&cls, p.sym.as_ref()).cloned()
-                } else {
-                    None
-                }
-            } else if let ast::MemberProp::Ident(p) = &m.prop {
-                let obj_ty = crate::lower_types::infer_type_from_expr(&m.obj, ctx);
-                match obj_ty {
-                    Type::Object(ot) => ot.properties.get(p.sym.as_ref()).map(|pi| pi.ty.clone()),
-                    // Class instance: receiver is `new Example()` or
-                    // a local typed `Example`. Consult the same
-                    // class_field_types registry the `this.<field>`
-                    // arm uses (populated for #302).
-                    Type::Named(cls) => ctx.lookup_class_field_type(&cls, p.sym.as_ref()).cloned(),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
+    // class instance field (`this.someMap`), plus #311's plain object
+    // property access — see `for_head::resolve_for_of_iterable_type`,
+    // which both for-of desugars share.
+    let iterable_type: Option<Type> = resolve_for_of_iterable_type(ctx, &for_of_stmt.right);
 
     // If the iterable is a Map, wrap in MapEntries to convert to array
     // This handles: for (const [k, v] of myMap) { ... } AND

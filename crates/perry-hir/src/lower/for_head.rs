@@ -252,6 +252,215 @@ pub(crate) fn guard_for_in_body(
     }]
 }
 
+/// Resolve the static type of a `for-of` subject expression.
+///
+/// Shared by the two for-of desugars (`lower/stmt_loops.rs` for module-level
+/// statements, `lower_decl/body_stmt.rs` for function bodies), which carried
+/// byte-identical copies of this match.
+///
+/// Issue #302: resolve the iterable type from either a local variable or a
+/// class instance field (`this.someMap`) — it was limited to `Ident`, so
+/// `for (const [k, v] of this.someMap)` produced a raw Map handle whose
+/// `.length` read 0 and the loop body never ran. Issue #311 extends the same
+/// treatment to plain object property access (`obj.m` where `obj` is a local
+/// with an inferred `Type::Object` shape), which had the identical
+/// silently-zero-iterations symptom from a different missing arm.
+pub(crate) fn resolve_for_of_iterable_type(
+    ctx: &LoweringContext,
+    subject: &ast::Expr,
+) -> Option<Type> {
+    match subject {
+        ast::Expr::Ident(ident) => ctx.lookup_local_type(ident.sym.as_ref()).cloned(),
+        ast::Expr::Member(m) => {
+            if matches!(m.obj.as_ref(), ast::Expr::This(_)) {
+                if let (Some(cls), ast::MemberProp::Ident(p)) = (ctx.current_class.clone(), &m.prop)
+                {
+                    ctx.lookup_class_field_type(&cls, p.sym.as_ref()).cloned()
+                } else {
+                    None
+                }
+            } else if let ast::MemberProp::Ident(p) = &m.prop {
+                match crate::lower_types::infer_type_from_expr(&m.obj, ctx) {
+                    Type::Object(ot) => ot.properties.get(p.sym.as_ref()).map(|pi| pi.ty.clone()),
+                    // Class instance: receiver is `new Example()` or a local
+                    // typed `Example`. Consult the same class_field_types
+                    // registry the `this.<field>` arm uses (populated for #302).
+                    Type::Named(cls) => ctx.lookup_class_field_type(&cls, p.sym.as_ref()).cloned(),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Does `ty` prove the value is a `Map` / a `Set`?
+///
+/// Issue #542/#543: a `Map<K, V> | undefined` parameter narrows to a Map after
+/// `if (!m) return;`, but the narrowing is not propagated into the type, so the
+/// union arm has to be accepted here too.
+fn type_proves_collection(ty: Option<&Type>, base_name: &str) -> bool {
+    let is_base = |t: &Type| matches!(t, Type::Generic { base, .. } if base == base_name);
+    match ty {
+        Some(t) if is_base(t) => true,
+        Some(Type::Union(variants)) => variants.iter().any(is_base),
+        _ => false,
+    }
+}
+
+/// Rewrite `for (… of m.values() / m.keys() / m.entries())` into the
+/// equivalent direct-collection `for-of` so it reaches the delete-safe index
+/// fast path below instead of the generic iterator protocol.
+///
+/// # Why
+///
+/// `for (const [k, v] of m)` is lowered to an index walk over the Map's flat
+/// entries buffer and allocates nothing per step. Reaching the same entries
+/// through `m.values()` produced a **Map iterator object** instead, and every
+/// `.next()` on one builds a fresh `{ value, done }` result — an object, two
+/// key strings, a keys array and a shape install, five heap allocations per
+/// element, plus the allocation-driven collections that follow. On a 500 000
+/// entry Map that is 805 ms against the direct form's 5 ms.
+///
+/// # What is rewritten, and what is not
+///
+/// The rewrite is gated on the receiver's static type proving `Map` / `Set`,
+/// because the rewritten head is only equivalent for a real collection: on
+/// anything else `for (const [, v] of x)` destructures each element rather
+/// than reading entry values.
+///
+/// | subject | head | becomes |
+/// |---|---|---|
+/// | `m.entries()` | 1–2 slot all-ident array pattern | `for (<head> of m)` |
+/// | `m.keys()` | plain ident `k` | `for (const [k] of m)` |
+/// | `m.values()` | plain ident `v` | `for (const [, v] of m)` |
+/// | `s.values()` / `s.keys()` | plain ident | `for (<head> of s)` |
+///
+/// `m.keys()` / `m.values()` with a destructuring head are left alone — `for
+/// (const [a, b] of m.values())` destructures the *value*, which the rewritten
+/// form would not do. `s.entries()` is left alone because it yields `[v, v]`
+/// pairs, which `for (… of s)` does not. `for await` is left alone. Every
+/// remaining head shape is left alone too, because the Map/Set *fallback* is a
+/// `MapEntries` / `SetValues` materialisation — a snapshot, where the iterator
+/// object is live — so rewriting onto it would change what a body that mutates
+/// the collection observes.
+///
+/// # Divergences this does NOT introduce
+///
+/// A patched `Map.prototype.values`, a patched
+/// `Map.prototype[Symbol.iterator]`, and an own-instance `values` shadow are
+/// **already** ignored by Perry before this rewrite (verified against the node
+/// oracle at the parent commit); the direct `for (… of m)` fast path has the
+/// same property. A `class MyMap extends Map` receiver types as `Type::Named`,
+/// not `Type::Generic`, so an overriding subclass method is never rewritten.
+pub(crate) fn rewrite_collection_view_for_of(
+    ctx: &LoweringContext,
+    stmt: &ast::ForOfStmt,
+) -> Option<ast::ForOfStmt> {
+    if stmt.is_await {
+        return None;
+    }
+    let ast::Expr::Call(call) = &*stmt.right else {
+        return None;
+    };
+    if !call.args.is_empty() {
+        return None;
+    }
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Member(member) = &**callee else {
+        return None;
+    };
+    let ast::MemberProp::Ident(view) = &member.prop else {
+        return None;
+    };
+    let view = view.sym.as_ref();
+    if !matches!(view, "values" | "keys" | "entries") {
+        return None;
+    }
+    let receiver_ty = resolve_for_of_iterable_type(ctx, &member.obj);
+    let is_map = type_proves_collection(receiver_ty.as_ref(), "Map");
+    let is_set = type_proves_collection(receiver_ty.as_ref(), "Set");
+
+    let ast::ForHead::VarDecl(var_decl) = &stmt.left else {
+        return None;
+    };
+    if var_decl.decls.len() != 1 {
+        return None;
+    }
+    let decl = var_decl.decls.first()?;
+
+    // Every arm below must land on a head shape the index fast path actually
+    // accepts. That is not tidiness: the *fallbacks* for a Map/Set for-of are
+    // `MapEntries` / `SetValues`, which materialise the whole collection up
+    // front. Rewriting onto one of those would trade a live iteration for a
+    // snapshot, so `for (const e of m.entries()) { m.set(…) }` would stop
+    // seeing appended entries. Shapes the fast path would decline keep the
+    // (slower, lazy, correct) iterator-object path instead.
+    let left = if is_set {
+        // Set: `keys()` and `values()` both yield the element, exactly what
+        // `for (… of s)` binds — and the Set fast path takes a plain ident.
+        // `entries()` yields `[v, v]`, which `for (… of s)` does not.
+        match (view, &decl.name) {
+            ("values" | "keys", ast::Pat::Ident(_)) => stmt.left.clone(),
+            _ => return None,
+        }
+    } else if is_map {
+        match view {
+            // `for (… of m.entries())` and `for (… of m)` are the same
+            // iteration in the language. Restricted to the 1–2 slot all-ident
+            // array patterns the Map fast path handles.
+            "entries" => {
+                let ast::Pat::Array(pat) = &decl.name else {
+                    return None;
+                };
+                let slots_ok = (pat.elems.len() == 1 || pat.elems.len() == 2)
+                    && pat
+                        .elems
+                        .iter()
+                        .all(|e| e.is_none() || matches!(e, Some(ast::Pat::Ident(_))));
+                if !slots_ok {
+                    return None;
+                }
+                stmt.left.clone()
+            }
+            "keys" | "values" => {
+                let ast::Pat::Ident(binding) = &decl.name else {
+                    return None;
+                };
+                let slot = Some(ast::Pat::Ident(binding.clone()));
+                let elems = if view == "keys" {
+                    vec![slot]
+                } else {
+                    vec![None, slot]
+                };
+                let mut rewritten = (**var_decl).clone();
+                rewritten.decls[0].name = ast::Pat::Array(ast::ArrayPat {
+                    span: binding.id.span,
+                    elems,
+                    optional: false,
+                    type_ann: None,
+                });
+                ast::ForHead::VarDecl(Box::new(rewritten))
+            }
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+
+    Some(ast::ForOfStmt {
+        span: stmt.span,
+        is_await: false,
+        left,
+        right: member.obj.clone(),
+        body: stmt.body.clone(),
+    })
+}
+
 /// Build the delete-safe control for the Map/Set `for-of` fast path (#6075).
 ///
 /// The fast path iterates the backing entries array by index (`arr_id` holds the

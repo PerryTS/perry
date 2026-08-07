@@ -53,6 +53,7 @@ pub(crate) use stmt::*;
 mod for_head;
 pub(crate) use for_head::{
     for_head_binding_stmts, guard_for_in_body, map_set_delete_safe_for_of, predefine_for_head,
+    resolve_for_of_iterable_type, rewrite_collection_view_for_of,
 };
 mod stmt_loops;
 pub(crate) use stmt_loops::{
