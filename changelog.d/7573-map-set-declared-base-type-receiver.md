@@ -71,7 +71,7 @@ subclassable native base", which would have cost the fast path for every
 `Map<K, V>`-annotated binding in every program, and over a codegen-emitted guard,
 which would have had to be repeated at each of the ~20 lowering sites.
 
-Three sites needed more than the funnel:
+Four sites needed more than the funnel:
 
 * `js_set_add` / `js_set_has` / `js_set_delete` / `js_set_clear` /
   `js_set_to_array` never called `clean_set_ptr` at all — they went straight to
@@ -85,6 +85,13 @@ Three sites needed more than the funnel:
   false and chaining handed out the backing. The receiver is rooted across the
   store (`RuntimeHandle::across_mut`), because it is a movable `ObjectHeader` and
   the store allocates.
+* `js_map_foreach` / `js_set_foreach` derive the collection they report as the
+  callback's 3rd argument (and the `self === m` identity) from the map being
+  iterated, which after resolution is the backing. They now pass the receiver
+  through as the collection override — the same contract
+  `js_map_foreach_with_collection` already serves for the unannotated path — and
+  only when the resolution actually moved, so a plain Map keeps
+  `has_override == false` and behaves exactly as before.
 
 #### Validation
 
