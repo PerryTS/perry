@@ -146,11 +146,17 @@ def report_statuses(report: dict) -> dict[str, str]:
     return statuses
 
 
-def validate_entry(test_id: str, record: object) -> list[str]:
-    """Schema + provenance rules for one entry (#797)."""
+def validate_entry(test_id: str, record: object) -> tuple[list[str], bool]:
+    """Schema + provenance rules for one entry (#797).
+
+    Returns (problems, platforms_ok). The second value is separate rather than
+    sniffed out of the message text: a `platforms` value the checker could not
+    parse must not be trusted to scope the entry either way, and deciding that
+    by substring-matching an error string would misfire on a test id.
+    """
     problems: list[str] = []
     if not isinstance(record, dict):
-        return [f"{test_id}: entry must be an object"]
+        return [f"{test_id}: entry must be an object"], False
 
     category = record.get("category")
     if not isinstance(category, str) or not category:
@@ -176,6 +182,7 @@ def validate_entry(test_id: str, record: object) -> list[str]:
     if not isinstance(added, str) or not DATE_RE.match(added):
         problems.append(f"{test_id}: added must be an ISO date YYYY-MM-DD; got {added!r}")
 
+    platforms_ok = True
     platforms = record.get("platforms")
     if platforms is not None:
         if (
@@ -184,15 +191,18 @@ def validate_entry(test_id: str, record: object) -> list[str]:
             or not all(isinstance(item, str) for item in platforms)
         ):
             problems.append(f"{test_id}: platforms must be a non-empty string array")
+            platforms_ok = False
         else:
             unknown = sorted(
                 {item for item in platforms if item.strip().lower() not in PLATFORM_ALIASES}
             )
             if unknown:
                 problems.append(f"{test_id}: unknown platforms: {', '.join(unknown)}")
+                platforms_ok = False
             elif len({normalize_platform(item) for item in platforms}) != len(platforms):
                 problems.append(f"{test_id}: platforms must not contain duplicates")
-    return problems
+                platforms_ok = False
+    return problems, platforms_ok
 
 
 def entry_applies(record: object, platform: str) -> bool:
@@ -219,10 +229,10 @@ def known_for_platform(known: dict, platform: str) -> tuple[set[str], list[str]]
     for test_id, record in known.items():
         if test_id == "_schema":
             continue
-        entry_problems = validate_entry(test_id, record)
+        entry_problems, platforms_ok = validate_entry(test_id, record)
         problems.extend(entry_problems)
         # A malformed `platforms` value cannot be trusted to scope the entry.
-        if any("platforms" in problem for problem in entry_problems):
+        if not platforms_ok:
             continue
         if entry_applies(record, platform):
             selected.add(test_id)

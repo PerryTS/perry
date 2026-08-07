@@ -81,6 +81,14 @@ longer exists, and cross-checks every `test_gap_*` entry against
 absent from it is one the snapshot asserts passes. That check would have named
 the diagchannel entry on the day it was added.
 
+One sharp edge, stated rather than special-cased: a `ci-env` entry is by
+definition one that *passes locally*, so running the full suite by hand — on a
+box that happens to have the fixture the entry says CI lacks — will report it as
+stale. That is the check working, not misfiring: on that host the entry is not
+load-bearing. The authoritative verdict is the CI run. If a `ci-env` failure is
+genuinely confined to one OS, scope it with `platforms` and the local run stops
+adjudicating it at all.
+
 ### Provenance (#797)
 
 Every entry must carry `issue`, `added`, `category`, and `reason`; the checker
