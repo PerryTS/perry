@@ -778,6 +778,9 @@ thread_local! {
     /// it was scheduled for has not. See
     /// `survivor_promotion_handoff_awaiting_minor`.
     static SURVIVOR_HANDOFF_AWAITING_MINOR: Cell<bool> = const { Cell::new(false) };
+    /// Count of handoffs the latch has suppressed — see
+    /// `survivor_promotion_handoff_suppressions`.
+    static SURVIVOR_HANDOFF_SUPPRESSIONS: Cell<u64> = const { Cell::new(0) };
     /// Phase 2/3 of the moving-GC project: set when an alloc-point nursery
     /// trigger fires while moving mode is on, deferring the collection to the
     /// next precise-root safepoint (event-loop boundary or a codegen loop
@@ -1241,6 +1244,16 @@ pub(super) fn note_survivor_promotion_handoff_full() {
     SURVIVOR_HANDOFF_AWAITING_MINOR.with(|flag| flag.set(true));
 }
 
+/// How many handoffs the latch has suppressed. Every one of these was a full
+/// mark-sweep that would have freed nothing — on `main` this counter would have
+/// read 18 for #7592's 200k `json_pipeline` run. It exists so the suppression
+/// itself is observable: the latch short-circuits before the arena inspection,
+/// so a test with an empty heap cannot otherwise distinguish "suppressed" from
+/// "there was no pressure anyway".
+pub(super) fn survivor_promotion_handoff_suppressions() -> u64 {
+    SURVIVOR_HANDOFF_SUPPRESSIONS.with(Cell::get)
+}
+
 /// Clear the latch — called only when a *copying* minor completes, since only
 /// that collector promotes. A non-moving minor fallback promotes nothing, so
 /// re-arming on one would reinstate the livelock at half rate.
@@ -1256,8 +1269,10 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
         return false;
     }
     // A handoff full has already run and promoted nothing; let the copying
-    // minor it was scheduled for actually happen (#7592).
+    // minor it was scheduled for actually happen (#7592). Placed before the
+    // survivor walk below so a suppressed handoff also skips that O(n) pass.
     if survivor_promotion_handoff_awaiting_minor() {
+        SURVIVOR_HANDOFF_SUPPRESSIONS.with(|n| n.set(n.get().saturating_add(1)));
         return false;
     }
     if crate::arena::copying_active_survivor_in_use_bytes()

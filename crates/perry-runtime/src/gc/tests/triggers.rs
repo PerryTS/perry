@@ -224,6 +224,62 @@ fn test_copying_minor_promotion_handoff_uses_predicted_old_pressure() {
     ));
 }
 
+/// #7592: a handoff full must not repeat without the copying minor it exists to
+/// enable.
+///
+/// The handoff replaces a minor with a full mark-sweep to make room for
+/// survivors about to be promoted, but a full mark-sweep is non-moving and
+/// promotes nothing — so it cannot relieve the pressure that scheduled it, and
+/// the predicate is true again at the next minor. Without the latch that is a
+/// livelock: json_pipeline at 200k records ran 19 consecutive
+/// `survivor_promotion_bytes` fulls, each freeing 0.0 MB at ~400 ms.
+///
+/// The latch short-circuits before any arena inspection, so this asserts the
+/// suppression itself rather than reproducing the heap state that arms it.
+#[test]
+fn test_survivor_promotion_handoff_waits_for_the_copying_minor() {
+    let _guard = GcTestIsolationGuard::new();
+
+    note_copying_minor_completed();
+    assert!(
+        !survivor_promotion_handoff_awaiting_minor(),
+        "latch must start clear"
+    );
+
+    note_survivor_promotion_handoff_full();
+    assert!(survivor_promotion_handoff_awaiting_minor());
+    // Assert the SUPPRESSION, not just the `false`. With an empty heap the
+    // predicate returns false at the survivor-occupancy check regardless, so a
+    // bare `assert!(!due)` passes with the latch deleted — it would be a test
+    // that cannot fail. The counter only moves if the latch branch ran.
+    for kind in [GcTriggerKind::ArenaBytes, GcTriggerKind::MallocCount] {
+        let before = survivor_promotion_handoff_suppressions();
+        assert!(
+            !copied_minor_promotion_handoff_due(kind),
+            "a second handoff must be suppressed while the first still awaits \
+             its copying minor ({kind:?})"
+        );
+        assert_eq!(
+            survivor_promotion_handoff_suppressions(),
+            before + 1,
+            "the latch branch must be what rejected it ({kind:?})"
+        );
+    }
+    // A trigger kind the handoff never applies to must not be counted as a
+    // latch suppression — it is rejected earlier, on its own merits.
+    let before = survivor_promotion_handoff_suppressions();
+    assert!(!copied_minor_promotion_handoff_due(GcTriggerKind::Direct));
+    assert_eq!(survivor_promotion_handoff_suppressions(), before);
+
+    // Only a COPYING minor clears it: a non-moving minor fallback promotes
+    // nothing and would reinstate the livelock at half rate.
+    note_copying_minor_completed();
+    assert!(
+        !survivor_promotion_handoff_awaiting_minor(),
+        "the copying minor consumes the handoff"
+    );
+}
+
 // 2026-07-09 audit (device-blind policy): budget-scaled threshold math.
 #[test]
 fn test_budget_scaled_clamps_only_under_budget() {
