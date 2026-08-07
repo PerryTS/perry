@@ -1523,6 +1523,48 @@ pub unsafe extern "C" fn js_class_static_method_call(
             return result;
         }
     }
+    // #7541: `class X extends Array` — inherited builtin static
+    // (`X.from(...)`, `X.of(...)`, `X.isArray(...)`).
+    //
+    // `Array.from` / `Array.of` are folded in the HIR on the LITERAL identifier
+    // `Array` (`lower/expr_call/array_only_methods.rs`), so a subclass receiver
+    // never matched and `MyArr.from([1, 2, 3])` resolved to nothing. The
+    // fallback at the end of this function returns the RECEIVER unchanged, so
+    // the call evaluated to the class ref — and `[...MyArr.from([1,2,3])]` threw
+    // `TypeError: value is not iterable` (#7541's report), which looked like a
+    // spread bug but is a missing static.
+    //
+    // Both spec statics are already implemented constructor-aware
+    // (`array::{array_from_full, array_of_full}` run `Construct(C, …)` when
+    // `IsConstructor(this)`, and `class_ref_id` makes a class ref answer true),
+    // so passing the subclass receiver as `this` builds a subclass instance —
+    // matching `Array.from.call(MyArr, …)`. Mirrors the Promise arm above.
+    if crate::array::is_array_subclass_class_id(class_id) {
+        let arg = |i: usize| -> f64 {
+            if i < args_len && !args_ptr.is_null() {
+                *args_ptr.add(i)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            }
+        };
+        match name {
+            "from" => {
+                return crate::array::array_from_full(receiver, arg(0), arg(1), arg(2));
+            }
+            "of" => {
+                let vals: &[f64] = if args_ptr.is_null() || args_len == 0 {
+                    &[]
+                } else {
+                    std::slice::from_raw_parts(args_ptr, args_len)
+                };
+                return crate::array::array_of_full(receiver, vals);
+            }
+            "isArray" => {
+                return crate::array::js_array_is_array(arg(0));
+            }
+            _ => {}
+        }
+    }
     // #6475: `class X extends <function value>() {}` — a static member
     // INHERITED from the parent FUNCTION's own properties, invoked as a call
     // (`X.use(f)`, effect's `HttpRouter.Tag(id)().use`/`unwrap`/`serve`). The
