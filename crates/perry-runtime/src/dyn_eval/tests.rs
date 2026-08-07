@@ -953,10 +953,14 @@ fn script_literals_use_fresh_populated_realm_prototypes() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let intrinsics = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     crate::object::populate_global_this_builtins(
-        intrinsics.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        intrinsics
+            .across_mut::<crate::object::ObjectHeader, _>(|| ())
+            .1,
     );
     let intrinsics = crate::value::js_nanbox_pointer(
-        intrinsics.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
+        intrinsics
+            .across_mut::<crate::object::ObjectHeader, _>(|| ())
+            .1 as i64,
     );
     let realm_object_prototype = bridge::intrinsic_prototype(intrinsics, "Object");
     assert_ne!(

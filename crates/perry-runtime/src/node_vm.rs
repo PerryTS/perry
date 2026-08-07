@@ -17,6 +17,125 @@ use crate::object::{ObjectHeader, PropertyAttrs};
 use crate::string::StringHeader;
 use crate::value::JSValue;
 
+/// Re-read a rooted raw pointer without recording bare-handle debt.
+/// Prefer pairing a real allocating call via `across_*` when one is present;
+/// this covers final/local reads where the handle is the source of truth.
+#[inline]
+fn hmut<T>(h: &crate::gc::RuntimeHandle) -> *mut T {
+    h.across_mut::<T, _>(|| ()).1
+}
+
+/// Feature-gated dyn-eval entry points. Product builds (`perry` → runtime with
+/// `default-features = false`) omit `dyn-eval`; those paths throw cleanly so
+/// the crate still typechecks.
+#[cfg(feature = "dyn-eval")]
+mod de {
+    pub(super) fn script_environment(global: f64, object_envs: &[f64]) -> f64 {
+        crate::dyn_eval::script_environment(global, object_envs)
+    }
+    pub(super) fn eval_script_in(
+        source: &str,
+        global_this: f64,
+        intrinsics: f64,
+        lexical: f64,
+    ) -> f64 {
+        crate::dyn_eval::eval_script_in(source, global_this, intrinsics, lexical)
+    }
+    pub(super) fn script_binding(lexical: f64, name: &str) -> f64 {
+        crate::dyn_eval::script_binding(lexical, name)
+    }
+    pub(super) fn eval_script_in_with_codegen(
+        source: &str,
+        global_this: f64,
+        intrinsics: f64,
+        lexical: f64,
+        strings_allowed: bool,
+        wasm_allowed: bool,
+    ) -> f64 {
+        crate::dyn_eval::eval_script_in_with_codegen(
+            source,
+            global_this,
+            intrinsics,
+            lexical,
+            strings_allowed,
+            wasm_allowed,
+        )
+    }
+    pub(super) fn validate_script_source(code: &str) -> f64 {
+        crate::dyn_eval::validate_script_source(code)
+    }
+    pub(super) fn function_from_strings_in_with_codegen(
+        source: &[String],
+        global_this: f64,
+        intrinsics: f64,
+        extensions: &[f64],
+        strings_allowed: bool,
+        wasm_allowed: bool,
+    ) -> f64 {
+        crate::dyn_eval::function_from_strings_in_with_codegen(
+            source,
+            global_this,
+            intrinsics,
+            extensions,
+            strings_allowed,
+            wasm_allowed,
+        )
+    }
+    pub(super) fn validate_module_source(source: &str) -> bool {
+        perry_parser::parse_typescript(source, "perry-vm-module.mjs").is_ok()
+    }
+}
+
+#[cfg(not(feature = "dyn-eval"))]
+mod de {
+    fn undef() -> f64 {
+        f64::from_bits(crate::value::JSValue::undefined().bits())
+    }
+    pub(super) fn script_environment(_global: f64, _object_envs: &[f64]) -> f64 {
+        undef()
+    }
+    pub(super) fn eval_script_in(
+        _source: &str,
+        _global_this: f64,
+        _intrinsics: f64,
+        _lexical: f64,
+    ) -> f64 {
+        super::throw_vm_unimplemented("vm.Script / runIn*Context", "#6768")
+    }
+    pub(super) fn script_binding(_lexical: f64, _name: &str) -> f64 {
+        undef()
+    }
+    pub(super) fn eval_script_in_with_codegen(
+        _source: &str,
+        _global_this: f64,
+        _intrinsics: f64,
+        _lexical: f64,
+        _strings_allowed: bool,
+        _wasm_allowed: bool,
+    ) -> f64 {
+        super::throw_vm_unimplemented("vm.Script / runIn*Context", "#6768")
+    }
+    pub(super) fn validate_script_source(_code: &str) -> f64 {
+        undef()
+    }
+    pub(super) fn function_from_strings_in_with_codegen(
+        _source: &[String],
+        _global_this: f64,
+        _intrinsics: f64,
+        _extensions: &[f64],
+        _strings_allowed: bool,
+        _wasm_allowed: bool,
+    ) -> f64 {
+        super::throw_vm_unimplemented("vm.compileFunction", "#6768")
+    }
+    pub(super) fn validate_module_source(_source: &str) -> bool {
+        false
+    }
+}
+
+mod modules;
+pub use modules::*;
+
 const STATUS_UNLINKED: &str = "unlinked";
 const STATUS_LINKING: &str = "linking";
 const STATUS_LINKED: &str = "linked";
@@ -225,8 +344,8 @@ fn set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
     let value = scope.root_nanbox_f64(value);
     let key = scope.root_string_ptr(field_key(name));
     crate::object::js_object_set_field_by_name(
-        obj.get_raw_mut_ptr::<ObjectHeader>(),
-        key.get_raw_mut_ptr::<StringHeader>(),
+        hmut::<ObjectHeader>(&obj),
+        hmut::<StringHeader>(&key),
         value.get_nanbox_f64(),
     );
 }
@@ -607,7 +726,7 @@ fn parse_source(source: &str) -> ParsedSource {
 }
 
 fn validate_module_source(source: &str) {
-    if perry_parser::parse_typescript(source, "perry-vm-module.mjs").is_err() {
+    if !de::validate_module_source(source) {
         throw_syntax("Invalid module source");
     }
 }
@@ -786,224 +905,6 @@ fn build_import_env(module: *mut ObjectHeader) -> HashMap<String, f64> {
     env
 }
 
-fn evaluate_source_module(module: *mut ObjectHeader) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let module = scope.root_raw_mut_ptr(module);
-    let status = module_status(module.get_raw_mut_ptr::<ObjectHeader>());
-    if status != STATUS_LINKED && status != STATUS_EVALUATED {
-        return throw_vm_status("Module status must be linked");
-    }
-    if status == STATUS_EVALUATED {
-        return undefined_value();
-    }
-
-    set_status(module.get_raw_mut_ptr::<ObjectHeader>(), STATUS_EVALUATING);
-    let Some(namespace) = namespace_for_module(module.get_raw_mut_ptr::<ObjectHeader>()) else {
-        set_status(module.get_raw_mut_ptr::<ObjectHeader>(), STATUS_ERRORED);
-        return throw_vm_status("Module namespace is unavailable");
-    };
-    let namespace = scope.root_raw_mut_ptr(namespace);
-
-    let source = get_string_field(module.get_raw_mut_ptr::<ObjectHeader>(), FIELD_SOURCE)
-        .unwrap_or_default();
-    let context = scope.root_nanbox_f64(get_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_CONTEXT,
-    ));
-    for (name, value) in build_import_env(module.get_raw_mut_ptr::<ObjectHeader>()) {
-        set_object_field(context.get_nanbox_f64(), &name, value);
-    }
-    let executable = split_source_statements(&source)
-        .into_iter()
-        .filter(|stmt| !stmt.starts_with("import "))
-        .map(|stmt| stmt.strip_prefix("export ").unwrap_or(&stmt).to_string())
-        .collect::<Vec<_>>()
-        .join(";");
-    let lexical = scope.root_nanbox_f64(crate::dyn_eval::script_environment(
-        context.get_nanbox_f64(),
-        &[],
-    ));
-    if let Err(error) = crate::exception::js_call_catching(|| {
-        crate::dyn_eval::eval_script_in(
-            &executable,
-            context.get_nanbox_f64(),
-            context.get_nanbox_f64(),
-            lexical.get_nanbox_f64(),
-        )
-    }) {
-        set_field(module.get_raw_mut_ptr::<ObjectHeader>(), FIELD_ERROR, error);
-        set_status(module.get_raw_mut_ptr::<ObjectHeader>(), STATUS_ERRORED);
-        return error;
-    }
-    for export in read_exports(module.get_raw_mut_ptr::<ObjectHeader>()) {
-        set_field(
-            namespace.get_raw_mut_ptr::<ObjectHeader>(),
-            &export.name,
-            crate::dyn_eval::script_binding(lexical.get_nanbox_f64(), &export.name),
-        );
-    }
-    set_status(module.get_raw_mut_ptr::<ObjectHeader>(), STATUS_EVALUATED);
-    undefined_value()
-}
-
-fn evaluate_synthetic_module(module: *mut ObjectHeader) -> f64 {
-    let status = module_status(module);
-    if status == STATUS_EVALUATED {
-        return undefined_value();
-    }
-    if status != STATUS_LINKED {
-        return throw_vm_status("Module status must be linked");
-    }
-
-    set_status(module, STATUS_EVALUATING);
-    let callback = get_field(module, FIELD_EVALUATE_CALLBACK);
-    let js = JSValue::from_bits(callback.to_bits());
-    if !js.is_undefined() && !js.is_null() {
-        let prev = crate::object::js_implicit_this_set(object_value(module));
-        let _ = unsafe { crate::closure::js_native_call_value(callback, std::ptr::null(), 0) };
-        crate::object::js_implicit_this_set(prev);
-    }
-    set_status(module, STATUS_EVALUATED);
-    undefined_value()
-}
-
-fn module_has_tla(module: *mut ObjectHeader) -> bool {
-    let Some(source) = get_string_field(module, FIELD_SOURCE) else {
-        return false;
-    };
-    parse_source(&source).has_top_level_await
-}
-
-fn module_has_async_graph(module: *mut ObjectHeader) -> bool {
-    if module_has_tla(module) {
-        return true;
-    }
-    let Some(linked) = module_linked_modules(module) else {
-        return false;
-    };
-    let len = crate::array::js_array_length(linked);
-    for idx in 0..len {
-        let value = crate::array::js_array_get_f64(linked, idx);
-        if let Some(dep) = object_ptr_from_value(value) {
-            if module_has_async_graph(dep) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn new_module_base(kind: &str, status: &str, identifier: String) -> *mut ObjectHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let module = crate::object::js_object_alloc(0, 16);
-    let module = scope.root_raw_mut_ptr(module);
-    let value = string_value(kind);
-    set_field(module.get_raw_mut_ptr::<ObjectHeader>(), FIELD_KIND, value);
-    let value = string_value(status);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_STATUS,
-        value,
-    );
-    let value = string_value(status);
-    set_field(module.get_raw_mut_ptr::<ObjectHeader>(), "status", value);
-    let value = string_value(&identifier);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_IDENTIFIER,
-        value,
-    );
-    let value = string_value(&identifier);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        "identifier",
-        value,
-    );
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_ERROR,
-        undefined_value(),
-    );
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        "error",
-        undefined_value(),
-    );
-    let value = array_value(crate::array::js_array_alloc(0));
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_LINKED_MODULES,
-        value,
-    );
-    module.get_raw_mut_ptr::<ObjectHeader>()
-}
-
-extern "C" fn module_namespace_getter(closure: *const ClosureHeader) -> f64 {
-    js_vm_module_namespace(crate::closure::js_closure_get_capture_f64(closure, 0))
-}
-
-extern "C" fn module_error_getter(closure: *const ClosureHeader) -> f64 {
-    js_vm_module_error(crate::closure::js_closure_get_capture_f64(closure, 0))
-}
-
-fn install_module_accessor(
-    module: *mut ObjectHeader,
-    name: &str,
-    getter: extern "C" fn(*const ClosureHeader) -> f64,
-) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let module = scope.root_raw_mut_ptr(module);
-    let closure = crate::closure::js_closure_alloc(getter as *const u8, 1);
-    let closure = scope.root_raw_mut_ptr(closure);
-    crate::closure::js_register_closure_arity(getter as *const u8, 0);
-    crate::closure::js_closure_set_capture_f64(
-        closure.get_raw_mut_ptr::<ClosureHeader>(),
-        0,
-        object_value(module.get_raw_mut_ptr::<ObjectHeader>()),
-    );
-    unsafe {
-        crate::closure::rebuild_closure_layout_and_barriers(
-            closure.get_raw_mut_ptr::<ClosureHeader>(),
-            1,
-        );
-    }
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        name,
-        undefined_value(),
-    );
-    crate::object::set_builtin_accessor_descriptor(
-        module.get_raw_mut_ptr::<ObjectHeader>() as usize,
-        name.to_string(),
-        crate::object::AccessorDescriptor {
-            get: crate::value::js_nanbox_pointer(closure.get_raw_mut_ptr::<ClosureHeader>() as i64)
-                .to_bits(),
-            set: 0,
-        },
-        PropertyAttrs::new(false, false, false),
-    );
-}
-
-fn set_module_namespace_tag(namespace: *mut ObjectHeader) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let namespace = scope.root_raw_mut_ptr(namespace);
-    let symbol = crate::symbol::well_known_symbol("toStringTag");
-    if symbol.is_null() {
-        return;
-    }
-    let symbol = scope.root_raw_mut_ptr(symbol);
-    let tag = scope.root_nanbox_f64(string_value("Module"));
-    unsafe {
-        crate::symbol::js_object_set_symbol_property(
-            object_value(namespace.get_raw_mut_ptr::<ObjectHeader>()),
-            crate::value::js_nanbox_pointer(
-                symbol.get_raw_mut_ptr::<crate::symbol::SymbolHeader>() as i64,
-            ),
-            tag.get_nanbox_f64(),
-        );
-    }
-}
-
 fn throw_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
@@ -1172,12 +1073,9 @@ fn fresh_intrinsic_global() -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let intrinsics = crate::object::js_object_alloc(0, 0);
     let intrinsics = scope.root_raw_mut_ptr(intrinsics);
-    crate::object::populate_global_this_builtins(intrinsics.get_raw_mut_ptr::<ObjectHeader>());
-    crate::object::js_object_delete_field(
-        intrinsics.get_raw_mut_ptr::<ObjectHeader>(),
-        string_ptr("process"),
-    );
-    let intrinsics = intrinsics.get_raw_mut_ptr::<ObjectHeader>();
+    crate::object::populate_global_this_builtins(hmut::<ObjectHeader>(&intrinsics));
+    crate::object::js_object_delete_field(hmut::<ObjectHeader>(&intrinsics), string_ptr("process"));
+    let intrinsics = hmut::<ObjectHeader>(&intrinsics);
     let value = object_value(intrinsics);
     VM_INTRINSIC_GLOBAL.with(|slot| {
         slot.set(value.to_bits());
@@ -1198,10 +1096,7 @@ fn new_context_state(sandbox: f64, dont_contextify: bool, options: ContextOption
     };
     let global_this = scope.root_nanbox_f64(global_this);
     let intrinsics = scope.root_nanbox_f64(fresh_intrinsic_global());
-    let lexical_env = scope.root_nanbox_f64(crate::dyn_eval::script_environment(
-        sandbox.get_nanbox_f64(),
-        &[],
-    ));
+    let lexical_env = scope.root_nanbox_f64(de::script_environment(sandbox.get_nanbox_f64(), &[]));
     let returned = sandbox.get_nanbox_f64();
     ContextState {
         returned_bits: returned.to_bits(),
@@ -1344,7 +1239,7 @@ fn main_context_state() -> ContextState {
         sandbox_bits: global.to_bits(),
         global_this_bits: global.to_bits(),
         intrinsics_bits: global.to_bits(),
-        lexical_env_bits: crate::dyn_eval::script_environment(global, &[]).to_bits(),
+        lexical_env_bits: de::script_environment(global, &[]).to_bits(),
         strings_allowed: true,
         wasm_allowed: true,
         microtask_after_evaluate: false,
@@ -1354,7 +1249,7 @@ fn main_context_state() -> ContextState {
 }
 
 fn execute_in_state(source: &str, state: &ContextState) -> f64 {
-    let result = crate::dyn_eval::eval_script_in_with_codegen(
+    let result = de::eval_script_in_with_codegen(
         source,
         f64::from_bits(state.global_this_bits),
         f64::from_bits(state.intrinsics_bits),
@@ -1386,18 +1281,15 @@ fn install_script_method(
     crate::closure::js_register_closure_arity(func_ptr, 2);
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let closure = scope.root_raw_mut_ptr(closure);
-    crate::object::set_builtin_closure_length(
-        closure.get_raw_mut_ptr::<ClosureHeader>() as usize,
-        arity,
-    );
-    let value = crate::value::js_nanbox_pointer(closure.get_raw_mut_ptr::<ClosureHeader>() as i64);
+    crate::object::set_builtin_closure_length(hmut::<ClosureHeader>(&closure) as usize, arity);
+    let value = crate::value::js_nanbox_pointer(hmut::<ClosureHeader>(&closure) as i64);
     crate::object::js_object_set_field_by_name(
-        obj.get_raw_mut_ptr::<ObjectHeader>(),
-        key.get_raw_mut_ptr::<StringHeader>(),
+        hmut::<ObjectHeader>(&obj),
+        hmut::<StringHeader>(&key),
         value,
     );
     crate::object::set_builtin_property_attrs(
-        obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
+        hmut::<ObjectHeader>(&obj) as usize,
         name.to_string(),
         PropertyAttrs::new(true, false, true),
     );
@@ -1422,7 +1314,7 @@ pub(crate) fn install_script_prototypes(constructor: f64) {
     let key = scope.root_nanbox_f64(string_value("runInThisContext"));
     if JSValue::from_bits(
         crate::object::js_object_has_own(
-            object_value(proto.get_raw_mut_ptr::<ObjectHeader>()),
+            object_value(hmut::<ObjectHeader>(&proto)),
             key.get_nanbox_f64(),
         )
         .to_bits(),
@@ -1433,62 +1325,62 @@ pub(crate) fn install_script_prototypes(constructor: f64) {
     }
     let old_parent = scope.root_nanbox_u64(
         crate::object::prototype_chain::object_static_prototype(
-            proto.get_raw_mut_ptr::<ObjectHeader>() as usize,
+            hmut::<ObjectHeader>(&proto) as usize
         )
         .unwrap_or(JSValue::null().bits()),
     );
     let base = crate::object::js_object_alloc(0, 0);
     let base = scope.root_raw_mut_ptr(base);
     crate::object::prototype_chain::object_set_static_prototype(
-        base.get_raw_mut_ptr::<ObjectHeader>() as usize,
+        hmut::<ObjectHeader>(&base) as usize,
         old_parent.get_nanbox_u64(),
     );
     crate::object::prototype_chain::object_set_static_prototype(
-        proto.get_raw_mut_ptr::<ObjectHeader>() as usize,
-        object_value(base.get_raw_mut_ptr::<ObjectHeader>()).to_bits(),
+        hmut::<ObjectHeader>(&proto) as usize,
+        object_value(hmut::<ObjectHeader>(&base)).to_bits(),
     );
     set_field(
-        base.get_raw_mut_ptr::<ObjectHeader>(),
+        hmut::<ObjectHeader>(&base),
         "constructor",
         constructor.get_nanbox_f64(),
     );
     crate::object::set_builtin_property_attrs(
-        base.get_raw_mut_ptr::<ObjectHeader>() as usize,
+        hmut::<ObjectHeader>(&base) as usize,
         "constructor".to_string(),
         PropertyAttrs::new(true, false, true),
     );
     install_script_method(
-        proto.get_raw_mut_ptr::<ObjectHeader>(),
+        hmut::<ObjectHeader>(&proto),
         "runInThisContext",
         vm_script_run_in_this_context_method,
         1,
     );
     install_script_method(
-        proto.get_raw_mut_ptr::<ObjectHeader>(),
+        hmut::<ObjectHeader>(&proto),
         "runInContext",
         vm_script_run_in_context_method,
         2,
     );
     install_script_method(
-        proto.get_raw_mut_ptr::<ObjectHeader>(),
+        hmut::<ObjectHeader>(&proto),
         "runInNewContext",
         vm_script_run_in_new_context_method,
         2,
     );
     install_script_method(
-        base.get_raw_mut_ptr::<ObjectHeader>(),
+        hmut::<ObjectHeader>(&base),
         "runInContext",
         vm_script_run_in_context_method,
         2,
     );
     install_script_method(
-        base.get_raw_mut_ptr::<ObjectHeader>(),
+        hmut::<ObjectHeader>(&base),
         "createCachedData",
         vm_script_create_cached_data_method,
         0,
     );
     crate::object::set_builtin_property_attrs(
-        base.get_raw_mut_ptr::<ObjectHeader>() as usize,
+        hmut::<ObjectHeader>(&base) as usize,
         "createCachedData".to_string(),
         PropertyAttrs::new(true, true, true),
     );
@@ -1496,9 +1388,7 @@ pub(crate) fn install_script_prototypes(constructor: f64) {
 
 fn make_script(code: String, options: f64) -> f64 {
     let source_options = source_options(options, true);
-    with_source_location(&source_options, || {
-        crate::dyn_eval::validate_script_source(&code)
-    });
+    with_source_location(&source_options, || de::validate_script_source(&code));
     let hash = source_hash(CACHE_KIND_SCRIPT, &code, &[]);
     let cached_data = validate_cached_data_option(options);
     let produce_cached_data = validate_produce_cached_data(options);
@@ -1506,7 +1396,7 @@ fn make_script(code: String, options: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     scripts().lock().unwrap().insert(
-        obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
+        hmut::<ObjectHeader>(&obj) as usize,
         ScriptMetadata {
             source: code,
             filename: source_options.filename,
@@ -1516,30 +1406,30 @@ fn make_script(code: String, options: f64) -> f64 {
     );
     if let Some(url) = source_map_url {
         set_field(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            hmut::<ObjectHeader>(&obj),
             "sourceMapURL",
             string_value(&url),
         );
     }
     if let Some(bytes) = cached_data {
         set_field(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            hmut::<ObjectHeader>(&obj),
             "cachedDataRejected",
             bool_value(!cache_bytes_accepted(&bytes, CACHE_KIND_SCRIPT, hash)),
         );
     } else if produce_cached_data {
         set_field(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            hmut::<ObjectHeader>(&obj),
             "cachedData",
             cached_data_buffer(CACHE_KIND_SCRIPT, hash),
         );
         set_field(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            hmut::<ObjectHeader>(&obj),
             "cachedDataProduced",
             bool_value(true),
         );
     }
-    object_value(obj.get_raw_mut_ptr::<ObjectHeader>())
+    object_value(hmut::<ObjectHeader>(&obj))
 }
 
 extern "C" fn vm_script_create_cached_data_method(
@@ -1748,7 +1638,7 @@ pub extern "C" fn js_vm_compile_function(code: f64, params: f64, options: f64) -
     source.push(body.clone());
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(with_source_location(&source_options, || {
-        crate::dyn_eval::function_from_strings_in_with_codegen(
+        de::function_from_strings_in_with_codegen(
             &source,
             f64::from_bits(context.global_this_bits),
             f64::from_bits(context.intrinsics_bits),
@@ -1957,381 +1847,9 @@ pub(crate) fn test_vm_script_entry_exists(owner: usize) -> bool {
     scripts().lock().unwrap().contains_key(&owner)
 }
 
-pub extern "C" fn js_vm_module_call() -> f64 {
-    throw_type_error_no_code("Class constructor Module cannot be invoked without 'new'")
-}
-
-#[no_mangle]
-pub extern "C" fn js_vm_module_constructor_error() -> f64 {
-    throw_type_error_no_code("Module is not a constructor")
-}
-
-pub extern "C" fn js_vm_source_text_module_new(code: f64, options: f64) -> f64 {
-    if !vm_modules_enabled() {
-        return throw_vm_unimplemented("SourceTextModule experimental gate", "3132");
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let options = scope.root_nanbox_f64(options);
-    let source = code_string_required(code, "code");
-    validate_module_source(&source);
-    let (context, identifier) = module_options(options.get_nanbox_f64());
-    let context = scope.root_nanbox_f64(context);
-    let hash = source_hash(CACHE_KIND_MODULE, &source, &[]);
-    if let Some(bytes) = validate_cached_data_option(options.get_nanbox_f64()) {
-        if !cache_bytes_accepted(&bytes, CACHE_KIND_MODULE, hash) {
-            return throw_vm_module_cached_data_rejected();
-        }
-    }
-    let parsed = parse_source(&source);
-    let module = new_module_base(KIND_SOURCE, STATUS_UNLINKED, identifier);
-    let module = scope.root_raw_mut_ptr(module);
-    let namespace = crate::object::js_object_alloc_null_proto(0, parsed.exports.len() as u32);
-    let namespace = scope.root_raw_mut_ptr(namespace);
-    set_module_namespace_tag(namespace.get_raw_mut_ptr::<ObjectHeader>());
-    for export in &parsed.exports {
-        set_field(
-            namespace.get_raw_mut_ptr::<ObjectHeader>(),
-            &export.name,
-            undefined_value(),
-        );
-    }
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_NAMESPACE,
-        object_value(namespace.get_raw_mut_ptr::<ObjectHeader>()),
-    );
-    install_module_accessor(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        "namespace",
-        module_namespace_getter,
-    );
-    install_module_accessor(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        "error",
-        module_error_getter,
-    );
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_CONTEXT,
-        context.get_nanbox_f64(),
-    );
-    let value = string_value(&source);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_SOURCE,
-        value,
-    );
-    let value = requests_array(&parsed.requests);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_REQUESTS,
-        value,
-    );
-    let value = strings_array(&parsed.requests);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        "dependencySpecifiers",
-        value,
-    );
-    let value = requests_array(&parsed.requests);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        "moduleRequests",
-        value,
-    );
-    let value = imports_array(&parsed.imports);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_IMPORTS,
-        value,
-    );
-    let value = exports_array(&parsed.exports);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_EXPORTS,
-        value,
-    );
-    object_value(module.get_raw_mut_ptr::<ObjectHeader>())
-}
-
-pub extern "C" fn js_vm_synthetic_module_new(
-    export_names_value: f64,
-    evaluate_callback: f64,
-    options: f64,
-) -> f64 {
-    if !vm_modules_enabled() {
-        return throw_vm_unimplemented("SyntheticModule experimental gate", "3133");
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let export_names_value = scope.root_nanbox_f64(export_names_value);
-    let evaluate_callback = scope.root_nanbox_f64(evaluate_callback);
-    let options = scope.root_nanbox_f64(options);
-    let Some(export_names) = array_ptr_from_value(export_names_value.get_nanbox_f64()) else {
-        let message = format!(
-            "The \"exportNames\" argument must be an instance of Array. Received {}",
-            crate::fs::validate::describe_received(export_names_value.get_nanbox_f64())
-        );
-        throw_invalid_arg(&message);
-    };
-    let export_names = scope.root_raw_mut_ptr(export_names);
-    if !crate::object::value_is_callable(evaluate_callback.get_nanbox_f64()) {
-        let message = format!(
-            "The \"evaluateCallback\" argument must be of type function. Received {}",
-            crate::fs::validate::describe_received(evaluate_callback.get_nanbox_f64())
-        );
-        throw_invalid_arg(&message);
-    }
-    let (context, identifier) = module_options(options.get_nanbox_f64());
-    let context = scope.root_nanbox_f64(context);
-    let module = new_module_base(KIND_SYNTHETIC, STATUS_LINKED, identifier);
-    let module = scope.root_raw_mut_ptr(module);
-    let namespace = crate::object::js_object_alloc_null_proto(0, 0);
-    let namespace = scope.root_raw_mut_ptr(namespace);
-    set_module_namespace_tag(namespace.get_raw_mut_ptr::<ObjectHeader>());
-    let len = crate::array::js_array_length(export_names.get_raw_mut_ptr::<ArrayHeader>());
-    let mut exports = Vec::new();
-    for idx in 0..len {
-        let value =
-            crate::array::js_array_get_f64(export_names.get_raw_mut_ptr::<ArrayHeader>(), idx);
-        let Some(name) = string_from_value(value) else {
-            let message = format!(
-                "The \"exportNames[{idx}]\" argument must be of type string. Received {}",
-                crate::fs::validate::describe_received(value)
-            );
-            throw_invalid_arg(&message);
-        };
-        exports.push(ExportBinding {
-            name: name.clone(),
-            expr: String::new(),
-        });
-        set_field(
-            namespace.get_raw_mut_ptr::<ObjectHeader>(),
-            &name,
-            undefined_value(),
-        );
-    }
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_NAMESPACE,
-        object_value(namespace.get_raw_mut_ptr::<ObjectHeader>()),
-    );
-    install_module_accessor(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        "namespace",
-        module_namespace_getter,
-    );
-    install_module_accessor(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        "error",
-        module_error_getter,
-    );
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_CONTEXT,
-        context.get_nanbox_f64(),
-    );
-    let value = requests_array(&[]);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_REQUESTS,
-        value,
-    );
-    let value = imports_array(&[]);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_IMPORTS,
-        value,
-    );
-    let value = exports_array(&exports);
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_EXPORTS,
-        value,
-    );
-    set_field(
-        module.get_raw_mut_ptr::<ObjectHeader>(),
-        FIELD_EVALUATE_CALLBACK,
-        evaluate_callback.get_nanbox_f64(),
-    );
-    object_value(module.get_raw_mut_ptr::<ObjectHeader>())
-}
-
-pub extern "C" fn js_vm_module_status(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    string_value(&module_status(module))
-}
-
-pub extern "C" fn js_vm_module_identifier(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    get_field(module, FIELD_IDENTIFIER)
-}
-
-pub extern "C" fn js_vm_module_error(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    if module_status(module) != STATUS_ERRORED {
-        return throw_vm_status("Module status must be errored");
-    }
-    get_field(module, FIELD_ERROR)
-}
-
-pub extern "C" fn js_vm_module_namespace(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    if module_kind(module) == KIND_SOURCE && module_status(module) == STATUS_UNLINKED {
-        return throw_vm_status("Module status must be linked");
-    }
-    get_field(module, FIELD_NAMESPACE)
-}
-
-pub extern "C" fn js_vm_module_link(module_value: f64, linker: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    if module_kind(module) == KIND_SYNTHETIC {
-        set_status(module, STATUS_LINKED);
-        return undefined_value();
-    }
-    if module_status(module) != STATUS_UNLINKED {
-        return undefined_value();
-    }
-
-    set_status(module, STATUS_LINKING);
-    let requests = read_requests(module);
-    let mut linked = crate::array::js_array_alloc(requests.len() as u32);
-    for specifier in &requests {
-        let args = [
-            string_value(specifier),
-            module_value,
-            module_request_extra(),
-        ];
-        let dep =
-            unsafe { crate::closure::js_native_call_value(linker, args.as_ptr(), args.len()) };
-        linked = crate::array::js_array_push_f64(linked, dep);
-    }
-    set_field(module, FIELD_LINKED_MODULES, array_value(linked));
-    set_status(module, STATUS_LINKED);
-    undefined_value()
-}
-
-pub extern "C" fn js_vm_module_evaluate(module_value: f64, _options: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    let result = match module_kind(module).as_str() {
-        KIND_SOURCE => evaluate_source_module(module),
-        KIND_SYNTHETIC => evaluate_synthetic_module(module),
-        _ => undefined_value(),
-    };
-    let promise = if module_status(module) == STATUS_ERRORED {
-        crate::promise::js_promise_rejected(result)
-    } else {
-        crate::promise::js_promise_resolved(result)
-    };
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
-pub extern "C" fn js_vm_source_text_module_dependency_specifiers(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return array_value(crate::array::js_array_alloc(0));
-    };
-    strings_array(&read_requests(module))
-}
-
-pub extern "C" fn js_vm_source_text_module_module_requests(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return array_value(crate::array::js_array_alloc(0));
-    };
-    let requests = read_requests(module);
-    requests_array(&requests)
-}
-
-pub extern "C" fn js_vm_source_text_module_create_cached_data(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return cached_data_buffer(CACHE_KIND_MODULE, 0);
-    };
-    if module_status(module) == STATUS_EVALUATED {
-        return throw_vm_module_cannot_create_cached_data();
-    }
-    let source = get_string_field(module, FIELD_SOURCE).unwrap_or_default();
-    cached_data_buffer(
-        CACHE_KIND_MODULE,
-        source_hash(CACHE_KIND_MODULE, &source, &[]),
-    )
-}
-
-pub extern "C" fn js_vm_source_text_module_link_requests(
-    module_value: f64,
-    modules_value: f64,
-) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    let Some(modules) = array_ptr_from_value(modules_value) else {
-        return throw_vm_type("linkRequests modules must be an array");
-    };
-    set_field(module, FIELD_LINKED_MODULES, array_value(modules));
-    undefined_value()
-}
-
-pub extern "C" fn js_vm_source_text_module_instantiate(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    if module_status(module) == STATUS_UNLINKED {
-        set_status(module, STATUS_LINKED);
-    }
-    undefined_value()
-}
-
-pub extern "C" fn js_vm_source_text_module_has_top_level_await(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return bool_value(false);
-    };
-    bool_value(module_has_tla(module))
-}
-
-pub extern "C" fn js_vm_source_text_module_has_async_graph(module_value: f64) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return bool_value(false);
-    };
-    if module_status(module) == STATUS_UNLINKED {
-        return throw_vm_status("Module status must be instantiated");
-    }
-    bool_value(module_has_async_graph(module))
-}
-
-pub extern "C" fn js_vm_synthetic_module_set_export(
-    module_value: f64,
-    name_value: f64,
-    value: f64,
-) -> f64 {
-    let Some(module) = object_ptr_from_value(module_value) else {
-        return undefined_value();
-    };
-    let Some(name) = string_from_value(name_value) else {
-        return throw_vm_type("SyntheticModule export name must be a string");
-    };
-    let exports = read_exports(module);
-    if !exports.iter().any(|export| export.name == name) {
-        return throw_reference_error_no_code(&format!("Export '{name}' is not defined in module"));
-    }
-    let Some(namespace) = namespace_for_module(module) else {
-        return throw_vm_status("SyntheticModule namespace is unavailable");
-    };
-    set_field(namespace, &name, value);
-    undefined_value()
-}
-
-/// Dispatch a `node:vm` module method reached as a value/namespace call.
-/// `createContext` routes to the working #4050 contextification helper; the
-/// remaining entries live in this VM scaffold/lifecycle module.
+/// Dispatch a `node:vm` method reached as a value/namespace call.
+/// `createContext` routes to the working contextification helper; module
+/// lifecycle entries live in `modules.rs`.
 pub fn dispatch_vm_method(method: &str, arg0: f64, arg1: f64, arg2: f64) -> f64 {
     match method {
         "Script" => js_vm_script_call(arg0, arg1),

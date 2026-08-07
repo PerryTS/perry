@@ -47,6 +47,7 @@ mod prototype_methods;
 pub(crate) mod prototype_objects;
 mod registration;
 mod state;
+mod vm_brand;
 
 // ── state.rs ────────────────────────────────────────────────────────────────
 pub(crate) use state::{
@@ -108,19 +109,19 @@ pub use prototype_methods::{
     js_register_function_prototype_method, js_register_prototype_method, CLASS_PROTOTYPE_METHODS,
 };
 
-// ── construct.rs ────────────────────────────────────────────────────────────
+// ── construct.rs / vm_brand.rs ──────────────────────────────────────────────
 pub(crate) use construct::{
-    brand_vm_script_instance, extends_target_must_throw, function_would_have_own_prototype,
-    is_callable_function_value, js_value_is_constructor, lookup_prototype_method,
-    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_fs, nm_ctor_readline, nm_ctor_repl,
-    nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
-    ordinary_function_prototype_value_for_read, promise_parent_in_chain,
+    extends_target_must_throw, function_would_have_own_prototype, is_callable_function_value,
+    js_value_is_constructor, lookup_prototype_method, nm_ctor_child_process, nm_ctor_cluster,
+    nm_ctor_fs, nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty,
+    nm_ctor_vm, nm_ctor_wasi, ordinary_function_prototype_value_for_read, promise_parent_in_chain,
 };
 pub use construct::{
     js_ctor_return_override, js_function_prototype_value_for_read, js_new_function_construct,
     js_new_function_construct_apply, js_new_function_construct_with_new_target,
     js_new_target_value,
 };
+pub(crate) use vm_brand::brand_vm_script_instance;
 
 // ── gc_roots.rs ─────────────────────────────────────────────────────────────
 pub(crate) use gc_roots::{
