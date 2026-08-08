@@ -584,8 +584,10 @@ already working, on a workload that happens to reach it through `JSON.parse`.
     is not, on its own, a "larger Eden" knob: above ~32 MB it is a "no
     copying minor" knob unless the workload also holds a live set. Sizing the
     retained set to 262,144 objects buys 4 copying minors freeing 37/36/68/68 MB
-    (the first copies 532,482 objects in one cycle) against ~16 MB per minor
-    for every default-cap probe.
+    — 49.7 MB per minor, the first copying 532,482 objects in one cycle —
+    against 14.6–16.6 MB per minor on eleven of the twelve default-cap probes
+    and 21.8 MB on `12_large_live_set`, whose tenured-proportional cap term is
+    the shipped path to a larger Eden and tops out around 22 MB here.
 
     **`wt-scavtenure` is subsumed, measured rather than assumed.** #7432 is
     merged, its worktree exists on neither host, and the baseline has been

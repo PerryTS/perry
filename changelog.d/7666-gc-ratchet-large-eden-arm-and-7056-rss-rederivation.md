@@ -44,9 +44,11 @@ unless the workload also holds a live set. Measured on the pinned host:
 | 131,072 | 1 | 14 |
 | 262,144 (shipped) | **4** | 12 |
 
-At the shipped size the four minors free 37, 36, 68 and 68 MB and the first
-copies **532,482 objects (32 MB)** in one cycle, against ~16 MB per minor for
-every default-cap probe.
+At the shipped size the four minors free 37, 36, 68 and 68 MB — 49.7 MB per
+minor — and the first copies **532,482 objects (32 MB)** in one cycle. The rest
+of the suite runs 14.6–16.6 MB per minor on eleven of twelve, and 21.8 MB on
+`12_large_live_set`, whose tenured-proportional cap term already raises its Eden
+without any knob.
 
 **Shown able to fail**, each arm measured with the real harness and scored by
 `check` against the freshly pinned artifact:

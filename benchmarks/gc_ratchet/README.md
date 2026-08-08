@@ -143,9 +143,14 @@ The fix is the retained set, which holds the pacing baseline high enough that a
 | 131,072 | 1 | 14 |
 | 262,144 (shipped) | **4** | 12 |
 
-At `KEEP = 262,144` the four minors free 37, 36, 68 and 68 MB and the first
-copies 532,482 objects (32 MB) in one cycle, against ~16 MB per minor for every
-default-cap probe. The guard that keeps this honest is `check`'s existing
+At `KEEP = 262,144` the four minors free 37, 36, 68 and 68 MB (49.7 MB per
+minor) and the first copies 532,482 objects — 32 MB — in one cycle. Against the
+rest of the suite: **14.6–16.6 MB per minor on eleven of the twelve default-cap
+probes**, and 21.8 MB on `12_large_live_set`, whose tenured-proportional cap
+term (`gc/tenuring.rs`, `max(influx x scale, tenured/2)`) already raises its
+Eden a little. That last row is worth noticing — it is the shipped path by which
+a large Eden is reached without any knob, and it tops out around 22 MB on the
+biggest workload the suite has. The guard that keeps this honest is `check`'s existing
 liveness rule (`minor_cycles > 0` and `copied_objects + promoted_objects > 0`):
 a future change that stops reaching the copying minor at this cadence cannot be
 pinned, it fails.
