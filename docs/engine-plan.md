@@ -308,48 +308,72 @@ each moved by an order of magnitude instead of a few percent:
   delete-safe index walk over the flat entries it is **5 ms**. Perry already won
   lookup before the fix (76 ms vs node 115, bun 103).
 
-**Read this section before picking up any row above.** Three times this campaign
+**Read this section before picking up any row above.** Four times this campaign
 a ticket was worked from a headline number that had already collapsed — #7510
-(33.6% → 11%), `layout_forget_object` (14.5% → 3.0% → 1.7%), and `layout_note_slot`
-(7.5% → 0.03%, correctly closed with **no code at all**). Re-measure the row
-before profiling it.
+(33.6% → 11%), `layout_forget_object` (14.5% → 3.0% → 1.7%), `layout_note_slot`
+(7.5% → 0.03%, correctly closed with **no code at all**), and #7478 (a 2.3x scan
+penalty that was 1.01x by the time anyone re-ran it). Re-measure the row before
+profiling it.
 
-### JSON polyglot legs — the tape is a net negative on scans
+#7478 adds a second failure mode to watch for: **a stale floor is as
+misleading as a stale headline.** Its acceptance bar was "materially under the
+1350 ms `idiomatic` row" — but `idiomatic` is a *measurement*, not a constant,
+and it had moved to 938 ms. A bar quoted as a number silently becomes a bar
+quoted against a different build. When acceptance is "beat arm X", re-measure
+arm X in the same run, never carry its number forward.
 
-Same run. `roundtrip` is the crown jewel and `field_access` is the problem:
+### JSON polyglot legs — the tape's scan penalty is closed (#7478)
+
+`roundtrip` is the crown jewel and `field_access` was the standing problem: at
+the v0.5.1299 sweep the optimized configuration was 2.2x SLOWER than the
+unoptimized one at 3.6x the RSS, with a sigma of 136 against every other row's
+under 5.
 
 | leg | perry optimized | perry idiomatic | bun | node | rust serde_json |
 |---|--:|--:|--:|--:|--:|
 | roundtrip | **192 ms** (82 MB) | 1307 ms | 216 | 379 | 178 |
 | field_access | **2984 ms** (219 MB, sigma 136) | **1350 ms** (61 MB) | 218 | 380 | 183 |
 
-Perry **wins roundtrip** against both JS runtimes and lands within ~8% of Rust
-serde_json. `field_access` was the standing problem: the optimized configuration
-was 2.2x SLOWER than the unoptimized one at 3.6x the RSS, with a sigma of 136
-against every other row's under 5.
+**That inversion is closed** — #7483 (DirectParser float parity), #7499
+(reparse-on-materialize), #7537 (early batch flip), #7539 (tape
+side-allocation), with #7546 fixing the wrong-JSON defect the work surfaced.
+Re-measured at **v0.5.1370** on the pinned quiet mini, 11 interleaved rounds,
+every arm's checksum identical to node 26.5.1:
 
-**That inversion is now closed** (#7478 → #7537 early batch flip, then #7539
-tape side-allocation), measured on the same host:
+| phase | tape on, then → now | tape off, then → now |
+|---|--:|--:|
+| parse only | 210 → **160 ms** | 1220 → 1196 ms |
+| parse + full scan | 3030 → **1233 ms** | 1287 → 1224 ms |
+| parse + stringify | 254 → **171 ms** | 1756 → 1449 ms |
+| field_access | 2981 → **1721 ms** | — → 1480 ms |
 
-| `field_access` | median | sigma | peak RSS |
+The issue's headline was that a full scan cost **2.3x the direct parser**
+(3030 vs 1287). It is now **1.01x** (1233 vs 1224): the tape neither wins nor
+loses a scan, which is the correct resting state for a structure whose whole
+value is on the paths that skip materialization. `roundtrip` — the memcpy path
+this must not regress — went the other way, 254 → 171 ms.
+
+**The two remaining terms are now orthogonal, which is the real result.** The
+issue documented an *interaction* (scan sigma 214.9 under gen-GC vs 8.8 under
+mark-sweep for the identical tape). Measuring all four `PERRY_JSON_TAPE` x
+`PERRY_GEN_GC` combinations, `field_access` decomposes additively:
+
+| | tape on | tape off | tape term |
 |---|--:|--:|--:|
-| sweep (v0.5.1299) | 2984 ms | 136 | 219 MB |
-| after #7537 | 2043 ms | 146 | 195 MB |
-| **after #7539** | **1809 ms** | **17.3** | **155 MB** |
+| gen-GC | 1721 ms | 1480 ms | **+241** |
+| mark-sweep | 1133 ms | 938 ms | **+195** |
+| gen-GC term | **+588** | **+542** | |
 
-Sigma collapses **8.3x** — that was the headline symptom, not the median — and
-the decisive result is that **turning the tape ON is no longer worse than
-turning it OFF**. The tape-off arm still carries sigma 117.2 and 168 MB, so the
-residual variance and footprint belong to the generational collector's behaviour
-on this workload and have nothing left to do with the tape. The GC trace agrees
-to the cycle: 19 cycles / 9 full / 6 `old_gen_bytes` becomes **14 / 5 / 2**,
-which is the `PERRY_JSON_TAPE=0` arm's profile exactly.
+The tape costs ~200 ms whichever collector runs, and the collector costs
+~560 ms whether or not the tape exists. The ~200 ms *is* the tape build (parse
+only is 160 ms) and is structural, exactly as #7537 recorded: the build is
+purely additive whenever the whole tree ends up materialized anyway, and
+nothing can predict scan-shaped access before the parse.
 
-`roundtrip` — the memcpy path this must not regress — **improved**, 201 → 193 ms,
-with peak old-generation in-use down 39.6 → 14.1 MB.
-
-Still open: 1809 ms has not reached the 1350 ms idiomatic floor, and the gap is
-now collector behaviour rather than tape design.
+So `field_access`'s remaining ~560 ms is a **generational-collector** term that
+the tape-off arm carries identically. It is not a tape-policy problem and does
+not belong to #7478; it is the same collector behaviour the GC campaign is
+already working, on a workload that happens to reach it through `JSON.parse`.
 
 ### Gates and blockers
 
@@ -379,8 +403,23 @@ now collector behaviour rather than tape design.
    rooting re-reads are material on a spread-heavy workload. If they are, the
    answer is hoisting them (#7487's pooled-alloca precedent), never removing
    them — they close real use-after-frees.
-2. **#7478 — the JSON tape's scan path**, where our optimized build is 2.2x
-   slower than our unoptimized one. The 1350 ms idiomatic row is the floor.
+2. ~~**#7478 — the JSON tape's scan path**~~ — **closed, re-measured at
+   v0.5.1370.** The headline (a full scan costs 2.3x the direct parser) is
+   gone: 3030 → 1233 ms against the tape-off arm's 1224, i.e. **1.01x**, and
+   `roundtrip` improved 254 → 171 ms rather than paying for it. The four-way
+   `PERRY_JSON_TAPE` x `PERRY_GEN_GC` decomposition above is what closes it —
+   the tape term (~200 ms, its own build) and the collector term (~560 ms) are
+   now **additive and independent**, where the issue had documented them as an
+   interaction. The residual on this benchmark is therefore the collector's,
+   carried identically by the tape-off arm, and is tracked with the GC work
+   rather than here.
+
+   Worth recording as method: **this ticket's headline was stale in both
+   directions.** The 2.3x had been fixed by four merges nobody had re-measured
+   together, and its stated floor (the 1350 ms `idiomatic` row) had itself
+   moved to 938 ms — so coding to the ticket would have chased a target that
+   had already moved and declared failure against a bar that no longer existed.
+   Two switches, measured one at a time, was the whole difference.
 3. ~~**`_tlv_get_addr` — thread-local addressing**~~ — **measured out (#7565).**
    Re-measuring first is what decided the design: the 27.0% was real, but the
    ticket's "41 distinct call-graph sites, this is diffuse" was not — **seven
