@@ -366,7 +366,10 @@ jobs:
   # floors are about safepoints rather than root stores, and — the one that
   # matters — a separate job is a separate branch-protection context, so this
   # can be promoted to required on its own schedule without dragging the
-  # shadow arms with it.
+  # shadow arms with it. The price is a second compiler build; `needs:` would
+  # avoid it and was rejected, because it would make this job unrunnable
+  # whenever the shadow job is red — precisely when someone wants to know
+  # whether the OTHER lowering is affected.
   #
   # NOT REQUIRED, deliberately, and this is the second step nobody took last
   # time. A gate that has never been green blocks every open PR the day it
@@ -505,6 +508,11 @@ jobs:
       # filter. `|| true` is deliberate and is the ONLY one in this file —
       # this step is not a gate and must not be read as one.
       - name: Unfiltered hazard census (diagnostic, not a gate)
+        # The explicit opt-out `gc_gate_wiring_check.py` looks for. Without it
+        # that gate reads the `|| true` below as a swallowed failure -- which
+        # is exactly right for a gating step and exactly wrong for this one, so
+        # the difference has to be declared rather than argued in a comment.
+        continue-on-error: true
         run: |
           python3 scripts/gc_root_dominance_check.py ir-corpus-native \
             --statepoints \
