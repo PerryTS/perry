@@ -467,6 +467,23 @@ python3 benchmarks/gc_ratchet/gc_ratchet.py measure \
 python3 benchmarks/gc_ratchet/gc_ratchet.py check --current /tmp/current.json
 ```
 
+★ **`--probes-dir` pointed at a copy outside the repo is a different
+compilation, and its retention is not comparable to the pinned artifact.** A
+probe compiled with a `package.json` in scope retains one more 1 MiB arena block
+at `gc()` than the same source compiled without one, and `09_try_catch_roots`
+sits on that boundary: 5,825,256 from the repo directory, 4,777,624 from any of
+three `/tmp` directories, and 5,825,256 again from `/tmp` **with a
+`package.json` copied in** — each stable across repeats. Read against the
+baseline that is a −17.98% "improvement" in a probe nothing touched, and it cost
+real time before it was localised. The driver and CI always compile from
+`benchmarks/gc_ratchet/probes`, so the gate is self-consistent; *ratios between
+arms measured in the same directory* are unaffected, which is what makes a
+copied directory usable for an A/B and not for a comparison against the pin.
+
+(This is not build non-determinism, which was ruled out in the same session: two
+builds of one probe from one directory differ byte-for-byte and report the
+identical retention.)
+
 ## What `heap_used_bytes` actually contains (#7559, #7558)
 
 **A retention row is not evidence of a collector regression until it has been

@@ -590,12 +590,27 @@ already working, on a workload that happens to reach it through `JSON.parse`.
     **`wt-scavtenure` is subsumed, measured rather than assumed.** #7432 is
     merged, its worktree exists on neither host, and the baseline has been
     re-pinned five times since — most recently in full by #7657 at `59d522052`
-    on the pinned host, which also closed #7652's mixed provenance. Running
-    `check` at `7bde3de24` against that artifact on the pinned host: **`OK`**,
-    12/12 probes, `pinned_host` profile. The only cell outside its band is
-    `09_try_catch_roots.heap_used_bytes` at **−17.98%**, which is an
-    *improvement* (one 1 MiB block of #7559-shaped residue) and is folded into
-    this re-pin.
+    on the pinned host, which also closed #7652's mixed provenance. Running the
+    quiet-host driver's `--check` at this PR's commit against that artifact:
+    **every one of the 144 pinned cells `ok`**, the only failure being the new
+    probe's absence from the baseline, which is the friction adding a probe is
+    supposed to cost. There is no pending re-pin.
+
+    ★ **One trap found the hard way, and it is worth the four lines.** An
+    ad-hoc `measure --probes-dir <copy>` first reported
+    `09_try_catch_roots.heap_used_bytes` **−17.98%** against the pin, which
+    reads exactly like drift since `59d522052`. It is not drift: a probe
+    compiled with a `package.json` in scope retains one more 1 MiB arena block
+    at `gc()` than the same source compiled without one, and 09 sits on that
+    block boundary. Reproduced three ways — repo dir 5,825,256; any of three
+    `/tmp` directories 4,777,624; `/tmp` **plus a copied `package.json`**
+    5,825,256 — each stable 3/3, and unmoved by Perry's known build
+    non-determinism (two builds from the same directory differ byte-wise and
+    report the identical number). The driver and CI always compile from the
+    repo, so the gate is self-consistent; **a copied probes directory outside
+    the repo is a different compilation and its absolute retention is not
+    comparable to the artifact.** Ratios between arms measured in the same
+    directory are unaffected, which is why item 9's 2x2 stands.
 
 ---
 
