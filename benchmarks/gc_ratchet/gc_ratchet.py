@@ -98,6 +98,10 @@ DEFAULT_TOLERANCES = HERE / "tolerances.json"
 
 GCMETRIC_RE = re.compile(r"^#gcmetric\s+([a-z0-9_]+)=(-?[0-9]+)\s*$")
 COPY_MINOR_RE = re.compile(r"^\[gc-copy-minor\]\s+ran\s+(.*)$")
+SCAN_FALLBACK_RE = re.compile(
+    r"^\[gc-scan-fallback\]\s+site=(\w+)\s+automatic=(true|false)\s+count=(\d+)\s*$"
+)
+GC_STEP_PREFIX = "[gc-step]"
 
 #: A probe may declare the collector configuration it is a probe *of*, as
 #: ``// gc-ratchet-env: KEY=VALUE`` comment lines in its own source. See
@@ -110,10 +114,6 @@ PROBE_ENV_RE = re.compile(r"^//\s*gc-ratchet-env:\s*([A-Za-z_][A-Za-z0-9_]*)=(\S
 #: ``classify`` sweeps; ``PERRY_GC_DIAG`` is what separates the traced pass from
 #: the timed one.
 RESERVED_PROBE_ENV = frozenset(("PERRY_CONSERVATIVE_STACK_SCAN", "PERRY_GC_DIAG"))
-SCAN_FALLBACK_RE = re.compile(
-    r"^\[gc-scan-fallback\]\s+site=(\w+)\s+automatic=(true|false)\s+count=(\d+)\s*$"
-)
-GC_STEP_PREFIX = "[gc-step]"
 
 #: Runtime knob that turns the conservative native-stack scan off. See
 #: ``classify`` for why this harness cares.
@@ -593,7 +593,13 @@ def probe_run_env(source: Path) -> dict[str, str]:
 def _with_probe_env(
     probe_env: Mapping[str, str], extra: Mapping[str, str] | None = None
 ) -> dict[str, str]:
-    """The probe's declared env, plus whatever the harness is adding this pass."""
+    """The probe's declared env, plus whatever the harness is adding this pass.
+
+    Layered over ``os.environ`` by ``run_once``, so a knob exported into the
+    shell applies to every probe that does *not* declare it and is overridden
+    for the one that does — which is what makes an ad-hoc sweep over a knob
+    still leave an armed probe measuring its own arm.
+    """
     merged = dict(probe_env)
     if extra:
         merged.update(extra)
