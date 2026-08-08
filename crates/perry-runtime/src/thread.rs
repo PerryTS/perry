@@ -1488,7 +1488,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     // Pin the promise so GC doesn't collect it while the thread is running.
     // Malloc-resident (see above), so this does not arm the young-pin latch.
     let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
-    gc::pin_object(promise_header);
+    gc::pin_object_non_young(promise_header);
 
     let promise_usize = promise as usize;
     // #6185: the promise lives in the SPAWNING agent's heap, so that is the
@@ -1615,7 +1615,7 @@ pub fn thread_job_begin() {
 /// `promise` must be a live promise allocation preceded by an 8-byte GcHeader.
 pub unsafe fn pin_promise(promise: *mut crate::promise::Promise) {
     let header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
-    gc::pin_object(header);
+    gc::pin_object_non_young(header);
 }
 
 /// Resolve the promise at `promise_usize` with a UTF-8 string on the agent that

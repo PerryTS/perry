@@ -277,3 +277,56 @@ fn pin_latch_sabotage_child() {
     let _ = collect_minor_trace(GcTriggerKind::Direct);
     panic!("copying minor relocated a pinned young object without aborting");
 }
+
+/// #7650 follow-up: every `pin_object_non_young` call site must really be
+/// non-young, because that variant deliberately skips the space classifier and
+/// therefore leaves the latch disarmed.
+///
+/// The variant exists for a LINK reason, not a GC one — `pin_object` reaches
+/// `arena::classify_heap_space`, and that edge kept a reference chain alive
+/// that `-Wl,-dead_strip` had been removing, breaking five `perry-ext-*` crates
+/// with `Undefined symbols: _js_blob_new, _js_fetch_with_options, …` (#7650,
+/// bisected). The full workspace test is tag/nightly-only, so a per-PR run
+/// cannot see it. The safety property is therefore asserted here rather than at
+/// the call, and it is only as good as this list: **add a case when you add a
+/// caller.**
+///
+/// Callers as of this change:
+/// * `string/format.rs` — the interned format buffer, allocated long-lived.
+/// * `thread.rs` (x2) — the spawn promise and its handle, malloc-resident, so
+///   they carry no `GC_FLAG_ARENA` and the predicate short-circuits.
+#[test]
+fn pin_object_non_young_call_sites_are_never_young() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    unsafe {
+        // `string/format.rs` pins a LONG-LIVED allocation.
+        let longlived = crate::string::js_string_from_bytes_longlived(b"x".as_ptr(), 1);
+        let ll_header = header_from_user_ptr(longlived as *const u8) as *mut GcHeader;
+        assert!(
+            !crate::gc::pin::pin_constrains_copying_minor_for_tests(ll_header),
+            "format.rs pins a long-lived string; if that allocation ever moved \
+             to Eden, pin_object_non_young there would become memory corruption"
+        );
+
+        // `thread.rs` pins MALLOC-resident promise state: no GC_FLAG_ARENA, so
+        // the predicate short-circuits before any space classification.
+        let mut synthetic = std::ptr::read(ll_header);
+        synthetic.gc_flags &= !crate::gc::GC_FLAG_ARENA;
+        assert!(
+            !crate::gc::pin::pin_constrains_copying_minor_for_tests(&mut synthetic),
+            "a header without GC_FLAG_ARENA is malloc space and can never be \
+             Eden/FromSurvivor"
+        );
+
+        // Control: a plain nursery object IS young, so the predicate the two
+        // assertions above rely on is not vacuously false for everything.
+        let young = young_leaf();
+        let y_header = header_from_user_ptr(young as *const u8) as *mut GcHeader;
+        assert!(
+            crate::gc::pin::pin_constrains_copying_minor_for_tests(y_header),
+            "control: a nursery object must be reported young, or this test \
+             proves nothing about the two assertions above"
+        );
+    }
+}

@@ -114,6 +114,58 @@ pub unsafe fn pin_object(header: *mut GcHeader) {
     (*header).gc_flags |= GC_FLAG_PINNED;
 }
 
+/// Set `GC_FLAG_PINNED` on an object the CALLER has already proven cannot be
+/// young-arena resident, without consulting the space classifier.
+///
+/// # Why this exists, and why it is not merely an optimisation
+///
+/// [`pin_object`] reaches `crate::arena::classify_heap_space`, and that edge is
+/// load-bearing for a reason that has nothing to do with the GC: the
+/// `perry-ext-*` crates link a **feature-stripped** runtime through
+/// `perry-ffi`'s `runtime-link` and are built with `-Wl,-dead_strip`.
+/// Introducing this call from `thread.rs` / `string/format.rs` kept a reference
+/// chain alive that the stripper had previously removed, and five ext crates
+/// stopped linking with `Undefined symbols: _js_blob_new,
+/// _js_fetch_with_options, _js_fetch_notify_signal_aborted` (#7650, bisected to
+/// that commit against a clean parent). `cargo-test` scopes per-PR runs to the
+/// changed crates' reverse-dependency closure and the FULL workspace is
+/// tag/nightly-only, so no per-PR gate could have seen it.
+///
+/// Making [`pin_object`] conservative instead — arming the latch for any
+/// `GC_FLAG_ARENA` object — would also remove the edge, but it would arm on
+/// exactly the long-lived pins this variant serves (`format.rs` pins long-lived
+/// strings), throwing away the preflight skip #7645 bought.
+///
+/// # Safety
+///
+/// As [`pin_object`], **plus** the caller must guarantee `header` is malloc
+/// space, `Longlived`, or `Old`. Pinning a young-arena object through here
+/// leaves the latch disarmed, and a copying minor will then relocate a pinned
+/// object — memory corruption, not a missed optimisation. `debug_assert` catches
+/// it in test builds, and the claim is checked for every real call site by
+/// `pin_object_non_young_call_sites_are_never_young` in
+/// `gc/tests/copying/latch.rs`; **add a case there when you add a caller.**
+#[inline]
+pub unsafe fn pin_object_non_young(header: *mut GcHeader) {
+    if header.is_null() {
+        return;
+    }
+    debug_assert!(
+        !pin_constrains_copying_minor(header),
+        "pin_object_non_young called on a young-arena object: the young-pin \
+         latch stays disarmed and the copying minor will relocate it"
+    );
+    (*header).gc_flags |= GC_FLAG_PINNED;
+}
+
+/// Test accessor for the young-pin predicate, so
+/// `pin_object_non_young_call_sites_are_never_young` can assert the invariant
+/// its callers rest on without duplicating the classification logic.
+#[cfg(test)]
+pub(crate) unsafe fn pin_constrains_copying_minor_for_tests(header: *mut GcHeader) -> bool {
+    pin_constrains_copying_minor(header)
+}
+
 /// Clear `GC_FLAG_PINNED` on `header`. Does **not** disarm the latch — see the
 /// module docs on why the latch is monotone.
 ///

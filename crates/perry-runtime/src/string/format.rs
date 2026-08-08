@@ -88,7 +88,7 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
             // this does not arm the young-pin latch (#7645).
             let gc_header =
                 (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            crate::gc::pin_object(gc_header);
+            crate::gc::pin_object_non_young(gc_header);
         }
         SMALL_INT_CACHE.with(|c| unsafe {
             // GC_STORE_AUDIT(ROOT): SMALL_INT_CACHE is scanned by scan_small_int_cache_roots_mut.
