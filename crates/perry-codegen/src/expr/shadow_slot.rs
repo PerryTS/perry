@@ -210,7 +210,7 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
 
 /// Bind frame slot `slot_idx` to the root alloca `slot_ptr` — the raw form of
 /// [`emit_shadow_slot_bind_for_local`], for roots that are not named locals
-/// (#7469: the pooled temp-root allocas in `temp_root.rs`).
+/// (#7469: the pooled temp-root allocas in `rooting/temp_root.rs`).
 ///
 /// The caller owns the pairing of `slot_idx` and `slot_ptr`; everything else
 /// — the stack-map textual marker, the #7088 inline frame write, the FFI

@@ -136,11 +136,13 @@ mod record_value;
 mod repsel_gates;
 mod scalar_slot_root;
 pub(crate) mod shadow_inline;
-mod shadow_slot;
+// `pub(crate)` since #7615 slice 8: `rooting/temp_root.rs` binds a pooled
+// temp alloca through the same shadow-slot emission every named local uses,
+// and it now lives outside `crate::expr`.
+pub(crate) mod shadow_slot;
 #[cfg(test)]
 mod slice7_rooting_tests;
 mod slot_rep;
-pub(crate) mod temp_root;
 // #7128: the env-knob table and the pure `gates -> context flags` derivation.
 // Every `FnCtx` construction site goes through `RepselContextFlags` so that a
 // knob cannot silently acquire a second representation's sites again.
@@ -728,7 +730,7 @@ pub(crate) struct FnCtx<'a> {
     /// #7469: pooled frame-rooted allocas for expression temporaries — see
     /// [`temp_root::TempRootPool`]. Starts empty; grows on the first
     /// protected temporary this function lowers.
-    pub temp_roots: temp_root::TempRootPool,
+    pub temp_roots: crate::rooting::TempRootPool,
 
     /// Cached pointer to this function's `InlineArenaState` slot —
     /// allocated lazily on the first `new ClassName()` site that uses

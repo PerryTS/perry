@@ -50,7 +50,7 @@ use perry_hir::Expr;
 
 use crate::types::{DOUBLE, I32, I64};
 
-use super::FnCtx;
+use crate::expr::FnCtx;
 
 /// Per-function pool of frame-rooted temp allocas (#7469).
 ///
@@ -155,12 +155,12 @@ fn temp_pool_acquire(ctx: &mut FnCtx<'_>) -> Option<String> {
 fn temp_slot_store(ctx: &mut FnCtx<'_>, handle: &str, value_i64: &str) {
     ctx.block().store(I64, value_i64, handle);
     let idx = ctx.temp_roots.frame_idx(handle);
-    super::shadow_slot::emit_shadow_slot_bind_ptr(ctx, idx, handle);
+    crate::expr::shadow_slot::emit_shadow_slot_bind_ptr(ctx, idx, handle);
 }
 
 /// Push `value_i64` (a bare heap pointer or NaN-boxed bits) and return the
 /// slot handle.
-pub(crate) fn temp_root_push_i64(ctx: &mut FnCtx<'_>, value_i64: &str) -> String {
+pub(in crate::rooting) fn temp_root_push_i64(ctx: &mut FnCtx<'_>, value_i64: &str) -> String {
     if let Some(handle) = temp_pool_acquire(ctx) {
         temp_slot_store(ctx, &handle, value_i64);
         return handle;
@@ -170,7 +170,7 @@ pub(crate) fn temp_root_push_i64(ctx: &mut FnCtx<'_>, value_i64: &str) -> String
 }
 
 /// Push a NaN-boxed `double` temporary and return the slot-index register.
-pub(crate) fn temp_root_push_double(ctx: &mut FnCtx<'_>, value: &str) -> String {
+pub(in crate::rooting) fn temp_root_push_double(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let bits = ctx.block().bitcast_double_to_i64(value);
     temp_root_push_i64(ctx, &bits)
 }
@@ -180,7 +180,7 @@ pub(crate) fn temp_root_push_double(ctx: &mut FnCtx<'_>, value: &str) -> String 
 /// In alloca mode the re-read is a plain load — the collector rewrote the
 /// alloca (shadow scan or statepoint relocation), so the load IS the
 /// post-collection value, same as a named local's re-read.
-pub(crate) fn temp_root_get_i64(ctx: &mut FnCtx<'_>, idx: &str) -> String {
+pub(in crate::rooting) fn temp_root_get_i64(ctx: &mut FnCtx<'_>, idx: &str) -> String {
     if ctx.temp_roots.alloca_mode == Some(true) {
         return ctx.block().load(I64, idx);
     }
@@ -188,7 +188,7 @@ pub(crate) fn temp_root_get_i64(ctx: &mut FnCtx<'_>, idx: &str) -> String {
 }
 
 /// Re-read slot `idx` as a NaN-boxed `double`.
-pub(crate) fn temp_root_get_double(ctx: &mut FnCtx<'_>, idx: &str) -> String {
+pub(in crate::rooting) fn temp_root_get_double(ctx: &mut FnCtx<'_>, idx: &str) -> String {
     let bits = temp_root_get_i64(ctx, idx);
     ctx.block().bitcast_i64_to_double(&bits)
 }
@@ -198,7 +198,7 @@ pub(crate) fn temp_root_get_double(ctx: &mut FnCtx<'_>, idx: &str) -> String {
 /// For producers that hand back a *different* address each round — the
 /// `concat` accumulator (#6971), where every `js_string_concat` yields a new
 /// string and the old one stops being the value that must stay alive.
-pub(crate) fn temp_root_set_i64(ctx: &mut FnCtx<'_>, idx: &str, value_i64: &str) {
+pub(in crate::rooting) fn temp_root_set_i64(ctx: &mut FnCtx<'_>, idx: &str, value_i64: &str) {
     if ctx.temp_roots.alloca_mode == Some(true) {
         temp_slot_store(ctx, idx, value_i64);
         return;
@@ -212,13 +212,13 @@ pub(crate) fn temp_root_set_i64(ctx: &mut FnCtx<'_>, idx: &str, value_i64: &str)
 /// The `Object.assign` accumulator (#7200) is the same shape as the `concat`
 /// one: `js_object_assign_one` returns the target's *post-collection* address,
 /// so each link must republish rather than keep the address it passed in.
-pub(crate) fn temp_root_set_double(ctx: &mut FnCtx<'_>, idx: &str, value: &str) {
+pub(in crate::rooting) fn temp_root_set_double(ctx: &mut FnCtx<'_>, idx: &str, value: &str) {
     let bits = ctx.block().bitcast_double_to_i64(value);
     temp_root_set_i64(ctx, idx, &bits);
 }
 
 /// Drop slot `idx` and everything pushed above it.
-pub(crate) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
+pub(in crate::rooting) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
     if ctx.temp_roots.alloca_mode == Some(true) {
         // Mirror the FFI contract exactly: drop `idx` and everything acquired
         // above it. Each released slot is zeroed (dropping its retention) and
@@ -236,7 +236,7 @@ pub(crate) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
         ctx.temp_roots.active = pos;
         for (alloca, slot_idx) in released {
             ctx.block().store(I64, "0", &alloca);
-            super::shadow_slot::emit_shadow_slot_clear(ctx, slot_idx);
+            crate::expr::shadow_slot::emit_shadow_slot_clear(ctx, slot_idx);
         }
         return;
     }
@@ -252,7 +252,7 @@ pub(crate) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
 /// the triple is a load, the push itself, and a store — so the plain
 /// `js_array_push_f64` (which roots `value` internally on its grow path) is
 /// the cheaper form and the fused helper stays FFI-fallback-only.
-pub(crate) fn temp_rooted_array_push(ctx: &mut FnCtx<'_>, idx: &str, value: &str) {
+pub(in crate::rooting) fn temp_rooted_array_push(ctx: &mut FnCtx<'_>, idx: &str, value: &str) {
     if ctx.temp_roots.alloca_mode == Some(true) {
         let arr = ctx.block().load(I64, idx);
         let new_arr = ctx
@@ -280,7 +280,7 @@ pub(crate) fn temp_rooted_array_push(ctx: &mut FnCtx<'_>, idx: &str, value: &str
 /// Pair with [`temp_rooted_array_push`] per argument, then
 /// [`rooted_array_read`] and [`temp_root_truncate`] — in that order, so the
 /// array stays rooted across the call that consumes it.
-pub(crate) fn rooted_array_begin(ctx: &mut FnCtx<'_>, cap: &str) -> String {
+pub(in crate::rooting) fn rooted_array_begin(ctx: &mut FnCtx<'_>, cap: &str) -> String {
     let arr = ctx.block().call(I64, "js_array_alloc", &[(I32, cap)]);
     temp_root_push_i64(ctx, &arr)
 }
@@ -288,7 +288,7 @@ pub(crate) fn rooted_array_begin(ctx: &mut FnCtx<'_>, cap: &str) -> String {
 /// Read the accumulator back out of its temp-root slot. Does NOT truncate:
 /// callers truncate after the consuming call, so the array is still rooted
 /// while the consumer runs (formatting an argument list allocates).
-pub(crate) fn rooted_array_read(ctx: &mut FnCtx<'_>, idx: &str) -> String {
+pub(in crate::rooting) fn rooted_array_read(ctx: &mut FnCtx<'_>, idx: &str) -> String {
     temp_root_get_i64(ctx, idx)
 }
 
@@ -297,7 +297,7 @@ pub(crate) fn rooted_array_read(ctx: &mut FnCtx<'_>, idx: &str) -> String {
 /// Deliberately one-sided: `false` must mean "provably allocates nothing", and
 /// everything unrecognized answers `true`. A wrong `false` is a
 /// use-after-free; a wrong `true` costs two runtime calls on a cold path.
-pub(crate) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         // Immediates and plain slot reads. `LocalGet` reads an alloca,
         // `GlobalGet` a module global — neither allocates. (Reading an
@@ -387,8 +387,8 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
                 // provably hold no pointer cannot be strings, so the `+` is a
                 // numeric add and allocates nothing.
                 && (!matches!(op, perry_hir::BinaryOp::Add)
-                    || (super::expr_is_known_non_pointer_shadow_value(ctx, left)
-                        && super::expr_is_known_non_pointer_shadow_value(ctx, right)))
+                    || (crate::expr::expr_is_known_non_pointer_shadow_value(ctx, left)
+                        && crate::expr::expr_is_known_non_pointer_shadow_value(ctx, right)))
         }
         _ => false,
     }
@@ -419,7 +419,7 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// coercion of it reaches a poll decision. Honesty of scalar annotations is a
 /// standing invariant of the precise-root design, inherited here rather than
 /// introduced.
-pub(crate) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> bool {
+pub(in crate::rooting) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> bool {
     !ctx.shadow_slot_map.contains_key(&id)
         && !ctx.module_globals.contains_key(&id)
         && matches!(
@@ -435,91 +435,6 @@ pub(crate) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> bool {
         )
 }
 
-/// Does any expression after index `i` reach a collection point?
-///
-/// This is the gate for protecting value `i`: a value that nothing allocating
-/// follows cannot be collected before it is consumed, so the rooting calls
-/// would be pure overhead. `i < n`, `x * 2` on proven-numeric locals,
-/// `f(x, y)` on plain locals and `[1, 2, 3]` therefore emit exactly the IR
-/// they emitted before #6951.
-fn any_later_ref_may_trigger_gc(ctx: &FnCtx<'_>, exprs: &[&Expr], i: usize) -> bool {
-    exprs
-        .iter()
-        .skip(i + 1)
-        .any(|e| expr_may_trigger_gc(ctx, e))
-}
-
-/// Lower `exprs` left to right, keeping each already-evaluated value precisely
-/// rooted across the evaluation of the ones that follow (#6951).
-///
-/// Returns the lowered values — **re-read from their roots, or re-derived from
-/// their immutable storage** ([`OperandProtection`]), so they are valid after
-/// an evacuating cycle — and the guard index the caller must pass to
-/// [`temp_root_release`] once the consuming call has run. `None` means nothing
-/// needed a temp-root slot; it does NOT mean nothing was re-read, because the
-/// [`OperandProtection::Reload`] half emits no runtime call at all.
-pub(crate) fn lower_exprs_rooted(
-    ctx: &mut FnCtx<'_>,
-    exprs: &[&Expr],
-) -> anyhow::Result<(Vec<String>, Option<String>)> {
-    let mut values = Vec::with_capacity(exprs.len());
-    let mut slots: Vec<Option<String>> = Vec::with_capacity(exprs.len());
-    let mut guard: Option<String> = None;
-    let mut reload: Vec<bool> = Vec::with_capacity(exprs.len());
-    for (i, expr) in exprs.iter().enumerate() {
-        let value = super::lower_expr(ctx, expr)?;
-        // `any_later_ref_may_trigger_gc` is the *window*: can anything between
-        // this operand and the consuming call collect? [`operand_protection`]
-        // turns that window into the one strategy this operand needs.
-        let collects = any_later_ref_may_trigger_gc(ctx, exprs, i);
-        match operand_protection(ctx, expr, collects) {
-            OperandProtection::Root => {
-                let idx = temp_root_push_double(ctx, &value);
-                // The FIRST slot pushed is the guard: truncating it drops every
-                // slot above it too, so one call releases the whole group.
-                if guard.is_none() {
-                    guard = Some(idx.clone());
-                }
-                slots.push(Some(idx));
-                reload.push(false);
-            }
-            OperandProtection::Reload => {
-                slots.push(None);
-                reload.push(true);
-            }
-            OperandProtection::Reuse => {
-                slots.push(None);
-                reload.push(false);
-            }
-        }
-        values.push(value);
-    }
-    for (i, value) in values.iter_mut().enumerate() {
-        if let Some(idx) = slots[i].clone() {
-            *value = temp_root_get_double(ctx, &idx);
-        } else if reload[i] {
-            // #7114: no runtime call — just the load that was already emitted,
-            // emitted again below the collection point so it observes the
-            // address evacuation wrote back into the handle global.
-            *value = super::lower_expr(ctx, exprs[i])?;
-        }
-    }
-    Ok((values, guard))
-}
-
-/// Lower a `left`/`right` operand pair with the same contract as
-/// [`lower_exprs_rooted`].
-pub(crate) fn lower_operand_pair_rooted(
-    ctx: &mut FnCtx<'_>,
-    left: &Expr,
-    right: &Expr,
-) -> anyhow::Result<(String, String, Option<String>)> {
-    let (mut values, guard) = lower_exprs_rooted(ctx, &[left, right])?;
-    let right_value = values.pop().expect("pair lowering yields two values");
-    let left_value = values.pop().expect("pair lowering yields two values");
-    Ok((left_value, right_value, guard))
-}
-
 /// Already-lowered operand values kept alive across work whose shape the
 /// caller controls — a later operand whose *representation* is chosen per
 /// branch (`Expr::MapSet`, #6970) or an allocation that happens after the whole
@@ -533,7 +448,7 @@ pub(crate) fn lower_operand_pair_rooted(
 /// When `protect` is false this emits nothing at all and [`RootedOperands::reread`]
 /// hands the original registers straight back, so unprotected sites keep their
 /// pre-#6951 IR byte for byte.
-pub(crate) struct RootedOperands {
+pub(in crate::rooting) struct RootedOperands {
     /// Slot index per operand, or `None` when the operand was not rooted.
     slots: Vec<Option<String>>,
     /// The registers as originally lowered — the answer when nothing is rooted
@@ -578,7 +493,7 @@ pub(crate) struct RootedOperands {
 /// `wtf8_literal_operand_is_rooted_not_merely_reused` in
 /// `tests/temp_root_operand_temporaries.rs` pins the current answer so that edit
 /// goes red instead of shipping another silent wrong answer.
-pub(crate) fn operand_is_reloadable(expr: &Expr) -> bool {
+pub(in crate::rooting) fn operand_is_reloadable(expr: &Expr) -> bool {
     // ONLY provably immutable sources. A string literal always re-lowers to a
     // load of the same `__perry_init_strings_*` handle, so re-reading it can
     // never observe a different value.
@@ -606,7 +521,7 @@ pub(crate) fn operand_is_reloadable(expr: &Expr) -> bool {
 /// `m.set(k, v)` roots `map` before `key` is lowered rather than after.
 ///
 /// See [`RootedOperands::push`] for the per-operand contract.
-pub(crate) fn root_operands_begin(capacity: usize) -> RootedOperands {
+pub(in crate::rooting) fn root_operands_begin(capacity: usize) -> RootedOperands {
     RootedOperands {
         slots: Vec::with_capacity(capacity),
         values: Vec::with_capacity(capacity),
@@ -635,7 +550,7 @@ impl RootedOperands {
     ///
     /// When `collects` is false neither applies: nothing can be swept and
     /// nothing can move, so the register is reused and the IR is unchanged.
-    pub(crate) fn push(
+    pub(in crate::rooting) fn push(
         &mut self,
         ctx: &mut FnCtx<'_>,
         operand: &Expr,
@@ -674,7 +589,7 @@ impl RootedOperands {
     /// - **unrooted and not re-loadable** → keep the register. This is only
     ///   reached for values `expr_is_known_non_pointer_shadow_value` proved are
     ///   not heap references, which relocation cannot invalidate.
-    pub(crate) fn reread(
+    pub(in crate::rooting) fn reread(
         &self,
         ctx: &mut FnCtx<'_>,
         operands: &[&Expr],
@@ -700,7 +615,7 @@ impl RootedOperands {
     /// the roots exist to close.
     ///
     /// Same three cases as [`RootedOperands::reread`]; see its documentation.
-    pub(crate) fn reread_one(
+    pub(in crate::rooting) fn reread_one(
         &self,
         ctx: &mut FnCtx<'_>,
         operands: &[&Expr],
@@ -711,21 +626,14 @@ impl RootedOperands {
                 let idx = idx.clone();
                 temp_root_get_double(ctx, &idx)
             }
-            None if self.reloadable[i] => super::lower_expr(ctx, operands[i])?,
+            None if self.reloadable[i] => crate::expr::lower_expr(ctx, operands[i])?,
             None => self.values[i].clone(),
         })
     }
 
-    /// True when this group actually pushed slots — the signal a caller uses to
-    /// keep an eager unbox (and therefore its exact register numbering) on the
-    /// unprotected path.
-    pub(crate) fn is_rooted(&self) -> bool {
-        self.guard.is_some()
-    }
-
     /// Drop the group. Call it *after* the consuming call: the consumer
     /// allocates while reading these values.
-    pub(crate) fn release(self, ctx: &mut FnCtx<'_>) {
+    pub(in crate::rooting) fn release(self, ctx: &mut FnCtx<'_>) {
         temp_root_release(ctx, self.guard);
     }
 
@@ -739,7 +647,7 @@ impl RootedOperands {
     /// drops both. So that caller needs the index rather than the act — and it
     /// must not release early, since the accumulator has to stay rooted across
     /// the consuming call too.
-    pub(crate) fn guard(&self) -> Option<String> {
+    pub(in crate::rooting) fn guard(&self) -> Option<String> {
         self.guard.clone()
     }
 }
@@ -747,180 +655,14 @@ impl RootedOperands {
 /// Release a guard returned by [`lower_exprs_rooted`]. Call it *after* the
 /// consuming call, not before: the consumer allocates while reading these
 /// values.
-pub(crate) fn temp_root_release(ctx: &mut FnCtx<'_>, guard: Option<String>) {
+pub(in crate::rooting) fn temp_root_release(ctx: &mut FnCtx<'_>, guard: Option<String>) {
     if let Some(idx) = guard {
         temp_root_truncate(ctx, &idx);
     }
 }
 
-/// An operand of a property/element STORE that is lowered *before* the value,
-/// kept valid across the value's evaluation (#7154).
-///
-/// Two operands are in that position, and both need it:
-///
-/// - the **receiver**. `o.k = f()` and `o[k] = f()` evaluate the reference
-///   first and the value second — spec order, and codegen follows it. That
-///   leaves the receiver in an SSA register while `f()` runs, and `f()`
-///   allocates. A back-edge poll inside it drives an evacuating minor which
-///   relocates the receiver; the *slot* the register was loaded from is a root
-///   and gets rewritten, but the register does not, so the store lands in
-///   abandoned from-space memory and the field never appears on the object the
-///   program keeps.
-/// - the **computed key**. `o[k] = f()` lowers `k` before `f`, and a
-///   non-literal string key is an ordinary heap string with the same exposure:
-///   `unbox_str_handle` below the call then reads a pre-move `StringHeader*`,
-///   so the field lands under a garbage key. Same for the `[sym]: init` pair of
-///   a class expression's symbol statics, where the Symbol is lowered before
-///   its initializer.
-///
-/// This is the store-side instance of the [module invariant](self): property
-/// (2) — a rewritten location — is worthless without property (3), reading that
-/// location again below the collection point. It is #7114 with a store operand
-/// instead of a call operand.
-///
-/// A temp root (not a re-load) is the required strategy: re-lowering the
-/// operand would observe an assignment made by `f()` itself, which is a
-/// miscompile rather than a rooting fix — see [`operand_is_reloadable`].
-///
-/// Guards nest: push the receiver's first and the key's second, then release in
-/// the opposite order, because [`temp_root_truncate`] is a stack *cut* and a
-/// release of the outer one drops the inner.
-pub(crate) struct StoreOperandGuard {
-    slot: Option<String>,
-    /// The operand took [`OperandProtection::Reload`]: no runtime slot, but the
-    /// re-read below the collection point must re-emit the lowering rather than
-    /// reuse the register. See [`reread_store_operand`].
-    reload: bool,
-}
-
-/// Root `lowered` (the already-lowered `operand`) if evaluating `value` can
-/// collect. Emits nothing otherwise, so stores with an inert RHS keep their old
-/// IR.
-pub(crate) fn guard_store_operand(
-    ctx: &mut FnCtx<'_>,
-    operand: &Expr,
-    lowered: &str,
-    value: &Expr,
-) -> StoreOperandGuard {
-    let collects = expr_may_trigger_gc(ctx, value);
-    guard_store_operand_across(ctx, operand, lowered, collects)
-}
-
-/// [`guard_store_operand`] with the window stated explicitly.
-///
-/// The hazard is not visible from a single sibling expression: a receiver
-/// lowered before both the key and the value is live across *both*, so its
-/// `collects` is the disjunction. Deriving it from the value alone — which is
-/// what every caller did before #7201 — leaves `o[f()] = 1` unguarded, because
-/// the literal `1` cannot collect while `f()` obviously can. This mirrors
-/// [`RootedOperands::push`], whose doc already states that "for `m.set(k, v)`
-/// the receiver's window covers both `key`'s lowering and `value`'s".
-pub(crate) fn guard_store_operand_across(
-    ctx: &mut FnCtx<'_>,
-    operand: &Expr,
-    lowered: &str,
-    collects: bool,
-) -> StoreOperandGuard {
-    let protection = operand_protection(ctx, operand, collects);
-    let slot = match protection {
-        OperandProtection::Root => Some(temp_root_push_double(ctx, lowered)),
-        // `Reload` emits no runtime call, but it is NOT "keep the register":
-        // [`reread_store_operand`] re-lowers the operand below the collection
-        // point. `Reuse` means a proven non-pointer, which relocation cannot
-        // touch, so its register is genuinely reusable.
-        OperandProtection::Reload | OperandProtection::Reuse => None,
-    };
-    StoreOperandGuard {
-        slot,
-        reload: protection == OperandProtection::Reload,
-    }
-}
-
-/// Re-read the operand below the value's evaluation. Returns `lowered`
-/// unchanged only when the operand is a proven non-pointer.
-///
-/// # Why `Reload` must re-lower, not reuse (#7201)
-///
-/// Until this was fixed, the `Reload` arm returned the caller's register
-/// unchanged, on the reasoning that "for a literal [the register] is a load
-/// from that same global". It is a load from that global *taken before the
-/// collection point*. A string literal's `__perry_init_strings_*` handle is a
-/// registered root that evacuation **rewrites** — that is the whole content of
-/// #7114 — so the pre-collection register names from-space and the global does
-/// not. Emitting the load again is the entire fix and costs no runtime call.
-///
-/// This now matches [`RootedOperands::reread`], which has always re-lowered its
-/// `Reload` operands. The two helper families answering the same question
-/// differently is exactly the drift that produced #7114.
-pub(crate) fn reread_store_operand(
-    ctx: &mut FnCtx<'_>,
-    guard: &StoreOperandGuard,
-    operand: &Expr,
-    lowered: &str,
-) -> anyhow::Result<String> {
-    match &guard.slot {
-        Some(idx) => {
-            let idx = idx.clone();
-            Ok(temp_root_get_double(ctx, &idx))
-        }
-        None if guard.reload => super::lower_expr(ctx, operand),
-        None => Ok(lowered.to_string()),
-    }
-}
-
-/// Drop the guard. Call it *after* the store, not before: the store helper
-/// allocates (key interning, field-array growth, shape transition).
-pub(crate) fn release_store_operand(ctx: &mut FnCtx<'_>, guard: StoreOperandGuard) {
-    if let Some(idx) = guard.slot {
-        temp_root_truncate(ctx, &idx);
-    }
-}
-
-/// A freshly allocated container handle (object, array, …) that generated code
-/// keeps writing into while it lowers the initializer expressions.
-///
-/// The handle is a raw `i64` in an SSA register, and every initializer that
-/// allocates is a chance for the half-built container to be swept out from
-/// under it — the object-literal form of the #6951 accumulator bug. Re-read
-/// the handle through [`rooted_handle_get`] before every use.
-pub(crate) struct RootedHandle {
-    slot: Option<String>,
-    value: String,
-}
-
-/// Root `handle` when `protect` says an upcoming initializer can collect.
-/// `protect == false` emits nothing and [`rooted_handle_get`] hands the
-/// original register straight back, so unprotected sites keep their old IR.
-pub(crate) fn rooted_handle_begin(
-    ctx: &mut FnCtx<'_>,
-    handle_i64: &str,
-    protect: bool,
-) -> RootedHandle {
-    let slot = protect.then(|| temp_root_push_i64(ctx, handle_i64));
-    RootedHandle {
-        slot,
-        value: handle_i64.to_string(),
-    }
-}
-
-pub(crate) fn rooted_handle_get(ctx: &mut FnCtx<'_>, handle: &RootedHandle) -> String {
-    match &handle.slot {
-        Some(idx) => {
-            let idx = idx.clone();
-            temp_root_get_i64(ctx, &idx)
-        }
-        None => handle.value.clone(),
-    }
-}
-
-pub(crate) fn rooted_handle_release(ctx: &mut FnCtx<'_>, handle: RootedHandle) {
-    if let Some(idx) = handle.slot {
-        temp_root_truncate(ctx, &idx);
-    }
-}
-
 /// Do any of an object literal's / call's initializer expressions collect?
-pub(crate) fn any_may_trigger_gc<'a>(
+pub(in crate::rooting) fn any_may_trigger_gc<'a>(
     ctx: &FnCtx<'_>,
     exprs: impl IntoIterator<Item = &'a Expr>,
 ) -> bool {
@@ -962,8 +704,8 @@ pub(crate) fn any_may_trigger_gc<'a>(
 /// (2). `m.set(fresh(), churn())` regressed straight back to an abort when this
 /// was written as a blanket `LocalGet` suppression; the Map receiver was
 /// exactly such a local.
-pub(crate) fn operand_needs_root(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    if super::expr_is_known_non_pointer_shadow_value(ctx, expr) {
+pub(in crate::rooting) fn operand_needs_root(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    if crate::expr::expr_is_known_non_pointer_shadow_value(ctx, expr) {
         return false;
     }
     // Only a string literal is suppressed: it is a registered root AND
@@ -983,7 +725,7 @@ pub(crate) fn operand_needs_root(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// See the module header for the three properties a root buys. Each variant is
 /// the cheapest strategy that supplies all three for its class of operand:
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum OperandProtection {
+pub(in crate::rooting) enum OperandProtection {
     /// Push a temp-root slot and re-read it. The only strategy that gives
     /// liveness *and* a rewritten location *and* the call-time value, so it is
     /// what every operand with no other root gets — and also what a local or a
@@ -1017,7 +759,7 @@ pub(crate) enum OperandProtection {
 /// Keeping the two predicates but calling them from two places is what let the
 /// pair drift, so the fix is the single call site, not a second copy of the
 /// re-load.
-pub(crate) fn operand_protection(
+pub(in crate::rooting) fn operand_protection(
     ctx: &FnCtx<'_>,
     expr: &Expr,
     collects: bool,
@@ -1038,39 +780,4 @@ pub(crate) fn operand_protection(
     // Suppressed by `expr_is_known_non_pointer_shadow_value`: not a heap
     // reference, so there is nothing for the collector to move.
     OperandProtection::Reuse
-}
-
-/// Open an expression-scope temp-root barrier for a call/constructor whose
-/// operands are `args`.
-///
-/// Pushes a null marker slot and returns its index. Because
-/// [`temp_root_truncate`] is a stack *cut*, [`temp_root_scope_end`] drops the
-/// marker and every slot pushed above it — no matter which of the callee's
-/// return paths ran. That is what makes rooting tractable in
-/// `lower_call/new.rs`, where `lowered_args` is consumed at a dozen sites
-/// spread over ~20 return paths (#6969); the alternative is a `temp_root_release`
-/// at each, which is exactly the bookkeeping that gets missed.
-///
-/// A null word decodes to nothing, so the marker itself roots no object.
-/// Emits nothing when nothing inside the scope could ever need rooting.
-///
-/// #7154: `also_needed` is the caller's extra reason to open the scope beyond
-/// its operands. `lower_new_impl_inner` roots the freshly-allocated *instance*
-/// across the constructor body, and `new C()` with no arguments is precisely
-/// the shape that would otherwise push a slot with no marker above it to cut —
-/// a temp-root entry leaked per construction.
-pub(crate) fn temp_root_scope_begin(
-    ctx: &mut FnCtx<'_>,
-    args: &[Expr],
-    also_needed: bool,
-) -> Option<String> {
-    (also_needed || args.iter().any(|a| operand_needs_root(ctx, a)))
-        .then(|| temp_root_push_i64(ctx, "0"))
-}
-
-/// Close a barrier opened by [`temp_root_scope_begin`].
-pub(crate) fn temp_root_scope_end(ctx: &mut FnCtx<'_>, scope: Option<String>) {
-    if let Some(idx) = scope {
-        temp_root_truncate(ctx, &idx);
-    }
 }

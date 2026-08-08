@@ -50,7 +50,7 @@
 //!
 //! # Why re-loading is sound, and when it is not
 //!
-//! Re-reading a slot is NOT unconditionally safe, and `expr/temp_root.rs`'s
+//! Re-reading a slot is NOT unconditionally safe, and `rooting/temp_root.rs`'s
 //! [`operand_is_reloadable`] documents exactly why: re-lowering a local reads
 //! its value *now*, and "now" is after the later arguments have run — any of
 //! which may have reassigned it. `new C(g, bump())` where `bump()` assigns `g`
@@ -148,6 +148,7 @@
 //! reload — and the re-derived `bitcast`/`and` above it are pure and fold.
 //!
 //! [`operand_is_reloadable`]: crate::expr::temp_root
+//! [`operand_is_reloadable`]: crate::rooting
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -1236,7 +1237,7 @@ mod tests {
         // ★ The soundness half. `f(x, (x = other, 1))` must pass the ORIGINAL
         // `x`; re-reading the slot below the assignment would hand the consumer
         // the new value, which is a miscompile and not a rooting fix. See
-        // `expr::temp_root::operand_is_reloadable`.
+        // `rooting::operand_is_reloadable`.
         let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
         let b = f.create_block("entry");
         let slot = b.alloca(DOUBLE);

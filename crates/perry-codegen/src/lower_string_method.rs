@@ -7,15 +7,15 @@ use anyhow::{bail, Result};
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
-use crate::expr::temp_root::{
-    self, temp_root_get_double, temp_root_get_i64, temp_root_push_double, temp_root_push_i64,
-    temp_root_set_i64, temp_root_truncate,
-};
 use crate::expr::{
     i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
     FnCtx,
 };
 use crate::lower_string_concat::str_operand_handle_tag_dispatched;
+use crate::rooting::{
+    open_rooted_group, operand_may_collect, with_rooted_accumulator, Arg, EmittedValue, Repr,
+    RootedGroup,
+};
 use crate::type_analysis::is_string_expr;
 
 mod char_code_at;
@@ -166,9 +166,17 @@ pub(crate) fn lower_string_method(
     // `gc::root_words` bare form covers. Root it across the whole dispatch;
     // the truncate below is the single release point for every one of the
     // match's ~60 return paths.
-    let args_can_collect = args.iter().any(|a| temp_root::expr_may_trigger_gc(ctx, a));
-    let recv_root = args_can_collect.then(|| temp_root_push_double(ctx, &recv_box));
-    let result = lower_string_method_dispatch(ctx, object, property, args, &recv_box, &recv_root);
+    let args_can_collect = args.iter().any(|a| operand_may_collect(ctx, a));
+    // #7615 slice 8: the ESCAPING group form. The release has to post-dominate
+    // ~60 return paths inside the dispatch, which no closure form can own
+    // without swallowing the whole 1,100-line match — the same argument
+    // `open_rooted_group`'s doc makes for `func_ref.rs`'s dispatch diamonds.
+    // What the group buys over the raw slot index it replaces is that a caller
+    // holding it cannot truncate at the wrong slot, in the wrong order, or
+    // twice: it never sees an index.
+    let mut group = open_rooted_group(1);
+    let recv = group.adopt_emitted(ctx, Repr::Boxed, &recv_box, args_can_collect);
+    let result = lower_string_method_dispatch(ctx, object, property, args, &recv_box, &group, recv);
     // Released only after the dispatch's consuming runtime call has run: that
     // call allocates while it reads the receiver.
     //
@@ -190,10 +198,13 @@ pub(crate) fn lower_string_method(
     // defense-in-depth: emitting after a terminator is never correct, and the
     // check is free. Reachability of the arm from a TypeScript source remains
     // unproven; see the PR body.
-    if let Some(idx) = &recv_root {
-        if !ctx.block().is_terminated() {
-            temp_root_truncate(ctx, idx);
-        }
+    //
+    // Not releasing on the terminated path is the SAFE half of a mis-managed
+    // guard (`open_rooted_group`'s doc): over-retention, not a dangling
+    // pointer. `release` on an empty group — the `args_can_collect == false`
+    // case — emits nothing, so the guard alone decides.
+    if !ctx.block().is_terminated() {
+        group.release(ctx);
     }
     result
 }
@@ -204,14 +215,8 @@ pub(crate) fn lower_string_method(
 /// evacuating cycle rewrites it and the register pushed beforehand is stale.
 /// Returns the original register when nothing was rooted, emitting no IR — so a
 /// method whose arguments cannot collect keeps its previous code byte for byte.
-fn reread_recv(ctx: &mut FnCtx<'_>, recv_root: &Option<String>, recv_box: &str) -> String {
-    match recv_root {
-        Some(idx) => {
-            let idx = idx.clone();
-            temp_root_get_double(ctx, &idx)
-        }
-        None => recv_box.to_string(),
-    }
+fn reread_recv(ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>, recv: EmittedValue) -> String {
+    group.reread_emitted(ctx, recv)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -221,7 +226,8 @@ fn lower_string_method_dispatch(
     property: &str,
     args: &[Expr],
     recv_box: &str,
-    recv_root: &Option<String>,
+    group: &RootedGroup<'_>,
+    recv: EmittedValue,
 ) -> Result<String> {
     let recv_box = recv_box.to_string();
     match property {
@@ -250,7 +256,7 @@ fn lower_string_method_dispatch(
             } else {
                 None
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let needle_handle = if needle_is_str {
@@ -299,7 +305,7 @@ fn lower_string_method_dispatch(
             } else {
                 None
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             // String length (i32 at header offset 0). Used as the default end
@@ -352,7 +358,7 @@ fn lower_string_method_dispatch(
             // its coercion/undefined/RegExp checks for this common hot path.
             if args.len() == 1 && matches!(&args[0], Expr::String(_) | Expr::WtfString(_)) {
                 let delim_box = lower_expr(ctx, &args[0])?;
-                let recv_box = reread_recv(ctx, recv_root, &recv_box);
+                let recv_box = reread_recv(ctx, group, recv);
                 let blk = ctx.block();
                 let recv_handle = unbox_str_handle(blk, &recv_box);
                 let delim_handle = unbox_str_handle(blk, &delim_box);
@@ -381,7 +387,7 @@ fn lower_string_method_dispatch(
             } else {
                 None
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             // No separator → pass `undefined`, which `js_string_split_value`
@@ -426,7 +432,7 @@ fn lower_string_method_dispatch(
             } else {
                 Some(lower_expr(ctx, &args[0])?)
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let locales_box = match locales_box {
                 Some(v) => v,
@@ -453,7 +459,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter() {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let runtime_fn = match property {
@@ -473,7 +479,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter() {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let runtime_fn = match property {
@@ -502,7 +508,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let value_handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &value_d)]);
@@ -535,7 +541,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
@@ -554,7 +560,7 @@ fn lower_string_method_dispatch(
                 );
             }
             let count_d = lower_expr(ctx, &args[0])?;
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let result = blk.call(
@@ -596,7 +602,7 @@ fn lower_string_method_dispatch(
             let repl_is_str = is_string_expr(ctx, &args[1]);
             let needle_box = lower_expr(ctx, &args[0])?;
             let repl_box = lower_expr(ctx, &args[1])?;
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             // #4871: a `searchValue` codegen can't type (an object-property
@@ -720,7 +726,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
@@ -742,7 +748,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
             let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
@@ -764,7 +770,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter().skip(1) {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             if let Some(value) = lower_char_code_at_inline(ctx, object, &recv_box, &idx_d) {
                 return Ok(value);
             }
@@ -805,7 +811,7 @@ fn lower_string_method_dispatch(
             } else {
                 None
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let needle_handle = if needle_is_str {
@@ -874,7 +880,7 @@ fn lower_string_method_dispatch(
                 let sp_box = blk.load(DOUBLE, &sp_global);
                 unbox_str_handle(blk, &sp_box)
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             // Pass `target_length` as raw DOUBLE — the runtime does the
@@ -911,7 +917,7 @@ fn lower_string_method_dispatch(
                 }
                 form
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let result = blk.call(
@@ -972,7 +978,7 @@ fn lower_string_method_dispatch(
                     &[(DOUBLE, loc), (DOUBLE, opts_ref)],
                 );
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             // A non-string `that` (undefined/number/object) must be
@@ -1015,7 +1021,7 @@ fn lower_string_method_dispatch(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let i32_v = blk.call(
@@ -1040,7 +1046,7 @@ fn lower_string_method_dispatch(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let result = blk.call(
@@ -1070,7 +1076,7 @@ fn lower_string_method_dispatch(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let result = blk.call(
@@ -1086,7 +1092,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter() {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             // Returns a NaN-tagged boolean directly.
@@ -1097,7 +1103,7 @@ fn lower_string_method_dispatch(
             for extra in args.iter() {
                 let _ = lower_expr(ctx, extra)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let result = blk.call(I64, "js_string_to_well_formed", &[(I64, &recv_handle)]);
@@ -1116,45 +1122,43 @@ fn lower_string_method_dispatch(
             // `reread_recv` above cannot help: it has to be rooted in its own
             // right and written back after every concat, because each iteration
             // produces a NEW address.
-            let mut acc_handle = {
+            let acc_handle = {
                 let blk = ctx.block();
                 unbox_str_handle(blk, &recv_box)
             };
-            let args_can_collect = args.iter().any(|a| temp_root::expr_may_trigger_gc(ctx, a));
-            let acc_root = args_can_collect.then(|| temp_root_push_i64(ctx, &acc_handle));
-            for a in args {
-                let a_is_str = is_string_expr(ctx, a);
-                let s_box = lower_expr(ctx, a)?;
-                // The ToString coercion allocates too, so re-read only after it.
-                let s_handle = {
-                    let blk = ctx.block();
-                    if a_is_str {
-                        unbox_str_handle(blk, &s_box)
-                    } else {
-                        blk.call(I64, "js_string_coerce", &[(DOUBLE, &s_box)])
+            let args_can_collect = args.iter().any(|a| operand_may_collect(ctx, a));
+            // #7615 slice 8: `RootedAcc::advance` IS the "re-read, call, write
+            // the new address back" triple this arm spelled out by hand, and it
+            // exists for this exact reason (its doc names `js_string_concat`'s
+            // sibling `js_array_push_f64`). The accumulator never becomes a
+            // register the loop holds: `advance` materialises argument 0 from
+            // the slot as part of emitting the call.
+            with_rooted_accumulator(
+                ctx,
+                Repr::Ptr,
+                &acc_handle,
+                args_can_collect,
+                |ctx, acc| {
+                    for a in args {
+                        let a_is_str = is_string_expr(ctx, a);
+                        let s_box = lower_expr(ctx, a)?;
+                        // The ToString coercion allocates too, so re-read only after it.
+                        let s_handle = {
+                            let blk = ctx.block();
+                            if a_is_str {
+                                unbox_str_handle(blk, &s_box)
+                            } else {
+                                blk.call(I64, "js_string_coerce", &[(DOUBLE, &s_box)])
+                            }
+                        };
+                        // Write the new accumulator back, so the NEXT argument's
+                        // lowering keeps *this* string alive rather than its input.
+                        acc.advance(ctx, "js_string_concat", &[Arg::Plain(I64, &s_handle)]);
                     }
-                };
-                if let Some(idx) = &acc_root {
-                    let idx = idx.clone();
-                    acc_handle = temp_root_get_i64(ctx, &idx);
-                }
-                acc_handle = ctx.block().call(
-                    I64,
-                    "js_string_concat",
-                    &[(I64, &acc_handle), (I64, &s_handle)],
-                );
-                // Write the new accumulator back, so the NEXT argument's
-                // lowering keeps *this* string alive rather than its input.
-                if let Some(idx) = &acc_root {
-                    let idx = idx.clone();
-                    temp_root_set_i64(ctx, &idx, &acc_handle);
-                }
-            }
-            let boxed = nanbox_string_inline(ctx.block(), &acc_handle);
-            if let Some(idx) = &acc_root {
-                temp_root_truncate(ctx, idx);
-            }
-            Ok(boxed)
+                    Ok(())
+                },
+                |ctx, handle| Ok(nanbox_string_inline(ctx.block(), handle)),
+            )
         }
         "substr" => {
             // Legacy substr(start, length) — distinct from substring/slice:
@@ -1175,7 +1179,7 @@ fn lower_string_method_dispatch(
             } else {
                 None
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             // Pass the raw NaN-boxed args straight through: `js_string_substr`
@@ -1211,7 +1215,7 @@ fn lower_string_method_dispatch(
             } else {
                 None
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let method_id = regexp_search_method_id(property);
@@ -1272,7 +1276,7 @@ fn lower_string_method_dispatch(
             } else {
                 None
             };
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let method_id = regexp_search_method_id(property);
@@ -1313,7 +1317,7 @@ fn lower_string_method_dispatch(
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
-            let recv_box = reread_recv(ctx, recv_root, &recv_box);
+            let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &recv_box)]);
             Ok(nanbox_string_inline(blk, &handle))

@@ -19,10 +19,7 @@ use crate::expr::{lower_expr, nanbox_string_inline, unbox_str_handle, FnCtx};
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64};
 
-use crate::expr::temp_root::{
-    lower_exprs_rooted, lower_operand_pair_rooted, temp_root_get_double, temp_root_get_i64,
-    temp_root_push_double, temp_root_push_i64, temp_root_release, temp_root_truncate,
-};
+use crate::rooting::{with_operands_rooted, with_rooted_group, Repr};
 
 /// Lower the `str = str + rhs` self-append pattern. Uses the in-place
 /// `js_string_append` runtime function (refcount=1 → mutate in place,
@@ -212,57 +209,68 @@ fn lower_canonical_str_self_append(
         // order (a `rhs` that reassigns `s` must not be observed here), so the
         // pre-rhs value has to be carried across `rhs`'s evaluation and the
         // `js_jsvalue_to_string` coercion — both of which allocate. Re-reading
-        // the slot would take the wrong value; re-read the temp root instead.
-        let lhs_root = temp_root_push_double(ctx, &lhs_box);
-        let rhs_val = lower_expr(ctx, rhs)?;
-        let r_handle = ctx
-            .block()
-            .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &rhs_val)]);
-        // The coerced rhs is a bare string handle that has to survive the cold
-        // arm's `unbox_str_handle`, which materializes an SSO destination onto
-        // the heap — another allocation. Root it too and re-read it per arm.
-        let r_root = temp_root_push_i64(ctx, &r_handle);
-        let lhs_box = temp_root_get_double(ctx, &lhs_root);
-        let bits_d = ctx.block().bitcast_double_to_i64(&lhs_box);
-        let tag_d = ctx.block().lshr(I64, &bits_d, "48");
-        let is_heap = ctx.block().icmp_eq(I64, &tag_d, TAG_HEAP_STR);
+        // the slot would take the wrong value; re-read the root instead.
+        //
+        // #7615 slice 8: both values are produced by an EMITTED step rather
+        // than by lowering an `Expr` (a slot load and a coercion call), which
+        // is what `RootedGroup::adopt_emitted` is for, and both are re-read at
+        // more than one caller-chosen point — the `lhs` once below the
+        // coercion, the coerced `rhs` once per arm of the tag diamond. That
+        // multi-point re-read is why this is a group and not
+        // `with_operands_rooted`.
+        return with_rooted_group(ctx, 0, |ctx, group| {
+            let lhs_root = group.adopt_emitted(ctx, Repr::Boxed, &lhs_box, true);
+            let rhs_val = lower_expr(ctx, rhs)?;
+            let r_handle = ctx
+                .block()
+                .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &rhs_val)]);
+            // The coerced rhs is a bare string handle that has to survive the cold
+            // arm's `unbox_str_handle`, which materializes an SSO destination onto
+            // the heap — another allocation. Root it too and re-read it per arm.
+            let r_root = group.adopt_emitted(ctx, Repr::Ptr, &r_handle, true);
+            let lhs_box = group.reread_emitted(ctx, lhs_root);
+            let bits_d = ctx.block().bitcast_double_to_i64(&lhs_box);
+            let tag_d = ctx.block().lshr(I64, &bits_d, "48");
+            let is_heap = ctx.block().icmp_eq(I64, &tag_d, TAG_HEAP_STR);
 
-        let heap_idx = ctx.new_block("strapp.heap");
-        let cold_idx = ctx.new_block("strapp.cold");
-        let merge_idx = ctx.new_block("strapp.merge");
-        let heap_label = ctx.block_label(heap_idx);
-        let cold_label = ctx.block_label(cold_idx);
-        let merge_label = ctx.block_label(merge_idx);
-        ctx.block().cond_br(&is_heap, &heap_label, &cold_label);
+            let heap_idx = ctx.new_block("strapp.heap");
+            let cold_idx = ctx.new_block("strapp.cold");
+            let merge_idx = ctx.new_block("strapp.merge");
+            let heap_label = ctx.block_label(heap_idx);
+            let cold_label = ctx.block_label(cold_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block().cond_br(&is_heap, &heap_label, &cold_label);
 
-        ctx.current_block = heap_idx;
-        let h_d = ctx.block().and(I64, &bits_d, POINTER_MASK_I64);
-        let r_heap = temp_root_get_i64(ctx, &r_root);
-        let h_heap = ctx
-            .block()
-            .call(I64, "js_string_append", &[(I64, &h_d), (I64, &r_heap)]);
-        let heap_pred = ctx.block().label.clone();
-        ctx.block().br(&merge_label);
+            ctx.current_block = heap_idx;
+            let h_d = ctx.block().and(I64, &bits_d, POINTER_MASK_I64);
+            let r_heap = group.reread_emitted(ctx, r_root);
+            let h_heap = ctx
+                .block()
+                .call(I64, "js_string_append", &[(I64, &h_d), (I64, &r_heap)]);
+            let heap_pred = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
 
-        ctx.current_block = cold_idx;
-        let h_d2 = unbox_str_handle(ctx.block(), &lhs_box);
-        let r_cold = temp_root_get_i64(ctx, &r_root);
-        let h_cold = ctx
-            .block()
-            .call(I64, "js_string_append", &[(I64, &h_d2), (I64, &r_cold)]);
-        let cold_pred = ctx.block().label.clone();
-        ctx.block().br(&merge_label);
+            ctx.current_block = cold_idx;
+            let h_d2 = unbox_str_handle(ctx.block(), &lhs_box);
+            let r_cold = group.reread_emitted(ctx, r_root);
+            let h_cold = ctx
+                .block()
+                .call(I64, "js_string_append", &[(I64, &h_d2), (I64, &r_cold)]);
+            let cold_pred = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
 
-        ctx.current_block = merge_idx;
-        let handle = ctx
-            .block()
-            .phi(I64, &[(&h_heap, &heap_pred), (&h_cold, &cold_pred)]);
-        let new_box = nanbox_string_inline(ctx.block(), &handle);
-        ctx.block().store(DOUBLE, &new_box, slot);
-        // `lhs_root` is the base of the pair, so one truncate drops both. The
-        // index register is defined in the entry block and dominates the merge.
-        temp_root_truncate(ctx, &lhs_root);
-        return Ok(new_box);
+            ctx.current_block = merge_idx;
+            let handle = ctx
+                .block()
+                .phi(I64, &[(&h_heap, &heap_pred), (&h_cold, &cold_pred)]);
+            let new_box = nanbox_string_inline(ctx.block(), &handle);
+            ctx.block().store(DOUBLE, &new_box, slot);
+            // The group's release is one truncate at the LOWEST slot it holds —
+            // `lhs_root` — which drops the coerced-rhs slot with it, because a
+            // truncate is a stack cut. It runs in the merge block, which the slot
+            // registers (defined in the entry block) dominate.
+            Ok(new_box)
+        });
     }
 
     // Proven-string rhs: mirror the legacy fast path's evaluation order
@@ -396,10 +404,39 @@ pub(crate) fn lower_string_coerce_concat(
     // #6951: `l_box` is a heap string in an SSA register while `right` is
     // lowered. If `right` allocates (`"tag" + f()`), a collection sweeps the
     // left operand and the concat reads freed memory — a segfault, not a
-    // dropped character. `lower_operand_pair_rooted` emits nothing at all when
-    // `right` provably cannot collect, which is the common `"user_" + i` case.
-    let (l_box, r_box, guard) = lower_operand_pair_rooted(ctx, left, right)?;
+    // dropped character. `with_operands_rooted` emits nothing at all when
+    // `right` provably cannot collect, which is the common `"user_" + i` case,
+    // and it owns the release on all three exits — including the two early
+    // returns below, which is where #7462's "released on one arm" lived.
+    with_operands_rooted(ctx, &[left, right], |ctx, values| {
+        coerce_concat_body(
+            ctx,
+            left,
+            right,
+            &values[0],
+            &values[1],
+            l_is_string,
+            r_is_string,
+        )
+    })
+}
 
+/// The body of [`lower_string_coerce_concat`], below its operand roots.
+///
+/// A separate function rather than a closure body so the three arms keep their
+/// indentation — and so the ONE place that still needs a nested scope (the
+/// both-non-string fallback, whose left coercion has to survive the right
+/// coercion) reads as the exception it is.
+#[allow(clippy::too_many_arguments)]
+fn coerce_concat_body(
+    ctx: &mut FnCtx<'_>,
+    left: &Expr,
+    right: &Expr,
+    l_box: &str,
+    r_box: &str,
+    l_is_string: bool,
+    r_is_string: bool,
+) -> Result<String> {
     // Issue #58: fused string+value concat — when one side is a string
     // and the other is not, use the fused runtime call that collapses
     // js_jsvalue_to_string + js_string_concat into a single allocation
@@ -408,55 +445,51 @@ pub(crate) fn lower_string_coerce_concat(
         // Issue #214: SSO-safe unbox; repsel Phase 3a: inline `bitcast+and`
         // for proven-heap operands (string literals — the `"user_" + i`
         // shape) and tag-dispatch for canonical-Str locals.
-        let l_handle = str_operand_handle_tag_dispatched(ctx, left, &l_box);
+        let l_handle = str_operand_handle_tag_dispatched(ctx, left, l_box);
         let blk = ctx.block();
         let result_handle = blk.call(
             I64,
             "js_string_concat_value",
-            &[(I64, &l_handle), (DOUBLE, &r_box)],
+            &[(I64, &l_handle), (DOUBLE, r_box)],
         );
-        let boxed = nanbox_string_inline(blk, &result_handle);
-        temp_root_release(ctx, guard);
-        return Ok(boxed);
+        return Ok(nanbox_string_inline(blk, &result_handle));
     }
 
     if !l_is_string && r_is_string {
         // Issue #214: SSO-safe unbox; repsel Phase 3a: see above.
-        let r_handle = str_operand_handle_tag_dispatched(ctx, right, &r_box);
+        let r_handle = str_operand_handle_tag_dispatched(ctx, right, r_box);
         let blk = ctx.block();
         let result_handle = blk.call(
             I64,
             "js_value_concat_string",
-            &[(DOUBLE, &l_box), (I64, &r_handle)],
+            &[(DOUBLE, l_box), (I64, &r_handle)],
         );
-        let boxed = nanbox_string_inline(blk, &result_handle);
-        temp_root_release(ctx, guard);
-        return Ok(boxed);
+        return Ok(nanbox_string_inline(blk, &result_handle));
     }
 
     // Both non-string (shouldn't normally reach here) — fall back to
     // the generic path.
     let l_handle = ctx
         .block()
-        .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &l_box)]);
+        .call(I64, "js_jsvalue_to_string", &[(DOUBLE, l_box)]);
     // The coercion of the right operand allocates, and `l_handle` is a bare
     // string address in an SSA register — root it across that call (#6951).
-    let l_root = temp_root_push_i64(ctx, &l_handle);
-    let r_handle = ctx
-        .block()
-        .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &r_box)]);
-    let l_handle = temp_root_get_i64(ctx, &l_root);
-    let blk = ctx.block();
-
-    let result_handle = blk.call(
-        I64,
-        "js_string_concat",
-        &[(I64, &l_handle), (I64, &r_handle)],
-    );
-    let boxed = nanbox_string_inline(blk, &result_handle);
-    temp_root_truncate(ctx, &l_root);
-    temp_root_release(ctx, guard);
-    Ok(boxed)
+    // It is an EMITTED value (a coercion result, not a lowered `Expr`), so the
+    // group is the only form that can take it.
+    with_rooted_group(ctx, 0, |ctx, group| {
+        let l_root = group.adopt_emitted(ctx, Repr::Ptr, &l_handle, true);
+        let r_handle = ctx
+            .block()
+            .call(I64, "js_jsvalue_to_string", &[(DOUBLE, r_box)]);
+        let l_handle = group.reread_emitted(ctx, l_root);
+        let blk = ctx.block();
+        let result_handle = blk.call(
+            I64,
+            "js_string_concat",
+            &[(I64, &l_handle), (I64, &r_handle)],
+        );
+        Ok(nanbox_string_inline(blk, &result_handle))
+    })
 }
 
 /// Lower a static `s1 + s2` string concatenation. Both operands must
@@ -484,21 +517,20 @@ pub(crate) fn lower_string_concat(
 ) -> Result<String> {
     // #6951: same hazard as `lower_string_coerce_concat` — the left operand is
     // a heap string in an SSA register across the right operand's evaluation.
-    let (l_box, r_box, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-    let blk = ctx.block();
-    // SSO-aware fast path: pass operands as NaN-boxed f64s directly to
-    // `js_string_concat_sso`, which keeps SSO operands inline (no
-    // materialise-to-heap defeat) and returns the result NaN-boxed —
-    // SSO when the total fits 5 bytes, heap-pointer otherwise. Saves up
-    // to 3 heap allocations per concat on hot paths like ABC451D's
-    // recursive `before + after` (1.4M concats with 1-9 byte operands).
-    let result = blk.call(
-        DOUBLE,
-        "js_string_concat_box",
-        &[(DOUBLE, &l_box), (DOUBLE, &r_box)],
-    );
-    temp_root_release(ctx, guard);
-    Ok(result)
+    with_operands_rooted(ctx, &[left, right], |ctx, values| {
+        let blk = ctx.block();
+        // SSO-aware fast path: pass operands as NaN-boxed f64s directly to
+        // `js_string_concat_sso`, which keeps SSO operands inline (no
+        // materialise-to-heap defeat) and returns the result NaN-boxed —
+        // SSO when the total fits 5 bytes, heap-pointer otherwise. Saves up
+        // to 3 heap allocations per concat on hot paths like ABC451D's
+        // recursive `before + after` (1.4M concats with 1-9 byte operands).
+        Ok(blk.call(
+            DOUBLE,
+            "js_string_concat_box",
+            &[(DOUBLE, &values[0]), (DOUBLE, &values[1])],
+        ))
+    })
 }
 
 /// Cap the per-call part count for the n-way fold. Must match the
@@ -590,27 +622,25 @@ pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) ->
     // part's evaluation — this is the template-literal / log-line shape, and
     // one allocating interpolation was enough to sweep the parts already
     // lowered. Parts that nothing allocating follows emit no rooting calls.
-    let (lowered, guard) = lower_exprs_rooted(ctx, parts)?;
+    with_operands_rooted(ctx, parts, |ctx, lowered| {
+        let n = lowered.len();
+        // Hoist the buffer to the function entry block. Issue #167.
+        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, CONCAT_CHAIN_MAX_PARTS);
+        let blk = ctx.block();
+        for (i, val) in lowered.iter().enumerate() {
+            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+            blk.store(DOUBLE, val, &slot);
+        }
+        // Pass the array's base pointer as i64 (codegen ABI uses i64 for
+        // raw pointer args matching the existing `js_string_concat` shape).
+        let base_i64 = blk.next_reg();
+        blk.emit_raw(format!("{} = ptrtoint ptr {} to i64", base_i64, buf_reg));
 
-    let n = lowered.len();
-    // Hoist the buffer to the function entry block. Issue #167.
-    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, CONCAT_CHAIN_MAX_PARTS);
-    let blk = ctx.block();
-    for (i, val) in lowered.iter().enumerate() {
-        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-        blk.store(DOUBLE, val, &slot);
-    }
-    // Pass the array's base pointer as i64 (codegen ABI uses i64 for
-    // raw pointer args matching the existing `js_string_concat` shape).
-    let base_i64 = blk.next_reg();
-    blk.emit_raw(format!("{} = ptrtoint ptr {} to i64", base_i64, buf_reg));
-
-    let result_handle = blk.call(
-        I64,
-        "js_string_concat_chain",
-        &[(I64, &base_i64), (I32, &format!("{}", n))],
-    );
-    let boxed = nanbox_string_inline(blk, &result_handle);
-    temp_root_release(ctx, guard);
-    Ok(boxed)
+        let result_handle = blk.call(
+            I64,
+            "js_string_concat_chain",
+            &[(I64, &base_i64), (I32, &format!("{}", n))],
+        );
+        Ok(nanbox_string_inline(blk, &result_handle))
+    })
 }

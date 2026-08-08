@@ -322,6 +322,30 @@ mod tests {
 // and the API is the only thing that makes the correct form the easy one.
 // ---------------------------------------------------------------------------
 
+/// The raw, order-sensitive rooting API.
+///
+/// **PRIVATE, and that is the campaign's terminal condition** (#7615). It used
+/// to be `crate::expr::temp_root`, reachable from anywhere in the crate, and
+/// every bug in the #7341 family was an ordering mistake against it: a push
+/// below the collection point (#7192), a truncate at the wrong slot, a release
+/// on one arm of an `if` (#7462), a re-read taken above the window (#7114).
+///
+/// A private module inside `rooting` makes each of those unwritable outside
+/// this file rather than merely uncounted — the ledger below can only report
+/// what a module NAMES, and a module that cannot name it has nothing to
+/// report. The accessors additionally carry an explicit
+/// `pub(in crate::rooting)`, so re-opening the module in a moment of haste
+/// does not silently widen them back.
+///
+/// Two items keep `pub(crate)` and are re-exported below, because they are not
+/// accessors and make no ordering decision: [`TempRootPool`] is the
+/// compile-time slot bookkeeping `FnCtx` owns, and `expr_is_inert_primitive`
+/// is the "can evaluating this run user code?" predicate the loop back-edge
+/// poll shares (`crate::loop_purity`).
+mod temp_root;
+
+pub(crate) use temp_root::{expr_is_inert_primitive, TempRootPool};
+
 use anyhow::Result;
 use perry_hir::Expr;
 
@@ -378,7 +402,7 @@ impl RootedSlot {
     /// every slot acquired after it. Release in reverse acquisition order, as
     /// the un-migrated callers already had to.
     pub(crate) fn release(self, ctx: &mut FnCtx<'_>) {
-        crate::expr::temp_root::temp_root_truncate(ctx, &self.idx);
+        temp_root::temp_root_truncate(ctx, &self.idx);
     }
 }
 
@@ -418,8 +442,8 @@ fn materialize<'a>(ctx: &mut FnCtx<'_>, args: &'a [Arg<'a>]) -> Vec<(LlvmType, S
 /// public path out of it fuses the read to the emission that consumes it.
 fn read_slot(ctx: &mut FnCtx<'_>, slot: &RootedSlot) -> String {
     match slot.repr {
-        Repr::Ptr => crate::expr::temp_root::temp_root_get_i64(ctx, &slot.idx),
-        Repr::Boxed => crate::expr::temp_root::temp_root_get_double(ctx, &slot.idx),
+        Repr::Ptr => temp_root::temp_root_get_i64(ctx, &slot.idx),
+        Repr::Boxed => temp_root::temp_root_get_double(ctx, &slot.idx),
     }
 }
 
@@ -443,7 +467,7 @@ pub(crate) fn call_rooted(
     let reg = ctx
         .block()
         .call(ret_ty, callee, &borrow_args(&materialized));
-    let idx = crate::expr::temp_root::temp_root_push_i64(ctx, &reg);
+    let idx = temp_root::temp_root_push_i64(ctx, &reg);
     RootedSlot {
         idx,
         repr: Repr::Ptr,
@@ -535,8 +559,7 @@ pub(crate) fn with_operands_rooted_across<'f, T, R>(
     across: impl FnOnce(&mut FnCtx<'f>) -> Result<T>,
     body: impl FnOnce(&mut FnCtx<'f>, &[String], T) -> Result<R>,
 ) -> Result<R> {
-    let across_collects =
-        crate::expr::temp_root::any_may_trigger_gc(ctx, across_exprs.iter().copied());
+    let across_collects = temp_root::any_may_trigger_gc(ctx, across_exprs.iter().copied());
     with_operands_rooted_window(ctx, exprs, across_collects, across, body)
 }
 
@@ -584,7 +607,7 @@ fn with_operands_rooted_window<'f, T, R>(
     across: impl FnOnce(&mut FnCtx<'f>) -> Result<T>,
     body: impl FnOnce(&mut FnCtx<'f>, &[String], T) -> Result<R>,
 ) -> Result<R> {
-    use crate::expr::temp_root::{any_may_trigger_gc, root_operands_begin};
+    use temp_root::{any_may_trigger_gc, root_operands_begin};
 
     let mut group = root_operands_begin(exprs.len());
     let out = (|| {
@@ -619,7 +642,7 @@ pub(crate) fn any_operand_may_collect<'a>(
     ctx: &FnCtx<'_>,
     exprs: impl IntoIterator<Item = &'a Expr>,
 ) -> bool {
-    crate::expr::temp_root::any_may_trigger_gc(ctx, exprs)
+    temp_root::any_may_trigger_gc(ctx, exprs)
 }
 
 /// [`any_operand_may_collect`] for a single expression.
@@ -630,7 +653,7 @@ pub(crate) fn any_operand_may_collect<'a>(
 /// arguments after it plus an allocating rebind. One `collects` for the whole
 /// list cannot say that.
 pub(crate) fn operand_may_collect(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    crate::expr::temp_root::expr_may_trigger_gc(ctx, expr)
+    temp_root::expr_may_trigger_gc(ctx, expr)
 }
 
 // ---------------------------------------------------------------------------
@@ -706,7 +729,7 @@ pub(crate) fn operand_may_collect(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 ///    which the generic dynamic call needs, because its callee operand is a
 ///    hand-emitted by-name property read rather than `lower_expr(callee)`.
 pub(crate) struct RootedGroup<'a> {
-    operands: crate::expr::temp_root::RootedOperands,
+    operands: temp_root::RootedOperands,
     exprs: Vec<&'a Expr>,
     accs: Vec<String>,
     emitted: Vec<EmittedRoot>,
@@ -757,7 +780,7 @@ pub(crate) struct AccArray(usize);
 impl<'a> RootedGroup<'a> {
     fn new(capacity: usize) -> Self {
         RootedGroup {
-            operands: crate::expr::temp_root::root_operands_begin(capacity),
+            operands: temp_root::root_operands_begin(capacity),
             exprs: Vec::with_capacity(capacity),
             accs: Vec::new(),
             emitted: Vec::new(),
@@ -919,8 +942,8 @@ impl<'a> RootedGroup<'a> {
     ) -> EmittedValue {
         let root = if protect {
             let idx = match repr {
-                Repr::Ptr => crate::expr::temp_root::temp_root_push_i64(ctx, value),
-                Repr::Boxed => crate::expr::temp_root::temp_root_push_double(ctx, value),
+                Repr::Ptr => temp_root::temp_root_push_i64(ctx, value),
+                Repr::Boxed => temp_root::temp_root_push_double(ctx, value),
             };
             self.note_slot(Some(idx.clone()));
             EmittedRoot::Rooted(RootedSlot { idx, repr })
@@ -953,7 +976,7 @@ impl<'a> RootedGroup<'a> {
     /// it lives in the group so that ONE release drops the operands and the
     /// arrays together.
     pub(crate) fn begin_array(&mut self, ctx: &mut FnCtx<'_>, cap: &str) -> AccArray {
-        let slot = crate::expr::temp_root::rooted_array_begin(ctx, cap);
+        let slot = temp_root::rooted_array_begin(ctx, cap);
         self.note_slot(Some(slot.clone()));
         self.accs.push(slot);
         AccArray(self.accs.len() - 1)
@@ -963,20 +986,20 @@ impl<'a> RootedGroup<'a> {
     /// possibly-reallocated pointer back into it.
     pub(crate) fn push_array(&mut self, ctx: &mut FnCtx<'_>, acc: AccArray, value: &str) {
         let slot = self.accs[acc.0].clone();
-        crate::expr::temp_root::temp_rooted_array_push(ctx, &slot, value);
+        temp_root::temp_rooted_array_push(ctx, &slot, value);
     }
 
     /// Re-read the finished array as a raw `i64` pointer. Does not release: the
     /// consuming call allocates while it reads the array.
     pub(crate) fn read_array(&self, ctx: &mut FnCtx<'_>, acc: AccArray) -> String {
         let slot = self.accs[acc.0].clone();
-        crate::expr::temp_root::rooted_array_read(ctx, &slot)
+        temp_root::rooted_array_read(ctx, &slot)
     }
 
     /// Drop the whole scope. Call it *after* the consuming call: the consumer
     /// allocates while reading these values.
     pub(crate) fn release(self, ctx: &mut FnCtx<'_>) {
-        crate::expr::temp_root::temp_root_release(ctx, self.first_slot);
+        temp_root::temp_root_release(ctx, self.first_slot);
     }
 }
 
@@ -1053,7 +1076,7 @@ pub(crate) fn implicit_this_save(ctx: &mut FnCtx<'_>, new_this: &str) -> Implici
     let prev = ctx
         .block()
         .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, new_this)]);
-    let idx = crate::expr::temp_root::temp_root_push_double(ctx, &prev);
+    let idx = temp_root::temp_root_push_double(ctx, &prev);
     ImplicitThisSave {
         slot: RootedSlot {
             idx,
@@ -1209,12 +1232,8 @@ impl RootedAcc {
     pub(crate) fn advance(&mut self, ctx: &mut FnCtx<'_>, callee: &str, rest: &[Arg<'_>]) {
         let next = self.call(ctx, self.repr.llvm_ty(), callee, rest);
         match (&self.slot, self.repr) {
-            (Some(slot), Repr::Ptr) => {
-                crate::expr::temp_root::temp_root_set_i64(ctx, &slot.idx, &next)
-            }
-            (Some(slot), Repr::Boxed) => {
-                crate::expr::temp_root::temp_root_set_double(ctx, &slot.idx, &next)
-            }
+            (Some(slot), Repr::Ptr) => temp_root::temp_root_set_i64(ctx, &slot.idx, &next),
+            (Some(slot), Repr::Boxed) => temp_root::temp_root_set_double(ctx, &slot.idx, &next),
             (None, _) => self.value = next,
         }
     }
@@ -1242,8 +1261,8 @@ pub(crate) fn with_rooted_accumulator<'f, R>(
 ) -> Result<R> {
     let slot = protect.then(|| {
         let idx = match repr {
-            Repr::Ptr => crate::expr::temp_root::temp_root_push_i64(ctx, initial),
-            Repr::Boxed => crate::expr::temp_root::temp_root_push_double(ctx, initial),
+            Repr::Ptr => temp_root::temp_root_push_i64(ctx, initial),
+            Repr::Boxed => temp_root::temp_root_push_double(ctx, initial),
         };
         RootedSlot { idx, repr }
     });
@@ -1448,121 +1467,293 @@ pub(crate) fn with_rooted_accumulator<'f, R>(
 /// serve and the note on what it weakens. Which is the shape of the answer this
 /// campaign keeps arriving at: an API gap recorded in slice N is a combinator
 /// in slice N+1, and writing the gap down is what makes the next slice cheap.
+///
+/// # Slice 8 — the campaign's last slice, and its terminal condition
+///
+/// The plan's terminal condition was `expr/temp_root.rs` "going
+/// `pub(in crate::rooting)` — the raw accessor unreachable, not merely
+/// uncounted". As literally spelled that is **not expressible in Rust**:
+/// `pub(in path)` requires `path` to be an ANCESTOR module of the item
+/// (E0742), and `crate::rooting` is not an ancestor of `crate::expr::temp_root`.
+/// So the file MOVED — it is `crate::rooting::temp_root` now, declared with a
+/// private `mod temp_root;` and with every accessor additionally carrying an
+/// explicit `pub(in crate::rooting)`. Either alone would do it; both are here
+/// because the module declaration is one keyword away from re-widening
+/// twenty-five items at once.
+///
+/// Two items keep `pub(crate)` and are re-exported at the top of this file,
+/// and neither is an accessor: [`TempRootPool`] is the compile-time slot
+/// bookkeeping `FnCtx` owns (no runtime behaviour, no ordering), and
+/// `expr_is_inert_primitive` is the shared "can evaluating this run user
+/// code?" predicate the loop back-edge poll consults
+/// (`crate::loop_purity`). A predicate cannot be called in the wrong order.
+///
+/// **Fourteen items were DELETED rather than narrowed**, because slice 8 left
+/// them with no caller at all: `lower_exprs_rooted`,
+/// `lower_operand_pair_rooted`, `any_later_ref_may_trigger_gc`,
+/// `RootedOperands::is_rooted`, the whole `StoreOperandGuard` family
+/// (`guard_store_operand`, `guard_store_operand_across`,
+/// `reread_store_operand`, `release_store_operand`), the whole `RootedHandle`
+/// family (`rooted_handle_begin`/`_get`/`_release`) and
+/// `temp_root_scope_begin`/`_end`. CLAUDE.md's kill-policy is explicit that
+/// "the losing mode should stop compiling", and each of these WAS a losing
+/// mode: a caller-managed guard whose combinator replacement owns the release.
+///
+/// ## Modules migrated, and how they were told apart from the decision-free ones
+///
+/// The brief for this slice listed 14 files by `expr::temp_root` mention.
+/// That count conflates two populations, and the ledger is only meaningful for
+/// one of them. Sorting them is the first half of the work:
+///
+/// **Eight modules made rooting decisions and are listed below.** Seven are
+/// load-bearing on the committed source (each named the raw API before the
+/// migration):
+///
+///   * `expr/binary.rs` — five `lower_operand_pair_rooted` +
+///     `temp_root_release` pairs, one per dynamic-dispatch arm, each with the
+///     release on its own `return` path. They collapse into one
+///     `lower_rooted_dynamic_binary` helper over [`with_operands_rooted`]:
+///     five chances to misplace a release become none.
+///   * `expr/math_simple.rs` — `Expr::MapSet` is a [`RootedGroup`] (two
+///     operands with UNEQUAL windows, re-read at eight arm-specific points,
+///     released once); `MapGet`/`MapHas` are the plain single-re-read shape.
+///     `Expr::ArrayMap` is a live bug, below.
+///   * `expr/static_field_meta.rs` — `ClassExprFresh` is a [`RootedGroup`]
+///     over the class object with a nested [`with_rooted_accumulator`] for the
+///     `__perry_ctor_caps` snapshot array and a nested
+///     [`with_operands_rooted`] per symbol static.
+///   * `expr/dyn_extern_i18n.rs` — the namespace-object build (#7280's
+///     269-member zod case) is exactly [`with_rooted_accumulator`]'s shape.
+///   * `lower_string_method.rs` — the receiver root that spans ~60 return
+///     paths, via [`open_rooted_group`].
+///   * `lower_string_concat.rs` — split out of `lower_string_method.rs` this
+///     slice; load-bearing because the code it contains named
+///     `lower_exprs_rooted`, `lower_operand_pair_rooted` and four raw
+///     push/get/truncate/release spellings on `main`.
+///   * `lower_call/new.rs` — `refresh_rooted_args` re-reads one operand group
+///     at three caller-chosen points under a scope marker spanning ~20 return
+///     paths. Slice 5 named it as the shape the API could not express and
+///     slice 6 built [`RootedGroup`] for exactly it; this is the collection.
+///
+/// The eighth, `lower_call/new_alloc.rs`, is **vacuous on the committed
+/// source** — it never named the raw API, because it is the instance
+/// allocation carved out of `new.rs` this slice and everything it emits sits
+/// above the instance root. It is listed anyway, for the reason slice 3 listed
+/// `array_push.rs`: an unlisted sibling of a listed module is the obvious
+/// place to put a raw push and escape the check. Its listing means something
+/// only because the sabotage arm was run on it.
+///
+/// **Nine files mention the raw API and make no rooting decision at all.**
+/// They are deliberately NOT listed, because a ledger line on a module that
+/// never had a decision to make looks substantive and asserts nothing:
+///
+///   * `expr/mod.rs` — declared `mod temp_root` and typed the `temp_roots`
+///     field. Structural; both are gone with the move.
+///   * `codegen/entry.rs`, `codegen/method.rs`, `codegen/function.rs`,
+///     `codegen/closure.rs` — `TempRootPool::default()` at each `FnCtx`
+///     construction. Constructing the pool is not using it.
+///   * `stmt/loops.rs` — one call to `expr_is_inert_primitive`, a purity
+///     predicate for the back-edge poll.
+///   * `loop_purity.rs` — a doc link and nothing else (zero code sites; the
+///     brief's count included the comment).
+///   * `root_reload.rs`, `gc_call_effects.rs`, `runtime_decls/arrays.rs` —
+///     the STRING LITERALS `"js_gc_temp_root_push"` and friends, which name
+///     runtime symbols, not this module. So do five test files
+///     (`expr/slice7_rooting_tests.rs`, `lower_call/console_rooting_tests.rs`,
+///     `lower_call/timer_rooting_tests.rs`,
+///     `codegen/testing_feature_gate_tests.rs`) plus
+///     `linker_temp_lifecycle_tests.rs`, whose `temp_root_if_clang_available`
+///     is about a temporary DIRECTORY.
+///
+/// ## The three unverified leads slice 7 handed over
+///
+///   * `static_field_meta.rs`'s `caps_arr` — **a real accumulator shape with a
+///     provably empty window.** The array holds the only reference to
+///     everything pushed so far while the next element is lowered, which is
+///     #6951 exactly; but `captured_args` is built at one site
+///     (`lower/lower_expr/arm_class.rs`) as
+///     `ids.iter().map(|id| Expr::LocalGet(*id))`, and `expr_may_trigger_gc`
+///     answers `false` for every `LocalGet`. So it is rooted through
+///     [`with_rooted_accumulator`] with `protect` computed rather than
+///     assumed: today that is `false` and the IR is byte for byte unchanged,
+///     and the day a non-inert expression reaches the list it is rooted by
+///     construction.
+///   * `math_simple.rs`'s `ArrayMap` — **CONFIRMED live.** The receiver was
+///     lowered, `callback` was lowered, and only then was the receiver
+///     unboxed: `unbox_to_i64` below its own window masks a stale box rather
+///     than repairing it (#7280 taxonomy (c)). `arr.map(x => …)` allocates a
+///     closure at minimum. Fixed via [`with_operands_rooted`].
+///   * `dyn_extern_i18n.rs`'s `path_handle` — **DISMISSED, and the premise is
+///     wrong about the CFG.** The lead says the raw handle is reused across a
+///     compare loop "that runs module `__init` bodies". It does not: each
+///     `<prefix>__init()` is emitted into that iteration's MATCH block, which
+///     branches straight to the join, so no `__init` dominates any later use
+///     of `path_handle`. Along the fallthrough chain the only emissions
+///     between the handle's production and its last use are
+///     `js_get_string_pointer_unified` and `js_string_equals` — neither
+///     re-enters user code nor enumerates an object, which is the standard
+///     [`with_operands_rooted_across_call`]'s doc sets for an emitted step
+///     (#7198). What that module DID have was the namespace-object
+///     accumulator, which is migrated above.
 #[cfg(test)]
 const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
         "crates/perry-codegen/src/expr/url_main.rs",
-        include_str!("expr/url_main.rs"),
+        include_str!("../expr/url_main.rs"),
     ),
     (
         "crates/perry-codegen/src/lower_array_method.rs",
-        include_str!("lower_array_method.rs"),
+        include_str!("../lower_array_method.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/arrays_finds.rs",
-        include_str!("expr/arrays_finds.rs"),
+        include_str!("../expr/arrays_finds.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/array_methods.rs",
-        include_str!("expr/array_methods.rs"),
+        include_str!("../expr/array_methods.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/instance_misc1.rs",
-        include_str!("expr/instance_misc1.rs"),
+        include_str!("../expr/instance_misc1.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/logical_collections.rs",
-        include_str!("expr/logical_collections.rs"),
+        include_str!("../expr/logical_collections.rs"),
     ),
     (
         "crates/perry-codegen/src/lower_call/property_get/map_set.rs",
-        include_str!("lower_call/property_get/map_set.rs"),
+        include_str!("../lower_call/property_get/map_set.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/objects_arrays_lit.rs",
-        include_str!("expr/objects_arrays_lit.rs"),
+        include_str!("../expr/objects_arrays_lit.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/array_literal.rs",
-        include_str!("expr/array_literal.rs"),
+        include_str!("../expr/array_literal.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/object_literal.rs",
-        include_str!("expr/object_literal.rs"),
+        include_str!("../expr/object_literal.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/array_push.rs",
-        include_str!("expr/array_push.rs"),
+        include_str!("../expr/array_push.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/index_get.rs",
-        include_str!("expr/index_get.rs"),
+        include_str!("../expr/index_get.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/index_get/guarded_array.rs",
-        include_str!("expr/index_get/guarded_array.rs"),
+        include_str!("../expr/index_get/guarded_array.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/index_get/inline_dyn_typed_array.rs",
-        include_str!("expr/index_get/inline_dyn_typed_array.rs"),
+        include_str!("../expr/index_get/inline_dyn_typed_array.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/index_set.rs",
-        include_str!("expr/index_set.rs"),
+        include_str!("../expr/index_set.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/index_set_typed_array.rs",
-        include_str!("expr/index_set_typed_array.rs"),
+        include_str!("../expr/index_set_typed_array.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/property_get.rs",
-        include_str!("expr/property_get.rs"),
+        include_str!("../expr/property_get.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/property_get/globalget.rs",
-        include_str!("expr/property_get/globalget.rs"),
+        include_str!("../expr/property_get/globalget.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/property_get/helpers.rs",
-        include_str!("expr/property_get/helpers.rs"),
+        include_str!("../expr/property_get/helpers.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/property_set.rs",
-        include_str!("expr/property_set.rs"),
+        include_str!("../expr/property_set.rs"),
     ),
     (
         "crates/perry-codegen/src/lower_call/extern_timers.rs",
-        include_str!("lower_call/extern_timers.rs"),
+        include_str!("../lower_call/extern_timers.rs"),
     ),
     (
         "crates/perry-codegen/src/lower_call/namespace_call.rs",
-        include_str!("lower_call/namespace_call.rs"),
+        include_str!("../lower_call/namespace_call.rs"),
     ),
     (
         "crates/perry-codegen/src/lower_call/mod.rs",
-        include_str!("lower_call/mod.rs"),
+        include_str!("../lower_call/mod.rs"),
     ),
     (
         "crates/perry-codegen/src/lower_call/func_ref.rs",
-        include_str!("lower_call/func_ref.rs"),
+        include_str!("../lower_call/func_ref.rs"),
     ),
     (
         "crates/perry-codegen/src/lower_call/console_promise.rs",
-        include_str!("lower_call/console_promise.rs"),
+        include_str!("../lower_call/console_promise.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/child_proc.rs",
-        include_str!("expr/child_proc.rs"),
+        include_str!("../expr/child_proc.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/proxy_reflect.rs",
-        include_str!("expr/proxy_reflect.rs"),
+        include_str!("../expr/proxy_reflect.rs"),
     ),
     (
         "crates/perry-codegen/src/expr/fs_await.rs",
-        include_str!("expr/fs_await.rs"),
+        include_str!("../expr/fs_await.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/binary.rs",
+        include_str!("../expr/binary.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/math_simple.rs",
+        include_str!("../expr/math_simple.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/static_field_meta.rs",
+        include_str!("../expr/static_field_meta.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/dyn_extern_i18n.rs",
+        include_str!("../expr/dyn_extern_i18n.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_string_method.rs",
+        include_str!("../lower_string_method.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_string_concat.rs",
+        include_str!("../lower_string_concat.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_call/new.rs",
+        include_str!("../lower_call/new.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_call/new_alloc.rs",
+        include_str!("../lower_call/new_alloc.rs"),
     ),
 ];
+
+/// `rooting/temp_root.rs`, inlined at compile time for the terminal-condition
+/// test below.
+#[cfg(test)]
+const RAW_ROOTING_API_SRC: &str = include_str!("temp_root.rs");
+
+/// The two items in `temp_root.rs` that are allowed to stay `pub(crate)`.
+///
+/// Neither is an accessor. Adding to this list is how the campaign's terminal
+/// condition would be given back, so it is spelled out rather than derived.
+#[cfg(test)]
+const RAW_API_PUBLIC_EXCEPTIONS: &[&str] = &["struct TempRootPool", "fn expr_is_inert_primitive"];
 
 /// Lines in `src` that reach past [`crate::rooting`] into the raw rooting API.
 #[cfg(test)]
@@ -1579,7 +1770,102 @@ fn escape_hatch_uses(src: &str) -> Vec<(usize, String)> {
 
 #[cfg(test)]
 mod migration_ledger {
-    use super::{escape_hatch_uses, MIGRATED_MODULES};
+    use super::{
+        escape_hatch_uses, MIGRATED_MODULES, RAW_API_PUBLIC_EXCEPTIONS, RAW_ROOTING_API_SRC,
+    };
+
+    /// Every `pub`-ish item declared in `temp_root.rs`, as
+    /// `("pub(crate)" | "pub(in crate::rooting)" | "pub", "fn name")`.
+    fn declared_items(src: &str) -> Vec<(String, String)> {
+        src.lines()
+            .filter_map(|line| {
+                let code = line.split("//").next().unwrap_or(line).trim_start();
+                for vis in ["pub(in crate::rooting) ", "pub(crate) ", "pub "] {
+                    if let Some(rest) = code.strip_prefix(vis) {
+                        let mut it = rest.split_whitespace();
+                        let kind = it.next()?;
+                        if !matches!(kind, "fn" | "struct" | "enum" | "mod" | "const" | "type") {
+                            return None;
+                        }
+                        let name = it.next()?.split(['(', '<', '{', ':']).next()?.to_string();
+                        return Some((vis.trim().to_string(), format!("{kind} {name}")));
+                    }
+                }
+                None
+            })
+            .collect()
+    }
+
+    /// **The campaign's terminal condition** (#7615): the raw rooting API is
+    /// unreachable outside `crate::rooting`, not merely unnamed.
+    ///
+    /// The ledger above can only report what a module NAMES, which is why this
+    /// is a separate assertion rather than a stronger phrasing of that one.
+    /// Both halves are checked, because either alone can be undone by one
+    /// keyword: the module declaration must stay private, and every accessor
+    /// must carry `pub(in crate::rooting)` so re-opening the module does not
+    /// silently widen twenty-five items at once.
+    #[test]
+    fn the_raw_rooting_api_is_unreachable_outside_this_module() {
+        let items = declared_items(RAW_ROOTING_API_SRC);
+        assert!(
+            items.len() > 15,
+            "expected temp_root.rs to declare the raw API; found {} items — the \
+             include_str! target moved and this check is measuring nothing",
+            items.len()
+        );
+        let widened: Vec<&(String, String)> = items
+            .iter()
+            .filter(|(vis, item)| {
+                vis != "pub(in crate::rooting)" && !RAW_API_PUBLIC_EXCEPTIONS.contains(&&**item)
+            })
+            .collect();
+        assert!(
+            widened.is_empty(),
+            "the Layer 1 campaign's terminal condition is that every accessor in \
+             rooting/temp_root.rs is pub(in crate::rooting). These are not, and \
+             are not on the two-item exception list:\n{}",
+            widened
+                .iter()
+                .map(|(vis, item)| format!("  {vis} {item}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
+        let decl = include_str!("mod.rs");
+        assert!(
+            decl.contains("\nmod temp_root;\n"),
+            "rooting/temp_root.rs must be declared with a PRIVATE `mod temp_root;` — \
+             a pub(crate) module would make every item in it reachable crate-wide \
+             regardless of its own visibility"
+        );
+    }
+
+    /// Sabotage duty for the terminal-condition check: a widened accessor must
+    /// be reported, and the two allowed exceptions must not be.
+    #[test]
+    fn the_terminal_condition_check_reports_a_widened_accessor() {
+        let planted = "\
+pub(crate) fn temp_root_push_i64(ctx: &mut FnCtx<'_>, v: &str) -> String {}
+pub(in crate::rooting) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {}
+pub(crate) struct TempRootPool {}
+pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, e: &Expr) -> bool {}
+";
+        let items = declared_items(planted);
+        assert_eq!(items.len(), 4, "parsed {items:?}");
+        let widened: Vec<&(String, String)> = items
+            .iter()
+            .filter(|(vis, item)| {
+                vis != "pub(in crate::rooting)" && !RAW_API_PUBLIC_EXCEPTIONS.contains(&&**item)
+            })
+            .collect();
+        assert_eq!(
+            widened.len(),
+            1,
+            "exactly the widened accessor must be reported, got {widened:?}"
+        );
+        assert_eq!(widened[0].1, "fn temp_root_push_i64");
+    }
 
     /// An empty ledger passes vacuously, which is hazard 4 in CLAUDE.md applied
     /// to this test. Assert the subject exists before asserting it is clean.
