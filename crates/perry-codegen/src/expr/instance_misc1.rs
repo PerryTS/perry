@@ -939,11 +939,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- path.join(a, b) -> string --------
         // The HIR variant is binary; multi-arg path.join lowers to
         // chained PathJoin in the HIR.
+        // #7621: both operands reach the runtime NaN-BOXED, so this arm emits
+        // NO unbox at all. Unboxing here would need two `js_path_arg_header`
+        // calls, and the first ALLOCATES for an SSO operand — a collection
+        // point with the second operand still in a bare register, i.e. exactly
+        // the window the #7615 migration exists to remove. Handing both
+        // NaN-boxed doubles to one runtime entry deletes the window from
+        // codegen rather than protecting it: `js_path_join_value` roots operand
+        // 1 across its own materialisation with `RuntimeHandle::across_const`.
+        // See perry-runtime/src/path/value_args.rs.
         Expr::PathJoin(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &vals[0]);
-            let b_handle = unbox_to_i64(blk, &vals[1]);
-            let result = blk.call(I64, "js_path_join", &[(I64, &a_handle), (I64, &b_handle)]);
+            let result = blk.call(
+                I64,
+                "js_path_join_value",
+                &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
+            );
             Ok(nanbox_string_inline(blk, &result))
         }),
 
@@ -953,12 +964,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // PathWin32Join in the HIR.
         Expr::PathWin32Join(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &vals[0]);
-            let b_handle = unbox_to_i64(blk, &vals[1]);
+            // #7621: NaN-boxed pair, no unbox here — see `Expr::PathJoin`.
             let result = blk.call(
                 I64,
-                "js_path_win32_join",
-                &[(I64, &a_handle), (I64, &b_handle)],
+                "js_path_win32_join_value",
+                &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
             );
             Ok(nanbox_string_inline(blk, &result))
         }),
@@ -998,7 +1008,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             _ => unreachable!(),
                         };
                         let blk = ctx.block();
-                        let h = unbox_to_i64(blk, &lowered[0]);
+                        // #7621: `js_path_arg_header`, not `unbox_to_i64` — the
+                        // plain mask hands an SSO string's inline CHARACTERS to
+                        // a `*StringHeader` consumer. It is emitted INSIDE the
+                        // rooted region, and needs no window of its own: the
+                        // materialising call is immediately followed by its
+                        // consumer with nothing between them, and the helper
+                        // only allocates — it cannot re-enter user code or
+                        // enumerate an object, so per #7198 it cannot initiate a
+                        // moving collection and `with_operands_rooted_across_call`
+                        // would be pure cost here.
+                        let h = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &lowered[0])]);
                         let result = blk.call(I64, fn_name, &[(I64, &h)]);
                         Ok(nanbox_string_inline(blk, &result))
                     }
@@ -1016,34 +1036,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Ok(nanbox_string_inline(blk, &result))
                     }
                     PathWin32Method::BasenameExt | PathWin32Method::ResolveJoin => {
+                        // #7621: two-operand methods hand BOTH operands to the
+                        // runtime NaN-boxed, so this arm emits no unbox at all
+                        // — see the `Expr::PathJoin` comment above for why that
+                        // is stronger than protecting the window here.
                         let fn_name = match method {
-                            PathWin32Method::BasenameExt => "js_path_win32_basename_ext",
-                            PathWin32Method::ResolveJoin => "js_path_win32_resolve_join",
+                            PathWin32Method::BasenameExt => "js_path_win32_basename_ext_value",
+                            PathWin32Method::ResolveJoin => "js_path_win32_resolve_join_value",
                             _ => unreachable!(),
                         };
                         let blk = ctx.block();
-                        let a = unbox_to_i64(blk, &lowered[0]);
-                        let b = unbox_to_i64(blk, &lowered[1]);
-                        let result = blk.call(I64, fn_name, &[(I64, &a), (I64, &b)]);
+                        let result = blk.call(
+                            I64,
+                            fn_name,
+                            &[(DOUBLE, &lowered[0]), (DOUBLE, &lowered[1])],
+                        );
                         Ok(nanbox_string_inline(blk, &result))
                     }
                     PathWin32Method::IsAbsolute => {
                         let blk = ctx.block();
-                        let h = unbox_to_i64(blk, &lowered[0]);
+                        // #7621: SSO-safe unbox — see the Dirname arm above.
+                        let h = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &lowered[0])]);
                         let i32_v = blk.call(I32, "js_path_win32_is_absolute", &[(I64, &h)]);
                         Ok(i32_bool_to_nanbox(blk, &i32_v))
                     }
                     PathWin32Method::MatchesGlob => {
                         let blk = ctx.block();
-                        let p = unbox_to_i64(blk, &lowered[0]);
-                        let pat = unbox_to_i64(blk, &lowered[1]);
-                        let i32_v =
-                            blk.call(I32, "js_path_win32_matches_glob", &[(I64, &p), (I64, &pat)]);
+                        // #7621: NaN-boxed pair, no unbox here.
+                        let i32_v = blk.call(
+                            I32,
+                            "js_path_win32_matches_glob_value",
+                            &[(DOUBLE, &lowered[0]), (DOUBLE, &lowered[1])],
+                        );
                         Ok(i32_bool_to_nanbox(blk, &i32_v))
                     }
                     PathWin32Method::Parse => {
                         let blk = ctx.block();
-                        let h = unbox_to_i64(blk, &lowered[0]);
+                        // #7621: SSO-safe unbox. Before this,
+                        // `path.win32.parse(shortComputed).base` was silently ""
+                        // rather than a throw.
+                        let h = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &lowered[0])]);
                         let result = blk.call(I64, "js_path_win32_parse", &[(I64, &h)]);
                         Ok(nanbox_pointer_inline(blk, &result))
                     }
@@ -1237,7 +1269,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PathDirname(p) => {
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
+            // #7621: SSO-safe unbox (see path/value_args.rs).
+            let p_handle = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &p_box)]);
             let result = blk.call(I64, "js_path_dirname", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -1714,21 +1747,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PathBasename(p) => {
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
+            // #7621: SSO-safe unbox (see path/value_args.rs).
+            let p_handle = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &p_box)]);
             let result = blk.call(I64, "js_path_basename", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
         Expr::PathBasenameExt(p, ext) => {
             // path.basename(path, ext) — strips trailing `ext` suffix.
-            // Runtime: js_path_basename_ext(path_ptr, ext_ptr) -> *StringHeader.
+            // #7621: the runtime entry takes both operands NaN-boxed and
+            // unboxes them under a root, so this arm emits no unbox — see
+            // `Expr::PathJoin`.
             rooting::with_operands_rooted(ctx, &[p, ext], |ctx, vals| {
                 let blk = ctx.block();
-                let p_handle = unbox_to_i64(blk, &vals[0]);
-                let e_handle = unbox_to_i64(blk, &vals[1]);
                 let result = blk.call(
                     I64,
-                    "js_path_basename_ext",
-                    &[(I64, &p_handle), (I64, &e_handle)],
+                    "js_path_basename_ext_value",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
                 );
                 Ok(nanbox_string_inline(blk, &result))
             })
@@ -1737,7 +1771,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // path.parse(p) -> object with { dir, base, ext, name, root }
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
+            // #7621: SSO-safe unbox (see path/value_args.rs). Before this,
+            // `path.parse(shortComputed).base` was silently "" rather than a
+            // throw, because js_path_parse defaults an unreadable header.
+            let p_handle = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &p_box)]);
             let result = blk.call(I64, "js_path_parse", &[(I64, &p_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }

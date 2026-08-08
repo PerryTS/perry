@@ -207,7 +207,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PathIsAbsolute(p) => {
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
+            // #7621: SSO-safe unbox — see crates/perry-runtime/src/path/value_args.rs.
+            let p_handle = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &p_box)]);
             let i32_res = blk.call(I32, "js_path_is_absolute", &[(I64, &p_handle)]);
             Ok(i32_bool_to_nanbox(blk, &i32_res))
         }

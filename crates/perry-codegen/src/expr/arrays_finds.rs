@@ -556,7 +556,12 @@ pub(crate) fn lower(
         Expr::PathExtname(p) => {
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
+            // #7621: `js_path_arg_header`, not `unbox_to_i64` — the plain mask
+            // hands an SSO string's inline CHARACTERS to a `*StringHeader`
+            // consumer. Single-operand arms need no rooting: the materialising
+            // call is immediately followed by the consumer, with nothing
+            // between them that can collect.
+            let p_handle = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &p_box)]);
             let result = blk.call(I64, "js_path_extname", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -591,26 +596,29 @@ pub(crate) fn lower(
                 let p_box = vals[0].clone();
                 let pat_box = vals[1].clone();
                 let blk = ctx.block();
-                let p_handle = unbox_to_i64(blk, &p_box);
-                let pat_handle = unbox_to_i64(blk, &pat_box);
                 let i32_v = blk.call(
                     I32,
-                    "js_path_matches_glob",
-                    &[(I64, &p_handle), (I64, &pat_handle)],
+                    "js_path_matches_glob_value",
+                    &[(DOUBLE, &p_box), (DOUBLE, &pat_box)],
                 );
                 Ok(i32_bool_to_nanbox(blk, &i32_v))
             })
         }
+        // #7621: both operands go to the runtime NaN-BOXED. Unboxing them here
+        // would mean two `js_path_arg_header` calls, and the first one
+        // ALLOCATES for an SSO operand — a collection point with the second
+        // operand still live in a bare register. This API cannot close that
+        // window (`with_operands_rooted` yields registers, not slots, and
+        // `RootedSlot` has no `read` by design), so the pair is unboxed inside
+        // one runtime call that roots across its own materialisation.
         Expr::PathResolveJoin(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
             let a_box = vals[0].clone();
             let b_box = vals[1].clone();
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &a_box);
-            let b_handle = unbox_to_i64(blk, &b_box);
             let result = blk.call(
                 I64,
-                "js_path_resolve_join",
-                &[(I64, &a_handle), (I64, &b_handle)],
+                "js_path_resolve_join_value",
+                &[(DOUBLE, &a_box), (DOUBLE, &b_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }),

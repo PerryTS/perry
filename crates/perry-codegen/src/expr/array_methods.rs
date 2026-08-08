@@ -278,17 +278,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::StaticPluginResolve(_) => Ok(double_literal(0.0)),
 
         // -------- More cheap stubs --------
+        // #7621: `js_path_arg_header`, not `unbox_to_i64` — the plain mask hands
+        // an SSO string's inline CHARACTERS to a `*StringHeader` consumer.
         Expr::PathNormalize(p) => {
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
+            let p_handle = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &p_box)]);
             let result = blk.call(I64, "js_path_normalize", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
         Expr::PathResolve(p) => {
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
+            let p_handle = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &p_box)]);
             let result = blk.call(I64, "js_path_resolve", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
