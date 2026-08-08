@@ -37,8 +37,9 @@
 //   * `tag` is a heap string, so a survivor carries a pointer the rewrite must
 //     follow into a different object kind;
 //   * the verification phase reads all four back and folds them into the
-//     checksum, which is diffed byte-for-byte against Node. A missed rewrite
-//     therefore has to either fault or produce a wrong number; it cannot pass.
+//     `hits`/`tagChars`/`peerIds`/`notes`/`noteSum` lines, every one of which
+//     is diffed byte-for-byte against Node. A missed rewrite therefore has to
+//     either fault or produce a wrong number; it cannot pass quietly.
 //
 // Metric contract as everywhere else: stdout carries only `probe:`/`checksum:`
 // style lines, `#gcmetric` goes to stderr.
@@ -52,10 +53,11 @@ declare function gc(): void;
 // runs zero copying minors — the arm would be pinned on a collector it never
 // reached. A ~30 MB retained set holds the baseline high enough that a 64 MB
 // Eden is not a doubling, which is what leaves the copying minor reachable.
-// Measured on the pinned host at v0.5.1376: KEEP 131,072 -> 1 copying minor,
-// KEEP 262,144 -> 3 (freed 36 MB, 36 MB, 68 MB per minor, against 16 MB per
-// minor for the default-cap probes). `check`'s liveness rule is what keeps that
-// honest: a shape that stopped reaching the copying minor cannot be pinned.
+// Measured on the pinned host at v0.5.1376: KEEP 8,192 -> 0 copying minors,
+// 131,072 -> 1, 262,144 -> 4 (freeing 37, 36, 68 and 68 MB; 49.7 MB per minor,
+// against 14.6-16.6 MB on eleven of the twelve default-cap probes and 21.8 MB
+// on 12_large_live_set). `check`'s liveness rule is what keeps that honest: a
+// shape that stopped reaching the copying minor cannot be pinned.
 const KEEP = 262144;
 const RING = 512;
 const CHURN = 3000000;
