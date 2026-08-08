@@ -126,9 +126,23 @@ on a real workload. When adding a cache of a heap pointer, register it in
 alloca in generated code. Within that scope it is the only instrument that sees
 a defect before it crashes, which is why it runs first.
 
-**It is blind to three classes, all found the hard way. A clean report is not
+**It is blind to four classes, all found the hard way. A clean report is not
 evidence for any of them:**
 
+- **★ The lowering that ships.** `gc_root_dominance_corpus.sh` compiles the
+  corpus under `PERRY_RS4GC=0`, which selects the **shadow stack** — and since
+  #7370 that is not the default on any target the runtime can walk. The reason
+  is stated in the script and is a real one (the checker anchors on
+  `@js_shadow_slot_bind` calls, and the native lowering emits **zero** of them,
+  so under the default the corpus contains 1251 statepoints, no binds at all,
+  and `--min-binds` fails the job). But the consequence has to be said out loud
+  here too, because this page is what a reader is pointed at: **a green
+  `gc-root-dominance` is evidence about the shadow lowering only.** Teaching the
+  checker to read `gc.statepoint` relocation bundles is the open work; until
+  then the native side is covered by unit tests rather than by this gate —
+  `crates/perry-codegen/src/native_root_coverage` (#7502), which asserts on the
+  `ptr addrspace(1)` root allocas, on each statepoint's `"gc-live"` bundle, and
+  on the compact `__perry_gcmap` map the collector actually reads.
 - **Runtime tables and interning caches** (#7231) — it reads emitted IR and
   cannot see a runtime cell. Tell: fails 10/10 rather than intermittently.
 - **Unrooted locals in runtime Rust** (#7249) — same reason. It read
