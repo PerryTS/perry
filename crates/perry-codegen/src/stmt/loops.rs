@@ -1818,7 +1818,7 @@ fn lower_packed_f64_range_versioned_for(
 /// `errors` runtime call, accessor-ish names, …). A tracked field must not
 /// collide or the fast clone's access would lower through a different —
 /// possibly calling — path, breaking the call-free guarantee.
-const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
+pub(super) const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
     "length",
     "errors",
     "size",
@@ -1837,7 +1837,7 @@ const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
 /// #5093: class names with dedicated (builtin-flavored) branches in the
 /// property lowering dispatch; a user class sharing one of these names could
 /// be intercepted before the class-field diamond.
-const CLASS_FIELD_LOOP_CLASS_DENYLIST: &[&str] = &[
+pub(super) const CLASS_FIELD_LOOP_CLASS_DENYLIST: &[&str] = &[
     "Headers",
     "URLPattern",
     "ClientRequest",
@@ -4569,7 +4569,7 @@ fn dynamic_bound_private_counter_is_safe(
     advanced_by_increment && !stmts_mutate_local(body, counter_id)
 }
 
-fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
+pub(super) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     let tag = ctx.block().and(
         I64,
@@ -4663,10 +4663,19 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    // repsel #7480 / #5093: `sum += arr[i].field` over an array carrying the
+    // homogeneous element-shape invariant. Tried last, so every array-shaped
+    // matcher above keeps precedence on the loops it already owns.
+    if super::element_shape_loop::lower_element_shape_versioned_for(
+        ctx, init, condition, update, body,
+    )? {
+        return Ok(());
+    }
+
     lower_for_after_init(ctx, init, condition, update, body, "for")
 }
 
-fn lower_for_after_init(
+pub(super) fn lower_for_after_init(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
     condition: Option<&perry_hir::Expr>,
@@ -4685,7 +4694,7 @@ fn lower_for_after_init(
 /// value must dominate the block this is emitted from — only the fast
 /// preheader of the range-versioned loop qualifies.
 #[allow(clippy::too_many_arguments)]
-fn lower_for_after_init_with_i32_bound(
+pub(super) fn lower_for_after_init_with_i32_bound(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
     condition: Option<&perry_hir::Expr>,
@@ -5831,11 +5840,11 @@ fn local_bound_storage_accessible(ctx: &crate::expr::FnCtx<'_>, bound_id: u32) -
 /// `class_field_versioned_loop_fires_for_module_scope_counter` is the assertion
 /// that the lowering is live; keep it that way (CLAUDE.md, "a gate must assert
 /// its subject was live").
-fn local_has_readable_slot(ctx: &crate::expr::FnCtx<'_>, local_id: u32) -> bool {
+pub(super) fn local_has_readable_slot(ctx: &crate::expr::FnCtx<'_>, local_id: u32) -> bool {
     ctx.locals.contains_key(&local_id) || ctx.local_slot_reps.contains_key(&local_id)
 }
 
-fn local_bound_is_loop_invariant(
+pub(super) fn local_bound_is_loop_invariant(
     cond: &perry_hir::Expr,
     update: Option<&perry_hir::Expr>,
     body: &[perry_hir::Stmt],
@@ -5887,7 +5896,7 @@ fn length_source_can_use_static_i32(ctx: &crate::expr::FnCtx<'_>, source: &Lengt
     }
 }
 
-fn loop_counter_bounds_are_safe(
+pub(super) fn loop_counter_bounds_are_safe(
     ctx: &crate::expr::FnCtx<'_>,
     counter_id: u32,
     update: Option<&perry_hir::Expr>,
@@ -5898,7 +5907,10 @@ fn loop_counter_bounds_are_safe(
         && !stmts_mutate_local(body, counter_id)
 }
 
-fn loop_counter_entry_i32_range_is_safe(init: Option<&perry_hir::Stmt>, counter_id: u32) -> bool {
+pub(super) fn loop_counter_entry_i32_range_is_safe(
+    init: Option<&perry_hir::Stmt>,
+    counter_id: u32,
+) -> bool {
     use perry_hir::{Expr, Stmt};
     let Some(Stmt::Let {
         id,

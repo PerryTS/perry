@@ -610,11 +610,18 @@ pub extern "C" fn js_array_element_shape_check(
     }
 }
 
-// NOTE — no `keepalive-anchors` `#[used]` statics here, deliberately.
-// `keepalive-anchors` is a DEFAULT feature, so an anchor would pin these
-// five functions into every shipped binary while nothing calls them: the
-// exact dead-strip defeat the hello-size campaign traced its regression to.
-// The consumer PR adds an anchor for whichever symbol it actually emits.
+// NOTE — exactly ONE `keepalive-anchors` `#[used]` static, deliberately.
+// `keepalive-anchors` is a DEFAULT feature, so an anchor pins its symbol into
+// every shipped binary: anchoring all five would be the dead-strip defeat the
+// hello-size campaign traced its regression to. #5093's element-shape
+// versioned-loop clone emits a call to exactly one of them
+// (`js_array_ensure_element_shape`, from the loop preheader), so that one —
+// and only that one — is anchored. The other four stay unanchored and
+// dead-strippable until something emits a call to them.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_ARRAY_ENSURE_ELEMENT_SHAPE: extern "C" fn(*mut ArrayHeader) -> i32 =
+    js_array_ensure_element_shape;
 
 #[cfg(test)]
 pub(crate) fn test_element_shape_record_exists(owner: usize) -> bool {

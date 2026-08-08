@@ -987,6 +987,7 @@ pub(super) fn compile_closure(
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
