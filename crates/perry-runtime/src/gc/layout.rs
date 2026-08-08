@@ -18,6 +18,35 @@ pub(super) const GC_COPY_PROMOTION_SURVIVALS: u8 = 4;
 // Low bits remain object freeze/seal/preventExtensions flags.
 pub const GC_LAYOUT_STATE_MASK: u16 = 0xC000;
 pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
+/// No payload slot holds a pointer, so `heap_payload_slot_selection` skips the
+/// WHOLE payload without consulting any mask. This is the one layout state that
+/// is not a precision hint: marking, the evacuation rewrite and the
+/// remembered-set dirty scan all funnel through that same enumeration, so an
+/// object left here while holding a heap pointer loses that child outright — it
+/// is neither kept alive nor rewritten when it moves.
+///
+/// **How to verify a change to this state (#7635).** The end-to-end knobs do
+/// catch a misdeclaration, but only if the workload actually holds a misdeclared
+/// object across a collection, and it is easy to build one that never does:
+/// #7635 forced every JSON-parsed record to `POINTER_FREE` while it held heap
+/// strings and got byte-identical correct output under `PERRY_GC_ZEAL=1
+/// PERRY_GC_PROTECT_FROMSPACE=1` and `PERRY_GC_FORCE_EVACUATE=1`, because
+/// `js_json_parse` is LAZY for 1 KB–16 MB top-level arrays (`json_tape`) and the
+/// probe read its records only after the last GC. Under `PERRY_JSON_TAPE=0` the
+/// same sabotage SIGSEGVs. So:
+///
+/// - "clean under zeal + from-space protect" is evidence only once you have
+///   shown the misdeclared object EXISTED during a collection;
+/// - `PERRY_GC_FROMSPACE_SCAN=1` is the instrument to prefer — its
+///   whole-payload word scan consults no layout state, and it reported the
+///   stranded children at exactly `dangling=8000 owners=4000`;
+/// - `PERRY_GC_VERIFY_EVACUATION` is blind here by construction: it walks the
+///   same enumeration the rewrite pass walks, which is to say it asks this
+///   state which slots exist.
+///
+/// The workload-free detectors are the child-slot enumerator and relocation
+/// across a copying minor; worked example, sabotage-verified in both
+/// directions: `gc/tests/copying/deferred_finalize_7635.rs`.
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 // A side-layout payload whose entire live prefix contains pointers. Bit 13 is

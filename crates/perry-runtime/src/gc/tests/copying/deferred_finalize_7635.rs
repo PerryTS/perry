@@ -10,7 +10,7 @@
 //! > in that state neither keeps its children alive nor has its slots rewritten
 //! > when they move.
 //!
-//! # Why this file exists rather than an end-to-end probe
+//! # Why a unit test, when the end-to-end probe reported clean
 //!
 //! #7633 deferred the JSON materialiser's per-slot layout notes to one
 //! finalize. Auditing it, #7635 sabotaged that finalize to
@@ -18,40 +18,52 @@
 //! `POINTER_FREE` while holding heap strings — and got **byte-identical correct
 //! output** from a 4,000-record Perry-compiled workload under `PERRY_GC_ZEAL=1
 //! PERRY_GC_PROTECT_FROMSPACE=1` and under `PERRY_GC_FORCE_EVACUATE=1`, with
-//! copying minors and retired quarantine sets observed live. Those three knobs
-//! do not discriminate this hazard, for a structural reason worth stating once:
+//! copying minors and retired quarantine sets observed live.
 //!
-//! - `PERRY_GC_PROTECT_FROMSPACE` faults on a *deref of a retired page*. A
-//!   stranded child is only dereferenced if the mutator happens to read that
-//!   field again after the retirement, and only while the address is still
-//!   inside the bounded quarantine (`…_DEPTH`, default 4).
-//! - `PERRY_GC_VERIFY_EVACUATION` walks the same enumeration the rewrite pass
-//!   walks — which is to say it asks this very layout state which slots exist.
-//!   It is blind to a misdeclaration by construction. (`gc/fromspace_scan.rs`'s
-//!   module header makes the same point about the verifier generally.)
-//! - `PERRY_GC_FORCE_EVACUATE` only makes survivors MOVE; moving harder does
-//!   not make an un-enumerated slot enumerable.
+//! **The instruments were not at fault; the probe's subject never existed.**
+//! `js_json_parse` routes a top-level array of 1 KB–16 MB through the LAZY TAPE
+//! (`json_tape`, default since #179), so `parse_object` does not run at
+//! `JSON.parse` time — it runs when an element is first read. The probe read
+//! its records only *after* the churn, so every misdeclared record was
+//! materialised after the last collection. A traced-object audit added to
+//! `heap_payload_slot_selection` on the sabotaged build confirms it: **zero**
+//! objects in `POINTER_FREE` state with pointer-bearing payload words were ever
+//! handed to the collector. Nothing was stranded because nothing was there.
 //!
-//! Two things do discriminate it, and both are used here:
+//! Re-run so the misdeclared records actually live across a collection and
+//! every instrument fires (measured on the sabotaged build, this branch):
+//!
+//! | arm | clean | sabotaged |
+//! |---|---|---|
+//! | default (lazy), read after churn | exit 0 | exit 0, byte-identical, `dangling=0` |
+//! | `PERRY_JSON_TAPE=0`, read after churn | exit 0 | **SIGSEGV**; `dangling=8000 owners=4000` on the first scanned cycle; `PERRY_GC_PROTECT_FROMSPACE=1` prints `FAULT: signal 10 at 0x…` |
+//! | default (lazy), records touched BEFORE the churn | exit 0 | 7,872 of 8,000 values read back wrong |
+//!
+//! So the end-to-end lesson is about *probe construction*, not instrument
+//! capability — with one real exception. `PERRY_GC_VERIFY_EVACUATION` walks the
+//! same enumeration the rewrite pass walks, i.e. it asks this very layout state
+//! which slots exist, and is blind to a misdeclaration by construction;
+//! `gc/fromspace_scan.rs`'s module header makes the same point about the
+//! verifier generally. **`PERRY_GC_FROMSPACE_SCAN=1` is the layout-independent
+//! one** — a whole-payload word scan that consults no root enumeration and no
+//! layout state — and it is the knob to reach for on this hazard class.
+//!
+//! What this file adds on top is a detector that needs no workload at all, so
+//! it cannot be defeated by a lazy path, a GC that did not happen to run, or
+//! conservative-scan residue:
 //!
 //! 1. **The child-slot enumerator itself** — `gc_child_slots` is the single
 //!    question every collector pass funnels through, so asking it directly is
-//!    deterministic regardless of GC timing, conservative-scan residue, or
-//!    whether a copying minor happened to run.
+//!    deterministic regardless of GC timing.
 //! 2. **Relocation** — after a copying minor that actually moved things, a
 //!    traced child has a NEW address and the holding slot says so. A stranded
-//!    child's slot still holds its pre-cycle address. That comparison does not
-//!    depend on reading the stale memory, which is why it is stable where a
-//!    poison/deref instrument is not.
-//!
-//! The layout-independent end-to-end instrument is `PERRY_GC_FROMSPACE_SCAN=1`
-//! (whole-payload word scan, no root enumeration), which reports a stranded
-//! child as `dangling=`. It is the knob #7635's audit was missing.
+//!    child's slot still holds its pre-cycle address, and that comparison never
+//!    reads the stale memory.
 //!
 //! [`a_misdeclared_pointer_free_record_strands_its_child`] is the SABOTAGE ARM,
 //! made permanent: it performs the identical construction with the finalize's
 //! `saw_pointer` forced to `false` and asserts the child is stranded. A green
-//! run of the positive test therefore means the finalize was load-bearing, not
+//! run of the positive tests therefore means the finalize was load-bearing, not
 //! that nothing was tried.
 
 use super::*;
@@ -176,7 +188,9 @@ fn finalize_settles_pointer_free_or_unknown_and_nothing_else() {
 fn a_materialised_record_keeps_its_children_traced_and_rewritten_7635() {
     let _guard = CopyingNurseryTestGuard::new(1);
 
-    let obj = unsafe { materialise_record(/* honest_finalize = */ true) };
+    let obj = unsafe {
+        materialise_record(/* honest_finalize = */ true)
+    };
     let before: Vec<usize> = (0..FIELD_VALUES.len())
         .map(|index| unsafe { (field_bits(obj, index) & POINTER_MASK) as usize })
         .collect();
@@ -207,8 +221,7 @@ fn a_materialised_record_keeps_its_children_traced_and_rewritten_7635() {
                 "field {index} must have been relocated and its slot rewritten"
             );
             assert!(
-                crate::arena::pointer_in_nursery(child)
-                    || crate::arena::pointer_in_old_gen(child),
+                crate::arena::pointer_in_nursery(child) || crate::arena::pointer_in_old_gen(child),
                 "field {index} must name a live heap object, not a stale address"
             );
             assert_string_bytes(child as *const crate::StringHeader, bytes);
@@ -233,11 +246,12 @@ fn json_parse_record_keeps_its_string_values_traced_and_rewritten_7635() {
     // heap `StringHeader`s in the nursery — collectable and movable — rather
     // than inline short strings that no layout state could strand.
     let text = br#"{"alpha":"value_alpha","bravo":"value_bravo"}"#;
-    let parsed =
-        unsafe { crate::json::js_json_parse(crate::string::js_string_from_bytes(
+    let parsed = unsafe {
+        crate::json::js_json_parse(crate::string::js_string_from_bytes(
             text.as_ptr(),
             text.len() as u32,
-        )) };
+        ))
+    };
     js_shadow_slot_set(0, parsed.bits());
 
     let obj = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut ObjectHeader;
@@ -312,8 +326,12 @@ fn json_parse_record_keeps_its_string_values_traced_and_rewritten_7635() {
 fn a_misdeclared_pointer_free_record_strands_its_child() {
     let _guard = CopyingNurseryTestGuard::new(1);
 
-    let honest = unsafe { materialise_record(/* honest_finalize = */ true) };
-    let sabotaged = unsafe { materialise_record(/* honest_finalize = */ false) };
+    let honest = unsafe {
+        materialise_record(/* honest_finalize = */ true)
+    };
+    let sabotaged = unsafe {
+        materialise_record(/* honest_finalize = */ false)
+    };
 
     unsafe {
         assert_eq!(
