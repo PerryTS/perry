@@ -551,7 +551,7 @@ pub(super) fn strip_nanbox_user_ptr(bits: u64) -> usize {
 }
 
 #[inline]
-pub(super) fn layout_pointer_bearing_bits(bits: u64) -> bool {
+pub(in crate::gc) fn layout_pointer_bearing_bits(bits: u64) -> bool {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
         return bits & POINTER_MASK != 0;
@@ -607,6 +607,29 @@ pub(crate) unsafe fn layout_init_all_pointer_slots(user_ptr: *mut u8) {
     layout_forget_object(user_ptr as usize);
     set_layout_state(header, GC_LAYOUT_SIDE_MASK);
     (*header)._reserved |= GC_LAYOUT_ALL_POINTERS;
+}
+
+/// #7630: settle a materialiser-built object's layout state ONCE, after its
+/// construction loop elided the per-slot notes
+/// (`runtime_store_jsvalue_slot_layout_deferred`). Two exact outcomes:
+///
+/// - **No pointer was stored**: the `layout_init_pointer_free` birth state is
+///   still the truth, and it is the valuable one — the tracer skips the whole
+///   payload. Nothing to do.
+/// - **Any pointer was stored**: `GC_LAYOUT_UNKNOWN`, the tag-checked
+///   scan-all-slots state. For a cohort whose every slot is a NaN-boxed
+///   `JSValue`, a pointer mask can never skip anything a tag check would not
+///   reject anyway — the mask machinery (per-object side-table entry, hashmap
+///   round-trip per store, `layout_transfer` per promotion,
+///   `layout_forget_object` per death) buys nothing here. Routed through
+///   `layout_mark_unknown`, not a bare state store, so a mask that a
+///   slow-path by-name store DID create mid-construction (shape-overflow
+///   records) is removed with the state change rather than stranded.
+pub(crate) unsafe fn layout_finish_deferred_boxed_object(user_ptr: usize, saw_pointer: bool) {
+    if !saw_pointer {
+        return;
+    }
+    layout_mark_unknown(user_ptr as *mut u8);
 }
 
 pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {

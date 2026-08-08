@@ -1503,6 +1503,34 @@ fn canonicalize_typed_slot_store_bits(
     }
 }
 
+/// #7630: `runtime_store_jsvalue_slot` minus the per-slot layout note, for a
+/// caller that OWNS the object's whole construction and settles its layout
+/// state once at the end (`layout_finish_deferred_boxed_object`). The JSON
+/// materialiser is the caller: per record it performed ~13 `layout_note_slot`
+/// calls whose only net effect was to build a per-object side-table pointer
+/// mask — the profile's top cost family. Everything else is kept bit-for-bit:
+/// the typed-slot canonicalization, the string addref demote, and the write
+/// barrier (whose SATB shade must never be dropped — the #7602 lesson).
+/// Returns whether the stored bits carry a heap pointer, so the caller can
+/// accumulate the one fact the elided notes were computing.
+#[inline]
+pub(crate) fn runtime_store_jsvalue_slot_layout_deferred(
+    parent_user: usize,
+    slot_addr: usize,
+    slot_index: usize,
+    value_bits: u64,
+) -> bool {
+    let value_bits = canonicalize_typed_slot_store_bits(parent_user, slot_index, value_bits);
+    unsafe {
+        std::ptr::write(slot_addr as *mut u64, value_bits);
+    }
+    if value_bits & TAG_MASK == STRING_TAG {
+        crate::string::js_string_addref((value_bits & POINTER_MASK) as *mut crate::StringHeader);
+    }
+    runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
+    super::layout::layout_pointer_bearing_bits(value_bits)
+}
+
 #[inline]
 pub(crate) fn runtime_store_jsvalue_slot(
     parent_user: usize,
