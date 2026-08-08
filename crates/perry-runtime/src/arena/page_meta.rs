@@ -834,6 +834,12 @@ pub(crate) fn old_pages_begin_gc_cycle() {
 }
 
 pub(crate) fn old_pages_reset_sweep_accounting() {
+    // #7625 READER (`OLD_GEN_PAGE_META`): closes the promote → sweep window
+    // inside a full cycle. The per-object accounting that follows calls
+    // `refresh_policy_bits`, which reads `allocated_bytes`; flushing here means
+    // it never recomputes a page's bits from a count that is missing this
+    // cycle's promotions.
+    flush_deferred_old_page_registrations();
     OLD_GEN_PAGE_META.with(|meta| {
         for page_meta in meta.borrow_mut().values_mut() {
             page_meta.reset_cycle_sweep_accounting();
@@ -1077,9 +1083,9 @@ impl OldArenaPageObjectCursor {
     pub(crate) fn new(pages: &crate::fast_hash::PtrHashSet<usize>) -> Self {
         // #7625 READER: same obligation as `old_arena_walk_objects_on_pages`.
         // The cursor is stepped incrementally by the budgeted cycle, which
-        // marks but never allocates into old-gen, so no entry can accumulate
-        // between `new` and the last `next` — `cursor_window_defers_nothing`
-        // pins that.
+        // marks but never allocates into old-gen, so nothing can accumulate
+        // between `new` and the last `next`; `next` debug-asserts that rather
+        // than paying a thread-local check per object.
         flush_deferred_old_page_registrations();
         Self {
             pages: pages.iter().copied().collect(),
@@ -1089,6 +1095,14 @@ impl OldArenaPageObjectCursor {
     }
 
     pub(crate) fn next(&mut self) -> Option<usize> {
+        // #7625: `new` flushed; the stepping window must not re-dirty the
+        // buffer, or this reader would be walking a stale index. Debug-only so
+        // the per-object read costs nothing in a shipped collector.
+        debug_assert!(
+            DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| buf.borrow().is_empty()),
+            "an old-gen birth happened while a page-object cursor was stepping; \
+             this reader is now walking a stale index (#7625)"
+        );
         loop {
             let page = *self.pages.get(self.page_cursor)?;
             let header = OLD_GEN_PAGE_OBJECTS.with(|index| {
