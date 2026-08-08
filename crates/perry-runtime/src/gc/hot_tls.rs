@@ -125,6 +125,54 @@ pub(super) fn hot_per_object_layouts_nonempty() -> &'static Cell<bool> {
     unsafe { &*(crate::tls_hot::hot().per_object_layouts_nonempty as *const Cell<bool>) }
 }
 
+// --- #7598: parse-cohort birth window ---------------------------------------
+
+thread_local! {
+    /// Nesting depth of [`ParseBirthOldScope`] windows on this thread. While
+    /// nonzero, `arena_alloc_gc` births go straight to old-gen with
+    /// `GC_FLAG_TENURED` — the JSON tape materialiser arms it around each
+    /// cohort re-parse, so the records AND their whole subtrees (strings,
+    /// sub-objects, element backings — everything funnels through
+    /// `arena_alloc_gc`) are born together in the generation they will live
+    /// in. `u32` depth rather than bool: `reparse_materialize` is reachable
+    /// from inside stringify's force-materialize, so windows nest.
+    static PARSE_BIRTH_OLD_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Address of this thread's `PARSE_BIRTH_OLD_DEPTH`.
+pub(crate) fn parse_birth_old_depth_hot_addr() -> *mut u8 {
+    PARSE_BIRTH_OLD_DEPTH.with(|f| f as *const _ as *mut u8)
+}
+
+/// `PARSE_BIRTH_OLD_DEPTH` without a TLS resolution — the "is a parse-cohort
+/// birth window open?" probe `arena_alloc_gc` pays on every allocation. Same
+/// cached-base pattern (and cost class) as `hot_arena_free_list_nonempty`,
+/// which that function already reads.
+#[inline(always)]
+pub(crate) fn hot_parse_birth_old_depth() -> &'static Cell<u32> {
+    // SAFETY: paired with `parse_birth_old_depth_hot_addr` above.
+    unsafe { &*(crate::tls_hot::hot().parse_birth_old_depth as *const Cell<u32>) }
+}
+
+/// #7598: RAII window — allocations on this thread are born tenured in
+/// old-gen while any scope is alive. See `PARSE_BIRTH_OLD_DEPTH`.
+pub(crate) struct ParseBirthOldScope;
+
+impl ParseBirthOldScope {
+    pub(crate) fn new() -> Self {
+        let cell = hot_parse_birth_old_depth();
+        cell.set(cell.get() + 1);
+        Self
+    }
+}
+
+impl Drop for ParseBirthOldScope {
+    fn drop(&mut self) {
+        let cell = hot_parse_birth_old_depth();
+        cell.set(cell.get().saturating_sub(1));
+    }
+}
+
 // --- gc::malloc -------------------------------------------------------------
 
 /// Address of this thread's `ARENA_FREE_LIST`.

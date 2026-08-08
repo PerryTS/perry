@@ -494,6 +494,11 @@ pub(crate) fn with_built_tape<R>(bytes: &[u8], f: impl FnOnce(&[TapeEntry]) -> R
 /// Returns `JSValue::null()` on empty tape (caller shouldn't invoke
 /// materialize on None tapes, but this keeps the function total).
 pub unsafe fn materialize(tape: &Tape, bytes: &[u8]) -> JSValue {
+    // #7598: the whole cohort this materialisation builds lives exactly as
+    // long as the materialised result — born old, together (see
+    // `ParseBirthOldScope`). Only lazy-tape blobs reach here, so the
+    // engagement is size-gated by the tape's own laziness threshold.
+    let _birth = crate::gc::ParseBirthOldScope::new();
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = TapeSource::Borrowed {
         tape: &tape.entries,
@@ -1643,6 +1648,10 @@ unsafe fn reparse_materialize(
     hdr: *mut LazyArrayHeader,
     cached_length: u32,
 ) -> (Option<*mut crate::array::ArrayHeader>, *mut LazyArrayHeader) {
+    // #7598: batch re-parse of a lazy array's blob — the cohort birth window
+    // (see `ParseBirthOldScope`; declining paths allocate nothing, so arming
+    // before the declines is harmless and keeps the window unmissable).
+    let _birth = crate::gc::ParseBirthOldScope::new();
     // The blob is this array's own source only when the tape root is the
     // blob's first value. Every production lazy array is built that way;
     // anything else declines rather than guessing.

@@ -100,6 +100,8 @@ pub(crate) struct HotTls {
     // gc/malloc.rs
     pub(crate) arena_free_list: *mut u8,
     pub(crate) arena_free_list_nonempty: *mut u8,
+    // gc/hot_tls.rs (#7598)
+    pub(crate) parse_birth_old_depth: *mut u8,
     // gc/barrier.rs
     pub(crate) birth_extra_flags: *mut u8,
     pub(crate) incremental_mark_valid_ptrs: *mut u8,
@@ -125,6 +127,7 @@ impl HotTls {
         page_generations: std::ptr::null_mut(),
         arena_free_list: std::ptr::null_mut(),
         arena_free_list_nonempty: std::ptr::null_mut(),
+        parse_birth_old_depth: std::ptr::null_mut(),
         birth_extra_flags: std::ptr::null_mut(),
         incremental_mark_valid_ptrs: std::ptr::null_mut(),
         incremental_mark_minor_only: std::ptr::null_mut(),
@@ -164,6 +167,7 @@ fn fill(slots: *mut HotTls) {
         (*slots).page_generations = crate::arena::page_generations_hot_addr();
         (*slots).arena_free_list = crate::gc::arena_free_list_hot_addr();
         (*slots).arena_free_list_nonempty = crate::gc::arena_free_list_nonempty_hot_addr();
+        (*slots).parse_birth_old_depth = crate::gc::parse_birth_old_depth_hot_addr();
         (*slots).birth_extra_flags = crate::gc::birth_extra_flags_hot_addr();
         (*slots).incremental_mark_valid_ptrs = crate::gc::incremental_mark_valid_ptrs_hot_addr();
         (*slots).incremental_mark_minor_only = crate::gc::incremental_mark_minor_only_hot_addr();
@@ -414,6 +418,11 @@ mod tests {
             "arena_free_list_nonempty"
         );
         assert_eq!(
+            hot.parse_birth_old_depth,
+            crate::gc::parse_birth_old_depth_hot_addr(),
+            "parse_birth_old_depth"
+        );
+        assert_eq!(
             hot.birth_extra_flags,
             crate::gc::birth_extra_flags_hot_addr(),
             "birth_extra_flags"
@@ -477,6 +486,7 @@ mod tests {
             ("page_generations", hot.page_generations),
             ("arena_free_list", hot.arena_free_list),
             ("arena_free_list_nonempty", hot.arena_free_list_nonempty),
+            ("parse_birth_old_depth", hot.parse_birth_old_depth),
             ("birth_extra_flags", hot.birth_extra_flags),
             (
                 "incremental_mark_valid_ptrs",
