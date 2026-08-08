@@ -452,12 +452,64 @@ pub(crate) fn with_operands_rooted<'f, R>(
     exprs: &[&Expr],
     body: impl FnOnce(&mut FnCtx<'f>, &[String]) -> Result<R>,
 ) -> Result<R> {
-    let (values, guard) = crate::expr::temp_root::lower_exprs_rooted(ctx, exprs)?;
-    let out = body(ctx, &values);
+    with_operands_rooted_across(ctx, exprs, &[], |_| Ok(()), |ctx, vals, ()| body(ctx, vals))
+}
+
+/// [`with_operands_rooted`], but with a caller-controlled lowering step wedged
+/// between the operand group and its re-read.
+///
+/// `across` lowers `across_exprs` in a representation this API cannot produce —
+/// today that is `expr::arrays_finds`'s index lowering, which picks between the
+/// `i32` fast path (`lower_expr_as_i32`) and a `double` + `fptosi` from the
+/// expression's proven integer range. Feeding those indexes to
+/// [`with_operands_rooted`] instead would force every `u8[i]` back onto the
+/// NaN-boxed path, which is a codegen-quality regression rather than a rooting
+/// fix.
+///
+/// **Why the plain form cannot serve.** Its re-read point is fixed at the end of
+/// the operand list, so an operand lowered before caller-controlled work is
+/// re-read *above* that work and is stale again by the time the call runs — the
+/// exact half-measure #7114 is. Here the group is rooted before `across` runs
+/// and re-read after it, so `body` sees post-collection values.
+///
+/// `across_exprs` is used for one thing: deciding whether the window collects at
+/// all. It is not lowered here — `across` owns that — so passing the
+/// expressions rather than a `bool` keeps "does this window collect?" answered
+/// by `operand_protection` like every other site, instead of by the caller.
+/// When neither the later operands nor `across_exprs` can collect, nothing is
+/// pushed and the emitted IR is unchanged.
+///
+/// The release still happens on every path out, including `across`'s `?`.
+pub(crate) fn with_operands_rooted_across<'f, T, R>(
+    ctx: &mut FnCtx<'f>,
+    exprs: &[&Expr],
+    across_exprs: &[&Expr],
+    across: impl FnOnce(&mut FnCtx<'f>) -> Result<T>,
+    body: impl FnOnce(&mut FnCtx<'f>, &[String], T) -> Result<R>,
+) -> Result<R> {
+    use crate::expr::temp_root::{any_may_trigger_gc, root_operands_begin};
+
+    let across_collects = any_may_trigger_gc(ctx, across_exprs.iter().copied());
+    let mut group = root_operands_begin(exprs.len());
+    let out = (|| {
+        // Incremental, one operand at a time: each is rooted BEFORE the next is
+        // lowered. Rooting a finished list afterwards is worse than doing
+        // nothing — it publishes an already-dangling pointer into a slot the
+        // collector scans (`root_operands_begin`'s doc, #6969).
+        for (i, expr) in exprs.iter().enumerate() {
+            let value = crate::expr::lower_expr(ctx, expr)?;
+            let collects =
+                across_collects || any_may_trigger_gc(ctx, exprs[i + 1..].iter().copied());
+            group.push(ctx, expr, &value, collects);
+        }
+        let extra = across(ctx)?;
+        let values = group.reread(ctx, exprs)?;
+        body(ctx, &values, extra)
+    })();
     // Released after `body`'s consuming call, which itself allocates -- and on
-    // the error path too, so a lowering that bails does not leave the group
-    // pushed.
-    crate::expr::temp_root::temp_root_release(ctx, guard);
+    // every error path too, including a bail from the operand lowering itself,
+    // so a lowering that fails does not leave the group pushed.
+    group.release(ctx);
     out
 }
 
@@ -489,6 +541,17 @@ pub(crate) fn with_operands_rooted<'f, R>(
 /// from an unstarted one, and that is what let the half-migration hide.
 ///
 /// No boundary is outstanding today.
+///
+/// **Listing a module that never used the escape hatch passes vacuously.** That
+/// is true of every module migrated so far except `expr/url_main.rs`: they named
+/// no `temp_root` symbol before the migration, so
+/// `migrated_modules_do_not_reach_past_the_rooting_api` went green the instant
+/// the line was added. The listing only means something if the slice ALSO ran
+/// the sabotage arm — inject a real, compiling `temp_root_push_*` /
+/// `temp_root_truncate` pair into the migrated module, confirm the ledger test
+/// goes red and names the lines, then revert. Slices 1a and 1b both did, and
+/// recorded it in their PRs; a slice that skips it is adding a line that asserts
+/// nothing.
 #[cfg(test)]
 const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
@@ -498,6 +561,14 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
         "crates/perry-codegen/src/lower_array_method.rs",
         include_str!("lower_array_method.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/arrays_finds.rs",
+        include_str!("expr/arrays_finds.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/array_methods.rs",
+        include_str!("expr/array_methods.rs"),
     ),
 ];
 
