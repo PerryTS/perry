@@ -707,15 +707,23 @@ thread_local! {
 /// allocation-free the extra batches cost only the loop entry. So it is sized
 /// for the footprint it has to justify.
 ///
-/// It was reduced while chasing the one `gc-ratchet` `pinned_host` regression
-/// row this change produces — `11_collect_at_depth.rss_bytes`, ~+1.07 MB — on
-/// the theory that the row WAS this buffer. **That theory is disproved and the
-/// row is not this constant's fault**: shrinking the cap 8× (1 MB → 128 KB)
-/// moved the cell by +16 KB in the wrong direction (+1,081,344 B → +1,097,728 B)
-/// when it should have shed ~0.9 MB. That probe also promotes **zero** objects,
-/// so this path is inert there. See the changelog fragment for the open
-/// question. The smaller cap is kept because it is better on its own terms,
-/// not because it fixed anything.
+/// It was reduced while chasing a `gc-ratchet` `pinned_host` row —
+/// `11_collect_at_depth.rss_bytes`, ~+1.07 MB above the pinned artifact — on the
+/// theory that the row WAS this buffer. Two measurements later that theory is
+/// dead twice over, and the cap had nothing to do with it:
+///
+/// 1. Shrinking the cap 8× (1 MB → 128 KB) moved the cell +16 KB in the WRONG
+///    direction when it should have shed ~0.9 MB. The probe also promotes
+///    **zero** objects, so this path is inert on it.
+/// 2. Measuring **`origin/main` itself** on the same idle host settled it:
+///    base reads 35,651,584 on that cell (+2.88% over the pinned artifact, just
+///    under the band) against fix's 35,749,888. **fix is +98 KB over base, not
+///    +1.07 MB** — the row is ~91% pre-existing drift between the artifact
+///    (pinned at 0.5.1346) and current `main`, and base fails ten other
+///    `pinned_host` RSS cells on its own.
+///
+/// The smaller cap is kept because 128 KB beats 1 MB on its own terms, not
+/// because it fixed anything.
 pub(crate) const DEFERRED_OLD_PAGE_REGISTRATION_CAP: usize = 8_192;
 
 /// Record `header_addr`'s page registration for the next flush instead of

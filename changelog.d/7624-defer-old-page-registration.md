@@ -98,98 +98,127 @@ into suppression. It is not hypothetical: on its first run it caught
 argument attached). Both of its arms are sabotage-verified — a bogus exemption
 and a newly added unflushed toucher each turn it red.
 
-## Measured — pinned quiet host (`perry-macos`, M1 mini, load ~1.3)
+## Measured — pinned quiet host (`perry-macos`, M1 mini)
+
+> An earlier revision of this description carried a wall/user/RSS table taken
+> while a second `run_public_baseline` was concurrently executing on the mini.
+> **That table is superseded by this one.** The GC census rows were never
+> affected — they are load-independent — and are unchanged.
 
 Both arms `perry-dev`, identical package set, one target dir each. Workloads
 compiled on the dev Mac with `PERRY_NO_AUTO_OPTIMIZE=1` and the **prebuilt
 executables shipped** to the mini, so nothing was rebuilt on the measurement
-host. Run only after the owner's `run_public_baseline` had exited. 5 rounds,
-base/fix interleaved within each round, every row hash-verified.
+host. 5 rounds, base/fix interleaved within each round, every row hash-verified.
 
-### json_pipeline (medians of 5)
+**Idleness was gated, not assumed.** The run waits for all three of: no
+`run_public_baseline` process, a `SCRIPT REAL EXIT=` marker in
+`/tmp/baseline_mini.log`, and 1-min load < 2.0 — then settles 60 s, measures,
+and **re-checks all three afterwards**. Load recorded by the A/B itself at its
+own start: `1.62 2.04 2.45`.
 
-| | base | fix | Δ |
+Deltas are **medians of per-round paired deltas**, which is the statistic the
+interleaving exists to support; see the `cycles` note below for why
+median-of-medians is not safe here.
+
+### json_pipeline
+
+| | base | fix | Δ (paired) |
 |---|--:|--:|--:|
-| 200k wall | 1.64 s | **1.56 s** | **−4.9%** |
-| 200k user CPU | 1.58 s | **1.50 s** | **−5.1%** |
-| 200k peak RSS | 489.0 MB | **471.1 MB** | **−3.7%** |
-| 500k wall | 4.36 s | **4.18 s** | **−4.1%** |
-| 500k user CPU | 4.21 s | **4.02 s** | **−4.5%** |
+| 200k wall | 1.53 s | **1.47 s** | **−3.9%** |
+| 200k user CPU | 1.48 s | **1.42 s** | **−4.1%** |
+| 200k peak RSS | 489.0 MB | **486.8 MB** | −0.5% |
+| 500k wall | 4.09 s | **3.94 s** | **−3.7%** |
+| 500k user CPU | 3.95 s | **3.80 s** | **−3.8%** |
 | 500k peak RSS | 1,110.4 MB | 1,114.7 MB | +0.4% |
 
-Fix is faster in every paired round at both sizes. (The one 200k `fix` row
-reading 2.11 s is round 1 only, first touch of a freshly rsync'd binary — its
-*user* CPU is 1.54 s, i.e. normal; it is I/O, not compute, and it is left in
-the raw log rather than dropped.)
+**All 20 paired json deltas are negative** — 200k wall −4.5/−3.9/−4.6/−3.9/−3.9%,
+500k wall −3.9/−3.7/−3.4/−3.7/−3.9%. Output hashes identical at both sizes.
 
-Output hashes identical at both sizes, and the **GC census is identical** at
-both sizes — same cycles, same `promoted_objects`/`promoted_bytes`, same sweep
-and reclaim. That is the check that this is bookkeeping and not a behaviour
-change: 200k promotes 1,657,962 objects / 113,226,896 bytes and 500k promotes
-4,117,011 / 280,996,760, all through the path this PR touches, and none of it
-moves.
+```
+200k base real 1.54 1.53 1.53 1.53 1.53   fix 1.47 1.47 1.46 1.47 1.47
+500k base real 4.10 4.09 4.09 4.09 4.11   fix 3.94 3.94 3.95 3.94 3.95
+```
 
-### gc bench set (medians of 5, `gc-handoff/bench`)
+**The clean host both shrank the effect and shrank the noise.** Base 200k wall
+now spans 1.53–1.54 s (0.7%) where under the concurrent baseline it spanned
+1.63–1.75 s (7%). The honest win is **smaller** than the superseded table
+claimed (−3.9%/−3.7% vs −4.9%/−4.1%), and that table's 200k RSS "win" (−3.7%)
+was noise — it is −0.5% here.
 
-| workload | wall Δ | RSS Δ |
-|---|--:|--:|
-| retain | **−4.2%** | −0.6% |
-| retain1 | **−4.3%** | **−6.6%** |
-| deeplist | −2.3% | +1.2% |
-| tree | −0.5% | −2.4% |
-| churn / churn_alloc / churn_num / churn_read / push_num | 0.0% | +0.1…+1.3% |
-| cycles | +1.0% | +1.0% |
-| push_cls | +2.5% | +0.4% |
+### gc bench set (`gc-handoff/bench`)
+
+| workload | wall Δ (paired) | RSS Δ | output |
+|---|--:|--:|---|
+| retain1 | **−4.6%** | **−6.6%** | identical |
+| retain | **−4.5%** | −0.6% | identical |
+| churn_alloc | −2.5% | +0.3% | identical |
+| deeplist | −2.4% | +1.6% | identical |
+| churn / churn_read / churn_num / push_cls / push_num / cycles | 0.0% | +0.0…+1.3% | identical |
+| tree | +0.8% | −2.2% | identical |
 
 All eleven produce byte-identical stdout. The wins land where the mechanism
-predicts — `retain`/`retain1`/`tree`/`deeplist` are the promote-heavy ones. The
-two small positives are at the 10 ms resolution of `/usr/bin/time` on 0.4 s and
-1.0 s workloads.
+predicts — `retain`/`retain1`/`deeplist` are the promote-heavy ones.
 
-### What the measurement changed in the patch
+> **`cycles` is reported at +0.0%, not +18.5%.** Median-of-medians says +18.5%;
+> that is an artifact. The workload is **bimodal in both arms** (rounds 1–3
+> ≈ 0.79 s, rounds 4–5 ≈ 0.96 s), so the two arms' medians land on different
+> modes. The paired deltas are 0.00 in three of five rounds and the run-1
+> outlier is the whole difference. This is exactly what interleaving is for, and
+> it is why every number above is a paired statistic.
 
-Both are recorded because they are the reason the final numbers look the way
-they do — and because one of them is a correction to a claim I made first.
+### GC census — identical, and load-independent
 
-1. **+31 MB peak RSS at 500k** (1,110 → 1,142 MB, reproducibly, all 5 rounds).
-   Not the deferral — the *flush*: ~63 flushes per run, each `mem::take`ing the
-   pending buffer so the next burst re-grew a ~1 MB `Vec` from empty, plus a
-   second ~1 MB staging `Vec` for the page-meta updates, allocated and freed per
-   batch. The flush now holds both table borrows at once and applies the meta
-   update inline, and hands the pending buffer back to its thread-local. **A
-   flush allocates nothing.**
-2. **The 64k-entry cap** (1 MB resident) was inherited from #7623, where the
-   buffer backed a different shape. Cut to **8,192 entries (128 KB)** — it still
-   amortises the per-batch loop ~8,000×, and with an allocation-free flush the
-   extra batches cost only the loop entry. This was done believing it would
-   clear the `gc-ratchet` row below; it did not, and that is written up there
-   rather than quietly dropped.
+`CENSUS 200k IDENTICAL`, `CENSUS 500k IDENTICAL`: same cycle sequence, same
+`promoted_objects`/`promoted_bytes`, same sweep and reclaim. 200k promotes
+**1,657,962 objects / 113,226,896 bytes**; 500k promotes **4,117,011 /
+280,996,760** — all through the path this PR touches, none of it moving.
 
-### gc-ratchet (the #7609 baseline), both arms, same session
+### gc-ratchet (the #7609 baseline), both arms, clean host
 
-Both arms measured in the same session on the pinned host, `measure --repeats 7`
-then `check` on both profiles.
+Both arms measured back-to-back in the same session on the clean host,
+`measure --repeats 7`, then `check` on both profiles. 144 cells per arm.
 
-- **`shared_ci`** (the profile CI gates on): **OK on both arms.**
-- **`pinned_host`** (stricter — also gates memory and time): base **0 regression
-  rows**; fix **1**, `11_collect_at_depth.rss_bytes` 34,652,160 → 35,749,888
-  (**+3.17%**, band 1,039,565).
+| | base (`origin/main`) | fix |
+|---|---|---|
+| `shared_ci` (what CI gates on) | **OK** | **OK** |
+| `pinned_host` | **FAILED**, 10 regression rows | FAILED, 15 rows |
 
-Every GC counter on every probe is `+0.00%` on both arms — `copied_objects`,
-`copied_bytes`, `promoted_objects`, `promoted_bytes`, `freed_bytes`,
-`minor_cycles`, `step_cycles`, `heap_used_bytes`, `heap_total_bytes` — which is
-the same "bookkeeping only" result the census gives, reproduced by an
-independent harness across twelve probes.
+**Read the base column first.** Pure `origin/main` fails `pinned_host` on this
+host with ten RSS rows of its own (`03_cross_gen_writes` +3.83%,
+`08_map_set_sidetables` +4.20%, `04_dead_after_deep_stack` +3.72%, …). The
+pinned artifact was captured at `main 26b9c9d59` (0.5.1346) and we are at
+0.5.1355, so the profile's RSS bands no longer describe this host/version.
+**"fix fails `pinned_host`" is therefore not a statement about this PR** — the
+only sound comparison is base vs fix in the same session, which is what follows.
 
-**The one open row, stated honestly.** I first attributed it to the deferral
-buffer and cut the cap 64k → 8k to remove it. **That was wrong, and the
-measurement says so**: the cell did not move (+1,081,344 B at a 1 MB buffer →
-+1,097,728 B at a 128 KB buffer — it should have shed ~0.9 MB). Two further
-facts point away from the deferral: `11_collect_at_depth` promotes **zero**
-objects, so this PR's path is inert on it, and the base arm produced zero
-regression rows on the same host in the same session, so it is not host drift
-either. The remaining hypothesis — untested — is allocator segment granularity
-shifting under a runtime ~10 KB larger. Flagged rather than explained away; it
-does not affect `shared_ci`, and the 8k cap is kept because 128 KB is better
-than 1 MB on its own terms, not because it fixed this.
+**fix vs base, all 144 cells:**
+
+- **GC semantics: 107 of 108 cells byte-identical.** The single exception is
+  `12_large_live_set.heap_used_bytes` (59,946,104 → 59,944,160, −1,944 B) — the
+  one cell the harness explicitly de-gates by probe override because it is
+  conservative-stack-scan sample-dependent, with a documented spread of 9,072 B
+  over 36 runs. The difference is under a quarter of that spread. Every
+  `copied_*`, `promoted_*`, `freed_bytes`, `minor_cycles`, `step_cycles` and
+  `heap_total_bytes` cell is identical.
+- **Memory: 24 cells, median fix-vs-base +0.23%**, range −0.30% to +1.46%
+  (largest: `07_array_grow_evacuate.peak_rss_bytes` +1.46%).
+- **Wall: 12 cells, median fix-vs-base +0.0%.** These probes are microbenchmarks
+  where the deferral has almost nothing to do; the promote-heavy work is
+  json_pipeline's.
+
+**And this retires the open question from the earlier revision.** I had flagged
+`11_collect_at_depth.rss_bytes` as an unexplained ~+1.07 MB, with "allocator
+segment granularity" as an untested hypothesis. Measuring **base on the same
+clean host** answers it:
+
+| | `11_collect_at_depth.rss_bytes` | vs pinned artifact |
+|---|--:|--:|
+| pinned baseline (0.5.1346) | 34,652,160 | — |
+| **base arm = pure `origin/main`** | 35,651,584 | **+2.88%** (ok — just under the 1,039,565 band) |
+| fix arm | 35,749,888 | +3.17% (REGRESSION — just over) |
+
+**fix is +98,304 B (+0.28%) above base, not +1.07 MB.** Base already sat at 96%
+of the allowance, so the cell tips over on a rounding-scale difference. The row
+is ~91% pre-existing drift in `origin/main` and ~9% this PR. No allocator-granularity
+story is needed, and the one I floated should be disregarded.
 
