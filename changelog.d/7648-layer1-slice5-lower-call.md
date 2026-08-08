@@ -44,6 +44,19 @@ fixed.
    `…_DEPTH` are *not* needed here: this fault is a use-after-move that lands on
    recycled memory, not a from-space `SIGSEGV`, so zeal alone surfaces it.
 
+   **The runtime fault is arrangement-dependent; the IR window is not.** Review
+   could not reproduce the `TypeError` on a `main` baseline built during the
+   audit, using these files and these commands — it printed the correct answer.
+   What review *did* confirm, directly in `--trace llvm` output, is the window
+   itself: `%r9 = bitcast i64 %r8 to double` (the callback), then
+   `call double @perry_fn_…__churn()`, then
+   `js_timer_validate_callback(double %r9, …)` reading the register defined above
+   the call — and the fixed arm storing `%r8` into a root slot and reloading it.
+   Whether a stale pointer is *observably* wrong depends on what gets recycled
+   into those bytes, which is why the acceptance tests assert the IR ordering
+   rather than a runtime outcome. **A window that does not fault today is not a
+   window that is absent** — it is one whose victim happened to survive.
+
    Conversely, a window that does not fault is not a window that is absent —
    whether a stale pointer is *observably* wrong depends on what gets recycled
    into those bytes. The IR above is the evidence that the bug is there; the
@@ -67,15 +80,22 @@ fixed.
    Worth knowing before concluding from one non-faulting arrangement that the arm
    is clean.
 
-3. **The `has_rest` namespace direct call lost every rest element — silently.**
+3. **The `has_rest` namespace direct call lost every rest element — silently, on
+   the default build, with no GC instrumentation at all.** This is the most
+   serious of the four and the only one that needs nothing special to see.
    The #7154 accumulator shape verbatim: `current` was a raw `*mut ArrayHeader`
    threaded through a push loop while the next argument's expression ran, holding
    the only reference to everything pushed so far. `lower_rest_call_args_rooted`
    was written for exactly this and this path never adopted it. For
    `lib.joinRest(churn("head"), churn("r1"), churn("r2"), churn("r3"))` node
-   prints `head|r1,r2,r3` and the baseline prints `head|`. A wrong answer, not a
-   crash. Delegating to the audited helper also pads the fixed parameters to the
-   declared arity, which the hand-rolled loop did not.
+   prints `head|r1,r2,r3` and the baseline prints `head|`. Independently
+   reproduced during review with a different repro shape, where the baseline
+   prints **nothing at all and exits 0** — no zeal, no protect, no
+   `PERRY_GC_MOVING_LOOP_POLLS`, just the plain compiler: the argument churn
+   allocates enough to guarantee a collection inside the window, so unlike the
+   other three this one needs no instrumentation to arrange. A wrong answer, not
+   a crash. Delegating to the audited helper also pads the fixed parameters to
+   the declared arity, which the hand-rolled loop did not.
 
 4. **Three more unprotected windows**, repaired in passing and reachable by
    inspection rather than by a reproducer that faults today: the `fs/promises`
