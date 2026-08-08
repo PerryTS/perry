@@ -272,6 +272,78 @@ fn build_valid_pointer_set_sliced_build_preserves_contains_and_enclosing_object(
     }
 }
 
+/// #7646: arena membership now answers from the address-ordered census runs
+/// rather than a shadow `BTreeSet`, which makes RUN BOUNDARIES load-bearing.
+/// Runs seal every `VALID_POINTER_ARENA_RUN_CAPACITY` (1024) starts, so the
+/// final run is partial and is only sealed by `finalize()`. The sliced-build
+/// test above allocates 1100 strings — enough to cross the boundary — but
+/// checks only the first 16, which all live in the FIRST run: it passes
+/// unchanged if every later run is lost.
+///
+/// This checks every start, both directions.
+#[test]
+fn valid_pointer_membership_spans_every_census_run_including_the_partial_one_7646() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    // > 2 full runs, so the last one is partial and cannot be sealed by the
+    // capacity check alone.
+    let arena_strings = (0..2600).map(|_| young_leaf()).collect::<Vec<_>>();
+    let (arena_object, fields) = unsafe { alloc_nursery_test_object(4) };
+    let arena_object = arena_object as usize;
+    let interior = fields as usize;
+
+    let valid_ptrs = ValidPointerSetBuilder::new().finish();
+
+    assert!(
+        valid_ptrs.arena_runs.len() >= 3,
+        "premise: the census must span several runs, got {}",
+        valid_ptrs.arena_runs.len()
+    );
+    assert!(
+        valid_ptrs.current_arena_run.is_empty(),
+        "finalize() must seal the open run before the set escapes the builder; \
+         {} starts would otherwise be invisible to membership",
+        valid_ptrs.current_arena_run.len()
+    );
+    assert_eq!(
+        valid_ptrs.arena_run_firsts.len(),
+        valid_ptrs.arena_runs.len(),
+        "the fence mirror must stay index-aligned with the runs"
+    );
+    for (index, run) in valid_ptrs.arena_runs.iter().enumerate() {
+        assert_eq!(
+            valid_ptrs.arena_run_firsts[index], run[0],
+            "fence {index} must equal its run's first key"
+        );
+    }
+
+    // Positive: EVERY censused start, not a prefix — a start in the last,
+    // partial run is the one a lost `finalize()` drops.
+    for (index, &ptr) in arena_strings.iter().enumerate() {
+        assert!(
+            valid_ptrs.contains(&ptr),
+            "arena start {index} of {} is censused but not reported as a member",
+            arena_strings.len()
+        );
+    }
+    assert!(valid_ptrs.contains(&arena_object));
+
+    // Negative: membership must not become a SUPERSET. A floor lookup returns
+    // the greatest censused start <= ptr, so an interior pointer floors to its
+    // object and must still be rejected as a START — otherwise the conservative
+    // scan would begin tracing from the middle of an object.
+    assert!(
+        !valid_ptrs.contains(&interior),
+        "an interior pointer must not report as an object start"
+    );
+    assert_eq!(valid_ptrs.enclosing_object(interior), Some(arena_object));
+    assert!(
+        !valid_ptrs.contains(&(arena_object + 1)),
+        "an unaligned address inside an object must not report as a start"
+    );
+}
+
 #[test]
 fn build_valid_pointer_set_finalize_is_separate_bounded_phase() {
     let _guard = CopyingNurseryTestGuard::new(0);

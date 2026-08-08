@@ -287,8 +287,31 @@ impl ValidPointerSet {
 
     /// Exact arena membership: the census runs are address-ordered, so `ptr`
     /// was censused iff its floor is itself.
+    ///
+    /// **Load-bearing ordering requirement, which the `BTreeSet` this replaced
+    /// did not have.** The B-tree was complete after every `push_arena`, so a
+    /// mid-build query merely saw fewer entries. The runs are only complete
+    /// once `finalize()` has sealed `current_arena_run` — up to
+    /// `VALID_POINTER_ARENA_RUN_CAPACITY` censused starts are invisible before
+    /// that. A membership query on an unsealed set is therefore a FALSE
+    /// NEGATIVE, and a false negative here is not a missed optimisation: the
+    /// conservative scan drops the root, the object is swept live, and the
+    /// failure surfaces cycles later as `TypeError: value is not a function`.
+    ///
+    /// The builder's phase machine guarantees this today (`Finalize` precedes
+    /// `Done`, and the set escapes only through `finish()`), so the assert is
+    /// free in release. It exists so that a phase added after `Finalize`, or a
+    /// caller that queries a partially-built set, fails a test instead of
+    /// corrupting the heap. Verified to fire: skipping the seal in `finalize`
+    /// trips it with "4 censused starts are invisible to this lookup".
     #[inline]
     fn arena_start_censused(&self, ptr: usize) -> bool {
+        debug_assert!(
+            self.current_arena_run.is_empty(),
+            "arena membership queried before finalize() sealed the open run: \
+             {} censused starts are invisible to this lookup",
+            self.current_arena_run.len()
+        );
         self.find_arena_floor(ptr) == Some(ptr)
     }
 
