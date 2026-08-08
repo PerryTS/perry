@@ -895,6 +895,42 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
     Ok(Some((out, stats)))
 }
 
+/// Decode the stack map in `asm` down to exactly what the collector reads at
+/// run time: per function symbol, one entry per safepoint listing that
+/// safepoint's deduplicated `(dwarf_reg, frame_offset)` roots.
+///
+/// The seam `native_root_coverage` asserts through (#7502). It deliberately
+/// runs `encode_stream` + `verify_roundtrip` rather than handing back
+/// `decode_v3`'s output, so a test's "this safepoint has N roots" is a claim
+/// about the **compact map the binary ships**, not about an intermediate the
+/// encoder could still drop on the floor. Absence of a block is an `Err`, not
+/// an empty `Ok`: "there were no roots" and "there was no map" must not be the
+/// same answer to a caller that is about to assert a root count is zero.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn decode_stack_map_roots(
+    asm: &str,
+    target: &str,
+) -> Result<Vec<(String, Vec<Vec<(u16, i32)>>)>, String> {
+    let lines: Vec<&str> = asm.lines().collect();
+    if find_block_start(&lines).is_none() {
+        return Err("assembly carries no stack-map section".to_string());
+    }
+    let block = parse_block(&lines, word_width_for(target))?;
+    let functions = decode_v3(&block)?;
+    let stream = encode_stream(&functions);
+    verify_roundtrip(&functions, &stream)?;
+    Ok(functions
+        .into_iter()
+        .map(|f| {
+            (
+                f.symbol,
+                f.records.into_iter().map(|r| r.roots).collect::<Vec<_>>(),
+            )
+        })
+        .collect())
+}
+
 /// Rewrite the stack map in `asm_path` into Perry's compact form, then
 /// assemble it to `obj_path`.
 ///

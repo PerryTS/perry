@@ -29,6 +29,11 @@ pub mod module;
 pub mod nanbox;
 #[cfg(feature = "llvm-inprocess")]
 pub mod native_emit;
+/// Coverage for the native-roots (RS4GC statepoint) lowering that ships —
+/// #7502. Test-only; see the module docs for what it asserts and why the
+/// shadow-pinned suites are not a substitute.
+#[cfg(test)]
+mod native_root_coverage;
 pub(crate) mod native_value;
 pub(crate) mod nm_install;
 pub mod opt_report;
