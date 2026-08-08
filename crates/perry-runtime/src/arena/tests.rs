@@ -1180,6 +1180,181 @@ fn block_pool_is_per_thread_and_drops_with_its_thread() {
 // `flush_deferred_old_page_registrations()` call turns it red.
 // ---------------------------------------------------------------------------
 
+/// The rule this whole family enforces, made checkable rather than remembered.
+///
+/// The per-obligation tests below each pin ONE flush site, which is the right
+/// shape for the sites that exist today — but they are blind to a site that
+/// does not exist yet. A future edit that adds a function touching either table
+/// gets no test, and the deferral silently starts being visible to it. This
+/// closes that: both tables are thread-locals private to `page_meta.rs`, so the
+/// toucher set is enumerable from the source, and every toucher must either
+/// flush or appear below with a reason.
+///
+/// A name in `EXEMPT` that no longer touches either table also fails, so a
+/// removed function cannot leave a stale exemption behind (the shape
+/// `gc_root_dominance_allowlist.json` uses).
+#[test]
+fn deferred_registration_flush_sites() {
+    // Every exemption is a claim about why the deferral cannot be observed.
+    const EXEMPT: &[(&str, &str)] = &[
+        (
+            "register_old_block_pages",
+            "creates zeroed per-page META entries when a BLOCK is registered; \
+             reads no counter the deferral owes",
+        ),
+        (
+            "update_old_page_meta_for_object",
+            "the flush's own target — it is what applies the batch",
+        ),
+        (
+            "register_old_object_pages",
+            "the eager path itself; the flush calls its logic, and \
+             arena_alloc_gc_old_excluding_pages still calls it directly",
+        ),
+        (
+            "old_page_account_swept_object",
+            "per-object sweep writer. It calls refresh_policy_bits, which reads \
+             allocated_bytes, but the flush refreshes every page it touches and \
+             every READER flushes first, so no reader can observe a stale bit. \
+             Kept flush-free so the sweep path pays nothing",
+        ),
+        (
+            "old_page_account_promoted_object",
+            "as old_page_account_swept_object — per-object, same argument",
+        ),
+        (
+            "old_page_account_dirty_slot",
+            "touches only dirty_slots/epoch, which no registration contributes to",
+        ),
+        (
+            "old_page_mark_dirty",
+            "per-store barrier path; asks only whether a META entry exists, and \
+             entries are created per page at BLOCK registration, not per object",
+        ),
+        (
+            "old_page_clear_dirty",
+            "as old_page_mark_dirty — the dirty bit only",
+        ),
+        (
+            "next",
+            "OldArenaPageObjectCursor::next. `new` flushes and the budgeted \
+             stepping window marks without allocating into old-gen, so the \
+             buffer cannot re-fill mid-walk; `next` debug-asserts exactly that \
+             rather than paying a thread-local read per object",
+        ),
+        (
+            "old_arena_page_index_clear_for_tests",
+            "DISCARDS the buffer instead: a caller asking for an empty index \
+             must not get a repopulated one",
+        ),
+        ("defer_old_object_page_registration", "the producer"),
+        (
+            "flush_deferred_old_page_registrations",
+            "the flush entry point",
+        ),
+        (
+            "flush_deferred_old_page_registrations_batch",
+            "the flush body",
+        ),
+        (
+            "deferred_old_page_registrations_len",
+            "test-only observer of the buffer, not of either table",
+        ),
+    ];
+
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/arena/page_meta.rs"),
+    )
+    .expect("page_meta.rs must be readable");
+
+    // Split into function bodies by tracking `fn <name>` headers at any indent.
+    let mut current: Option<String> = None;
+    let mut bodies: Vec<(String, String)> = Vec::new();
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed
+            .strip_prefix("pub(crate) fn ")
+            .or_else(|| trimmed.strip_prefix("pub fn "))
+            .or_else(|| trimmed.strip_prefix("fn "))
+        {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            current = Some(name.clone());
+            bodies.push((name, String::new()));
+        }
+        if current.is_some() {
+            if let Some(last) = bodies.last_mut() {
+                last.1.push_str(line);
+                last.1.push('\n');
+            }
+        }
+    }
+
+    let touches = |body: &str| {
+        body.contains("OLD_GEN_PAGE_OBJECTS.with") || body.contains("OLD_GEN_PAGE_META.with")
+    };
+    let exempt_names: Vec<&str> = EXEMPT.iter().map(|(n, _)| *n).collect();
+
+    let mut offenders = Vec::new();
+    let mut touching = std::collections::BTreeSet::new();
+    for (name, body) in &bodies {
+        if !touches(body) {
+            continue;
+        }
+        touching.insert(name.clone());
+        if body.contains("flush_deferred_old_page_registrations()") {
+            continue;
+        }
+        if exempt_names.contains(&name.as_str()) {
+            continue;
+        }
+        offenders.push(name.clone());
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these functions in arena/page_meta.rs read or mutate OLD_GEN_PAGE_OBJECTS / \
+         OLD_GEN_PAGE_META without first calling flush_deferred_old_page_registrations(), \
+         and are not listed as exempt: {offenders:?}.\n\
+         A deferred registration is invisible to a reader that does not flush, and a \
+         REMOVER that does not flush is worse — the removal no-ops and the later flush \
+         resurrects the dead entry. Add the flush, or add the function to EXEMPT with \
+         the argument for why the deferral cannot be observed there (#7624)."
+    );
+
+    // Stale exemptions fail too, so this list cannot rot into suppression.
+    let stale: Vec<&str> = exempt_names
+        .iter()
+        .copied()
+        .filter(|n| {
+            !touching.contains(*n)
+                && !matches!(
+                    *n,
+                    "defer_old_object_page_registration"
+                        | "flush_deferred_old_page_registrations"
+                        | "flush_deferred_old_page_registrations_batch"
+                        | "deferred_old_page_registrations_len"
+                        | "old_arena_page_index_clear_for_tests"
+                )
+        })
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "EXEMPT names nothing that touches either table any more: {stale:?}. \
+         Delete the entry (#7624)."
+    );
+
+    // And the gate must be looking at something.
+    assert!(
+        touching.len() >= 10,
+        "only found {} functions touching the page tables — the parser above has \
+         probably stopped matching, which would make this gate vacuous",
+        touching.len()
+    );
+}
+
 /// A synthetic old-gen block plus `count` distinct in-range header addresses.
 /// Registration never dereferences a header, so fabricated addresses exercise
 /// the bookkeeping exactly as real ones do — and keep the test independent of
