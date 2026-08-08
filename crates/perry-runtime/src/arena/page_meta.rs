@@ -698,9 +698,22 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
-/// Cap chosen so the buffer's worst-case footprint (16 B/entry × 64k = 1 MB)
-/// stays a rounding error while flushes stay rare on an allocation burst.
-pub(crate) const DEFERRED_OLD_PAGE_REGISTRATION_CAP: usize = 65_536;
+/// Bound on the buffer between flushes, and therefore on its resident
+/// footprint: 16 B/entry × 8k = **128 KB**.
+///
+/// This started at 64k entries (1 MB), inherited from #7623 where the buffer
+/// backed a different shape. The `gc-ratchet` `pinned_host` profile priced that
+/// choice: `11_collect_at_depth.rss_bytes` rose 34,652,160 → 35,733,504, i.e.
+/// **+1,081,344 B — the buffer, essentially exactly** — and that one cell was
+/// the only regression row across all twelve probes, on an arm whose GC
+/// counters were otherwise byte-identical to the baseline.
+///
+/// Nothing wanted 64k. The point of the cap is to amortise the per-batch loop
+/// over many entries, and 8k already does that ~8,000×; since the flush is
+/// allocation-free the extra batches cost only the loop entry. So the cap is
+/// sized for the footprint it has to justify, not for the largest number that
+/// still looked small.
+pub(crate) const DEFERRED_OLD_PAGE_REGISTRATION_CAP: usize = 8_192;
 
 /// Record `header_addr`'s page registration for the next flush instead of
 /// performing it now. Callers must be old-gen births; see the module comment
