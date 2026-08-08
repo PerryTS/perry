@@ -231,8 +231,9 @@ fn element_shape_loop_pure_expr_collect(
 /// 2. #7480 step 3: an **object-literal element type** (`keep: {v: number}[]`),
 ///    resolved to the `__AnonShape_<hash>` class the literals actually
 ///    allocate ([`anon_shape_class_for_element_type`]). This is #7480's own
-///    kernel and the whole measured gap — 414 ms vs node's 12 on 200k × 50,
-///    where the named-class arm is already 13 ms.
+///    kernel and the whole measured gap: 408 ms against node's 12 on
+///    200k × 50 before this resolved, 12 ms after, where the named-class arm
+///    was already 13 ms.
 ///
 /// Neither has to be *right*: the preheader compares the class id the runtime
 /// invariant reports against this one, so a wrong answer costs the clone,
