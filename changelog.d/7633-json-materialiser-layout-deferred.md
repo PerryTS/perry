@@ -24,3 +24,15 @@ Pinned-host, interleaved, hash-identical: `json_pipeline` 200k `build_out`
 451 → 422 MB; `layout_note_slot` / `layout_forget_object` vanish from the
 profile. Also splits `barrier.rs`'s slot-store helpers into
 `barrier_store.rs` for the 2000-line cap.
+
+Qualification added by #7643: this landed on the strength of its argument
+(the materialiser owns each object end to end, finalize is reached on every
+path, the pointer case is conservative) plus a clean gap suite — the GC
+half of it had no regression test, and #7635 showed why that mattered by
+forcing every parsed record to `POINTER_FREE` and getting byte-identical
+correct output from every runtime instrument. The argument was right, but
+the probe could not have shown it either way: `js_json_parse` is lazy for
+1 KB–16 MB top-level arrays, so the records were materialised after the
+last collection. #7643 adds the workload-free regression tests
+(`gc/tests/copying/deferred_finalize_7635.rs`) and the verification note on
+`GC_LAYOUT_POINTER_FREE`.
