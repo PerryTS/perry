@@ -702,17 +702,20 @@ thread_local! {
 /// footprint: 16 B/entry × 8k = **128 KB**.
 ///
 /// This started at 64k entries (1 MB), inherited from #7623 where the buffer
-/// backed a different shape. The `gc-ratchet` `pinned_host` profile priced that
-/// choice: `11_collect_at_depth.rss_bytes` rose 34,652,160 → 35,733,504, i.e.
-/// **+1,081,344 B — the buffer, essentially exactly** — and that one cell was
-/// the only regression row across all twelve probes, on an arm whose GC
-/// counters were otherwise byte-identical to the baseline.
+/// backed a different shape. Nothing here wanted 64k: the cap exists to amortise
+/// the per-batch loop, 8k already does that ~8,000×, and since the flush is
+/// allocation-free the extra batches cost only the loop entry. So it is sized
+/// for the footprint it has to justify.
 ///
-/// Nothing wanted 64k. The point of the cap is to amortise the per-batch loop
-/// over many entries, and 8k already does that ~8,000×; since the flush is
-/// allocation-free the extra batches cost only the loop entry. So the cap is
-/// sized for the footprint it has to justify, not for the largest number that
-/// still looked small.
+/// It was reduced while chasing the one `gc-ratchet` `pinned_host` regression
+/// row this change produces — `11_collect_at_depth.rss_bytes`, ~+1.07 MB — on
+/// the theory that the row WAS this buffer. **That theory is disproved and the
+/// row is not this constant's fault**: shrinking the cap 8× (1 MB → 128 KB)
+/// moved the cell by +16 KB in the wrong direction (+1,081,344 B → +1,097,728 B)
+/// when it should have shed ~0.9 MB. That probe also promotes **zero** objects,
+/// so this path is inert there. See the changelog fragment for the open
+/// question. The smaller cap is kept because it is better on its own terms,
+/// not because it fixed anything.
 pub(crate) const DEFERRED_OLD_PAGE_REGISTRATION_CAP: usize = 8_192;
 
 /// Record `header_addr`'s page registration for the next flush instead of
