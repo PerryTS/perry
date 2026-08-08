@@ -51,8 +51,9 @@ fn counted_loop(body: Vec<Stmt>) -> Stmt {
 ///
 /// **Sabotage 1** — `function/precise_roots.rs`, the alloca-retype arm emits
 /// `alloca double` instead of `alloca ptr addrspace(1)`: RED, `root_allocas`
-/// 2 → 0. Reddens all seven mechanics and both pipeline self-tests, which is
-/// the point: nothing here can pass without the retype.
+/// 2 → 0. This one reddens 10 of the 14 tests in the module (all eight
+/// mechanics and both pipeline self-tests), which is the point: nothing here
+/// can pass without the retype.
 ///
 /// **Sabotage 2** — the same arm's `.filter(|reg| roots.contains(reg))`
 /// dropped, so every scalar alloca is retyped: RED.
