@@ -46,6 +46,12 @@ A decrementing counter would recover the fast path after a transient pin (a sett
 
 `dirty_slot_preflight_reason` took a `remembered_dirty_snapshot()`, whose **first** call on a thread arms the barrier and rebuilds the remembered set from the heap — a walk whose own comment says "nothing is marked yet when a collector first asks for the log". In a successful copying minor that first call was always the preflight's. Letting it fall through to the copy phase's snapshot would have run it after `visit_mutable_root_slots` had already evacuated root-reachable young objects, i.e. against a half-moved heap. `arm_and_reconstruct_remembered_set_if_unarmed()` is therefore called explicitly on the skip path, keeping it where it was. It is one-shot per thread, so every later cycle pays a thread-local flag read.
 
+### gc-ratchet: one cell re-pinned
+
+`01_nursery_churn.heap_used_bytes` moves 6,277,048 -> 7,325,584 and is re-pinned in `benchmarks/gc_ratchet/baseline/gc-ratchet-v1.json` (one cell; `tolerances.json` untouched). It is **not** retention: `gc_ratchet.py classify` reports `heap_used_precise_bytes` byte-identical on all 12 probes and on both arms (5,228,512 here), and the whole delta is `false_root_excess` — exactly one 1 MiB nursery block. Cause is #7558: the probe's own `gc()` forces a conservative stack scan, and removing the preflight's recursion changes which stale pointer-shaped words survive deep on the native stack, where one of them pins a whole block.
+
+It is re-pinned rather than given `12_large_live_set`'s `probe_overrides` exemption because the delta is **deterministic** — spread 0 over 7 samples on both arms — and a reproducible shift can still carry a band, whereas that exemption's premise is genuine sample-dependence and `gating` is one-way. Same host as the rest of the artifact (checked against its `host` block), and `check` was green for current main against the unedited artifact, so the other 143 cells are still in band. The re-pinned cell still fails on a further 1 MiB block, so it remains a live gate.
+
 ### Counters that move, deliberately
 
 Skipping a traversal removes its telemetry, and only that: the eight fields above. `test_copying_minor_rewrites_exact_{object,closure}_pointer_*` now expect `masked_pointer_slots_read == 1` instead of `2` — one read by the copier where there used to be one by each walk — so the drop has a unit-scale witness that fails if the walk ever returns.
