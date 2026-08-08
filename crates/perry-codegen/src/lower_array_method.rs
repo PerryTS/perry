@@ -174,6 +174,20 @@ fn lowered_arg_count(property: &str, args: &[Expr]) -> usize {
     declared.min(args.len())
 }
 
+/// Argument `i`'s re-read value, or `undefined` when the call site omitted it.
+///
+/// Every arm that can be called with the argument missing pads it with
+/// `undefined` rather than failing to compile, so the runtime raises the
+/// spec's TypeError instead (#4091, and the `includes`/`indexOf`/`at` arms
+/// which have a defined meaning for `undefined`). That was eighteen copies of
+/// the same three lines.
+fn arg_or_undefined(arg_vals: &[String], i: usize) -> String {
+    arg_vals
+        .get(i)
+        .cloned()
+        .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)))
+}
+
 /// The receiver followed by the arguments [`lowered_arg_count`] claims, which
 /// is the list `lower_array_method` roots as a group.
 fn operand_exprs<'a>(object: &'a Expr, property: &str, args: &'a [Expr]) -> Vec<&'a Expr> {
@@ -213,10 +227,7 @@ pub(crate) fn lower_array_method(
                 Ok(blk.call(DOUBLE, "js_array_pop_f64", &[(I64, &recv_handle)]))
             }
             "join" => {
-                let sep_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let sep_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 let result_handle = blk.call(
@@ -254,10 +265,7 @@ pub(crate) fn lower_array_method(
                 // compile — pad a missing callback with `undefined` and let
                 // `js_validate_array_callback` raise it. (A trailing `thisArg`
                 // is accepted but not yet applied.)
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -437,10 +445,7 @@ pub(crate) fn lower_array_method(
             }
             "flatMap" => {
                 // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -474,10 +479,7 @@ pub(crate) fn lower_array_method(
                 }
 
                 // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -507,10 +509,7 @@ pub(crate) fn lower_array_method(
                 }
 
                 // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -524,10 +523,7 @@ pub(crate) fn lower_array_method(
             }
             "findLast" => {
                 // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -540,10 +536,7 @@ pub(crate) fn lower_array_method(
             }
             "findLastIndex" => {
                 // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -564,10 +557,7 @@ pub(crate) fn lower_array_method(
                 }
                 // 0-arg → runtime TypeError (callback validation on undefined),
                 // not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let (has_initial, initial_box) = if args.len() == 2 {
                     (1i32, arg_vals[1].clone())
                 } else {
@@ -598,10 +588,7 @@ pub(crate) fn lower_array_method(
                 }
                 // 0-arg → runtime TypeError (callback validation on undefined),
                 // not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let (has_initial, initial_box) = if args.len() == 2 {
                     (1i32, arg_vals[1].clone())
                 } else {
@@ -642,10 +629,7 @@ pub(crate) fn lower_array_method(
                 }
 
                 // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -682,10 +666,7 @@ pub(crate) fn lower_array_method(
                 }
 
                 // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -716,10 +697,7 @@ pub(crate) fn lower_array_method(
                 }
 
                 // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let cb_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // #4091: throw TypeError for a non-callable callback before iterating.
@@ -739,10 +717,7 @@ pub(crate) fn lower_array_method(
                     );
                 }
                 // 0-arg → includes(undefined), not compile-fail.
-                let val_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let val_box = arg_or_undefined(arg_vals, 0);
                 // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
                 // when present; otherwise has_from=0 with a placeholder DOUBLE.
                 let (from_box, has_from) = if args.len() == 2 {
@@ -786,10 +761,7 @@ pub(crate) fn lower_array_method(
                     );
                 }
                 // 0-arg → search for `undefined` from index 0, not compile-fail.
-                let val_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let val_box = arg_or_undefined(arg_vals, 0);
                 // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
                 // when present; otherwise has_from=0 with a placeholder DOUBLE.
                 let (from_box, has_from) = if args.len() == 2 {
@@ -825,10 +797,7 @@ pub(crate) fn lower_array_method(
                     );
                 }
                 // 0-arg → search for `undefined`, not compile-fail.
-                let val_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let val_box = arg_or_undefined(arg_vals, 0);
                 // Optional fromIndex: with has_from=1 pass the lowered index;
                 // when absent pass has_from=0 (runtime defaults to length-1) and
                 // reuse `val_box` as an ignored placeholder DOUBLE operand.
@@ -854,10 +823,7 @@ pub(crate) fn lower_array_method(
             "at" => {
                 // `arr.at()` with no index → `at(undefined)` → index 0, not a
                 // compile error.
-                let idx_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let idx_box = arg_or_undefined(arg_vals, 0);
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 Ok(blk.call(
@@ -913,10 +879,7 @@ pub(crate) fn lower_array_method(
                     // `arr.fill()` with no value fills the whole array with
                     // `undefined` (ECMA-262 step: value defaults to undefined).
                     0 | 1 => {
-                        let val_box = arg_vals
-                            .first()
-                            .cloned()
-                            .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                        let val_box = arg_or_undefined(arg_vals, 0);
                         let blk = ctx.block();
                         let recv_handle = unbox_to_i64(blk, recv_box);
                         let result = blk.call(
@@ -1154,10 +1117,7 @@ pub(crate) fn lower_array_method(
             // helper no-ops for non-typed-array receivers, so it is safe under the
             // broadened `is_array_expr` (which also routes plain arrays here).
             "set" => {
-                let src_box = arg_vals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| double_literal(f64::from_bits(TAG_UNDEFINED)));
+                let src_box = arg_or_undefined(arg_vals, 0);
                 let off_box = if args.len() >= 2 {
                     arg_vals[1].clone()
                 } else {
