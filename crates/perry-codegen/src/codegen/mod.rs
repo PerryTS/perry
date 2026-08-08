@@ -44,6 +44,8 @@ mod artifacts;
 mod boxed_locals;
 mod closure;
 mod closure_collect;
+#[cfg(test)]
+mod emission_order_tests;
 mod entry;
 mod func_registry;
 mod function;

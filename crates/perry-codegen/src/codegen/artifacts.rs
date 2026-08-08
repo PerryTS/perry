@@ -1833,16 +1833,29 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // "use of undefined value" (regression class of #318/#343).
     let materialized_closure_ids: std::collections::HashSet<perry_hir::types::FuncId> =
         closures.iter().map(|(id, _)| *id).collect();
-    for (func_id, display) in &hir.closure_display_names {
-        if !materialized_closure_ids.contains(func_id) {
-            continue;
-        }
-        if display.is_empty() || named_inline_closure_ids.contains(func_id) {
-            continue;
-        }
-        if registered_fn_ids.contains(func_id) {
-            continue;
-        }
+    // Sorted, NOT raw `HashMap` iteration (#7622) — the same defect #7038 fixed
+    // one loop down for `closure_source_text`, left standing here. Every entry
+    // mints a rodata constant through `add_string_constant`, whose `@.str.N`
+    // counter numbers in first-use order, and emits one
+    // `js_register_function_name` call in `__perry_init_strings_*`. Iterating
+    // the map directly made both a per-process permutation, so the same source
+    // compiled by the same binary produced different `.ll` on every run — which
+    // silently invalidates any A/B that compares raw IR (the primary evidence
+    // the #7615 rooting slices offer). Emission order is the only thing that
+    // changes; sorting by `FuncId` makes it stable without altering what is
+    // emitted.
+    let mut materialized_closure_display: Vec<(&perry_hir::types::FuncId, &String)> = hir
+        .closure_display_names
+        .iter()
+        .filter(|(func_id, display)| {
+            materialized_closure_ids.contains(*func_id)
+                && !display.is_empty()
+                && !named_inline_closure_ids.contains(*func_id)
+                && !registered_fn_ids.contains(*func_id)
+        })
+        .collect();
+    materialized_closure_display.sort_by_key(|(func_id, _)| **func_id);
+    for (func_id, display) in materialized_closure_display {
         let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
         user_fn_display_names.push((sym, display.clone()));
     }

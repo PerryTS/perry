@@ -238,7 +238,21 @@ pub(crate) fn try_lower_instance_method_call(
         let mut impl_owner: Vec<Option<String>> = Vec::new();
         let mut seen_pairs: std::collections::HashSet<(u32, String)> =
             std::collections::HashSet::new();
-        for (start_cls, &start_cid) in ctx.class_ids.iter() {
+        // Walk `class_ids` in a FIXED order, not `HashMap` order (#7622). Each
+        // surviving entry becomes one `icmp`-guarded case block in the tower
+        // below, so the map's per-process iteration order was the tower's arm
+        // order: the same source compiled twice by the same binary emitted the
+        // same arms naming DIFFERENT `perry_method_*` callees per position.
+        // `seen_pairs` also dedups on `(class_id, fname)`, so with two names
+        // sharing a class id (a class-expression self-binding alias, or an
+        // imported class registered under both its own and its local-alias
+        // name) which arm is emitted FIRST is what the runtime's first-match
+        // tower actually executes — order-dependence that is behavioural, not
+        // just cosmetic. Sorting by `(class_id, name)` is total and stable.
+        let mut dispatch_roots: Vec<(&String, u32)> =
+            ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+        dispatch_roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+        for (start_cls, start_cid) in dispatch_roots {
             let mut cur: Option<String> = Some(start_cls.clone());
             while let Some(c) = cur {
                 let key = (c.clone(), property.to_string());
@@ -691,7 +705,15 @@ pub(crate) fn try_lower_instance_method_call(
             // function than the static fallback, C needs an
             // explicit case in the dispatch table.
             let mut overrides: Vec<(u32, String)> = Vec::new();
-            for (sub_name, &sub_id) in ctx.class_ids.iter() {
+            // Fixed order, not `HashMap` order — the virtual-override tower has
+            // the same #7622 defect as the interface tower above, and for the
+            // same reason: `overrides` is walked by index to emit the
+            // `vdispatch.caseN` blocks, the `icmp eq i32` chain and the phi
+            // incoming list, so the map's per-process order WAS the arm order.
+            let mut override_roots: Vec<(&String, u32)> =
+                ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+            override_roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+            for (sub_name, sub_id) in override_roots {
                 if *sub_name == class_name {
                     continue;
                 }
@@ -776,18 +798,29 @@ pub(crate) fn try_lower_instance_method_call(
                 }
                 walk = ctx.classes.get(&cur).and_then(|c| c.extends_name.clone());
             }
+            // #7622: no `break` on the first name that carries `sub_id`. Class
+            // ids are not unique over `class_ids` KEYS — a class-expression
+            // self-binding alias (`var X = class _X`) and an imported class
+            // registered under both its own and its local-alias name both map
+            // two names to one id — so first-match-wins made this a hash-order
+            // tie-break, and the loser's arity is what decides how many
+            // TAG_UNDEFINED padding args EVERY emitted call in the tower
+            // carries. Taking the max over all names sharing the id is both
+            // order-independent and the direction this variable already means:
+            // under-padding is the #235 garbage-argument bug, over-padding just
+            // lets a default-param desugaring fire.
             for (sub_id, _) in &overrides {
                 for (sub_name, &id) in ctx.class_ids.iter() {
-                    if id == *sub_id {
-                        if let Some(&n) = ctx
-                            .method_param_counts
-                            .get(&(sub_name.clone(), property.to_string()))
-                        {
-                            if n > max_explicit_arity {
-                                max_explicit_arity = n;
-                            }
+                    if id != *sub_id {
+                        continue;
+                    }
+                    if let Some(&n) = ctx
+                        .method_param_counts
+                        .get(&(sub_name.clone(), property.to_string()))
+                    {
+                        if n > max_explicit_arity {
+                            max_explicit_arity = n;
                         }
-                        break;
                     }
                 }
             }
