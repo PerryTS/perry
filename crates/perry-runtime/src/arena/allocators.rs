@@ -117,7 +117,7 @@ pub(crate) fn arena_alloc_old_excluding_pages(
 /// `arena_alloc_gc_longlived` for the same shape on the longlived
 /// arena — only the backing region differs.
 ///
-/// #7625: page registration is DEFERRED here (`defer_old_object_page_registration`
+/// #7624: page registration is DEFERRED here (`defer_old_object_page_registration`
 /// rather than `register_old_object_pages`). This is the per-object old-gen
 /// birth path — since #7613's promote-on-first-copy it carries every promotion
 /// a copying minor makes, ~113 MB per json_pipeline run — and eager
@@ -184,7 +184,7 @@ pub(crate) fn arena_alloc_gc_old_born_tenured(size: usize, align: usize, obj_typ
     user_ptr
 }
 
-/// #7625: registration stays EAGER here, unlike `arena_alloc_gc_old`. This is
+/// #7624: registration stays EAGER here, unlike `arena_alloc_gc_old`. This is
 /// old-page defrag's relocation allocator (`gc/oldgen.rs`'s
 /// `evacuate_selected_old_pages_collecting`), which runs from INSIDE
 /// `old_arena_walk_objects_on_pages`' callback — i.e. downstream of that

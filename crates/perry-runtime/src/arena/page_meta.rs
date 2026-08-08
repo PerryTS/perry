@@ -400,7 +400,7 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
     if pages.is_empty() {
         return;
     }
-    // #7625 REMOVER: a deferred entry for one of these pages must be folded in
+    // #7624 REMOVER: a deferred entry for one of these pages must be folded in
     // BEFORE the page is dropped, or the flush would re-add it afterwards and
     // hand a later walk a header inside a recycled block.
     flush_deferred_old_page_registrations();
@@ -661,7 +661,7 @@ pub(crate) fn register_old_object_pages(header_addr: usize, total_size: usize) {
 }
 
 // ---------------------------------------------------------------------------
-// #7625: deferred old-object page registration.
+// #7624: deferred old-object page registration.
 //
 // `register_old_object_pages` above is written for the OCCASIONAL old-gen
 // birth it was introduced for. Per call it pays two `RefCell` borrows, two
@@ -793,7 +793,7 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
     if header_addr == 0 || total_size == 0 {
         return;
     }
-    // #7625 REMOVER: see `unregister_old_block_pages`. Removing before the
+    // #7624 REMOVER: see `unregister_old_block_pages`. Removing before the
     // flush would leave the flush to resurrect this object.
     flush_deferred_old_page_registrations();
     let overlaps = old_object_page_overlaps(header_addr, total_size);
@@ -818,7 +818,7 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
 }
 
 pub(crate) fn old_pages_begin_gc_cycle() {
-    // #7625 CYCLE START: all three cycle constructors route through here
+    // #7624 CYCLE START: all three cycle constructors route through here
     // (`gc/mod.rs`'s minor, `gc/cycle.rs`'s `new_full`, `gc/policy.rs`'s
     // budgeted), so every collection begins with a complete page-objects index
     // and an EMPTY deferral buffer.
@@ -834,7 +834,7 @@ pub(crate) fn old_pages_begin_gc_cycle() {
 }
 
 pub(crate) fn old_pages_reset_sweep_accounting() {
-    // #7625 READER (`OLD_GEN_PAGE_META`): closes the promote → sweep window
+    // #7624 READER (`OLD_GEN_PAGE_META`): closes the promote → sweep window
     // inside a full cycle. The per-object accounting that follows calls
     // `refresh_policy_bits`, which reads `allocated_bytes`; flushing here means
     // it never recomputes a page's bits from a count that is missing this
@@ -933,7 +933,7 @@ pub(crate) fn old_page_account_dirty_slot(slot_addr: usize) {
 }
 
 pub(crate) fn old_page_summary() -> OldPageSummary {
-    // #7625 READER (`OLD_GEN_PAGE_META`): a deferred registration also owes
+    // #7624 READER (`OLD_GEN_PAGE_META`): a deferred registration also owes
     // this table an `allocated_bytes`/`object_count` update, so the summary
     // would under-report a mid-cycle promotion burst without the flush.
     flush_deferred_old_page_registrations();
@@ -981,7 +981,7 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
 }
 
 pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
-    // #7625 READER (`OLD_GEN_PAGE_META`): this one drives real policy —
+    // #7624 READER (`OLD_GEN_PAGE_META`): this one drives real policy —
     // `gc/oldgen_defrag.rs` selects evacuation pages from it.
     flush_deferred_old_page_registrations();
     let current_epoch = old_gen_page_dirty_epoch();
@@ -1046,7 +1046,7 @@ pub(crate) fn old_arena_walk_objects_on_pages(
         return 0;
     }
 
-    // #7625 READER: promotions land in old-gen mid-cycle (a copying minor's
+    // #7624 READER: promotions land in old-gen mid-cycle (a copying minor's
     // root scan runs before the remembered-set walk), so this cannot rely on
     // the cycle-start flush alone.
     flush_deferred_old_page_registrations();
@@ -1081,7 +1081,7 @@ pub(crate) struct OldArenaPageObjectCursor {
 
 impl OldArenaPageObjectCursor {
     pub(crate) fn new(pages: &crate::fast_hash::PtrHashSet<usize>) -> Self {
-        // #7625 READER: same obligation as `old_arena_walk_objects_on_pages`.
+        // #7624 READER: same obligation as `old_arena_walk_objects_on_pages`.
         // The cursor is stepped incrementally by the budgeted cycle, which
         // marks but never allocates into old-gen, so nothing can accumulate
         // between `new` and the last `next`; `next` debug-asserts that rather
@@ -1095,13 +1095,13 @@ impl OldArenaPageObjectCursor {
     }
 
     pub(crate) fn next(&mut self) -> Option<usize> {
-        // #7625: `new` flushed; the stepping window must not re-dirty the
+        // #7624: `new` flushed; the stepping window must not re-dirty the
         // buffer, or this reader would be walking a stale index. Debug-only so
         // the per-object read costs nothing in a shipped collector.
         debug_assert!(
             DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| buf.borrow().is_empty()),
             "an old-gen birth happened while a page-object cursor was stepping; \
-             this reader is now walking a stale index (#7625)"
+             this reader is now walking a stale index (#7624)"
         );
         loop {
             let page = *self.pages.get(self.page_cursor)?;
@@ -1129,7 +1129,7 @@ pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size:
     if header_addr == 0 || total_size == 0 {
         return;
     }
-    // #7625 REMOVER: see `unregister_old_block_pages`.
+    // #7624 REMOVER: see `unregister_old_block_pages`.
     flush_deferred_old_page_registrations();
     let overlaps = old_object_page_overlaps(header_addr, total_size);
     if overlaps.is_empty() {
@@ -1182,7 +1182,7 @@ pub(crate) fn old_arena_page_index_clear_for_tests() {
     // Wiping page metadata makes real old-arena objects unclassifiable —
     // stand the #6179 differential verifier down for this thread's test.
     crate::gc::CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.set(true));
-    // #7625: DISCARD rather than flush — a caller asking for an empty index
+    // #7624: DISCARD rather than flush — a caller asking for an empty index
     // would get a repopulated one if the pending burst were folded in first.
     DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| buf.borrow_mut().clear());
     OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().clear());
@@ -1190,7 +1190,7 @@ pub(crate) fn old_arena_page_index_clear_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn old_page_meta_for_tests(page: usize) -> Option<OldPageMeta> {
-    // #7625 READER: same rule as `old_page_summary`/`old_page_meta_snapshot`,
+    // #7624 READER: same rule as `old_page_summary`/`old_page_meta_snapshot`,
     // so a test that allocates and then inspects a page sees what eager
     // registration would have left.
     flush_deferred_old_page_registrations();

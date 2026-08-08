@@ -1170,7 +1170,7 @@ fn block_pool_is_per_thread_and_drops_with_its_thread() {
 }
 
 // ---------------------------------------------------------------------------
-// #7625: deferred old-object page registration.
+// #7624: deferred old-object page registration.
 //
 // `arena_alloc_gc_old` records its page registration in a thread-local buffer
 // instead of folding it into `OLD_GEN_PAGE_OBJECTS`/`OLD_GEN_PAGE_META` on the
@@ -1255,7 +1255,7 @@ fn every_cycle_constructor_routes_through_the_flush_point() {
             src.contains("old_pages_begin_gc_cycle()"),
             "the {what} constructor in gc/{file} no longer calls \
              old_pages_begin_gc_cycle(); deferred old-page registrations would \
-             survive into the cycle unflushed (#7625)"
+             survive into the cycle unflushed (#7624)"
         );
     }
 }
@@ -1356,7 +1356,7 @@ fn removing_a_deferred_object_does_not_resurrect_it() {
         assert!(
             !visited_now(&pages).contains(&headers[0]),
             "a deferred entry removed before its flush was resurrected by the \
-             flush — unregister_old_object_pages must flush first (#7625)"
+             flush — unregister_old_object_pages must flush first (#7624)"
         );
 
         // 2. old_arena_page_index_remove_object
@@ -1364,7 +1364,7 @@ fn removing_a_deferred_object_does_not_resurrect_it() {
         old_arena_page_index_remove_object(headers[1], 64);
         assert!(
             !visited_now(&pages).contains(&headers[1]),
-            "old_arena_page_index_remove_object must flush first (#7625)"
+            "old_arena_page_index_remove_object must flush first (#7624)"
         );
 
         // 3. unregister_old_block_pages — the whole page goes away, and a
@@ -1373,7 +1373,7 @@ fn removing_a_deferred_object_does_not_resurrect_it() {
         unregister_old_block_pages(&[generation_page_for_addr(headers[2])]);
         assert!(
             !visited_now(&pages).contains(&headers[2]),
-            "unregister_old_block_pages must flush first (#7625)"
+            "unregister_old_block_pages must flush first (#7624)"
         );
     });
 }
