@@ -694,7 +694,8 @@ pub(crate) fn defer_old_object_page_registration(header_addr: usize, total_size:
 /// `old_pages_begin_gc_cycle` (every collection begins with an accurate
 /// index) and from the size-cap overflow in `defer_old_object_page_registration`.
 pub(crate) fn flush_deferred_old_page_registrations() {
-    let pending = DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
+    let pending =
+        DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
     for (header_addr, total_size) in pending {
         register_old_object_pages(header_addr, total_size);
     }

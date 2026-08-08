@@ -2036,6 +2036,7 @@ mod tests {
             &HashMap::new(),
             &constants,
             &crate::collectors::ModuleDispatchFacts::default(),
+            true,
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));

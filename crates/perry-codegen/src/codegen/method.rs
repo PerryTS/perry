@@ -388,8 +388,8 @@ pub(super) fn compile_method(
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
-            false,
-        );
+        false,
+    );
 
     // Representation-selection context gates (see codegen/function.rs).
     let repsel_flags = crate::expr::RepselContextFlags::for_body(
@@ -1450,8 +1450,8 @@ pub(super) fn compile_static_method(
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
-            false,
-        );
+        false,
+    );
 
     // Representation-selection context gates (see codegen/function.rs).
     let repsel_flags =

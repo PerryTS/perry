@@ -186,8 +186,7 @@ pub(crate) fn arena_alloc_gc_old_born_tenured_bump(
     unsafe {
         let header = raw as *mut GcHeader;
         (*header).obj_type = obj_type;
-        (*header).gc_flags =
-            GC_FLAG_ARENA | GC_FLAG_TENURED | crate::gc::gc_birth_extra_flags();
+        (*header).gc_flags = GC_FLAG_ARENA | GC_FLAG_TENURED | crate::gc::gc_birth_extra_flags();
         crate::gc::gc_note_black_birth(header);
         (*header)._reserved = 0;
         (*header).size = total as u32;
