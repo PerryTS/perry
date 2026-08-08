@@ -478,8 +478,9 @@ reads a different corpus, its floors are about safepoints rather than root
 stores, and it should be promotable without dragging the shadow arms along.
 Promote it on the same terms — after its first green run on `main`, never
 before — and note that its `--max-unrooted` budget is a *ratchet under triage*,
-not a calibrated zero. Lower it as the population is fixed; a promotion that
-freezes the budget where it is has bought a number, not an invariant.
+not a calibrated zero: the residual is enumerated by shape in #7664. Lower it as
+the population is fixed; a promotion that freezes the budget where it is has
+bought a number, not an invariant.
 
 ## Rules of thumb
 

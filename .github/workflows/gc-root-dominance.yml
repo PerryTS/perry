@@ -472,6 +472,10 @@ jobs:
           # with no issue numbers would be worse documentation than one number
           # that can only go down. Lower it as sites are fixed.
           #
+          # The 21 are enumerated by shape in #7664, which is this budget's
+          # referent: a number with nothing behind it is the thing CLAUDE.md
+          # warns a threshold decays into.
+          #
           # `stale` (the object survives and is relocated, but a raw copy of
           # its pre-move address is used below) reads 0 today and is held
           # there.

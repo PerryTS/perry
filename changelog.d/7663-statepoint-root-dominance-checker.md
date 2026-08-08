@@ -84,8 +84,9 @@ property GET (#7280 / zod's `clone`), two module-global reads, a
 `js_new_target_get` → `js_new_target_set` pair structurally identical to #7226's
 `prev_this`, and one closure-capture read. They are **not** allowlisted: the
 gate carries `--max-unrooted 21`, a ratchet that can only be lowered, with
-`--max-stale 0` holding the other class at zero. Each shape wants its own issue
-before the budget comes down.
+`--max-stale 0` holding the other class at zero. The 21 are enumerated by shape
+in #7664, which is the budget's referent; each shape wants its own fix and its
+own decrement before the job is promoted to a required context.
 
 The #7210 `IMMOVABLE_SOURCES` exemptions carry over rather than being
 re-derived — that adjudication is about the allocator, not the lowering, and
