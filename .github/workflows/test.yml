@@ -202,6 +202,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/class_id_collisions.py
 
+      # #7645. The copying minor skips its eligibility preflight — the walk that
+      # proves nothing reachable is pinned — whenever the young-pin latch is
+      # clear. That is sound only while EVERY creation of GC_FLAG_PINNED goes
+      # through gc::pin_object, which is what arms the latch; a pin created any
+      # other way lets the collector relocate a pinned object whose holder keeps
+      # a raw address no scanner rewrites. This SCANS for both shapes the tree
+      # has used — `gc_flags |= GC_FLAG_PINNED` and the raw `*gc_flags_ptr |=
+      # 0x04` that hid two of the six pin sites from every grep — and fails on a
+      # stale allowlist entry as well as on a new site.
+      - name: GC pin-site custody audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/gc_pin_sites.py --self-test
+          python3 scripts/gc_pin_sites.py
+
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
       # in the quarantine sweep had rooting ALREADY -- what was missing was
