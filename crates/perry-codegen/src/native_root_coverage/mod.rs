@@ -382,15 +382,6 @@ impl Statepoints {
         );
         hits
     }
-
-    /// The largest live set at any safepoint in the function.
-    pub fn max_live(&self) -> usize {
-        self.points
-            .iter()
-            .map(|sp| sp.live.len())
-            .max()
-            .unwrap_or(0)
-    }
 }
 
 /// Run the production statepoint rewrite over `ir` and read back every
