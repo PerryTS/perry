@@ -433,9 +433,10 @@ impl<'a> DirectParser<'a> {
                                 // GC_STORE_AUDIT(BARRIERED): shaped JSON field write uses the
                                 // layout-deferred slot-store helper (#7630); the layout state
                                 // is settled once at the tail of this function.
-                                saw_pointer |= crate::object::store_object_field_slot_layout_deferred(
-                                    js_obj, slot_idx, value_bits,
-                                );
+                                saw_pointer |=
+                                    crate::object::store_object_field_slot_layout_deferred(
+                                        js_obj, slot_idx, value_bits,
+                                    );
                                 fast_idx += 1;
                                 took_fast = true;
                             }

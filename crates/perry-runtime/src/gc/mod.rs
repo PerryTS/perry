@@ -82,6 +82,9 @@ mod trace;
 pub(crate) use trace::*;
 mod barrier;
 pub use barrier::*;
+/// #7630: the runtime slot-store helpers, split from `barrier.rs` (2000-line cap).
+mod barrier_store;
+pub use barrier_store::*;
 mod dirty_page_cache;
 // #7187 Phase B: `crate::arena`'s page-metadata module invalidates the
 // barrier's "already dirty" page cache when it un-stamps or discards a page.
