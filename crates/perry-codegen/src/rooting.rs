@@ -845,6 +845,41 @@ pub(crate) fn with_rooted_accumulator<'f, R>(
 /// the module cannot make an ORDERING mistake against the raw API, because it
 /// no longer names it. A window with no decision at all is invisible to this
 /// check, and the only instrument for it is reading the module.
+///
+/// Slice 5 is two modules of the `lower_call/` family, both load-bearing:
+/// `extern_timers.rs` and `namespace_call.rs` each named
+/// `lower_exprs_rooted` / `temp_root_release` before the migration, so their
+/// lines hold on the committed source and not only under sabotage.
+///
+/// It is two rather than the six the family contains, and the four left out are
+/// left out for one reason worth recording, because it is a **statement about
+/// this API rather than about those files**: three of them need a re-read at
+/// more than one point, and every `with_operands_rooted*` form has exactly one.
+///
+///   * `lower_call/mod.rs` — `lower_call_args_rooted` and
+///     `lower_rest_call_args_rooted` return a guard *deliberately*: their
+///     consumers in `func_ref.rs` are block-splitting specialized-ABI diamonds,
+///     so the release must sit in a merge block that post-dominates four
+///     dispatch paths, ~200 lines below the lowering. A closure form can express
+///     that only by swallowing the whole dispatch chain, in a file outside the
+///     slice.
+///   * `lower_call/new.rs` — `refresh_rooted_args` re-reads the SAME operand
+///     group at three caller-chosen points (after the instance allocation,
+///     before the field initializers, before an inlined constructor body), under
+///     a `temp_root_scope_begin`/`_end` marker spanning ~20 return paths.
+///   * `lower_call/console_promise.rs` — `lower_dynamic_closure_call` re-reads
+///     the receiver and callee below the arguments, then re-reads the arguments
+///     again below the allocating rebind unbox. Two stages, one combinator.
+///   * `lower_call/early_branches.rs` — its only escape-hatch uses are
+///     `implicit_this_save`/`implicit_this_restore`, which is already a paired
+///     combinator rather than the raw ordering API. Migrating it means
+///     re-exporting that pair through `crate::rooting`, which is a rename that
+///     would make the ledger line look substantive while asserting nothing new.
+///
+/// The honest reading: a module that cannot be migrated because the API cannot
+/// say what it means is a gap in the API, and recording it here is what stops
+/// the next slice from rediscovering it. The variadic/rest shape (per-element
+/// re-reads between allocating pushes) is the concrete missing combinator.
 #[cfg(test)]
 const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
@@ -926,6 +961,14 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
         "crates/perry-codegen/src/expr/property_set.rs",
         include_str!("expr/property_set.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_call/extern_timers.rs",
+        include_str!("lower_call/extern_timers.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_call/namespace_call.rs",
+        include_str!("lower_call/namespace_call.rs"),
     ),
 ];
 
