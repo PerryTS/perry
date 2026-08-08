@@ -331,6 +331,81 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         }
     }
 
+    // repsel #7480 / #5093: inside the fast clone of an ELEMENT-shape
+    // versioned loop, `arr[i].field` in number context lowers to a bare
+    // element load plus the residual per-element check, with no element-read
+    // tier and no guard call (see stmt/element_shape_loop.rs).
+    //
+    // #7480 step 3: this sits ABOVE the `receiver_class_name` gate on purpose.
+    // The clone's element class can be one that resolver does not answer for —
+    // an object-literal element type (`keep: {v: number}[]`) resolves to its
+    // `__AnonShape_<hash>` only inside the matcher, which is where that
+    // resolution is kept so it cannot un-gate anything else (#6377). Every
+    // fact this consults was validated by the matcher when the fact was built:
+    // the class has no computed members and no base, the property is not an
+    // accessor and is not denylisted, and its declared type is a raw-f64
+    // candidate at the packed slot index carried here. So the lowering needs
+    // nothing from the receiver's static type, and asking for it would have
+    // made the whole clone dead IR.
+    if let Some((fact, field_index)) =
+        crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property)
+            .map(|(fact, idx)| (fact.clone(), idx))
+    {
+        if let Expr::IndexGet { object: array, .. } = object.as_ref() {
+            if let Expr::LocalGet(arr_id) = array.as_ref() {
+                // The counter's canonical i32 slot is what the matcher
+                // required; without it there is nothing to index with.
+                if let Some(slot) = ctx.i32_counter_slots.get(&fact.index_local_id).cloned() {
+                    let idx_i32 = ctx.block().load(I32, &slot);
+                    let value = crate::expr::element_shape_guard::emit_element_shape_field_load(
+                        ctx,
+                        &fact,
+                        &idx_i32,
+                        field_index,
+                    );
+                    let lowered = LoweredValue {
+                        semantic: SemanticKind::JsNumber,
+                        rep: NativeRep::F64,
+                        llvm_ty: DOUBLE,
+                        value: value.clone(),
+                    };
+                    ctx.record_lowered_value_with_access_mode_and_facts(
+                        "ElementShapeFieldGet",
+                        Some(*arr_id),
+                        "element_shape_loop.raw_f64_load",
+                        &lowered,
+                        Some(BoundsState::Guarded {
+                            guard_id: "element_shape_loop_preheader_check".to_string(),
+                        }),
+                        None,
+                        Some(BufferAccessMode::CheckedNative),
+                        None,
+                        None,
+                        None,
+                        vec![raw_f64_layout_fact(
+                            Some(*arr_id),
+                            "consumed",
+                            "element_shape_loop_preheader_check",
+                            None,
+                        )],
+                        Vec::new(),
+                        false,
+                        false,
+                        vec![
+                            format!("field={property}"),
+                            format!("class={}", fact.class_name),
+                            "loop_versioning=element_shape".to_string(),
+                            "index_range=nonnegative_i32".to_string(),
+                            "length_range=guarded_i32".to_string(),
+                            "element_shape=homogeneous_class".to_string(),
+                        ],
+                    );
+                    return Ok(Some(value));
+                }
+            }
+        }
+    }
+
     let Some(class_name) = receiver_class_name(ctx, object) else {
         return Ok(None);
     };
@@ -367,80 +442,6 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     ) else {
         return Ok(None);
     };
-
-    // repsel #7480 / #5093: inside the fast clone of an ELEMENT-shape
-    // versioned loop, `arr[i].field` in number context lowers to a bare
-    // element load plus the residual per-element check, with no element-read
-    // tier and no guard call (see stmt/element_shape_loop.rs). Checked before
-    // the class-field fact because the receiver shapes are disjoint
-    // (`IndexGet` vs `LocalGet`) and this one is the cheaper lowering.
-    if !ctx.element_shape_loop_facts.is_empty() {
-        if let Expr::IndexGet { object, index } = object.as_ref() {
-            if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
-                (object.as_ref(), index.as_ref())
-            {
-                let hit = crate::expr::element_shape_loop_fact_lookup(
-                    &ctx.element_shape_loop_facts,
-                    *arr_id,
-                    *idx_id,
-                    &class_name,
-                    property,
-                )
-                .filter(|(_, loop_idx)| *loop_idx == field_index)
-                .map(|(fact, _)| fact.clone());
-                if let Some(fact) = hit {
-                    // The counter's canonical i32 slot is what the matcher
-                    // required; without it there is nothing to index with.
-                    if let Some(slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
-                        let idx_i32 = ctx.block().load(I32, &slot);
-                        let value = crate::expr::element_shape_guard::emit_element_shape_field_load(
-                            ctx,
-                            &fact,
-                            &idx_i32,
-                            field_index,
-                        );
-                        let lowered = LoweredValue {
-                            semantic: SemanticKind::JsNumber,
-                            rep: NativeRep::F64,
-                            llvm_ty: DOUBLE,
-                            value: value.clone(),
-                        };
-                        ctx.record_lowered_value_with_access_mode_and_facts(
-                            "ElementShapeFieldGet",
-                            Some(*arr_id),
-                            "element_shape_loop.raw_f64_load",
-                            &lowered,
-                            Some(BoundsState::Guarded {
-                                guard_id: "element_shape_loop_preheader_check".to_string(),
-                            }),
-                            None,
-                            Some(BufferAccessMode::CheckedNative),
-                            None,
-                            None,
-                            None,
-                            vec![raw_f64_layout_fact(
-                                Some(*arr_id),
-                                "consumed",
-                                "element_shape_loop_preheader_check",
-                                None,
-                            )],
-                            Vec::new(),
-                            false,
-                            false,
-                            vec![
-                                format!("field={property}"),
-                                "loop_versioning=element_shape".to_string(),
-                                "index_range=nonnegative_i32".to_string(),
-                                "length_range=guarded_i32".to_string(),
-                                "element_shape=homogeneous_class".to_string(),
-                            ],
-                        );
-                        return Ok(Some(value));
-                    }
-                }
-            }
-        }
-    }
 
     // #5093 loop versioning: inside the fast clone of a class-field versioned
     // loop, a tracked number-context field read on the proven receiver lowers

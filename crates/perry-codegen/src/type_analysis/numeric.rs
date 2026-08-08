@@ -278,6 +278,25 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return true;
             }
+            // repsel #7480 step 3: inside an element-shape fast clone a tracked
+            // `arr[i].field` read is a GUARD-PROVEN raw double — the preheader
+            // pinned the element class and the per-element residual check
+            // requires `GC_OBJ_TYPED_LAYOUT_INTACT`, so the slot cannot hold a
+            // NaN-boxed value. This is a stronger proof than the declared-type
+            // answer below, and it is the ONLY one available for an
+            // object-literal element type, whose owner class
+            // `receiver_class_name` deliberately does not resolve.
+            //
+            // It is also load-bearing rather than a bonus: without it
+            // `sum += keep[j].v` lowers through
+            // `js_dynamic_string_or_number_add`, that call fails the clone's
+            // call-free admission test, and the clone is never entered at all.
+            // Scoped to the clone — outside one the fact vector is empty.
+            if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property)
+                .is_some()
+            {
+                return true;
+            }
             if let Expr::LocalGet(id) = object.as_ref() {
                 if ctx
                     .scalar_replaced

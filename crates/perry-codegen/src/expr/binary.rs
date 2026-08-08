@@ -58,7 +58,19 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
             return Ok((value, true));
         }
     }
-    if expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
+    // repsel #7480 step 3: a tracked `arr[i].field` read inside an
+    // element-shape fast clone routes to the raw-f64 lowering WITHOUT the
+    // boxed-fallback test below. That test asks `receiver_class_name`, which
+    // by design does not resolve an object-literal element type, so the read
+    // would otherwise fall through to `lower_expr` — a generic diamond, whose
+    // calls then fail the clone's call-free admission and cost the clone
+    // entirely. The predicate is left alone rather than widened: this read has
+    // no boxed fallback at all (the residual per-element check proves the slot
+    // is a raw double before the load), so claiming one here would be a lie
+    // that other consumers of that predicate would read.
+    let in_element_shape_clone = matches!(expr, Expr::PropertyGet { object, property, .. }
+        if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some());
+    if in_element_shape_clone || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
         if let Some(value) =
             super::property_get::lower_raw_f64_class_field_get_for_number_context(ctx, expr)?
         {

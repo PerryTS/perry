@@ -122,6 +122,51 @@ fn node_class(extends_name: Option<&str>) -> Class {
     }
 }
 
+/// A closed-shape object literal's synthesized class, exactly as
+/// `perry-hir`'s `mint_anon_shape_class` builds it: content-addressed name, no
+/// base, no computed members, fields in source order with `init: None`.
+fn anon_shape_class(id: u32, name: &str, fields: &[(&str, Type)]) -> Class {
+    let mut class = node_class(None);
+    class.id = id;
+    class.name = name.to_string();
+    class.fields = fields
+        .iter()
+        .map(|(field, ty)| ClassField {
+            name: (*field).to_string(),
+            key_expr: None,
+            ty: ty.clone(),
+            init: None,
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        })
+        .collect();
+    class
+}
+
+/// The declared element type of #7480's own kernel: `{ v: number; w: number }`.
+fn object_element_type(fields: &[(&str, Type)], optional: bool) -> Type {
+    let mut properties = std::collections::HashMap::new();
+    let mut property_order = Vec::new();
+    for (name, ty) in fields {
+        property_order.push((*name).to_string());
+        properties.insert(
+            (*name).to_string(),
+            perry_hir::types::PropertyInfo {
+                ty: ty.clone(),
+                optional,
+                readonly: false,
+            },
+        );
+    }
+    Type::Object(perry_hir::types::ObjectType {
+        name: None,
+        properties,
+        property_order: Some(property_order),
+        index_signature: None,
+    })
+}
+
 /// `keep[<index>].v`
 fn elem_field(array_id: u32, index: Expr) -> Expr {
     Expr::PropertyGet {
@@ -194,6 +239,25 @@ fn element_shape_module(body: Vec<Stmt>, extends_name: Option<&str>) -> Module {
     m
 }
 
+/// `const keep: <elem>[] = []; let sum = 0; for (let j = 0; j < N; j++) sum +=
+/// keep[j].v` with an explicit set of module classes — the object-literal
+/// twin of [`element_shape_module`] (#7480 step 3).
+fn object_element_module(elem: Type, classes: Vec<Class>) -> Module {
+    let mut m = element_shape_module(
+        vec![accumulate_stmt(
+            SUM_ID,
+            ARRAY_ID,
+            Expr::LocalGet(COUNTER_ID),
+        )],
+        None,
+    );
+    m.classes = classes;
+    if let Some(Stmt::Let { ty, .. }) = m.init.first_mut() {
+        *ty = Type::Array(Box::new(elem));
+    }
+    m
+}
+
 fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
@@ -220,17 +284,47 @@ fn block_slice<'a>(ir: &'a str, label: &str) -> &'a str {
     &body[..end]
 }
 
-/// The emitted text the fast clone owns: from its cond block to the slow
-/// clone's.
+/// Byte offset of the DEFINITION of block `label` — a line that begins at
+/// column 0 with `<label>` and ends in `:`. A bare `ir.find(label)` finds the
+/// `br label %<label>` reference instead, which is a different place entirely.
+fn block_def_offset(ir: &str, label: &str) -> Option<usize> {
+    let mut offset = 0usize;
+    for line in ir.split_inclusive('\n') {
+        if line.starts_with(label) && line.trim_end().ends_with(':') {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// The emitted text the fast clone owns: from the DEFINITION of its cond block
+/// to the definition of the slow clone's. Covers `for.element_shape_fast.*`
+/// and the `element_shape.load` block the field read branches into.
+///
+/// #7480 step 3 — ANTI-VACUITY. This used to slice from the first *substring*
+/// occurrence of `for.element_shape_fast.cond`, which is the
+/// `br label %for.element_shape_fast.cond.N` terminator of
+/// `element_shape.loop.fast.preheader`, three lines above the slow
+/// preheader's own branch. Every assertion made against the result is a
+/// NEGATIVE (`!fast.contains(" call ")`, `!fast.contains("js_array_get_f64")`,
+/// …), so that four-line stub satisfied all of them: the IR census that exists
+/// to prove the clone is really call-free had never been able to fail. The
+/// liveness assertion below is what makes it a gate — CLAUDE.md's "a gate must
+/// assert its subject was live".
 fn fast_clone_slice(ir: &str) -> &str {
-    let start = ir
-        .find("for.element_shape_fast.cond")
-        .expect("fast clone cond block");
-    let end = ir[start..]
-        .find("for.element_shape_slow.cond")
-        .map(|off| start + off)
-        .unwrap_or(ir.len());
-    &ir[start..end]
+    let start = block_def_offset(ir, "for.element_shape_fast.cond")
+        .expect("the fast clone's cond block should be DEFINED in the emitted IR");
+    let end = block_def_offset(ir, "for.element_shape_slow.cond").unwrap_or(ir.len());
+    assert!(end > start, "the fast clone must precede the slow clone");
+    let slice = &ir[start..end];
+    assert!(
+        slice.contains("for.element_shape_fast.body") && slice.contains("element_shape.load"),
+        "the fast-clone slice must contain the cloned BODY and its element \
+         load, otherwise every negative assertion against it is vacuous; \
+         sliced:\n{slice}"
+    );
+    slice
 }
 
 #[test]
@@ -503,6 +597,234 @@ fn the_repaired_head_is_written_back_to_the_binding() {
             l.starts_with("%rs4gc.b") && l.contains(&format!("bitcast double {refreshed} to i64"))
         }),
         "the value stored back must be the refreshed head {refreshed}; emitted:\n{repair}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #7480 step 3: OBJECT-LITERAL element types.
+//
+// `keep: {v: number, w: number}[]` is #7480's own kernel and the whole
+// measured gap — 414 ms against node's 12 on 200k x 50, where the named-class
+// arm the clone already covered is 13 ms. The literals allocate an
+// `__AnonShape_<hash>`, so a class id genuinely exists; the matcher resolves
+// it by matching the declared property order against the module's anon shapes.
+//
+// The two halves are NOT separable, which is why the assertions below are in
+// one test: with no resolvable class the accumulator also loses its numeric
+// proof, `sum += keep[j].v` lowers through `js_dynamic_string_or_number_add`,
+// and THAT CALL fails the clone's call-free admission — so a fix that resolved
+// the class without also restoring the numeric proof would emit a block of
+// dead fast-clone IR and change nothing.
+// ---------------------------------------------------------------------------
+
+const ANON_SHAPE_VW: &str = "__AnonShape_0000000000000abc";
+
+#[test]
+fn element_shape_versioned_loop_resolves_an_object_literal_element_type() {
+    let ir = emit(&object_element_module(
+        object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        vec![anon_shape_class(
+            311,
+            ANON_SHAPE_VW,
+            &[("v", Type::Number), ("w", Type::Number)],
+        )],
+    ));
+    for label in CLONE_LABELS {
+        assert!(
+            ir.contains(label),
+            "#7480's own kernel (an object-literal element type) must reach the \
+             clone, but `{label}` is absent — the matcher declined"
+        );
+    }
+    // The guard must be pinned to the ANON SHAPE's keys global, not to some
+    // other class that happened to be in scope.
+    let deref = block_slice(&ir, "element_shape.loop.preheader.deref");
+    assert!(
+        deref.contains("AnonShape"),
+        "the preheader must load the anon shape's keys global; emitted:\n{deref}"
+    );
+
+    let fast = fast_clone_slice(&ir);
+    assert!(
+        !fast.contains(" call "),
+        "the fast clone must be call-free; found a call in:\n{fast}"
+    );
+    // The second half, and the reason the first half alone would be inert: the
+    // accumulate is a real `fadd`, not the BigInt-aware dynamic add helper.
+    assert!(
+        !fast.contains("js_dynamic_string_or_number_add"),
+        "the accumulator must regain its numeric proof inside the clone; \
+         emitted:\n{fast}"
+    );
+    assert!(
+        fast.contains("fadd"),
+        "the accumulate must lower to an fadd inside the clone; emitted:\n{fast}"
+    );
+}
+
+/// SABOTAGE (resolution): two anon shapes with the same field NAMES and
+/// incompatible field types are ambiguous. `ctx.classes` is a `HashMap`, so
+/// "pick whichever came first" would make the emitted code depend on iteration
+/// order; the resolver declines instead.
+#[test]
+fn element_shape_versioned_loop_declines_an_ambiguous_object_shape() {
+    let ir = emit(&object_element_module(
+        // `any` rules nothing out, so BOTH shapes below stay compatible and
+        // the tie cannot be broken.
+        object_element_type(&[("v", Type::Any), ("w", Type::Any)], false),
+        vec![
+            anon_shape_class(
+                311,
+                ANON_SHAPE_VW,
+                &[("v", Type::Number), ("w", Type::Number)],
+            ),
+            anon_shape_class(
+                312,
+                "__AnonShape_0000000000000def",
+                &[("v", Type::String), ("w", Type::String)],
+            ),
+        ],
+    ));
+    for label in CLONE_LABELS {
+        assert!(
+            !ir.contains(label),
+            "an ambiguous object shape must not be cloned, but `{label}` was \
+             emitted — the pick would depend on HashMap iteration order"
+        );
+    }
+}
+
+/// A tie that field types CAN break is resolved rather than declined: only one
+/// of the two same-named shapes is numeric, and the declaration says `number`.
+#[test]
+fn element_shape_versioned_loop_breaks_a_tie_on_field_types() {
+    let ir = emit(&object_element_module(
+        object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        vec![
+            anon_shape_class(
+                311,
+                ANON_SHAPE_VW,
+                &[("v", Type::Number), ("w", Type::Number)],
+            ),
+            anon_shape_class(
+                312,
+                "__AnonShape_0000000000000def",
+                &[("v", Type::String), ("w", Type::String)],
+            ),
+        ],
+    ));
+    for label in CLONE_LABELS {
+        assert!(
+            ir.contains(label),
+            "a type-disambiguated object shape should still be cloned, but \
+             `{label}` is absent"
+        );
+    }
+}
+
+/// SABOTAGE (closedness): an OPTIONAL property means the runtime object may
+/// not have that slot at all, so the declared order names no layout.
+#[test]
+fn element_shape_versioned_loop_declines_an_optional_property() {
+    let ir = emit(&object_element_module(
+        object_element_type(&[("v", Type::Number), ("w", Type::Number)], true),
+        vec![anon_shape_class(
+            311,
+            ANON_SHAPE_VW,
+            &[("v", Type::Number), ("w", Type::Number)],
+        )],
+    ));
+    for label in CLONE_LABELS {
+        assert!(
+            !ir.contains(label),
+            "an optional property must not be cloned, but `{label}` was emitted"
+        );
+    }
+}
+
+/// SABOTAGE (no allocation site): an object type whose shape no literal in the
+/// module allocates has no class id to guard on. The declared type is a hint,
+/// and a hint with no referent must decline rather than invent one.
+#[test]
+fn element_shape_versioned_loop_declines_an_unallocated_object_shape() {
+    let ir = emit(&object_element_module(
+        object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        vec![anon_shape_class(
+            311,
+            ANON_SHAPE_VW,
+            &[("x", Type::Number), ("y", Type::Number)],
+        )],
+    ));
+    for label in CLONE_LABELS {
+        assert!(
+            !ir.contains(label),
+            "an object shape with no matching anon class must not be cloned, \
+             but `{label}` was emitted"
+        );
+    }
+}
+
+/// SABOTAGE (field order): the anon shape's slot layout is SOURCE ORDER, so a
+/// same-named-but-reordered shape is a different layout. Matching it would
+/// read `w` where the loop asked for `v`.
+#[test]
+fn element_shape_versioned_loop_declines_a_reordered_object_shape() {
+    let ir = emit(&object_element_module(
+        object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        vec![anon_shape_class(
+            311,
+            ANON_SHAPE_VW,
+            &[("w", Type::Number), ("v", Type::Number)],
+        )],
+    ));
+    for label in CLONE_LABELS {
+        assert!(
+            !ir.contains(label),
+            "a reordered object shape must not be cloned, but `{label}` was \
+             emitted — its packed slot indices describe a different layout"
+        );
+    }
+}
+
+/// The object-literal resolution must not leak out of the matcher. A read of
+/// the same array OUTSIDE any element-shape loop still has no resolvable
+/// receiver class, which is the #6377 containment `receiver_class_name` was
+/// deliberately not widened for.
+#[test]
+fn object_literal_element_resolution_does_not_escape_the_clone() {
+    let mut m = object_element_module(
+        object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        vec![anon_shape_class(
+            311,
+            ANON_SHAPE_VW,
+            &[("v", Type::Number), ("w", Type::Number)],
+        )],
+    );
+    // A straight-line read after the loop, at a constant index.
+    m.init.push(Stmt::Expr(Expr::LocalSet(
+        SUM_ID,
+        Box::new(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(SUM_ID)),
+            right: Box::new(elem_field(ARRAY_ID, Expr::Integer(0))),
+        }),
+    )));
+    let ir = emit(&m);
+    assert!(
+        ir.contains("element_shape.loop.fast.preheader"),
+        "the loop must still be cloned"
+    );
+    // Outside the clone the read keeps the generic by-name lowering. If the
+    // resolver had been wired into `receiver_class_name` instead, this read
+    // would have become a class-field diamond too — a change this PR did not
+    // measure.
+    let after = &ir[ir
+        .find("element_shape.loop.merge")
+        .expect("merge block should exist")..];
+    assert!(
+        after.contains("js_object_get_field_by_name_f64")
+            || after.contains("js_object_get_field_ic_miss"),
+        "the post-loop read must stay on the by-name path; emitted:\n{after}"
     );
 }
 

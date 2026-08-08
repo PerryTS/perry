@@ -1605,21 +1605,56 @@ pub(crate) struct ElementShapeLoopFact {
     pub max_field_index: u32,
 }
 
-/// Find the innermost active element-shape loop fact covering
-/// `(array_local_id, index_local_id, class_name, property)`. Returns the fact
-/// and the packed slot index of the field.
-pub(crate) fn element_shape_loop_fact_lookup<'f>(
-    facts: &'f [ElementShapeLoopFact],
-    array_local_id: u32,
-    index_local_id: u32,
-    class_name: &str,
+/// Find the innermost active element-shape loop fact covering a
+/// `PropertyGet`'s receiver: answers `Some((fact, packed_slot_index))` exactly
+/// when `object.property` is a tracked `arr[counter].field` read inside an
+/// element-shape fast clone.
+///
+/// The single entry point for the three sites that must agree about that read
+/// — the field lowering itself
+/// (`expr::property_get::lower_raw_f64_class_field_get_for_number_context`),
+/// `type_analysis::is_numeric_expr`, and `expr::binary`'s arithmetic-operand
+/// router. #7480 step 3 made the clone self-contained by routing all three
+/// through the fact instead of through `receiver_class_name`, which by design
+/// does not resolve an object-literal element type; the fact's own
+/// `class_name` is therefore the authoritative answer rather than a filter on
+/// one the caller supplies.
+///
+/// `(array, counter)` already identifies one loop — a counter local is minted
+/// per `for`, and the matcher admits exactly one array per loop. Cheap
+/// early-out first: outside a fast clone the fact vector is empty.
+///
+/// The **canonical-i32 counter slot is part of the predicate**, not a
+/// precondition the caller re-checks. Answering `Some` is a promise that the
+/// read really does take the bare-load lowering, and `is_numeric_expr` bets a
+/// raw `double` on that promise: if the field lowering declined for want of an
+/// i32 slot while the numeric predicate still said yes, the operand would be
+/// consumed as a real double while the generic lowering handed back a NaN-boxed
+/// value. The matcher declines the whole loop without that slot
+/// (`lower_element_shape_versioned_for`), so today the two can't disagree —
+/// asking here keeps them unable to disagree if the matcher is ever widened.
+pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
+    ctx: &'f FnCtx<'_>,
+    object: &perry_hir::Expr,
     property: &str,
 ) -> Option<(&'f ElementShapeLoopFact, u32)> {
-    facts.iter().rev().find_map(|fact| {
-        if fact.array_local_id != array_local_id
-            || fact.index_local_id != index_local_id
-            || fact.class_name != class_name
-        {
+    use perry_hir::Expr;
+    if ctx.element_shape_loop_facts.is_empty() {
+        return None;
+    }
+    let Expr::IndexGet { object, index } = object else {
+        return None;
+    };
+    let (Expr::LocalGet(array_local_id), Expr::LocalGet(index_local_id)) =
+        (object.as_ref(), index.as_ref())
+    else {
+        return None;
+    };
+    if !ctx.i32_counter_slots.contains_key(index_local_id) {
+        return None;
+    }
+    ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
+        if fact.array_local_id != *array_local_id || fact.index_local_id != *index_local_id {
             return None;
         }
         fact.fields.get(property).map(|idx| (fact, *idx))

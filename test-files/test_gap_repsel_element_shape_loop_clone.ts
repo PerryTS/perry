@@ -315,3 +315,187 @@ function fill(rows: Node[], n: number): void {
 const callerOwned: Node[] = [];
 fill(callerOwned, 40);
 console.log("grown-callee-filled:", sumField(callerOwned, callerOwned.length));
+
+// ---------------------------------------------------------------------------
+// 11. OBJECT-LITERAL element types (#7480 step 3). `keep: {v, w}[]` is #7480's
+//     own kernel: the literals allocate an `__AnonShape_<hash>`, so a class id
+//     exists, and the matcher resolves it by matching the declared property
+//     order against the module's anon shapes. Every hazard above applies here
+//     too, and two are specific to this arm:
+//
+//     * the resolution is a HINT — the preheader still compares the class id
+//       the runtime invariant reports, so a mis-resolved shape must cost the
+//       clone and never the answer;
+//     * the clone only exists because the accumulator also regains its numeric
+//       proof (an untyped `+` lowers to a call, which fails the clone's
+//       call-free admission), so a wrong numeric claim would show up here as a
+//       wrong SUM rather than as a crash.
+// ---------------------------------------------------------------------------
+type Row = { v: number; w: number };
+
+function sumRow(rows: Row[], n: number): number {
+  let sum = 0;
+  for (let j = 0; j < n; j++) {
+    sum += rows[j].v;
+  }
+  return sum;
+}
+
+// The same loop with an INLINE `.length` bound. The matcher only accepts an
+// integer literal or a local as the bound (`rows.length` is a `PropertyGet`),
+// so this shape gets no clone at all — which is exactly why it has to be here:
+// a kernel written the obvious way must still print the same number.
+function sumRowInlineBound(rows: Row[]): number {
+  let sum = 0;
+  for (let j = 0; j < rows.length; j++) {
+    sum += rows[j].v;
+  }
+  return sum;
+}
+
+function buildRowsLocal(n: number): Row[] {
+  const out: Row[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({ v: i, w: i * 2 });
+  }
+  return out;
+}
+
+// Built in the reading scope AND grown past MIN_ARRAY_CAPACITY.
+const rowsLocal: Row[] = [];
+for (let i = 0; i < 40; i++) {
+  rowsLocal.push({ v: i, w: i * 2 });
+}
+console.log("obj-hot:", sumRow(rowsLocal, rowsLocal.length));
+console.log("obj-hot-again:", sumRow(rowsLocal, rowsLocal.length));
+console.log("obj-inline-bound:", sumRowInlineBound(rowsLocal));
+
+// The #7660 stale-head shapes, on the object-literal arm.
+const rowsReturned = buildRowsLocal(40);
+console.log("obj-grown-callee-built:", sumRow(rowsReturned, rowsReturned.length));
+let objPrefix = 0;
+for (let j = 0; j < 17; j++) {
+  objPrefix += rowsReturned[j].v;
+}
+console.log("obj-grown-prefix-17:", objPrefix);
+
+function fillRows(rows: Row[], n: number): void {
+  for (let i = 0; i < n; i++) {
+    rows.push({ v: i, w: i * 3 });
+  }
+}
+const rowsCallerOwned: Row[] = [];
+fillRows(rowsCallerOwned, 40);
+console.log(
+  "obj-grown-callee-filled:",
+  sumRow(rowsCallerOwned, rowsCallerOwned.length),
+);
+
+// Empty, and a bound past the end.
+console.log("obj-empty:", sumRow([], 0));
+const rowsShort: Row[] = [{ v: 5, w: 5 }, { v: 6, w: 6 }];
+let objOver = "";
+for (let j = 0; j < 4; j++) {
+  const row = rowsShort[j] as Row | undefined;
+  objOver += row === undefined ? "_" : String(row.v);
+}
+console.log("obj-bound-past-length:", objOver);
+
+// Heterogeneous / revoked: no proof exists, or it is retired mid-loop.
+const rowsHetero: Row[] = [{ v: 1, w: 1 }, { v: 2, w: 2 }, { v: 3, w: 3 }];
+(rowsHetero as unknown as unknown[])[1] = 40;
+let objHetero = "";
+for (let j = 0; j < rowsHetero.length; j++) {
+  objHetero += String(rowsHetero[j].v) + ",";
+}
+console.log("obj-hetero:", objHetero);
+
+const rowsRevoked: Row[] = [];
+for (let i = 0; i < 20; i++) {
+  rowsRevoked.push({ v: i, w: i });
+}
+let objRevoked = "";
+for (let j = 0; j < rowsRevoked.length; j++) {
+  objRevoked += String(rowsRevoked[j].v) + ",";
+  if (j === 2) {
+    (rowsRevoked as unknown as unknown[])[9] = 100;
+  }
+}
+console.log("obj-mid-loop-store:", objRevoked);
+
+// Residual per-element hazards: layout downgrade, `delete`, own accessor.
+const rowsDown: Row[] = [];
+for (let i = 0; i < 20; i++) {
+  rowsDown.push({ v: i, w: i });
+}
+(rowsDown[3] as unknown as Record<string, unknown>).v = "nine";
+// Through the CLONE (local bound): the residual per-element check must side
+// exit on the downgraded element and the slow clone must re-run that
+// iteration, so the accumulator turns into a string exactly where JS says it
+// does. Through the generic path (inline `.length` bound) for contrast.
+console.log("obj-layout-downgrade:", sumRow(rowsDown, rowsDown.length));
+console.log("obj-layout-downgrade-generic:", sumRowInlineBound(rowsDown));
+
+const rowsDeleted: Row[] = [];
+for (let i = 0; i < 20; i++) {
+  rowsDeleted.push({ v: i, w: i });
+}
+delete (rowsDeleted[2] as unknown as Record<string, unknown>).w;
+console.log("obj-deleted-field:", sumRow(rowsDeleted, rowsDeleted.length));
+
+const rowsAccessor: Row[] = [];
+for (let i = 0; i < 20; i++) {
+  rowsAccessor.push({ v: i, w: i });
+}
+Object.defineProperty(rowsAccessor[4], "v", {
+  get() {
+    return 99;
+  },
+  configurable: true,
+});
+console.log("obj-own-accessor:", sumRow(rowsAccessor, rowsAccessor.length));
+
+// A SECOND anon shape with the same field NAMES but different field types.
+// The two shapes are distinct classes, so a resolver that picked the wrong one
+// would guard on a class id the array never reports — costing the clone, never
+// the answer. Both loops below must still print the right thing.
+type StrRow = { v: string; w: string };
+const strRows: StrRow[] = [];
+for (let i = 0; i < 20; i++) {
+  strRows.push({ v: String(i), w: String(i) });
+}
+let strOut = "";
+for (let j = 0; j < strRows.length; j++) {
+  strOut += strRows[j].v;
+}
+console.log("obj-same-names-string-shape:", strOut);
+console.log("obj-numeric-shape-after:", sumRow(rowsLocal, rowsLocal.length));
+
+// A shape whose reads mix a numeric and a non-numeric field: the matcher must
+// decline (the non-numeric field is not a raw-f64 candidate) and the answer
+// must be JavaScript's string concatenation, not an arithmetic add.
+type MixedRow = { n: number; s: string };
+const mixed: MixedRow[] = [];
+for (let i = 0; i < 20; i++) {
+  mixed.push({ n: i, s: "x" });
+}
+let mixedAcc = "";
+for (let j = 0; j < mixed.length; j++) {
+  mixedAcc += String(mixed[j].n) + mixed[j].s;
+}
+console.log("obj-mixed-fields:", mixedAcc);
+
+// A MODULE-LEVEL array read from inside a function — the module-global arm of
+// the preheader's growth-forwarding write-back (the array was grown by a
+// callee, so the global holds the pre-growth head on first read).
+const globalRows: Row[] = buildRowsLocal(40);
+
+function sumGlobalRows(n: number): number {
+  let sum = 0;
+  for (let j = 0; j < n; j++) {
+    sum += globalRows[j].w;
+  }
+  return sum;
+}
+console.log("obj-module-global:", sumGlobalRows(globalRows.length));
+console.log("obj-module-global-again:", sumGlobalRows(globalRows.length));

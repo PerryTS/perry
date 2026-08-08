@@ -176,9 +176,24 @@ fn element_shape_loop_pure_expr_collect(
             array.is_none_or(|a| a != *id) && crate::type_analysis::is_numeric_expr(ctx, expr)
         }
         Expr::Number(_) | Expr::Integer(_) => true,
+        // NOTE (#7480 step 3): deliberately NOT gated on
+        // `is_numeric_expr(ctx, expr)`. `BinaryOp` is arithmetic/bitwise only
+        // (no `in`/`instanceof`), so the sole hazard the whole-expression test
+        // covered was `+` on a possibly-string operand — and every leaf this
+        // walk admits is numeric by the time the match is ACCEPTED: numeric
+        // locals and literals by their own arms, and tracked `arr[j].field`
+        // reads because the caller rejects the whole loop unless every
+        // collected property is a declared raw-f64 candidate on the resolved
+        // element class.
+        //
+        // The gate had to go for the object-literal kernel: at match time no
+        // fact is installed yet, so `is_numeric_expr` cannot see through
+        // `keep[j].v` (its `PropertyGet` arm resolves the owner through
+        // `receiver_class_name`, which by design does not type an
+        // object-literal element). Keeping it would have declined #7480's own
+        // kernel before the class resolver was ever consulted.
         Expr::Binary { left, right, .. } => {
-            crate::type_analysis::is_numeric_expr(ctx, expr)
-                && element_shape_loop_pure_expr_collect(ctx, left, counter_id, array, props)
+            element_shape_loop_pure_expr_collect(ctx, left, counter_id, array, props)
                 && element_shape_loop_pure_expr_collect(ctx, right, counter_id, array, props)
         }
         Expr::NumberCoerce(operand) => {
@@ -208,35 +223,150 @@ fn element_shape_loop_pure_expr_collect(
 /// Resolve the class every element of `array_id` must have for the clone to
 /// fire.
 ///
-/// Exactly one source: `receiver_class_name` on the `IndexGet`, i.e. a
-/// declared element type (`keep: Node[]`) — the same path Perry already uses
-/// to resolve `items[2].display()`. It does not have to be *right*: the
-/// preheader compares the class id the runtime invariant reports against this
-/// one, so a wrong answer costs the clone, never correctness.
+/// Two sources, tried in order:
 ///
-/// **Deliberately NOT resolved: object-literal element types**
-/// (`keep: {v: number}[]`), which is #7480's own kernel — an object literal
-/// lowers to `New { __AnonShape_<hash> }`, so a class id genuinely exists, and
-/// matching the declared object type's property order against this module's
-/// `__AnonShape_*` classes would find it. It is left out on purpose, because
-/// the class name alone is not enough: `receiver_class_name` returning `None`
-/// is also what makes `lower_raw_f64_class_field_get_for_number_context`
-/// decline, so the read would still lower through the generic diamond, the
-/// clone would fail its call-free check, and the only thing the wider matcher
-/// would buy is a block of dead fast-clone IR. Reaching that kernel means
-/// teaching `static_type_of` / `receiver_class_name` to type an `Object`-typed
-/// property read — which is precisely the #6377 "more type visibility un-gates
-/// latent fast paths" change, and belongs in its own PR with its own gap-suite
-/// A/B. Measured cost of the omission: the object-literal kernel stays at
-/// ~88 ms while the named-class kernel goes 43 → 16 ms.
+/// 1. `receiver_class_name` on the `IndexGet`, i.e. a declared *named* element
+///    type (`keep: Node[]`) — the same path Perry already uses to resolve
+///    `items[2].display()`.
+/// 2. #7480 step 3: an **object-literal element type** (`keep: {v: number}[]`),
+///    resolved to the `__AnonShape_<hash>` class the literals actually
+///    allocate ([`anon_shape_class_for_element_type`]). This is #7480's own
+///    kernel and the whole measured gap — 414 ms vs node's 12 on 200k × 50,
+///    where the named-class arm is already 13 ms.
+///
+/// Neither has to be *right*: the preheader compares the class id the runtime
+/// invariant reports against this one, so a wrong answer costs the clone,
+/// never correctness. The annotation stays a hint, never layout.
 fn element_class_name(ctx: &FnCtx<'_>, array_id: u32, counter_id: u32) -> Option<String> {
-    crate::type_analysis::receiver_class_name(
+    if let Some(named) = crate::type_analysis::receiver_class_name(
         ctx,
         &perry_hir::Expr::IndexGet {
             object: Box::new(perry_hir::Expr::LocalGet(array_id)),
             index: Box::new(perry_hir::Expr::LocalGet(counter_id)),
         },
-    )
+    ) {
+        return Some(named);
+    }
+    anon_shape_class_for_element_type(ctx, array_id)
+}
+
+/// Content-addressed synthetic class every closed-shape object literal lowers
+/// to (`perry-hir/src/lower/context.rs::mint_anon_shape_class`).
+const ANON_SHAPE_PREFIX: &str = "__AnonShape_";
+
+/// #7480 step 3: resolve `keep: {v: number, w: number}[]` to the
+/// `__AnonShape_<hash>` class its literals allocate.
+///
+/// **Why not widen `receiver_class_name`.** That is the #6377 blast radius
+/// #7612 deliberately refused — every consumer of the receiver-class resolver
+/// would start seeing a class for an `Object`-typed read, un-gating latent
+/// fast paths this change never measured. The resolver therefore lives here,
+/// in the matcher, and the fast clone is made self-contained instead: its
+/// field read carries its own `class_name` + packed slot index on
+/// `ElementShapeLoopFact`, and the three predicates that would otherwise have
+/// re-derived the class from the receiver
+/// (`lower_raw_f64_class_field_get_for_number_context`, `is_numeric_expr`,
+/// `lower_arithmetic_operand`'s routing test) consult that fact instead. All
+/// three are scoped to the fast clone, where the guard has already proven the
+/// element's class *and* — via the residual check's
+/// `GC_OBJ_TYPED_LAYOUT_INTACT` bit — that the slot really holds a raw double.
+///
+/// **Why the hash cannot be recomputed.** `mint_anon_shape_class` keys the
+/// FNV hash on the literal's *inferred value* types (`{v: 1}` tags `i`, not
+/// `n`), while the annotation says `number`. So the class is found by matching
+/// the declared property order against the module's anon shapes, not by
+/// recomputing the name.
+///
+/// Ambiguity declines rather than guesses: two anon shapes can share a field
+/// name list (`{v: n, w: n}` vs `{v: s, w: s}`), so candidates are narrowed by
+/// field-type compatibility and a still-ambiguous set returns `None`. That
+/// keeps the answer independent of `ctx.classes` iteration order, which is a
+/// `HashMap`'s.
+fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<String> {
+    use perry_hir::types::Type as HirType;
+
+    let elem = match ctx.local_types.get(&array_id)? {
+        HirType::Array(elem) => elem.as_ref(),
+        // `new Array<{v: number}>(n)` locals carry the generic spelling.
+        HirType::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
+            &type_args[0]
+        }
+        _ => return None,
+    };
+    let HirType::Object(obj) = elem else {
+        return None;
+    };
+    // Only a CLOSED shape names a layout: an index signature, a method
+    // signature (which `property_order` does not record) or an optional
+    // property all mean the runtime object may not have exactly these slots.
+    if obj.index_signature.is_some() {
+        return None;
+    }
+    let order = obj.property_order.as_ref()?;
+    if order.is_empty() || order.len() != obj.properties.len() {
+        return None;
+    }
+    if obj.properties.values().any(|p| p.optional) {
+        return None;
+    }
+
+    let mut candidates: Vec<&str> = ctx
+        .classes
+        .iter()
+        .filter(|(name, class)| {
+            name.starts_with(ANON_SHAPE_PREFIX)
+                // The clone's packed slot indices describe ONE class's own
+                // fields; an inherited layout or a computed key would not be
+                // self-describing. Anon shapes never have either, so this is
+                // a belt-and-braces check that keeps the invariant local.
+                && class.extends_name.is_none()
+                && class.computed_members.is_empty()
+                && class.fields.len() == order.len()
+                && class
+                    .fields
+                    .iter()
+                    .zip(order)
+                    .all(|(f, want)| f.key_expr.is_none() && f.name == *want)
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if candidates.len() > 1 {
+        candidates.retain(|name| {
+            ctx.classes.get(*name).is_some_and(|class| {
+                class.fields.iter().all(|f| {
+                    obj.properties
+                        .get(&f.name)
+                        .is_some_and(|p| anon_shape_field_type_is_compatible(&p.ty, &f.ty))
+                })
+            })
+        });
+    }
+    match candidates.as_slice() {
+        [only] => Some((*only).to_string()),
+        _ => None,
+    }
+}
+
+/// Disambiguator for [`anon_shape_class_for_element_type`]: is a synthesized
+/// anon-shape field type (inferred from the literal's VALUES) consistent with
+/// the declared property type (an annotation)?
+///
+/// Only used to break a tie between same-named shapes, so it is deliberately
+/// coarse — `Number`/`Int32` are one bucket (`{v: 1}` infers `Int32` for a
+/// `number`-declared property), as are `String`/`StringLiteral`.
+fn anon_shape_field_type_is_compatible(
+    declared: &perry_hir::types::Type,
+    actual: &perry_hir::types::Type,
+) -> bool {
+    use perry_hir::types::Type as T;
+    match (declared, actual) {
+        (T::Number | T::Int32, T::Number | T::Int32) => true,
+        (T::String | T::StringLiteral(_), T::String | T::StringLiteral(_)) => true,
+        // An `any`/`unknown` annotation names no layout, so it rules nothing
+        // out; every other pair must agree exactly.
+        (T::Any | T::Unknown, _) => true,
+        (d, a) => d == a,
+    }
 }
 
 /// Match `for (let j = k0; j < B; j++) acc = <pure over arr[j].field>`.

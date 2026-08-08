@@ -460,48 +460,71 @@ already working, on a workload that happens to reach it through `JSON.parse`.
    `gc-rooting-invariant.md` records as having already shipped broken. Today's
    ~20 rooting bugs were all found by hand with `PERRY_GC_PROTECT_FROMSPACE`
    because nothing else can find them. This is the structural fix.
-6. **Repsel** — the element-shape invariant landed (#7496) and its
-   versioned-loop consumer landed (#7612, matrix #7608, corpus #7619). What
-   remains of #7480 is **element `Ptr<Shape>` for object-literal element
-   types**, and it is the whole measured gap, not a tail: #7612's
-   `element_class_name` resolves `Array(Named(C))` only, so #7480's own kernel
-   (`keep: {v,w}[]`) never reaches the clone. Re-measured 2026-08-08 on the
-   pinned quiet host, 200k elements × 50 sweeps, checksums equal, interleaved:
+6. ~~**Repsel — element `Ptr<Shape>` for object-literal element types**~~ —
+   **closed.** The element-shape invariant landed (#7496), its versioned-loop
+   consumer landed (#7612, matrix #7608, corpus #7619) and stopped SIGBUSing
+   (#7660); the last piece of #7480 was that `element_class_name` resolved
+   `Array(Named(C))` only, so #7480's own kernel (`keep: {v,w}[]`) never
+   reached the clone at all. Re-measured on the pinned quiet host, 200k
+   elements × 50 sweeps, 7 interleaved rounds, checksums equal across all four
+   runtimes, `rustc`/`cargo` at zero and 94.6–94.9% idle throughout:
 
-   | kernel | perry | node | bun | ratio |
+   | kernel | perry before | perry after | node | bun |
    |---|--:|--:|--:|--:|
-   | `keep: {v,w}[]` — #7480's kernel | 414 ms | 12 ms | 12 ms | **34.5×** |
-   | `keep: Node[]` — what #7612 covers | 13 ms‡ | 57 ms† | 15 ms | **0.23×** |
+   | `keep: {v,w}[]` — #7480's kernel | 408 ms | **12 ms** | 12 ms | 12 ms |
+   | `keep: Node[]` — what #7612 covered | 13 ms | 13 ms | 56 ms | 12 ms |
+   | region-local `{v,w}[]` (#7034 §3) | 15 ms | 14 ms | 12 ms | — |
 
-   **The issue's recorded 93 ms / 6.2× is stale and was optimistic** — the
-   fourth time a figure in this plan has gone stale, and the first in that
-   direction. Two traps in this one table, both of which cost time to find:
+   **34× on the object-literal arm, to parity with both engines**, and the
+   named-class arm is unchanged. The recorded 93 ms / 6.2× in the issue was
+   stale in the *optimistic* direction (the real figure was 34.5× node); its
+   cost model was wrong too, and the correction is the load-bearing part:
 
-   †Node is *slower* on the named-class arm than on the literal arm (57 vs
-   12 ms). `v: number;` cannot be erased by type stripping — without the
-   annotation it is still a valid class field declaration — so V8
-   pre-initialises the slot to `undefined`, pinning the field to tagged
-   representation. **"Beat node" is therefore a different number on the two
-   arms**; re-measure the arm you are gating on, in the same run.
+   **The two levers are not separable, and that is a property of the design,
+   not of this kernel.** #7480 recorded "no out-of-line guard calls, the cost
+   is stacked inline diamonds"; the object-literal arm actually carried three
+   calls per iteration, the third being `js_dynamic_string_or_number_add` —
+   with no resolvable class the accumulator loses its numeric proof, so `+` is
+   not an `fadd`. The plan called that "a second, separable lever". It is not
+   one: the clone is admitted only if it is provably call-free
+   (`LlBlock::contains_gc_unsafe_call`, which counts every non-`llvm.` call),
+   so a fix that resolved the element class WITHOUT also restoring the numeric
+   proof emits the clone, fails the call-free test, branches unconditionally to
+   the slow arm, and buys exactly zero at a cost in code size. Anything gated
+   on call-freeness has this shape: the enabling proof and the proof that makes
+   the body cheap are the same admission test.
 
-   ‡That cell did not exist before #7660: on `main` the named-class arm
-   *SIGBUSes*, because the versioned-loop consumer derived its elements base
-   from an unresolved growth-forwarding stub for any array grown outside the
-   scope that reads it. Step 2's win was real but gated behind a crash.
+   **What was deliberately NOT taken: `receiver_class_name` is unchanged.**
+   Widening it to type an `Object`-typed element read is the #6377 blast radius
+   #7612 refused, and it is not needed — the resolver lives in the matcher, and
+   the clone was made self-contained instead (its `ElementShapeLoopFact`
+   carries the class name and packed slot index, and the field lowering,
+   `is_numeric_expr` and the arithmetic-operand router all consult that fact).
+   So `keep[j].v` OUTSIDE an element-shape loop is byte-for-byte what it was.
+   The numeric claim inside the clone is stronger than the annotation it
+   replaces: the residual per-element check already proves
+   `GC_OBJ_TYPED_LAYOUT_INTACT`, i.e. that the slot holds a raw double.
 
-   The IR does not match the issue's recorded cost model either. #7480 says
-   the body has "no out-of-line guard calls, the cost is stacked inline
-   diamonds"; the object-literal arm actually carries **three calls per
-   iteration** — `js_typed_feedback_observe_property_get`,
-   `js_typed_feedback_record_guard_pass` (on the *hit* path) and
-   `js_dynamic_string_or_number_add`, because with no resolvable class the
-   field read falls into the by-name PIC tower and the accumulator loses its
-   numeric proof. That is a second, separable lever, and it is the kind of win
-   that gets misattributed to the element-shape work.
+   **What remains, and why it is a different ticket.** Route A proper — a
+   `Ptr<Shape>` element representation that survives outside a loop — is still
+   open for the parameter/global case. It needs the type-visibility change
+   above, with its own gap-suite A/B, and it should be scoped against the fact
+   that the region-local case is already covered: `collectors/ptr_shape_elements.rs`
+   (#7034 §3, E1–E5) puts that row at 14–15 ms with no work from this change.
+   Sequencing note carried from before: element reads are 13% of `churn`, so
+   against the bookkeeping levers this stays an RSS/footprint play more than a
+   time one — but the 34× above is the kernel, and it was real.
 
-   Sequencing note carried from before: element reads are 13% of `churn` at
-   4.3×, so against the bookkeeping levers this stays an RSS/footprint play
-   more than a time one — but the 34.5× above is the kernel, and it is real.
+   Method note for the next person: the IR census that proves the clone is
+   call-free had been **vacuous since #7612**. `fast_clone_slice` sliced from
+   the first *substring* match of `for.element_shape_fast.cond`, which is the
+   `br label %…` terminator of the fast preheader — four lines above the slow
+   preheader — and every assertion made against the result is a negative
+   (`!fast.contains(" call ")`). The slicer now finds the block DEFINITION and
+   asserts the slice contains the cloned body and its element load, so it
+   cannot pass on an empty subject again. Same family as #7024/#7025: the gate
+   ran, its subject did not.
+
 7. **Layer 1** — migrate remaining lowerings onto the rooted-combinator API
    (`crates/perry-codegen/src/rooting.rs`). **#7615 is the ordered worklist**:
    88 modules, 694 raw-pointer sites, 262 hazard sites, grouped into ten
