@@ -2688,13 +2688,26 @@ pub extern "C" fn js_gc_collect() {
 /// **What it cost.** A conservative scan retains whatever the native stack
 /// happens to look like a pointer to, so the reading every retained-heap number
 /// in this project is taken through — `process.memoryUsage()` after `gc()` —
-/// carried a stack-residue tax that was *not* small: 8,275,208 bytes, 16% of
-/// `12_large_live_set`'s reported retention, and non-deterministic run to run
-/// because stack residue is. That is why `benchmarks/gc_ratchet` had to stop
-/// gating that cell (#7554) and why two more probes' retention rows were
-/// unbelievable without a manual `gc_ratchet.py classify` cross-check (#7559).
-/// It also made this path non-moving, which is why `PERRY_GC_FORCE_EVACUATE`
-/// was inert for every `gc()`-driven test (#6942/#6946).
+/// carried a stack-residue tax. Measured with `gc_ratchet.py classify` on
+/// `main` at `961777904`: non-zero on **nine of the twelve** ratchet probes,
+/// and 28.63% / 28.24% / 29.71% / 31.03% of reported retention on
+/// `01_nursery_churn`, `05_closure_capture`, `06_string_retention` and
+/// `11_collect_at_depth` respectively (13.80%, 8,273,888 bytes, on
+/// `12_large_live_set` — the case #7558 was filed for was the *smallest* of the
+/// four). It was also non-deterministic run to run, because stack residue is,
+/// which is why `benchmarks/gc_ratchet` had to stop gating that cell (#7554)
+/// and why retention rows were unbelievable without a manual `classify`
+/// cross-check (#7559). And it made this path non-moving, which is why
+/// `PERRY_GC_FORCE_EVACUATE` was inert for every `gc()`-driven test
+/// (#6942/#6946).
+///
+/// **A second-order effect worth knowing about.** `gc/tenuring.rs` deliberately
+/// refuses to seed the adaptive tenuring threshold from a cycle that ran the
+/// conservative scan, so on any `gc()`-driven workload that seed had never
+/// fired. It fires now. On two ratchet probes `tenuring_survivals` falls
+/// `4 -> 1` and survivors are promoted on first copy rather than copied into
+/// survivor space; the copying minor still runs and moves *more* objects.
+/// Removing a conservative scan is not only a retention change.
 ///
 /// **What is unchanged.** `gc()` is still synchronous — #7148's disposition
 /// that it must not be *deferred* to a safepoint stands, because
