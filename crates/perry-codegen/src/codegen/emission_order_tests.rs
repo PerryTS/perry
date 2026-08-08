@@ -305,11 +305,18 @@ fn plain_class(id: u32, name: &str, method: Function) -> Class {
 /// `o` is an `any`-typed parameter, so `receiver_class_name` cannot name a
 /// class and the call lowers through the dynamic-dispatch tower — one
 /// `icmp`-guarded case per implementing class.
+///
+/// Class ids run OPPOSITE to class names on purpose: `C00` gets id `N`, `C15`
+/// gets id 1. The emission order under test is by class id, and with ids
+/// assigned in name order the two are indistinguishable — a sort keyed on the
+/// class NAME would satisfy the assertion just as well, so the test would not
+/// pin the property it claims. Reversed, only a class-id sort produces the
+/// expected sequence.
 fn dispatch_tower_module() -> Module {
     let mut m = empty_module("emission_order_tower.ts");
     for k in 0..N {
         m.classes.push(plain_class(
-            k + 1,
+            N - k,
             &format!("C{:02}", k),
             method_fn(200 + k, "m"),
         ));
@@ -399,10 +406,13 @@ fn dispatch_tower_arms_are_emitted_in_class_id_order() {
         "expected one dispatch-tower arm per implementing class, got {:?}",
         arms
     );
-    let mut sorted = arms.clone();
-    sorted.sort();
+    // Spelled out rather than derived by sorting `arms` itself: `C{:02}` runs
+    // opposite to the class ids, so this sequence is satisfied ONLY by a
+    // class-id ordering. A name-keyed sort — or `arms.sort()` compared against
+    // itself — would accept the reverse and prove nothing.
+    let expected: Vec<String> = (0..N).rev().map(|k| format!("C{:02}", k)).collect();
     assert_eq!(
-        arms, sorted,
+        arms, expected,
         "dispatch-tower arms must be emitted in class-id order, not \
          `ctx.class_ids` hash order (#7622)"
     );
