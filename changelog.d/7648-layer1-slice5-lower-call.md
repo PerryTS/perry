@@ -27,12 +27,27 @@ fixed.
    %r10 = call i64 @js_timer_validate_callback(double %r8, i32 0)   ; stale
    ```
 
-   Under `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1` the baseline throws
-   #7210's own symptom text — `The "callback" argument must be of type function.
-   Received an instance of Object` — for both timers, where node prints the
-   scheduled timer. A **capturing** callback is required to reproduce: a
-   non-capturing arrow lowers to `js_closure_alloc_singleton`, which is never
-   moved, so the stale register keeps working and hides the bug.
+   Compiled with `PERRY_GC_MOVING_LOOP_POLLS=1` and run under `PERRY_GC_ZEAL=1`,
+   the baseline throws #7210's own symptom text — `The "callback" argument must
+   be of type function. Received an instance of Object` — for both timers, where
+   node prints the scheduled timer.
+
+   **Two preconditions, and both are easy to miss.** `PERRY_GC_MOVING_LOOP_POLLS=1`
+   is a **compile**-time flag: without it `churn()` gets no loop back-edge polls,
+   zeal only fires at event-loop boundaries, a compute-only loop never collects,
+   and the identical binary prints the correct answer at exit 0. Check it took
+   effect with `--trace llvm`: the module must contain at least one
+   `call … @js_gc_loop_safepoint` (1 with the flag, 0 without). And the callback
+   must genuinely **capture** — a callback that closes over nothing but module
+   globals allocates a closure whose contents nothing relocates, so the stale
+   register keeps working. `PERRY_GC_PROTECT_FROMSPACE` and
+   `…_DEPTH` are *not* needed here: this fault is a use-after-move that lands on
+   recycled memory, not a from-space `SIGSEGV`, so zeal alone surfaces it.
+
+   Conversely, a window that does not fault is not a window that is absent —
+   whether a stale pointer is *observably* wrong depends on what gets recycled
+   into those bytes. The IR above is the evidence that the bug is there; the
+   thrown `TypeError` is only evidence that it is reachable in one arrangement.
 
 2. **The var-shaped namespace export dispatched through a stale closure.**
    `import * as ns from "./m"; ns.arrow(churn())` fetches the closure from its
@@ -42,7 +57,15 @@ fixed.
    taxonomy (a) and (c) at once: `root_reload` could not have repaired it, because
    the pointer is derived *below* the window from a register captured *above* it.
    Baseline throws `TypeError: value is not a function`; node and the fix print
-   `a:1` / `b:2`.
+   `a:1` / `b:2`. Same two preconditions as bug 1 (compile-time polls; zeal alone
+   suffices).
+
+   The reproducer that faults imports a **`.ts`** sibling and calls a two-argument
+   export. A `.mjs` sibling with a one-argument export emits the identical window
+   — getter, `churn`, then `bitcast`/`and` of the pre-call register into
+   `js_closure_call1` — and does **not** fault, for the recycling reason above.
+   Worth knowing before concluding from one non-faulting arrangement that the arm
+   is clean.
 
 3. **The `has_rest` namespace direct call lost every rest element — silently.**
    The #7154 accumulator shape verbatim: `current` was a raw `*mut ArrayHeader`
