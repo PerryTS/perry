@@ -230,9 +230,18 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
     // Approximate the live set: collect first so unreachable malloc
     // objects are freed and fully-dead nursery blocks are reset before
     // the walk picks the population (Node's writeHeapSnapshot also
-    // forces a full GC). `js_gc_collect` forces the conservative
-    // native-stack scan when no per-thread override is pinned (#4977),
-    // so top-level locals held only on the native stack survive.
+    // forces a full GC).
+    //
+    // #7558: this used to add "`js_gc_collect` forces the conservative
+    // native-stack scan (#4977), so top-level locals held only on the native
+    // stack survive". It no longer forces it — the collection runs on precise
+    // roots like every other one — and the snapshot is *better* for it: what
+    // it walks is now the reachable live set rather than the live set plus
+    // whatever the native stack happened to look like a heap pointer to. If a
+    // top-level local were genuinely unrooted here, the snapshot would be the
+    // least of the consequences: the program would already be reading freed
+    // memory, which is the invariant `scripts/gc_root_dominance_check.py`
+    // gates.
     js_gc_collect();
 
     // Free-list slots are dead-but-unreclaimed space inside live
