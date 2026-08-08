@@ -4,6 +4,7 @@
   "artifact_id": "gc-ratchet-v1",
   "not_the_public_baseline": "Internal Perry-vs-Perry GC ratchet. The public Node/Bun evidence is benchmarks/results/public-node-bun-v1.json, owned by benchmarks/run_public_baseline.sh. Never regenerate one from the other.",
   "commit": "a8f73122d08b64b030f9e34e868cdea1bdee59a4",
+  "code_tree": "dd8020788eedd362689719e47a819939a9203951",
   "generated_at": "2026-08-08T22:03:20+00:00",
   "platform": "darwin-arm64",
   "host": {

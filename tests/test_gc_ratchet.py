@@ -16,10 +16,12 @@ import json
 import stat
 import sys
 import tempfile
+import subprocess
 import unittest
 from pathlib import Path
 
 from benchmarks.gc_ratchet.gc_ratchet import (
+    code_tree_hash,
     ALL_METRICS,
     DEFAULT_ARTIFACT,
     DETERMINISTIC_METRICS,
@@ -1316,3 +1318,55 @@ class ProbeRunEnvGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class RebaseStableProvenanceTests(unittest.TestCase):
+    """#7666 follow-up: `commit` alone does not survive the merge that ships it.
+
+    A gc-ratchet re-pin is written on a branch and REBASED at merge time (the
+    maintainer adds the version bump), which orphans the commit the pin
+    recorded. #7666's artifact named `a8f73122d`; that object still resolves
+    locally but is NOT an ancestor of `main`, so a future reader attributing a
+    moved cell looks up a commit that is not in the history. This recurs on
+    every pin, so the artifact also records the tree hash of `crates/` — the
+    code whose behaviour a probe measures, stable across both the rebase and
+    the version bump (which touches only Cargo.toml / Cargo.lock / CLAUDE.md).
+    """
+
+    def test_the_shipped_baseline_records_a_code_tree(self):
+        baseline = Path(__file__).resolve().parents[1] / "benchmarks" / "gc_ratchet" / "baseline" / "gc-ratchet-v1.json"
+        artifact = json.loads(baseline.read_text())
+        self.assertIn(
+            "code_tree",
+            artifact,
+            "the pinned artifact must carry a rebase-stable provenance field; "
+            "`commit` alone is orphaned by the merge that ships the pin",
+        )
+        self.assertRegex(
+            artifact["code_tree"],
+            r"^[0-9a-f]{40}$",
+            "code_tree must be a full git tree hash",
+        )
+
+    def test_code_tree_hash_is_a_tree_not_a_commit(self):
+        """It must name `HEAD:crates`, not `HEAD`.
+
+        A commit hash here would be exactly the field it replaces, and would
+        change on every version bump — which is half of what makes `commit`
+        useless for this.
+        """
+        value = code_tree_hash()
+        if value == "unknown":
+            self.skipTest("git unavailable")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        self.assertNotEqual(
+            value, head, "code_tree must be a TREE hash, not the commit hash"
+        )
+        expected = subprocess.run(
+            ["git", "rev-parse", "HEAD:crates"],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        self.assertEqual(value, expected)
+

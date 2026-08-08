@@ -235,6 +235,26 @@ class ArtifactDefect:
 # ---------------------------------------------------------------------------
 
 
+def code_tree_hash() -> str:
+    """Tree hash of `crates/` — the code whose behaviour a probe measures.
+
+    Rebase- and version-bump-stable, unlike the commit hash. Returns
+    `"unknown"` rather than raising when git is unavailable, because a missing
+    provenance note must not fail a measurement run.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD:crates"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else "unknown"
+    except OSError:
+        return "unknown"
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -1197,6 +1217,20 @@ def assemble(
             "benchmarks/run_public_baseline.sh. Never regenerate one from the other."
         ),
         "commit": commit,
+        # Rebase-stable companion to `commit`. A gc-ratchet re-pin is written on
+        # a branch and REBASED at merge time (the maintainer adds the version
+        # bump), which orphans the commit the pin recorded: #7666's artifact
+        # named `a8f73122d`, a hash that is not in `main`'s history. Provenance
+        # stayed single and uniform -- this is not #7652's substance -- but a
+        # future reader attributing a moved cell looks up a commit that does not
+        # exist, and that recurs on EVERY pin.
+        #
+        # `crates/`'s tree hash identifies exactly the code that was measured. It
+        # survives both the rebase and the version bump (which touches only
+        # Cargo.toml / Cargo.lock / CLAUDE.md), so it still resolves after the
+        # branch is gone: `git rev-parse <any-commit>:crates` on a candidate
+        # commit either matches or does not.
+        "code_tree": code_tree_hash(),
         "generated_at": utc_now(),
         "platform": measurement["platform"],
         "host": measurement["host"],
