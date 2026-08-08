@@ -518,3 +518,240 @@ pub(crate) fn lower_object_literal(
         },
     )
 }
+
+#[cfg(test)]
+mod by_name_method_closure_tests {
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Function, Module as HirModule, Param, Stmt};
+
+    /// `{ add(k) {…}, tag: {}, scale(k) {…}, last: {} }` — an object literal
+    /// carrying two `this`-capturing method closures. That selects
+    /// `lower_object_literal`'s BY-NAME path and with it the deferred
+    /// `this`-patch machinery this module's nested accumulators root.
+    ///
+    /// Built from HIR rather than from TypeScript on purpose. Since #809 every
+    /// source-level object literal containing a `Prop::Method` is lowered to a
+    /// source-ordered IIFE over `{}` (`js_object_set_method_by_name`), so the
+    /// by-name path with a non-empty prop list is not reachable from
+    /// TypeScript: over the whole `gc_root_dominance_corpus.sh` corpus (129
+    /// sources, 149 modules) every emitted `js_object_alloc` is
+    /// `(i32 0, i32 0)`. A branch no corpus reaches is a branch no IR A/B can
+    /// speak for, so it gets a test of its own rather than an assumption.
+    ///
+    /// The two closures deliberately reserve DIFFERENT `this` slots — `add`
+    /// captures nothing so its slot index is 0, `scale` captures `base` so its
+    /// index is 1 — which is what lets
+    /// [`the_patches_are_applied_in_source_order`] tell the two patch calls
+    /// apart.
+    fn method_literal_ir() -> String {
+        let closure = |func_id: u32, captures: Vec<u32>| {
+            let param_id = 10 + func_id;
+            let mut body = vec![Stmt::Return(Some(Expr::LocalGet(param_id)))];
+            if !captures.is_empty() {
+                body.insert(0, Stmt::Expr(Expr::LocalGet(captures[0])));
+            }
+            Expr::Closure {
+                func_id,
+                params: vec![Param {
+                    id: param_id,
+                    name: "k".to_string(),
+                    ty: Type::Any,
+                    default: None,
+                    decorators: Vec::new(),
+                    is_rest: false,
+                    arguments_object: None,
+                }],
+                return_type: Type::Any,
+                body,
+                captures,
+                mutable_captures: Vec::new(),
+                captures_this: true,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: false,
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+            }
+        };
+        let mut hir = HirModule::new("objlit_by_name_test");
+        hir.functions.push(Function {
+            id: 0,
+            name: "build".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 5,
+                    name: "base".to_string(),
+                    ty: Type::Number,
+                    mutable: false,
+                    init: Some(Expr::Number(1.0)),
+                },
+                Stmt::Return(Some(Expr::Object(vec![
+                    ("add".to_string(), closure(1, Vec::new())),
+                    // Allocating initializers AFTER each closure: that is what
+                    // makes `protect_handle` true, i.e. what puts the closure
+                    // values in a window at all.
+                    ("tag".to_string(), Expr::Object(Vec::new())),
+                    ("scale".to_string(), closure(2, vec![5])),
+                    ("last".to_string(), Expr::Object(Vec::new())),
+                ]))),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let opts = crate::CompileOptions {
+            emit_ir_only: true,
+            ..Default::default()
+        };
+        let bytes = crate::compile_module(&hir, opts).expect("test module compiles");
+        String::from_utf8(bytes).expect("LLVM IR is UTF-8")
+    }
+
+    /// The `build` function's body, and only it — the closure bodies are
+    /// separate `define`s and contain none of what is asserted below.
+    fn build_fn(ir: &str) -> String {
+        let mut body = Vec::new();
+        let mut inside = false;
+        for line in ir.lines() {
+            if line.starts_with("define ") {
+                inside = line.contains("__build(");
+                continue;
+            }
+            if inside {
+                if line == "}" {
+                    break;
+                }
+                body.push(line.trim());
+            }
+        }
+        assert!(
+            !body.is_empty(),
+            "no `build` function in the emitted IR:\n{ir}"
+        );
+        body.join("\n")
+    }
+
+    /// Everything the lowering emits after the last property store: the
+    /// deferred closure re-reads, the patch loop, and the releases.
+    fn tail_after_last_property_store(ir: &str) -> String {
+        let last_store = ir
+            .rfind("@js_object_set_field_by_name(")
+            .expect("a by-name store");
+        ir[last_store..].to_string()
+    }
+
+    /// The literal must take the BY-NAME path, or every assertion below is
+    /// about a branch that did not run.
+    #[test]
+    fn a_this_capturing_method_selects_the_by_name_path() {
+        let ir = build_fn(&method_literal_ir());
+        assert!(
+            ir.contains("@js_object_alloc(i32 0, i32 4)"),
+            "the four-property literal must allocate through the by-name path:\n{ir}"
+        );
+        assert_eq!(
+            ir.matches("@js_object_set_field_by_name(").count(),
+            4,
+            "every property is stored by name on this path:\n{ir}"
+        );
+    }
+
+    /// Each `this` patch must be emitted BELOW the last property store — the
+    /// ordering the deferral exists for ("every method sees the fully
+    /// initialized object"), and what forces the closure values to be rooted in
+    /// the first place.
+    ///
+    /// Counting patch calls over the WHOLE function would be vacuous: closure
+    /// construction emits `js_closure_set_capture_bits` too (that is how the
+    /// reserved `this` slot is seeded from `js_implicit_this_get`), so the
+    /// count only means something in the tail.
+    #[test]
+    fn the_this_patches_run_below_every_property_store() {
+        let ir = build_fn(&method_literal_ir());
+        let tail = tail_after_last_property_store(&ir);
+        assert_eq!(
+            tail.matches("@js_closure_set_capture_bits(").count(),
+            2,
+            "one patch per `this`-capturing method, all below the last store:\n{tail}"
+        );
+    }
+
+    /// The patches must be applied in SOURCE order. The nested form fills its
+    /// list innermost-first, so a dropped `reverse()` swaps the two — invisible
+    /// while both closures reserve the same `this` slot index, and a live
+    /// miscompile the moment they do not. Here `add` captures nothing (slot 0)
+    /// and `scale` captures `base` (slot 1), so the order is readable off the
+    /// `i32 <idx>` argument.
+    #[test]
+    fn the_patches_are_applied_in_source_order() {
+        let ir = build_fn(&method_literal_ir());
+        let tail = tail_after_last_property_store(&ir);
+        let idxs: Vec<&str> = tail
+            .lines()
+            .filter(|l| l.contains("@js_closure_set_capture_bits("))
+            .map(|l| {
+                l.split("i32 ")
+                    .nth(1)
+                    .and_then(|s| s.split(',').next())
+                    .expect("the reserved this-slot index")
+            })
+            .collect();
+        assert_eq!(
+            idxs,
+            vec!["0", "1"],
+            "`add` (slot 0) must be patched before `scale` (slot 1) — reverse order \
+             means the nested accumulators' list was not re-reversed:\n{tail}"
+        );
+    }
+
+    /// The rooting shape, read off the IR. Three GC values are live across the
+    /// literal — the object handle and both deferred closure values — so the
+    /// lowering must own three rooted slots and must give each back, innermost
+    /// first, with the object handle released LAST (it is still needed by the
+    /// patch loop).
+    #[test]
+    fn three_slots_are_rooted_and_released_innermost_first() {
+        let full = method_literal_ir();
+        let ir = build_fn(&full);
+        let tail = tail_after_last_property_store(&ir);
+        // Line INDEXES, not `str::find`: the slot registers are `%r3`, `%r16`
+        // and `%r38`, and `%r3` is a prefix of `%r38`, so a substring search for
+        // the object's release finds the first closure's instead — and the
+        // assertion then reads backwards while passing.
+        let releases: Vec<usize> = tail
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.starts_with("store ptr addrspace(1) null, ptr %"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            releases.len(),
+            3,
+            "the object handle and both closure values must each be released \
+             exactly once below the last store:\n{tail}"
+        );
+        let release_pos = releases[2];
+        let patches: Vec<usize> = tail
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("@js_closure_set_capture_bits("))
+            .map(|(i, _)| i)
+            .collect();
+        let patch_pos = *patches.last().expect("a patch call");
+        assert!(
+            release_pos > patch_pos,
+            "the object handle's root must outlive the patch loop that reads it — the \
+             release is a stack CUT, so giving it back early drops every closure slot \
+             above it too:\n{tail}"
+        );
+    }
+}
