@@ -56,6 +56,7 @@ mod native;
 mod native_module_dispatch;
 mod native_table;
 mod new;
+mod new_alloc;
 mod new_ctor_args;
 mod new_helpers;
 mod omitted_native_params;
