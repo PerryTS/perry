@@ -1,6 +1,6 @@
 //! Array allocation primitives.
 use super::*;
-use crate::arena::arena_alloc_gc;
+use crate::arena::arena_alloc_gc_runtime;
 use std::ptr;
 
 #[cold]
@@ -37,7 +37,7 @@ pub(crate) fn array_length_from_property_value_or_throw(value: f64) -> u32 {
 pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
     // Use at least MIN_ARRAY_CAPACITY to reduce reallocations for growing arrays
     let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
-    let ptr = arena_alloc_gc(
+    let ptr = arena_alloc_gc_runtime(
         array_byte_size(actual_capacity as usize),
         8,
         crate::gc::GC_TYPE_ARRAY,
@@ -75,7 +75,7 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
 /// while the result is being materialized.
 pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader {
     let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
-    let ptr = arena_alloc_gc(
+    let ptr = arena_alloc_gc_runtime(
         array_byte_size(actual_capacity as usize),
         8,
         crate::gc::GC_TYPE_ARRAY,
@@ -119,7 +119,7 @@ pub extern "C" fn js_array_create() -> i64 {
 #[no_mangle]
 pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader {
     let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
-    let ptr = arena_alloc_gc(
+    let ptr = arena_alloc_gc_runtime(
         array_byte_size(actual_capacity as usize),
         8,
         crate::gc::GC_TYPE_ARRAY,
@@ -362,7 +362,7 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
 /// uninitialized; only pure LLVM stores may execute in that window.
 #[no_mangle]
 pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
-    let ptr = arena_alloc_gc(
+    let ptr = arena_alloc_gc_runtime(
         array_byte_size(capacity as usize),
         8,
         crate::gc::GC_TYPE_ARRAY,

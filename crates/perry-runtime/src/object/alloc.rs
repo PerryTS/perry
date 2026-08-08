@@ -6,6 +6,7 @@
 //! module and are reached via `use super::*;`.
 
 use super::*;
+use crate::arena::arena_alloc_gc_runtime;
 
 static CLASS_KEYS_BY_ID: std::sync::RwLock<Option<std::collections::HashMap<u32, (usize, u32)>>> =
     std::sync::RwLock::new(None);
@@ -135,7 +136,7 @@ pub extern "C" fn js_object_alloc_with_parent(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let ptr = arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
         // Initialize header
@@ -172,7 +173,7 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let ptr = arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
         // Initialize header only - fields left uninitialized for constructor to fill
@@ -207,7 +208,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let ptr = arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
         (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -263,7 +264,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let ptr = arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
         (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -402,7 +403,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let ptr = arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
         (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -565,7 +566,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let ptr = arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
     unsafe {
         (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*ptr).class_id = class_id;
@@ -613,7 +614,8 @@ pub extern "C" fn js_object_alloc_with_shape(
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * 8;
     let total_size = header_size + fields_size;
-    let obj_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let obj_ptr =
+        arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
         (*obj_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -747,7 +749,8 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     if !src_is_object {
         let phys_slots = std::cmp::max(extra_count, crate::object::INLINE_SLOT_FLOOR as u32);
         let total_size = header_size + phys_slots as usize * 8;
-        let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+        let new_ptr =
+            arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
         (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
         (*new_ptr).class_id = 0;
         (*new_ptr).parent_class_id = 0;
@@ -777,7 +780,8 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         crate::object::INLINE_SLOT_FLOOR as u32,
     );
     let total_size = header_size + phys_slots as usize * 8;
-    let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let new_ptr =
+        arena_alloc_gc_runtime(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
     (*new_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
     (*new_ptr).class_id = 0;
     (*new_ptr).parent_class_id = 0;

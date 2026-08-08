@@ -303,25 +303,28 @@ pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -
 /// (~10 instructions on the fast path) that inlining is a clear win
 /// and the slow path (free-list walk + new arena block) is gated
 /// behind a cold branch.
+/// #7598: `arena_alloc_gc` with the parse-cohort birth-window check. This is
+/// the entry the RUNTIME's own allocation helpers use (strings, arrays,
+/// objects — everything the JSON materialiser reaches). `arena_alloc_gc`
+/// itself stays check-free deliberately: it is bitcode-inlined into user IR,
+/// where the window can never be open (the window spans a single FFI call and
+/// user code cannot run inside it), and the first version of this check —
+/// placed there — bloated every inlined allocation site in every compiled
+/// program: the gc-ratchet A/B measured +5–22 % RSS and up to +82 % wall on
+/// probes that never parse a byte of JSON, reproducible with the arm order
+/// flipped. Runtime-side, the probe is one cached hot-TLS load — the same
+/// cost class as the free-list probe the allocation already pays.
 #[inline(always)]
-pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
-
-    // #7598: inside a parse-cohort birth window, every allocation is born
-    // tenured in old-gen — the JSON materialiser owns the window, and the
-    // cohort it builds (records, their strings, sub-objects, backings) is
-    // live for the result's lifetime by construction. Placing it at birth
-    // removes the copying minor's single-hop promotion of the whole cohort
-    // (#7613 made it single-hop; this makes it zero-hop) and, because the
-    // subtree is placed together, the old→young field edges that a
-    // parent-only placement would have fed the remembered set (#7623's
-    // measured failure). Page registration is deferred (#7624), so the
-    // per-object cost matches the young path's order of magnitude. The
-    // probe is one load off the cached hot-TLS base — the same cost class
-    // as the free-list probe below, which every call here already pays.
+pub(crate) fn arena_alloc_gc_runtime(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     if crate::gc::hot_parse_birth_old_depth().get() != 0 {
         return arena_alloc_gc_old_born_tenured(size, align, obj_type);
     }
+    arena_alloc_gc(size, align, obj_type)
+}
+
+#[inline(always)]
+pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
 
     // Large arena-backed GC objects are born directly in non-moving old
     // generation. The threshold applies to the actual bytes a copying nursery

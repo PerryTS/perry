@@ -501,7 +501,7 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
 #[inline]
 pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8) {
     let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
-    let raw = crate::arena::arena_alloc_gc(payload_size, 8, crate::gc::GC_TYPE_STRING);
+    let raw = crate::arena::arena_alloc_gc_runtime(payload_size, 8, crate::gc::GC_TYPE_STRING);
     let ptr = raw as *mut StringHeader;
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
     (ptr, data)

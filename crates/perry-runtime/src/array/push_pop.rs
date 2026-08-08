@@ -1,6 +1,6 @@
 //! push / pop / shift / unshift / set_length / delete + grow primitive.
 use super::*;
-use crate::arena::arena_alloc_gc;
+use crate::arena::arena_alloc_gc_runtime;
 use std::ptr;
 
 /// `pop`/`shift`/`push`/`unshift` on a frozen array perform a `Set`/`Delete`
@@ -85,7 +85,8 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let new_size = array_byte_size(new_capacity as usize);
 
         // Allocate new from arena and copy old data.
-        let new_ptr = arena_alloc_gc(new_size, 8, crate::gc::GC_TYPE_ARRAY) as *mut ArrayHeader;
+        let new_ptr =
+            arena_alloc_gc_runtime(new_size, 8, crate::gc::GC_TYPE_ARRAY) as *mut ArrayHeader;
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         // GC_STORE_AUDIT(BARRIERED): array growth copy transfers layout and replays write barriers below.
         ptr::copy_nonoverlapping(arr as *const u8, new_ptr as *mut u8, old_size);
