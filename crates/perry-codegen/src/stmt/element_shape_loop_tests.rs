@@ -484,7 +484,10 @@ fn the_repaired_head_is_written_back_to_the_binding() {
     // not "a store exists" but "the value stored is the refresh's result".
     let refreshed = repair
         .lines()
-        .find_map(|l| l.trim().split_once(" = call double @js_array_refresh_local_head"))
+        .find_map(|l| {
+            l.trim()
+                .split_once(" = call double @js_array_refresh_local_head")
+        })
         .map(|(reg, _)| reg.to_string())
         .expect("the refresh call should bind a register");
     assert!(
