@@ -215,7 +215,7 @@ pub(crate) fn try_lower_static_dispatch(
             }
             // #7211: rooted save/restore — the displaced implicit `this` is
             // live across the static method body below, which is user code.
-            let prev_this = crate::expr::temp_root::implicit_this_save(ctx, &recv_box);
+            let prev_this = crate::rooting::implicit_this_save(ctx, &recv_box);
             // Receiver-sensitive static `this`: arm the one-shot override with
             // the ACTUAL receiver box so the callee prologue's
             // `js_static_this_resolve` binds `this` to it (spec
@@ -240,7 +240,7 @@ pub(crate) fn try_lower_static_dispatch(
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
             let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
-            crate::expr::temp_root::implicit_this_restore(ctx, prev_this);
+            crate::rooting::implicit_this_restore(ctx, prev_this);
             return Ok(Some(result));
         }
         // #1787 / #321: the call target is a static FIELD holding a callable,

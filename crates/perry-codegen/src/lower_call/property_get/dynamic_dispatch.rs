@@ -407,8 +407,7 @@ pub(crate) fn try_lower_instance_method_call(
             // call fallthrough pattern (#519).
             let recv_for_this_probe = recv_box.clone();
             // #7211: rooted save/restore across the user-code dispatch.
-            let prev_this_probe =
-                crate::expr::temp_root::implicit_this_save(ctx, &recv_for_this_probe);
+            let prev_this_probe = crate::rooting::implicit_this_save(ctx, &recv_for_this_probe);
             let v_override_probe = ctx.block().call(
                 DOUBLE,
                 "js_native_call_value",
@@ -418,7 +417,7 @@ pub(crate) fn try_lower_instance_method_call(
                     (I64, &probe_args_len_str),
                 ],
             );
-            crate::expr::temp_root::implicit_this_restore(ctx, prev_this_probe);
+            crate::rooting::implicit_this_restore(ctx, prev_this_probe);
             let after_override_probe = ctx.block().label.clone();
             if !ctx.block().is_terminated() {
                 ctx.block().br(&probe_outer_merge_label);
@@ -1400,7 +1399,7 @@ fn emit_collapsed_instance_dispatch(
     // function value (#632 — a class-field non-arrow function reads `this`).
     ctx.current_block = override_idx;
     // #7211: rooted save/restore across the user-code dispatch.
-    let prev_this = crate::expr::temp_root::implicit_this_save(ctx, recv_box);
+    let prev_this = crate::rooting::implicit_this_save(ctx, recv_box);
     let v_override = ctx.block().call(
         DOUBLE,
         "js_native_call_value",
@@ -1410,7 +1409,7 @@ fn emit_collapsed_instance_dispatch(
             (I64, &args_len),
         ],
     );
-    crate::expr::temp_root::implicit_this_restore(ctx, prev_this);
+    crate::rooting::implicit_this_restore(ctx, prev_this);
     let after_override = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);

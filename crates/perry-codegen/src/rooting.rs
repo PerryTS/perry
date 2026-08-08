@@ -622,6 +622,322 @@ pub(crate) fn any_operand_may_collect<'a>(
     crate::expr::temp_root::any_may_trigger_gc(ctx, exprs)
 }
 
+/// [`any_operand_may_collect`] for a single expression.
+///
+/// The per-operand form is what a group with *unequal* windows needs: in the
+/// generic dynamic call the receiver is live across the callee read and every
+/// argument, the callee across every argument, and argument `i` across the
+/// arguments after it plus an allocating rebind. One `collects` for the whole
+/// list cannot say that.
+pub(crate) fn operand_may_collect(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    crate::expr::temp_root::expr_may_trigger_gc(ctx, expr)
+}
+
+// ---------------------------------------------------------------------------
+// The multi-point re-read scope (#7615 slice 6).
+//
+// WHY THE `with_operands_rooted*` FAMILY COULD NOT TAKE THE `lower_call/`
+// MODULES, stated as a property of the API rather than of those files.
+//
+// Every form above re-reads at exactly ONE point: the end of the operand list,
+// after an optional `across` step. That is the whole shape for `m.set(k, v)`
+// and `u8[i]` — lower, protect, re-read once, consume once. Three lowerings in
+// `lower_call/` are not that shape, and each is a different way of not being
+// it:
+//
+//   * `lower_dynamic_closure_call` consumes the group in TWO instructions with
+//     an allocating step between them. The receiver and callee feed
+//     `js_closure_unbox_callee_checked_rebind`, which CLONES a `this`-capturing
+//     closure and therefore allocates; the arguments feed `js_closure_callN`
+//     BELOW it. One re-read point can serve one of those two and must strand
+//     the other (#7154's own reasoning, `RootedOperands::reread_one`).
+//   * `lower_rest_call_args_rooted` re-reads element `i` between the pushes
+//     that materialise the rest array — `js_array_alloc` plus one
+//     `js_array_push_f64` per element, all of which allocate — so its re-read
+//     points are a LOOP, not a point.
+//   * `try_lower_func_ref_call` releases ~450 lines below the lowering, in the
+//     merge block of four block-splitting specialized-ABI dispatch diamonds. A
+//     closure form can express that only by swallowing the dispatch chain.
+//
+// So the missing combinator is not "the variadic/rest shape" (slice 5's
+// hypothesis, and the shape that made it visible) but the thing all three want:
+// ONE temp-root scope whose contents may be re-read at ANY number of
+// caller-chosen points. The rest/variadic case then falls out as a group that
+// happens to hold an accumulator array as well as operands, which is why
+// [`RootedGroup`] carries both rather than there being a second type for it.
+//
+// TWO ENTRY POINTS, AND THE ASYMMETRY IS DELIBERATE.
+//
+// [`with_rooted_group`] owns the release, like every other combinator here.
+// [`open_rooted_group`] hands the group back, which every other combinator in
+// this file deliberately refuses to do — so it needs an argument.
+//
+// The argument is that the two halves of a mis-managed guard are not equally
+// dangerous. A release that is EARLY or MIS-ORDERED is a use-after-free: the
+// slot is cut while the consumer still reads it. A release that never happens
+// is over-retention — the slot stays bound for the rest of the function, the
+// object stays live, and the emitted code is merely conservative (in the FFI
+// fallback the runtime stack also grows, which is #7462's symptom and a real
+// bug, but still not a dangling pointer).
+//
+// [`RootedGroup`] removes the dangerous half BY CONSTRUCTION and for both
+// entry points: it is not `Clone`, `release` consumes it, and there is no way
+// to obtain the slot index — so a caller cannot truncate at the wrong slot, in
+// the wrong order, or twice. What escaping leaves writable is exactly the safe
+// half. That is strictly better than the raw API it replaces, where the caller
+// holds an `Option<String>` slot index it can truncate anywhere.
+//
+// Prefer [`with_rooted_group`]. Reach for [`open_rooted_group`] only where the
+// release must post-dominate blocks the lowering does not lexically contain.
+// ---------------------------------------------------------------------------
+
+/// One temp-root scope: an ordered stack of rooted values — already-lowered
+/// **operands** and mutable **accumulator arrays** — re-readable at any number
+/// of caller-chosen points and released once, for the whole stack.
+///
+/// Two things it does NOT do, both on purpose:
+///
+///  * it never hands out a slot index, so the release cannot be mis-ordered.
+///    `temp_root_truncate` is a stack CUT — truncating the wrong slot drops
+///    every slot above it, which is how a receiver save becomes the number `0`
+///    (`func_ref.rs`'s note on release ordering);
+///  * it never lowers an operand it was not asked to. [`RootedGroup::lower`]
+///    lowers, [`RootedGroup::adopt`] takes a value the caller emitted itself —
+///    which the generic dynamic call needs, because its callee operand is a
+///    hand-emitted by-name property read rather than `lower_expr(callee)`.
+pub(crate) struct RootedGroup<'a> {
+    operands: crate::expr::temp_root::RootedOperands,
+    exprs: Vec<&'a Expr>,
+    accs: Vec<String>,
+    /// The LOWEST slot this group pushed, of either kind. One truncate at it
+    /// drops the whole scope, because a truncate is a stack cut.
+    first_slot: Option<String>,
+}
+
+/// A handle on one accumulator array inside a [`RootedGroup`].
+///
+/// Opaque and `Copy`: it indexes the group's own list, so it cannot name a slot
+/// belonging to a different group or outlive the release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AccArray(usize);
+
+impl<'a> RootedGroup<'a> {
+    fn new(capacity: usize) -> Self {
+        RootedGroup {
+            operands: crate::expr::temp_root::root_operands_begin(capacity),
+            exprs: Vec::with_capacity(capacity),
+            accs: Vec::new(),
+            first_slot: None,
+        }
+    }
+
+    /// Record the lowest slot the group holds. Slots are handed out in
+    /// increasing watermark order, so the first one recorded is the lowest and
+    /// later ones must not displace it.
+    fn note_slot(&mut self, slot: Option<String>) {
+        if self.first_slot.is_none() {
+            self.first_slot = slot;
+        }
+    }
+
+    /// Lower `expr` and root it across a window the caller states.
+    ///
+    /// Returns the operand's index for [`RootedGroup::reread`] — and returns
+    /// *only* that. The lowered register is deliberately not handed back: a
+    /// caller holding it is the second half of every bug in this family, and
+    /// the group is now the only way to name the value.
+    pub(crate) fn lower(
+        &mut self,
+        ctx: &mut FnCtx<'_>,
+        expr: &'a Expr,
+        collects: bool,
+    ) -> Result<usize> {
+        let value = crate::expr::lower_expr(ctx, expr)?;
+        Ok(self.adopt(ctx, expr, &value, collects))
+    }
+
+    /// Root a value the caller emitted itself.
+    ///
+    /// `expr` still decides the protection, so the group answers "root,
+    /// re-derive, or reuse?" through `operand_protection` exactly as a lowered
+    /// operand does.
+    ///
+    /// **Precondition.** `value` must be what lowering `expr` produces, or
+    /// `expr` must not be `operand_is_reloadable` — because a `Reload` operand
+    /// is re-read by *re-lowering* `expr`, and re-lowering something the caller
+    /// did not lower would answer with a different value. Only `Expr::String`
+    /// is reloadable, so every current caller (a `PropertyGet` callee, a
+    /// receiver) satisfies this trivially; the note is here for the next one.
+    pub(crate) fn adopt(
+        &mut self,
+        ctx: &mut FnCtx<'_>,
+        expr: &'a Expr,
+        value: &str,
+        collects: bool,
+    ) -> usize {
+        self.operands.push(ctx, expr, value, collects);
+        let pushed = self.operands.guard();
+        self.note_slot(pushed);
+        self.exprs.push(expr);
+        self.exprs.len() - 1
+    }
+
+    /// Re-read operand `i` **here**, below whatever has collected since it was
+    /// rooted.
+    ///
+    /// Mandatory rather than defensive, and it is the reason this type exists:
+    /// the slot is a MUTABLE root that an evacuating cycle rewrites in place,
+    /// so a register read before the cycle names from-space.
+    pub(crate) fn reread(&self, ctx: &mut FnCtx<'_>, i: usize) -> Result<String> {
+        self.operands.reread_one(ctx, &self.exprs, i)
+    }
+
+    /// Re-read every operand at this point, in order.
+    pub(crate) fn reread_all(&self, ctx: &mut FnCtx<'_>) -> Result<Vec<String>> {
+        self.operands.reread(ctx, &self.exprs)
+    }
+
+    /// How many operands the group holds.
+    pub(crate) fn len(&self) -> usize {
+        self.exprs.len()
+    }
+
+    /// Allocate an argument-accumulator array of capacity `cap` and root it in
+    /// this scope.
+    ///
+    /// This is the variadic / spread / rest shape: `js_array_alloc(n)`, then one
+    /// push per argument. The accumulator holds the ONLY reference to everything
+    /// pushed so far while the next argument is lowered, and every push
+    /// allocates — so it is an accumulator in exactly [`RootedAcc`]'s sense, and
+    /// it lives in the group so that ONE release drops the operands and the
+    /// arrays together.
+    pub(crate) fn begin_array(&mut self, ctx: &mut FnCtx<'_>, cap: &str) -> AccArray {
+        let slot = crate::expr::temp_root::rooted_array_begin(ctx, cap);
+        self.note_slot(Some(slot.clone()));
+        self.accs.push(slot);
+        AccArray(self.accs.len() - 1)
+    }
+
+    /// Push one element, re-reading the array from its slot and publishing the
+    /// possibly-reallocated pointer back into it.
+    pub(crate) fn push_array(&mut self, ctx: &mut FnCtx<'_>, acc: AccArray, value: &str) {
+        let slot = self.accs[acc.0].clone();
+        crate::expr::temp_root::temp_rooted_array_push(ctx, &slot, value);
+    }
+
+    /// Re-read the finished array as a raw `i64` pointer. Does not release: the
+    /// consuming call allocates while it reads the array.
+    pub(crate) fn read_array(&self, ctx: &mut FnCtx<'_>, acc: AccArray) -> String {
+        let slot = self.accs[acc.0].clone();
+        crate::expr::temp_root::rooted_array_read(ctx, &slot)
+    }
+
+    /// Drop the whole scope. Call it *after* the consuming call: the consumer
+    /// allocates while reading these values.
+    pub(crate) fn release(self, ctx: &mut FnCtx<'_>) {
+        crate::expr::temp_root::temp_root_release(ctx, self.first_slot);
+    }
+}
+
+/// Open a [`RootedGroup`] for the duration of `body` and release it on every
+/// path out, including `body`'s `?`.
+pub(crate) fn with_rooted_group<'f, 'a, R>(
+    ctx: &mut FnCtx<'f>,
+    capacity: usize,
+    body: impl FnOnce(&mut FnCtx<'f>, &mut RootedGroup<'a>) -> Result<R>,
+) -> Result<R> {
+    let mut group = RootedGroup::new(capacity);
+    let out = body(ctx, &mut group);
+    group.release(ctx);
+    out
+}
+
+/// Open a [`RootedGroup`] whose release the CALLER performs, because it must
+/// post-dominate blocks this lowering does not lexically contain.
+///
+/// One shape needs this and it is named rather than left general:
+/// `func_ref.rs`'s direct call lowers its arguments, then dispatches through up
+/// to four specialized-ABI diamonds that split the block, and the release has
+/// to sit in the merge. Releasing inside either side of a diamond would leave
+/// the other side's call reading dropped slots.
+///
+/// `#[must_use]` because dropping the group silently is the one mistake left
+/// writable — see the block comment above for why that mistake is
+/// over-retention rather than a dangling pointer, and why the dangerous half
+/// (an early or mis-ordered truncate) is not writable at all.
+#[must_use = "a RootedGroup must be released with `release`, below the call that reads it"]
+pub(crate) fn open_rooted_group<'a>(capacity: usize) -> RootedGroup<'a> {
+    RootedGroup::new(capacity)
+}
+
+/// A saved implicit `this`, held in a rooted slot for the duration of a
+/// dispatch (#7211).
+///
+/// **Moved here in slice 6 rather than re-exported.** It was already a paired
+/// combinator with this file's contract — root before the window, re-read
+/// after it, never hand out the register — but it lived in the raw API, so six
+/// `lower_call/` modules had to name `expr::temp_root` while making no ordering
+/// decision at all. Leaving a copy behind would have given the pair two
+/// spellings, which is the drift that produced #7114; there is one.
+///
+/// `js_implicit_this_set` swaps the `IMPLICIT_THIS` cell and returns what was
+/// there, read straight out of a cell `scan_implicit_this_roots_mut`
+/// (`object/this_binding.rs:176`) registers as a scanned MUTABLE root. The swap
+/// has already overwritten the cell, so the returned value is now held ONLY in
+/// an SSA register, across the whole call the bind exists to scope.
+///
+/// Two ways that hurts, and the second is what makes it worse than an ordinary
+/// stale read:
+///
+///  * the enclosing frame still roots the same object, so an evacuating minor
+///    inside the callee MOVES it and rewrites that root — leaving this register
+///    naming from-space. The restore then publishes a pre-move address back
+///    INTO a root the collector scans, so the corruption outlives the call that
+///    caused it and surfaces in whatever reads `this` next;
+///  * where no other root holds it, the object is simply collected.
+///
+/// Seven lowerings emit this pair. They had seven copies of the same three
+/// lines and therefore seven copies of the same bug, which is why it is a
+/// combinator rather than seven edits.
+pub(crate) struct ImplicitThisSave {
+    slot: RootedSlot,
+}
+
+/// Bind `new_this` as the implicit `this` and root the value it displaced.
+///
+/// Unconditional, unlike an operand group: the window is a user or native call,
+/// so `operand_protection`'s "can this window collect?" test has exactly one
+/// answer here and there is nothing to gate on.
+pub(crate) fn implicit_this_save(ctx: &mut FnCtx<'_>, new_this: &str) -> ImplicitThisSave {
+    let prev = ctx
+        .block()
+        .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, new_this)]);
+    let idx = crate::expr::temp_root::temp_root_push_double(ctx, &prev);
+    ImplicitThisSave {
+        slot: RootedSlot {
+            idx,
+            repr: Repr::Boxed,
+        },
+    }
+}
+
+/// Restore the saved implicit `this`, re-read from its root.
+///
+/// Reading the slot rather than the register is the fix, not a precaution: the
+/// slot is a mutable root, so an evacuating cycle inside the dispatch rewrote
+/// it and the register pushed beforehand names from-space.
+///
+/// The release is emitted BEFORE the restore call so that nested saves — an
+/// override arm inside an outer bind — release inner to outer. A release is a
+/// stack cut, so a caller holding a LOWER group may release it afterwards and
+/// drop this slot a second time harmlessly.
+pub(crate) fn implicit_this_restore(ctx: &mut FnCtx<'_>, save: ImplicitThisSave) {
+    let prev = read_slot(ctx, &save.slot);
+    save.slot.release(ctx);
+    ctx.block()
+        .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev)]);
+}
+
 /// A GC-managed value that generated code keeps **updating** while it lowers
 /// further expressions: an object literal's half-built handle, `Object.assign`'s
 /// threaded target, `Math.min(...)`'s growing argument array.
@@ -880,6 +1196,42 @@ pub(crate) fn with_rooted_accumulator<'f, R>(
 /// say what it means is a gap in the API, and recording it here is what stops
 /// the next slice from rediscovering it. The variadic/rest shape (per-element
 /// re-reads between allocating pushes) is the concrete missing combinator.
+///
+/// **Slice 6 built that combinator and it is not the one slice 5 named.**
+/// Slice 5's hypothesis was the variadic/rest shape; three modules wanted it and
+/// only one of them is variadic. What all three want is
+/// [`RootedGroup`] — one temp-root scope, re-readable at ANY number of
+/// caller-chosen points — of which the rest shape is the case that also holds
+/// an accumulator array. The block comment above [`RootedGroup`] argues the
+/// shape and the two entry points; the reason there are two is that
+/// `func_ref.rs`'s release must post-dominate four block-splitting dispatch
+/// diamonds, which no closure form can own without swallowing the dispatch
+/// chain.
+///
+/// Slice 6 lists three modules, all load-bearing on the committed source:
+///
+///   * `lower_call/mod.rs` — `lower_call_args_rooted` /
+///     `lower_rest_call_args_rooted` / `emit_rooted_call`. Named
+///     `lower_exprs_rooted`, `root_operands_begin`, `rooted_array_begin`,
+///     `temp_rooted_array_push`, `rooted_array_read` and `temp_root_release`.
+///     It now hands its callers a [`RootedGroup`] instead of an
+///     `Option<String>` slot index, which is what makes `extern_func.rs`,
+///     `namespace_call.rs` and `func_ref.rs` unable to truncate at the wrong
+///     slot even though they still hold the scope.
+///   * `lower_call/func_ref.rs` — the escaping-release consumer, plus
+///     `implicit_this_save` / `implicit_this_restore`.
+///   * `lower_call/console_promise.rs` — the two-stage dynamic closure call,
+///     the `js_native_call_method_by_id` dispatch (which turned out to be the
+///     plain single-re-read shape after all), and eight `console.*` arms.
+///
+/// **`implicit_this_save` / `implicit_this_restore` MOVED here** rather than
+/// being re-exported, so the pair has one spelling. That incidentally clears
+/// the escape hatch out of `early_branches.rs`, `method_override.rs` and both
+/// `property_get` dispatchers, whose only uses were that pair. They are
+/// deliberately NOT listed: a line here would assert that the module makes
+/// every rooting decision through this API, and nobody has read those four
+/// modules for windows with no decision at all. An unlisted module is honest;
+/// a listed unaudited one is the distinction slice 4 had to draw the hard way.
 #[cfg(test)]
 const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
@@ -969,6 +1321,18 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
         "crates/perry-codegen/src/lower_call/namespace_call.rs",
         include_str!("lower_call/namespace_call.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_call/mod.rs",
+        include_str!("lower_call/mod.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_call/func_ref.rs",
+        include_str!("lower_call/func_ref.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_call/console_promise.rs",
+        include_str!("lower_call/console_promise.rs"),
     ),
 ];
 

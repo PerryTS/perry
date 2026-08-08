@@ -121,7 +121,7 @@ pub(super) fn emit_own_method_override_check(
     };
     // #7211: rooted save/restore — the displaced implicit `this` is live
     // across `js_native_call_value`, which runs arbitrary user code.
-    let prev_this = crate::expr::temp_root::implicit_this_save(ctx, &recv_for_this);
+    let prev_this = crate::rooting::implicit_this_save(ctx, &recv_for_this);
     let v_override = ctx.block().call(
         DOUBLE,
         "js_native_call_value",
@@ -131,7 +131,7 @@ pub(super) fn emit_own_method_override_check(
             (I64, &args_len),
         ],
     );
-    crate::expr::temp_root::implicit_this_restore(ctx, prev_this);
+    crate::rooting::implicit_this_restore(ctx, prev_this);
     let after_override = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
