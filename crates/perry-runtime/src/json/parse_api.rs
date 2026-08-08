@@ -155,6 +155,13 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
         let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
         std::slice::from_raw_parts(data_ptr, len)
     };
+    // #7598: the generic EAGER arm is where every blob past
+    // LAZY_MAX_BLOB_BYTES (16 MB) lands — including the workloads whose
+    // parse cohorts drove this issue — plus lazy-range fall-throughs. Same
+    // cohort-lifetime argument and the same size gate as the typed door: a
+    // large parse's tree lives as long as its root, so it is born tenured in
+    // old-gen, subtree and all; small parses keep young births.
+    let _birth = (len >= 64 * 1024).then(crate::gc::ParseBirthOldScope::new);
     let mut parser = DirectParser::new(bytes);
     let result = parser.parse_value();
     parse_root_push(result);
@@ -328,6 +335,11 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
         std::slice::from_raw_parts(data_ptr, len)
     };
 
+    // #7598: the generic EAGER arm of `js_json_parse` — every blob past
+    // LAZY_MAX_BLOB_BYTES (16 MB) lands here, including the workloads whose
+    // parse cohorts drove this issue. Same cohort-lifetime argument and size
+    // gate as the other doors.
+    let _birth = (len >= 64 * 1024).then(crate::gc::ParseBirthOldScope::new);
     let mut parser = DirectParser::new(bytes);
     let result = parser.parse_value();
     parse_root_push(result);
@@ -530,6 +542,13 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     crate::gc::gc_suppress();
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
 
+    // #7598: the typed eager parse is the door `JSON.parse(x) as T[]`
+    // actually compiles to — the workload cohort births HERE, not in the
+    // lazy tape. Same cohort-lifetime argument as the tape doors, with the
+    // size gate the tape gets for free from its own laziness threshold:
+    // small eager parses keep young births (their cohorts are exactly the
+    // parse-and-discard shape pretenuring must not touch).
+    let _birth = (len >= 64 * 1024).then(crate::gc::ParseBirthOldScope::new);
     let mut parser = DirectParser::with_shape(bytes, shape);
     let result = parser.parse_array_typed();
     parse_root_push(result);

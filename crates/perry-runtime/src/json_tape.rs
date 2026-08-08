@@ -1531,7 +1531,16 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     (*hdr).walk_tape_pos = idx as u32;
     (*hdr).cumulative_walk_steps = (*hdr).cumulative_walk_steps.saturating_add(step_cost);
 
-    let value = materialize_from_idx_source(&source, &scope, idx);
+    // #7598: a lazily-materialised element goes straight into the sparse
+    // cache, which lives as long as the lazy array itself — the same cohort
+    // argument as the batch entries, one element at a time. This is the door
+    // json_pipeline actually walks through: sequential access keeps the walk
+    // cursor O(1), so the batch crossover never trips and every record
+    // materialises HERE.
+    let value = {
+        let _birth = crate::gc::ParseBirthOldScope::new();
+        materialize_from_idx_source(&source, &scope, idx)
+    };
     let value_handle = scope.root_nanbox_u64(value.bits());
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     let bitmap = (*hdr).materialized_bitmap;
