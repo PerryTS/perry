@@ -43,5 +43,5 @@
   specializations still do not match one another.
 
   Known and deliberately separate: `constructor.name` still reports the mangled
-  `Gen$num`. Same root cause, different surface, and it can move error-message
-  text, so it needs its own parity sweep.
+  `Gen$num` (#7632). Same root cause, different surface, and it can move
+  error-message text, so it needs its own parity sweep.
