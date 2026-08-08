@@ -212,10 +212,24 @@ fn test_json_tape_eager_materialization_handles_survive_copied_minor_gc() {
         );
         let js = unsafe { crate::json_tape::materialize(&object_tape, object_input) };
         let original_obj = hook.fired_ptr();
-        assert_ne!(
+        // #7598: materialised cohorts are born tenured in old-gen
+        // (`ParseBirthOldScope`), so — like #7539's lazy header below — the
+        // copied minor at the safepoint CANNOT relocate the object, and the
+        // rooted handle must resolve to the SAME address the hook saw. The
+        // pre-#7598 form asserted the opposite (young ⇒ moved ⇒ rewritten);
+        // that premise is deliberately dead. Handle-rewrite coverage for
+        // movable subjects lives in the non-tape scanner tests above.
+        assert_eq!(
             js.bits() & POINTER_MASK,
             original_obj as u64,
-            "root object handle should be rewritten after copied-minor GC"
+            "a born-old materialised object must be identity-stable across the minor"
+        );
+        assert!(
+            matches!(
+                crate::arena::classify_heap_generation((js.bits() & POINTER_MASK) as usize),
+                crate::arena::HeapGeneration::Old
+            ),
+            "the materialised cohort must be born in old-gen (#7598)"
         );
         js
     };
@@ -236,10 +250,11 @@ fn test_json_tape_eager_materialization_handles_survive_copied_minor_gc() {
         );
         let js = unsafe { crate::json_tape::materialize(&array_tape, array_input) };
         let original_arr = hook.fired_ptr();
-        assert_ne!(
+        // #7598: same born-old identity-stability as the object arm above.
+        assert_eq!(
             js.bits() & POINTER_MASK,
             original_arr as u64,
-            "root array handle should be rewritten after copied-minor GC"
+            "a born-old materialised array must be identity-stable across the minor"
         );
         js
     };
@@ -458,12 +473,23 @@ fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc
         hdr_after as usize, before_force_hdr,
         "the lazy header must not move across a copied-minor GC (#7539)"
     );
-    // The MATERIALIZED ARRAY is young and does move — which is the handle
-    // refresh this test is really about, and the reason the header being
-    // stable does not make it vacuous.
-    assert_ne!(
+    // #7598: the re-parsed cohort — the materialized array included — is born
+    // tenured in old-gen (`ParseBirthOldScope` arms `reparse_materialize`),
+    // so the copied minor at the safepoint cannot relocate it: identity must
+    // be STABLE, the exact inverse of the pre-#7598 premise (young ⇒ moved ⇒
+    // refreshed). What keeps this non-vacuous is the sparse-cache element
+    // identity assertion below — the cached element was created OUTSIDE the
+    // window (young, movable) and its handle must still resolve.
+    assert_eq!(
         arr as usize, original_arr,
-        "force materialization should refresh the rooted array handle"
+        "a born-old re-parsed array must be identity-stable across the minor"
+    );
+    assert!(
+        matches!(
+            crate::arena::classify_heap_generation(arr as usize),
+            crate::arena::HeapGeneration::Old
+        ),
+        "the re-parsed cohort must be born in old-gen (#7598)"
     );
     unsafe {
         assert_eq!((*hdr_after).materialized, arr);
