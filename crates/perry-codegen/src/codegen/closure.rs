@@ -893,7 +893,6 @@ pub(super) fn compile_closure(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
-        pretenure_next_object_literal: false,
         func_names,
         strings,
         loop_targets: Vec::new(),

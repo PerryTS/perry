@@ -1837,6 +1837,50 @@ mod tests {
         }
     }
 
+    /// #7598: the run-once region gate is what makes `pretenure_accumulator`
+    /// a cohort-lifetime fact rather than a shape fact — a function region's
+    /// accumulator is re-entered per call and its cohort dies at return
+    /// (measured 6.6x slower when pretenured). The admission machinery is
+    /// retained for a future dynamic-feedback pretenurer (see #7623's audit:
+    /// json_pipeline's moved cohort is runtime-allocated, so codegen-visible
+    /// literals were the wrong target); this test keeps the graph-level fact
+    /// live and pins the gate's direction at both polarities.
+    #[test]
+    fn pretenure_accumulator_fact_requires_a_run_once_region() {
+        let accumulator = Stmt::Let {
+            id: 1,
+            name: "out".into(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Array(vec![])),
+        };
+        let push_loop = Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![Stmt::Expr(Expr::ArrayPush {
+                array_id: 1,
+                value: Box::new(Expr::Object(vec![("v".to_string(), Expr::Integer(1))])),
+            })],
+        };
+        let build = |region_runs_once: bool| {
+            collect_native_region_fact_graph(
+                &[accumulator.clone(), push_loop.clone()],
+                &[],
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &crate::collectors::ModuleDispatchFacts::default(),
+                region_runs_once,
+            )
+        };
+        assert!(build(true).pretenure_accumulator(1));
+        assert!(!build(false).pretenure_accumulator(1));
+    }
+
     fn const_number_let(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
             id,

@@ -656,51 +656,6 @@ pub(crate) fn register_old_object_pages(header_addr: usize, total_size: usize) {
     update_old_page_meta_for_object(&added_pages, true);
 }
 
-thread_local! {
-    /// #7598: page registrations deferred by the born-tenured BUMP allocator.
-    /// `register_old_object_pages` per allocation is the measured killer of
-    /// site-level pretenuring — per object it pays two `RefCell` borrows, two
-    /// `Vec` allocations, and a **linear `contains` scan of the page's object
-    /// list** (O(objects-per-page)² as a page fills; the dedup exists because
-    /// hole reuse can re-register an address that `unregister` never removed).
-    /// Every reader of the page-objects index runs at GC time (defrag page
-    /// selection, sweep accounting), so registration only has to be visible by
-    /// cycle start — `old_pages_begin_gc_cycle` flushes this buffer, and a
-    /// size cap bounds it between cycles.
-    static DEFERRED_OLD_PAGE_REGISTRATIONS: std::cell::RefCell<Vec<(usize, usize)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Cap chosen so the buffer's worst-case footprint (16 B/entry × 64k = 1 MB)
-/// stays a rounding error while flushes stay rare on allocation bursts.
-const DEFERRED_OLD_PAGE_REGISTRATION_CAP: usize = 65_536;
-
-/// #7598: defer this object's page registration to the next flush. ONLY for
-/// freshly bump-allocated born-tenured objects — the deferred entry relies on
-/// the full `register_old_object_pages` (with its hole-reuse dedup) running at
-/// flush time, it just runs it off the allocation hot path.
-pub(crate) fn defer_old_object_page_registration(header_addr: usize, total_size: usize) {
-    let flush_now = DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| {
-        let mut buf = buf.borrow_mut();
-        buf.push((header_addr, total_size));
-        buf.len() >= DEFERRED_OLD_PAGE_REGISTRATION_CAP
-    });
-    if flush_now {
-        flush_deferred_old_page_registrations();
-    }
-}
-
-/// Drain the deferred buffer through the real registration path. Called from
-/// `old_pages_begin_gc_cycle` (every collection begins with an accurate
-/// index) and from the size-cap overflow in `defer_old_object_page_registration`.
-pub(crate) fn flush_deferred_old_page_registrations() {
-    let pending =
-        DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
-    for (header_addr, total_size) in pending {
-        register_old_object_pages(header_addr, total_size);
-    }
-}
-
 #[allow(dead_code)]
 pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize) {
     if header_addr == 0 || total_size == 0 {
@@ -728,9 +683,6 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
 }
 
 pub(crate) fn old_pages_begin_gc_cycle() {
-    // #7598: born-tenured bump allocations defer their page registration;
-    // every collection must begin with an accurate page-objects index.
-    flush_deferred_old_page_registrations();
     // #6181: the per-page `dirty_slots` reset used to iterate every old page
     // here (O(old pages) on every minor, growing with old-gen size). It is now
     // a single epoch bump — a page whose `dirty_slots_epoch` predates the new

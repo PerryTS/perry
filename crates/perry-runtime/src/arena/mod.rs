@@ -63,8 +63,7 @@ pub use allocators::{
     arena_alloc_longlived, arena_alloc_old, js_arena_alloc,
 };
 pub(crate) use allocators::{
-    arena_alloc_gc_old_born_tenured, arena_alloc_gc_old_born_tenured_bump,
-    arena_alloc_gc_old_excluding_pages, arena_alloc_gc_survivor,
+    arena_alloc_gc_old_born_tenured, arena_alloc_gc_old_excluding_pages, arena_alloc_gc_survivor,
 };
 
 // walk.rs

@@ -625,14 +625,7 @@ fn lower_new_impl_inner(
         // NOTE the env test is `is_none()`: `PERRY_INLINE_NEW=""` *enables*
         // the inline path, because an empty string is `Some("")`.
         let force_inline_new = std::env::var_os("PERRY_INLINE_NEW").is_some();
-        // #7598: a pretenure-accumulator push value is born TENURED in
-        // old-gen via the outlined call, never the inline Eden bump — the
-        // ~140-cycle call it re-pays is noise against the Eden→survivor→old
-        // double copy it removes for a cohort that is live for the rest of
-        // the loop by construction. Taken here so it covers exactly this
-        // allocation; the constructor's own inner allocations read `false`.
-        let pretenure = std::mem::take(&mut ctx.pretenure_next_object_literal);
-        if pretenure || (!force_inline_new && !new_site_is_in_loop(ctx)) {
+        if !force_inline_new && !new_site_is_in_loop(ctx) {
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
             } else {
@@ -642,16 +635,14 @@ fn lower_new_impl_inner(
                 s
             };
             let keys_ptr = ctx.block().load(I64, &keys_slot);
-            let alloc_fn = if pretenure {
-                "js_object_alloc_class_inline_keys_pretenured"
-            } else {
-                "js_object_alloc_class_inline_keys"
-            };
-            ctx.pending_declares
-                .push((alloc_fn.to_string(), I64, vec![I32, I32, I32, I64]));
+            ctx.pending_declares.push((
+                "js_object_alloc_class_inline_keys".to_string(),
+                I64,
+                vec![I32, I32, I32, I64],
+            ));
             ctx.block().call(
                 I64,
-                alloc_fn,
+                "js_object_alloc_class_inline_keys",
                 &[
                     (I32, &cid_str),
                     (I32, &parent_cid_str),

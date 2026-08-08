@@ -126,28 +126,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
             let value_is_numeric = is_numeric_expr(ctx, value);
             let require_numeric_layout =
                 value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, &array_expr);
-            // #7598: an accumulator declared outside every loop and filled
-            // inside one keeps its cohort live for the rest of the loop, so
-            // the pushed value is born tenured — skipping the
-            // Eden→survivor→old double copy the copying minor would otherwise
-            // pay for it. `Expr::New` is the shape object literals actually
-            // reach codegen in (the AnonShape transform synthesizes a class);
-            // `Expr::Object` covers literals the transform leaves alone. The
-            // flag is taken by the value's own allocation lowering
-            // (`lower_object_literal` / `lower_call/new.rs`), so it reaches
-            // exactly the root allocation and never a nested one.
-            if matches!(value.as_ref(), Expr::Object(_) | Expr::New { .. })
-                && ctx.native_facts.pretenure_accumulator(*array_id)
-            {
-                ctx.pretenure_next_object_literal = true;
-            }
             let (v, v_bits) =
                 lower_array_push_value(ctx, value, layout_note_needed, write_barrier_needed)?;
-            // Consumed by whichever allocation tier the value took. Cleared
-            // unconditionally: tiers that allocate elsewhere (dynamic-parent
-            // classes, method-closure literals) never read it, and it must
-            // not leak past this push (#7590's leak class).
-            ctx.pretenure_next_object_literal = false;
             let arr_box = lower_expr(ctx, &array_expr)?;
 
             // Repsel 4a.1 (#6904 recon): the guarded numeric push was an

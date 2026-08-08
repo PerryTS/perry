@@ -154,47 +154,6 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
-/// #7598: the born-tenured allocator for the PRETENURE-ACCUMULATOR hot path —
-/// a per-object rate the ordinary old-gen path was never built for.
-/// Two deliberate departures from `arena_alloc_gc_old`, both measured to be
-/// the difference between winning and losing the pretenure trade:
-///
-/// - **No `old_free_take_exact` probe.** Hole reuse is an anti-growth
-///   mechanism for occasional promotions; on a 100k-object burst the probe is
-///   pure per-allocation overhead, and burst cohorts live and die together —
-///   contiguous bump placement is what old-page defrag wants from them anyway.
-/// - **Deferred page registration.** `register_old_object_pages` per object
-///   pays two RefCell borrows, two Vec allocations, and a linear dedup scan of
-///   the page's object list (quadratic as a page fills). Every reader of that
-///   index runs at GC time, so the burst defers into
-///   `defer_old_object_page_registration` and `old_pages_begin_gc_cycle`
-///   flushes before any collector work reads it.
-///
-/// Header init is identical to `arena_alloc_gc_old` + `GC_FLAG_TENURED` in
-/// the same breath — the `Old ⟹ TENURED` contract (#7602) holds here exactly
-/// as for the wrapper below.
-pub(crate) fn arena_alloc_gc_old_born_tenured_bump(
-    size: usize,
-    align: usize,
-    obj_type: u8,
-) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
-
-    let pad = align.max(8);
-    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
-    let raw = arena_alloc_old(total, align);
-    unsafe {
-        let header = raw as *mut GcHeader;
-        (*header).obj_type = obj_type;
-        (*header).gc_flags = GC_FLAG_ARENA | GC_FLAG_TENURED | crate::gc::gc_birth_extra_flags();
-        crate::gc::gc_note_black_birth(header);
-        (*header)._reserved = 0;
-        (*header).size = total as u32;
-    }
-    super::page_meta::defer_old_object_page_registration(raw as usize, total);
-    unsafe { raw.add(GC_HEADER_SIZE) }
-}
-
 /// The old-gen + born-tenured shape `arena_alloc_gc` hands a LARGE object, for
 /// a caller that wants it on size-independent grounds.
 ///
