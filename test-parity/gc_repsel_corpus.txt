@@ -697,3 +697,4 @@ test_gap_gc_global_builtin_lookup_rooting
 # back out of line onto `js_iterator_to_array`, i.e. onto #7475's path, and this
 # file stops covering the walk.
 test_gap_gc_spread_symbol_iterator_rooting
+test_gap_repsel_element_shape_loop_clone
