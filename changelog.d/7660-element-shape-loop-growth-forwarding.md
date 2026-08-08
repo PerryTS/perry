@@ -28,11 +28,28 @@ a bug with a threshold: right at 16 elements, bus error at 17.
 function build(n: number): Node[] {
   const out: Node[] = [];
   for (let i = 0; i < n; i++) out.push(new Node(i, i * 2));
-  return out;                                    // grew 16 -> 32 -> ...
+  return out;                                    // grew 16 -> 32, stub returned
 }
-const keep = build(1000);
+function sweep(keep: Node[], n: number): number {
+  let sum = 0;
+  for (let j = 0; j < n; j++) sum += keep[j].v;  // bound is a LocalGet
+  return sum;
+}
+const keep = build(17);                          // 17, not 16
 sweep(keep, keep.length);                        // exit 138 before this fix
 ```
+
+**Two ingredients, and the second is the one that makes this hard to
+reproduce.** (1) the array must have grown past `MIN_ARRAY_CAPACITY` (16) in a
+callee that returned it — minimal N is 17; and (2) the clone must actually be
+emitted, which requires a loop bound that is `Expr::Integer` or
+`Expr::LocalGet`. An inline `arr.length` bound is an `Expr::PropertyGet`, which
+`match_element_shape_versioned_loop` rejects, so `for (let j = 0; j <
+keep.length; j++)` emits no clone and **cannot** fault; hoisting the identical
+bound into a local flips it. Nothing else matters: `--release` and
+`--profile perry-dev` fault identically, auto-optimize is irrelevant, no
+run-time knob is involved, and the read does not need to cross a function
+boundary (a module-scope loop with a hoisted bound faults the same way).
 
 Fixed with a new `element_shape.loop.preheader.repair` block between the brand
 test and the guard call: follow the chain once with
@@ -68,7 +85,8 @@ resolves the chain.
 alike — built its array in the same scope that read it, so the binding always
 held the live head, and the largest was 64 elements pushed at module scope,
 where each `push`'s write-back updates the global. The raw-pointer derivation
-was never handed a stub. `test_gap_repsel_element_shape_loop_clone.ts` gains
+was never handed a stub. The new gap case covers both bound forms, so a future
+narrowing of ingredient (2) cannot silently drop the coverage. `test_gap_repsel_element_shape_loop_clone.ts` gains
 case 10 with both stale-head shapes above 16 elements (callee builds and
 returns; callee grows the caller's array): **exit 138 on the pre-fix compiler,
 byte-identical to node with the fix**. Three codegen census tests cover the
