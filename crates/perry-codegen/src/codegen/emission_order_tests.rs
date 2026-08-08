@@ -297,6 +297,7 @@ fn plain_class(id: u32, name: &str, method: Function) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
