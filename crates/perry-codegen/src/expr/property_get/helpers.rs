@@ -3,6 +3,19 @@
 //! Pure mechanical move — bodies are verbatim. Visibility widened to
 //! `pub(crate)` so both the trunk's guarded arms and the sibling general
 //! dispatch can reach them.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Listed in `crate::rooting`'s `MIGRATED_MODULES`, and the listing is
+//! **vacuous on the committed source**: this module has never named an
+//! `expr::temp_root` symbol, so only the sabotage arm makes the line an
+//! assertion. The audit that earned it: these helpers receive the receiver
+//! already lowered and lower no user expression, so no operand window opens
+//! inside them. The class-field guard diamond does hold a derived
+//! `obj_bits`/`obj_handle` across `js_typed_feedback_class_field_get_guard`;
+//! that shape is a *derived raw pointer*, which no temp root can name and which
+//! `crate::rooting` therefore cannot express — it is recorded in #7648, not
+//! papered over here.
 
 use super::*;
 

@@ -3,6 +3,20 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Migrated onto [`crate::rooting`]; this module names no `expr::temp_root`
+//! symbol. Both windows here are the READ counterpart of the store-operand
+//! guard — `o[f()]` evaluates the base before the key, so the base is live in
+//! an SSA register while arbitrary user code runs — and both are one call to
+//! [`crate::rooting::with_operands_rooted`] over `[base, key]`. The key needs
+//! no protection of its own because it is lowered last, which the operand list
+//! derives rather than asserts.
+//!
+//! The remaining `js_*` calls in this file return `DOUBLE` (NaN-boxed) or are
+//! consumed in the block that produced them, so there is no raw-pointer
+//! register to root: `call_rooted` has no site here.
 
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
@@ -12,6 +26,7 @@ use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
+use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
@@ -1225,7 +1240,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // it as `*StringHeader`. Issue #214 SSO bug class.
                 let preserve_class_ref_bits =
                     index_object_is_class_or_proto_ref(ctx, object.as_ref());
-                let obj_box = lower_expr(ctx, object)?;
                 // #7154: `o[f()]` evaluates the base first and the key second,
                 // leaving the base in a bare SSA register while `f()` runs. An
                 // evacuating minor inside `f()` relocates the base; the location
@@ -1239,157 +1253,158 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `PERRY_GC_MOVING_LOOP_POLLS=1`: `numericOriginMap` is a module
                 // global (a registered root the collector rewrites) and the key
                 // `typeof def.value` is a property get that can collect.
-                let recv_guard =
-                    super::temp_root::guard_store_operand(ctx, object, &obj_box, index);
-                let key_box = lower_expr(ctx, index)?;
-                let obj_box =
-                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
-                let blk = ctx.block();
-                let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                let obj_handle =
-                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
-                let key_handle = unbox_str_handle(blk, &key_box);
-                let site_id = emit_typed_feedback_register_site(
-                    ctx,
-                    TypedFeedbackKind::PropertyGet,
-                    "object[index]",
-                    TypedFeedbackContract::object_get_by_name(),
-                );
-                let out = ctx.block().call(
-                    DOUBLE,
-                    "js_typed_feedback_object_get_field_by_name_f64",
-                    &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
-                );
-                super::temp_root::release_store_operand(ctx, recv_guard);
-                return Ok(out);
+                //
+                // The base and the key are one operand group: the base's window
+                // is the key's lowering, the key's window is empty (it is
+                // lowered last), and `operand_protection` derives both from the
+                // list rather than from a hand-written `collects` flag.
+                return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                    let (obj_box, key_box) = (&vals[0], &vals[1]);
+                    let blk = ctx.block();
+                    let obj_bits = blk.bitcast_double_to_i64(obj_box);
+                    let obj_handle =
+                        classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
+                    let key_handle = unbox_str_handle(blk, key_box);
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::PropertyGet,
+                        "object[index]",
+                        TypedFeedbackContract::object_get_by_name(),
+                    );
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_typed_feedback_object_get_field_by_name_f64",
+                        &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
+                    ))
+                });
             }
             // Last-resort fallback with runtime tag checks on the index.
             // First runtime-check whether the index is a Symbol; if so,
             // dispatch to the symbol-property side table — mirrors the
             // IndexSet branch. Otherwise fall through to string/numeric.
             let preserve_class_ref_bits = index_object_is_class_or_proto_ref(ctx, object.as_ref());
-            let obj_box = lower_expr(ctx, object)?;
             // #7154: same window as the dynamic-string-key arm above — the base
             // is live in a register while the key expression is lowered, and an
             // evacuating minor inside the key relocates it.
-            let recv_guard = super::temp_root::guard_store_operand(ctx, object, &obj_box, index);
-            let idx_box = lower_expr(ctx, index)?;
-            let obj_box =
-                super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
-            // RequireObjectCoercible(base): `null[k]` / `undefined[k]` must throw
-            // a TypeError per spec, NOT silently return undefined. The dotted
-            // PropertyGet path already guards nullish receivers; the computed
-            // form fell through to the by-name runtime helper (masked handle
-            // `2`/`1`) which returned undefined. The check fires here — after
-            // both the base and the property-key *expression* are evaluated but
-            // before ToPropertyKey (key coercion / `toString`) — matching the
-            // ECMAScript evaluation order (test262 compound-assignment S11.13.2_A7.*,
-            // prefix/postfix increment A6). A non-nullish receiver passes through
-            // unchanged. (#4918 non-class language remnant.)
-            let obj_box =
-                ctx.block()
-                    .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
-            let blk = ctx.block();
-            let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-            let obj_handle = classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
-            let is_sym_i32 = blk.call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
-            let is_sym_bit = blk.icmp_ne(I32, &is_sym_i32, "0");
-            let sym_idx = ctx.new_block("iget.sym");
-            let nonsym_idx = ctx.new_block("iget.nonsym");
-            let str_idx = ctx.new_block("iget.str");
-            let num_idx = ctx.new_block("iget.num");
-            let merge_idx = ctx.new_block("iget.merge");
-            let sym_lbl = ctx.block_label(sym_idx);
-            let nonsym_lbl = ctx.block_label(nonsym_idx);
-            let str_lbl = ctx.block_label(str_idx);
-            let num_lbl = ctx.block_label(num_idx);
-            let merge_lbl = ctx.block_label(merge_idx);
-            ctx.block().cond_br(&is_sym_bit, &sym_lbl, &nonsym_lbl);
-            // Symbol key → side-table get.
-            ctx.current_block = sym_idx;
-            let v_sym = ctx.block().call(
-                DOUBLE,
-                "js_object_get_symbol_property",
-                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
-            );
-            let sym_end_lbl = ctx.block().label.clone();
-            ctx.block().br(&merge_lbl);
-            // Not a symbol → recompute idx_bits in this block.
-            ctx.current_block = nonsym_idx;
-            let blk = ctx.block();
-            let idx_bits = blk.bitcast_double_to_i64(&idx_box);
-            let top16 = blk.lshr(I64, &idx_bits, "48");
-            // STRING_TAG (0x7FFF = 32767): heap StringHeader pointer.
-            let is_str_tag_heap = blk.icmp_eq(I64, &top16, "32767");
-            let lower48 = blk.and(I64, &idx_bits, POINTER_MASK_I64);
-            let is_valid_ptr = blk.icmp_ugt(I64, &lower48, "4095");
-            let is_str_heap = blk.and(crate::types::I1, &is_str_tag_heap, &is_valid_ptr);
-            // SHORT_STRING_TAG (0x7FF9 = 32761): inline SSO from JSON.parse,
-            // .slice, etc. Lower 48 encode length+bytes, NOT a pointer, so we
-            // can't AND-mask to a StringHeader; route through unbox_str_handle
-            // which materializes SSO to a heap StringHeader (issue #434).
-            let is_str_tag_sso = blk.icmp_eq(I64, &top16, "32761");
-            let is_str = blk.or(crate::types::I1, &is_str_heap, &is_str_tag_sso);
-            ctx.block().cond_br(&is_str, &str_lbl, &num_lbl);
-            // String key → object field access.
-            ctx.current_block = str_idx;
-            let key_handle = {
+            //
+            // The group is released after `body` returns, which lands the
+            // truncate in the merge block — below every arm's getter, any of
+            // which can run a user getter and therefore collect.
+            rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                let (obj_box, idx_box) = (vals[0].clone(), vals[1].clone());
+                // RequireObjectCoercible(base): `null[k]` / `undefined[k]` must throw
+                // a TypeError per spec, NOT silently return undefined. The dotted
+                // PropertyGet path already guards nullish receivers; the computed
+                // form fell through to the by-name runtime helper (masked handle
+                // `2`/`1`) which returned undefined. The check fires here — after
+                // both the base and the property-key *expression* are evaluated but
+                // before ToPropertyKey (key coercion / `toString`) — matching the
+                // ECMAScript evaluation order (test262 compound-assignment S11.13.2_A7.*,
+                // prefix/postfix increment A6). A non-nullish receiver passes through
+                // unchanged. (#4918 non-class language remnant.)
+                let obj_box =
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
                 let blk = ctx.block();
-                unbox_str_handle(blk, &idx_box)
-            };
-            let site_id = emit_typed_feedback_register_site(
-                ctx,
-                TypedFeedbackKind::PropertyGet,
-                "object[index]",
-                TypedFeedbackContract::object_get_by_name(),
-            );
-            let v_str = ctx.block().call(
-                DOUBLE,
-                "js_typed_feedback_object_get_field_by_name_f64",
-                &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
-            );
-            let str_end_lbl = ctx.block().label.clone();
-            ctx.block().br(&merge_lbl);
-            // Numeric key → polymorphic dispatch.
-            //
-            // Closes #471 (read side, paired with the IndexSet polymorphic
-            // fix above): the previous fallback emitted an inline
-            // `obj_handle + 8 + idx*8` load on the assumption that the
-            // receiver had an ArrayHeader (8-byte header) layout. Once the
-            // IndexSet path stopped writing through that layout for plain
-            // objects, the read side had to follow — `constMap[i] = v;
-            // constMap[i]` would otherwise set via the object setter
-            // (key stringified into the keys_array) and read from
-            // `obj+8+i*8` (stale ObjectHeader fields), returning garbage
-            // f64 values.
-            //
-            // Route through the runtime which checks the receiver's GC
-            // type and dispatches: arrays/lazy/buffers/typed-arrays
-            // through js_array_get_f64 (handles forwarding-chain follow
-            // + lazy-materialize + per-kind reads), plain objects
-            // through stringify-the-index + js_object_get_field_by_name_f64.
-            ctx.current_block = num_idx;
-            let v_num = ctx.block().call(
-                DOUBLE,
-                "js_object_get_index_polymorphic",
-                &[(I64, &obj_handle), (DOUBLE, &idx_box)],
-            );
-            let num_end_lbl = ctx.block().label.clone();
-            ctx.block().br(&merge_lbl);
-            // Merge.
-            ctx.current_block = merge_idx;
-            let merged = ctx.block().phi(
-                DOUBLE,
-                &[
-                    (&v_sym, &sym_end_lbl),
-                    (&v_str, &str_end_lbl),
-                    (&v_num, &num_end_lbl),
-                ],
-            );
-            // Released in the merge block so every arm's getter (any of which
-            // can run a user getter and therefore collect) is still covered.
-            super::temp_root::release_store_operand(ctx, recv_guard);
-            Ok(merged)
+                let obj_bits = blk.bitcast_double_to_i64(&obj_box);
+                let obj_handle =
+                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
+                let is_sym_i32 = blk.call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
+                let is_sym_bit = blk.icmp_ne(I32, &is_sym_i32, "0");
+                let sym_idx = ctx.new_block("iget.sym");
+                let nonsym_idx = ctx.new_block("iget.nonsym");
+                let str_idx = ctx.new_block("iget.str");
+                let num_idx = ctx.new_block("iget.num");
+                let merge_idx = ctx.new_block("iget.merge");
+                let sym_lbl = ctx.block_label(sym_idx);
+                let nonsym_lbl = ctx.block_label(nonsym_idx);
+                let str_lbl = ctx.block_label(str_idx);
+                let num_lbl = ctx.block_label(num_idx);
+                let merge_lbl = ctx.block_label(merge_idx);
+                ctx.block().cond_br(&is_sym_bit, &sym_lbl, &nonsym_lbl);
+                // Symbol key → side-table get.
+                ctx.current_block = sym_idx;
+                let v_sym = ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_symbol_property",
+                    &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
+                );
+                let sym_end_lbl = ctx.block().label.clone();
+                ctx.block().br(&merge_lbl);
+                // Not a symbol → recompute idx_bits in this block.
+                ctx.current_block = nonsym_idx;
+                let blk = ctx.block();
+                let idx_bits = blk.bitcast_double_to_i64(&idx_box);
+                let top16 = blk.lshr(I64, &idx_bits, "48");
+                // STRING_TAG (0x7FFF = 32767): heap StringHeader pointer.
+                let is_str_tag_heap = blk.icmp_eq(I64, &top16, "32767");
+                let lower48 = blk.and(I64, &idx_bits, POINTER_MASK_I64);
+                let is_valid_ptr = blk.icmp_ugt(I64, &lower48, "4095");
+                let is_str_heap = blk.and(crate::types::I1, &is_str_tag_heap, &is_valid_ptr);
+                // SHORT_STRING_TAG (0x7FF9 = 32761): inline SSO from JSON.parse,
+                // .slice, etc. Lower 48 encode length+bytes, NOT a pointer, so we
+                // can't AND-mask to a StringHeader; route through unbox_str_handle
+                // which materializes SSO to a heap StringHeader (issue #434).
+                let is_str_tag_sso = blk.icmp_eq(I64, &top16, "32761");
+                let is_str = blk.or(crate::types::I1, &is_str_heap, &is_str_tag_sso);
+                ctx.block().cond_br(&is_str, &str_lbl, &num_lbl);
+                // String key → object field access.
+                ctx.current_block = str_idx;
+                let key_handle = {
+                    let blk = ctx.block();
+                    unbox_str_handle(blk, &idx_box)
+                };
+                let site_id = emit_typed_feedback_register_site(
+                    ctx,
+                    TypedFeedbackKind::PropertyGet,
+                    "object[index]",
+                    TypedFeedbackContract::object_get_by_name(),
+                );
+                let v_str = ctx.block().call(
+                    DOUBLE,
+                    "js_typed_feedback_object_get_field_by_name_f64",
+                    &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
+                );
+                let str_end_lbl = ctx.block().label.clone();
+                ctx.block().br(&merge_lbl);
+                // Numeric key → polymorphic dispatch.
+                //
+                // Closes #471 (read side, paired with the IndexSet polymorphic
+                // fix above): the previous fallback emitted an inline
+                // `obj_handle + 8 + idx*8` load on the assumption that the
+                // receiver had an ArrayHeader (8-byte header) layout. Once the
+                // IndexSet path stopped writing through that layout for plain
+                // objects, the read side had to follow — `constMap[i] = v;
+                // constMap[i]` would otherwise set via the object setter
+                // (key stringified into the keys_array) and read from
+                // `obj+8+i*8` (stale ObjectHeader fields), returning garbage
+                // f64 values.
+                //
+                // Route through the runtime which checks the receiver's GC
+                // type and dispatches: arrays/lazy/buffers/typed-arrays
+                // through js_array_get_f64 (handles forwarding-chain follow
+                // + lazy-materialize + per-kind reads), plain objects
+                // through stringify-the-index + js_object_get_field_by_name_f64.
+                ctx.current_block = num_idx;
+                let v_num = ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_index_polymorphic",
+                    &[(I64, &obj_handle), (DOUBLE, &idx_box)],
+                );
+                let num_end_lbl = ctx.block().label.clone();
+                ctx.block().br(&merge_lbl);
+                // Merge.
+                ctx.current_block = merge_idx;
+                let merged = ctx.block().phi(
+                    DOUBLE,
+                    &[
+                        (&v_sym, &sym_end_lbl),
+                        (&v_str, &str_end_lbl),
+                        (&v_num, &num_end_lbl),
+                    ],
+                );
+                Ok(merged)
+            })
         }
 
         // Phase H err: `agg.errors.length` — receiver is

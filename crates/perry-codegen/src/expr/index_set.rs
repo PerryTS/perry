@@ -3,6 +3,29 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Migrated onto [`crate::rooting`]; this module names no `expr::temp_root`
+//! symbol. Every arm is the same window — `o[k] = v` evaluates the reference
+//! before the value (spec order), so the receiver, and on the dynamic arms the
+//! key too, sit in SSA registers while arbitrary user code runs.
+//!
+//! Each arm is one call to [`crate::rooting::with_operands_rooted`] over
+//! `[object, index, value]` (the value is lowered by `lower_expr`) or to
+//! [`crate::rooting::with_operands_rooted_across`] over `[object]` / `[object,
+//! index]` with `[index, value]` as the window (the value is lowered by
+//! `lower_value_for_dynamic_index_set`, which the operand list cannot produce).
+//! The point of the operand-list form is that it *derives* the per-operand
+//! window rather than restating it: #7201's disjunction — the receiver is live
+//! across BOTH the key and the value — falls out of the list order instead of
+//! being a hand-written `recv_collects`, and the two arms that got that flag
+//! wrong are exactly the two bugs this slice fixed (#7646, #7647).
+//!
+//! Nesting note that no longer applies: the dynamic-string-key arm used to push
+//! two guards and release them inner-to-outer, because `temp_root_truncate` is a
+//! stack CUT. One operand group has one guard, so that ordering obligation is
+//! gone rather than merely documented.
 
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
@@ -12,6 +35,7 @@ use crate::native_value::{
     BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
     NativeRep, SemanticKind,
 };
+use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64};
 
@@ -228,60 +252,69 @@ fn lower_array_index_set_via_runtime_key(
     value: &Expr,
     source_label: &str,
 ) -> Result<String> {
-    let arr_box = lower_expr(ctx, object)?;
     // #7341, same hazard as the packed path: the receiver is live across both
     // `index` and `value` lowering, and an allocating RHS is a collection
     // point. Without this the store writes through a pre-evacuation address.
-    let recv_collects = super::temp_root::expr_may_trigger_gc(ctx, index)
-        || super::temp_root::expr_may_trigger_gc(ctx, value);
-    let recv_guard =
-        super::temp_root::guard_store_operand_across(ctx, object, &arr_box, recv_collects);
-    let idx_double = lower_expr(ctx, index)?;
-    let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
-    let (val_double, val_bits) = lower_value_for_dynamic_index_set(
+    //
+    // `across` rather than the plain operand form: the value is lowered by
+    // `lower_value_for_dynamic_index_set`, a native-rep lowering the operand
+    // list cannot produce. Passing `[index, value]` as the window keeps its
+    // extent answered by `operand_protection` — the #7201 disjunction — rather
+    // than by a `recv_collects` flag this function re-derives.
+    rooting::with_operands_rooted_across(
         ctx,
-        value,
-        "index_set.array_runtime_key_value_bits",
-        "array_runtime_key_set_helper_edge",
-    )?;
-    let arr_box = super::temp_root::reread_store_operand(ctx, &recv_guard, object, &arr_box)?;
-    let arr_handle = {
-        let blk = ctx.block();
-        unbox_to_i64(blk, &arr_box)
-    };
-    let site_id = emit_typed_feedback_register_site(
-        ctx,
-        TypedFeedbackKind::ArrayElement,
-        source_label,
-        TypedFeedbackContract::array_set_index_or_string(),
-    );
-    let new_handle = ctx.block().call(
-        I64,
-        "js_typed_feedback_array_set_index_or_string",
-        &[
-            (I64, &site_id),
-            (I64, &arr_handle),
-            (DOUBLE, &idx_double),
-            (DOUBLE, &val_double),
-        ],
-    );
-    if let Expr::LocalGet(id) = object {
-        if let Some(slot) = ctx.locals.get(id).cloned() {
-            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
-            ctx.block().store(DOUBLE, &new_box, &slot);
-        } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
-            let g_ref = format!("@{}", global_name);
-            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-        }
-    }
-    if value_needs_barrier {
-        let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
-        emit_write_barrier(ctx, &arr_bits, &val_bits);
-    }
-    // After the store: the helper itself can grow the element array.
-    super::temp_root::release_store_operand(ctx, recv_guard);
-    Ok(val_double)
+        &[object],
+        &[index, value],
+        |ctx| {
+            let idx_double = lower_expr(ctx, index)?;
+            let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
+            let (val_double, val_bits) = lower_value_for_dynamic_index_set(
+                ctx,
+                value,
+                "index_set.array_runtime_key_value_bits",
+                "array_runtime_key_set_helper_edge",
+            )?;
+            Ok((idx_double, value_needs_barrier, val_double, val_bits))
+        },
+        |ctx, vals, (idx_double, value_needs_barrier, val_double, val_bits)| {
+            let arr_box = &vals[0];
+            let arr_handle = {
+                let blk = ctx.block();
+                unbox_to_i64(blk, arr_box)
+            };
+            let site_id = emit_typed_feedback_register_site(
+                ctx,
+                TypedFeedbackKind::ArrayElement,
+                source_label,
+                TypedFeedbackContract::array_set_index_or_string(),
+            );
+            let new_handle = ctx.block().call(
+                I64,
+                "js_typed_feedback_array_set_index_or_string",
+                &[
+                    (I64, &site_id),
+                    (I64, &arr_handle),
+                    (DOUBLE, &idx_double),
+                    (DOUBLE, &val_double),
+                ],
+            );
+            if let Expr::LocalGet(id) = object {
+                if let Some(slot) = ctx.locals.get(id).cloned() {
+                    let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+                    ctx.block().store(DOUBLE, &new_box, &slot);
+                } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
+                    let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+                    let g_ref = format!("@{}", global_name);
+                    emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+                }
+            }
+            if value_needs_barrier {
+                let arr_bits = ctx.block().bitcast_double_to_i64(arr_box);
+                emit_write_barrier(ctx, &arr_bits, &val_bits);
+            }
+            Ok(val_double)
+        },
+    )
 }
 
 fn lower_packed_f64_loop_store_value(
@@ -947,40 +980,52 @@ pub(crate) fn lower(
             // to `js_array_set_f64_extend`, falling back to object-property
             // set on non-numeric keys per spec.
             if is_array_expr(ctx, object) && is_string_expr(ctx, index) {
-                let arr_box = lower_expr(ctx, object)?;
-                let key_box = lower_expr(ctx, index)?;
+                // #7646: neither operand was guarded. The receiver AND the key
+                // are lowered before the value, and the key is a heap string by
+                // construction on this arm (`is_string_expr`) with no
+                // registered root of its own — `unbox_str_handle` below would
+                // hand the setter a pre-move `StringHeader*`. `for (const i in
+                // src) out[i] = mk();` is the shape, which is the very pattern
+                // the arm was added for (#637).
                 let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
-                let (val_double, val_bits) =
-                    lower_value_for_optional_barrier(ctx, value, value_needs_barrier)?;
-                let (arr_handle, key_handle) = {
-                    let blk = ctx.block();
-                    let arr_handle = unbox_to_i64(blk, &arr_box);
-                    let key_handle = unbox_str_handle(blk, &key_box);
-                    (arr_handle, key_handle)
-                };
-                let site_id = emit_typed_feedback_register_site(
+                return rooting::with_operands_rooted_across(
                     ctx,
-                    TypedFeedbackKind::ArrayElement,
-                    "array[string_index]",
-                    TypedFeedbackContract::array_set_string_key(),
+                    &[object.as_ref(), index.as_ref()],
+                    &[value.as_ref()],
+                    |ctx| lower_value_for_optional_barrier(ctx, value, value_needs_barrier),
+                    |ctx, vals, (val_double, val_bits)| {
+                        let (arr_box, key_box) = (vals[0].clone(), vals[1].clone());
+                        let (arr_handle, key_handle) = {
+                            let blk = ctx.block();
+                            let arr_handle = unbox_to_i64(blk, &arr_box);
+                            let key_handle = unbox_str_handle(blk, &key_box);
+                            (arr_handle, key_handle)
+                        };
+                        let site_id = emit_typed_feedback_register_site(
+                            ctx,
+                            TypedFeedbackKind::ArrayElement,
+                            "array[string_index]",
+                            TypedFeedbackContract::array_set_string_key(),
+                        );
+                        ctx.block().call(
+                            I64,
+                            "js_typed_feedback_array_set_string_key",
+                            &[
+                                (I64, &site_id),
+                                (I64, &arr_handle),
+                                (I64, &key_handle),
+                                (DOUBLE, &val_double),
+                            ],
+                        );
+                        if value_needs_barrier {
+                            let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
+                            let val_bits = val_bits
+                                .unwrap_or_else(|| ctx.block().bitcast_double_to_i64(&val_double));
+                            emit_write_barrier(ctx, &arr_bits, &val_bits);
+                        }
+                        Ok(val_double)
+                    },
                 );
-                ctx.block().call(
-                    I64,
-                    "js_typed_feedback_array_set_string_key",
-                    &[
-                        (I64, &site_id),
-                        (I64, &arr_handle),
-                        (I64, &key_handle),
-                        (DOUBLE, &val_double),
-                    ],
-                );
-                if value_needs_barrier {
-                    let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
-                    let val_bits =
-                        val_bits.unwrap_or_else(|| ctx.block().bitcast_double_to_i64(&val_double));
-                    emit_write_barrier(ctx, &arr_bits, &val_bits);
-                }
-                return Ok(val_double);
             }
             // Issue #637 followup: `arr[k] = X` where receiver is array
             // but index is dynamically-typed (Any) — most commonly a
@@ -994,48 +1039,54 @@ pub(crate) fn lower(
             // the existing fast path is correct and avoids the runtime
             // dispatch overhead).
             if is_array_expr(ctx, object) && !is_numeric_expr(ctx, index) {
-                let arr_box = lower_expr(ctx, object)?;
                 // #7341: receiver live across `index` and `value` lowering.
-                let recv_collects = super::temp_root::expr_may_trigger_gc(ctx, index)
-                    || super::temp_root::expr_may_trigger_gc(ctx, value);
-                let recv_guard = super::temp_root::guard_store_operand_across(
-                    ctx,
-                    object,
-                    &arr_box,
-                    recv_collects,
-                );
-                let idx_double = lower_expr(ctx, index)?;
+                //
+                // #7646: the KEY was live across `value` too, and was not
+                // rooted. This arm fires exactly when the index is NOT
+                // statically numeric — a `forEach` callback's `(item, k)` where
+                // `k` came from a for-in over object keys, say — so `idx_double`
+                // is routinely a NaN-boxed heap string, and
+                // `js_typed_feedback_array_set_index_or_string` parses it as a
+                // key. An evacuating minor inside the RHS therefore left the
+                // store reading a from-space `StringHeader*` and the element
+                // landed under a garbage key. The dynamic-string-key arm below
+                // has guarded exactly this since #7154; this one was missed
+                // because its key is not *statically* a string.
+                //
+                // One operand group derives both windows rather than restating
+                // either: the receiver's spans `index` and `value`, the key's
+                // spans `value`, and `value` is lowered last so it takes
+                // nothing.
                 let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
-                let val_double = lower_expr(ctx, value)?;
-                let arr_box =
-                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &arr_box)?;
-                let arr_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &arr_box)
-                };
-                let site_id = emit_typed_feedback_register_site(
-                    ctx,
-                    TypedFeedbackKind::ArrayElement,
-                    "array[dynamic_index]",
-                    TypedFeedbackContract::array_set_index_or_string(),
-                );
-                ctx.block().call(
-                    I64,
-                    "js_typed_feedback_array_set_index_or_string",
-                    &[
-                        (I64, &site_id),
-                        (I64, &arr_handle),
-                        (DOUBLE, &idx_double),
-                        (DOUBLE, &val_double),
-                    ],
-                );
-                if value_needs_barrier {
-                    let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                    let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
-                    emit_write_barrier(ctx, &arr_bits, &val_bits);
-                }
-                super::temp_root::release_store_operand(ctx, recv_guard);
-                return Ok(val_double);
+                return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
+                    let (arr_box, idx_double, val_double) = (&vals[0], &vals[1], &vals[2]);
+                    let arr_handle = {
+                        let blk = ctx.block();
+                        unbox_to_i64(blk, arr_box)
+                    };
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::ArrayElement,
+                        "array[dynamic_index]",
+                        TypedFeedbackContract::array_set_index_or_string(),
+                    );
+                    ctx.block().call(
+                        I64,
+                        "js_typed_feedback_array_set_index_or_string",
+                        &[
+                            (I64, &site_id),
+                            (I64, &arr_handle),
+                            (DOUBLE, idx_double),
+                            (DOUBLE, val_double),
+                        ],
+                    );
+                    if value_needs_barrier {
+                        let val_bits = ctx.block().bitcast_double_to_i64(val_double);
+                        let arr_bits = ctx.block().bitcast_double_to_i64(arr_box);
+                        emit_write_barrier(ctx, &arr_bits, &val_bits);
+                    }
+                    Ok(val_double.clone())
+                });
             }
             if is_array_expr(ctx, object)
                 && numeric_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
@@ -1314,7 +1365,11 @@ pub(crate) fn lower(
                 let value_is_numeric = is_numeric_expr(ctx, value);
                 let require_numeric_layout =
                     value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, object);
-                let arr_box = lower_expr(ctx, object)?;
+                let local_id = if let Expr::LocalGet(id) = object.as_ref() {
+                    Some(*id)
+                } else {
+                    None
+                };
                 // #7341: this array path skipped the store-operand guard the
                 // generic object paths below already apply (#7154). `a[i] = v`
                 // evaluates the receiver first and the value last — spec order
@@ -1335,107 +1390,127 @@ pub(crate) fn lower(
                 // all, so neither lowering could have covered it.
                 //
                 // The window is the disjunction over `index` and `value`
-                // (#7201): the receiver is live across both.
-                let recv_collects = super::temp_root::expr_may_trigger_gc(ctx, index)
-                    || super::temp_root::expr_may_trigger_gc(ctx, value);
-                let recv_guard = super::temp_root::guard_store_operand_across(
-                    ctx,
-                    object,
-                    &arr_box,
-                    recv_collects,
-                );
-                let idx_double = lower_expr(ctx, index)?;
-                let val_double = lower_expr(ctx, value)?;
-                let arr_box =
-                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &arr_box)?;
-                let local_id = if let Expr::LocalGet(id) = object.as_ref() {
-                    Some(*id)
-                } else {
-                    None
-                };
-                let feedback_site_id = emit_typed_feedback_register_site(
-                    ctx,
-                    TypedFeedbackKind::ArrayElement,
-                    "array[index]=",
-                    if require_numeric_layout {
-                        TypedFeedbackContract::numeric_array_set_index()
-                    } else {
-                        TypedFeedbackContract::array_set_index()
-                    },
-                );
-                // Use the fast inlined IndexSet path only when the
-                // receiver is a local that's actually in ctx.locals
-                // (stack slot). Module-level arrays accessed from inside
-                // a function are in ctx.module_globals instead — for
-                // those we use js_array_set_f64_extend (the realloc-
-                // capable variant) and write the new pointer back to
-                // the global slot. Issue #221: the previous code
-                // funneled module globals through js_array_set_f64
-                // which returns silently when `index >= length` — so
-                // every `arr[i] = v` against a `const A: T[] = []`
-                // declared empty was a silent no-op, both the value
-                // and the implicit length update vanishing.
-                if let Some(id) = local_id {
-                    if ctx.locals.contains_key(&id) {
-                        let value_is_canonical_raw_f64 =
-                            crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
-                        lower_index_set_fast(
-                            ctx,
-                            &arr_box,
-                            &idx_double,
-                            &val_double,
-                            id,
-                            layout_note_needed,
-                            write_barrier_needed,
-                            value_is_numeric,
-                            require_numeric_layout,
-                            value_is_canonical_raw_f64,
-                            &feedback_site_id,
-                        )?;
-                    } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
-                        let blk = ctx.block();
-                        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                        let new_handle = blk.call(
-                            I64,
-                            "js_typed_feedback_array_set_f64_extend",
-                            &[
-                                (I64, &feedback_site_id),
-                                (I64, &arr_handle),
-                                (I32, &idx_i32),
-                                (DOUBLE, &val_double),
-                            ],
-                        );
-                        let new_box = nanbox_pointer_inline(blk, &new_handle);
-                        let g_ref = format!("@{}", global_name);
-                        // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
-                        emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-                        // Gen-GC Phase C2: write barrier on array element store.
-                        if write_barrier_needed {
-                            let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                            emit_write_barrier(ctx, &arr_bits, &val_bits);
+                // (#7201): the receiver is live across both. The operand group
+                // derives that from the list order; the index is numeric on
+                // this path, so it takes no slot and the IR is unchanged.
+                return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
+                    let (arr_box, idx_double, val_double) =
+                        (vals[0].clone(), vals[1].clone(), vals[2].clone());
+                    let feedback_site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::ArrayElement,
+                        "array[index]=",
+                        if require_numeric_layout {
+                            TypedFeedbackContract::numeric_array_set_index()
+                        } else {
+                            TypedFeedbackContract::array_set_index()
+                        },
+                    );
+                    // Use the fast inlined IndexSet path only when the
+                    // receiver is a local that's actually in ctx.locals
+                    // (stack slot). Module-level arrays accessed from inside
+                    // a function are in ctx.module_globals instead — for
+                    // those we use js_array_set_f64_extend (the realloc-
+                    // capable variant) and write the new pointer back to
+                    // the global slot. Issue #221: the previous code
+                    // funneled module globals through js_array_set_f64
+                    // which returns silently when `index >= length` — so
+                    // every `arr[i] = v` against a `const A: T[] = []`
+                    // declared empty was a silent no-op, both the value
+                    // and the implicit length update vanishing.
+                    if let Some(id) = local_id {
+                        if ctx.locals.contains_key(&id) {
+                            let value_is_canonical_raw_f64 =
+                                crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
+                            lower_index_set_fast(
+                                ctx,
+                                &arr_box,
+                                &idx_double,
+                                &val_double,
+                                id,
+                                layout_note_needed,
+                                write_barrier_needed,
+                                value_is_numeric,
+                                require_numeric_layout,
+                                value_is_canonical_raw_f64,
+                                &feedback_site_id,
+                            )?;
+                        } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
+                            let blk = ctx.block();
+                            let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                            let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
+                            let new_handle = blk.call(
+                                I64,
+                                "js_typed_feedback_array_set_f64_extend",
+                                &[
+                                    (I64, &feedback_site_id),
+                                    (I64, &arr_handle),
+                                    (I32, &idx_i32),
+                                    (DOUBLE, &val_double),
+                                ],
+                            );
+                            let new_box = nanbox_pointer_inline(blk, &new_handle);
+                            let g_ref = format!("@{}", global_name);
+                            // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
+                            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+                            // Gen-GC Phase C2: write barrier on array element store.
+                            if write_barrier_needed {
+                                let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
+                                emit_write_barrier(ctx, &arr_bits, &val_bits);
+                            }
+                        } else {
+                            // Closure-captured array, or local without a
+                            // stack slot (rare). Issue #637 followup / hono r2:
+                            // pre-fix this called `js_array_set_f64` (non-
+                            // extending), which silently returned when `index
+                            // >= length` (matching `js_array_set_f64`'s in-
+                            // bounds gate at array.rs:571). For an empty
+                            // captured array (common pattern: closure body
+                            // does `arr[++i] = X` to populate from outer
+                            // scope), this dropped every write. Switch to
+                            // `js_array_set_f64_extend` — the forwarding-
+                            // pointer mechanism (issue #233) handles realloc
+                            // visibility for the caller, so we don't need a
+                            // writeback target here. Discard the returned
+                            // pointer; downstream reads via clean_arr_ptr
+                            // follow the forwarding chain to the new head.
+                            let blk = ctx.block();
+                            let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                            let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
+                            blk.call(
+                                I64,
+                                "js_typed_feedback_array_set_f64_extend",
+                                &[
+                                    (I64, &feedback_site_id),
+                                    (I64, &arr_handle),
+                                    (I32, &idx_i32),
+                                    (DOUBLE, &val_double),
+                                ],
+                            );
+                            // Gen-GC Phase C2: write barrier on array element store.
+                            if write_barrier_needed {
+                                let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
+                                emit_write_barrier(ctx, &arr_bits, &val_bits);
+                            }
                         }
                     } else {
-                        // Closure-captured array, or local without a
-                        // stack slot (rare). Issue #637 followup / hono r2:
-                        // pre-fix this called `js_array_set_f64` (non-
-                        // extending), which silently returned when `index
-                        // >= length` (matching `js_array_set_f64`'s in-
-                        // bounds gate at array.rs:571). For an empty
-                        // captured array (common pattern: closure body
-                        // does `arr[++i] = X` to populate from outer
-                        // scope), this dropped every write. Switch to
-                        // `js_array_set_f64_extend` — the forwarding-
-                        // pointer mechanism (issue #233) handles realloc
-                        // visibility for the caller, so we don't need a
-                        // writeback target here. Discard the returned
-                        // pointer; downstream reads via clean_arr_ptr
-                        // follow the forwarding chain to the new head.
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
                         let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
+                        // Issue #637 followup / hono r2: use the extend variant
+                        // so `arr[i] = X` for i >= length grows the array per
+                        // JS spec, instead of silently no-op'ing (which the
+                        // non-extend `js_array_set_f64` did via `if index >=
+                        // length { return; }`). The hono Trie's
+                        // `indexReplacementMap[++captureIndex] = N` pattern
+                        // (sparse-extend from a closure capturing the array)
+                        // was the load-bearing site — pre-fix the array stayed
+                        // length 0 inside the closure, so `for (const i in
+                        // indexReplacementMap)` outside the closure iterated
+                        // zero times and `handlerMap` ended up empty.
                         blk.call(
                             I64,
                             "js_typed_feedback_array_set_f64_extend",
@@ -1452,300 +1527,311 @@ pub(crate) fn lower(
                             emit_write_barrier(ctx, &arr_bits, &val_bits);
                         }
                     }
-                } else {
-                    let blk = ctx.block();
-                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                    // Issue #637 followup / hono r2: use the extend variant
-                    // so `arr[i] = X` for i >= length grows the array per
-                    // JS spec, instead of silently no-op'ing (which the
-                    // non-extend `js_array_set_f64` did via `if index >=
-                    // length { return; }`). The hono Trie's
-                    // `indexReplacementMap[++captureIndex] = N` pattern
-                    // (sparse-extend from a closure capturing the array)
-                    // was the load-bearing site — pre-fix the array stayed
-                    // length 0 inside the closure, so `for (const i in
-                    // indexReplacementMap)` outside the closure iterated
-                    // zero times and `handlerMap` ended up empty.
-                    blk.call(
-                        I64,
-                        "js_typed_feedback_array_set_f64_extend",
-                        &[
-                            (I64, &feedback_site_id),
-                            (I64, &arr_handle),
-                            (I32, &idx_i32),
-                            (DOUBLE, &val_double),
-                        ],
-                    );
-                    // Gen-GC Phase C2: write barrier on array element store.
-                    if write_barrier_needed {
-                        let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                        emit_write_barrier(ctx, &arr_bits, &val_bits);
-                    }
-                }
-                // After the store, never before: every branch above ends in a
-                // helper that can itself allocate (element-array growth, the
-                // extend path's realloc).
-                super::temp_root::release_store_operand(ctx, recv_guard);
-                return Ok(val_double);
+                    // The group is released after `body` returns, never before:
+                    // every branch above ends in a helper that can itself allocate
+                    // (element-array growth, the extend path's realloc).
+                    Ok(val_double)
+                });
             }
             if let Expr::String(literal) = index.as_ref() {
-                let obj_box = lower_expr(ctx, object)?;
                 // #7154: the value expression can collect, and an evacuating
                 // minor inside it relocates the receiver out from under
                 // `obj_box`. Root it across the evaluation and re-read below.
-                let recv_guard =
-                    super::temp_root::guard_store_operand(ctx, object, &obj_box, value);
-                let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
+                // The key is a literal, so it is not an operand here at all —
+                // it is interned into the string pool below.
+                return rooting::with_operands_rooted_across(
                     ctx,
-                    value,
-                    "index_set.literal_string_value_bits",
-                    "literal_string_index_set_helper_edge",
-                )?;
-                let obj_box =
-                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
-                let key_idx = ctx.strings.intern(literal);
-                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-                super::property_set::emit_nullish_write_guard(
-                    ctx,
-                    &obj_bits,
-                    literal,
-                    "iset.literal",
+                    &[object.as_ref()],
+                    &[value.as_ref()],
+                    |ctx| {
+                        lower_value_for_dynamic_index_set(
+                            ctx,
+                            value,
+                            "index_set.literal_string_value_bits",
+                            "literal_string_index_set_helper_edge",
+                        )
+                    },
+                    |ctx, vals, (val_double, _val_bits)| {
+                        let obj_box = vals[0].clone();
+                        let key_idx = ctx.strings.intern(literal);
+                        let key_handle_global =
+                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                        super::property_set::emit_nullish_write_guard(
+                            ctx,
+                            &obj_bits,
+                            literal,
+                            "iset.literal",
+                        );
+                        let static_classref = super::index_get::index_object_is_class_or_proto_ref(
+                            ctx,
+                            object.as_ref(),
+                        );
+                        let (obj_handle, key_raw) = {
+                            let blk = ctx.block();
+                            let obj_handle = super::index_get::classref_preserving_handle(
+                                blk,
+                                &obj_bits,
+                                static_classref,
+                            );
+                            let key_box = blk.load(DOUBLE, &key_handle_global);
+                            let key_bits = blk.bitcast_double_to_i64(&key_box);
+                            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                            (obj_handle, key_raw)
+                        };
+                        let site_id = emit_typed_feedback_register_site(
+                            ctx,
+                            TypedFeedbackKind::PropertySet,
+                            literal,
+                            TypedFeedbackContract::object_set_by_name(),
+                        );
+                        ctx.block().call_void(
+                            "js_typed_feedback_object_set_field_by_name",
+                            &[
+                                (I64, &site_id),
+                                (I64, &obj_handle),
+                                (I64, &key_raw),
+                                (DOUBLE, &val_double),
+                            ],
+                        );
+                        Ok(val_double)
+                    },
                 );
-                let static_classref =
-                    super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
-                let (obj_handle, key_raw) = {
-                    let blk = ctx.block();
-                    let obj_handle = super::index_get::classref_preserving_handle(
-                        blk,
-                        &obj_bits,
-                        static_classref,
-                    );
-                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                    (obj_handle, key_raw)
-                };
-                let site_id = emit_typed_feedback_register_site(
-                    ctx,
-                    TypedFeedbackKind::PropertySet,
-                    literal,
-                    TypedFeedbackContract::object_set_by_name(),
-                );
-                ctx.block().call_void(
-                    "js_typed_feedback_object_set_field_by_name",
-                    &[
-                        (I64, &site_id),
-                        (I64, &obj_handle),
-                        (I64, &key_raw),
-                        (DOUBLE, &val_double),
-                    ],
-                );
-                super::temp_root::release_store_operand(ctx, recv_guard);
-                return Ok(val_double);
             }
             if is_string_expr(ctx, index) {
-                let obj_box = lower_expr(ctx, object)?;
-                // #7154: see the literal-key arm above.
-                let recv_guard =
-                    super::temp_root::guard_store_operand(ctx, object, &obj_box, value);
-                let key_box = lower_expr(ctx, index)?;
-                // #7154: the KEY sits in the same window as the receiver. A
-                // non-literal string key is an ordinary heap string with no
-                // registered root of its own, so an evacuating minor inside the
-                // value's evaluation relocates it and leaves `key_box` naming
-                // from-space — `unbox_str_handle` below would hand the setter a
-                // pre-move `StringHeader*` and the field would land under a
-                // garbage key. Pushed AFTER `recv_guard` so the two cuts nest:
-                // `temp_root_truncate` drops everything above its index, so the
-                // key must be released first.
-                let key_guard = super::temp_root::guard_store_operand(ctx, index, &key_box, value);
-                let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
+                // #7154: see the literal-key arm above, plus the KEY, which
+                // sits in the same window. A non-literal string key is an
+                // ordinary heap string with no registered root of its own, so
+                // an evacuating minor inside the value's evaluation relocates
+                // it and leaves the register naming from-space —
+                // `unbox_str_handle` below would hand the setter a pre-move
+                // `StringHeader*` and the field would land under a garbage key.
+                //
+                // #7647: the receiver's window used to be derived from `value`
+                // ALONE, which is the half-measure #7201 named. The receiver is
+                // lowered before the KEY as well, so `o[f()] = 1` — a literal
+                // RHS that cannot collect, an allocating key that can — left it
+                // unguarded. As one operand group the receiver's window is the
+                // disjunction over everything after it, which is what #7201
+                // established and what `guard_store_operand`'s two-argument
+                // form structurally could not say.
+                return rooting::with_operands_rooted_across(
                     ctx,
-                    value,
-                    "index_set.string_value_bits",
-                    "string_index_set_helper_edge",
-                )?;
-                let key_box =
-                    super::temp_root::reread_store_operand(ctx, &key_guard, index, &key_box)?;
-                let obj_box =
-                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
-                let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-                super::property_set::emit_nullish_write_guard(
-                    ctx,
-                    &obj_bits,
-                    "index",
-                    "iset.string",
+                    &[object.as_ref(), index.as_ref()],
+                    &[value.as_ref()],
+                    |ctx| {
+                        lower_value_for_dynamic_index_set(
+                            ctx,
+                            value,
+                            "index_set.string_value_bits",
+                            "string_index_set_helper_edge",
+                        )
+                    },
+                    |ctx, vals, (val_double, _val_bits)| {
+                        let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
+                        let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                        super::property_set::emit_nullish_write_guard(
+                            ctx,
+                            &obj_bits,
+                            "index",
+                            "iset.string",
+                        );
+                        let static_classref = super::index_get::index_object_is_class_or_proto_ref(
+                            ctx,
+                            object.as_ref(),
+                        );
+                        let (obj_handle, key_handle) = {
+                            let blk = ctx.block();
+                            let obj_handle = super::index_get::classref_preserving_handle(
+                                blk,
+                                &obj_bits,
+                                static_classref,
+                            );
+                            // SSO-safe key unbox — see IndexGet branch above for rationale.
+                            let key_handle = unbox_str_handle(blk, &key_box);
+                            (obj_handle, key_handle)
+                        };
+                        let site_id = emit_typed_feedback_register_site(
+                            ctx,
+                            TypedFeedbackKind::PropertySet,
+                            "object[string_index]",
+                            TypedFeedbackContract::object_set_by_name(),
+                        );
+                        ctx.block().call_void(
+                            "js_typed_feedback_object_set_field_by_name",
+                            &[
+                                (I64, &site_id),
+                                (I64, &obj_handle),
+                                (I64, &key_handle),
+                                (DOUBLE, &val_double),
+                            ],
+                        );
+                        // One group, one release, below the store. The inner-to-outer
+                        // ordering obligation the two hand-written guards carried —
+                        // `temp_root_truncate` is a stack CUT, so releasing the
+                        // receiver first silently dropped the key's slot as well — is
+                        // gone rather than merely documented.
+                        Ok(val_double)
+                    },
                 );
-                let static_classref =
-                    super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
-                let (obj_handle, key_handle) = {
-                    let blk = ctx.block();
-                    let obj_handle = super::index_get::classref_preserving_handle(
-                        blk,
-                        &obj_bits,
-                        static_classref,
-                    );
-                    // SSO-safe key unbox — see IndexGet branch above for rationale.
-                    let key_handle = unbox_str_handle(blk, &key_box);
-                    (obj_handle, key_handle)
-                };
-                let site_id = emit_typed_feedback_register_site(
-                    ctx,
-                    TypedFeedbackKind::PropertySet,
-                    "object[string_index]",
-                    TypedFeedbackContract::object_set_by_name(),
-                );
-                ctx.block().call_void(
-                    "js_typed_feedback_object_set_field_by_name",
-                    &[
-                        (I64, &site_id),
-                        (I64, &obj_handle),
-                        (I64, &key_handle),
-                        (DOUBLE, &val_double),
-                    ],
-                );
-                // Inner-to-outer: `temp_root_truncate` drops every slot at and
-                // above its index, so releasing the receiver first would drop
-                // the key's as a side effect. Correct today, wrong the moment
-                // the push order changes — and #7207's `proxy_reflect` sibling
-                // spells both out for exactly that reason.
-                super::temp_root::release_store_operand(ctx, key_guard);
-                super::temp_root::release_store_operand(ctx, recv_guard);
-                return Ok(val_double);
             }
             // Fallback with runtime STRING_TAG check, matching IndexGet.
             // Layout: first runtime-check whether the index is a Symbol
             // (POINTER_TAG with SYMBOL_MAGIC). If so, dispatch to the
             // symbol-property side table. Otherwise fall through to the
             // string/numeric dispatch.
-            let obj_box = lower_expr(ctx, object)?;
-            let idx_box = lower_expr(ctx, index)?;
-            let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
-                ctx,
-                value,
-                "index_set.dynamic_value_bits",
-                "polymorphic_index_set_helper_edge",
-            )?;
-            let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-            super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset");
-            let static_classref =
-                super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
-            let obj_handle = {
-                let blk = ctx.block();
-                super::index_get::classref_preserving_handle(blk, &obj_bits, static_classref)
-            };
-            let feedback_site_id = emit_typed_feedback_register_site(
-                ctx,
-                TypedFeedbackKind::ArrayElement,
-                "index_set",
-                TypedFeedbackContract::polymorphic_index_set(),
-            );
-            // Symbol check: js_is_symbol returns 1 if idx_box is a Symbol.
-            let is_sym_i32 = ctx.block().call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
-            let is_sym_bit = ctx.block().icmp_ne(I32, &is_sym_i32, "0");
-            let sym_set = ctx.new_block("iset.sym");
-            let nonsym_set = ctx.new_block("iset.nonsym");
-            let str_set = ctx.new_block("iset.str");
-            let num_set = ctx.new_block("iset.num");
-            let set_merge = ctx.new_block("iset.merge");
-            let sym_lbl = ctx.block_label(sym_set);
-            let nonsym_lbl = ctx.block_label(nonsym_set);
-            let str_lbl = ctx.block_label(str_set);
-            let num_lbl = ctx.block_label(num_set);
-            let merge_lbl = ctx.block_label(set_merge);
-            ctx.block().cond_br(&is_sym_bit, &sym_lbl, &nonsym_lbl);
-            // Symbol key → side-table set.
-            ctx.current_block = sym_set;
-            ctx.block().call(
-                DOUBLE,
-                "js_object_set_symbol_property",
-                &[
-                    (DOUBLE, &obj_box),
-                    (DOUBLE, &idx_box),
-                    (DOUBLE, &val_double),
-                ],
-            );
-            ctx.block().br(&merge_lbl);
-            // Not a symbol — recompute idx_bits in this block (LLVM SSA, no
-            // dominance issue: each branch starts fresh).
-            ctx.current_block = nonsym_set;
-            let blk = ctx.block();
-            let idx_bits = blk.bitcast_double_to_i64(&idx_box);
-            let top16 = blk.lshr(I64, &idx_bits, "48");
-            // STRING_TAG (0x7FFF) heap pointer + SHORT_STRING_TAG (0x7FF9) SSO.
-            // See IndexGet path comment / issue #434 for the SSO rationale.
-            let is_str_tag_heap = blk.icmp_eq(I64, &top16, "32767");
-            let lower48 = blk.and(I64, &idx_bits, POINTER_MASK_I64);
-            let is_valid_ptr = blk.icmp_ugt(I64, &lower48, "4095");
-            let is_str_heap = blk.and(crate::types::I1, &is_str_tag_heap, &is_valid_ptr);
-            let is_str_tag_sso = blk.icmp_eq(I64, &top16, "32761");
-            let is_str = blk.or(crate::types::I1, &is_str_heap, &is_str_tag_sso);
-            ctx.block().cond_br(&is_str, &str_lbl, &num_lbl);
-            // String key → polymorphic helper that detects array receivers
-            // and parses numeric-string keys as array indices, falling
-            // through to `js_object_set_field_by_name` for Object/Closure
-            // receivers. Issue #637: pre-fix this called the object setter
-            // unconditionally, which silently no-op'd `arr[stringKey] = X`
-            // on captured arrays whose static type was lost across the
-            // closure boundary (forEach callbacks, replace callbacks, etc.).
-            ctx.current_block = str_set;
-            let key_handle = {
-                let blk = ctx.block();
-                unbox_str_handle(blk, &idx_box)
-            };
-            ctx.block().call(
-                I64,
-                "js_typed_feedback_array_set_string_key",
-                &[
-                    (I64, &feedback_site_id),
-                    (I64, &obj_handle),
-                    (I64, &key_handle),
-                    (DOUBLE, &val_double),
-                ],
-            );
-            ctx.block().br(&merge_lbl);
-            // Numeric key → polymorphic dispatch.
             //
-            // Closes #471: the previous fallback emitted an inline
-            // `obj_handle + 8 + idx*8` store on the assumption that the
-            // receiver had an ArrayHeader (8-byte header) layout. That's
-            // a load-bearing assumption for `arr[i] = v` against an
-            // unknown-typed receiver where `is_array_expr` couldn't
-            // narrow it statically — but the header spans object_header_size_bytes(...) bytes, then inline slots, plus
-            // `max(field_count, 8)` inline slots, so writing at offset
-            // `8 + idx*8` for any `idx ≥ 7` overflows the object's
-            // allocation and corrupts the adjacent heap object. The
-            // @perryts/mongodb #471 repro hit this with `idMap[i] = …`
-            // (a `Record<number, unknown>`) and trampled the keys_array
-            // of an unrelated object that the BSON encoder later read
-            // as an empty doc, producing structurally-truncated wire data.
-            //
-            // Route through the runtime which checks the receiver's GC
-            // type and dispatches: arrays/buffers/typed-arrays through
-            // js_array_set_f64_extend (handles forwarding + per-kind
-            // stores), plain objects through stringify-the-index +
-            // js_object_set_field_by_name. The forwarding-chain handling
-            // that the previous code's inline-vs-fwd branch did is now
-            // inside js_array_set_f64_extend's clean_arr_ptr_mut.
-            ctx.current_block = num_set;
-            {
-                let blk = ctx.block();
-                blk.call_void(
-                    "js_typed_feedback_object_set_index_polymorphic",
-                    &[
-                        (I64, &feedback_site_id),
-                        (I64, &obj_handle),
-                        (DOUBLE, &idx_box),
-                        (DOUBLE, &val_double),
-                    ],
-                );
-            }
-            ctx.block().br(&merge_lbl);
-            ctx.current_block = set_merge;
-            Ok(val_double)
+            // #7647: this arm had NO store-operand guard on either operand,
+            // while every sibling arm above has had one since #7154. It is the
+            // most exposed of them all — it is reached precisely when NOTHING
+            // about the receiver or the key is statically known, so both are
+            // ordinary heap values by default, and both are consumed after
+            // `lower_value_for_dynamic_index_set` has lowered arbitrary user
+            // code. `js_object_set_symbol_property` takes the receiver box
+            // directly and the string arm masks the key to a `StringHeader*`,
+            // so an evacuating minor in the RHS lands the write on a stale
+            // object under a stale key. `m[k] = f()` on an `any`-typed `m`
+            // reaches it.
+            return rooting::with_operands_rooted_across(
+                ctx,
+                &[object.as_ref(), index.as_ref()],
+                &[value.as_ref()],
+                |ctx| {
+                    lower_value_for_dynamic_index_set(
+                        ctx,
+                        value,
+                        "index_set.dynamic_value_bits",
+                        "polymorphic_index_set_helper_edge",
+                    )
+                },
+                |ctx, vals, (val_double, _val_bits)| {
+                    let (obj_box, idx_box) = (vals[0].clone(), vals[1].clone());
+                    let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                    super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset");
+                    let static_classref =
+                        super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
+                    let obj_handle = {
+                        let blk = ctx.block();
+                        super::index_get::classref_preserving_handle(
+                            blk,
+                            &obj_bits,
+                            static_classref,
+                        )
+                    };
+                    let feedback_site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::ArrayElement,
+                        "index_set",
+                        TypedFeedbackContract::polymorphic_index_set(),
+                    );
+                    // Symbol check: js_is_symbol returns 1 if idx_box is a Symbol.
+                    let is_sym_i32 = ctx.block().call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
+                    let is_sym_bit = ctx.block().icmp_ne(I32, &is_sym_i32, "0");
+                    let sym_set = ctx.new_block("iset.sym");
+                    let nonsym_set = ctx.new_block("iset.nonsym");
+                    let str_set = ctx.new_block("iset.str");
+                    let num_set = ctx.new_block("iset.num");
+                    let set_merge = ctx.new_block("iset.merge");
+                    let sym_lbl = ctx.block_label(sym_set);
+                    let nonsym_lbl = ctx.block_label(nonsym_set);
+                    let str_lbl = ctx.block_label(str_set);
+                    let num_lbl = ctx.block_label(num_set);
+                    let merge_lbl = ctx.block_label(set_merge);
+                    ctx.block().cond_br(&is_sym_bit, &sym_lbl, &nonsym_lbl);
+                    // Symbol key → side-table set.
+                    ctx.current_block = sym_set;
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_object_set_symbol_property",
+                        &[
+                            (DOUBLE, &obj_box),
+                            (DOUBLE, &idx_box),
+                            (DOUBLE, &val_double),
+                        ],
+                    );
+                    ctx.block().br(&merge_lbl);
+                    // Not a symbol — recompute idx_bits in this block (LLVM SSA, no
+                    // dominance issue: each branch starts fresh).
+                    ctx.current_block = nonsym_set;
+                    let blk = ctx.block();
+                    let idx_bits = blk.bitcast_double_to_i64(&idx_box);
+                    let top16 = blk.lshr(I64, &idx_bits, "48");
+                    // STRING_TAG (0x7FFF) heap pointer + SHORT_STRING_TAG (0x7FF9) SSO.
+                    // See IndexGet path comment / issue #434 for the SSO rationale.
+                    let is_str_tag_heap = blk.icmp_eq(I64, &top16, "32767");
+                    let lower48 = blk.and(I64, &idx_bits, POINTER_MASK_I64);
+                    let is_valid_ptr = blk.icmp_ugt(I64, &lower48, "4095");
+                    let is_str_heap = blk.and(crate::types::I1, &is_str_tag_heap, &is_valid_ptr);
+                    let is_str_tag_sso = blk.icmp_eq(I64, &top16, "32761");
+                    let is_str = blk.or(crate::types::I1, &is_str_heap, &is_str_tag_sso);
+                    ctx.block().cond_br(&is_str, &str_lbl, &num_lbl);
+                    // String key → polymorphic helper that detects array receivers
+                    // and parses numeric-string keys as array indices, falling
+                    // through to `js_object_set_field_by_name` for Object/Closure
+                    // receivers. Issue #637: pre-fix this called the object setter
+                    // unconditionally, which silently no-op'd `arr[stringKey] = X`
+                    // on captured arrays whose static type was lost across the
+                    // closure boundary (forEach callbacks, replace callbacks, etc.).
+                    ctx.current_block = str_set;
+                    let key_handle = {
+                        let blk = ctx.block();
+                        unbox_str_handle(blk, &idx_box)
+                    };
+                    ctx.block().call(
+                        I64,
+                        "js_typed_feedback_array_set_string_key",
+                        &[
+                            (I64, &feedback_site_id),
+                            (I64, &obj_handle),
+                            (I64, &key_handle),
+                            (DOUBLE, &val_double),
+                        ],
+                    );
+                    ctx.block().br(&merge_lbl);
+                    // Numeric key → polymorphic dispatch.
+                    //
+                    // Closes #471: the previous fallback emitted an inline
+                    // `obj_handle + 8 + idx*8` store on the assumption that the
+                    // receiver had an ArrayHeader (8-byte header) layout. That's
+                    // a load-bearing assumption for `arr[i] = v` against an
+                    // unknown-typed receiver where `is_array_expr` couldn't
+                    // narrow it statically — but the header spans object_header_size_bytes(...) bytes, then inline slots, plus
+                    // `max(field_count, 8)` inline slots, so writing at offset
+                    // `8 + idx*8` for any `idx ≥ 7` overflows the object's
+                    // allocation and corrupts the adjacent heap object. The
+                    // @perryts/mongodb #471 repro hit this with `idMap[i] = …`
+                    // (a `Record<number, unknown>`) and trampled the keys_array
+                    // of an unrelated object that the BSON encoder later read
+                    // as an empty doc, producing structurally-truncated wire data.
+                    //
+                    // Route through the runtime which checks the receiver's GC
+                    // type and dispatches: arrays/buffers/typed-arrays through
+                    // js_array_set_f64_extend (handles forwarding + per-kind
+                    // stores), plain objects through stringify-the-index +
+                    // js_object_set_field_by_name. The forwarding-chain handling
+                    // that the previous code's inline-vs-fwd branch did is now
+                    // inside js_array_set_f64_extend's clean_arr_ptr_mut.
+                    ctx.current_block = num_set;
+                    {
+                        let blk = ctx.block();
+                        blk.call_void(
+                            "js_typed_feedback_object_set_index_polymorphic",
+                            &[
+                                (I64, &feedback_site_id),
+                                (I64, &obj_handle),
+                                (DOUBLE, &idx_box),
+                                (DOUBLE, &val_double),
+                            ],
+                        );
+                    }
+                    ctx.block().br(&merge_lbl);
+                    // The group is released after `body` returns, which lands the
+                    // truncate in the merge block — below every arm's setter, each of
+                    // which can run a user setter and therefore collect.
+                    ctx.current_block = set_merge;
+                    Ok(val_double)
+                },
+            );
         }
 
         // `obj.field = v` — generic object field write.

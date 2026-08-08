@@ -813,6 +813,38 @@ pub(crate) fn with_rooted_accumulator<'f, R>(
 /// committed source — the sabotage arm is the only thing that makes it an
 /// assertion, exactly as for both slice-1 modules, and the audit that earned
 /// the listing is written into that file's header rather than into this one.
+///
+/// Slice 4 is three load-bearing and six vacuous. `index_get.rs`,
+/// `index_set.rs` and `property_set.rs` all named the `StoreOperandGuard`
+/// family (`guard_store_operand`, `guard_store_operand_across`,
+/// `reread_store_operand`, `release_store_operand`, `expr_may_trigger_gc`)
+/// before the migration, so their lines hold on the committed source. The other
+/// six — `index_get/guarded_array.rs`, `index_get/inline_dyn_typed_array.rs`,
+/// `index_set_typed_array.rs`, `property_get.rs`, `property_get/globalget.rs`,
+/// `property_get/helpers.rs` — named none, and each carries the audit that
+/// earned its listing in its own file header.
+///
+/// ★ **A listed module is not an audited module, and slice 4 is where that
+/// distinction became load-bearing.** These two properties are not the same:
+///
+///   1. every rooting decision the module makes goes through `crate::rooting`
+///      — which is what this ledger checks, and what the listing means;
+///   2. every window in the module HAS a rooting decision.
+///
+/// `index_set.rs` and `index_get.rs` satisfy (1) and do not satisfy (2). The
+/// migration itself surfaced the gap: translating the six guarded arms of
+/// `index_set.rs` made it obvious that its `#5525` typed-array arm, its
+/// bounded-index array store and ten arms of `index_get.rs` lower a receiver,
+/// then lower more user code, then use the receiver — and root nothing. Three
+/// of those were adjacent to arms this slice was already rewriting and are
+/// fixed here (#7645, #7646, #7647); the rest are filed (#7647, #7648) rather
+/// than fixed, because they sit on inline fast paths where a temp root is a
+/// measured cost rather than plumbing.
+///
+/// So do not read a ledger line as "this module has no rooting bugs". It says
+/// the module cannot make an ORDERING mistake against the raw API, because it
+/// no longer names it. A window with no decision at all is invisible to this
+/// check, and the only instrument for it is reading the module.
 #[cfg(test)]
 const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
@@ -858,6 +890,42 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
         "crates/perry-codegen/src/expr/array_push.rs",
         include_str!("expr/array_push.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/index_get.rs",
+        include_str!("expr/index_get.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/index_get/guarded_array.rs",
+        include_str!("expr/index_get/guarded_array.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/index_get/inline_dyn_typed_array.rs",
+        include_str!("expr/index_get/inline_dyn_typed_array.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/index_set.rs",
+        include_str!("expr/index_set.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/index_set_typed_array.rs",
+        include_str!("expr/index_set_typed_array.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/property_get.rs",
+        include_str!("expr/property_get.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/property_get/globalget.rs",
+        include_str!("expr/property_get/globalget.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/property_get/helpers.rs",
+        include_str!("expr/property_get/helpers.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/property_set.rs",
+        include_str!("expr/property_set.rs"),
     ),
 ];
 

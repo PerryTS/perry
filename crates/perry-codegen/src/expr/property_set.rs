@@ -3,6 +3,22 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Migrated onto [`crate::rooting`]; this module names no `expr::temp_root`
+//! symbol. Every store here is the same shape — the receiver is lowered first
+//! because `Set(O, k, v)` evaluates the reference before the value, so it sits
+//! in an SSA register while arbitrary user code runs — and that shape is
+//! exactly one call to [`crate::rooting::with_operands_rooted`] (the value is
+//! lowered by `lower_expr`) or
+//! [`crate::rooting::with_operands_rooted_across`] (the value is lowered by
+//! `lower_value_for_dynamic_property_set`, which this API cannot produce).
+//!
+//! The migration found one arm that had no guard at all: `arr.length = f()`
+//! (#7645). It is the same #7154 window every sibling arm already closed, and
+//! it is closed here by putting the receiver in an operand group rather than by
+//! a fourth hand-written guard.
 
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
@@ -13,6 +29,7 @@ use crate::native_value::{
     BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
     NativeRep, SemanticKind,
 };
+use crate::rooting;
 use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr, receiver_class_name,
 };
@@ -266,22 +283,22 @@ fn lower_runtime_property_set_by_name(
     property: &str,
     value: &Expr,
 ) -> Result<String> {
-    let recv_box = lower_expr(ctx, object)?;
     // #7154: root the receiver across the value's evaluation, which allocates.
-    let recv_guard = super::temp_root::guard_store_operand(ctx, object, &recv_box, value);
-    let val_double = lower_expr(ctx, value)?;
-    let recv_box = super::temp_root::reread_store_operand(ctx, &recv_guard, object, &recv_box)?;
-    let key_idx = ctx.strings.intern(property);
-    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
-    let blk = ctx.block();
-    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-    let property_id = crate::strings::emit_static_dispatch_id(blk, &dispatch_global);
-    blk.call_void(
-        "js_object_set_field_by_property_id",
-        &[(I64, &obj_bits), (I64, &property_id), (DOUBLE, &val_double)],
-    );
-    super::temp_root::release_store_operand(ctx, recv_guard);
-    Ok(val_double)
+    // The group re-reads it as part of emitting the store, so no register of
+    // the receiver exists across the window.
+    rooting::with_operands_rooted(ctx, &[object, value], |ctx, vals| {
+        let (recv_box, val_double) = (&vals[0], &vals[1]);
+        let key_idx = ctx.strings.intern(property);
+        let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+        let blk = ctx.block();
+        let obj_bits = blk.bitcast_double_to_i64(recv_box);
+        let property_id = crate::strings::emit_static_dispatch_id(blk, &dispatch_global);
+        blk.call_void(
+            "js_object_set_field_by_property_id",
+            &[(I64, &obj_bits), (I64, &property_id), (DOUBLE, val_double)],
+        );
+        Ok(val_double.clone())
+    })
 }
 
 fn lower_value_for_dynamic_property_set(
@@ -381,19 +398,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // an array). Deliberately out of scope here; the static-typed
             // case covers the issue's repro.
             if property == "length" && crate::type_analysis::is_array_expr(ctx, object) {
-                let arr_box = lower_expr(ctx, object)?;
-                let val_double = lower_expr(ctx, value)?;
-                let blk = ctx.block();
-                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                // `arr.length = v` is a strict `Set(O,"length",v,true)`: a frozen
-                // array's `length` is non-writable, so route to the throwing
-                // variant instead of the silent internal helper.
-                blk.call_void(
-                    "js_array_set_length_strict",
-                    &[(I64, &arr_handle), (DOUBLE, &val_double)],
-                );
-                return Ok(val_double);
+                // #7645: this arm had NO store-operand guard, while every other
+                // `PropertySet` arm in this file has had one since #7154. It is
+                // the same window: `arr.length = f()` lowers the receiver first
+                // (spec order), `f()` allocates and can drive an evacuating
+                // minor, and `js_array_set_length_strict` then truncates through
+                // a pre-move `ArrayHeader*` — the array the program keeps is
+                // left at its old length. The receiver's own slot is a root the
+                // collector rewrites; the register is not.
+                return rooting::with_operands_rooted(ctx, &[object, value], |ctx, vals| {
+                    let (arr_box, val_double) = (&vals[0], &vals[1]);
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(arr_box);
+                    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                    // `arr.length = v` is a strict `Set(O,"length",v,true)`: a
+                    // frozen array's `length` is non-writable, so route to the
+                    // throwing variant instead of the silent internal helper.
+                    blk.call_void(
+                        "js_array_set_length_strict",
+                        &[(I64, &arr_handle), (DOUBLE, val_double)],
+                    );
+                    Ok(val_double.clone())
+                });
             }
             // #1344: `process.env.X = v` must persist to the real OS
             // environment, not just a cached ProcessEnv object backing.
@@ -1250,62 +1276,72 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
             }
-            let obj_box = lower_expr(ctx, object)?;
             // #7154: the value expression can collect, and an evacuating minor
             // inside it relocates the receiver out from under `obj_box` --
             // `obj.k = f()` then writes `k` into abandoned from-space memory
             // and the field never appears on the object the program keeps.
-            let recv_guard = super::temp_root::guard_store_operand(ctx, object, &obj_box, value);
-            let (val_double, _val_bits) = lower_value_for_dynamic_property_set(
+            //
+            // `across` rather than the plain form because the value is lowered
+            // by `lower_value_for_dynamic_property_set` (an
+            // `ExpectedNativeRep::JsValueBits` lowering plus a recorded
+            // materialisation), which the operand list cannot produce.
+            rooting::with_operands_rooted_across(
                 ctx,
-                value,
-                "property_set.dynamic_value_bits",
-                "dynamic_property_set_helper_edge",
-            )?;
-            let obj_box =
-                super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
-            // Intern the field name in the StringPool (same one the
-            // matching getter uses, so they share the global string).
-            let key_idx = ctx.strings.intern(property);
-            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-            let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-            emit_nullish_write_guard(ctx, &obj_bits, property, "pset");
-            // Issue #618-followup: pass the FULL bits (including NaN-box
-            // tag) so the runtime can detect INT32-tagged class refs
-            // (`SQL.Aliased = Aliased` IIFE-static-property pattern from
-            // drizzle-orm). Pre-fix the AND-with-POINTER_MASK_I64 stripped
-            // the 0x7FFE tag, leaving the runtime with a small integer
-            // (the class id) — which fell into the small-handle dispatch
-            // path and silently dropped the assignment. The runtime now
-            // checks for top16 == 0x7FFE and routes to CLASS_DYNAMIC_PROPS.
-            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-            let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
-            if matches!(property.as_str(), "caller" | "arguments") {
-                ctx.block().call_void(
-                    "js_object_set_field_by_name",
-                    &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
-                );
-                super::temp_root::release_store_operand(ctx, recv_guard);
-                return Ok(val_double);
-            }
-            let site_id = emit_typed_feedback_register_site(
-                ctx,
-                TypedFeedbackKind::PropertySet,
-                property,
-                TypedFeedbackContract::object_set_by_name(),
-            );
-            ctx.block().call_void(
-                "js_typed_feedback_object_set_field_by_name_fast",
-                &[
-                    (I64, &site_id),
-                    (I64, &obj_bits),
-                    (I64, &key_raw),
-                    (DOUBLE, &val_double),
-                ],
-            );
-            super::temp_root::release_store_operand(ctx, recv_guard);
-            Ok(val_double)
+                &[object.as_ref()],
+                &[value.as_ref()],
+                |ctx| {
+                    lower_value_for_dynamic_property_set(
+                        ctx,
+                        value,
+                        "property_set.dynamic_value_bits",
+                        "dynamic_property_set_helper_edge",
+                    )
+                },
+                |ctx, vals, (val_double, _val_bits)| {
+                    let obj_box = &vals[0];
+                    // Intern the field name in the StringPool (same one the
+                    // matching getter uses, so they share the global string).
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
+                    emit_nullish_write_guard(ctx, &obj_bits, property, "pset");
+                    // Issue #618-followup: pass the FULL bits (including NaN-box
+                    // tag) so the runtime can detect INT32-tagged class refs
+                    // (`SQL.Aliased = Aliased` IIFE-static-property pattern from
+                    // drizzle-orm). Pre-fix the AND-with-POINTER_MASK_I64 stripped
+                    // the 0x7FFE tag, leaving the runtime with a small integer
+                    // (the class id) — which fell into the small-handle dispatch
+                    // path and silently dropped the assignment. The runtime now
+                    // checks for top16 == 0x7FFE and routes to CLASS_DYNAMIC_PROPS.
+                    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+                    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+                    let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+                    if matches!(property.as_str(), "caller" | "arguments") {
+                        ctx.block().call_void(
+                            "js_object_set_field_by_name",
+                            &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+                        );
+                        return Ok(val_double);
+                    }
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::PropertySet,
+                        property,
+                        TypedFeedbackContract::object_set_by_name(),
+                    );
+                    ctx.block().call_void(
+                        "js_typed_feedback_object_set_field_by_name_fast",
+                        &[
+                            (I64, &site_id),
+                            (I64, &obj_bits),
+                            (I64, &key_raw),
+                            (DOUBLE, &val_double),
+                        ],
+                    );
+                    Ok(val_double)
+                },
+            )
         }
 
         // `obj.field` — generic object field read. We get the key string

@@ -4,6 +4,18 @@
 //! (#7342 pushed it to 2035). Pure mechanical move — the two functions below
 //! are verbatim, and `index_set.rs` calls them through a `use super::` path
 //! exactly as it called them locally before.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Listed in `crate::rooting`'s `MIGRATED_MODULES`, and the listing is
+//! **vacuous on the committed source**: this module has never named an
+//! `expr::temp_root` symbol, so only the sabotage arm makes the line an
+//! assertion. The audit that earned it: both functions take the receiver, index
+//! and value already lowered by the caller, and emit only pure IR plus the
+//! out-of-line `js_dyn_index_set` fallback — no user expression is lowered
+//! here, so no window opens. The receiver's exposure across the VALUE's
+//! lowering is the caller's to close, and `index_set.rs`'s `#5525` arm is one
+//! of the sites #7647 records as still open.
 
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
