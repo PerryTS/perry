@@ -716,8 +716,17 @@ pub(crate) struct RootedGroup<'a> {
 
 /// A handle on one accumulator array inside a [`RootedGroup`].
 ///
-/// Opaque and `Copy`: it indexes the group's own list, so it cannot name a slot
-/// belonging to a different group or outlive the release.
+/// Opaque and `Copy`. What it buys is the half that matters: it is not a slot
+/// index, so it cannot be truncated, mis-ordered or released — only handed back
+/// to the group, which owns every emission that touches the slot.
+///
+/// It is **not branded per group**. It is a bare index into the group's own
+/// list, so passing a handle to a *different* group selects that group's
+/// accumulator at the same position (or panics if it has fewer). Pass a handle
+/// only to the group that returned it. Branding it would need a group identity
+/// this file has nowhere to get without global state, and the mistake is not
+/// one any caller is positioned to make: a group is always a local, and the two
+/// entry points hand it out one at a time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AccArray(usize);
 
