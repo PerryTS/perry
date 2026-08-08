@@ -3,11 +3,51 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Layer 1 migrated module (#7615, slice 2)
+//!
+//! Nothing here names `expr::temp_root`. Multi-operand arms go through
+//! [`crate::rooting::with_operands_rooted`]; the two `RegExp` arms, whose
+//! receiver is live across a collection point this module *emits* rather than
+//! lowers, go through [`crate::rooting::with_operands_rooted_across_call`].
+//! `crate::rooting::migration_ledger` fails the build if this module reaches
+//! back into the raw API. Single-operand arms keep their plain `lower_expr` —
+//! with nothing lowered after the operand there is no window and
+//! `operand_protection` would answer `Reuse` (the template's rule, #7617).
+//!
+//! ## What the migration found
+//!
+//! **`with (o) { x = f() }` (`Expr::WithSet`).** The receiver AND the interned
+//! property key were materialised above the RHS, then used below it. The key is
+//! a load from a `__perry_init_strings_*` handle global — a registered root that
+//! evacuation **rewrites** — so the register named from-space while the global
+//! did not. That is #7114 exactly, in a second arm: the write landed under a
+//! garbage key, on a stale receiver. Both now materialise below the group's
+//! re-read.
+//!
+//! **Operand-to-operand windows** in `delete o[k]` (both the string-key and the
+//! dynamic form), `x instanceof <dynamic>`, `path.join`, `path.win32.*`,
+//! `path.relative`, `path.basename(p, ext)`, `arr.includes(v, from)`,
+//! `arr.splice(...)`, `Array.from(it, fn)`, `Object.groupBy` / `Map.groupBy`,
+//! `s.match(re)` / `s.matchAll(re)`, `JSON.parse(t, reviver)` and `a[i]++`.
+//!
+//! ## Deliberately NOT closed here
+//!
+//! `Expr::IndexUpdate` (`a[i]++`) still holds its re-read receiver and index
+//! across `js_dyn_index_get`, `js_to_numeric` and `js_numeric_step` — three
+//! calls that can each run user code (a getter, a `valueOf`) — before
+//! `js_dyn_index_set` consumes them. Closing that needs a *per-use* re-read
+//! inside the body, which is a different combinator from the group-wide one
+//! this campaign has (`RootedOperands::reread_one` is the raw-API shape it would
+//! wrap). Per the template's rule, that combinator should arrive with the slice
+//! that needs it rather than ahead of one. Filed separately; the operand-to-
+//! operand half IS closed here.
 
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr, WithSetFallback};
 
 use crate::nanbox::{double_literal, i64_literal, POINTER_MASK_I64};
+use crate::rooting;
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
@@ -191,91 +231,102 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             fallback,
             strict,
         } => {
-            let obj = lower_expr(ctx, object)?;
-            let (key_box, key_raw) = emit_with_key(ctx, property);
-            // HasBinding probe AFTER the RHS evaluates — matches V8/node
-            // (`with (o) { var x = delete o.x; }` writes the hoisted var,
-            // not o.x — test262 variable/binding-resolution.js judges
-            // against node's order, not the spec's resolve-reference-first).
-            let value_reg = lower_expr(ctx, value)?;
-            let had = ctx.block().call(
-                I32,
-                "js_with_has_binding",
-                &[(DOUBLE, &obj), (I64, &key_raw)],
-            );
-            let had_bool = ctx.block().icmp_ne(I32, &had, "0");
+            // #7615 slice 2: `obj` was live across the RHS's lowering, and so
+            // was the interned key — whose register is a load from a
+            // `__perry_init_strings_*` handle global that evacuation rewrites
+            // (#7114). Root the receiver across the RHS and materialise the key
+            // BELOW the re-read; the HasBinding probe still runs after the RHS.
+            rooting::with_operands_rooted(ctx, &[object, value], |ctx, vals| {
+                let (obj, value_reg) = (vals[0].clone(), vals[1].clone());
+                let (key_box, key_raw) = emit_with_key(ctx, property);
+                // HasBinding probe AFTER the RHS evaluates — matches V8/node
+                // (`with (o) { var x = delete o.x; }` writes the hoisted var,
+                // not o.x — test262 variable/binding-resolution.js judges
+                // against node's order, not the spec's resolve-reference-first).
+                let had = ctx.block().call(
+                    I32,
+                    "js_with_has_binding",
+                    &[(DOUBLE, &obj), (I64, &key_raw)],
+                );
+                let had_bool = ctx.block().icmp_ne(I32, &had, "0");
 
-            let hit_idx = ctx.new_block("with.set.hit");
-            let miss_idx = ctx.new_block("with.set.miss");
-            let merge_idx = ctx.new_block("with.set.merge");
-            let hit_label = ctx.block_label(hit_idx);
-            let miss_label = ctx.block_label(miss_idx);
-            let merge_label = ctx.block_label(merge_idx);
-            ctx.block().cond_br(&had_bool, &hit_label, &miss_label);
+                let hit_idx = ctx.new_block("with.set.hit");
+                let miss_idx = ctx.new_block("with.set.miss");
+                let merge_idx = ctx.new_block("with.set.merge");
+                let hit_label = ctx.block_label(hit_idx);
+                let miss_label = ctx.block_label(miss_idx);
+                let merge_label = ctx.block_label(merge_idx);
+                ctx.block().cond_br(&had_bool, &hit_label, &miss_label);
 
-            ctx.current_block = hit_idx;
-            let strict_i32 = if *strict { "1" } else { "0" };
-            let hit = ctx.block().call(
-                DOUBLE,
-                "js_with_set_binding",
-                &[
-                    (DOUBLE, &obj),
-                    (I64, &key_raw),
-                    (DOUBLE, &value_reg),
-                    (I32, strict_i32),
-                ],
-            );
-            let hit_after = ctx.block().label.clone();
-            if !ctx.block().is_terminated() {
-                ctx.block().br(&merge_label);
-            }
-
-            ctx.current_block = miss_idx;
-            let miss = match fallback {
-                WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) => {
-                    store_prelowered_local(ctx, *id, &value_reg)?
+                ctx.current_block = hit_idx;
+                let strict_i32 = if *strict { "1" } else { "0" };
+                let hit = ctx.block().call(
+                    DOUBLE,
+                    "js_with_set_binding",
+                    &[
+                        (DOUBLE, &obj),
+                        (I64, &key_raw),
+                        (DOUBLE, &value_reg),
+                        (I32, strict_i32),
+                    ],
+                );
+                let hit_after = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
                 }
-                WithSetFallback::ThrowReferenceError => ctx.block().call(
-                    DOUBLE,
-                    "js_throw_reference_error_unresolvable_assignment",
-                    &[(DOUBLE, &key_box)],
-                ),
-                WithSetFallback::ThrowConstAssignment => ctx.block().call(
-                    DOUBLE,
-                    "js_throw_type_error_const_assignment",
-                    &[(DOUBLE, &key_box)],
-                ),
-                WithSetFallback::Ignore => value_reg.clone(),
-            };
-            let miss_after = ctx.block().label.clone();
-            if !ctx.block().is_terminated() {
-                ctx.block().br(&merge_label);
-            }
 
-            ctx.current_block = merge_idx;
-            Ok(ctx
-                .block()
-                .phi(DOUBLE, &[(&hit, &hit_after), (&miss, &miss_after)]))
+                ctx.current_block = miss_idx;
+                let miss = match fallback {
+                    WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) => {
+                        store_prelowered_local(ctx, *id, &value_reg)?
+                    }
+                    WithSetFallback::ThrowReferenceError => ctx.block().call(
+                        DOUBLE,
+                        "js_throw_reference_error_unresolvable_assignment",
+                        &[(DOUBLE, &key_box)],
+                    ),
+                    WithSetFallback::ThrowConstAssignment => ctx.block().call(
+                        DOUBLE,
+                        "js_throw_type_error_const_assignment",
+                        &[(DOUBLE, &key_box)],
+                    ),
+                    WithSetFallback::Ignore => value_reg.clone(),
+                };
+                let miss_after = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
+                }
+
+                ctx.current_block = merge_idx;
+                Ok(ctx
+                    .block()
+                    .phi(DOUBLE, &[(&hit, &hit_after), (&miss, &miss_after)]))
+            })
         }
         Expr::InstanceOf {
             expr: e,
             ty,
             ty_expr,
         } => {
-            let v = lower_expr(ctx, e)?;
             // v0.5.749: dynamic dispatch when the type is a runtime
             // expression (function arg, local holding a class ref).
             // The runtime helper `js_instanceof_dynamic` extracts the
             // class_id from the INT32 NaN-tag and walks the chain.
             // Refs #420 / #618 followup.
+            //
+            // #7615 slice 2: `v` is live across the RHS's lowering, so the pair
+            // is rooted as a group. The static-RHS path below lowers nothing
+            // after `v` and keeps its plain `lower_expr`.
             if let Some(ty_e) = ty_expr {
-                let ty_v = lower_expr(ctx, ty_e)?;
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_instanceof_dynamic",
-                    &[(DOUBLE, &v), (DOUBLE, &ty_v)],
-                ));
+                return rooting::with_operands_rooted(ctx, &[e, ty_e], |ctx, vals| {
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_instanceof_dynamic",
+                        &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
+                    ))
+                });
             }
+            let v = lower_expr(ctx, e)?;
             if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(ty) {
                 if submod_key == "diagnostics_channel"
                     && matches!(exported_name.as_str(), "Channel" | "BoundedChannel")
@@ -665,45 +716,56 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 Expr::IndexGet { object, index } if is_string_expr(ctx, index) => {
-                    let obj_box = lower_expr(ctx, object)?;
-                    let key_box = lower_expr(ctx, index)?;
-                    // `delete null[k]` / `delete undefined[k]` → TypeError, after
-                    // the key expression is evaluated (spec
-                    // EvaluatePropertyAccessWithExpressionKey: RequireObjectCoercible
-                    // runs after ToPropertyKey's operand is evaluated).
-                    ctx.block()
-                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
-                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
-                    let blk = ctx.block();
-                    // SSO-safe key unbox — `js_object_delete_field`
-                    // dereferences the key as `*StringHeader`. #214 class.
-                    let key_handle = unbox_str_handle(blk, &key_box);
-                    // Raw receiver: primitive `delete prim[k]` no-ops to `true`.
-                    let i32_v = blk.call(
-                        I32,
-                        "js_object_delete_field_value",
-                        &[(DOUBLE, &obj_box), (I64, &key_handle)],
-                    );
-                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
+                    // #7615 slice 2: the receiver is live across the key's
+                    // lowering, and the key is unboxed to a raw `StringHeader*`
+                    // below it — slice 1b's `BufferSlice` shape.
+                    rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                        let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
+                        // `delete null[k]` / `delete undefined[k]` → TypeError, after
+                        // the key expression is evaluated (spec
+                        // EvaluatePropertyAccessWithExpressionKey: RequireObjectCoercible
+                        // runs after ToPropertyKey's operand is evaluated).
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_require_object_coercible",
+                            &[(DOUBLE, &obj_box)],
+                        );
+                        let strict = if ctx.is_strict_fn { "1" } else { "0" };
+                        let blk = ctx.block();
+                        // SSO-safe key unbox — `js_object_delete_field`
+                        // dereferences the key as `*StringHeader`. #214 class.
+                        let key_handle = unbox_str_handle(blk, &key_box);
+                        // Raw receiver: primitive `delete prim[k]` no-ops to `true`.
+                        let i32_v = blk.call(
+                            I32,
+                            "js_object_delete_field_value",
+                            &[(DOUBLE, &obj_box), (I64, &key_handle)],
+                        );
+                        Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
+                    })
                 }
                 // delete obj[expr] — route dynamic keys through the runtime so
                 // string-valued locals (for example `delete fn[name]`) still
                 // use the ordinary property-delete path instead of being
                 // misread as numeric array indexes.
                 Expr::IndexGet { object, index } => {
-                    let obj_box = lower_expr(ctx, object)?;
-                    let idx_box = lower_expr(ctx, index)?;
-                    ctx.block()
-                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
-                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
-                    let blk = ctx.block();
-                    // Raw receiver: primitive `delete prim[expr]` no-ops to `true`.
-                    let i32_v = blk.call(
-                        I32,
-                        "js_object_delete_dynamic_value",
-                        &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
-                    );
-                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
+                    rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                        let (obj_box, idx_box) = (vals[0].clone(), vals[1].clone());
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_require_object_coercible",
+                            &[(DOUBLE, &obj_box)],
+                        );
+                        let strict = if ctx.is_strict_fn { "1" } else { "0" };
+                        let blk = ctx.block();
+                        // Raw receiver: primitive `delete prim[expr]` no-ops to `true`.
+                        let i32_v = blk.call(
+                            I32,
+                            "js_object_delete_dynamic_value",
+                            &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
+                        );
+                        Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
+                    })
                 }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
@@ -821,19 +883,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // #2773: `js_array_from_mapped` throws for nullish sources, validates
             // mapFn callability, calls mapFn(value, index) and binds the optional
             // thisArg. All three args are passed raw NaN-boxed (DOUBLE).
-            let iter_box = lower_expr(ctx, iterable)?;
-            let cb_box = lower_expr(ctx, map_fn)?;
-            let this_box = match this_arg {
-                Some(t) => lower_expr(ctx, t)?,
-                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-            };
-            let blk = ctx.block();
-            let mapped = blk.call(
-                I64,
-                "js_array_from_mapped",
-                &[(DOUBLE, &iter_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
-            );
-            Ok(nanbox_pointer_inline(blk, &mapped))
+            let mut operands: Vec<&Expr> = vec![iterable, map_fn];
+            if let Some(t) = this_arg {
+                operands.push(t);
+            }
+            rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let this_box = vals.get(2).cloned().unwrap_or_else(|| {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                });
+                let blk = ctx.block();
+                let mapped = blk.call(
+                    I64,
+                    "js_array_from_mapped",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1]), (DOUBLE, &this_box)],
+                );
+                Ok(nanbox_pointer_inline(blk, &mapped))
+            })
         }
         Expr::Uint8ArrayFrom(iter) => {
             // #2774: materialize the source into a real Uint8Array (kind 1) so
@@ -874,33 +939,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- path.join(a, b) -> string --------
         // The HIR variant is binary; multi-arg path.join lowers to
         // chained PathJoin in the HIR.
-        Expr::PathJoin(a, b) => {
-            let a_box = lower_expr(ctx, a)?;
-            let b_box = lower_expr(ctx, b)?;
+        Expr::PathJoin(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &a_box);
-            let b_handle = unbox_to_i64(blk, &b_box);
+            let a_handle = unbox_to_i64(blk, &vals[0]);
+            let b_handle = unbox_to_i64(blk, &vals[1]);
             let result = blk.call(I64, "js_path_join", &[(I64, &a_handle), (I64, &b_handle)]);
             Ok(nanbox_string_inline(blk, &result))
-        }
+        }),
 
         // -------- path.win32.join(a, b) -> string (issue #810) --------
         // Windows-style join with `\` separator, regardless of host
         // platform. Multi-arg path.win32.join lowers to chained
         // PathWin32Join in the HIR.
-        Expr::PathWin32Join(a, b) => {
-            let a_box = lower_expr(ctx, a)?;
-            let b_box = lower_expr(ctx, b)?;
+        Expr::PathWin32Join(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &a_box);
-            let b_handle = unbox_to_i64(blk, &b_box);
+            let a_handle = unbox_to_i64(blk, &vals[0]);
+            let b_handle = unbox_to_i64(blk, &vals[1]);
             let result = blk.call(
                 I64,
                 "js_path_win32_join",
                 &[(I64, &a_handle), (I64, &b_handle)],
             );
             Ok(nanbox_string_inline(blk, &result))
-        }
+        }),
 
         // -------- path.win32.<method>(...) (issue #1162) --------
         // One arm covers every win32 sub-namespace method other than
@@ -909,91 +970,92 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // js_path_win32_* runtime function.
         Expr::PathWin32 { method, args } => {
             use perry_hir::PathWin32Method;
-            // Lower all args up front into NaN-boxed JSValue locals.
-            let lowered: Vec<_> = args
-                .iter()
-                .map(|a| lower_expr(ctx, a))
-                .collect::<Result<Vec<_>, _>>()?;
-            match method {
-                PathWin32Method::ToNamespacedPath => {
-                    let blk = ctx.block();
-                    Ok(blk.call(
-                        DOUBLE,
-                        "js_path_win32_to_namespaced_path_value",
-                        &[(DOUBLE, &lowered[0])],
-                    ))
+            // Lower all args up front into NaN-boxed JSValue locals. #7615
+            // slice 2: each was live across the ones after it, and the
+            // two-operand methods unbox both to raw `StringHeader*` below.
+            let operands: Vec<&Expr> = args.iter().collect();
+            rooting::with_operands_rooted(ctx, &operands, |ctx, lowered| {
+                match method {
+                    PathWin32Method::ToNamespacedPath => {
+                        let blk = ctx.block();
+                        Ok(blk.call(
+                            DOUBLE,
+                            "js_path_win32_to_namespaced_path_value",
+                            &[(DOUBLE, &lowered[0])],
+                        ))
+                    }
+                    PathWin32Method::Dirname
+                    | PathWin32Method::Basename
+                    | PathWin32Method::Extname
+                    | PathWin32Method::Normalize
+                    | PathWin32Method::Resolve => {
+                        let fn_name = match method {
+                            PathWin32Method::Dirname => "js_path_win32_dirname",
+                            PathWin32Method::Basename => "js_path_win32_basename",
+                            PathWin32Method::Extname => "js_path_win32_extname",
+                            PathWin32Method::Normalize => "js_path_win32_normalize",
+                            PathWin32Method::Resolve => "js_path_win32_resolve",
+                            _ => unreachable!(),
+                        };
+                        let blk = ctx.block();
+                        let h = unbox_to_i64(blk, &lowered[0]);
+                        let result = blk.call(I64, fn_name, &[(I64, &h)]);
+                        Ok(nanbox_string_inline(blk, &result))
+                    }
+                    PathWin32Method::Relative => {
+                        // #2995: validate both operands are strings (throwing
+                        // ERR_INVALID_ARG_TYPE on a non-string) before computing
+                        // the relative path. Pass the NaN-boxed doubles so the
+                        // runtime can inspect their type.
+                        let blk = ctx.block();
+                        let result = blk.call(
+                            I64,
+                            "js_path_win32_relative_checked",
+                            &[(DOUBLE, &lowered[0]), (DOUBLE, &lowered[1])],
+                        );
+                        Ok(nanbox_string_inline(blk, &result))
+                    }
+                    PathWin32Method::BasenameExt | PathWin32Method::ResolveJoin => {
+                        let fn_name = match method {
+                            PathWin32Method::BasenameExt => "js_path_win32_basename_ext",
+                            PathWin32Method::ResolveJoin => "js_path_win32_resolve_join",
+                            _ => unreachable!(),
+                        };
+                        let blk = ctx.block();
+                        let a = unbox_to_i64(blk, &lowered[0]);
+                        let b = unbox_to_i64(blk, &lowered[1]);
+                        let result = blk.call(I64, fn_name, &[(I64, &a), (I64, &b)]);
+                        Ok(nanbox_string_inline(blk, &result))
+                    }
+                    PathWin32Method::IsAbsolute => {
+                        let blk = ctx.block();
+                        let h = unbox_to_i64(blk, &lowered[0]);
+                        let i32_v = blk.call(I32, "js_path_win32_is_absolute", &[(I64, &h)]);
+                        Ok(i32_bool_to_nanbox(blk, &i32_v))
+                    }
+                    PathWin32Method::MatchesGlob => {
+                        let blk = ctx.block();
+                        let p = unbox_to_i64(blk, &lowered[0]);
+                        let pat = unbox_to_i64(blk, &lowered[1]);
+                        let i32_v =
+                            blk.call(I32, "js_path_win32_matches_glob", &[(I64, &p), (I64, &pat)]);
+                        Ok(i32_bool_to_nanbox(blk, &i32_v))
+                    }
+                    PathWin32Method::Parse => {
+                        let blk = ctx.block();
+                        let h = unbox_to_i64(blk, &lowered[0]);
+                        let result = blk.call(I64, "js_path_win32_parse", &[(I64, &h)]);
+                        Ok(nanbox_pointer_inline(blk, &result))
+                    }
+                    PathWin32Method::Format => {
+                        // js_path_win32_format takes a NaN-boxed double (object handle).
+                        let obj_box = lowered[0].clone();
+                        let blk = ctx.block();
+                        let result = blk.call(I64, "js_path_win32_format", &[(DOUBLE, &obj_box)]);
+                        Ok(nanbox_string_inline(blk, &result))
+                    }
                 }
-                PathWin32Method::Dirname
-                | PathWin32Method::Basename
-                | PathWin32Method::Extname
-                | PathWin32Method::Normalize
-                | PathWin32Method::Resolve => {
-                    let fn_name = match method {
-                        PathWin32Method::Dirname => "js_path_win32_dirname",
-                        PathWin32Method::Basename => "js_path_win32_basename",
-                        PathWin32Method::Extname => "js_path_win32_extname",
-                        PathWin32Method::Normalize => "js_path_win32_normalize",
-                        PathWin32Method::Resolve => "js_path_win32_resolve",
-                        _ => unreachable!(),
-                    };
-                    let blk = ctx.block();
-                    let h = unbox_to_i64(blk, &lowered[0]);
-                    let result = blk.call(I64, fn_name, &[(I64, &h)]);
-                    Ok(nanbox_string_inline(blk, &result))
-                }
-                PathWin32Method::Relative => {
-                    // #2995: validate both operands are strings (throwing
-                    // ERR_INVALID_ARG_TYPE on a non-string) before computing
-                    // the relative path. Pass the NaN-boxed doubles so the
-                    // runtime can inspect their type.
-                    let blk = ctx.block();
-                    let result = blk.call(
-                        I64,
-                        "js_path_win32_relative_checked",
-                        &[(DOUBLE, &lowered[0]), (DOUBLE, &lowered[1])],
-                    );
-                    Ok(nanbox_string_inline(blk, &result))
-                }
-                PathWin32Method::BasenameExt | PathWin32Method::ResolveJoin => {
-                    let fn_name = match method {
-                        PathWin32Method::BasenameExt => "js_path_win32_basename_ext",
-                        PathWin32Method::ResolveJoin => "js_path_win32_resolve_join",
-                        _ => unreachable!(),
-                    };
-                    let blk = ctx.block();
-                    let a = unbox_to_i64(blk, &lowered[0]);
-                    let b = unbox_to_i64(blk, &lowered[1]);
-                    let result = blk.call(I64, fn_name, &[(I64, &a), (I64, &b)]);
-                    Ok(nanbox_string_inline(blk, &result))
-                }
-                PathWin32Method::IsAbsolute => {
-                    let blk = ctx.block();
-                    let h = unbox_to_i64(blk, &lowered[0]);
-                    let i32_v = blk.call(I32, "js_path_win32_is_absolute", &[(I64, &h)]);
-                    Ok(i32_bool_to_nanbox(blk, &i32_v))
-                }
-                PathWin32Method::MatchesGlob => {
-                    let blk = ctx.block();
-                    let p = unbox_to_i64(blk, &lowered[0]);
-                    let pat = unbox_to_i64(blk, &lowered[1]);
-                    let i32_v =
-                        blk.call(I32, "js_path_win32_matches_glob", &[(I64, &p), (I64, &pat)]);
-                    Ok(i32_bool_to_nanbox(blk, &i32_v))
-                }
-                PathWin32Method::Parse => {
-                    let blk = ctx.block();
-                    let h = unbox_to_i64(blk, &lowered[0]);
-                    let result = blk.call(I64, "js_path_win32_parse", &[(I64, &h)]);
-                    Ok(nanbox_pointer_inline(blk, &result))
-                }
-                PathWin32Method::Format => {
-                    // js_path_win32_format takes a NaN-boxed double (object handle).
-                    let obj_box = lowered.into_iter().next().unwrap();
-                    let blk = ctx.block();
-                    let result = blk.call(I64, "js_path_win32_format", &[(DOUBLE, &obj_box)]);
-                    Ok(nanbox_string_inline(blk, &result))
-                }
-            }
+            })
         }
 
         // -------- queueMicrotask(fn) stub --------
@@ -1041,32 +1103,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let mut arg_refs: Vec<&Expr> = Vec::with_capacity(n + 1);
             arg_refs.push(callback);
             arg_refs.extend(args.iter());
-            let (vals, guard) = super::temp_root::lower_exprs_rooted(ctx, &arg_refs)?;
-            let cb_box = vals[0].clone();
-            let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-            for (i, v) in vals.iter().skip(1).enumerate() {
+            rooting::with_operands_rooted(ctx, &arg_refs, |ctx, vals| {
+                let cb_box = vals[0].clone();
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, v) in vals.iter().skip(1).enumerate() {
+                    let blk = ctx.block();
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf
+                ));
                 let blk = ctx.block();
-                let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
-                blk.store(DOUBLE, v, &slot);
-            }
-            let ptr_reg = ctx.block().next_reg();
-            ctx.block().emit_raw(format!(
-                "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                ptr_reg, n, buf
-            ));
-            let blk = ctx.block();
-            // #3046: same callback validation on the trailing-args path.
-            let cb_handle = blk.call(
-                I64,
-                "js_timer_validate_callback",
-                &[(DOUBLE, &cb_box), (I32, "3")],
-            );
-            blk.call_void(
-                "js_queue_next_tick_args",
-                &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
-            );
-            super::temp_root::temp_root_release(ctx, guard);
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+                // #3046: same callback validation on the trailing-args path.
+                let cb_handle = blk.call(
+                    I64,
+                    "js_timer_validate_callback",
+                    &[(DOUBLE, &cb_box), (I32, "3")],
+                );
+                blk.call_void(
+                    "js_queue_next_tick_args",
+                    &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
+                );
+                Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            })
         }
 
         // -------- RegExpTest --------
@@ -1074,13 +1136,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Receiver is a NaN-tagged i64 RegExpHeader pointer; arg is
         // a NaN-tagged string. Both must be unboxed before the call.
         Expr::RegExpTest { regex, string } => {
-            let regex_box = lower_expr(ctx, regex)?;
             // #7154: the receiver is live across BOTH the string operand's own
             // lowering and the `js_jsvalue_to_string_coerce` below it, and the
             // coerce is unconditional — it allocates, and on an object argument
             // it runs a user `toString`, which is arbitrary JS with its own
-            // back-edge polls. So the window always exists and `collects` is
-            // `true` rather than a `expr_may_trigger_gc(string)` test.
+            // back-edge polls. So the window always exists, which is what
+            // `with_operands_rooted_across_call` states: an emitted call is not
+            // an `Expr`, so `any_may_trigger_gc` has nothing to read and the
+            // answer cannot be derived from the `string` operand.
             //
             // This is the site the registry reproducer faults at
             // (`defineApiCall + 404`, `obj_type=3 size=80`): `js_regexp_new`'s
@@ -1088,31 +1151,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // minor that moved it, and `js_regexp_test` dereferenced from-space.
             // The static checker could not see it because `ALLOC_RE` spelled the
             // allocator `regexp_alloc\w*` and the call is `js_regexp_new`.
-            let guard = super::temp_root::guard_store_operand_across(ctx, regex, &regex_box, true);
-            let str_box = lower_expr(ctx, string)?;
-            // Per spec `RegExp.prototype.test` does `ToString(argument)`, so a
-            // String wrapper (`re.test(new String("x"))`), a number
-            // (`re.test(123)`), or an object with a custom `toString` must be
-            // coerced — and a throwing `toString`/`valueOf` must propagate.
-            // `js_get_string_pointer_unified` only unwraps real strings, so use
-            // the coercing ToString that dispatches `toString` on objects.
-            let str_handle =
-                ctx.block()
-                    .call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]);
-            // Re-read BELOW the coerce, then unbox. Unboxing above it is what
-            // parked the pre-move address in a register in the first place.
-            let regex_box = super::temp_root::reread_store_operand(ctx, &guard, regex, &regex_box)?;
-            let blk = ctx.block();
-            let regex_handle = unbox_to_i64(blk, &regex_box);
-            let i32_v = blk.call(
-                I32,
-                "js_regexp_test",
-                &[(I64, &regex_handle), (I64, &str_handle)],
-            );
-            let out = i32_bool_to_nanbox(ctx.block(), &i32_v);
-            // After the call: `js_regexp_test` allocates while reading these.
-            super::temp_root::release_store_operand(ctx, guard);
-            Ok(out)
+            rooting::with_operands_rooted_across_call(
+                ctx,
+                &[regex],
+                |ctx| {
+                    let str_box = lower_expr(ctx, string)?;
+                    // Per spec `RegExp.prototype.test` does `ToString(argument)`,
+                    // so a String wrapper (`re.test(new String("x"))`), a number
+                    // (`re.test(123)`), or an object with a custom `toString`
+                    // must be coerced — and a throwing `toString`/`valueOf` must
+                    // propagate. `js_get_string_pointer_unified` only unwraps
+                    // real strings, so use the coercing ToString that dispatches
+                    // `toString` on objects.
+                    Ok(ctx
+                        .block()
+                        .call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]))
+                },
+                |ctx, vals, str_handle| {
+                    // Unbox BELOW the re-read. Unboxing above the coerce is what
+                    // parked the pre-move address in a register in the first
+                    // place. The release follows the call, which allocates while
+                    // reading these.
+                    let blk = ctx.block();
+                    let regex_handle = unbox_to_i64(blk, &vals[0]);
+                    let i32_v = blk.call(
+                        I32,
+                        "js_regexp_test",
+                        &[(I64, &regex_handle), (I64, &str_handle)],
+                    );
+                    Ok(i32_bool_to_nanbox(ctx.block(), &i32_v))
+                },
+            )
         }
         Expr::RegExpExec { regex, string } => {
             // Returns ArrayHeader* or null. For a null (0) result we must
@@ -1120,28 +1189,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // correctly — just NaN-boxing 0 with POINTER_TAG produces a
             // non-null pointer value that compares unequal to null, causing
             // infinite loops + segfaults when callers IndexGet on the result.
-            let regex_box = lower_expr(ctx, regex)?;
             // #7154, identical shape to `RegExpTest` above and found with it:
             // the receiver is live across the string operand's lowering and
             // across the unconditional coerce, which allocates and can run a
             // user `toString`.
-            let guard = super::temp_root::guard_store_operand_across(ctx, regex, &regex_box, true);
-            let str_box = lower_expr(ctx, string)?;
-            // `RegExp.prototype.exec` does `ToString(argument)` — coerce String
-            // wrappers / numbers / objects (and propagate a throwing toString)
-            // rather than only unwrapping real strings (see RegExpTest above).
-            let str_handle =
-                ctx.block()
-                    .call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]);
-            let regex_box = super::temp_root::reread_store_operand(ctx, &guard, regex, &regex_box)?;
-            let blk = ctx.block();
-            let regex_handle = unbox_to_i64(blk, &regex_box);
-            let result = blk.call(
-                I64,
-                "js_regexp_exec",
-                &[(I64, &regex_handle), (I64, &str_handle)],
-            );
-            super::temp_root::release_store_operand(ctx, guard);
+            let result = rooting::with_operands_rooted_across_call(
+                ctx,
+                &[regex],
+                |ctx| {
+                    let str_box = lower_expr(ctx, string)?;
+                    // `RegExp.prototype.exec` does `ToString(argument)` — coerce
+                    // String wrappers / numbers / objects (and propagate a
+                    // throwing toString) rather than only unwrapping real
+                    // strings (see RegExpTest above).
+                    Ok(ctx
+                        .block()
+                        .call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]))
+                },
+                |ctx, vals, str_handle| {
+                    let blk = ctx.block();
+                    let regex_handle = unbox_to_i64(blk, &vals[0]);
+                    Ok(blk.call(
+                        I64,
+                        "js_regexp_exec",
+                        &[(I64, &regex_handle), (I64, &str_handle)],
+                    ))
+                },
+            )?;
             let blk = ctx.block();
             // Branch on result == 0 → TAG_NULL; else NaN-box as pointer.
             let is_null = blk.icmp_eq(I64, &result, "0");
@@ -1171,15 +1245,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // #2995: validate both operands are strings before computing the
             // relative path. The checked entry point inspects the NaN-boxed
             // doubles and throws ERR_INVALID_ARG_TYPE for non-strings.
-            let f_box = lower_expr(ctx, from)?;
-            let t_box = lower_expr(ctx, to)?;
-            let blk = ctx.block();
-            let result = blk.call(
-                I64,
-                "js_path_relative_checked",
-                &[(DOUBLE, &f_box), (DOUBLE, &t_box)],
-            );
-            Ok(nanbox_string_inline(blk, &result))
+            rooting::with_operands_rooted(ctx, &[from, to], |ctx, vals| {
+                let blk = ctx.block();
+                let result = blk.call(
+                    I64,
+                    "js_path_relative_checked",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
+                );
+                Ok(nanbox_string_inline(blk, &result))
+            })
         }
 
         // -------- arr.includes(value) -> boolean --------
@@ -1188,41 +1262,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             from_index,
         } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let v = lower_expr(ctx, value)?;
-            // #2804: optional fromIndex. has_from=1 + lowered index when
-            // present; otherwise has_from=0 with a placeholder DOUBLE (`v`).
-            let (from_box, has_from) = match from_index {
-                Some(fi) => (lower_expr(ctx, fi)?, "1"),
-                None => (v.clone(), "0"),
-            };
-            let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            // Use `js_array_includes_jsvalue` which does deep-value
-            // equality (string content, not pointer identity). The
-            // `*_f64` variant compares raw f64 bits which fails for
-            // strings created at different sites.
-            let i32_v = blk.call(
-                I32,
-                "js_array_includes_jsvalue",
-                &[
-                    (I64, &arr_handle),
-                    (DOUBLE, &v),
-                    (DOUBLE, &from_box),
-                    (I32, has_from),
-                ],
-            );
-            // Convert i32 boolean to NaN-tagged TAG_TRUE/FALSE so
-            // console.log prints "true"/"false".
-            let bit = blk.icmp_ne(I32, &i32_v, "0");
-            let tagged = blk.select(
-                crate::types::I1,
-                &bit,
-                I64,
-                crate::nanbox::TAG_TRUE_I64,
-                crate::nanbox::TAG_FALSE_I64,
-            );
-            Ok(blk.bitcast_i64_to_double(&tagged))
+            let mut operands: Vec<&Expr> = vec![array, value];
+            if let Some(fi) = from_index {
+                operands.push(fi);
+            }
+            rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let v = vals[1].clone();
+                // #2804: optional fromIndex. has_from=1 + lowered index when
+                // present; otherwise has_from=0 with a placeholder DOUBLE (`v`).
+                let (from_box, has_from) = match vals.get(2) {
+                    Some(fi) => (fi.clone(), "1"),
+                    None => (v.clone(), "0"),
+                };
+                let blk = ctx.block();
+                let arr_handle = unbox_to_i64(blk, &vals[0]);
+                // Use `js_array_includes_jsvalue` which does deep-value
+                // equality (string content, not pointer identity). The
+                // `*_f64` variant compares raw f64 bits which fails for
+                // strings created at different sites.
+                let i32_v = blk.call(
+                    I32,
+                    "js_array_includes_jsvalue",
+                    &[
+                        (I64, &arr_handle),
+                        (DOUBLE, &v),
+                        (DOUBLE, &from_box),
+                        (I32, has_from),
+                    ],
+                );
+                // Convert i32 boolean to NaN-tagged TAG_TRUE/FALSE so
+                // console.log prints "true"/"false".
+                let bit = blk.icmp_ne(I32, &i32_v, "0");
+                let tagged = blk.select(
+                    crate::types::I1,
+                    &bit,
+                    I64,
+                    crate::nanbox::TAG_TRUE_I64,
+                    crate::nanbox::TAG_FALSE_I64,
+                );
+                Ok(blk.bitcast_i64_to_double(&tagged))
+            })
         }
 
         // -------- arr.splice(start, deleteCount?, ...items) --------
@@ -1235,76 +1314,86 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             delete_count,
             items,
         } => {
-            let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
-            let start_d = lower_expr(ctx, start)?;
-            let count_d = if let Some(d) = delete_count {
-                lower_expr(ctx, d)?
-            } else {
-                "2147483647.0".to_string()
-            };
-
-            // Evaluate splice-insert items and collect their f64 values.
-            let mut item_vals: Vec<String> = Vec::new();
-            for it in items {
-                item_vals.push(lower_expr(ctx, it)?);
+            // #7615 slice 2: the array, the start index, the delete count and
+            // every inserted item were each live in a register across the
+            // lowering of the ones after them.
+            let array_get = Expr::LocalGet(*array_id);
+            let mut operands: Vec<&Expr> = vec![&array_get, start];
+            let has_count = delete_count.is_some();
+            if let Some(d) = delete_count {
+                operands.push(d);
             }
+            operands.extend(items.iter());
+            rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let arr_box = vals[0].clone();
+                let start_d = vals[1].clone();
+                let items_at = if has_count { 3 } else { 2 };
+                let count_d = if has_count {
+                    vals[2].clone()
+                } else {
+                    "2147483647.0".to_string()
+                };
+                let item_vals: Vec<String> = vals[items_at..].to_vec();
 
-            let blk = ctx.block();
-            // Scratch out-parameter slot — used only in this block to
-            // receive the modified-array handle from js_array_splice.
-            let out_slot = blk.alloca(I64);
-            blk.store(I64, "0", &out_slot);
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            // ToIntegerOrInfinity via the clamping helper: `fptosi` on
-            // ±Infinity/NaN is LLVM poison — `splice(Infinity, 3)` deleted
-            // from index 0 (test262 splice/S15.4.4.12_A2.1_T3).
-            let start_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &start_d)]);
-            let count_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
+                let blk = ctx.block();
+                // Scratch out-parameter slot — used only in this block to
+                // receive the modified-array handle from js_array_splice.
+                let out_slot = blk.alloca(I64);
+                blk.store(I64, "0", &out_slot);
+                let arr_handle = unbox_to_i64(blk, &arr_box);
+                // ToIntegerOrInfinity via the clamping helper: `fptosi` on
+                // ±Infinity/NaN is LLVM poison — `splice(Infinity, 3)` deleted
+                // from index 0 (test262 splice/S15.4.4.12_A2.1_T3).
+                let start_i32 =
+                    blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &start_d)]);
+                let count_i32 =
+                    blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
 
-            let (items_ptr, items_count_str) = if item_vals.is_empty() {
-                ("null".to_string(), "0".to_string())
-            } else {
-                // Allocate a stack buffer of [N x double] for the
-                // items, store each value, and pass the base pointer.
-                let n = item_vals.len();
-                let items_count_str = format!("{}", n);
-                let buf_reg = blk.next_reg();
-                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                for (i, val) in item_vals.iter().enumerate() {
-                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                    blk.store(DOUBLE, val, &slot);
+                let (items_ptr, items_count_str) = if item_vals.is_empty() {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    // Allocate a stack buffer of [N x double] for the
+                    // items, store each value, and pass the base pointer.
+                    let n = item_vals.len();
+                    let items_count_str = format!("{}", n);
+                    let buf_reg = blk.next_reg();
+                    blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                    for (i, val) in item_vals.iter().enumerate() {
+                        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                        blk.store(DOUBLE, val, &slot);
+                    }
+                    (buf_reg, items_count_str)
+                };
+
+                // Note: js_array_splice's return value is the DELETED
+                // array; the modified-in-place arr is written to *out_arr.
+                let deleted_handle = blk.call(
+                    I64,
+                    "js_array_splice",
+                    &[
+                        (I64, &arr_handle),
+                        (I32, &start_i32),
+                        (I32, &count_i32),
+                        (PTR, &items_ptr),
+                        (I32, &items_count_str),
+                        (PTR, &out_slot),
+                    ],
+                );
+                // Read the modified array from the out slot and write it
+                // back to the source local.
+                let modified_handle = ctx.block().load(I64, &out_slot);
+                let modified_box = nanbox_pointer_inline(ctx.block(), &modified_handle);
+                if let Some(slot) = ctx.locals.get(array_id).cloned() {
+                    ctx.block().store(DOUBLE, &modified_box, &slot);
+                } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
+                    let g_ref = format!("@{}", global_name);
+                    // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
+                    emit_root_nanbox_store_on_block(ctx.block(), &modified_box, &g_ref);
                 }
-                (buf_reg, items_count_str)
-            };
-
-            // Note: js_array_splice's return value is the DELETED
-            // array; the modified-in-place arr is written to *out_arr.
-            let deleted_handle = blk.call(
-                I64,
-                "js_array_splice",
-                &[
-                    (I64, &arr_handle),
-                    (I32, &start_i32),
-                    (I32, &count_i32),
-                    (PTR, &items_ptr),
-                    (I32, &items_count_str),
-                    (PTR, &out_slot),
-                ],
-            );
-            // Read the modified array from the out slot and write it
-            // back to the source local.
-            let modified_handle = ctx.block().load(I64, &out_slot);
-            let modified_box = nanbox_pointer_inline(ctx.block(), &modified_handle);
-            if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                ctx.block().store(DOUBLE, &modified_box, &slot);
-            } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
-                let g_ref = format!("@{}", global_name);
-                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
-                emit_root_nanbox_store_on_block(ctx.block(), &modified_box, &g_ref);
-            }
-            // Return the deleted array (NaN-boxed) as the splice
-            // expression's value.
-            Ok(nanbox_pointer_inline(ctx.block(), &deleted_handle))
+                // Return the deleted array (NaN-boxed) as the splice
+                // expression's value.
+                Ok(nanbox_pointer_inline(ctx.block(), &deleted_handle))
+            })
         }
 
         // -------- ObjectFromEntries (passes through to runtime) --------
@@ -1320,51 +1409,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Both args are NaN-boxed f64; the runtime validates iterability and
         // callback callability (TypeError on failure) per Node semantics.
         Expr::ObjectGroupBy { items, key_fn } => {
-            let items_v = lower_expr(ctx, items)?;
-            let cb_v = lower_expr(ctx, key_fn)?;
-            let blk = ctx.block();
-            Ok(blk.call(
-                DOUBLE,
-                "js_object_group_by",
-                &[(DOUBLE, &items_v), (DOUBLE, &cb_v)],
-            ))
+            rooting::with_operands_rooted(ctx, &[items, key_fn], |ctx, vals| {
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_object_group_by",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
+                ))
+            })
         }
 
         // -------- Map.groupBy(items, keyFn) --------
         // Routes through `js_map_group_by(items_value, callback)` — returns a
         // Map keyed by callback results without string coercion.
         Expr::MapGroupBy { items, key_fn } => {
-            let items_v = lower_expr(ctx, items)?;
-            let cb_v = lower_expr(ctx, key_fn)?;
-            let blk = ctx.block();
-            Ok(blk.call(
-                DOUBLE,
-                "js_map_group_by",
-                &[(DOUBLE, &items_v), (DOUBLE, &cb_v)],
-            ))
+            rooting::with_operands_rooted(ctx, &[items, key_fn], |ctx, vals| {
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_map_group_by",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
+                ))
+            })
         }
 
         // -------- string.match(regex) --------
         Expr::StringMatch { string, regex } => {
-            let s_box = lower_expr(ctx, string)?;
-            let r_box = lower_expr(ctx, regex)?;
-            let blk = ctx.block();
-            // SSO-safe string-receiver unbox: `js_string_match` reads
-            // `byte_len` and the UTF-8 bytes from the StringHeader, which
-            // segfaults on SSO inline bits. SIGSEGV repro:
-            // `JSON.parse('"abc"').match(/b/)`. #214 SSO bug class.
-            let s_handle = unbox_str_handle(blk, &s_box);
-            let r_handle = unbox_to_i64(blk, &r_box);
-            let result = blk.call(
-                I64,
-                "js_string_match",
-                &[(I64, &s_handle), (I64, &r_handle)],
-            );
+            let result = rooting::with_operands_rooted(ctx, &[string, regex], |ctx, vals| {
+                let (s_box, r_box) = (vals[0].clone(), vals[1].clone());
+                let blk = ctx.block();
+                // SSO-safe string-receiver unbox: `js_string_match` reads
+                // `byte_len` and the UTF-8 bytes from the StringHeader, which
+                // segfaults on SSO inline bits. SIGSEGV repro:
+                // `JSON.parse('"abc"').match(/b/)`. #214 SSO bug class.
+                let s_handle = unbox_str_handle(blk, &s_box);
+                let r_handle = unbox_to_i64(blk, &r_box);
+                Ok(blk.call(
+                    I64,
+                    "js_string_match",
+                    &[(I64, &s_handle), (I64, &r_handle)],
+                ))
+            })?;
             // #4858: js_string_match returns null (0) on no-match. NaN-boxing
             // 0 with POINTER_TAG yields a value that is neither `null` nor a
             // valid heap pointer — `s.match(/x/g) === null` was false and
             // consumers that deref the result (JSON.stringify, .map) crashed.
             // Branchless null → TAG_NULL select, same as RegExpExec above.
+            let blk = ctx.block();
             let is_null = blk.icmp_eq(I64, &result, "0");
             let ptr_boxed = nanbox_pointer_inline(ctx.block(), &result);
             let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
@@ -1380,16 +1471,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // pattern value so runtime can validate RegExp globals or create a
         // global RegExp for string/non-RegExp patterns.
         Expr::StringMatchAll { string, regex } => {
-            let s_box = lower_expr(ctx, string)?;
-            let r_box = lower_expr(ctx, regex)?;
-            let blk = ctx.block();
-            let s_handle = unbox_str_handle(blk, &s_box);
-            let result = blk.call(
-                I64,
-                "js_string_match_all_value",
-                &[(I64, &s_handle), (DOUBLE, &r_box)],
-            );
-            Ok(nanbox_pointer_inline(blk, &result))
+            rooting::with_operands_rooted(ctx, &[string, regex], |ctx, vals| {
+                let blk = ctx.block();
+                let s_handle = unbox_str_handle(blk, &vals[0]);
+                let result = blk.call(
+                    I64,
+                    "js_string_match_all_value",
+                    &[(I64, &s_handle), (DOUBLE, &vals[1])],
+                );
+                Ok(nanbox_pointer_inline(blk, &result))
+            })
         }
 
         // -------- obj.field++ / obj.field-- (PropertyUpdate) --------
@@ -1581,33 +1672,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             op,
             prefix,
         } => {
-            let obj_box = lower_expr(ctx, object)?;
-            let idx_box = lower_expr(ctx, index)?;
-            let blk = ctx.block();
-            let old = blk.call(
-                DOUBLE,
-                "js_dyn_index_get",
-                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
-            );
-            // ToNumeric + numeric step so a BigInt element stays BigInt
-            // (`var x = [0n]; ++x[0] === 1n`). Mirrors the identifier Update +
-            // PropertyUpdate paths. #4918 prefix/postfix bigint.
-            let old_num = blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
-            let step_arg = match op {
-                BinaryOp::Sub => "0",
-                _ => "1",
-            };
-            let new = blk.call(
-                DOUBLE,
-                "js_numeric_step",
-                &[(DOUBLE, &old_num), (I32, step_arg)],
-            );
-            blk.call(
-                DOUBLE,
-                "js_dyn_index_set",
-                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new)],
-            );
-            Ok(if *prefix { new } else { old_num })
+            // #7615 slice 2 closes the operand-to-operand half only: the
+            // receiver was live across the index's own lowering. The three
+            // helpers below (`js_dyn_index_get`, `js_to_numeric`,
+            // `js_numeric_step`) can each re-enter user code, so `obj_box` and
+            // `idx_box` are still held across collection points before
+            // `js_dyn_index_set` consumes them. Closing that needs a per-use
+            // re-read inside the body rather than one group-wide re-read; see
+            // the module header.
+            rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                let (obj_box, idx_box) = (vals[0].clone(), vals[1].clone());
+                let blk = ctx.block();
+                let old = blk.call(
+                    DOUBLE,
+                    "js_dyn_index_get",
+                    &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
+                );
+                // ToNumeric + numeric step so a BigInt element stays BigInt
+                // (`var x = [0n]; ++x[0] === 1n`). Mirrors the identifier Update +
+                // PropertyUpdate paths. #4918 prefix/postfix bigint.
+                let old_num = blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+                let step_arg = match op {
+                    BinaryOp::Sub => "0",
+                    _ => "1",
+                };
+                let new = blk.call(
+                    DOUBLE,
+                    "js_numeric_step",
+                    &[(DOUBLE, &old_num), (I32, step_arg)],
+                );
+                blk.call(
+                    DOUBLE,
+                    "js_dyn_index_set",
+                    &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new)],
+                );
+                Ok(if *prefix { new } else { old_num })
+            })
         }
 
         // -------- path.basename --------
@@ -1621,17 +1721,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PathBasenameExt(p, ext) => {
             // path.basename(path, ext) — strips trailing `ext` suffix.
             // Runtime: js_path_basename_ext(path_ptr, ext_ptr) -> *StringHeader.
-            let p_box = lower_expr(ctx, p)?;
-            let e_box = lower_expr(ctx, ext)?;
-            let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
-            let e_handle = unbox_to_i64(blk, &e_box);
-            let result = blk.call(
-                I64,
-                "js_path_basename_ext",
-                &[(I64, &p_handle), (I64, &e_handle)],
-            );
-            Ok(nanbox_string_inline(blk, &result))
+            rooting::with_operands_rooted(ctx, &[p, ext], |ctx, vals| {
+                let blk = ctx.block();
+                let p_handle = unbox_to_i64(blk, &vals[0]);
+                let e_handle = unbox_to_i64(blk, &vals[1]);
+                let result = blk.call(
+                    I64,
+                    "js_path_basename_ext",
+                    &[(I64, &p_handle), (I64, &e_handle)],
+                );
+                Ok(nanbox_string_inline(blk, &result))
+            })
         }
         Expr::PathParse(p) => {
             // path.parse(p) -> object with { dir, base, ext, name, root }
@@ -1743,30 +1843,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }
         Expr::JsonParseReviver { text, reviver } => {
-            let s_box = lower_expr(ctx, text)?;
-            let r_box = lower_expr(ctx, reviver)?;
-            let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
-            let r_handle = unbox_to_i64(blk, &r_box);
-            let result_i64 = blk.call(
-                I64,
-                "js_json_parse_with_reviver",
-                &[(I64, &s_handle), (I64, &r_handle)],
-            );
-            Ok(blk.bitcast_i64_to_double(&result_i64))
+            rooting::with_operands_rooted(ctx, &[text, reviver], |ctx, vals| {
+                let blk = ctx.block();
+                let s_handle = unbox_to_i64(blk, &vals[0]);
+                let r_handle = unbox_to_i64(blk, &vals[1]);
+                let result_i64 = blk.call(
+                    I64,
+                    "js_json_parse_with_reviver",
+                    &[(I64, &s_handle), (I64, &r_handle)],
+                );
+                Ok(blk.bitcast_i64_to_double(&result_i64))
+            })
         }
         Expr::JsonParseWithReviver(text, reviver) => {
-            let s_box = lower_expr(ctx, text)?;
-            let r_box = lower_expr(ctx, reviver)?;
-            let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
-            let r_handle = unbox_to_i64(blk, &r_box);
-            let result_i64 = blk.call(
-                I64,
-                "js_json_parse_with_reviver",
-                &[(I64, &s_handle), (I64, &r_handle)],
-            );
-            Ok(blk.bitcast_i64_to_double(&result_i64))
+            rooting::with_operands_rooted(ctx, &[text, reviver], |ctx, vals| {
+                let blk = ctx.block();
+                let s_handle = unbox_to_i64(blk, &vals[0]);
+                let r_handle = unbox_to_i64(blk, &vals[1]);
+                let result_i64 = blk.call(
+                    I64,
+                    "js_json_parse_with_reviver",
+                    &[(I64, &s_handle), (I64, &r_handle)],
+                );
+                Ok(blk.bitcast_i64_to_double(&result_i64))
+            })
         }
 
         // -------- new Date() / new Date(ts) / new Date(year, month, ...) --------

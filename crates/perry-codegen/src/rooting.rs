@@ -326,7 +326,34 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::FnCtx;
-use crate::types::LlvmType;
+use crate::types::{LlvmType, DOUBLE, I64};
+
+/// How a rooted slot's contents are read back out.
+///
+/// A temp-root slot is representation-agnostic — `temp_root_push_double`
+/// bitcasts to `i64` and pushes the same word `temp_root_push_i64` does — so
+/// the *reader* decides whether the word is a raw heap pointer or a NaN-boxed
+/// JS value. Before this was carried on the slot, that decision lived at each
+/// call site as a choice between `temp_root_get_i64` and `temp_root_get_double`,
+/// and reading a boxed slot as a pointer is a silent miscompile rather than a
+/// type error. Recording it at the push makes the pair impossible to mismatch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Repr {
+    /// A raw heap pointer in an `i64` — what a `js_*` helper returning `I64`
+    /// yields, and what `unbox_to_i64` derives.
+    Ptr,
+    /// A NaN-boxed JS value in a `double` — the ordinary operand currency.
+    Boxed,
+}
+
+impl Repr {
+    fn llvm_ty(self) -> LlvmType {
+        match self {
+            Repr::Ptr => I64,
+            Repr::Boxed => DOUBLE,
+        }
+    }
+}
 
 /// A slot the collector knows about, holding a GC-managed pointer for the
 /// duration of a lowering.
@@ -341,6 +368,7 @@ use crate::types::LlvmType;
 #[derive(Debug)]
 pub(crate) struct RootedSlot {
     idx: String,
+    repr: Repr,
 }
 
 impl RootedSlot {
@@ -362,9 +390,11 @@ impl RootedSlot {
 /// asserting the collector does not manage — an `i32`, a length, a literal, or
 /// a value another combinator has already re-read below the last collection
 /// point.
+#[derive(Clone, Copy)]
 pub(crate) enum Arg<'a> {
-    /// Re-read this slot immediately before the call. The register never
-    /// exists as a value the caller can hold.
+    /// Re-read this slot immediately before the call, in the representation the
+    /// slot was pushed with. The register never exists as a value the caller
+    /// can hold.
     Root(&'a RootedSlot),
     /// A value the collector does not manage in this window.
     Plain(LlvmType, &'a str),
@@ -378,13 +408,19 @@ pub(crate) enum Arg<'a> {
 fn materialize<'a>(ctx: &mut FnCtx<'_>, args: &'a [Arg<'a>]) -> Vec<(LlvmType, String)> {
     args.iter()
         .map(|arg| match arg {
-            Arg::Root(slot) => (
-                crate::types::I64,
-                crate::expr::temp_root::temp_root_get_i64(ctx, &slot.idx),
-            ),
+            Arg::Root(slot) => (slot.repr.llvm_ty(), read_slot(ctx, slot)),
             Arg::Plain(ty, reg) => (*ty, (*reg).to_string()),
         })
         .collect()
+}
+
+/// The one place a rooted slot becomes a register, and it is private: every
+/// public path out of it fuses the read to the emission that consumes it.
+fn read_slot(ctx: &mut FnCtx<'_>, slot: &RootedSlot) -> String {
+    match slot.repr {
+        Repr::Ptr => crate::expr::temp_root::temp_root_get_i64(ctx, &slot.idx),
+        Repr::Boxed => crate::expr::temp_root::temp_root_get_double(ctx, &slot.idx),
+    }
 }
 
 fn borrow_args(args: &[(LlvmType, String)]) -> Vec<(LlvmType, &str)> {
@@ -408,7 +444,10 @@ pub(crate) fn call_rooted(
         .block()
         .call(ret_ty, callee, &borrow_args(&materialized));
     let idx = crate::expr::temp_root::temp_root_push_i64(ctx, &reg);
-    RootedSlot { idx }
+    RootedSlot {
+        idx,
+        repr: Repr::Ptr,
+    }
 }
 
 // A `root_i64(ctx, reg) -> RootedSlot` combinator -- "root a raw pointer some
@@ -434,6 +473,15 @@ pub(crate) fn call_with_roots(
     let materialized = materialize(ctx, args);
     ctx.block()
         .call(ret_ty, callee, &borrow_args(&materialized))
+}
+
+/// [`call_with_roots`] for a `void` helper — a mutator such as
+/// `js_object_set_field_by_name` or `js_map_set`, which is most of the
+/// accumulator surface. Returning nothing is the point: there is no register
+/// for a caller to hold, so this form cannot reopen the window at all.
+pub(crate) fn call_void_with_roots(ctx: &mut FnCtx<'_>, callee: &str, args: &[Arg<'_>]) {
+    let materialized = materialize(ctx, args);
+    ctx.block().call_void(callee, &borrow_args(&materialized));
 }
 
 /// Lower `exprs` with every already-evaluated operand rooted across the
@@ -487,9 +535,57 @@ pub(crate) fn with_operands_rooted_across<'f, T, R>(
     across: impl FnOnce(&mut FnCtx<'f>) -> Result<T>,
     body: impl FnOnce(&mut FnCtx<'f>, &[String], T) -> Result<R>,
 ) -> Result<R> {
+    let across_collects =
+        crate::expr::temp_root::any_may_trigger_gc(ctx, across_exprs.iter().copied());
+    with_operands_rooted_window(ctx, exprs, across_collects, across, body)
+}
+
+/// [`with_operands_rooted_across`] for a step that is an **emitted runtime
+/// call** rather than a lowered expression.
+///
+/// The two forms differ only in who answers "does this window collect?", and
+/// for a call there is nothing for `any_may_trigger_gc` to read — the step is
+/// not an `Expr`. `re.test(s)` is the shape: the arm unconditionally emits
+/// `js_jsvalue_to_string_coerce`, which allocates and, on an object argument,
+/// dispatches a user `toString`. Deriving the window from the `string` operand
+/// answers *false* for a plain local and drops the root, which is #7154 at that
+/// exact site (`js_regexp_test` dereferencing a from-space `RegExpHeader`).
+///
+/// So this takes the answer rather than deriving it, and the precedent is
+/// deliberate: `temp_root::guard_store_operand_across` already had to, for the
+/// same reason and since #7201. What stays centralised is the part that can
+/// drift — `operand_protection` still decides *how* each operand is protected
+/// (root / re-derive / reuse). Only the window's extent is stated here, and it
+/// is stated as "yes", the conservative answer.
+///
+/// Use it only when the emitted step can re-enter user code or enumerate an
+/// arbitrary object's own properties. For a helper that merely allocates, the
+/// project's position (#7198) is that it cannot *initiate* a moving collection,
+/// so a root there would be pure cost.
+pub(crate) fn with_operands_rooted_across_call<'f, T, R>(
+    ctx: &mut FnCtx<'f>,
+    exprs: &[&Expr],
+    across: impl FnOnce(&mut FnCtx<'f>) -> Result<T>,
+    body: impl FnOnce(&mut FnCtx<'f>, &[String], T) -> Result<R>,
+) -> Result<R> {
+    with_operands_rooted_window(ctx, exprs, true, across, body)
+}
+
+/// The one implementation behind all three `with_operands_rooted*` forms.
+///
+/// They differ only in how `across_collects` is obtained; keeping the lowering,
+/// the re-read point and the release in a single body is what stops the family
+/// from growing three subtly different orderings (the drift that produced
+/// #7114).
+fn with_operands_rooted_window<'f, T, R>(
+    ctx: &mut FnCtx<'f>,
+    exprs: &[&Expr],
+    across_collects: bool,
+    across: impl FnOnce(&mut FnCtx<'f>) -> Result<T>,
+    body: impl FnOnce(&mut FnCtx<'f>, &[String], T) -> Result<R>,
+) -> Result<R> {
     use crate::expr::temp_root::{any_may_trigger_gc, root_operands_begin};
 
-    let across_collects = any_may_trigger_gc(ctx, across_exprs.iter().copied());
     let mut group = root_operands_begin(exprs.len());
     let out = (|| {
         // Incremental, one operand at a time: each is rooted BEFORE the next is
@@ -510,6 +606,155 @@ pub(crate) fn with_operands_rooted_across<'f, T, R>(
     // every error path too, including a bail from the operand lowering itself,
     // so a lowering that fails does not leave the group pushed.
     group.release(ctx);
+    out
+}
+
+/// Does evaluating any of these expressions reach a collection point?
+///
+/// Re-exported so a migrated module can answer the question a caller-supplied
+/// `protect` flag needs (`{ ...a, k: f() }`, `Math.min(f(), g(), h())`) without
+/// naming `expr::temp_root`. It is the same predicate `operand_protection`
+/// consults, not a second copy.
+pub(crate) fn any_operand_may_collect<'a>(
+    ctx: &FnCtx<'_>,
+    exprs: impl IntoIterator<Item = &'a Expr>,
+) -> bool {
+    crate::expr::temp_root::any_may_trigger_gc(ctx, exprs)
+}
+
+/// A GC-managed value that generated code keeps **updating** while it lowers
+/// further expressions: an object literal's half-built handle, `Object.assign`'s
+/// threaded target, `Math.min(...)`'s growing argument array.
+///
+/// It is the operand group's mirror image. An operand is lowered once and read
+/// once; an accumulator is written, read, rewritten and read again, with
+/// arbitrary user code lowered between the writes. #7154's `ObjectSpread` bug is
+/// the canonical failure: the half-built object sat in a raw SSA register while
+/// 269 spread values were lowered, an evacuating minor relocated it, and every
+/// later field store wrote into abandoned from-space memory — silently, because
+/// the fields simply did not appear on the copy the program kept.
+///
+/// The invariant it enforces is the one a raw handle cannot: **the accumulator
+/// never exists as a register the lowering holds across an emission.** Every
+/// consuming call re-reads it as part of being emitted ([`RootedAcc::call`],
+/// [`RootedAcc::call_void`]), and a helper that returns a fresh address
+/// publishes it straight back into the slot ([`RootedAcc::advance`]) rather than
+/// handing it out. The single point where a register does escape is the final
+/// read, and [`with_rooted_accumulator`]'s `finish` closure owns it: it runs
+/// below the last collection point and above the release, so there is no
+/// program in which the escaped register outlives its root.
+pub(crate) struct RootedAcc {
+    slot: Option<RootedSlot>,
+    repr: Repr,
+    /// The register as first produced. The answer when `protect` was false, in
+    /// which case nothing is emitted and the IR matches the un-rooted form byte
+    /// for byte.
+    value: String,
+}
+
+impl RootedAcc {
+    /// The accumulator as a call argument.
+    fn as_arg(&self) -> Arg<'_> {
+        match &self.slot {
+            Some(slot) => Arg::Root(slot),
+            None => Arg::Plain(self.repr.llvm_ty(), &self.value),
+        }
+    }
+
+    fn args_with_self<'a>(&'a self, rest: &[Arg<'a>]) -> Vec<Arg<'a>> {
+        let mut all = Vec::with_capacity(rest.len() + 1);
+        all.push(self.as_arg());
+        all.extend_from_slice(rest);
+        all
+    }
+
+    /// Emit `callee(<accumulator>, ...rest)` and return its result register.
+    ///
+    /// The accumulator is argument **0**, positionally and deliberately. It is
+    /// argument 0 at every site this exists for — `js_object_set_field_by_name`,
+    /// `js_object_copy_own_fields`, `js_array_push_f64`, `js_object_assign_one`
+    /// — and keeping it positional is what lets the re-read be fused to the
+    /// emission instead of handed back to the caller as a register to place.
+    pub(crate) fn call(
+        &self,
+        ctx: &mut FnCtx<'_>,
+        ret_ty: LlvmType,
+        callee: &str,
+        rest: &[Arg<'_>],
+    ) -> String {
+        call_with_roots(ctx, ret_ty, callee, &self.args_with_self(rest))
+    }
+
+    /// [`RootedAcc::call`] for a `void` helper.
+    pub(crate) fn call_void(&self, ctx: &mut FnCtx<'_>, callee: &str, rest: &[Arg<'_>]) {
+        call_void_with_roots(ctx, callee, &self.args_with_self(rest));
+    }
+
+    /// Emit `callee(<accumulator>, ...rest)` and make its result the new
+    /// accumulator value.
+    ///
+    /// For helpers that may **relocate** what they are handed and return the
+    /// current address: `js_array_push_f64` reallocs the element storage,
+    /// `js_object_assign_one` returns the post-collection target. Keeping the
+    /// pre-call register instead is how `Object.assign(t, a, b)` threaded a
+    /// stale `t` into `b`'s link before #7200.
+    pub(crate) fn advance(&mut self, ctx: &mut FnCtx<'_>, callee: &str, rest: &[Arg<'_>]) {
+        let next = self.call(ctx, self.repr.llvm_ty(), callee, rest);
+        match (&self.slot, self.repr) {
+            (Some(slot), Repr::Ptr) => {
+                crate::expr::temp_root::temp_root_set_i64(ctx, &slot.idx, &next)
+            }
+            (Some(slot), Repr::Boxed) => {
+                crate::expr::temp_root::temp_root_set_double(ctx, &slot.idx, &next)
+            }
+            (None, _) => self.value = next,
+        }
+    }
+}
+
+/// Root a mutable accumulator for the duration of `build`, then hand its final
+/// value to `finish` and release it.
+///
+/// `protect == false` emits nothing at all — no push, no re-reads, no truncate —
+/// so a site whose initializers provably cannot collect keeps the IR it had
+/// before it was rooted at all.
+///
+/// The split into two closures is what makes the release unmissable while still
+/// letting the final value be *used*. `build` may not hold the accumulator in a
+/// register across anything; `finish` receives one, but it runs below the last
+/// collection point and above the release, and it is the only place the value
+/// escapes. Both paths — `build`'s `?` and `finish`'s — release.
+pub(crate) fn with_rooted_accumulator<'f, R>(
+    ctx: &mut FnCtx<'f>,
+    repr: Repr,
+    initial: &str,
+    protect: bool,
+    build: impl FnOnce(&mut FnCtx<'f>, &mut RootedAcc) -> Result<()>,
+    finish: impl FnOnce(&mut FnCtx<'f>, &str) -> Result<R>,
+) -> Result<R> {
+    let slot = protect.then(|| {
+        let idx = match repr {
+            Repr::Ptr => crate::expr::temp_root::temp_root_push_i64(ctx, initial),
+            Repr::Boxed => crate::expr::temp_root::temp_root_push_double(ctx, initial),
+        };
+        RootedSlot { idx, repr }
+    });
+    let mut acc = RootedAcc {
+        slot,
+        repr,
+        value: initial.to_string(),
+    };
+    let out = (|| {
+        build(ctx, &mut acc)?;
+        let final_value = match &acc.slot {
+            Some(slot) => read_slot(ctx, slot),
+            None => acc.value.clone(),
+        };
+        finish(ctx, &final_value)
+    })();
+    if let Some(slot) = acc.slot {
+        slot.release(ctx);
+    }
     out
 }
 
@@ -543,15 +788,22 @@ pub(crate) fn with_operands_rooted_across<'f, T, R>(
 /// No boundary is outstanding today.
 ///
 /// **Listing a module that never used the escape hatch passes vacuously.** That
-/// is true of every module migrated so far except `expr/url_main.rs`: they named
-/// no `temp_root` symbol before the migration, so
-/// `migrated_modules_do_not_reach_past_the_rooting_api` went green the instant
-/// the line was added. The listing only means something if the slice ALSO ran
-/// the sabotage arm — inject a real, compiling `temp_root_push_*` /
-/// `temp_root_truncate` pair into the migrated module, confirm the ledger test
-/// goes red and names the lines, then revert. Slices 1a and 1b both did, and
-/// recorded it in their PRs; a slice that skips it is adding a line that asserts
+/// was true of both slice-1 modules: they named no `temp_root` symbol before
+/// the migration, so `migrated_modules_do_not_reach_past_the_rooting_api` went
+/// green the instant the line was added. The listing only means something if the
+/// slice ALSO ran the sabotage arm — inject a real, compiling `temp_root_push_*`
+/// / `temp_root_truncate` pair into the migrated module, confirm the ledger test
+/// goes red and names the lines, then revert. Every slice so far has, and
+/// recorded it in its PR; a slice that skips it is adding a line that asserts
 /// nothing.
+///
+/// Slice 2's three modules are the first since the template where the listing is
+/// **not** vacuous: all three named `expr::temp_root` before the migration
+/// (`lower_exprs_rooted`, `guard_store_operand_across`, `rooted_handle_*`,
+/// `temp_root_{push,get,set}_double`), so the ledger line is load-bearing on the
+/// committed source and not only under sabotage. The sabotage arm was still run
+/// per module — the assert stops at the first offender, so one run cannot speak
+/// for three.
 #[cfg(test)]
 const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
@@ -569,6 +821,18 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
         "crates/perry-codegen/src/expr/array_methods.rs",
         include_str!("expr/array_methods.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/instance_misc1.rs",
+        include_str!("expr/instance_misc1.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/logical_collections.rs",
+        include_str!("expr/logical_collections.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_call/property_get/map_set.rs",
+        include_str!("lower_call/property_get/map_set.rs"),
     ),
 ];
 
