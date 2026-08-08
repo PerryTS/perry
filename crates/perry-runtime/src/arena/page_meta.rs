@@ -740,45 +740,73 @@ pub(crate) fn flush_deferred_old_page_registrations() {
 /// without an intervening free, which cannot happen without a flush (every
 /// remover flushes). Hole reuse — the reason the dedup exists at all — hands
 /// back an address registered BEFORE the batch, so it is still covered.
+/// The batch also holds BOTH table borrows at once and applies the
+/// `OLD_GEN_PAGE_META` update inline rather than staging it in a `Vec`. The two
+/// thread-locals are distinct cells, so there is no aliasing; the payoff is that
+/// a flush allocates nothing at all. That is not a micro-optimisation: measured
+/// on the pinned host, staging the updates and re-growing the pending buffer
+/// once per batch cost **+31 MB peak RSS** on json_pipeline 500k (63 flushes,
+/// each re-growing a ~1 MB `Vec` from empty and freeing a ~1 MB staging `Vec`),
+/// which is a regression the deferral does not need to pay.
 #[cold]
 fn flush_deferred_old_page_registrations_batch() {
-    let pending =
+    let mut pending =
         DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
     if pending.is_empty() {
         return;
     }
-    let mut meta_updates: Vec<(usize, usize)> = Vec::with_capacity(pending.len());
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        // Entries arrive in allocation order, so consecutive ones share a page;
-        // cache that page's pre-batch length across the run.
-        let mut run_page: Option<usize> = None;
-        let mut run_base_len: usize = 0;
-        for &(header_addr, total_size) in &pending {
-            let object_end = header_addr + total_size;
-            let first_page = generation_page_for_addr(header_addr);
-            let last_page = generation_page_for_addr(object_end - 1);
-            for page in first_page..=last_page {
-                let page_base = generation_page_base(page);
-                let page_end = page_base + GENERATION_PAGE_SIZE;
-                let overlap_start = header_addr.max(page_base);
-                let overlap_end = object_end.min(page_end);
-                if overlap_start >= overlap_end {
-                    continue;
-                }
-                let headers = index.entry(page).or_insert_with(Vec::new);
-                if run_page != Some(page) {
-                    run_page = Some(page);
-                    run_base_len = headers.len();
-                }
-                if !headers[..run_base_len.min(headers.len())].contains(&header_addr) {
+        OLD_GEN_PAGE_META.with(|meta| {
+            let mut meta = meta.borrow_mut();
+            // Entries arrive in allocation order, so consecutive ones share a
+            // page; cache that page's pre-batch length across the run.
+            let mut run_page: Option<usize> = None;
+            let mut run_base_len: usize = 0;
+            for &(header_addr, total_size) in &pending {
+                let object_end = header_addr + total_size;
+                let first_page = generation_page_for_addr(header_addr);
+                let last_page = generation_page_for_addr(object_end - 1);
+                for page in first_page..=last_page {
+                    let page_base = generation_page_base(page);
+                    let page_end = page_base + GENERATION_PAGE_SIZE;
+                    let overlap_start = header_addr.max(page_base);
+                    let overlap_end = object_end.min(page_end);
+                    if overlap_start >= overlap_end {
+                        continue;
+                    }
+                    let headers = index.entry(page).or_insert_with(Vec::new);
+                    if run_page != Some(page) {
+                        run_page = Some(page);
+                        run_base_len = headers.len();
+                    }
+                    if headers[..run_base_len.min(headers.len())].contains(&header_addr) {
+                        continue;
+                    }
                     headers.push(header_addr);
-                    meta_updates.push((page, overlap_end - overlap_start));
+                    // Identical to `update_old_page_meta_for_object(.., true)`
+                    // for this one page, applied here so no staging Vec exists.
+                    let page_meta = meta
+                        .entry(page)
+                        .or_insert_with(|| OldPageMeta::zero_for_page(page));
+                    page_meta.allocated_bytes = page_meta
+                        .allocated_bytes
+                        .saturating_add(overlap_end - overlap_start);
+                    page_meta.object_count = page_meta.object_count.saturating_add(1);
+                    page_meta.refresh_policy_bits();
                 }
             }
+        });
+    });
+    // Hand the allocation back rather than dropping it, so the next burst
+    // refills a buffer that is already 64k entries wide.
+    pending.clear();
+    DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        if buf.capacity() < pending.capacity() {
+            *buf = pending;
         }
     });
-    update_old_page_meta_for_object(&meta_updates, true);
 }
 
 /// Entries awaiting a flush. Tests only — the buffer is an implementation
