@@ -348,3 +348,165 @@ jobs:
             ir-corpus
             ir-corpus-dep
           retention-days: 7
+
+  # ★★★ THE LOWERING THAT ACTUALLY SHIPS (#7660).
+  #
+  # Everything in the job above compiles its corpus under `PERRY_RS4GC=0` — the
+  # SHADOW-STACK lowering — and since #7370 that is not the default on any
+  # target whose frames the runtime can walk. The reason was sound and is
+  # stated inline in `gc_root_dominance_corpus.sh`: the checker anchored on
+  # `@js_shadow_slot_bind`, the native lowering emits zero of them, and
+  # `--min-binds` therefore failed the job. So the gate was pointed at the only
+  # lowering it could read, and `docs/src/internals/gc-rooting-invariant.md`
+  # records the consequence as a blind spot: **a green `gc-root-dominance` was
+  # evidence about a lowering that does not ship.**
+  #
+  # This job closes that. It is a SEPARATE job, not more steps in the one
+  # above, for three reasons: it needs a differently-generated corpus, its
+  # floors are about safepoints rather than root stores, and — the one that
+  # matters — a separate job is a separate branch-protection context, so this
+  # can be promoted to required on its own schedule without dragging the
+  # shadow arms with it.
+  #
+  # NOT REQUIRED, deliberately, and this is the second step nobody took last
+  # time. A gate that has never been green blocks every open PR the day it
+  # becomes required (CLAUDE.md's corollary, which this repo has already paid
+  # for once — see hazard 2 in the header of this file). Let it run on `main`
+  # first, then promote. Promotion is an admin action and is tracked separately
+  # from the PR that adds this.
+  gc-root-dominance-statepoints:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Same fast structural failure first. `--self-test` now covers BOTH
+      # lowerings: the statepoint half asserts the bundle parser reads the
+      # wrapped callee and a non-empty live set (the two mistakes the Rust
+      # reader of this construct already made and caught), that the two verdict
+      # classes are distinguished by the bundle alone, that the relocated-value
+      # control reports zero, and that `--min-statepoints` refuses the shadow
+      # corpus while `--min-binds` refuses this one.
+      - name: Checker self-test (can this gate still fail?)
+        run: python3 scripts/gc_root_dominance_check.py --self-test
+
+      # The three static audits are shared vocabulary, not shadow-mode
+      # details: `--statepoints` classifies its sources with the same ALLOC_RE,
+      # decides MOVING with the same POLL_CAPABLE_RUNTIME, and honours the same
+      # #7210 exemptions. A phantom entry in any of them is a hole in THIS gate
+      # too, so all three run here as well rather than being inherited by
+      # assumption from a job that may not have run.
+      - name: ALLOC_RE alternatives must match real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-alloc-re
+      - name: POLL_CAPABLE_RUNTIME entries must name real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-capable
+      - name: Immovable-source exemptions must still hold
+        run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      # This also puts a matched LLVM 22 `opt` on disk and exports
+      # LLVM_SYS_221_PREFIX, which is how the corpus script finds it. The
+      # native corpus is `--trace llvm` output PLUS the production statepoint
+      # rewrite, because codegen does not emit statepoints — LLVM does, later,
+      # in the linker step.
+      - uses: ./.github/actions/setup-llvm22
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gcdom-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build perry and the runtime archives
+        run: |
+          set -euo pipefail
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      # The script single-sources the pass string from
+      # `STATEPOINT_REWRITE_PASSES` in perry-codegen and refuses to run if it
+      # cannot read it, so this corpus cannot drift away from the pipeline
+      # production uses. It also asserts its own subject: zero statepoints or
+      # zero live bundles is an error at generation time, not a clean verdict
+      # downstream.
+      - name: Emit the NATIVE (statepoint) IR corpus
+        run: ./scripts/gc_root_dominance_corpus.sh ir-corpus-native --lowering native
+
+      - name: Check GC values across safepoints (native roots)
+        run: |
+          set -euo pipefail
+          # No pipe: the checker's own exit status is the job's.
+          #
+          # FLOORS, from the corpus as of this commit — 149 modules, 2452
+          # functions, 29223 safepoints, 16972 with a live bundle, 39758
+          # relocations — set below that with room for churn and far above
+          # "something compiled". Three separate floors because they fail for
+          # three different reasons and the message has to say which:
+          #   --min-statepoints  this is the shadow corpus, or codegen stopped
+          #                      marking functions gc "statepoint-example"
+          #   --min-relocates    the corpus was copied through un-rewritten
+          #                      (`opt` exits 0 on a module with nothing to do)
+          #   --min-live-bundles safepoints that record NO roots, which is what
+          #                      an unrooted build looks like
+          #
+          # BUDGETS. `unrooted` (the object is in no live bundle at all) is the
+          # serious class and is a ratchet at its measured value, not zero:
+          # this is a new instrument pointed at a lowering nothing has ever
+          # checked, and the residual is a population under triage, named in
+          # the PR. `stale` (the object survives, a raw copy of its pre-move
+          # address is used below) reads 0 today and is held there.
+          #
+          # --seeded-violations plants 40 safepoints into this very IR, between
+          # a `ptrtoint ptr addrspace(1)` and its use, and requires all 40 to be
+          # reported. That is the arm that fails if the mode has stopped
+          # understanding LLVM's output — the only way a green verdict here
+          # could be a lie.
+          python3 scripts/gc_root_dominance_check.py ir-corpus-native \
+            --statepoints \
+            --moving-only \
+            --min-files 90 --min-funcs 1200 \
+            --min-statepoints 15000 \
+            --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-unrooted 19 \
+            --max-stale 0 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+
+      # ★ The unfiltered arm, as a DIAGNOSTIC rather than a gate.
+      #
+      # `--moving-only` keeps only hazards whose window reaches a safepoint
+      # that can run an evacuating minor. The rest are still hazards under the
+      # RECLAIM half of the invariant (a value held only in an untracked
+      # register can be swept, not just moved), and the count is an order of
+      # magnitude larger. Printing it keeps the filtered number honest: if the
+      # gated arm ever reads zero, this line says whether that is the corpus or
+      # the filter. `|| true` is deliberate and is the ONLY one in this file —
+      # this step is not a gate and must not be read as one.
+      - name: Unfiltered hazard census (diagnostic, not a gate)
+        run: |
+          python3 scripts/gc_root_dominance_check.py ir-corpus-native \
+            --statepoints \
+            --min-files 90 --min-funcs 1200 \
+            --min-statepoints 15000 --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-unrooted 100000 --max-stale 100000 || true
+
+      - name: Upload the IR corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gc-root-dominance-statepoint-ir
+          path: ir-corpus-native
+          retention-days: 7

@@ -96,18 +96,59 @@ from collections import defaultdict, deque
 
 # ---------------------------------------------------------------- IR parsing
 
-DEFINE_RE = re.compile(r"^define\s+.*?@([\w.$]+)\(")
+# LLVM QUOTES an identifier it cannot print bare, and `$` is one of the
+# characters that forces it — so every representation-selection specialisation
+# perry emits (`…$typed_f64`, `…$generic`, `…$spec_i32`) is printed
+# `@"name$suffix"`. `[\w.$]+` cannot match across the quotes, DEFINE_RE
+# therefore did not match the line, `cur` stayed None, and **the entire
+# function body was skipped without a word** — the exact silent-skip this
+# parser raises MalformedIR elsewhere to prevent.
+#
+# Measured: 175 of 2452 defines (7.1%) in the native corpus, and ZERO in the
+# shadow corpus — perry's own writer prints those names bare, LLVM's printer
+# quotes them, so this bites the native lowering only and the existing shadow
+# arms were never affected. Not a random 7% either: repsel specialisations are
+# exactly where `docs/src/internals/gc-rooting-invariant.md` says a
+# representation change moves the rooting obligation. Found because a seeded
+# violation went unreported in a function that was not being parsed at all.
+DEFINE_RE = re.compile(r'^define\s+.*?@(?:"([^"]*)"|([-\w.$]+))\s*\(')
+# A `define` this parser cannot name must be LOUD. Silently skipping it reports
+# every function in it clean.
+DEFINE_SHAPED_RE = re.compile(r"^define\b")
 # A trailing `; preds = %a, %b` comment is LLVM's own printed form (`llvm-dis`,
 # `opt -S`, `clang -S -emit-llvm`). Perry's writer never emits it, but pointing
 # this tool at LLVM-canonical IR is the obvious thing to try, and rejecting the
 # label there used to append it to the PREVIOUS block — collapsing the whole
 # function into one and producing exactly the line-order false positives the
 # docstring above says real dominance avoids.
-LABEL_RE = re.compile(r"^([\w.$][\w.$]*):\s*(?:;.*)?$")
+#
+# `-` is in the identifier class because LLVM's own identifiers allow it and
+# LLVM's own passes USE it. `rewrite-statepoints-for-gc` splits critical edges
+# into landing pads and names the halves `eh.lpad.8.split-lp`,
+# `…split-lp.split-lp`, and so on: 677 such labels in a 21-module native
+# corpus. Under the old class those lines matched LABEL_SHAPED_RE but not
+# LABEL_RE, so every native module raised MalformedIR and the mode could not
+# read its own corpus. (Loudly, at least — the parser's refusal-not-skip rule
+# working as designed.) Widening is safe for the shadow corpus: perry's writer
+# emits no hyphens, so no line changes classification there.
+LABEL_RE = re.compile(r"^([-\w.$][-\w.$]*):\s*(?:;.*)?$")
 # Anything that ends in `:` and is not an instruction is label-SHAPED. If the
 # strict form above declines it, that is a parser gap and must be loud.
 LABEL_SHAPED_RE = re.compile(r"^[^\s=]+:\s*(?:;.*)?$")
 ASSIGN_RE = re.compile(r"^\s*%([\w.$]+)\s*=\s*(.*)$")
+# LLVM prints one INSTRUCTION per record, not one per line: an `invoke` puts
+# `to label %ok unwind label %lpad` on a continuation line, and a `landingpad`
+# puts its `cleanup` / `catch` / `filter` clauses on theirs. Perry's own writer
+# never wraps, so the shadow corpus has none of these — but the native corpus
+# has 349 of each, and every one of them is an invoke whose CFG EDGES live on
+# the wrapped line. Read line-at-a-time, `build_cfg` finds no successor for the
+# invoke's block, every block below it becomes unreachable, `dominators` gives
+# them no idom, and `dominates()` then answers False for every pair — a
+# silently empty verdict over a corpus that parsed. So continuation lines are
+# folded onto the instruction they belong to, and the set of heads is closed
+# and asserted (`_CONTINUATION_HEAD_RE`) rather than "anything indented".
+_CONTINUATION_HEAD_RE = re.compile(
+    r"^\s+(?:to label %|unwind label %|cleanup\b|catch\b|filter\b)")
 # `invoke` (#7302) is a call with an unwind edge — it must be seen as a call
 # here or every collecting call inside a `try` body would be invisible to the
 # dominance analysis (a silent false-green for exactly the functions where
@@ -116,20 +157,141 @@ CALL_RE = re.compile(r"\b(?:call|invoke)\s+[^@]*@([\w.$]+)\(")
 BIND_RE = re.compile(r"call void @js_shadow_slot_bind\(i32 (\d+), ptr %([\w.$]+)\)")
 CLEAR_RE = re.compile(r"call void @js_shadow_slot_set\(i32 (\d+), i64 0\)")
 STORE_RE = re.compile(r"^\s*store\s+([\w\[\]x* ]+?)\s+([^,]+),\s*ptr %([\w.$]+)")
-BR_UNCOND_RE = re.compile(r"^\s*br label %([\w.$]+)")
-BR_COND_RE = re.compile(r"^\s*br i1 [^,]+, label %([\w.$]+), label %([\w.$]+)")
-SWITCH_LABEL_RE = re.compile(r"label %([\w.$]+)")
+# `[-\w.$]` throughout, for the reason spelled out on LABEL_RE: LLVM's own
+# `split-lp` landing-pad labels carry hyphens, and a branch regex that cannot
+# name them drops the edge rather than failing.
+BR_UNCOND_RE = re.compile(r"^\s*br label %([-\w.$]+)")
+BR_COND_RE = re.compile(r"^\s*br i1 [^,]+, label %([-\w.$]+), label %([-\w.$]+)")
+SWITCH_LABEL_RE = re.compile(r"label %([-\w.$]+)")
 # Invoke edges (#7302): normal destination + unwind destination. The invoke
 # terminates its block; the continuation label follows immediately in the
 # emitted text and both successors must appear in the CFG or the landing pad
 # (and everything reached through it) would be dropped as unreachable.
-INVOKE_EDGE_RE = re.compile(r"\binvoke\b.*\bto label %([\w.$]+) unwind label %([\w.$]+)")
+INVOKE_EDGE_RE = re.compile(r"\binvoke\b.*\bto label %([-\w.$]+) unwind label %([-\w.$]+)")
+
+
+# ------------------------------------------------- statepoint IR vocabulary
+#
+# The native lowering (#7370, the default on every target whose frames the
+# runtime can walk) expresses roots as `gc.statepoint` relocation bundles
+# rather than `@js_shadow_slot_bind` calls. One printed statepoint:
+#
+#   %tok = call token (i64, i32, ptr, i32, i32, ...)
+#          @llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0,
+#              ptr elementtype(i64 (i64, i64)) @js_object_get_field_by_name_f64,
+#              i32 2, i32 0, i64 %r21, i64 %r25, i32 0, i32 0)
+#          [ "gc-live"(ptr addrspace(1) %rs4gc.s5, ptr addrspace(1) %rs4gc.s4) ]
+#
+# Two things have to be read out of it and NEITHER survives a substring scan:
+#
+#   the WRAPPED CALLEE, which is the operand after the balanced
+#   `elementtype(...)` attribute. `) @` appears twice on the line — once
+#   closing the intrinsic's own `(i64, i32, ptr, i32, i32, ...)` signature and
+#   once closing `elementtype(…)` — and the first belongs to
+#   `@llvm.experimental.gc.statepoint.p0`. Reading that as the callee makes
+#   every safepoint in every function identical.
+#
+#   the LIVE SET, whose every operand is spelled `ptr addrspace(1) %r`. A scan
+#   to the first `)` truncates the list at `"ptr addrspace(1"`, finds no `%`,
+#   and reports an EMPTY live set for every statepoint in every program.
+#
+# Both mistakes were made and caught on the Rust side of this
+# (`perry-codegen/src/native_root_coverage/mod.rs`, which parses the same
+# construct for its unit tests); this is a port of that reader, not a second
+# derivation of it, and `self_test` carries the same two arms.
+STATEPOINT_MARK = "@llvm.experimental.gc.statepoint."
+RELOCATE_MARK = "@llvm.experimental.gc.relocate."
+GC_RESULT_MARK = "@llvm.experimental.gc.result."
+RELOCATE_RE = re.compile(
+    r"@llvm\.experimental\.gc\.relocate\.\w+\(token %([\w.$]+),")
+GC_RESULT_RE = re.compile(
+    r"@llvm\.experimental\.gc\.result\.\w+\(token %([\w.$]+)\)")
+
+
+def _balanced_group(text, marker):
+    """Contents of the parenthesised group opened by `marker`, honouring nesting.
+
+    Returns `(inner, end_index)` where `end_index` is the offset just past the
+    closing paren, or `None` when the marker is absent or unbalanced.
+    """
+    start = text.find(marker)
+    if start < 0:
+        return None
+    open_at = start + len(marker)
+    depth = 1
+    for i in range(open_at, len(text)):
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_at:i], i + 1
+    return None
+
+
+def statepoint_callee(text):
+    """The `@name` after the balanced `elementtype(...)`, or None if indirect."""
+    got = _balanced_group(text, "elementtype(")
+    if got is None:
+        return None
+    _inner, end = got
+    after = text[end:].lstrip()
+    if not after.startswith("@"):
+        return None            # indirect callee: a `%reg` sits here instead
+    name = re.match(r"[\w.$]+", after[1:])
+    return name.group(0) if name else None
+
+
+def statepoint_live_set(text):
+    """SSA registers in the `"gc-live"` operand bundle, in printed order."""
+    got = _balanced_group(text, '"gc-live"(')
+    if got is None:
+        return ()
+    inner, _end = got
+    live = []
+    for operand in inner.split(","):
+        operand = operand.strip()
+        # `ptr addrspace(1) %r` -- the register is the last whitespace-separated
+        # token. Constants (`null`, `undef`) legitimately appear and are not
+        # registers; they are dropped by the `%` test rather than by position.
+        parts = operand.rsplit(" ", 1)
+        if len(parts) == 2 and parts[1].startswith("%"):
+            live.append(parts[1][1:])
+    return tuple(live)
+
+
+def strip_trailing_comment(text):
+    """Drop LLVM's trailing `; …` annotation, honouring string constants.
+
+    Not cosmetic. `rewrite-statepoints-for-gc` annotates every relocation with
+    the register it relocated:
+
+        %s8.relocated = call ... @llvm.experimental.gc.relocate.p1(token %t,
+            i32 0, i32 0)  ; (%.0, %.0)
+
+    `uses()` matches whole SSA operands anywhere in the instruction text, so
+    that comment reads as a use of `%.0` — and since a relocation always sits
+    below the safepoint it belongs to, EVERY relocated value was reported stale
+    at its own relocation. Measured before this: 186 of 326 hits on a 21-module
+    corpus had `sink=llvm.experimental.gc.relocate.p1`, i.e. the majority of
+    the mode's output was LLVM's own bookkeeping quoted back at it.
+    """
+    in_str = False
+    for i, ch in enumerate(text):
+        if ch == '"':
+            in_str = not in_str
+        elif ch == ";" and not in_str:
+            return text[:i].rstrip()
+    return text
 
 
 class Insn:
-    __slots__ = ("text", "block", "idx", "result", "callee")
+    __slots__ = ("text", "block", "idx", "result", "callee", "is_statepoint",
+                 "live", "token")
 
     def __init__(self, text, block, idx):
+        text = strip_trailing_comment(text)
         self.text = text
         self.block = block
         self.idx = idx
@@ -137,6 +299,27 @@ class Insn:
         self.result = m.group(1) if m else None
         c = CALL_RE.search(text)
         self.callee = c.group(1) if c else None
+        self.is_statepoint = False
+        self.live = ()
+        self.token = None
+        if self.callee is not None and STATEPOINT_MARK[1:] in self.callee:
+            # ★ `callee` becomes the WRAPPED callee, deliberately.
+            #
+            # Every consumer in this file — `is_collecting`,
+            # `compute_poll_reaching`, the `--moving-only` classification, the
+            # `RECEIVER_SINKS` ranking — asks "what function does this call?".
+            # Under RS4GC the textual callee is always
+            # `llvm.experimental.gc.statepoint.p0`, so leaving it alone would
+            # make every safepoint in the corpus indistinguishable and
+            # `--moving-only` would classify nothing. Rewriting it here means
+            # those consumers keep working unmodified against both lowerings,
+            # which is the entire argument for this being a mode rather than a
+            # second script.
+            self.is_statepoint = True
+            self.live = statepoint_live_set(text)
+            self.token = self.result
+            wrapped = statepoint_callee(text)
+            self.callee = wrapped if wrapped is not None else "<indirect>"
 
 
 class Func:
@@ -165,10 +348,17 @@ def parse_file(path):
             line = raw.rstrip("\n")
             m = DEFINE_RE.match(line)
             if m:
-                cur = Func(m.group(1))
+                cur = Func(m.group(1) if m.group(1) is not None else m.group(2))
                 funcs.append(cur)
                 curblk = None
                 continue
+            if DEFINE_SHAPED_RE.match(line):
+                raise MalformedIR(
+                    f"{path}:{lineno}: `define` whose function name this parser "
+                    f"cannot read: {line.strip()[:120]!r}. Skipping it reports "
+                    "every function in it clean, which is how 175 repsel "
+                    "specialisations left the native corpus without a word."
+                )
             if cur is None:
                 continue
             if line.startswith("}"):
@@ -189,6 +379,20 @@ def parse_file(path):
                     cur.insns[curblk] = []
                 continue
             if not line.strip():
+                continue
+            # A wrapped instruction record (`to label %ok unwind label %lpad`,
+            # a landingpad's `cleanup`) belongs to the instruction above it.
+            # Folding rather than dropping is what keeps an `invoke`'s two CFG
+            # edges visible; see `_CONTINUATION_HEAD_RE`.
+            if _CONTINUATION_HEAD_RE.match(line):
+                if curblk is None or not cur.insns[curblk]:
+                    raise MalformedIR(
+                        f"{path}:{lineno}: continuation line with no "
+                        f"instruction to attach it to: {line.strip()!r}"
+                    )
+                prev = cur.insns[curblk][-1]
+                cur.insns[curblk][-1] = Insn(
+                    prev.text + " " + line.strip(), curblk, prev.idx)
                 continue
             if LABEL_SHAPED_RE.match(line.strip()):
                 raise MalformedIR(
@@ -1777,23 +1981,33 @@ def check_func_stale(module, f, poll_reaching=frozenset(), moving_only=False):
     return out
 
 
-def window_hits_generic(f, A, B):
-    """Collecting calls on some CFG path from just after A to just before B."""
+def _collecting_insn(ins):
+    return is_collecting(ins.callee)
+
+
+def window_hits_generic(f, A, B, pred=_collecting_insn):
+    """Collection points on some CFG path from just after A to just before B.
+
+    `pred` decides what a collection point IS. The shadow modes pass the
+    default, which asks `is_collecting(callee)` and therefore depends on
+    `NONCOLLECTING` being right. The statepoint mode passes `_is_statepoint`,
+    where the judgement was already made by LLVM and is in the IR.
+    """
     hits = []
     if A.block == B.block:
         for c in f.insns[A.block]:
-            if is_collecting(c.callee) and A.idx < c.idx < B.idx:
+            if pred(c) and A.idx < c.idx < B.idx:
                 hits.append(c)
         return hits
     for c in f.insns[A.block]:
-        if is_collecting(c.callee) and c.idx > A.idx:
+        if pred(c) and c.idx > A.idx:
             hits.append(c)
     for c in f.insns[B.block]:
-        if is_collecting(c.callee) and c.idx < B.idx:
+        if pred(c) and c.idx < B.idx:
             hits.append(c)
     for m_blk in between_blocks(f, A.block, B.block):
         for c in f.insns[m_blk]:
-            if is_collecting(c.callee):
+            if pred(c):
                 hits.append(c)
     return hits
 
@@ -2601,6 +2815,1128 @@ entry.0:
 """
 
 
+# ------------------------------------------------- the STATEPOINT mode ---
+#
+# Everything above this line reads the SHADOW-STACK lowering. Since #7370 that
+# is not the lowering that ships on any target whose frames the runtime can
+# walk, and `gc_root_dominance_corpus.sh` says so in a paragraph that ends
+# "teaching the checker to read relocation bundles is a separate change". This
+# is that change (#7660).
+#
+# ## What replaces the bind
+#
+# There is no `js_shadow_slot_bind` to anchor on — the native lowering emits
+# zero of them. A value is a root at a safepoint iff it appears in that
+# `gc.statepoint`'s `"gc-live"` operand bundle, and its post-safepoint identity
+# is the `gc.relocate` result, not the pre-statepoint SSA value. So
+#
+#     "the root store must dominate every later collection point"
+#
+# becomes
+#
+#     "no register naming a GC object may be USED below a statepoint unless it
+#      is the relocated value"
+#
+# which is the same invariant `--stale-registers` states, re-based on
+# statepoints. It is the SECOND half of that sentence that carries the bug
+# class: a use of the pre-relocation value below a statepoint is #7192's exact
+# shape — a rooted object, a stale pointer, surfacing cycles later as
+# "TypeError: value is not a function".
+#
+# ## Why every statepoint is a collection point, with no NONCOLLECTING appeal
+#
+# The shadow modes must decide for themselves whether a call can collect, and
+# `NONCOLLECTING` is where they can be wrong — a missing entry costs a false
+# positive, a WRONG entry costs a missed bug. Under RS4GC that judgement has
+# already been made, by LLVM, in the emitted IR: a call that is not
+# `gc-leaf-function` gets a statepoint. So this mode does not consult
+# `NONCOLLECTING` at all, and a statepoint over `js_write_barrier_root_nanbox`
+# (which genuinely cannot collect, and IS in NONCOLLECTING) still counts. That
+# is a strict soundness improvement, and it is deliberate: the one-sidedness
+# now comes from LLVM's own conservatism rather than from a hand-maintained
+# list. `--moving-only` still narrows using POLL_CAPABLE_RUNTIME, because
+# "a safepoint" and "a safepoint that runs an EVACUATING minor" remain
+# different questions.
+#
+# ## Two verdict classes, because they have two different fixes
+#
+#   unrooted   no `ptr addrspace(1)` value in the register's cast chain is in
+#              the window statepoint's live bundle. The OBJECT is unprotected:
+#              nothing marks it, nothing rewrites it. This is #7207's shape.
+#   stale      the object IS in the bundle (so it survives and is relocated),
+#              but a raw i64/double copy of its pre-move address is used below.
+#              The fix is to re-derive from the relocated value —
+#              `OperandProtection::Reload` — not to add a root.
+#
+# The split is computed from a transparent-cast closure and is therefore
+# one-sided in the SAFE direction for the total and the LOOSE direction for the
+# split: over-approximating the closure can only move a hit from `unrooted` to
+# `stale`, never out of the report.
+
+# `ptrtoint ptr addrspace(1) %s to i64` -- a GC reference leaving the domain
+# RS4GC tracks. Everything downstream of it is a raw integer LLVM will not
+# relocate, which is precisely why Perry's NaN-boxed representation is exposed
+# here: a JSValue spends most of its life as a `double`, not as a pointer.
+UNMASK_RE = re.compile(r"=\s*ptrtoint\s+ptr\s+addrspace\(1\)\s+%([\w.$]+)\s+to\b")
+# The reverse: a raw word re-entering the tracked domain.
+REMASK_RE = re.compile(r"=\s*inttoptr\s+\S+\s+%([\w.$]+)\s+to\s+ptr\s+addrspace\(1\)")
+
+# ★ THE TRACKED/UNTRACKED LINE, which is the whole model.
+#
+# RS4GC relocates `ptr addrspace(1)` SSA values and rewrites every dominated
+# use of them. A register of that type is therefore NEVER stale: LLVM owns it.
+# A register of any other type that names the same object is invisible to
+# RS4GC, is not relocated, and IS stale below a safepoint. Perry's NaN-boxed
+# representation means most GC values spend most of their life on the wrong
+# side of that line, which is exactly why this mode has anything to say.
+#
+# Getting this line wrong in the LOOSE direction is not a false positive, it is
+# a wall of them. Measured: a forward cast-closure that walked THROUGH
+# `inttoptr … to ptr addrspace(1)` reached the relocation `phi` at the top of
+# every loop, came back out through the `ptrtoint` below it, and reported the
+# RELOCATED value as stale — 21 of 29 `--moving-only` hits on the 21-module
+# probe corpus were that one shape, every one of them correct code.
+#
+# Only three forms produce one in the corpus (`call` — i.e. `gc.relocate` —,
+# `phi`, and `inttoptr`); the others are here because LLVM may emit them and a
+# missing form silently widens the report. `_untracked_bundle_members` asserts
+# the predicate is not narrower than reality: every operand of a `"gc-live"`
+# bundle is `ptr addrspace(1)` by construction, so one this cannot recognise is
+# a parser gap and is reported as an error rather than absorbed.
+AS1_DEF_RE = re.compile(
+    r"^\s*%[\w.$]+\s*=\s*(?:"
+    r"(?:inttoptr|bitcast|addrspacecast)\b.*\bto\s+ptr\s+addrspace\(1\)\s*$"
+    # NB: no `\b` after `addrspace\(1\)`. `)` and the space that follows are
+    # both non-word, so there is no boundary between them and the alternative
+    # matches nothing -- which `_untracked_bundle_members` reported as 262
+    # unrecognised bundle operands the first time this ran, every one of them
+    # a `%.N = phi ptr addrspace(1) [ ... ]`. Exactly the dead-alternative
+    # failure `--audit-alloc-re` exists for, in a different regex.
+    r"|(?:phi|select|freeze)\s+ptr\s+addrspace\(1\)"
+    r"|(?:call|invoke)\s+[^%@]*\bptr\s+addrspace\(1\)\s+[@%(]"
+    r"|(?:load|getelementptr)\s+[^%@]*\bptr\s+addrspace\(1\)[,\s]"
+    r")")
+
+
+def tracked_registers(f):
+    """Registers LLVM tracks as GC references (`ptr addrspace(1)`-typed)."""
+    out = set()
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            if ins.result and AS1_DEF_RE.match(ins.text):
+                out.add(ins.result)
+    return out
+
+
+def native_effective_callee(ins, token_callee):
+    """The function this instruction's value came out of, seeing through the
+    `gc.result` indirection RS4GC introduces."""
+    if ins.callee is None:
+        return None
+    if GC_RESULT_MARK[1:] in ins.callee:
+        m = GC_RESULT_RE.search(ins.text)
+        return token_callee.get(m.group(1)) if m else None
+    return ins.callee
+
+
+def native_heap_source_kind(ins, token_callee):
+    """Classify `ins` as producing a register that may name a GC object.
+
+    `token_callee` maps a statepoint token register to the callee it wraps, so
+    a `gc.result` can be attributed to the call that produced it.
+    """
+    if ins.result is None or ins.is_statepoint:
+        return None
+    if ins.callee is not None:
+        if RELOCATE_MARK[1:] in ins.callee:
+            # The relocated value is the SOUND form, not a hazard. Classifying
+            # it as a source would report the fix as the bug.
+            return None
+        callee = native_effective_callee(ins, token_callee)
+        if callee is None or callee.startswith("llvm."):
+            return None
+        # A call with NO statepoint is one LLVM proved is `gc-leaf-function`.
+        # Its result is still a value, and `ALLOC_RE`/`ROOT_READ_CALLS` still
+        # describe what it hands back.
+        if ALLOC_RE.match(callee):
+            return "alloc"
+        if callee in ROOT_READ_CALLS:
+            return "capture" if "capture" in callee else "rootread"
+        return None
+    if UNMASK_RE.search(ins.text):
+        return "unmasked"
+    if "= load " in ins.text:
+        if GLOBAL_ROOT_RE.search(ins.text):
+            return "global"
+        kind = rewritten_load_kind(ins.text)
+        if kind is not None:
+            return kind
+    return None
+
+
+def native_immovable_exemption(ins, effective_callee, source_opts):
+    """The `IMMOVABLE_SOURCES` entry that exempts this source, if any.
+
+    The #7210 adjudication is about the ALLOCATOR, not about the lowering: the
+    class-keys array is old-arena and the keys global is a registered root
+    under statepoints exactly as under the shadow stack, and a box is still
+    `std::alloc::alloc`. Re-deriving that judgement here would be the
+    `REWRITTEN_LOAD_RE` mistake again — two modes with two answers to one
+    question, of which the narrower was wrong (#7240). Measured before this
+    was wired: 40 of 137 `unrooted` hits on the 21-module corpus were
+    `@perry_class_keys_*`, i.e. the population #7210 already dismissed.
+
+    The premises are gated by `--audit-immovable-sources`, which runs in CI
+    ahead of both corpora, and each exemption's knob turns it back off.
+    """
+    for src in IMMOVABLE_SOURCES:
+        hit = (effective_callee is not None and effective_callee in src.callees)
+        if not hit and src.load_re is not None and ins.callee is None:
+            hit = bool(src.load_re.search(ins.text))
+        if hit:
+            return None if source_opts.get(src.knob) else src
+    return None
+
+
+class StatepointHazard:
+    __slots__ = ("module", "func", "src", "kind", "use", "statepoints",
+                 "rooted", "poll_reaching")
+
+    def __init__(self, module, func, src, kind, use, statepoints, rooted,
+                 poll_reaching=frozenset()):
+        self.module = module
+        self.func = func
+        self.src = src
+        self.kind = kind
+        self.use = use
+        self.statepoints = statepoints
+        self.rooted = rooted
+        self.poll_reaching = poll_reaching
+
+    @property
+    def movers(self):
+        return sorted({c.callee for c in self.statepoints
+                       if c.callee == MOVING_POLL or c.callee in self.poll_reaching
+                       or c.callee in POLL_CAPABLE_RUNTIME})
+
+    @property
+    def moving(self):
+        return bool(self.movers)
+
+    @property
+    def kind_class(self):
+        return "stale" if self.rooted else "unrooted"
+
+    @property
+    def fatal_sink(self):
+        return bool(self.use.callee and RECEIVER_SINKS.match(self.use.callee))
+
+    @property
+    def fingerprint(self):
+        """Same shape as `Violation.fingerprint`, and for the same reasons:
+        names only, never registers or line numbers, so an unrelated lowering
+        change one instruction above does not churn it."""
+        return "{}::{}::{}:{}->{}".format(
+            self.module, self.func, self.kind_class, self.kind,
+            sorted({c.callee for c in self.statepoints})[0]
+            if self.statepoints else "?",
+        )
+
+
+def _is_statepoint(ins):
+    return ins.is_statepoint
+
+
+def _cast_closure(f, seed, tracked, stop_at_tracked):
+    """Forward closure of `seed` over bit-level/identity producers.
+
+    With `stop_at_tracked`, a register LLVM tracks terminates the walk: it is
+    relocated and its uses rewritten, so nothing derived from it below a
+    safepoint is stale.
+    """
+    chain = set(seed)
+    grew = True
+    while grew:
+        grew = False
+        for b in f.blocks:
+            for ins in f.insns[b]:
+                if ins.result is None or ins.result in chain:
+                    continue
+                if ins.is_statepoint or not is_transparent(ins):
+                    continue
+                if stop_at_tracked and ins.result in tracked:
+                    continue
+                if uses(ins.text, chain):
+                    chain.add(ins.result)
+                    grew = True
+    return chain
+
+
+def _back_closure(def_of, reg, limit=64):
+    """Registers `reg` was cast FROM, through identity producers only."""
+    seen = set()
+    q = deque([reg])
+    while q and len(seen) < limit:
+        r = q.popleft()
+        if r in seen:
+            continue
+        seen.add(r)
+        d = def_of.get(r)
+        if d is None or d.is_statepoint:
+            continue
+        m = UNMASK_RE.search(d.text)
+        if m:
+            q.append(m.group(1))
+            continue
+        if is_transparent(d):
+            q.extend(operand_regs(d.text))
+    return seen
+
+
+def _untracked_bundle_members(f, tracked):
+    """`"gc-live"` operands `AS1_DEF_RE` failed to recognise.
+
+    Non-vacuity for the tracked/untracked predicate. Every bundle operand is
+    spelled `ptr addrspace(1) %r`, so one whose definition this cannot classify
+    means the predicate is narrower than the IR — and a narrow predicate does
+    not fail quietly here, it turns correct relocated code into reported
+    hazards. Reported as an error rather than absorbed.
+    """
+    missing = set()
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            if ins.is_statepoint:
+                missing.update(r for r in ins.live if r not in tracked)
+    return missing
+
+
+def check_func_statepoints(module, f, want_moving_only=False,
+                           poll_reaching=frozenset(), source_opts=None,
+                           exempt_counts=None):
+    """Registers naming a GC object that are USED below a `gc.statepoint`."""
+    source_opts = source_opts or {}
+    if not f.blocks:
+        return []
+
+    def_of = {}
+    token_callee = {}
+    n_statepoints = 0
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            if ins.result:
+                def_of[ins.result] = ins
+            if ins.is_statepoint:
+                n_statepoints += 1
+                if ins.token:
+                    token_callee[ins.token] = ins.callee
+    if not n_statepoints:
+        # A function LLVM found nothing to instrument. Not a finding: it means
+        # this function cannot collect, so nothing in it can be stale.
+        return []
+
+    tracked = tracked_registers(f)
+    idom = dominators(f)
+    out = []
+
+    for b in f.blocks:
+        for src in f.insns[b]:
+            kind = native_heap_source_kind(src, token_callee)
+            if kind is None:
+                continue
+            exemption = native_immovable_exemption(
+                src, native_effective_callee(src, token_callee), source_opts)
+            if exemption is not None:
+                # Tallied, never silently dropped: "the corpus is clean" and
+                # "the corpus is entirely exempted" must not print the same.
+                if exempt_counts is not None:
+                    exempt_counts[exemption.key] += 1
+                continue
+            # TWO closures, because two different questions are being asked.
+            #
+            # `chain` is the UNTRACKED cast-closure and it is what a stale use
+            # is looked for in: it stops the moment the value re-enters
+            # `ptr addrspace(1)`, because from there LLVM relocates it and
+            # rewrites its uses. Anything derived from the tracked value BELOW
+            # a safepoint is derived from the relocated one and is correct.
+            #
+            # `reach` crosses that line in both directions and exists only to
+            # answer "is the OBJECT in this safepoint's live bundle" — a bundle
+            # can only ever name the `ptr addrspace(1)` register, so without
+            # crossing, every hit would classify `unrooted` and the split would
+            # be decoration.
+            chain = _cast_closure(f, {src.result}, tracked, stop_at_tracked=True)
+            reach = _cast_closure(f, _back_closure(def_of, src.result), tracked,
+                                  stop_at_tracked=False)
+            as1_chain = reach & tracked
+
+            for bb in f.blocks:
+                if not dominates(idom, src.block, bb):
+                    continue
+                hit = None
+                for use in f.insns[bb]:
+                    if use.result in chain or is_transparent(use):
+                        continue
+                    if not uses(use.text, chain):
+                        continue
+                    if use.block == src.block and use.idx <= src.idx:
+                        continue
+                    sps = window_hits_generic(f, src, use, pred=_is_statepoint)
+                    if not sps:
+                        continue
+                    if _protected_by_temp_root(f, src, use, chain):
+                        continue
+                    rooted = any(as1_chain & set(sp.live) for sp in sps)
+                    v = StatepointHazard(module, f.name, src, kind, use, sps,
+                                         rooted, poll_reaching)
+                    if want_moving_only and not v.moving:
+                        continue
+                    hit = v
+                    break
+                if hit is not None:
+                    out.append(hit)
+                    break
+    return out
+
+
+def _protected_by_temp_root(f, A, B, chain):
+    """A temp-root push / box store of the value inside the window roots it.
+
+    Same rule and same set as the bind-anchored check's `protected()`; both
+    mechanisms still exist under native roots (`js_gc_temp_root_push` is a
+    runtime side table the collector scans AND rewrites, independent of which
+    stack-root lowering codegen picked).
+    """
+    def scan(blk, lo, hi):
+        return any(c.callee in ROOTING_CALLS and uses(c.text, chain)
+                   for c in f.insns[blk][lo:hi])
+    if A.block == B.block:
+        return scan(A.block, A.idx + 1, B.idx)
+    if scan(A.block, A.idx + 1, len(f.insns[A.block])):
+        return True
+    if scan(B.block, 0, B.idx):
+        return True
+    return any(scan(m_blk, 0, len(f.insns[m_blk]))
+               for m_blk in between_blocks(f, A.block, B.block))
+
+
+def statepoint_corpus_stats(parsed):
+    """`(statepoints, live_bundles, relocates, live_roots)` over a corpus.
+
+    The subject-liveness numbers. `statepoints` alone is not enough: a corpus
+    can be full of safepoints that record nothing, which is what an unrooted
+    build looks like, so `live_bundles` and `relocates` are counted separately
+    and floored separately.
+    """
+    n_sp = n_live = n_reloc = n_roots = 0
+    unreadable = set()
+    for _mod, fs in parsed:
+        for f in fs:
+            has_sp = False
+            for b in f.blocks:
+                for ins in f.insns[b]:
+                    if ins.is_statepoint:
+                        has_sp = True
+                        n_sp += 1
+                        if ins.live:
+                            n_live += 1
+                            n_roots += len(ins.live)
+                    elif (ins.callee and RELOCATE_MARK[1:] in ins.callee
+                          and ins.result):
+                        n_reloc += 1
+            if has_sp:
+                unreadable |= _untracked_bundle_members(f, tracked_registers(f))
+    return n_sp, n_live, n_reloc, n_roots, unreadable
+
+
+def run_statepoints(parsed, poll_reaching, verbose, moving_only, allowlist,
+                    max_stale=None, max_unrooted=0, source_opts=None):
+    """Report and gate the statepoint mode. Returns an exit status."""
+    found = []
+    exempt_counts = defaultdict(int)
+    for mod, fs in parsed:
+        for f in fs:
+            found.extend(check_func_statepoints(mod, f, moving_only,
+                                                poll_reaching, source_opts,
+                                                exempt_counts))
+    suppressed, remaining = apply_allowlist(found, allowlist)
+
+    per_class = defaultdict(int)
+    per_kind = defaultdict(int)
+    per_sink = defaultdict(int)
+    for v in found:
+        per_class[v.kind_class] += 1
+        per_kind[f"{v.kind_class}/{v.kind}"] += 1
+        per_sink[v.use.callee or "store"] += 1
+
+    def render(v):
+        cs = sorted({c.callee for c in v.statepoints})
+        return (
+            f"{v.module}::{v.func}   [{v.kind_class}]\n"
+            f"  source ({v.kind}): {v.src.text.strip()[:200]}\n"
+            f"  stale use        : {v.use.text.strip()[:200]}\n"
+            f"  across safepoint : {', '.join(cs[:6])}"
+            f"{'  (+%d more)' % (len(cs) - 6) if len(cs) > 6 else ''}\n"
+            f"  MOVING           : "
+            f"{('YES via ' + ', '.join(v.movers[:3])) if v.moving else 'no'}\n"
+            f"  fingerprint      : {v.fingerprint}\n"
+        )
+
+    if verbose:
+        print("\n".join(render(v) for v in found))
+    print(f"=== statepoint hazards: {len(found)}  "
+          f"(unrooted: {per_class['unrooted']}, stale: {per_class['stale']})")
+    for k, n in sorted(per_kind.items(), key=lambda kv: -kv[1]):
+        print(f"  {n:6d}  {k}")
+    for k, n in sorted(per_sink.items(), key=lambda kv: -kv[1])[:12]:
+        print(f"  {n:6d}  sink={k}")
+    if exempt_counts:
+        print("=== suppressed by an IMMOVABLE_SOURCES exemption "
+              "(#7210: rewritten location, immovable object):")
+        by_key = {s.key: s for s in IMMOVABLE_SOURCES}
+        for k, n in sorted(exempt_counts.items(), key=lambda kv: -kv[1]):
+            src = by_key.get(k)
+            knob = f"  (--{src.knob.replace('_', '-')} re-reports these)" if src else ""
+            print(f"  {n:6d}  {k}{knob}")
+    else:
+        print("=== suppressed by an IMMOVABLE_SOURCES exemption: none")
+    if allowlist:
+        print(f"=== allowlisted: {len(suppressed)} hit(s) across "
+              f"{len(allowlist)} entr(y/ies);  unallowed: {len(remaining)}")
+
+    stale = stale_entries(allowlist)
+    if stale:
+        print("error: allowlist entries matched nothing:", file=sys.stderr)
+        for e in stale:
+            print(f"  {e.fingerprint}  ({e.issue})", file=sys.stderr)
+        return 2
+
+    rc = 0
+    # Two budgets, because the two classes are two different populations with
+    # two different fixes. Both are BUDGETS rather than allowlists, for the
+    # reason `--stale-registers` records: the residual here is a population
+    # under triage, not a list of adjudicated sites, and an allowlist entry per
+    # site would be forty tombstones nobody re-reads. A budget can only be
+    # lowered, and lowering it is the ratchet.
+    unrooted_remaining = [v for v in remaining if v.kind_class == "unrooted"]
+    stale_remaining = [v for v in remaining if v.kind_class == "stale"]
+    if len(unrooted_remaining) > max_unrooted:
+        if not verbose:
+            print("\n".join(render(v) for v in unrooted_remaining))
+        print(f"error: {len(unrooted_remaining)} GC value(s) live across a "
+              "gc.statepoint with nothing in that safepoint's \"gc-live\" "
+              "bundle naming them, budget is "
+              f"{max_unrooted}. Nothing marks or rewrites the object. See "
+              "docs/src/internals/gc-rooting-invariant.md.", file=sys.stderr)
+        rc = 1
+    else:
+        print(f"within budget: unrooted {len(unrooted_remaining)} <= "
+              f"{max_unrooted}")
+    if max_stale is not None:
+        if len(stale_remaining) > max_stale:
+            if not verbose:
+                print("\n".join(render(v) for v in stale_remaining))
+            print(f"error: {len(stale_remaining)} stale-across-safepoint "
+                  f"use(s), budget is {max_stale}. Lower the count or raise "
+                  "--max-stale deliberately.", file=sys.stderr)
+            rc = rc or 1
+        else:
+            print(f"within budget: stale {len(stale_remaining)} <= {max_stale}")
+    return rc
+
+
+# ------------------------------- seeded statepoint violations (real corpus) --
+#
+# `--self-test` proves the statepoint mode fires on HAND-WRITTEN IR. Necessary,
+# not sufficient, and for the reason the bind-anchored seeder already records:
+# frozen fixtures keep passing after perry's — or LLVM's — output drifts to a
+# shape the parser cannot read, at which point the mode reports a serene zero
+# over a corpus it is not analysing.
+#
+# So the same trick, against the safepoint the native lowering actually uses:
+# find a register that names a GC object and is used further down with NO
+# safepoint in between (i.e. correct code today), and SPLICE a safepoint into
+# the gap.
+#
+#     %r6  = ptrtoint ptr addrspace(1) %rs4gc.s2 to i64   <-- real
+#     %seed = call token ... @js_gc_loop_safepoint ...    <-- spliced in
+#     %r7  = and i64 %r6, 281474976710655                  <-- real
+#
+# Only the safepoint is synthetic; the function, its CFG, the cast chain, the
+# `ptr addrspace(1)` domain and the use are all perry-plus-RS4GC output. And
+# the spliced callee is `js_gc_loop_safepoint`, which is `MOVING_POLL`, so the
+# planted hazard survives `--moving-only` — the configuration the gate ships
+# with, not a laxer one.
+#
+# The seed carries NO `"gc-live"` bundle, which is what makes the planted hit
+# `unrooted` rather than `stale`: an empty bundle is exactly "the collector
+# would find nothing here".
+_SP_SEED = ("  %gcseed.tok = call token (i64, i32, ptr, i32, i32, ...) "
+            "@llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0, ptr "
+            "elementtype(void ()) @js_gc_loop_safepoint, i32 0, i32 0, i32 0, "
+            "i32 0)")
+
+# A source the mode recognises, spelled against the raw text so the seeder does
+# not have to build a `Func`. Deliberately narrow: `ptrtoint` off a tracked
+# pointer is the shape with the least ambiguity about whether a non-report
+# would be correct behaviour.
+_SP_SEED_SRC_RE = re.compile(
+    r"^\s*%([\w.$]+)\s*=\s*ptrtoint\s+ptr\s+addrspace\(1\)\s+%[\w.$]+\s+to\s+i64\s*$")
+
+
+def _sp_seed_sites(lines):
+    """Yield (line index, source register) pairs to splice a safepoint above.
+
+    A site is an unmask followed, later in the SAME basic block, by a plain use
+    of the unmasked register, with no safepoint, no relocation and no rooting
+    call between them. Every one of those exclusions matters: with a safepoint
+    already in the gap the site is reported before the mutation, so the seed
+    would prove nothing; with a rooting call in it a non-report is CORRECT and
+    would be counted as a miss.
+    """
+    block_start = 0
+    fn_hi = 0
+    for i, line in enumerate(lines):
+        if line.startswith("define "):
+            fn_hi = next((k for k in range(i + 1, len(lines))
+                          if lines[k].startswith("}")), len(lines))
+            block_start = i + 1
+            continue
+        if LABEL_RE.match(line) or line.startswith("}"):
+            block_start = i + 1
+            continue
+        if i >= fn_hi:
+            continue
+        m = _SP_SEED_SRC_RE.match(line)
+        if not m:
+            continue
+        reg = m.group(1)
+        block_end = next((k for k in range(i + 1, fn_hi)
+                          if LABEL_RE.match(lines[k]) or lines[k].startswith("}")),
+                         fn_hi)
+        use_at = None
+        for j in range(i + 1, block_end):
+            text = lines[j]
+            if (STATEPOINT_MARK in text or RELOCATE_MARK in text
+                    or any(rc in text for rc in ROOTING_CALLS)):
+                use_at = None
+                break
+            if not uses(text, {reg}):
+                continue
+            probe = Insn(text, "seed", 0)
+            if is_transparent(probe) or probe.result == reg:
+                continue
+            use_at = j
+            break
+        if use_at is not None and use_at > i + 1:
+            # Splice ABOVE the use but BELOW the source, so the safepoint lands
+            # strictly inside the window.
+            yield use_at, reg
+        elif use_at == i + 1:
+            yield use_at, reg
+
+
+def seeded_statepoint_test(paths, moving_only, want_sites, verbose=False):
+    """Return 0 if every seeded statepoint violation was caught."""
+    caught = missed = sites = 0
+    misses = []
+    with tempfile.TemporaryDirectory() as td:
+        mutant = os.path.join(td, "mutant.ll")
+        for p in sorted(paths):
+            if sites >= want_sites:
+                break
+            with open(p, "r", errors="replace") as fh:
+                lines = fh.read().splitlines()
+            try:
+                base = _scan_statepoints([p], moving_only)
+            except MalformedIR:
+                continue
+            for at, _reg in _sp_seed_sites(lines):
+                if sites >= want_sites:
+                    break
+                with open(mutant, "w") as fh:
+                    fh.write("\n".join(lines[:at] + [_SP_SEED] + lines[at:])
+                             + "\n")
+                try:
+                    after = _scan_statepoints([mutant], moving_only)
+                except MalformedIR:
+                    continue
+                sites += 1
+                if len(after) > len(base):
+                    caught += 1
+                    if verbose:
+                        print(f"  seeded {os.path.basename(p)}:{at + 1} -> caught")
+                else:
+                    missed += 1
+                    misses.append(f"{p}:{at + 1}")
+
+    print(f"=== seeded statepoint violations: {sites} planted, {caught} "
+          f"caught, {missed} MISSED")
+    if sites == 0:
+        print("error: could not seed a single violation into the corpus. The "
+              "mutator looks for a `ptrtoint ptr addrspace(1)` whose result is "
+              "used further down the same block with no safepoint between; "
+              "finding none means the IR no longer has the shape this mode "
+              "anchors on, so a clean verdict from it would be meaningless.",
+              file=sys.stderr)
+        return 2
+    if sites < want_sites:
+        print(f"error: only {sites} seed site(s) found, wanted {want_sites}. "
+              "Too narrow a sample to claim the checker still fires.",
+              file=sys.stderr)
+        return 2
+    if missed:
+        print("error: the checker did NOT report these seeded violations:",
+              file=sys.stderr)
+        for m in misses[:20]:
+            print(f"  {m}", file=sys.stderr)
+        print("A safepoint planted between a GC value and its use went "
+              "unreported. The mode is not reading this IR the way it thinks "
+              "it is; a clean verdict from it means nothing until this is "
+              "explained.", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _scan_statepoints(paths, moving_only=False, **source_opts):
+    """Statepoint hazards over `paths`."""
+    parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
+    poll_reaching, _known = compute_poll_reaching(
+        [f for _m, fs in parsed for f in fs])
+    return [v
+            for mod, fs in parsed
+            for f in fs
+            for v in check_func_statepoints(mod, f, moving_only, poll_reaching,
+                                            source_opts)]
+
+
+# --------------------------------------------- statepoint-mode fixtures ---
+#
+# One printed safepoint, reused by every fixture below so the shape under test
+# is the shape LLVM prints. `{live}` is the operand bundle and `{callee}` the
+# wrapped call.
+_SP_TEMPLATE = (
+    "  %{tok} = call token (i64, i32, ptr, i32, i32, ...) "
+    "@llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0, ptr "
+    "elementtype(void ()) @{callee}, i32 0, i32 0, i32 0, i32 0){live}")
+
+
+def _sp(tok="tok", callee="js_gc_loop_safepoint", live=()):
+    bundle = ""
+    if live:
+        ops = ", ".join(f"ptr addrspace(1) %{r}" for r in live)
+        bundle = f' [ "gc-live"({ops}) ]'
+    return _SP_TEMPLATE.format(tok=tok, callee=callee, live=bundle)
+
+
+# The #7192 shape under native roots: a receiver is unmasked out of the tracked
+# domain, a safepoint runs, and the RAW word is dereferenced below it. The
+# safepoint's live bundle is EMPTY, so nothing marks or rewrites the object —
+# class `unrooted`.
+_SELFTEST_SP_UNROOTED = """\
+define double @perry_fn_selftest__sp_unrooted(double %a) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+__SAFEPOINT__
+  %r = call double @js_object_get_field_by_name_f64(i64 %raw, i64 0)
+  ret double %r
+}
+""".replace("__SAFEPOINT__", _sp())
+
+# Identical except the safepoint's bundle NAMES the tracked pointer. The object
+# survives and is relocated, so only the raw copy is stale — class `stale`, and
+# the fix is a re-derive rather than a root.
+_SELFTEST_SP_STALE = """\
+define double @perry_fn_selftest__sp_stale(double %a) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+__SAFEPOINT__
+  %rs4gc.s1.relocated = call coldcc ptr addrspace(1) @llvm.experimental.gc.relocate.p1(token %tok, i32 0, i32 0)
+  %r = call double @js_object_get_field_by_name_f64(i64 %raw, i64 0)
+  ret double %r
+}
+""".replace("__SAFEPOINT__", _sp(live=("rs4gc.s1",)))
+
+# The FIX, and the control the whole mode rests on: the unmask happens BELOW
+# the safepoint, off the RELOCATED pointer. Byte-identical otherwise. If this
+# reports anything, the mode is firing on the code shape rather than on the
+# staleness — which is how a checker ends up unable to tell fixed from broken.
+_SELFTEST_SP_RELOADED = """\
+define double @perry_fn_selftest__sp_reloaded(double %a) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+__SAFEPOINT__
+  %rs4gc.s1.relocated = call coldcc ptr addrspace(1) @llvm.experimental.gc.relocate.p1(token %tok, i32 0, i32 0)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1.relocated to i64
+  %r = call double @js_object_get_field_by_name_f64(i64 %raw, i64 0)
+  ret double %r
+}
+""".replace("__SAFEPOINT__", _sp(live=("rs4gc.s1",)))
+
+# ★ The three things LLVM's PRINTER does that perry's writer never does, in one
+# fixture: an `invoke` statepoint whose destinations are on a CONTINUATION
+# line, a `landingpad` whose `cleanup` clause is on another, and a label with a
+# HYPHEN in it (`split-lp`, which `rewrite-statepoints-for-gc` itself creates).
+#
+# The differential is the point. Read line-at-a-time, the invoke's block has no
+# successor, `eh.cont.1` is unreachable, `dominates()` answers False for every
+# pair in it, and the fixture reports ZERO — a silent clean verdict over a
+# function the parser could not walk.
+_SELFTEST_SP_INVOKE = """\
+define double @perry_fn_selftest__sp_invoke(double %a) gc "statepoint-example" personality ptr @perry_eh_personality {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+  %tok = invoke token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0, ptr elementtype(void ()) @js_gc_loop_safepoint, i32 0, i32 0, i32 0, i32 0)
+          to label %eh.cont.1 unwind label %eh.lpad.2.split-lp
+
+eh.cont.1:                                        ; preds = %entry.0
+  %r = call double @js_object_get_field_by_name_f64(i64 %raw, i64 0)
+  ret double %r
+
+eh.lpad.2.split-lp:                               ; preds = %entry.0
+  %lpad = landingpad token
+          cleanup
+  ret double 0.000000e+00
+}
+"""
+
+# A repsel specialisation, whose name LLVM must quote. Skipped silently for as
+# long as this checker has existed; 175 of 2452 defines in the native corpus.
+_SELFTEST_SP_QUOTED_NAME = """\
+define internal double @"perry_fn_selftest__probe$typed_f64"(double %a) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+__SAFEPOINT__
+  %r = call double @js_object_get_field_by_name_f64(i64 %raw, i64 0)
+  ret double %r
+}
+""".replace("__SAFEPOINT__", _sp())
+
+# A `define` whose name this parser cannot read must RAISE, not be skipped.
+_SELFTEST_SP_BAD_DEFINE = """\
+define double @<mangled>(double %a) {
+entry.0:
+  ret double %a
+}
+"""
+
+# One printed statepoint, for the two parser unit arms. Both mistakes it guards
+# against were made on the Rust side of this construct and caught there
+# (`native_root_coverage`): reading `) @` as the callee names the intrinsic in
+# every function, and reading to the first `)` truncates every live set to
+# `"ptr addrspace(1"` and reports it empty.
+_SELFTEST_SP_PRINTED_LINE = (
+    '  %statepoint_token = call token (i64, i32, ptr, i32, i32, ...) '
+    '@llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0, ptr '
+    'elementtype(i64 (i64, i64)) @js_object_get_field_by_name_f64, i32 2, '
+    'i32 0, i64 %r21, i64 %r25, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) '
+    '%rs4gc.s5, ptr addrspace(1) %rs4gc.s4) ]')
+
+
+def statepoint_self_test():
+    """The `--statepoints` half of `--self-test`. Returns True when clean."""
+    ok = True
+
+    # --- parser units, both known traps ---------------------------------
+    got = statepoint_callee(_SELFTEST_SP_PRINTED_LINE)
+    if got != "js_object_get_field_by_name_f64":
+        print(f"self-test FAIL: statepoint callee read as {got!r}. `) @` "
+              "appears twice on the line and the first belongs to "
+              "@llvm.experimental.gc.statepoint.p0; reading that one makes "
+              "every safepoint in every function identical and --moving-only "
+              "classifies nothing.", file=sys.stderr)
+        ok = False
+    got = statepoint_live_set(_SELFTEST_SP_PRINTED_LINE)
+    if got != ("rs4gc.s5", "rs4gc.s4"):
+        print(f"self-test FAIL: live set read as {got!r}. Every operand is "
+              "spelled `ptr addrspace(1) %r`, so a scan to the first `)` "
+              "truncates the list and reports an EMPTY live set for every "
+              "safepoint -- under which every rooted value classifies "
+              "`unrooted` and the mode is pure noise.", file=sys.stderr)
+        ok = False
+    if statepoint_live_set(_sp()) != ():
+        print("self-test FAIL: a safepoint with no bundle must have an empty "
+              "live set", file=sys.stderr)
+        ok = False
+
+    # --- the tracked/untracked predicate, both directions ----------------
+    for text, want, why in (
+        ("  %.0 = phi ptr addrspace(1) [ %a, %bb ], [ %b, %cc ]", True,
+         "a relocation phi is the commonest tracked definition there is; "
+         "missing it reported 262 bundle operands as unreadable"),
+        ("  %s = inttoptr i64 %b to ptr addrspace(1)", True,
+         "the cast INTO the tracked domain"),
+        ("  %r = call coldcc ptr addrspace(1) "
+         "@llvm.experimental.gc.relocate.p1(token %t, i32 0, i32 0)", True,
+         "the relocated value itself"),
+        ("  %raw = ptrtoint ptr addrspace(1) %s to i64", False,
+         "the cast OUT of it -- an i64, which LLVM does not relocate. "
+         "Classifying it tracked would silence the entire mode"),
+    ):
+        if bool(AS1_DEF_RE.match(text)) != want:
+            print(f"self-test FAIL: AS1_DEF_RE should{'' if want else ' not'} "
+                  f"match {text.strip()!r} -- {why}", file=sys.stderr)
+            ok = False
+
+    # --- LLVM's trailing annotations are not uses ------------------------
+    annotated = ("  %s.relocated = call coldcc ptr addrspace(1) "
+                 "@llvm.experimental.gc.relocate.p1(token %t, i32 0, i32 0) "
+                 "; (%victim, %victim)")
+    if "%victim" in strip_trailing_comment(annotated):
+        print("self-test FAIL: a relocation's `; (%orig, %base)` annotation "
+              "must be stripped. Left in, every relocated value is reported "
+              "stale at its own relocation -- 186 of 326 hits on the first "
+              "measured corpus.", file=sys.stderr)
+        ok = False
+    quoted = '  %x = call i32 @f(ptr @g) ; note "a;b"'
+    if strip_trailing_comment('  %x = call i32 @f(ptr @g)') != \
+            '  %x = call i32 @f(ptr @g)':
+        print("self-test FAIL: a line with no comment must be unchanged",
+              file=sys.stderr)
+        ok = False
+    if ";" in strip_trailing_comment(quoted).split("@g)")[-1]:
+        print("self-test FAIL: comment stripping must not keep the comment",
+              file=sys.stderr)
+        ok = False
+
+    with tempfile.TemporaryDirectory() as td:
+        paths = {}
+        for name, text in (("unrooted", _SELFTEST_SP_UNROOTED),
+                           ("stale", _SELFTEST_SP_STALE),
+                           ("reloaded", _SELFTEST_SP_RELOADED),
+                           ("invoke", _SELFTEST_SP_INVOKE),
+                           ("quoted", _SELFTEST_SP_QUOTED_NAME)):
+            p = os.path.join(td, f"sp_{name}.ll")
+            with open(p, "w") as fh:
+                fh.write(text)
+            paths[name] = p
+
+        # --- the two classes, and the control -----------------------------
+        for name, want_class in (("unrooted", "unrooted"), ("stale", "stale")):
+            hits = _scan_statepoints([paths[name]], moving_only=True)
+            if len(hits) != 1 or hits[0].kind_class != want_class:
+                print(f"self-test FAIL: the {name} fixture must report exactly "
+                      f"one {want_class} hazard, got "
+                      f"{[(h.kind_class, h.kind) for h in hits]}. The two "
+                      "fixtures differ ONLY in whether the safepoint's "
+                      "\"gc-live\" bundle names the pointer, which is the "
+                      "whole distinction between 'add a root' and 're-derive "
+                      "from the relocated value'.", file=sys.stderr)
+                ok = False
+            elif hits[0].kind != "unmasked":
+                print(f"self-test FAIL: the {name} fixture's source is a "
+                      f"`ptrtoint ptr addrspace(1)`, got kind {hits[0].kind!r}",
+                      file=sys.stderr)
+                ok = False
+            elif not hits[0].moving:
+                print(f"self-test FAIL: the {name} fixture's safepoint wraps "
+                      "js_gc_loop_safepoint and MUST classify MOVING, or "
+                      "--moving-only -- the arm CI gates on -- drops it and "
+                      "the proof is vacuous.", file=sys.stderr)
+                ok = False
+
+        hits = _scan_statepoints([paths["reloaded"]], moving_only=True)
+        if hits:
+            print(f"self-test FAIL: re-deriving the raw word from the "
+                  f"RELOCATED pointer below the safepoint is the fix, so the "
+                  f"control must report 0, got {len(hits)}. A non-zero count "
+                  "means the mode cannot tell fixed from broken.",
+                  file=sys.stderr)
+            ok = False
+
+        # --- LLVM's printed forms: continuation lines, hyphens, quotes ----
+        funcs = parse_file(paths["invoke"])
+        f = funcs[0]
+        if len(f.blocks) != 3:
+            print(f"self-test FAIL: the invoke fixture has 3 blocks, parsed "
+                  f"{len(f.blocks)}", file=sys.stderr)
+            ok = False
+        elif f.succs["entry.0"] != {"eh.cont.1", "eh.lpad.2.split-lp"}:
+            print("self-test FAIL: an `invoke` whose `to label … unwind label "
+                  "…` is on a CONTINUATION line must still produce both CFG "
+                  f"edges, got {f.succs['entry.0']!r}. Without them every "
+                  "block below the invoke is unreachable, dominance answers "
+                  "False everywhere, and the function reports clean.",
+                  file=sys.stderr)
+            ok = False
+        hits = _scan_statepoints([paths["invoke"]], moving_only=True)
+        if len(hits) != 1:
+            print(f"self-test FAIL: the invoke fixture must report 1 hazard, "
+                  f"got {len(hits)}", file=sys.stderr)
+            ok = False
+
+        funcs = parse_file(paths["quoted"])
+        if [f.name for f in funcs] != ["perry_fn_selftest__probe$typed_f64"]:
+            print("self-test FAIL: a QUOTED define name (every repsel "
+                  "specialisation: `$typed_f64`, `$generic`, `$spec_i32`) must "
+                  f"parse, got {[f.name for f in funcs]!r}. 175 of 2452 "
+                  "defines in the native corpus were skipped in silence "
+                  "before this (zero in the shadow corpus: perry prints those "
+                  "names bare, LLVM's printer quotes them).",
+                  file=sys.stderr)
+            ok = False
+        if len(_scan_statepoints([paths["quoted"]], moving_only=True)) != 1:
+            print("self-test FAIL: the quoted-name fixture carries the same "
+                  "planted hazard as the unrooted one and must report it",
+                  file=sys.stderr)
+            ok = False
+
+        bad = os.path.join(td, "sp_bad_define.ll")
+        with open(bad, "w") as fh:
+            fh.write(_SELFTEST_SP_BAD_DEFINE)
+        try:
+            parse_file(bad)
+        except MalformedIR:
+            pass
+        else:
+            print("self-test FAIL: a `define` whose name the parser cannot "
+                  "read must raise MalformedIR, not be skipped. A skipped "
+                  "function reports clean.", file=sys.stderr)
+            ok = False
+
+        # --- the exemptions carry over from #7210 -------------------------
+        # An exemption that fires in one mode and not the other is the
+        # REWRITTEN_LOAD_RE divergence again, and #7240 is what that costs.
+        ck = os.path.join(td, "sp_class_keys.ll")
+        with open(ck, "w") as fh:
+            fh.write(_SELFTEST_SP_CLASS_KEYS)
+        if _scan_statepoints([ck], moving_only=True):
+            print("self-test FAIL: the @perry_class_keys_* source is exempt "
+                  "under #7210 (old-arena, registered root) and the statepoint "
+                  "mode must honour the same adjudication the alloca mode "
+                  "does. 1162 of this corpus's sources are that shape.",
+                  file=sys.stderr)
+            ok = False
+        if len(_scan_statepoints([ck], moving_only=True,
+                                 assume_old_defrag=True)) != 1:
+            print("self-test FAIL: --assume-old-defrag must make the "
+                  "class-keys fixture report again. An exemption with no "
+                  "off-switch is a condition nobody can re-check.",
+                  file=sys.stderr)
+            ok = False
+
+        # --- mode/corpus refusal, both directions -------------------------
+        #
+        # Each mode must REJECT the other's corpus rather than report it clean.
+        # The shadow fixture has binds and no safepoints; the statepoint
+        # fixtures have safepoints and no binds.
+        shadow = os.path.join(td, "shadow.ll")
+        with open(shadow, "w") as fh:
+            fh.write(_SELFTEST_PLANTED)
+        if _main_probe(["--statepoints", "--min-statepoints", "1",
+                        shadow]) != 2:
+            print("self-test FAIL: --statepoints over a corpus with no "
+                  "safepoints must exit 2. Reporting it clean is the same "
+                  "false green as running --min-binds over the native corpus.",
+                  file=sys.stderr)
+            ok = False
+        if _main_probe(["--min-binds", "1", paths["unrooted"]]) != 2:
+            print("self-test FAIL: the bind-anchored mode over the NATIVE "
+                  "corpus must exit 2 at --min-binds; the native lowering "
+                  "emits zero binds by construction.", file=sys.stderr)
+            ok = False
+        if _main_probe(["--statepoints", "--min-relocates", "50",
+                        paths["stale"]]) != 2:
+            print("self-test FAIL: --min-relocates must be able to reject a "
+                  "corpus. It is the floor that fails when the corpus was "
+                  "copied through un-rewritten.", file=sys.stderr)
+            ok = False
+        if _main_probe(["--statepoints", "--min-live-bundles", "50",
+                        paths["stale"]]) != 2:
+            print("self-test FAIL: --min-live-bundles must be able to reject a "
+                  "corpus. Safepoints that record no roots are what an "
+                  "unrooted build looks like.", file=sys.stderr)
+            ok = False
+        # ...and must NOT reject one that meets them, or it is a gate that
+        # always fails.
+        if _main_probe(["--statepoints", "--min-statepoints", "1",
+                        "--min-relocates", "1", "--min-live-bundles", "1",
+                        "--max-unrooted", "1", paths["stale"]]) != 0:
+            print("self-test FAIL: --statepoints over a corpus that MEETS "
+                  "every floor and is within budget must exit 0.",
+                  file=sys.stderr)
+            ok = False
+        # The budget must bite. Both fixtures together, because the unrooted
+        # one deliberately has an EMPTY live bundle and would be turned away by
+        # `--min-live-bundles` on its own -- which is that floor working, and
+        # is asserted separately above.
+        both = [paths["unrooted"], paths["stale"]]
+        if _main_probe(["--statepoints", "--max-unrooted", "0"] + both) != 1:
+            print("self-test FAIL: --max-unrooted 0 over a corpus with one "
+                  "unrooted hazard must exit 1; the budget cannot fail.",
+                  file=sys.stderr)
+            ok = False
+        if _main_probe(["--statepoints", "--max-unrooted", "1"] + both) != 0:
+            print("self-test FAIL: --max-unrooted 1 over a corpus with one "
+                  "unrooted hazard must exit 0; the budget is off by one.",
+                  file=sys.stderr)
+            ok = False
+        if _main_probe(["--statepoints", "--max-stale", "0", "--max-unrooted",
+                        "9", paths["stale"]]) != 1:
+            print("self-test FAIL: --max-stale 0 over a fixture with one stale "
+                  "hazard must exit 1", file=sys.stderr)
+            ok = False
+        # Disarmed-knob rule, same as every other mode pairing here.
+        for argv in (["--statepoints", "--stale-registers", paths["stale"]],
+                     ["--statepoints", "--unrooted-allocas", paths["stale"]],
+                     ["--statepoints", "--any-def", paths["stale"]],
+                     ["--min-statepoints", "5", paths["stale"]],
+                     ["--max-unrooted", "5", paths["stale"]]):
+            if _main_probe(argv) != 2:
+                print(f"self-test FAIL: {' '.join(argv[:-1])} must be a usage "
+                      "error; a mode flag that is accepted and ignored reads "
+                      "as a check that ran.", file=sys.stderr)
+                ok = False
+
+        # --- the corpus mutator must be able to manufacture a violation ---
+        with open(paths["reloaded"]) as fh:
+            clean_lines = fh.read().splitlines()
+        sites = list(_sp_seed_sites(clean_lines))
+        if not sites:
+            print("self-test FAIL: the statepoint mutator found no seed site "
+                  "in the reloaded control, which is an unmask followed by a "
+                  "use with no safepoint between -- the exact shape it exists "
+                  "to find.", file=sys.stderr)
+            ok = False
+        else:
+            at, _reg = sites[0]
+            mutant = os.path.join(td, "sp_mutant.ll")
+            with open(mutant, "w") as fh:
+                fh.write("\n".join(clean_lines[:at] + [_SP_SEED]
+                                   + clean_lines[at:]) + "\n")
+            if not _scan_statepoints([mutant], moving_only=True):
+                print("self-test FAIL: splicing a safepoint between the "
+                      "unmask and its use in the CLEAN fixture must produce a "
+                      "hazard; the mutator or the mode is broken.",
+                      file=sys.stderr)
+                ok = False
+    return ok
+
+
+# The #7210 class-keys shape, in native form: the keys global is loaded, a
+# safepoint runs, and the raw word is fed to the object allocator. Structurally
+# a hazard; not one, because the array is old-arena and the global is a
+# registered root.
+_SELFTEST_SP_CLASS_KEYS = """\
+define double @perry_fn_selftest__sp_class_keys(double %a) gc "statepoint-example" {
+entry.0:
+  %keys = load i64, ptr @perry_class_keys_Foo_0, align 8
+__SAFEPOINT__
+  %obj = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 %keys)
+  %box = bitcast i64 %obj to double
+  ret double %box
+}
+""".replace("__SAFEPOINT__", _sp())
+
+
 def _scan_unrooted(paths, moving_only=False, **source_opts):
     """(violations, n_gc_capable_allocas) over `paths`."""
     parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
@@ -3272,6 +4608,13 @@ def self_test():
                       file=sys.stderr)
                 ok = False
 
+    # ★ The NATIVE lowering's half. Kept in its own function purely for size;
+    # it runs unconditionally, because a `--self-test` that covered only the
+    # lowering that no longer ships would be the same false comfort the corpus
+    # script spent a paragraph apologising for.
+    if not statepoint_self_test():
+        ok = False
+
     print("self-test OK" if ok else "self-test FAILED")
     return 0 if ok else 1
 
@@ -3352,6 +4695,33 @@ def main():
                          "heap and never freed. An exemption whose premise has "
                          "quietly lapsed reads as a triaged false positive and "
                          "is a live hazard. Takes no corpus.")
+    ap.add_argument("--statepoints", action="store_true",
+                    help="check the NATIVE (RS4GC) root lowering instead: "
+                         "report every register naming a GC object that is USED "
+                         "below a `gc.statepoint` without being the relocated "
+                         "value (#7660). Needs a corpus emitted with "
+                         "`gc_root_dominance_corpus.sh --lowering native`; the "
+                         "shadow corpus has no statepoints and is refused.")
+    ap.add_argument("--min-statepoints", type=int, default=1, metavar="N",
+                    help="with --statepoints, fail unless at least N safepoints "
+                         "were parsed. Zero is the shadow corpus, or a build "
+                         "that stopped marking functions gc \"statepoint-example\".")
+    ap.add_argument("--min-live-bundles", type=int, default=1, metavar="N",
+                    help="with --statepoints, fail unless at least N safepoints "
+                         "carried a NON-EMPTY \"gc-live\" bundle. Safepoints "
+                         "that record nothing are what an unrooted build looks "
+                         "like, so a floor on safepoints alone is not a floor "
+                         "on roots.")
+    ap.add_argument("--min-relocates", type=int, default=1, metavar="N",
+                    help="with --statepoints, fail unless at least N "
+                         "`gc.relocate` calls were parsed. This is the one that "
+                         "fails if the corpus was copied through un-rewritten.")
+    ap.add_argument("--max-unrooted", type=int, default=0, metavar="N",
+                    help="with --statepoints, tolerate at most N `unrooted` "
+                         "hits (default 0). A BUDGET rather than an allowlist "
+                         "because the residual is a population under triage, "
+                         "not a list of adjudicated sites -- the same call "
+                         "--max-stale makes. It can only be lowered.")
     ap.add_argument("--assume-old-defrag", action="store_true",
                     help="treat old-arena objects (the @perry_class_keys_* "
                          "cache) as MOVABLE, i.e. answer #7210's first "
@@ -3377,10 +4747,23 @@ def main():
     # without `--stale-registers` would run the bind-anchored check and look
     # like it enforced a budget, and `--fatal-sinks` alone would look like it
     # narrowed a report it never reached. Refuse instead (argparse exits 2).
-    if ns.max_stale is not None and not ns.stale_registers:
-        ap.error("--max-stale requires --stale-registers")
+    if ns.max_stale is not None and not (ns.stale_registers or ns.statepoints):
+        ap.error("--max-stale requires --stale-registers or --statepoints")
     if ns.fatal_sinks and not ns.stale_registers:
         ap.error("--fatal-sinks requires --stale-registers")
+    # Same disarmed-knob rule as everything else here: a mode flag that is
+    # accepted and ignored reads as a check that ran.
+    if ns.statepoints and (ns.stale_registers or ns.unrooted_allocas
+                           or ns.any_def):
+        ap.error("--statepoints reads a different lowering from "
+                 "--stale-registers / --unrooted-allocas / --any-def; run one "
+                 "at a time, over the corpus that lowering emits")
+    for flag, val in (("--min-statepoints", ns.min_statepoints != 1),
+                      ("--min-live-bundles", ns.min_live_bundles != 1),
+                      ("--min-relocates", ns.min_relocates != 1),
+                      ("--max-unrooted", ns.max_unrooted != 0)):
+        if val and not ns.statepoints:
+            ap.error(f"{flag} requires --statepoints")
     # Same rule read the other way. `--any-def` only selects the bind-anchored
     # check's ANCHOR (`anchor = "any" if ns.any_def else "alloc"`, below), and
     # the stale-register path never consults it -- it anchors on every
@@ -3401,9 +4784,9 @@ def main():
     # widening and do nothing at all.
     for flag, val in (("--assume-old-defrag", ns.assume_old_defrag),
                       ("--assume-boxes-in-gc-heap", ns.assume_boxes_in_gc_heap)):
-        if val and not ns.unrooted_allocas:
-            ap.error(f"{flag} requires --unrooted-allocas (it only affects "
-                     "that pass's exemptions)")
+        if val and not (ns.unrooted_allocas or ns.statepoints):
+            ap.error(f"{flag} requires --unrooted-allocas or --statepoints "
+                     "(they are the passes that carry the exemptions)")
 
     if ns.self_test:
         return self_test()
@@ -3477,6 +4860,70 @@ def main():
               "exercised the lowerings this invariant runs through.",
               file=sys.stderr)
         return True
+
+    if ns.statepoints:
+        n_sp, n_live, n_reloc, n_roots, unreadable = \
+            statepoint_corpus_stats(parsed)
+        print(f"=== checked {n_funcs} functions / {len(parsed)} modules "
+              f"({len(paths)} .ll files)")
+        print(f"=== safepoints: {n_sp}   with a live bundle: {n_live}   "
+              f"relocates: {n_reloc}   (safepoint, root) pairs: {n_roots}")
+        if unreadable:
+            print(f"error: {len(unreadable)} \"gc-live\" bundle operand(s) whose "
+                  "definition AS1_DEF_RE does not recognise as `ptr "
+                  "addrspace(1)`, e.g. "
+                  f"{sorted(unreadable)[:5]}. The tracked/untracked predicate "
+                  "is narrower than the IR, which turns correctly relocated "
+                  "code into reported hazards. Widen AS1_DEF_RE.",
+                  file=sys.stderr)
+            return 2
+        # ★ Mode-appropriate floors, and each must REJECT THE OTHER MODE'S
+        # CORPUS rather than report it clean.
+        #
+        # `--min-binds` cannot do this job: the native corpus has ZERO binds by
+        # construction, so the bind floor would reject every valid corpus for
+        # this mode and accept none. And a floor on safepoints alone is not
+        # enough either — `opt` exits 0 on a module with nothing to rewrite, so
+        # a corpus copied through un-rewritten parses fine, contains no
+        # safepoints AND no relocates, and would otherwise print a serene
+        # "0 hazards". Three separate floors because they fail for three
+        # different reasons and the message has to say which.
+        if n_sp < ns.min_statepoints:
+            print(f"error: {n_sp} gc.statepoint(s) in the corpus, need at least "
+                  f"{ns.min_statepoints}. Either this is the SHADOW corpus "
+                  "(regenerate with `gc_root_dominance_corpus.sh --lowering "
+                  "native`), or the RS4GC rewrite did not run. A clean verdict "
+                  "over zero safepoints is a statement about nothing.",
+                  file=sys.stderr)
+            return 2
+        if n_reloc < ns.min_relocates:
+            print(f"error: {n_reloc} gc.relocate call(s), need at least "
+                  f"{ns.min_relocates}. Safepoints without relocations means "
+                  "the corpus was copied through un-rewritten, or codegen "
+                  "stopped producing `ptr addrspace(1)` roots for LLVM to "
+                  "track.", file=sys.stderr)
+            return 2
+        if n_live < ns.min_live_bundles:
+            print(f"error: {n_live} safepoint(s) carried a non-empty "
+                  f"\"gc-live\" bundle, need at least {ns.min_live_bundles}. "
+                  "Safepoints that record no roots are what an UNROOTED build "
+                  "looks like; this mode's subject would not have run.",
+                  file=sys.stderr)
+            return 2
+        if funcs_floor_violated():
+            return 2
+        rc = run_statepoints(
+            parsed, poll_reaching, verbose, moving_only, allowlist,
+            ns.max_stale, ns.max_unrooted,
+            source_opts={"assume_old_defrag": ns.assume_old_defrag,
+                         "assume_boxes_in_gc_heap": ns.assume_boxes_in_gc_heap})
+        if rc:
+            return rc
+        # --- can this gate still fail? -----------------------------------
+        if ns.seeded_violations:
+            return seeded_statepoint_test(paths, moving_only,
+                                          ns.seeded_violations, verbose)
+        return 0
 
     if ns.stale_registers:
         # `--min-binds` is a CORPUS-sanity assertion, not a bind-anchored-check
