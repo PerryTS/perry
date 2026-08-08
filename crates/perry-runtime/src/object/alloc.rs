@@ -311,7 +311,7 @@ fn alloc_class_inline_keys_impl(
     // themselves; the branches differ only in which generation a small object
     // is born into.
     let ptr = if pretenure {
-        crate::arena::arena_alloc_gc_old_born_tenured(total_size, 8, crate::gc::GC_TYPE_OBJECT)
+        crate::arena::arena_alloc_gc_old_born_tenured_bump(total_size, 8, crate::gc::GC_TYPE_OBJECT)
     } else {
         arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT)
     } as *mut ObjectHeader;
@@ -714,7 +714,7 @@ fn alloc_with_shape_impl(
     // shape, so the two branches differ only in which generation a small
     // object is born into.
     let obj_ptr = if pretenure {
-        crate::arena::arena_alloc_gc_old_born_tenured(total_size, 8, crate::gc::GC_TYPE_OBJECT)
+        crate::arena::arena_alloc_gc_old_born_tenured_bump(total_size, 8, crate::gc::GC_TYPE_OBJECT)
     } else {
         arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT)
     } as *mut ObjectHeader;

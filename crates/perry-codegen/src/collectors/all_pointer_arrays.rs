@@ -250,7 +250,7 @@ fn scan_depths(
     decl_depth: &mut HashMap<u32, u32>,
     push_depths: &mut HashMap<u32, Vec<u32>>,
 ) {
-    let mut record = |expr: &Expr, at: u32, push_depths: &mut HashMap<u32, Vec<u32>>| {
+    let record = |expr: &Expr, at: u32, push_depths: &mut HashMap<u32, Vec<u32>>| {
         super::scalar_method_dispatch::for_each_expr(expr, &mut |e| {
             if let Expr::ArrayPush { array_id, .. } = e {
                 push_depths.entry(*array_id).or_default().push(at);

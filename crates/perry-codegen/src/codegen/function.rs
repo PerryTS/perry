@@ -620,6 +620,7 @@ pub(super) fn compile_function(
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
         &spec_ta_lens,
+        false,
     );
 
     if let Some(plan) = spec_entry {

@@ -802,7 +802,8 @@ pub(super) fn compile_closure(
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
-    );
+            false,
+        );
 
     // Representation-selection context gates (see codegen/function.rs).
     // Async-step closures (CPS-rewritten `async` closures — the rewrite clears

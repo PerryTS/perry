@@ -687,6 +687,7 @@ pub(crate) fn collect_native_region_fact_graph(
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
+    region_runs_once: bool,
 ) -> NativeRegionFactGraph {
     collect_native_region_fact_graph_with_spec_lens(
         stmts,
@@ -701,6 +702,7 @@ pub(crate) fn collect_native_region_fact_graph(
         compile_time_constants,
         module_dispatch,
         &HashMap::new(),
+        region_runs_once,
     )
 }
 
@@ -722,8 +724,9 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_lens(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
+    region_runs_once: bool,
 ) -> NativeRegionFactGraph {
-    collect_type_facts(
+    let mut facts = collect_type_facts(
         stmts,
         params,
         flat_const_ids,
@@ -736,7 +739,17 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_lens(
         compile_time_constants,
         module_dispatch,
         spec_ta_lens,
-    )
+    );
+    // #7598: pretenure-accumulator admission additionally requires the REGION
+    // to run exactly once (module main/init). A function body's depth-0
+    // accumulator is re-entered on every call and its cohort dies at return —
+    // measured 6.6x slower with 4x the RSS when pretenured (the adversarial
+    // arm in the PR). Only a run-once region makes "declared outside every
+    // loop" a cohort-lifetime proof.
+    if !region_runs_once {
+        facts.arrays.pretenure_accumulator_locals.clear();
+    }
+    facts
 }
 
 // #854: thin wrapper over collect_type_facts, currently only exercised by this
@@ -2114,6 +2127,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &crate::collectors::ModuleDispatchFacts::default(),
+            true,
         );
 
         assert!(graph.integer_locals().contains(&1));

@@ -668,6 +668,7 @@ pub(super) fn compile_module_entry(
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
+            true,
         );
         // #7109: the program-entry body participates in canonical (i32/u32/Str)
         // selection on exactly the per-value rules a function body uses. There
@@ -708,6 +709,7 @@ pub(super) fn compile_module_entry(
             current_block: 0,
             discard_expr_value: false,
             discard_this_expr: false,
+            pretenure_next_object_literal: false,
             func_names,
             strings,
             loop_targets: Vec::new(),
@@ -1337,6 +1339,7 @@ pub(super) fn compile_module_entry(
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
+            true,
         );
         // #7109: the module-init body participates in canonical (i32/u32/Str)
         // selection on exactly the per-value rules a function body uses. There
@@ -1375,6 +1378,7 @@ pub(super) fn compile_module_entry(
             current_block: 0,
             discard_expr_value: false,
             discard_this_expr: false,
+            pretenure_next_object_literal: false,
             func_names,
             strings,
             loop_targets: Vec::new(),
