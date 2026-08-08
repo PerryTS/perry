@@ -89,12 +89,20 @@ const ELEM_HEADER_EXPECT: &str = "268435458"; // 0x1000_0002
 /// terminates with `cond_br(shape_ok, fast, slow)`. Never entering a clone
 /// whose call-freeness is unproven is the whole revocation argument.
 ///
-/// Sequencing is load-bearing. The brand test comes first so the pointer
-/// handed to the runtime is known to be a real array; the guard call comes
-/// next; and the elements base pointer is derived only AFTERWARDS, from a
-/// fresh load of the array's rooted slot — the guard call can allocate, and an
-/// allocation can move the array, so a base pointer derived before it could be
-/// a from-space address.
+/// Sequencing is load-bearing, in four steps and this order:
+///
+/// 1. the receiver is a heap pointer at all;
+/// 2. the **brand** test, so the pointer handed to the runtime is known to be
+///    a real array and not an `extends Array` instance (#7573/#7603);
+/// 3. the **growth-forwarding repair** (#7480) — the binding may hold a stale
+///    head, and steps below read `length` and the elements base off the raw
+///    pointer, where a forwarding stub is not merely wrong but *plausibly*
+///    wrong (see the block comment). It goes before the guard call, not after,
+///    because the refresh can itself allocate;
+/// 4. the guard call, and only THEN the elements base — derived from a fresh
+///    load of the array's rooted slot, because the guard call can allocate and
+///    an allocation can move the array, so a base derived before it could be a
+///    from-space address.
 ///
 /// Returns `(elements_base, expected_keys, shape_ok)`.
 pub(crate) fn emit_element_shape_loop_preheader_check(
