@@ -50,6 +50,20 @@ first visit the binding holds the live head, so later loop entries and the slow
 clone address the current array directly. Closure-captured arrays are now
 declined, since their capture cell is not updated by a plain slot store.
 
+That the binding really was a stub rather than a live head is established
+directly, not inferred: adding a module-scope `keep.push(…); keep.pop();` after
+the `build()` — which forces a write-back of the *resolved* head into the
+global — makes the same pre-fix compiler print the right answer and exit 0.
+(It also follows by construction, since `js_array_refresh_local_head` returns
+its input untouched when there is nothing to follow, so on an already-live
+binding this fix would be a no-op and the crash would survive it.) A
+**producer**-side gap is therefore also open, tracked as #7661:
+`expr/array_push.rs` writes the reallocated head back to the pushing scope's
+own slot, so the stub is being reintroduced somewhere between that slot and the
+caller's binding. The consumer fix is the right layer regardless — a stale head
+can arrive by several routes, which is exactly why every runtime entry point
+resolves the chain.
+
 **Why nothing caught it.** Every existing case — gap test and codegen census
 alike — built its array in the same scope that read it, so the binding always
 held the live head, and the largest was 64 elements pushed at module scope,
