@@ -251,42 +251,82 @@ carrying a non-deterministic gating cell cannot be *pinned*. Before #7554 the
 rule existed only in `tests/test_gc_ratchet.py`, which is why a bad pin could
 be committed and only wedge CI afterwards.
 
-`heap_total_bytes`, `minor_cycles`, `copied_objects`, `promoted_bytes` and
-`freed_bytes` on `12_large_live_set` all remain gating, so a real over-retention
-regression on that probe still goes red.
+The section is currently **empty**, which is the goal state and not an
+oversight. Its one entry — `12_large_live_set.heap_used_bytes` — was deleted by
+#7558, which removed the *cause* rather than the cell. That is rule 4 working
+as designed.
 
-### What that probe's non-determinism actually is
+### What that probe's non-determinism was, and where it went (#7558)
 
-Worth knowing, because it is a property of the *metric* rather than of the
-collector's steady state. Every probe reads `process.memoryUsage()` after an
-explicit `gc()`, and an explicit `gc()` runs a full mark-sweep with a **forced
-conservative stack scan** — `PERRY_GC_DIAG` prints `[gc-scan-fallback]
-site=manual_collect automatic=false` on every run. A conservative scan retains
+It was a property of the *measurement point*, not of the collector's steady
+state. Every probe reads `process.memoryUsage()` after an explicit `gc()`, and
+an explicit `gc()` used to run a full mark-sweep with a **forced conservative
+stack scan** — `PERRY_GC_DIAG` printed `[gc-scan-fallback] site=manual_collect
+automatic=false` on every run of every probe. A conservative scan retains
 whatever the native stack happens to look like a pointer to, and the stack
 residue at that moment differs between runs.
 
-Diffing two full traces that disagree shows this directly: the minors, the
-tenuring decisions, the step cycles and every copy/promote counter match
-exactly, and the only difference is in the *last* collection's `freed_bytes`.
-And with `PERRY_CONSERVATIVE_STACK_SCAN=off` the probe reports **51,668,688
-bytes on 8 consecutive runs, bit-identical**.
+Diffing two full traces that disagreed showed it directly: the minors, the
+tenuring decisions, the step cycles and every copy/promote counter matched
+exactly, and the only difference was in the *last* collection's `freed_bytes`.
 
-Two things follow. The variance is entirely false roots, so it is bounded by
-how much a handful of stale stack words can pin — a few kilobytes here. And
-the conservative scan is retaining **8.28 MB, 16% of this probe's reported
-retention**, systematically. The eleven small probes stay bit-identical because
-their live sets are one to two orders of magnitude smaller, so a stale stack
-word is far less likely to alias a plausible heap address at all.
+The tax was not confined to that probe, and it was much larger than the
+variance. `gc_ratchet.py classify` on `main` at `961777904`, all twelve probes:
+
+| probe | conservative | precise | excess |
+|---|---:|---:|---:|
+| `01_nursery_churn` | 7,325,584 | 5,228,512 | **28.63%** |
+| `02_survivor_promotion` | 9,678,792 | 9,416,632 | 2.71% |
+| `03_cross_gen_writes` | 1,427,664 | 1,394,880 | 2.30% |
+| `04_dead_after_deep_stack` | 4,897,320 | 4,891,968 | 0.11% |
+| `05_closure_capture` | 7,426,960 | 5,329,880 | **28.24%** |
+| `06_string_retention` | 7,058,896 | 4,961,800 | **29.71%** |
+| `07_array_grow_evacuate` | 15,649,104 | 15,649,104 | 0.00% |
+| `08_map_set_sidetables` | 1,512,456 | 1,512,456 | 0.00% |
+| `09_try_catch_roots` | 6,020,664 | 5,825,256 | 3.25% |
+| `10_store_receiver_across_alloc` | 4,664,632 | 4,664,632 | 0.00% |
+| `11_collect_at_depth` | 7,390,832 | 5,097,776 | **31.03%** |
+| `12_large_live_set` | 59,942,456 | 51,668,568 | 13.80% |
+
+Only `12_large_live_set` had a non-zero *spread* (864 bytes over 3 repeats),
+which is why it was the only cell that had to stop gating — but nine of twelve
+probes were reporting a retained heap that included a residue term, and on four
+of them that term was the larger part of the reported movement.
+
+#7558 removed the force: explicit `gc()` now consumes the same precise root set
+every automatic collection in a production binary already uses. Re-running
+`classify` on that build reports **excess 0.00% on all twelve probes and spread
+0 on all twelve**, so `heap_used_bytes` now means what its name says and the
+override is gone.
 
 ### The measurement must show the collector ran
 
-`check` fails a probe whose current run reports `minor_cycles == 0` or
-`copied_objects == 0` where the baseline reports more, rather than leaving that
-to the tolerance arithmetic. The arithmetic could not catch it: six probes pin
-`minor_cycles` at 1 and the allowance floor is also 1, so a collapse from 1 to 0
-is `delta == -allowance` and scored `ok`. The largest regression this ratchet
-exists to catch — a collector that stops running copying minors — was being
-reported as passing.
+`check` fails a probe whose current run reports `minor_cycles == 0`, or
+`copied_objects + promoted_objects == 0`, where the baseline reports more —
+rather than leaving that to the tolerance arithmetic. The arithmetic could not
+catch it: six probes pin `minor_cycles` at 1 and the allowance floor is also 1,
+so a collapse from 1 to 0 is `delta == -allowance` and scored `ok`. The largest
+regression this ratchet exists to catch — a collector that stops running copying
+minors — was being reported as passing.
+
+**Why the second probe is a sum (#7558).** It used to be `copied_objects`
+alone. Both counters come from the same `[gc-copy-minor] ran` line: they are the
+evacuating minor's own accounting of *where* it put each survivor — survivor
+space, or straight to old-gen. Either one alone names a destination; only the
+sum answers "did the copying minor move anything". #7558 produced the
+distinction for real: with the conservative scan gone, the adaptive-tenuring
+seed (`gc/tenuring.rs`, which deliberately refuses input from a conservatively
+scanned cycle) started receiving data on `gc()`-driven workloads,
+`tenuring_survivals` fell 4 → 1 on `09_try_catch_roots` and `11_collect_at_depth`,
+and every survivor was promoted on first copy: `copied_objects` 5,823 → 0 with
+`promoted_objects` 0 → 6,077. That is a copying minor that moved *more*.
+
+This is not a loosening. `copied_objects` keeps its own two-sided 5% band, so
+the same shift is still a `-100%` **REGRESSION** row that has to be re-pinned
+deliberately — it just is not *also* reported as "the collector did not run".
+And it closes a hole the #7558 re-pin would otherwise have opened: a baseline
+pinning `copied_objects = 0` on those two probes would have made the old rule's
+`base > 0` guard permanently false exactly where it had most recently fired.
 
 ## A defect in the artifact costs one cell, not the whole gate (#7554)
 
@@ -354,25 +394,31 @@ python3 benchmarks/gc_ratchet/gc_ratchet.py measure \
 python3 benchmarks/gc_ratchet/gc_ratchet.py check --current /tmp/current.json
 ```
 
-## What `heap_used_bytes` actually contains (#7559)
+## What `heap_used_bytes` actually contains (#7559, #7558)
 
 **A retention row is not evidence of a collector regression until it has been
-classified.** Two properties of the measurement point make this metric move for
-reasons that have nothing to do with what the collector retained:
+classified.** Two properties of the measurement point made this metric move for
+reasons that had nothing to do with what the collector retained. #7558 removed
+the first; the second is still live.
 
-1. **The measurement forces the conservative native-stack scan.** Every probe
-   reads `process.memoryUsage()` immediately after an explicit `gc()`, and an
-   explicit `gc()` is the one site in Perry that forces that scan
-   (`ManualGcScanGuard`, #4977 — the production default is `Auto`, which skips
-   it). So the reading is taken under a root set nothing else in the language
-   uses, and it includes whatever the native stack happened to look like a heap
-   pointer to at that instant.
-2. **`js_arena_stats` sums block *offsets*, not live bytes.** A block's
-   bump pointer never moves backwards, and a block holding one marked object
-   cannot be reset — so a single stale stack word costs a whole **1 MiB nursery
-   block**, an amplification of roughly 26,000x. (This is the nursery's version
-   of the old-generation accounting bug #7437/#7443 fixed by subtracting swept
-   holes.)
+1. ~~**The measurement forces the conservative native-stack scan.**~~ **Removed
+   by #7558.** Every probe reads `process.memoryUsage()` immediately after an
+   explicit `gc()`, and until #7558 an explicit `gc()` was the one site in Perry
+   that *forced* that scan (`ManualGcScanGuard`, #4977 — the production default
+   is `Auto`, which skips it). The reading was therefore taken under a root set
+   nothing else in the language used, and it included whatever the native stack
+   happened to look like a heap pointer to at that instant. It no longer is:
+   `gc()` consumes precise roots, and `classify` reports excess `0.00%` on all
+   twelve probes. **`classify` is now also the check that this term has not come
+   back** — a non-zero `excess` column means somebody re-added a forced scan.
+2. **`js_arena_stats` sums block *offsets*, not live bytes.** UNCHANGED, and it
+   is why (1) was so expensive. A block's bump pointer never moves backwards,
+   and a block holding one marked object cannot be reset — so a single stale
+   stack word cost a whole **1 MiB nursery block**, an amplification of roughly
+   26,000x. (This is the nursery's version of the old-generation accounting bug
+   #7437/#7443 fixed by subtracting swept holes.) The amplifier is still there
+   for any *other* source of over-retention, which is why a whole-block jump in
+   `heap_used_bytes` still means "one object too many", not "1 MiB too much".
 
 Measured across the 74 commits between the 2026-08-05 pin (`5e236e6e2`) and
 v0.5.1321, both endpoints built identically and both reproducing the pinned
@@ -414,6 +460,15 @@ that spread on `12_large_live_set` is why #7554 had to stop gating the cell.
 A row whose `excess` moved and whose `precise` did not is a false-root artifact.
 A row whose `precise` moved is a real retention change and the rest of this
 document applies to it.
+
+**Since #7558 the expected reading is `excess 0` on every row**, because the
+probes' own `gc()` no longer forces the scan and none of them reaches an
+automatic site that pins anything at the measurement point. That makes the tool
+do double duty: it still splits a breach, and a non-zero `excess` column is now
+itself the finding — either a forced scan came back at `gc()`, or an automatic
+site (`old_reclaim_alloc_point`, `nursery_churn_slack_valve`,
+`emergency_reclaim`, `manual_minor`) started firing on that workload. The
+`scan sites` column names which.
 
 ## When the gate goes red
 

@@ -315,10 +315,56 @@ class GateFailTests(unittest.TestCase):
         )
 
     def test_a_probe_that_evacuated_nothing_fails(self):
+        """Nothing moved AT ALL — neither copied nor promoted — is the failure.
+
+        #7558 narrowed this from ``copied_objects`` to
+        ``copied_objects + promoted_objects``. Both are parsed from the same
+        ``[gc-copy-minor] ran`` line, so either alone names a *destination*;
+        only the sum answers "did the copying minor move anything".
+        """
         baseline = _baseline()
-        current = _measurement(_probe(overrides={"copied_objects": 0.0}))
+        current = _measurement(
+            _probe(overrides={"copied_objects": 0.0, "promoted_objects": 0.0})
+        )
         _, failures = evaluate(baseline, current, profile="shared_ci")
         self.assertTrue(any("evacuated nothing" in failure for failure in _hard(failures)))
+
+    def test_copying_that_became_promotion_is_a_fingerprint_breach_not_a_liveness_one(self):
+        """The #7558 shape, and the reason the liveness probe had to change.
+
+        Removing explicit ``gc()``'s conservative stack scan re-enabled the
+        adaptive-tenuring seed on ``gc()``-driven workloads, ``tenuring_survivals``
+        fell 4 -> 1 on two probes, and every survivor went straight to old-gen:
+        ``copied_objects`` 5,823 -> 0 with ``promoted_objects`` 0 -> 6,077. That
+        is a copying minor that moved MORE, so it must not be reported as one
+        that did not run — while still being a two-sided band breach on
+        ``copied_objects``, because it IS a change in the collector's
+        behavioural fingerprint and must be re-pinned deliberately.
+        """
+        baseline = _baseline()
+        current = _measurement(
+            _probe(overrides={"copied_objects": 0.0, "promoted_objects": 24_000.0})
+        )
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        hard = _hard(failures)
+        self.assertFalse(
+            any("evacuated nothing" in failure for failure in hard),
+            "a minor that promoted every survivor still evacuated them; calling "
+            "that 'the collector did not run' would misdirect the next reader",
+        )
+        rows, _ = evaluate(baseline, current, profile="shared_ci")
+        copied = [
+            row
+            for row in rows
+            if row.probe == "01_probe" and row.metric == "copied_objects"
+        ]
+        self.assertEqual(len(copied), 1)
+        self.assertEqual(
+            copied[0].status,
+            "REGRESSION",
+            "the evacuation counters are a two-sided fingerprint: a collapse to "
+            "zero copies must still turn the job red and force a deliberate re-pin",
+        )
 
     def test_missing_probe_fails_instead_of_being_skipped(self):
         baseline = _baseline()

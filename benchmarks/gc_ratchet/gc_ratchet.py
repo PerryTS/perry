@@ -663,12 +663,21 @@ def classify(
     WHY THIS EXISTS
     ---------------
     ``heap_used_bytes`` is read from ``process.memoryUsage()`` immediately after
-    the probe's own explicit ``gc()``, and an explicit ``gc()`` is the one place
-    in Perry that *forces* the conservative native-stack scan (``#4977``'s
-    ``ManualGcScanGuard``; the production default is ``Auto``, which skips it).
-    So every probe's headline retention number is measured under a root set
-    nothing else in the language uses, and it includes whatever the native stack
-    happened to look like a heap pointer to at that instant.
+    the probe's own explicit ``gc()``. Until ``#7558`` an explicit ``gc()`` was
+    the one place in Perry that *forced* the conservative native-stack scan
+    (``#4977``'s ``ManualGcScanGuard``; the production default is ``Auto``,
+    which skips it). Every probe's headline retention number was therefore
+    measured under a root set nothing else in the language used, and it included
+    whatever the native stack happened to look like a heap pointer to at that
+    instant.
+
+    ``#7558`` removed that force, so the expected reading on every row is now
+    ``excess 0`` and this command has become a *check* as well as a split: a
+    non-zero ``excess`` means either a forced scan came back at ``gc()`` or an
+    automatic site started firing on that workload, and ``scan_fallback_sites``
+    names which. The two arms still differ in general, because
+    ``PERRY_CONSERVATIVE_STACK_SCAN=off`` also disables the remaining
+    (automatic, and ``perry/gc`` ``minor()``) sites.
 
     That residue is not small and it is not proportional. ``js_arena_stats``
     sums each arena block's **bump-pointer offset**, and a block cannot be reset
@@ -1390,16 +1399,56 @@ def evaluate(
         # and scores "ok". A probe that stopped collecting would have been
         # reported as passing — CLAUDE.md's fourth failure mode (the gate runs
         # but its subject never did) sitting inside the gate meant to close it.
-        for metric, what in (
-            ("minor_cycles", "ran no minor collection"),
-            ("copied_objects", "evacuated nothing"),
+        #
+        # ★ #7558: the second probe is `copied_objects + promoted_objects`, not
+        # `copied_objects`. Both counters are parsed from the SAME
+        # `[gc-copy-minor] ran` line — they are the evacuating minor's own
+        # accounting of where it put each survivor (survivor space vs old-gen),
+        # so their sum is "objects the copying minor MOVED" and either one alone
+        # is a destination, not a liveness signal.
+        #
+        # This is not a loosening. `copied_objects` keeps its own two-sided 5%
+        # band, so a workload that stops copying and starts promoting is still a
+        # -100% REGRESSION row on the fingerprint; what changes is only that it
+        # is no longer *also* reported as "the collector did not run". #7558 hit
+        # exactly that: removing explicit `gc()`'s conservative scan re-enabled
+        # the adaptive-tenuring seed on `gc()`-driven workloads (the seed
+        # deliberately refuses input from a conservatively-scanned cycle —
+        # `gc/tenuring.rs`), `tenuring_survivals` fell 4 -> 1 on two probes, and
+        # every survivor went straight to old-gen. `copied_objects` 5,823 -> 0
+        # with `promoted_objects` 0 -> 6,077 is a copying minor that moved MORE,
+        # not one that stopped.
+        #
+        # It also removes a hole the re-pin would otherwise have opened: pinning
+        # `copied_objects = 0` on those two probes would make the old rule's
+        # `base > 0` guard permanently false there, i.e. a liveness assertion
+        # that can no longer fail on the probes that most recently exercised it.
+        moved = {
+            key: (
+                float(entry["metrics"]["copied_objects"]["median"])
+                + float(entry["metrics"]["promoted_objects"]["median"])
+            )
+            for key, entry in (("base", base_entry), ("cur", cur_entry))
+        }
+        for metric, what, base_value, cur_value in (
+            (
+                "minor_cycles",
+                "ran no minor collection",
+                float(base_entry["metrics"]["minor_cycles"]["median"]),
+                float(cur_entry["metrics"]["minor_cycles"]["median"]),
+            ),
+            (
+                "copied_objects+promoted_objects",
+                "evacuated nothing (the copying minor moved no object, to survivor "
+                "space or to old-gen)",
+                moved["base"],
+                moved["cur"],
+            ),
         ):
-            if base_entry["metrics"][metric]["median"] > 0 and (
-                cur_entry["metrics"][metric]["median"] <= 0
-            ):
+            if base_value > 0 and cur_value <= 0:
                 failures.append(
                     f"{name}: {what} in this run ({metric} "
-                    f"{base_entry['metrics'][metric]['median']:,.0f} -> 0). The baseline it is "
+                    f"{base_value:,.0f} -> 0). The baseline it is "
                     "being compared against measures a collector that did; there is nothing "
                     "here to compare."
                 )
