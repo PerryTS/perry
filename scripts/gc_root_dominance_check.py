@@ -3047,7 +3047,27 @@ def _is_statepoint(ins):
     return ins.is_statepoint
 
 
-def _cast_closure(f, seed, tracked, stop_at_tracked):
+def transparent_use_graph(f):
+    """`reg -> [Insn]` for transparent, result-producing users of `reg`.
+
+    Built once per function. The obvious formulation — re-scan every
+    instruction on every growth round — is O(sources x instructions x rounds)
+    and turns a 149-module corpus into minutes; this makes each closure linear
+    in the edges it actually walks.
+    """
+    graph = defaultdict(list)
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            if ins.result is None or ins.is_statepoint:
+                continue
+            if not is_transparent(ins):
+                continue
+            for r in operand_regs(ins.text):
+                graph[r].append(ins)
+    return graph
+
+
+def _cast_closure(graph, seed, tracked, stop_at_tracked):
     """Forward closure of `seed` over bit-level/identity producers.
 
     With `stop_at_tracked`, a register LLVM tracks terminates the walk: it is
@@ -3055,20 +3075,16 @@ def _cast_closure(f, seed, tracked, stop_at_tracked):
     safepoint is stale.
     """
     chain = set(seed)
-    grew = True
-    while grew:
-        grew = False
-        for b in f.blocks:
-            for ins in f.insns[b]:
-                if ins.result is None or ins.result in chain:
-                    continue
-                if ins.is_statepoint or not is_transparent(ins):
-                    continue
-                if stop_at_tracked and ins.result in tracked:
-                    continue
-                if uses(ins.text, chain):
-                    chain.add(ins.result)
-                    grew = True
+    q = deque(seed)
+    while q:
+        r = q.popleft()
+        for ins in graph.get(r, ()):
+            if ins.result in chain:
+                continue
+            if stop_at_tracked and ins.result in tracked:
+                continue
+            chain.add(ins.result)
+            q.append(ins.result)
     return chain
 
 
@@ -3135,6 +3151,7 @@ def check_func_statepoints(module, f, want_moving_only=False,
         return []
 
     tracked = tracked_registers(f)
+    use_graph = transparent_use_graph(f)
     idom = dominators(f)
     out = []
 
@@ -3164,9 +3181,10 @@ def check_func_statepoints(module, f, want_moving_only=False,
             # can only ever name the `ptr addrspace(1)` register, so without
             # crossing, every hit would classify `unrooted` and the split would
             # be decoration.
-            chain = _cast_closure(f, {src.result}, tracked, stop_at_tracked=True)
-            reach = _cast_closure(f, _back_closure(def_of, src.result), tracked,
-                                  stop_at_tracked=False)
+            chain = _cast_closure(use_graph, {src.result}, tracked,
+                                  stop_at_tracked=True)
+            reach = _cast_closure(use_graph, _back_closure(def_of, src.result),
+                                  tracked, stop_at_tracked=False)
             as1_chain = reach & tracked
 
             for bb in f.blocks:
@@ -3577,6 +3595,49 @@ __SAFEPOINT__
 }
 """.replace("__SAFEPOINT__", _sp(live=("rs4gc.s1",)))
 
+# ★★ THE CONTROL FOR THE TRACKED/UNTRACKED LINE, and the one fixture whose
+# absence was found by sabotage rather than by design.
+#
+# An allocation's raw result is cast INTO `ptr addrspace(1)`, carried around a
+# loop through the relocation `phi` RS4GC builds, and cast back OUT below the
+# loop. Every hop is a "transparent" cast, so a forward closure that does not
+# stop at the tracked domain walks the whole circuit and reports the RELOCATED
+# value as stale — with a safepoint in the loop body, which is always.
+#
+# This is not a hypothetical shape: it is what the loop lowering emits, and it
+# accounted for 21 of the first 29 `--moving-only` hits measured on a real
+# corpus, every one of them correct code. Removing the `stop_at_tracked` guard
+# leaves the other seven fixtures GREEN, which is exactly why this one exists.
+_SELFTEST_SP_TRACKED_ROUNDTRIP = """\
+define double @perry_fn_selftest__sp_roundtrip(double %a) gc "statepoint-example" {
+entry.0:
+  %tok0 = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0, ptr elementtype(i64 (i32)) @js_array_alloc, i32 1, i32 0, i32 0, i32 0, i32 0)
+  %obj = call i64 @llvm.experimental.gc.result.i64(token %tok0)
+  %boxed = or i64 %obj, 9222527611924643840
+  %d = bitcast i64 %boxed to double
+  %rs4gc.b1 = bitcast double %d to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  br label %for.cond.1
+
+for.cond.1:                                       ; preds = %for.body.2, %entry.0
+  %v.0 = phi ptr addrspace(1) [ %rs4gc.s1, %entry.0 ], [ %v.0.relocated, %for.body.2 ]
+  %n.0 = phi double [ 0.000000e+00, %entry.0 ], [ %n.1, %for.body.2 ]
+  %c = fcmp olt double %n.0, 2.000000e+02
+  br i1 %c, label %for.body.2, label %for.exit.3
+
+for.body.2:                                       ; preds = %for.cond.1
+  %tok1 = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0, ptr elementtype(void ()) @js_gc_loop_safepoint, i32 0, i32 0, i32 0, i32 0) [ "gc-live"(ptr addrspace(1) %v.0) ]
+  %v.0.relocated = call coldcc ptr addrspace(1) @llvm.experimental.gc.relocate.p1(token %tok1, i32 0, i32 0)
+  %n.1 = fadd double %n.0, 1.000000e+00
+  br label %for.cond.1
+
+for.exit.3:                                       ; preds = %for.cond.1
+  %raw = ptrtoint ptr addrspace(1) %v.0 to i64
+  %r = call double @js_object_get_field_by_name_f64(i64 %raw, i64 0)
+  ret double %r
+}
+"""
+
 # ★ The three things LLVM's PRINTER does that perry's writer never does, in one
 # fixture: an `invoke` statepoint whose destinations are on a CONTINUATION
 # line, a `landingpad` whose `cleanup` clause is on another, and a label with a
@@ -3713,6 +3774,7 @@ def statepoint_self_test():
                            ("stale", _SELFTEST_SP_STALE),
                            ("reloaded", _SELFTEST_SP_RELOADED),
                            ("invoke", _SELFTEST_SP_INVOKE),
+                           ("roundtrip", _SELFTEST_SP_TRACKED_ROUNDTRIP),
                            ("quoted", _SELFTEST_SP_QUOTED_NAME)):
             p = os.path.join(td, f"sp_{name}.ll")
             with open(p, "w") as fh:
@@ -3752,6 +3814,32 @@ def statepoint_self_test():
                   file=sys.stderr)
             ok = False
 
+        # ★★ The tracked/untracked line. Nothing else in this file covers it:
+        # removing `stop_at_tracked` from `_cast_closure` leaves every other
+        # arm green, which is how this fixture came to be written (by
+        # sabotaging the guard and watching the suite pass).
+        hits = _scan_statepoints([paths["roundtrip"]], moving_only=True)
+        if hits:
+            print(f"self-test FAIL: a value carried around a loop through "
+                  f"RS4GC's relocation phi and cast back out below it is "
+                  f"correct code, so the roundtrip fixture must report 0, got "
+                  f"{len(hits)}: {[(h.kind_class, h.kind) for h in hits]}. The "
+                  "forward cast-closure has stopped stopping at "
+                  "`ptr addrspace(1)`, which reports the RELOCATED value as "
+                  "stale -- 21 of the first 29 hits measured on a real corpus, "
+                  "all of them correct.", file=sys.stderr)
+            ok = False
+        # ...and the fixture must still be a live subject: a loop safepoint
+        # with a live bundle, and a value that really does make the round trip.
+        rt = parse_file(paths["roundtrip"])[0]
+        rt_tracked = tracked_registers(rt)
+        if not {"v.0", "rs4gc.s1", "v.0.relocated"} <= rt_tracked:
+            print("self-test FAIL: the roundtrip fixture's phi, cast-in and "
+                  "relocation must all classify as tracked, or the arm above "
+                  f"reports 0 for the wrong reason. Tracked: {sorted(rt_tracked)}",
+                  file=sys.stderr)
+            ok = False
+
         # --- LLVM's printed forms: continuation lines, hyphens, quotes ----
         funcs = parse_file(paths["invoke"])
         f = funcs[0]
@@ -3773,7 +3861,13 @@ def statepoint_self_test():
                   f"got {len(hits)}", file=sys.stderr)
             ok = False
 
-        funcs = parse_file(paths["quoted"])
+        try:
+            funcs = parse_file(paths["quoted"])
+        except MalformedIR as exc:
+            funcs = []
+            print(f"self-test FAIL: a QUOTED define name did not parse: {exc}",
+                  file=sys.stderr)
+            ok = False
         if [f.name for f in funcs] != ["perry_fn_selftest__probe$typed_f64"]:
             print("self-test FAIL: a QUOTED define name (every repsel "
                   "specialisation: `$typed_f64`, `$generic`, `$spec_i32`) must "
@@ -3831,12 +3925,24 @@ def statepoint_self_test():
         shadow = os.path.join(td, "shadow.ll")
         with open(shadow, "w") as fh:
             fh.write(_SELFTEST_PLANTED)
+        # The three floors are defence in depth, so each has to be asserted
+        # ALONE: with the other two relaxed to 0, only `--min-statepoints` can
+        # produce the rejection. Asserted together, disabling this floor
+        # entirely still exits 2 (via `--min-relocates`) and the arm passes
+        # over a hole — which is how this arm was found to be vacuous, by
+        # sabotaging the floor and watching the suite stay green.
+        if _main_probe(["--statepoints", "--min-statepoints", "1",
+                        "--min-relocates", "0", "--min-live-bundles", "0",
+                        shadow]) != 2:
+            print("self-test FAIL: --min-statepoints ALONE must reject a "
+                  "corpus with no safepoints. Reporting it clean is the same "
+                  "false green as running --min-binds over the native corpus.",
+                  file=sys.stderr)
+            ok = False
         if _main_probe(["--statepoints", "--min-statepoints", "1",
                         shadow]) != 2:
             print("self-test FAIL: --statepoints over a corpus with no "
-                  "safepoints must exit 2. Reporting it clean is the same "
-                  "false green as running --min-binds over the native corpus.",
-                  file=sys.stderr)
+                  "safepoints must exit 2.", file=sys.stderr)
             ok = False
         if _main_probe(["--min-binds", "1", paths["unrooted"]]) != 2:
             print("self-test FAIL: the bind-anchored mode over the NATIVE "
@@ -3889,7 +3995,11 @@ def statepoint_self_test():
                      ["--statepoints", "--unrooted-allocas", paths["stale"]],
                      ["--statepoints", "--any-def", paths["stale"]],
                      ["--min-statepoints", "5", paths["stale"]],
-                     ["--max-unrooted", "5", paths["stale"]]):
+                     ["--max-unrooted", "5", paths["stale"]],
+                     ["--stale-registers", "--seeded-violations", "5",
+                      paths["stale"]],
+                     ["--unrooted-allocas", "--seeded-violations", "5",
+                      paths["stale"]]):
             if _main_probe(argv) != 2:
                 print(f"self-test FAIL: {' '.join(argv[:-1])} must be a usage "
                       "error; a mode flag that is accepted and ignored reads "
@@ -4779,6 +4889,14 @@ def main():
     if ns.stale_registers and ns.unrooted_allocas:
         ap.error("--stale-registers and --unrooted-allocas are separate "
                  "passes; run them one at a time")
+    # Same disarmed-knob rule, and this one has been live for a while: only the
+    # bind-anchored and statepoint paths have a seeder, so `--seeded-violations`
+    # on either of the other two modes reads as "prove this can still fail" and
+    # does nothing at all.
+    if ns.seeded_violations and (ns.stale_registers or ns.unrooted_allocas):
+        ap.error("--seeded-violations has no seeder for --stale-registers or "
+                 "--unrooted-allocas; it is honoured by the bind-anchored "
+                 "default and by --statepoints only")
     # Same disarmed-knob rule. The exemptions live in the unrooted-alloca pass
     # only, so `--assume-old-defrag` on any other pass would read like a
     # widening and do nothing at all.
@@ -4917,13 +5035,17 @@ def main():
             ns.max_stale, ns.max_unrooted,
             source_opts={"assume_old_defrag": ns.assume_old_defrag,
                          "assume_boxes_in_gc_heap": ns.assume_boxes_in_gc_heap})
-        if rc:
-            return rc
         # --- can this gate still fail? -----------------------------------
+        #
+        # UNCONDITIONALLY, not after an early `return rc`. The bind-anchored
+        # path puts its seeded proof below the return for real violations, so a
+        # run that finds something never demonstrates that it could have found
+        # something ELSE -- and the one run whose "can it fail" arm you most
+        # want is the one that is already telling you something.
         if ns.seeded_violations:
-            return seeded_statepoint_test(paths, moving_only,
-                                          ns.seeded_violations, verbose)
-        return 0
+            rc = seeded_statepoint_test(paths, moving_only,
+                                        ns.seeded_violations, verbose) or rc
+        return rc
 
     if ns.stale_registers:
         # `--min-binds` is a CORPUS-sanity assertion, not a bind-anchored-check

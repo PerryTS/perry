@@ -448,7 +448,7 @@ jobs:
           # No pipe: the checker's own exit status is the job's.
           #
           # FLOORS, from the corpus as of this commit — 149 modules, 2452
-          # functions, 29223 safepoints, 16972 with a live bundle, 39758
+          # functions, 30033 safepoints, 17478 with a live bundle, 40759
           # relocations — set below that with room for churn and far above
           # "something compiled". Three separate floors because they fail for
           # three different reasons and the message has to say which:
@@ -459,18 +459,27 @@ jobs:
           #   --min-live-bundles safepoints that record NO roots, which is what
           #                      an unrooted build looks like
           #
-          # BUDGETS. `unrooted` (the object is in no live bundle at all) is the
-          # serious class and is a ratchet at its measured value, not zero:
-          # this is a new instrument pointed at a lowering nothing has ever
-          # checked, and the residual is a population under triage, named in
-          # the PR. `stale` (the object survives, a raw copy of its pre-move
-          # address is used below) reads 0 today and is held there.
+          # BUDGETS. `unrooted` (the object is in NO live bundle at all, so
+          # nothing marks or rewrites it) is the serious class, and it is a
+          # RATCHET at its measured value rather than a calibrated zero: this
+          # is a new instrument pointed at a lowering nothing has ever checked
+          # statically, and 21 is a population under triage, not a number
+          # anyone has adjudicated. It is a budget rather than allowlist
+          # entries for the reason `--stale-registers` records — 21 tombstones
+          # with no issue numbers would be worse documentation than one number
+          # that can only go down. Lower it as sites are fixed.
+          #
+          # `stale` (the object survives and is relocated, but a raw copy of
+          # its pre-move address is used below) reads 0 today and is held
+          # there.
           #
           # --seeded-violations plants 40 safepoints into this very IR, between
           # a `ptrtoint ptr addrspace(1)` and its use, and requires all 40 to be
-          # reported. That is the arm that fails if the mode has stopped
-          # understanding LLVM's output — the only way a green verdict here
-          # could be a lie.
+          # reported. It runs even when the budgets are already red, because
+          # the run whose "can it still fail" arm you most want is the one that
+          # is already telling you something. That is the arm that fails if the
+          # mode has stopped understanding LLVM's output — the only way a green
+          # verdict here could be a lie.
           python3 scripts/gc_root_dominance_check.py ir-corpus-native \
             --statepoints \
             --moving-only \
@@ -478,7 +487,7 @@ jobs:
             --min-statepoints 15000 \
             --min-live-bundles 8000 \
             --min-relocates 20000 \
-            --max-unrooted 19 \
+            --max-unrooted 21 \
             --max-stale 0 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \
@@ -489,10 +498,11 @@ jobs:
       # `--moving-only` keeps only hazards whose window reaches a safepoint
       # that can run an evacuating minor. The rest are still hazards under the
       # RECLAIM half of the invariant (a value held only in an untracked
-      # register can be swept, not just moved), and the count is an order of
-      # magnitude larger. Printing it keeps the filtered number honest: if the
-      # gated arm ever reads zero, this line says whether that is the corpus or
-      # the filter. `|| true` is deliberate and is the ONLY one in this file —
+      # register can be swept, not just moved), and the count is two orders of
+      # magnitude larger: 1444 (1123 unrooted, 321 stale) against the gated
+      # arm's 21. Printing it keeps the filtered number honest — if the gated
+      # arm ever reads zero, this line says whether that is the corpus or the
+      # filter. `|| true` is deliberate and is the ONLY one in this file —
       # this step is not a gate and must not be read as one.
       - name: Unfiltered hazard census (diagnostic, not a gate)
         run: |

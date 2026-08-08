@@ -132,23 +132,9 @@ on a real workload. When adding a cache of a heap pointer, register it in
 alloca in generated code. Within that scope it is the only instrument that sees
 a defect before it crashes, which is why it runs first.
 
-**It is blind to four classes, all found the hard way. A clean report is not
+**It is blind to three classes, all found the hard way. A clean report is not
 evidence for any of them:**
 
-- **★ The lowering that ships.** `gc_root_dominance_corpus.sh` compiles the
-  corpus under `PERRY_RS4GC=0`, which selects the **shadow stack** — and since
-  #7370 that is not the default on any target the runtime can walk. The reason
-  is stated in the script and is a real one (the checker anchors on
-  `@js_shadow_slot_bind` calls, and the native lowering emits **zero** of them,
-  so under the default the corpus contains 1251 statepoints, no binds at all,
-  and `--min-binds` fails the job). But the consequence has to be said out loud
-  here too, because this page is what a reader is pointed at: **a green
-  `gc-root-dominance` is evidence about the shadow lowering only.** Teaching the
-  checker to read `gc.statepoint` relocation bundles is the open work; until
-  then the native side is covered by unit tests rather than by this gate —
-  `crates/perry-codegen/src/native_root_coverage` (#7502), which asserts on the
-  `ptr addrspace(1)` root allocas, on each statepoint's `"gc-live"` bundle, and
-  on the compact `__perry_gcmap` map the collector actually reads.
 - **Runtime tables and interning caches** (#7231) — it reads emitted IR and
   cannot see a runtime cell. Tell: fails 10/10 rather than intermittently.
 - **Unrooted locals in runtime Rust** (#7249) — same reason. It read
@@ -165,12 +151,62 @@ For the classes above, the instruments that catch them are the zeal/quarantine
 arms below and a *dependency-scale* workload — #7280 records 25 curated corpus
 files passing while 20 lines of stock zod fail.
 
+**A fourth class was on this list until #7660 and is now covered: the lowering
+that actually ships.** The corpus used to be compiled under `PERRY_RS4GC=0` —
+the shadow stack — because the checker anchored on `@js_shadow_slot_bind` and
+the native lowering emits zero of them. That made a green `gc-root-dominance` a
+statement about a lowering that has not been the default on any walkable-frame
+target since #7370. **Run both**, and know which one you ran:
+
 ```bash
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+
+# SHADOW (PERRY_RS4GC=0): still the lowering on arm64_32 watchOS and ARM64
+# Windows. Anchors on root stores.
 ./scripts/gc_root_dominance_corpus.sh ir-corpus
 python3 scripts/gc_root_dominance_check.py ir-corpus --moving-only \
   --allowlist scripts/gc_root_dominance_allowlist.json -v
+
+# NATIVE (PERRY_RS4GC=1): the default everywhere else. Anchors on
+# `gc.statepoint` `"gc-live"` bundles. Needs an LLVM `opt` -- codegen emits
+# `ptr addrspace(1)` root allocas and LLVM inserts the safepoints later, so the
+# corpus is `--trace llvm` output plus the production statepoint rewrite.
+./scripts/gc_root_dominance_corpus.sh ir-corpus-native --lowering native
+python3 scripts/gc_root_dominance_check.py ir-corpus-native --statepoints \
+  --moving-only -v
 ```
+
+Each mode **refuses the other's corpus** rather than reporting it clean: the
+native corpus has zero root stores, so `--min-binds` fails there, and the
+shadow corpus has zero safepoints, so `--min-statepoints` fails there.
+
+### What `--statepoints` checks, and how it differs
+
+Under native roots a value is a root at a safepoint iff it appears in that
+`gc.statepoint`'s `"gc-live"` bundle, and its identity below the safepoint is
+the `gc.relocate` result. So "the root store must dominate every later
+collection point" becomes:
+
+> No register naming a GC object may be USED below a safepoint unless it is the
+> relocated value.
+
+The line that does the work is **tracked vs untracked**. LLVM relocates
+`ptr addrspace(1)` SSA values and rewrites their dominated uses, so those are
+never stale. Everything else is invisible to it — and Perry NaN-boxes, so a
+JSValue spends most of its life as a `double`. Two verdict classes, because
+they have two different fixes:
+
+| class | means | fix |
+|---|---|---|
+| `unrooted` | no `ptr addrspace(1)` value in the register's cast chain is in the safepoint's live bundle. Nothing marks or rewrites the object. | root it |
+| `stale` | the object IS in the bundle and is relocated, but a raw copy of its pre-move address is used below | re-derive from the relocated value (`OperandProtection::Reload`) |
+
+Two things this mode gets for free that the shadow modes cannot:
+**`NONCOLLECTING` is not consulted** — LLVM already decided which calls are
+safepoints and put the answer in the IR, so a wrong entry in that hand-kept
+list cannot hide a hazard here; and every safepoint **names its wrapped
+callee**, so `--moving-only` classifies against the real symbol rather than
+`llvm.experimental.gc.statepoint.p0`.
 
 It parses the emitted LLVM IR, builds per-function CFGs, computes real
 Cooper/Harvey/Kennedy dominance, and reports every **collection point** that can
@@ -435,6 +471,15 @@ this is documentation. Per CLAUDE.md's corollary, promote it **after** the job's
 first green run on `main` with the `--unrooted-allocas` step included — a gate
 that has never been green in its current shape blocks every open PR the day it
 becomes required.
+
+**`gc-root-dominance-statepoints` is a SEPARATE context and a separate
+decision.** It was added by #7660 as a second job for exactly that reason: it
+reads a different corpus, its floors are about safepoints rather than root
+stores, and it should be promotable without dragging the shadow arms along.
+Promote it on the same terms — after its first green run on `main`, never
+before — and note that its `--max-unrooted` budget is a *ratchet under triage*,
+not a calibrated zero. Lower it as the population is fixed; a promotion that
+freezes the budget where it is has bought a number, not an invariant.
 
 ## Rules of thumb
 
