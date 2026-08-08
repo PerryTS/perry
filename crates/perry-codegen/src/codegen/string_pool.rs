@@ -515,6 +515,38 @@ pub(super) fn emit_string_pool(
         );
     }
 
+    // #7575: register the GENERIC class a monomorphized specialization came
+    // from. `class Gen<T> {}` + `new Gen<number>()` emits a second class
+    // `Gen$num` carrying its own class id, and the instance is stamped with
+    // that id — but `x instanceof Gen` resolves the RHS to the GENERIC's id,
+    // which is in no parent chain, so the walk answered `false` for the class
+    // the user wrote. This is a distinct edge from the parent one on purpose:
+    // `CLASS_REGISTRY`'s chain also resolves `super()`, static-method lookup
+    // and vtable dispatch, so it must keep pointing at the real base.
+    let mut origin_pairs: Vec<(u32, u32)> = Vec::new();
+    for (name, &cid) in class_ids.iter() {
+        let Some(class) = classes.get(name) else {
+            continue;
+        };
+        let Some(generic_name) = &class.specialized_from else {
+            continue;
+        };
+        if let Some(&generic_cid) = class_ids.get(generic_name) {
+            if generic_cid != 0 && generic_cid != cid {
+                origin_pairs.push((cid, generic_cid));
+            }
+        }
+    }
+    origin_pairs.sort_unstable();
+    for (cid, generic_cid) in origin_pairs {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        blk.call_void(
+            "js_register_class_generic_origin",
+            &[(I32, &cid.to_string()), (I32, &generic_cid.to_string())],
+        );
+    }
+
     // Issue #392: register every user class method in the runtime
     // VTABLE_REGISTRY so cross-module callers can dispatch via
     // `js_native_call_method` even when the codegen of the calling

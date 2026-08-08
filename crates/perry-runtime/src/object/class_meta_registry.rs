@@ -33,6 +33,57 @@ pub(crate) fn fetch_parent_kind(class_id: u32) -> Option<u8> {
     g.as_ref()?.get(&class_id).copied()
 }
 
+/// #7575: specialized class_id -> the GENERIC class_id it was monomorphized
+/// from.
+///
+/// Perry monomorphizes generic classes: `class Gen<T> {}` plus
+/// `new Gen<number>()` emits a second class `Gen$num`
+/// (`perry_hir::monomorph::mangle::generate_specialized_name`) with its own
+/// class id, and the instance is stamped with THAT id. `x instanceof Gen`
+/// resolves the RHS to the generic's id, which appears nowhere in the
+/// specialization's parent chain — so `new Gen<number>() instanceof Gen` was
+/// `false` while `instanceof` against a non-generic base stayed `true`. The
+/// issue surfaced as a Map/Set-subclass bug (`m instanceof MyMap`) because
+/// `class MyMap<K, V> extends Map<K, V>` is the idiomatic spelling, but the
+/// mechanism has nothing to do with Map/Set: a plain `class Gen<T> extends
+/// Base {}` fails identically.
+///
+/// This is deliberately a SEPARATE table rather than a `CLASS_REGISTRY` parent
+/// edge. That chain also resolves `super()` construction
+/// (`object/class_constructors.rs`), static-method lookup and vtable dispatch,
+/// so splicing the generic in between a specialization and its real base would
+/// re-run the wrong constructor. Only `instanceof` consults this one.
+static CLASS_GENERIC_ORIGIN: RwLock<Option<HashMap<u32, u32>>> = RwLock::new(None);
+
+/// Record that `class_id` is a monomorphized specialization of `generic_id`.
+///
+/// Emitted once per specialized class in the module-init prelude, next to the
+/// `js_register_class_parent` edges.
+#[no_mangle]
+pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u32) {
+    if class_id == 0 || generic_id == 0 || class_id == generic_id {
+        return;
+    }
+    let mut g = CLASS_GENERIC_ORIGIN.write().unwrap();
+    if g.is_none() {
+        *g = Some(HashMap::new());
+    }
+    g.as_mut().unwrap().insert(class_id, generic_id);
+}
+
+/// Keepalive anchor: emitted only from generated module-init code, so the
+/// whole-program auto-optimize bitcode pass would otherwise dead-strip it.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_REGISTER_CLASS_GENERIC_ORIGIN: extern "C" fn(u32, u32) =
+    js_register_class_generic_origin;
+
+/// The generic class `class_id` was specialized from, if any (no chain walk).
+pub(crate) fn class_generic_origin(class_id: u32) -> Option<u32> {
+    let g = CLASS_GENERIC_ORIGIN.read().ok()?;
+    g.as_ref()?.get(&class_id).copied()
+}
+
 /// Global registry of class IDs that extend the built-in Error class
 static EXTENDS_ERROR_REGISTRY: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
 

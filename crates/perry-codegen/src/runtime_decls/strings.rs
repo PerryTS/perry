@@ -1275,6 +1275,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // allocators register on every alloc; the inline allocator skips
     // the alloc-site call and relies on this one-time registration.
     module.declare_function("js_register_class_parent", VOID, &[I32, I32]);
+    // #7575: specialization -> generic edge for monomorphized generic classes.
+    // A SEPARATE edge from the parent one: the parent chain also resolves
+    // `super()`, static-method lookup and vtable dispatch, so only `instanceof`
+    // may follow this one.
+    module.declare_function("js_register_class_generic_origin", VOID, &[I32, I32]);
     // Issue #711: dynamic parent registration for `class X extends fn(...)`
     // shapes. Codegen emits at the class-declaration source position in
     // module.init (lower.rs); the runtime helper extracts the parent

@@ -479,6 +479,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // #6812: width hints don't cross module metadata; imported stubs
             // fall back to runtime learned sizing.
             alloc_width_hint: 0,
+            // #7575: monomorphization is per-module, so an imported stub never
+            // stands in for a specialization — its defining module registers
+            // the origin edge itself.
+            specialized_from: None,
             type_params: Vec::new(),
             extends: None,
             extends_name: ic.parent_name.clone(),

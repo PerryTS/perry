@@ -175,12 +175,12 @@ pub use with_env::*;
 // named re-exports keep existing `crate::object::X` / bare-name call sites in
 // the object submodules resolving unchanged.
 pub(crate) use class_meta_registry::{
-    extends_builtin_error, fetch_parent_kind, lookup_has_instance_hook, lookup_to_string_tag_hook,
-    register_fetch_parent_kind, CLASS_REGISTRY,
+    class_generic_origin, extends_builtin_error, fetch_parent_kind, lookup_has_instance_hook,
+    lookup_to_string_tag_hook, register_fetch_parent_kind, CLASS_REGISTRY,
 };
 pub use class_meta_registry::{
-    js_register_class_extends_error, js_register_class_has_instance,
-    js_register_class_to_string_tag,
+    js_register_class_extends_error, js_register_class_generic_origin,
+    js_register_class_has_instance, js_register_class_to_string_tag,
 };
 pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{

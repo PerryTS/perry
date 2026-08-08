@@ -1101,6 +1101,7 @@ impl LoweringContext {
             // timing is irrelevant.
             is_nested: false,
             alloc_width_hint,
+            specialized_from: None,
         });
 
         self.anon_shape_classes

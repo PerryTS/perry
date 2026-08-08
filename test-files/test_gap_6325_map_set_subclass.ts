@@ -25,7 +25,9 @@ s.add("x");
 console.log("set subclass has:", s.has("x"), "size:", s.size);
 
 // ── the registry parent edge is wired, so `instanceof` holds ──
+// #7575 tightened this to assert the SUBCLASS edge as well as the base one.
 console.log("instanceof:", m instanceof Map, s instanceof Set);
+console.log("instanceof subclass:", m instanceof M, s instanceof S);
 
 // ── explicit-ctor control (this path already worked — must keep working) ──
 class WithCtor extends Map {
