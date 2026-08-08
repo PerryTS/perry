@@ -20,7 +20,7 @@
 # nothing, because "0 violations over 3 files" and "0 violations over 300 files"
 # print the same verdict and mean opposite things.
 #
-# TWO LOWERINGS, and the corpus is not the same corpus for both (#7660)
+# TWO LOWERINGS, and the corpus is not the same corpus for both (#7663)
 # ---------------------------------------------------------------------
 #   --lowering shadow   PERRY_RS4GC=0: roots are `@js_shadow_slot_bind` calls.
 #                       This is what `gc_root_dominance_check.py`'s default,

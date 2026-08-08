@@ -2821,7 +2821,7 @@ entry.0:
 # is not the lowering that ships on any target whose frames the runtime can
 # walk, and `gc_root_dominance_corpus.sh` says so in a paragraph that ends
 # "teaching the checker to read relocation bundles is a separate change". This
-# is that change (#7660).
+# is that change (#7663).
 #
 # ## What replaces the bind
 #
@@ -4809,7 +4809,7 @@ def main():
                     help="check the NATIVE (RS4GC) root lowering instead: "
                          "report every register naming a GC object that is USED "
                          "below a `gc.statepoint` without being the relocated "
-                         "value (#7660). Needs a corpus emitted with "
+                         "value (#7663). Needs a corpus emitted with "
                          "`gc_root_dominance_corpus.sh --lowering native`; the "
                          "shadow corpus has no statepoints and is refused.")
     ap.add_argument("--min-statepoints", type=int, default=1, metavar="N",

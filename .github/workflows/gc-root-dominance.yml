@@ -349,7 +349,7 @@ jobs:
             ir-corpus-dep
           retention-days: 7
 
-  # ★★★ THE LOWERING THAT ACTUALLY SHIPS (#7660).
+  # ★★★ THE LOWERING THAT ACTUALLY SHIPS (#7663).
   #
   # Everything in the job above compiles its corpus under `PERRY_RS4GC=0` — the
   # SHADOW-STACK lowering — and since #7370 that is not the default on any

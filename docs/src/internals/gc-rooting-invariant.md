@@ -151,7 +151,7 @@ For the classes above, the instruments that catch them are the zeal/quarantine
 arms below and a *dependency-scale* workload — #7280 records 25 curated corpus
 files passing while 20 lines of stock zod fail.
 
-**A fourth class was on this list until #7660 and is now covered: the lowering
+**A fourth class was on this list until #7663 and is now covered: the lowering
 that actually ships.** The corpus used to be compiled under `PERRY_RS4GC=0` —
 the shadow stack — because the checker anchored on `@js_shadow_slot_bind` and
 the native lowering emits zero of them. That made a green `gc-root-dominance` a
@@ -473,7 +473,7 @@ that has never been green in its current shape blocks every open PR the day it
 becomes required.
 
 **`gc-root-dominance-statepoints` is a SEPARATE context and a separate
-decision.** It was added by #7660 as a second job for exactly that reason: it
+decision.** It was added by #7663 as a second job for exactly that reason: it
 reads a different corpus, its floors are about safepoints rather than root
 stores, and it should be promotable without dragging the shadow arms along.
 Promote it on the same terms — after its first green run on `main`, never
