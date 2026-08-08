@@ -471,21 +471,37 @@ already working, on a workload that happens to reach it through `JSON.parse`.
    | kernel | perry | node | bun | ratio |
    |---|--:|--:|--:|--:|
    | `keep: {v,w}[]` — #7480's kernel | 414 ms | 12 ms | 12 ms | **34.5×** |
-   | `keep: Node[]` — what #7612 covers | see #7480 | 58 ms† | 14 ms | — |
+   | `keep: Node[]` — what #7612 covers | 13 ms‡ | 57 ms† | 15 ms | **0.23×** |
 
    **The issue's recorded 93 ms / 6.2× is stale and was optimistic** — the
    fourth time a figure in this plan has gone stale, and the first in that
-   direction. †Node is *slower* on the named-class arm than on the literal
-   arm (58 vs 12 ms) because `v: number;` survives type-stripping as a class
-   field declaration, which pre-initialises the slot to `undefined` and pins
-   the field to tagged representation; so "beat node" means two different
-   numbers on the two arms. Re-measure the arm you are gating on.
+   direction. Two traps in this one table, both of which cost time to find:
+
+   †Node is *slower* on the named-class arm than on the literal arm (57 vs
+   12 ms). `v: number;` cannot be erased by type stripping — without the
+   annotation it is still a valid class field declaration — so V8
+   pre-initialises the slot to `undefined`, pinning the field to tagged
+   representation. **"Beat node" is therefore a different number on the two
+   arms**; re-measure the arm you are gating on, in the same run.
+
+   ‡That cell did not exist before #7660: on `main` the named-class arm
+   *SIGBUSes*, because the versioned-loop consumer derived its elements base
+   from an unresolved growth-forwarding stub for any array grown outside the
+   scope that reads it. Step 2's win was real but gated behind a crash.
+
+   The IR does not match the issue's recorded cost model either. #7480 says
+   the body has "no out-of-line guard calls, the cost is stacked inline
+   diamonds"; the object-literal arm actually carries **three calls per
+   iteration** — `js_typed_feedback_observe_property_get`,
+   `js_typed_feedback_record_guard_pass` (on the *hit* path) and
+   `js_dynamic_string_or_number_add`, because with no resolvable class the
+   field read falls into the by-name PIC tower and the accumulator loses its
+   numeric proof. That is a second, separable lever, and it is the kind of win
+   that gets misattributed to the element-shape work.
 
    Sequencing note carried from before: element reads are 13% of `churn` at
    4.3×, so against the bookkeeping levers this stays an RSS/footprint play
    more than a time one — but the 34.5× above is the kernel, and it is real.
-   #7660 first: the versioned-loop consumer bus-errored on any array grown
-   outside the reading scope, so step 2's win was gated behind a crash.
 7. **Layer 1** — migrate remaining lowerings onto the rooted-combinator API
    (`crates/perry-codegen/src/rooting.rs`). **#7615 is the ordered worklist**:
    88 modules, 694 raw-pointer sites, 262 hazard sites, grouped into ten
