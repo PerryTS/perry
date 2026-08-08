@@ -95,7 +95,13 @@
 //! Anything not expressed through this emitter: runtime-side Rust (layer 3), a
 //! raw pointer cached in a side table, or a value the collector moves that never
 //! passes through a `Raw`. The RFC's "What it cannot catch" section is the
-//! authority; this prototype does not widen it.
+//! authority; this half does not widen it.
+//!
+//! And note which half these doctests are about. **They prove the DESIGN, not
+//! the shipped code.** What the migrated lowerings actually get is the
+//! combinator form below, which is measurably weaker — the block comment where
+//! it starts records each sabotage arm and its outcome, including the two that
+//! compile silently.
 
 /// A register holding something the collector does not manage — an `i32`, a
 /// length, a slot index. No borrow, freely cloneable.
