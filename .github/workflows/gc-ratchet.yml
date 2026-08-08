@@ -81,9 +81,9 @@ jobs:
       #
       # `--scope structural` is load-bearing and is the #7554 repair. This step
       # runs BEFORE the measurement step, so anything it fails on costs the
-      # entire run's coverage — twelve probes that never execute. That price is
-      # correct for "this artifact is unreadable or tampered with" and badly
-      # wrong for "one of its 144 cells is not bit-identical", which is what
+      # entire run's coverage — thirteen probes that never execute. That price
+      # is correct for "this artifact is unreadable or tampered with" and badly
+      # wrong for "one of its 156 cells is not bit-identical", which is what
       # actually happened: one cell's 6,768-byte spread failed this step and the
       # ratchet measured NOTHING on any branch for three days, while two GC
       # pacing changes (#7594, #7596) merged with hand-run A/Bs in its place.

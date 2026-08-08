@@ -98,6 +98,18 @@ DEFAULT_TOLERANCES = HERE / "tolerances.json"
 
 GCMETRIC_RE = re.compile(r"^#gcmetric\s+([a-z0-9_]+)=(-?[0-9]+)\s*$")
 COPY_MINOR_RE = re.compile(r"^\[gc-copy-minor\]\s+ran\s+(.*)$")
+
+#: A probe may declare the collector configuration it is a probe *of*, as
+#: ``// gc-ratchet-env: KEY=VALUE`` comment lines in its own source. See
+#: ``probe_run_env``.
+PROBE_ENV_RE = re.compile(r"^//\s*gc-ratchet-env:\s*([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$")
+
+#: Env names a probe may not declare, because the harness itself sets them and
+#: a probe that also set them would be silently fighting the measurement rather
+#: than describing itself. ``PERRY_CONSERVATIVE_STACK_SCAN`` is the axis
+#: ``classify`` sweeps; ``PERRY_GC_DIAG`` is what separates the traced pass from
+#: the timed one.
+RESERVED_PROBE_ENV = frozenset(("PERRY_CONSERVATIVE_STACK_SCAN", "PERRY_GC_DIAG"))
 SCAN_FALLBACK_RE = re.compile(
     r"^\[gc-scan-fallback\]\s+site=(\w+)\s+automatic=(true|false)\s+count=(\d+)\s*$"
 )
@@ -510,6 +522,84 @@ def probe_sources(probes_dir: Path) -> list[Path]:
     return sources
 
 
+def probe_run_env(source: Path) -> dict[str, str]:
+    """The collector configuration a probe declares for its own *runs*.
+
+    A probe states this in its own source, as ``// gc-ratchet-env: KEY=VALUE``
+    comment lines::
+
+        // gc-ratchet-env: PERRY_GC_SCAVENGE_NURSERY_MB=64
+
+    WHY A PROBE MAY NEED ONE
+    ------------------------
+    Twelve of the thirteen probes run at the shipped 16 MB nursery cap, so every
+    copying minor this matrix has ever exercised is small and frequent. Both
+    #7472 and #7481 faulted at a *larger* Eden and neither was reachable from
+    here; #7481 says so directly ("a live copying-minor correctness signal at
+    exactly the cadence the ratchet probes never exercise"). A cadence is a
+    property of the run, not of the source, so the only way to pin it is to let
+    a probe name the run it is a probe of.
+
+    WHY IT LIVES IN THE PROBE SOURCE
+    -------------------------------
+    Because it is not possible to read the workload without reading the arm.
+    ``tolerances.json`` was the alternative and it separates the two files a
+    reader has to hold together to know what a row means.
+
+    WHAT IS REFUSED, AND WHY EACH
+    -----------------------------
+    * A name outside ``PERRY_*`` — a probe declares collector configuration, not
+      ``PATH`` or ``DYLD_*``. The probe set is reviewed as workloads; it must not
+      become a way to change the process the harness runs.
+    * ``PERRY_CONSERVATIVE_STACK_SCAN`` / ``PERRY_GC_DIAG`` — the harness sets
+      both (the first is ``classify``'s axis, the second separates the traced
+      pass from the timed one). A probe that also set them would silently
+      contradict the measurement instead of describing itself.
+    * A repeated key — two directives disagreeing about one variable has no
+      defensible reading, and picking the last would make the losing line look
+      effective.
+
+    The declaration deliberately does **not** reach ``compile_probe``. These are
+    runtime knobs read through ``OnceLock`` in ``perry-runtime``, and Perry's
+    object cache keys on every codegen env var (#6394), so passing them at
+    compile time would change the cache key without changing a byte of emitted
+    code — a difference that looks like a difference and is not one.
+    """
+    declared: dict[str, str] = {}
+    for lineno, line in enumerate(source.read_text(encoding="utf-8").splitlines(), start=1):
+        match = PROBE_ENV_RE.match(line.strip())
+        if not match:
+            continue
+        name, value = match.group(1), match.group(2)
+        if not name.startswith("PERRY_"):
+            raise RatchetError(
+                f"{source.name}:{lineno}: gc-ratchet-env may only set PERRY_* variables, "
+                f"got {name!r}"
+            )
+        if name in RESERVED_PROBE_ENV:
+            raise RatchetError(
+                f"{source.name}:{lineno}: {name} is set by the harness itself, so a probe "
+                "declaring it would contradict the measurement rather than describe it"
+            )
+        if name in declared:
+            raise RatchetError(
+                f"{source.name}:{lineno}: gc-ratchet-env sets {name} twice "
+                f"({declared[name]!r} then {value!r})"
+            )
+        declared[name] = value
+    return declared
+
+
+def _with_probe_env(
+    probe_env: Mapping[str, str], extra: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """The probe's declared env, plus whatever the harness is adding this pass."""
+    merged = dict(probe_env)
+    if extra:
+        merged.update(extra)
+    return merged
+
+
 def compile_probe(perry: Path, source: Path, out_dir: Path) -> Path:
     binary = out_dir / source.stem
     completed = subprocess.run(
@@ -575,14 +665,15 @@ def measure(
         for source in sources:
             name = source.stem
             binary = compile_probe(perry, source, out_dir)
+            probe_env = probe_run_env(source)
 
             for _ in range(warmup):
-                run_once([str(binary)])
+                run_once([str(binary)], extra_env=_with_probe_env(probe_env))
 
             samples: dict[str, list[float]] = {metric: [] for metric in SAMPLED_METRICS}
             stdouts: list[str] = []
             for _ in range(repeats):
-                run = run_once([str(binary)])
+                run = run_once([str(binary)], extra_env=_with_probe_env(probe_env))
                 if run["returncode"] != 0:
                     raise RatchetError(f"{name}: probe exited {run['returncode']}\n{run['stderr']}")
                 emitted = parse_gcmetrics(run["stderr"])
@@ -606,7 +697,10 @@ def measure(
             # counters it is about to gate on are actually deterministic.
             traced = [
                 parse_gc_diag(
-                    run_once([str(binary)], extra_env={"PERRY_GC_DIAG": "1"})["stderr"]
+                    run_once(
+                        [str(binary)],
+                        extra_env=_with_probe_env(probe_env, {"PERRY_GC_DIAG": "1"}),
+                    )["stderr"]
                 )
                 for _ in range(2)
             ]
@@ -631,6 +725,13 @@ def measure(
             results[name] = {
                 "stdout": stdouts[0],
                 "correctness": _check_against_node(node, source, stdouts[0]),
+                # Recorded per probe, and compared cell-for-cell by `evaluate`.
+                # Without this the arm would be invisible in the artifact: a
+                # deleted directive would silently retarget the probe at the
+                # default cadence and every row would still be inside its band,
+                # because the numbers would have been re-pinned to the new
+                # configuration by the same act that lost the old one.
+                "run_env": dict(probe_env),
                 "metrics": metrics,
             }
 
@@ -715,15 +816,16 @@ def classify(
         for source in sources:
             name = source.stem
             binary = compile_probe(perry, source, out_dir)
+            probe_env = probe_run_env(source)
             for _ in range(warmup):
-                run_once([str(binary)])
+                run_once([str(binary)], extra_env=_with_probe_env(probe_env))
 
             modes: dict[str, list[dict[str, int]]] = {}
             stdouts: dict[str, str] = {}
             for label, env in (("conservative", None), ("precise", {SCAN_MODE_ENV: "off"})):
                 seen: list[dict[str, int]] = []
                 for _ in range(repeats):
-                    run = run_once([str(binary)], extra_env=env)
+                    run = run_once([str(binary)], extra_env=_with_probe_env(probe_env, env))
                     if run["returncode"] != 0:
                         raise RatchetError(
                             f"{name}: probe exited {run['returncode']} with "
@@ -753,7 +855,10 @@ def classify(
                 )
 
             sites = parse_scan_fallbacks(
-                run_once([str(binary)], extra_env={"PERRY_GC_DIAG": "1"})["stderr"]
+                run_once(
+                    [str(binary)],
+                    extra_env=_with_probe_env(probe_env, {"PERRY_GC_DIAG": "1"}),
+                )["stderr"]
             )
             conservative_samples = [sample["heap_used_bytes"] for sample in modes["conservative"]]
             conservative = int(statistics.median(conservative_samples))
@@ -761,6 +866,7 @@ def classify(
             rows.append(
                 {
                     "probe": name,
+                    "run_env": dict(probe_env),
                     "heap_used_bytes": conservative,
                     "heap_used_samples": conservative_samples,
                     "heap_used_spread_bytes": max(conservative_samples) - min(conservative_samples),
@@ -1198,6 +1304,17 @@ def inspect_artifact(artifact: Mapping[str, Any]) -> list[ArtifactDefect]:
             artifact_defect(f"{name}: no metrics recorded")
             continue
 
+        # `run_env` is what tells a reader which collector these numbers came
+        # from, and `evaluate` compares it. An unreadable one would compare
+        # unequal against every well-formed run and read as a regression in the
+        # collector rather than as corruption of the artifact, so it is fatal
+        # for the same reason a tampered summary is.
+        recorded_env = entry.get("run_env", {})
+        if not isinstance(recorded_env, Mapping) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in recorded_env.items()
+        ):
+            artifact_defect(f"{name}: run_env is not a string-to-string mapping")
+
         # Integrity of the recorded numbers. A missing metric or a summary that
         # disagrees with its own samples is tampering or corruption, not
         # unfitness: it stays fatal, because a partially-trusted artifact is not
@@ -1283,6 +1400,13 @@ def validate_artifact(artifact: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Regression check
 # ---------------------------------------------------------------------------
+
+
+def _render_run_env(env: Mapping[str, str]) -> str:
+    """A probe's declared arm, printable. ``<default>`` when it declares none."""
+    if not env:
+        return "<default>"
+    return " ".join(f"{key}={value}" for key, value in sorted(env.items()))
 
 
 @dataclass
@@ -1377,6 +1501,23 @@ def evaluate(
 
         if cur_entry.get("stdout") != base_entry.get("stdout"):
             failures.append(f"{name}: observable output changed since the baseline")
+
+        # The arm is part of what the row means. `13_large_eden_survivors` is
+        # pinned at `PERRY_GC_SCAVENGE_NURSERY_MB=64` because its whole subject
+        # is the large-Eden cadence (#7481); at the default 16 MB it is a
+        # perfectly healthy probe of something else, and every band would still
+        # be satisfied by the re-pin that lost the arm. So the declared
+        # environment is compared like a metric: a run under a different one is
+        # not a comparison, it is two measurements of two collectors.
+        base_env = base_entry.get("run_env") or {}
+        cur_env = cur_entry.get("run_env") or {}
+        if base_env != cur_env:
+            failures.append(
+                f"{name}: ran under a different collector configuration than the baseline "
+                f"pinned ({_render_run_env(cur_env)} vs {_render_run_env(base_env)}); the "
+                "rows below compare two different collectors. Restore the probe's "
+                "`gc-ratchet-env` directive, or re-pin deliberately."
+            )
 
         # "unchecked" is a failure, not a pass. A run that could not reach the
         # Node oracle has not verified that the probe still computes anything;
@@ -1524,6 +1665,23 @@ def render(rows: Iterable[Row], baseline: Mapping[str, Any], profile: str) -> st
         "Only rows marked gating can fail the job. Non-gating rows are recorded so a",
         "drift that is real but unmeasurable on this runner is still visible.",
         "",
+    ]
+    # Named where the numbers are read, not only in the probe source: a row from
+    # a non-default arm answers a different question from its neighbours, and
+    # the reader of a CI table has no other way to know which.
+    armed = {
+        name: entry["run_env"]
+        for name, entry in sorted(baseline.get("probes", {}).items())
+        if entry.get("run_env")
+    }
+    if armed:
+        lines += [
+            "Probes pinned under a non-default collector configuration:",
+            "",
+            *(f"- `{name}` — `{_render_run_env(env)}`" for name, env in armed.items()),
+            "",
+        ]
+    lines += [
         "| Probe | Metric | Baseline | Current | Δ | Allowance | Gating | Status |",
         "|-------|--------|---------:|--------:|---:|----------:|:------:|--------|",
     ]

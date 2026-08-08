@@ -512,10 +512,90 @@ already working, on a workload that happens to reach it through `JSON.parse`.
    107-module ceiling list toward empty; same end state, same reason.
 8. **Statepoint-side static checker** — teach `gc_root_dominance_check.py` to
    read relocation bundles, closing the gap the #7452/#7460 repairs named.
-9. **RSS re-derivation under the statepoint default** (#7056) — the earlier
-   numbers were measured under the shadow stack.
-10. **Ratchet large-Eden probe arm** (#7481's lesson), plus the pending
-   quiet-host re-pins (`wt-scavtenure` baseline).
+9. ~~**RSS re-derivation under the statepoint default** (#7056)~~ — **done, and
+   the answer is that the root lowering is not an RSS lever.** Re-derived at
+   `7bde3de24` on the pinned quiet mini (95% idle, zero `rustc`/`cargo`
+   throughout), 12 ratchet probes x 7 repeats x **3 interleaved rotations**,
+   every probe byte-identical to the pinned Node oracle in all 72 probe-runs:
+
+   | | statepoint (default) | shadow stack (`PERRY_RS4GC=0`) | ratio |
+   |---|--:|--:|--:|
+   | peak RSS, 12 probes | 544.2 MB | 545.1 MB | **1.002** |
+   | retained heap after `gc()` | 114,594,904 B | 114,596,520 B | **1.000** |
+   | wall | 4,808 ms | 4,894 ms | 1.018 |
+
+   **104 of 108 deterministic cells are bit-identical between the two
+   lowerings.** All four that move are on `10_store_receiver_across_alloc` and
+   are ≤0.31% — the shadow stack keeps 7 more objects live at that collection
+   point than the statepoint map does. Between-rotation spread: retention
+   **0.000%**, peak RSS max 0.621% (median 0.000%), wall max 2.779%. The arms
+   were shown to differ before they were compared, per probe, not per suite:
+   `statepoint-example` + `addrspace(1)` roots present on 12/12 under the
+   default and **0 of both** under `PERRY_RS4GC=0`, with `js_shadow_frame_enter`
+   rising to match.
+
+   So #7056's RSS numbers were not invalidated by #7370. What *did* invalidate
+   parts of it is everything else that shipped since, and the re-derivation
+   should be read for those:
+
+   - **§9's recommendation shipped** (#7377): the 16 MB cap no longer hangs off
+     `gc_moving_loop_polls_enabled()`, and the poll has been default-off since
+     #7161. The five arms #7056 tabulates (`on`/`off`/`off_rt`/`on_cap128`/
+     `off_scav`) no longer name anything that ships.
+   - **The cap is still the whole footprint lever, and now measured on 12
+     probes rather than 8**: at `PERRY_GC_SCAVENGE_NURSERY_MB=128`, peak RSS is
+     **1.911x** and retained heap **2.475x** the shipped cap, for **0.947x** the
+     wall — up to 5.005x peak RSS on `04_dead_after_deep_stack` and 6.350x
+     retention on `07_array_grow_evacuate`. Identical to 0.6% under both root
+     lowerings, so this is a pacing result and not a rooting one.
+   - **§7's false-retention table is gone, not shrunk.** It recorded a
+     4.6x–54.8x conservative-vs-precise band on probes 01–08. `classify` at
+     `7bde3de24` reports **excess 0.00% and spread 0 on all twelve**, with no
+     `manual_collect` scan site anywhere — #7657 removed the forced scan at
+     `gc()` rather than the reading.
+   - **§6's real finding survives intact**: a conservative scan does not
+     degrade the copying minor, it **disables** it. Forcing
+     `PERRY_CONSERVATIVE_STACK_SCAN=full` under statepoints takes
+     `minor_cycles` to **0 on all twelve probes** (`copied + promoted` 0 on
+     all twelve), costs 1.98x retained heap (0.70x–6.35x) and 1.46x peak RSS
+     (0.93x–3.47x). Smaller than the +364%..+5371% #7056 recorded, same sign,
+     same mechanism.
+
+   Not re-derived, and stated rather than hidden: #7056's largest RSS numbers
+   (§3–§5, 272 MB -> 421 MB) came from three server-shaped workloads it wrote
+   and never landed, so there is nothing in the tree to re-run. The 12 probes
+   are what replaced them.
+10. ~~**Ratchet large-Eden probe arm** (#7481's lesson), plus the pending
+   quiet-host re-pins (`wt-scavtenure` baseline)~~ — **both done.**
+
+    `13_large_eden_survivors` pins the cadence the matrix had no coverage of,
+    via a per-probe `// gc-ratchet-env:` declaration that `check` compares like
+    a metric (delete the directive and every band is still satisfied, which is
+    exactly why the arm itself has to be gated). Full rationale and the
+    perturbations that turn it red: `benchmarks/gc_ratchet/README.md`.
+
+    **The finding that shaped it is worth carrying forward.** A large Eden on a
+    small retained set runs **zero copying minors** —
+    `arena_growth_full_escalation_due` escalates every minor to a full
+    mark-sweep once arena in-use clears its 32 MB floor and exceeds twice the
+    post-full baseline, which a 64 MB Eden over a ~1 MB live set does every
+    time. The first draft of the probe did precisely that and would have been
+    pinned on a collector it never reached. So `PERRY_GC_SCAVENGE_NURSERY_MB`
+    is not, on its own, a "larger Eden" knob: above ~32 MB it is a "no
+    copying minor" knob unless the workload also holds a live set. Sizing the
+    retained set to 262,144 objects buys 4 copying minors freeing 37/36/68/68 MB
+    (the first copies 532,482 objects in one cycle) against ~16 MB per minor
+    for every default-cap probe.
+
+    **`wt-scavtenure` is subsumed, measured rather than assumed.** #7432 is
+    merged, its worktree exists on neither host, and the baseline has been
+    re-pinned five times since — most recently in full by #7657 at `59d522052`
+    on the pinned host, which also closed #7652's mixed provenance. Running
+    `check` at `7bde3de24` against that artifact on the pinned host: **`OK`**,
+    12/12 probes, `pinned_host` profile. The only cell outside its band is
+    `09_try_catch_roots.heap_used_bytes` at **−17.98%**, which is an
+    *improvement* (one 1 MiB block of #7559-shaped residue) and is folded into
+    this re-pin.
 
 ---
 
