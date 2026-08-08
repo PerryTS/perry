@@ -344,7 +344,7 @@ fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
 /// covers the CONSUMER of that entry, but plants the entry by hand — it was
 /// green the entire time no producer wrote one. This drives the real producer.
 #[test]
-fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
+fn test_json_tape_lazy_get_cached_elements_are_born_old_and_survive_minors() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
@@ -390,9 +390,18 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
         element_addr, 0,
         "the probed element should materialize to a heap object"
     );
+    // #7598: lazy_get materialises inside the parse-cohort birth window, so
+    // the element is born OLD — the old→young edge this test used to pin no
+    // longer exists on this path, and no external dirty entry is needed: the
+    // element's own generation is its protection. The external-edge recording
+    // machinery keeps its coverage in the barrier tests and the #6010 Map/Set
+    // side-buffer paths; what THIS test now pins is the end-to-end property
+    // the edge existed to protect — the cached element survives a copying
+    // minor, identity-stable, readable.
     assert!(
-        crate::arena::pointer_in_nursery(element_addr as usize),
-        "the materialized element must be young, or no old→young edge exists"
+        crate::arena::pointer_in_old_gen(element_addr as usize),
+        "the materialized element must be born old (#7598), or this test's \
+         premise no longer matches the runtime"
     );
 
     let (cache_slot, header_addr) = unsafe {
@@ -426,18 +435,18 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
          would have covered the slot by accident"
     );
 
-    let snapshot = crate::gc::barrier::remembered_dirty_snapshot();
-    let slot_page = crate::arena::generation_page_for_addr(cache_slot);
-    assert!(
-        snapshot
-            .external_dirty_entries
-            .iter()
-            .any(|&(page, header)| page == slot_page && header == header_addr),
-        "lazy_get must record its sparse-cache store as an EXTERNAL dirty slot naming the \
-         owning LazyArrayHeader. Recording only the slot's page (the in-object barrier) is \
-         inert: the dirty scan walks the objects on that page and finds the cache's own \
-         GC_TYPE_STRING header, a leaf with no child slots, so nothing is marked or rewritten."
+    let _ = header_addr;
+    // The end-to-end survival check: run a copying minor and read the cached
+    // element back through the header. Born old, it must be identity-stable
+    // and intact with NO remembered-set help.
+    let _ = crate::gc::gc_collect_minor();
+    let again = unsafe { crate::json_tape::lazy_get(hdr, PROBE) };
+    assert_eq!(
+        again.bits() & POINTER_MASK,
+        element_addr,
+        "a born-old cached element must be identity-stable across the minor"
     );
+    let _ = cache_slot;
 }
 
 #[test]
