@@ -116,6 +116,16 @@ pub(crate) fn arena_alloc_old_excluding_pages(
 /// GcHeader-prefixed counterpart of `arena_alloc_old`. See
 /// `arena_alloc_gc_longlived` for the same shape on the longlived
 /// arena — only the backing region differs.
+///
+/// #7625: page registration is DEFERRED here (`defer_old_object_page_registration`
+/// rather than `register_old_object_pages`). This is the per-object old-gen
+/// birth path — since #7613's promote-on-first-copy it carries every promotion
+/// a copying minor makes, ~113 MB per json_pipeline run — and eager
+/// registration costs two `RefCell` borrows, two `Vec` allocations, and a
+/// linear dedup scan that grows as the page fills. Allocation policy is
+/// deliberately UNCHANGED: the `old_free_take_exact` hole probe below stays,
+/// so this is a bookkeeping change only. See the flush discipline in
+/// `arena/page_meta.rs`.
 pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
@@ -136,7 +146,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
             (*header)._reserved = 0;
             (*header).size = total as u32;
         }
-        register_old_object_pages(raw as usize, total);
+        defer_old_object_page_registration(raw as usize, total);
         return user_ptr as *mut u8;
     }
     let raw = arena_alloc_old(total, align);
@@ -149,7 +159,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-    register_old_object_pages(raw as usize, total);
+    defer_old_object_page_registration(raw as usize, total);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
@@ -174,6 +184,16 @@ pub(crate) fn arena_alloc_gc_old_born_tenured(size: usize, align: usize, obj_typ
     user_ptr
 }
 
+/// #7625: registration stays EAGER here, unlike `arena_alloc_gc_old`. This is
+/// old-page defrag's relocation allocator (`gc/oldgen.rs`'s
+/// `evacuate_selected_old_pages_collecting`), which runs from INSIDE
+/// `old_arena_walk_objects_on_pages`' callback — i.e. downstream of that
+/// reader's own flush. Deferring would be sound (the walk snapshots its header
+/// list before invoking the callback, and the flush discipline covers the
+/// rest), but it buys nothing: defrag is a rare, per-cycle pass whose
+/// per-object cost is dominated by the `copy_nonoverlapping` beside it, and
+/// keeping it eager keeps the deferral's proof obligation to the one path that
+/// measurably needs it.
 pub(crate) fn arena_alloc_gc_old_excluding_pages(
     size: usize,
     align: usize,

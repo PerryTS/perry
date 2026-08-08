@@ -43,9 +43,9 @@ pub(crate) use block::{
     gc_trigger_arena_calls, reset_gc_trigger_arena_probe,
 };
 pub(crate) use page_meta::{
-    address_span_overlaps_pages, register_block_space, register_old_object_pages,
-    unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_RETURNED_BYTES,
-    OLD_GEN_RECLAIM_REUSABLE_BYTES,
+    address_span_overlaps_pages, defer_old_object_page_registration, register_block_space,
+    register_old_object_pages, unregister_block_generation, unregister_old_block_pages,
+    OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
 };
 pub(crate) use page_meta::{page_generation_cache_hot_addr, page_generations_hot_addr};
 
@@ -122,6 +122,7 @@ pub(crate) use page_meta::{
 
 #[cfg(test)]
 pub(crate) use page_meta::{
-    generation_page_base, old_arena_page_index_clear_for_tests, old_page_meta_for_tests,
-    GENERATION_CLASS_SHIFT, GENERATION_PAGE_SIZE,
+    deferred_old_page_registrations_len, generation_page_base,
+    old_arena_page_index_clear_for_tests, old_page_meta_for_tests,
+    DEFERRED_OLD_PAGE_REGISTRATION_CAP, GENERATION_CLASS_SHIFT, GENERATION_PAGE_SIZE,
 };

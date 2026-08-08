@@ -400,6 +400,10 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
     if pages.is_empty() {
         return;
     }
+    // #7625 REMOVER: a deferred entry for one of these pages must be folded in
+    // BEFORE the page is dropped, or the flush would re-add it afterwards and
+    // hand a later walk a header inside a recycled block.
+    flush_deferred_old_page_registrations();
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
         for &page in pages {
@@ -656,11 +660,142 @@ pub(crate) fn register_old_object_pages(header_addr: usize, total_size: usize) {
     update_old_page_meta_for_object(&added_pages, true);
 }
 
+// ---------------------------------------------------------------------------
+// #7625: deferred old-object page registration.
+//
+// `register_old_object_pages` above is written for the OCCASIONAL old-gen
+// birth it was introduced for. Per call it pays two `RefCell` borrows, two
+// `Vec` allocations, a hash lookup, and a **linear `contains` scan of the
+// page's object list** — and that scan grows as the page fills, so a burst of
+// births into one 4 KiB page is quadratic in the objects it lands there.
+//
+// #7613's promote-on-first-copy made that path hot on ordinary workloads: a
+// copying minor promotes straight into old-gen (`gc/copying.rs`'s `move_young`
+// → `arena_alloc_gc_old`), so json_pipeline pushes ~113 MB of promotions per
+// run through it. Deferring lets the whole burst be registered in ONE batch,
+// where the per-page list length is captured once and the dedup scan only has
+// to cover the entries that predate the batch — zero comparisons for the fresh
+// pages a bump-allocated promotion burst actually fills.
+//
+// SOUNDNESS. The deferral is invisible because **every reader and every
+// remover of `OLD_GEN_PAGE_OBJECTS`/`OLD_GEN_PAGE_META` flushes first**, so
+// the index is exactly what eager registration would have left at each
+// observation point. Ordering matters in both directions: a remover that ran
+// before the flush would be a no-op and the flush would then RESURRECT a dead
+// entry, which is why removers flush too and not only readers. The flush sites
+// are enumerated in `deferred_registration_flush_sites` in `arena/tests.rs`,
+// which fails if a new toucher of either table appears without one.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Old-object page registrations not yet folded into `OLD_GEN_PAGE_OBJECTS`.
+    /// Entries are `(header_addr, total_size)`; nothing here is dereferenced, so
+    /// a deferred entry never keeps an object alive and is not a GC root — and
+    /// the flush discipline above means the buffer is provably EMPTY at every
+    /// point a collector could observe it (asserted by
+    /// `deferred_buffer_is_empty_after_every_cycle_constructor`).
+    static DEFERRED_OLD_PAGE_REGISTRATIONS: RefCell<Vec<(usize, usize)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Cap chosen so the buffer's worst-case footprint (16 B/entry × 64k = 1 MB)
+/// stays a rounding error while flushes stay rare on an allocation burst.
+pub(crate) const DEFERRED_OLD_PAGE_REGISTRATION_CAP: usize = 65_536;
+
+/// Record `header_addr`'s page registration for the next flush instead of
+/// performing it now. Callers must be old-gen births; see the module comment
+/// for why this is invisible to every consumer of the index.
+#[inline]
+pub(crate) fn defer_old_object_page_registration(header_addr: usize, total_size: usize) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    let full = DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        buf.push((header_addr, total_size));
+        buf.len() >= DEFERRED_OLD_PAGE_REGISTRATION_CAP
+    });
+    if full {
+        flush_deferred_old_page_registrations_batch();
+    }
+}
+
+/// Make the page-objects index complete. Cheap (one thread-local read) when
+/// nothing is pending, which is the case at all but a handful of GC-time calls.
+#[inline]
+pub(crate) fn flush_deferred_old_page_registrations() {
+    if DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| buf.borrow().is_empty()) {
+        return;
+    }
+    flush_deferred_old_page_registrations_batch();
+}
+
+/// The batched drain. Equivalent to `register_old_object_pages` per entry, but
+/// holding one borrow of each table for the whole batch and — the part that
+/// removes the quadratic term — scanning only the portion of a page's object
+/// list that PREDATES this batch.
+///
+/// Skipping the in-batch entries is sound because they are pairwise distinct:
+/// each comes from a live allocation, and an address cannot be handed out twice
+/// without an intervening free, which cannot happen without a flush (every
+/// remover flushes). Hole reuse — the reason the dedup exists at all — hands
+/// back an address registered BEFORE the batch, so it is still covered.
+#[cold]
+fn flush_deferred_old_page_registrations_batch() {
+    let pending =
+        DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
+    if pending.is_empty() {
+        return;
+    }
+    let mut meta_updates: Vec<(usize, usize)> = Vec::with_capacity(pending.len());
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        // Entries arrive in allocation order, so consecutive ones share a page;
+        // cache that page's pre-batch length across the run.
+        let mut run_page: Option<usize> = None;
+        let mut run_base_len: usize = 0;
+        for &(header_addr, total_size) in &pending {
+            let object_end = header_addr + total_size;
+            let first_page = generation_page_for_addr(header_addr);
+            let last_page = generation_page_for_addr(object_end - 1);
+            for page in first_page..=last_page {
+                let page_base = generation_page_base(page);
+                let page_end = page_base + GENERATION_PAGE_SIZE;
+                let overlap_start = header_addr.max(page_base);
+                let overlap_end = object_end.min(page_end);
+                if overlap_start >= overlap_end {
+                    continue;
+                }
+                let headers = index.entry(page).or_insert_with(Vec::new);
+                if run_page != Some(page) {
+                    run_page = Some(page);
+                    run_base_len = headers.len();
+                }
+                if !headers[..run_base_len.min(headers.len())].contains(&header_addr) {
+                    headers.push(header_addr);
+                    meta_updates.push((page, overlap_end - overlap_start));
+                }
+            }
+        }
+    });
+    update_old_page_meta_for_object(&meta_updates, true);
+}
+
+/// Entries awaiting a flush. Tests only — the buffer is an implementation
+/// detail everywhere else.
+#[cfg(test)]
+pub(crate) fn deferred_old_page_registrations_len() -> usize {
+    DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| buf.borrow().len())
+}
+
 #[allow(dead_code)]
 pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize) {
     if header_addr == 0 || total_size == 0 {
         return;
     }
+    // #7625 REMOVER: see `unregister_old_block_pages`. Removing before the
+    // flush would leave the flush to resurrect this object.
+    flush_deferred_old_page_registrations();
     let overlaps = old_object_page_overlaps(header_addr, total_size);
     let mut removed_pages = Vec::with_capacity(overlaps.len());
     OLD_GEN_PAGE_OBJECTS.with(|index| {
@@ -683,6 +818,11 @@ pub(crate) fn unregister_old_object_pages(header_addr: usize, total_size: usize)
 }
 
 pub(crate) fn old_pages_begin_gc_cycle() {
+    // #7625 CYCLE START: all three cycle constructors route through here
+    // (`gc/mod.rs`'s minor, `gc/cycle.rs`'s `new_full`, `gc/policy.rs`'s
+    // budgeted), so every collection begins with a complete page-objects index
+    // and an EMPTY deferral buffer.
+    flush_deferred_old_page_registrations();
     // #6181: the per-page `dirty_slots` reset used to iterate every old page
     // here (O(old pages) on every minor, growing with old-gen size). It is now
     // a single epoch bump — a page whose `dirty_slots_epoch` predates the new
@@ -787,6 +927,10 @@ pub(crate) fn old_page_account_dirty_slot(slot_addr: usize) {
 }
 
 pub(crate) fn old_page_summary() -> OldPageSummary {
+    // #7625 READER (`OLD_GEN_PAGE_META`): a deferred registration also owes
+    // this table an `allocated_bytes`/`object_count` update, so the summary
+    // would under-report a mid-cycle promotion burst without the flush.
+    flush_deferred_old_page_registrations();
     let current_epoch = old_gen_page_dirty_epoch();
     OLD_GEN_PAGE_META.with(|meta| {
         let meta = meta.borrow();
@@ -831,6 +975,9 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
 }
 
 pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
+    // #7625 READER (`OLD_GEN_PAGE_META`): this one drives real policy —
+    // `gc/oldgen_defrag.rs` selects evacuation pages from it.
+    flush_deferred_old_page_registrations();
     let current_epoch = old_gen_page_dirty_epoch();
     OLD_GEN_PAGE_META.with(|meta| {
         let mut snapshot = meta
@@ -893,6 +1040,11 @@ pub(crate) fn old_arena_walk_objects_on_pages(
         return 0;
     }
 
+    // #7625 READER: promotions land in old-gen mid-cycle (a copying minor's
+    // root scan runs before the remembered-set walk), so this cannot rely on
+    // the cycle-start flush alone.
+    flush_deferred_old_page_registrations();
+
     let mut headers = Vec::new();
     let mut seen = crate::fast_hash::new_ptr_hash_set();
     OLD_GEN_PAGE_OBJECTS.with(|index| {
@@ -923,6 +1075,12 @@ pub(crate) struct OldArenaPageObjectCursor {
 
 impl OldArenaPageObjectCursor {
     pub(crate) fn new(pages: &crate::fast_hash::PtrHashSet<usize>) -> Self {
+        // #7625 READER: same obligation as `old_arena_walk_objects_on_pages`.
+        // The cursor is stepped incrementally by the budgeted cycle, which
+        // marks but never allocates into old-gen, so no entry can accumulate
+        // between `new` and the last `next` — `cursor_window_defers_nothing`
+        // pins that.
+        flush_deferred_old_page_registrations();
         Self {
             pages: pages.iter().copied().collect(),
             page_cursor: 0,
@@ -957,6 +1115,8 @@ pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size:
     if header_addr == 0 || total_size == 0 {
         return;
     }
+    // #7625 REMOVER: see `unregister_old_block_pages`.
+    flush_deferred_old_page_registrations();
     let overlaps = old_object_page_overlaps(header_addr, total_size);
     if overlaps.is_empty() {
         return;
@@ -1008,11 +1168,18 @@ pub(crate) fn old_arena_page_index_clear_for_tests() {
     // Wiping page metadata makes real old-arena objects unclassifiable —
     // stand the #6179 differential verifier down for this thread's test.
     crate::gc::CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.set(true));
+    // #7625: DISCARD rather than flush — a caller asking for an empty index
+    // would get a repopulated one if the pending burst were folded in first.
+    DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| buf.borrow_mut().clear());
     OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().clear());
 }
 
 #[cfg(test)]
 pub(crate) fn old_page_meta_for_tests(page: usize) -> Option<OldPageMeta> {
+    // #7625 READER: same rule as `old_page_summary`/`old_page_meta_snapshot`,
+    // so a test that allocates and then inspects a page sees what eager
+    // registration would have left.
+    flush_deferred_old_page_registrations();
     let current_epoch = old_gen_page_dirty_epoch();
     OLD_GEN_PAGE_META.with(|meta| {
         meta.borrow()

@@ -1168,3 +1168,251 @@ fn block_pool_is_per_thread_and_drops_with_its_thread() {
     // The other thread's pool never touched ours.
     assert_eq!(block_pool_bytes_for_test(), before);
 }
+
+// ---------------------------------------------------------------------------
+// #7625: deferred old-object page registration.
+//
+// `arena_alloc_gc_old` records its page registration in a thread-local buffer
+// instead of folding it into `OLD_GEN_PAGE_OBJECTS`/`OLD_GEN_PAGE_META` on the
+// spot. The deferral is only invisible if EVERY reader and EVERY remover of
+// those two tables flushes first, so that is what these pin — one test per
+// obligation, each written so that deleting the corresponding
+// `flush_deferred_old_page_registrations()` call turns it red.
+// ---------------------------------------------------------------------------
+
+/// A synthetic old-gen block plus `count` distinct in-range header addresses.
+/// Registration never dereferences a header, so fabricated addresses exercise
+/// the bookkeeping exactly as real ones do — and keep the test independent of
+/// how many objects an allocator happens to fit in a page.
+fn synthetic_old_headers(count: usize) -> Vec<usize> {
+    let (base, min_size) = synthetic_old_block_range();
+    let size = (count * 64)
+        .next_multiple_of(GENERATION_PAGE_SIZE)
+        .max(min_size);
+    register_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
+    (0..count).map(|i| base + i * 64).collect()
+}
+
+fn page_object_count(page: usize) -> usize {
+    old_page_meta_for_tests(page)
+        .map(|meta| meta.object_count)
+        .unwrap_or(0)
+}
+
+#[test]
+fn old_gen_birth_defers_its_page_registration() {
+    run_with_fresh_arenas(|| {
+        assert_eq!(deferred_old_page_registrations_len(), 0);
+        let _old_ptr = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        assert!(
+            deferred_old_page_registrations_len() > 0,
+            "arena_alloc_gc_old must defer, not register eagerly — otherwise \
+             the change is inert and every measurement of it is vacuous"
+        );
+    });
+}
+
+#[test]
+fn cycle_start_flushes_deferred_registrations() {
+    run_with_fresh_arenas(|| {
+        let old_ptr = arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        let (header_addr, total_size) = old_header_and_size(old_ptr);
+        assert!(deferred_old_page_registrations_len() > 0);
+
+        // The single flush point all three cycle constructors route through.
+        old_pages_begin_gc_cycle();
+
+        assert_eq!(
+            deferred_old_page_registrations_len(),
+            0,
+            "old_pages_begin_gc_cycle must leave the deferral buffer empty"
+        );
+        let mut pages = crate::fast_hash::new_ptr_hash_set();
+        for (page, _) in old_object_page_overlaps(header_addr, total_size) {
+            pages.insert(page);
+        }
+        let mut visited = Vec::new();
+        old_arena_walk_objects_on_pages(&pages, |header| visited.push(header as usize));
+        assert_seen_headers("post-cycle-start walk", &visited, &[header_addr]);
+    });
+}
+
+/// The other half of the cycle-constructor claim. `cycle_start_flushes_...`
+/// proves `old_pages_begin_gc_cycle` flushes; this proves each of the three
+/// constructors actually calls it, which is what makes "every collection begins
+/// with a complete index" true rather than merely asserted in a comment.
+#[test]
+fn every_cycle_constructor_routes_through_the_flush_point() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gc");
+    for (file, what) in [
+        ("mod.rs", "non-moving / copying minor"),
+        ("cycle.rs", "full mark-sweep (GcCycleState::new_full)"),
+        ("policy.rs", "budgeted minor"),
+    ] {
+        let src = std::fs::read_to_string(root.join(file))
+            .unwrap_or_else(|e| panic!("cannot read gc/{file}: {e}"));
+        assert!(
+            src.contains("old_pages_begin_gc_cycle()"),
+            "the {what} constructor in gc/{file} no longer calls \
+             old_pages_begin_gc_cycle(); deferred old-page registrations would \
+             survive into the cycle unflushed (#7625)"
+        );
+    }
+}
+
+#[test]
+fn deferral_buffer_flushes_at_its_size_cap() {
+    run_with_fresh_arenas(|| {
+        let headers = synthetic_old_headers(DEFERRED_OLD_PAGE_REGISTRATION_CAP);
+        for &header in &headers {
+            defer_old_object_page_registration(header, 64);
+        }
+        assert_eq!(
+            deferred_old_page_registrations_len(),
+            0,
+            "the buffer must self-flush at DEFERRED_OLD_PAGE_REGISTRATION_CAP \
+             so it cannot grow without bound between collections"
+        );
+        // And the cap flush is a real registration, not a discard.
+        assert!(page_object_count(generation_page_for_addr(headers[0])) > 0);
+    });
+}
+
+/// Each reader of the two tables, one obligation per assertion. Delete any one
+/// `flush_deferred_old_page_registrations()` in `page_meta.rs` and exactly one
+/// of these goes red.
+#[test]
+fn every_index_reader_flushes_before_reading() {
+    run_with_fresh_arenas(|| {
+        let headers = synthetic_old_headers(4);
+        let page = generation_page_for_addr(headers[0]);
+        let mut pages = crate::fast_hash::new_ptr_hash_set();
+        pages.insert(page);
+
+        // 1. old_arena_walk_objects_on_pages
+        defer_old_object_page_registration(headers[0], 64);
+        let mut visited = Vec::new();
+        old_arena_walk_objects_on_pages(&pages, |h| visited.push(h as usize));
+        assert_seen_headers("old_arena_walk_objects_on_pages", &visited, &[headers[0]]);
+        assert_eq!(deferred_old_page_registrations_len(), 0);
+
+        // 2. OldArenaPageObjectCursor — same index, incremental reader.
+        defer_old_object_page_registration(headers[1], 64);
+        let mut cursor = OldArenaPageObjectCursor::new(&pages);
+        assert_eq!(
+            deferred_old_page_registrations_len(),
+            0,
+            "OldArenaPageObjectCursor::new must flush before it starts stepping"
+        );
+        let mut seen = Vec::new();
+        while let Some(h) = cursor.next() {
+            seen.push(h);
+        }
+        assert_seen_headers("OldArenaPageObjectCursor", &seen, &headers[..2]);
+
+        // 3. old_page_summary (OLD_GEN_PAGE_META)
+        let before = old_page_summary().object_count;
+        defer_old_object_page_registration(headers[2], 64);
+        assert_eq!(
+            old_page_summary().object_count,
+            before + 1,
+            "old_page_summary must flush; a mid-cycle promotion burst would \
+             otherwise be missing from allocated_bytes/object_count"
+        );
+
+        // 4. old_page_meta_snapshot — drives defrag page selection.
+        defer_old_object_page_registration(headers[3], 64);
+        let snapshot = old_page_meta_snapshot();
+        assert_eq!(deferred_old_page_registrations_len(), 0);
+        let page_base = generation_page_base(page);
+        let meta = snapshot
+            .iter()
+            .find(|m| m.page_base == page_base)
+            .expect("snapshot should carry the page");
+        assert_eq!(meta.object_count, 4);
+    });
+}
+
+/// The remover obligation, and the one that is easiest to get wrong: a removal
+/// that runs while the object is still only DEFERRED is a no-op, and the later
+/// flush then puts the dead object back. Registration ORDER, not just eventual
+/// visibility, is what the flush-before-remove rule buys.
+#[test]
+fn removing_a_deferred_object_does_not_resurrect_it() {
+    run_with_fresh_arenas(|| {
+        let headers = synthetic_old_headers(3);
+        let mut pages = crate::fast_hash::new_ptr_hash_set();
+        pages.insert(generation_page_for_addr(headers[0]));
+
+        let visited_now = |pages: &crate::fast_hash::PtrHashSet<usize>| {
+            let mut visited = Vec::new();
+            old_arena_walk_objects_on_pages(pages, |h| visited.push(h as usize));
+            visited
+        };
+
+        // 1. unregister_old_object_pages
+        defer_old_object_page_registration(headers[0], 64);
+        unregister_old_object_pages(headers[0], 64);
+        assert!(
+            !visited_now(&pages).contains(&headers[0]),
+            "a deferred entry removed before its flush was resurrected by the \
+             flush — unregister_old_object_pages must flush first (#7625)"
+        );
+
+        // 2. old_arena_page_index_remove_object
+        defer_old_object_page_registration(headers[1], 64);
+        old_arena_page_index_remove_object(headers[1], 64);
+        assert!(
+            !visited_now(&pages).contains(&headers[1]),
+            "old_arena_page_index_remove_object must flush first (#7625)"
+        );
+
+        // 3. unregister_old_block_pages — the whole page goes away, and a
+        //    later flush must not recreate it pointing into a recycled block.
+        defer_old_object_page_registration(headers[2], 64);
+        unregister_old_block_pages(&[generation_page_for_addr(headers[2])]);
+        assert!(
+            !visited_now(&pages).contains(&headers[2]),
+            "unregister_old_block_pages must flush first (#7625)"
+        );
+    });
+}
+
+/// The batched flush skips the dedup scan over entries added within the same
+/// batch. That is only sound if it still catches the case the dedup exists for:
+/// hole reuse handing back an address registered BEFORE the batch.
+#[test]
+fn batched_flush_matches_eager_registration() {
+    run_with_fresh_arenas(|| {
+        let headers = synthetic_old_headers(64);
+        let page = generation_page_for_addr(headers[0]);
+
+        // A pre-existing (pre-batch) registration, as hole reuse would leave.
+        register_old_object_pages(headers[0], 64);
+        assert_eq!(page_object_count(page), 1);
+
+        // Now defer the whole set INCLUDING the already-registered address.
+        for &header in &headers {
+            defer_old_object_page_registration(header, 64);
+        }
+        let mut pages = crate::fast_hash::new_ptr_hash_set();
+        pages.insert(page);
+        let mut visited = Vec::new();
+        old_arena_walk_objects_on_pages(&pages, |h| visited.push(h as usize));
+
+        visited.sort_unstable();
+        let mut expected = headers.clone();
+        expected.sort_unstable();
+        assert_eq!(
+            visited, expected,
+            "batched flush must produce exactly the eager index — no duplicate \
+             for the re-registered address, no dropped entry"
+        );
+        assert_eq!(
+            page_object_count(page),
+            headers.len(),
+            "page object_count must match the eager path's, counting the \
+             re-registered address exactly once"
+        );
+    });
+}
