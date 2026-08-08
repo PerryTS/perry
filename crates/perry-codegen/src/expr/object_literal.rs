@@ -1,16 +1,53 @@
 //! Object-literal lowering (extracted from `expr.rs`, issue #1098).
 //! Pure move — no logic changes.
+//!
+//! # Layer 1 migrated module (#7615, slice 3)
+//!
+//! Nothing here names `expr::temp_root`. Both build paths root the half-built
+//! object through [`crate::rooting::with_rooted_accumulator`], and so does the
+//! *other* GC value this lowering holds across user code — a `this`-capturing
+//! method closure's value, which the patch loop consumes below every remaining
+//! initializer. `crate::rooting::migration_ledger` fails the build if this
+//! module reaches back into the raw API.
+//!
+//! ## Why the closure values nest rather than sitting in a list
+//!
+//! #6951 rooted them as a flat `Vec` of raw slots and released none of them:
+//! the object handle's own `temp_root_truncate` is a stack **cut**, so cutting
+//! at the handle dropped every closure slot above it. That is correct, and it
+//! is correct only because of an invariant stated in a comment — "keep
+//! `rooted_handle_begin` ahead of this loop and the release after the patch
+//! loop". Reorder those two statements and the leak is silent.
+//!
+//! Nesting one `with_rooted_accumulator` per such property expresses the same
+//! lifetime as a scope: each value's root spans exactly the suffix of the
+//! literal that follows it, the release is owned on every path out (including a
+//! `?` from a later initializer, which the flat form leaked), and the value can
+//! only be read in `finish` — below the last initializer, above the release.
+//! No fourth combinator: the three existing `with_operands_rooted*` forms all
+//! lower their own operand list up front, which would evaluate every property
+//! before storing any of them and reorder observable side effects, and
+//! `with_rooted_accumulator` is exactly "a GC value held while more user code
+//! is lowered".
+//!
+//! ## What the migration found here
+//!
+//! Nothing new. #6951's rooting was already complete and correctly ordered —
+//! the handle is rooted immediately after its allocation, every field store
+//! re-reads it, the interned key is loaded *below* the value's lowering (the
+//! #7627 finding, already right in this arm), and the deferred closure values
+//! are re-read before the patch loop. This is a translation, and the IR differs
+//! only by instruction-order permutations with the identical opcode multiset:
+//! the re-read is now fused to the emission that consumes it, so it lands after
+//! the value's `bitcast` / the key's `and` instead of before.
 
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
-use super::temp_root::{
-    any_may_trigger_gc, rooted_handle_begin, rooted_handle_get, rooted_handle_release,
-    temp_root_get_double, temp_root_push_double,
-};
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::POINTER_MASK_I64;
+use crate::rooting::{self, Arg, Repr, RootedAcc};
 use crate::type_analysis::compute_auto_captures;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
@@ -172,6 +209,92 @@ fn emit_object_typed_shape_init(
     );
 }
 
+/// Materialize an interned key's raw `StringHeader` pointer.
+///
+/// Emitted **below** the property value's lowering, deliberately: the handle
+/// global is a registered root that an evacuating cycle *rewrites*, so a load
+/// taken above the value would name the pre-move address while the global did
+/// not — the shape #7627 found in `with (o) { x = f() }`. Interning is
+/// compile-time and stays where it was, so the string pool's numbering is
+/// untouched.
+fn emit_interned_key_raw(ctx: &mut FnCtx<'_>, key_handle_global: &str) -> String {
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    blk.and(I64, &key_bits, POINTER_MASK_I64)
+}
+
+/// Lower the by-name path's properties from index `from` onward into the rooted
+/// object accumulator, returning the `(closure value, reserved `this` slot)`
+/// pairs the patch loop needs — innermost first, i.e. reverse source order.
+///
+/// Recursive because a `this`-capturing method closure's value has to stay
+/// rooted for the whole *suffix* of the literal that follows it, which is one
+/// `with_rooted_accumulator` scope per such property. See the module header for
+/// why that is the shape rather than a list of slots.
+fn lower_by_name_props<'f>(
+    ctx: &mut FnCtx<'f>,
+    obj: &mut RootedAcc,
+    props: &[(String, Expr)],
+    from: usize,
+    protect: bool,
+) -> Result<Vec<(String, u32)>> {
+    for (i, (key, value_expr)) in props.iter().enumerate().skip(from) {
+        let key_idx = ctx.strings.intern(key);
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+
+        if let Expr::Closure {
+            params: cparams,
+            body: cbody,
+            captures: ccaps,
+            captures_this: true,
+            ..
+        } = value_expr
+        {
+            let auto_caps = compute_auto_captures(ctx, cparams, cbody, ccaps);
+            let this_idx = auto_caps.len() as u32;
+
+            let v = lower_expr(ctx, value_expr)?;
+            let key_raw = emit_interned_key_raw(ctx, &key_handle_global);
+            obj.call_void(
+                ctx,
+                "js_object_set_field_by_name",
+                &[Arg::Plain(I64, &key_raw), Arg::Plain(DOUBLE, &v)],
+            );
+
+            // The closure value is deferred: the patch loop reads it after every
+            // remaining property has been lowered, so it must survive their
+            // allocations AND be re-read afterwards (an evacuating cycle rewrote
+            // the slot; the register queued above is stale). `build` owns the
+            // rest of the literal, `finish` is the one place the value escapes,
+            // and the release happens on both paths out.
+            let mut rest: Vec<(String, u32)> = Vec::new();
+            let closure_value = rooting::with_rooted_accumulator(
+                ctx,
+                Repr::Boxed,
+                &v,
+                protect,
+                |ctx, _| {
+                    rest = lower_by_name_props(ctx, obj, props, i + 1, protect)?;
+                    Ok(())
+                },
+                |_ctx, closure_value| Ok(closure_value.to_string()),
+            )?;
+            rest.push((closure_value, this_idx));
+            return Ok(rest);
+        }
+
+        let v = lower_expr(ctx, value_expr)?;
+        let key_raw = emit_interned_key_raw(ctx, &key_handle_global);
+        obj.call_void(
+            ctx,
+            "js_object_set_field_by_name",
+            &[Arg::Plain(I64, &key_raw), Arg::Plain(DOUBLE, &v)],
+        );
+    }
+    Ok(Vec::new())
+}
+
 fn is_generator_iterator_object_literal(props: &[(String, Expr)]) -> bool {
     if props.len() != 3 {
         return false;
@@ -229,7 +352,7 @@ pub(crate) fn lower_object_literal(
     // therefore had its half-built object swept by `f`'s collection, and the
     // remaining field stores landed in recycled memory. Root the handle when any
     // initializer can collect; literals of plain locals emit no extra IR.
-    let protect_handle = any_may_trigger_gc(ctx, props.iter().map(|(_, v)| v));
+    let protect_handle = rooting::any_operand_may_collect(ctx, props.iter().map(|(_, v)| v));
     let field_count = props.len() as u32;
     let zero_str = "0".to_string();
     let n_str = field_count.to_string();
@@ -294,143 +417,104 @@ pub(crate) fn lower_object_literal(
             ],
         );
 
-        let rooted = rooted_handle_begin(ctx, &obj_handle, protect_handle);
-        for (i, (_, value_expr)) in props.iter().enumerate() {
-            let v = lower_expr(ctx, value_expr)?;
-            let idx_str = i.to_string();
-            let obj_handle = rooted_handle_get(ctx, &rooted);
-            // Issue #448: the runtime `js_object_set_field` takes its
-            // value as `JSValue` (`#[repr(transparent)] u64`), which the
-            // System V / AArch64 / Win64 ABIs all pass in a *general*-
-            // purpose register. The lowered NaN-box `v` is a `double`,
-            // which the same ABIs pass in a *floating-point* register.
-            // Without the bitcast the call sent the value in xmm0 / d0
-            // while Rust read garbage from rdx / x2, so generator iter
-            // objects (`{next, return, throw}` literals built via the
-            // shape-cache fast path) read back closure-typed fields as
-            // `0` — and the resulting `__iter.next()` dispatch never
-            // returned a real iter-result, so `for…of` over a class
-            // implementing `*[Symbol.iterator]()` hung forever
-            // allocating empty results.
-            let blk = ctx.block();
-            let v_bits = blk.bitcast_double_to_i64(&v);
-            blk.call_void(
-                "js_object_set_field",
-                &[(I64, &obj_handle), (I32, &idx_str), (I64, &v_bits)],
-            );
-        }
-        let obj_handle = rooted_handle_get(ctx, &rooted);
-        if let Some(layout) = typed_layout.as_ref() {
-            emit_object_typed_shape_init(ctx, &obj_handle, layout);
-        }
-        let boxed = nanbox_pointer_inline(ctx.block(), &obj_handle);
-        rooted_handle_release(ctx, rooted);
-        return Ok(boxed);
+        return rooting::with_rooted_accumulator(
+            ctx,
+            Repr::Ptr,
+            &obj_handle,
+            protect_handle,
+            |ctx, obj| {
+                for (i, (_, value_expr)) in props.iter().enumerate() {
+                    let v = lower_expr(ctx, value_expr)?;
+                    let idx_str = i.to_string();
+                    // Issue #448: the runtime `js_object_set_field` takes its
+                    // value as `JSValue` (`#[repr(transparent)] u64`), which the
+                    // System V / AArch64 / Win64 ABIs all pass in a *general*-
+                    // purpose register. The lowered NaN-box `v` is a `double`,
+                    // which the same ABIs pass in a *floating-point* register.
+                    // Without the bitcast the call sent the value in xmm0 / d0
+                    // while Rust read garbage from rdx / x2, so generator iter
+                    // objects (`{next, return, throw}` literals built via the
+                    // shape-cache fast path) read back closure-typed fields as
+                    // `0` — and the resulting `__iter.next()` dispatch never
+                    // returned a real iter-result, so `for…of` over a class
+                    // implementing `*[Symbol.iterator]()` hung forever
+                    // allocating empty results.
+                    let v_bits = ctx.block().bitcast_double_to_i64(&v);
+                    obj.call_void(
+                        ctx,
+                        "js_object_set_field",
+                        &[Arg::Plain(I32, &idx_str), Arg::Plain(I64, &v_bits)],
+                    );
+                }
+                Ok(())
+            },
+            |ctx, obj_handle| {
+                if let Some(layout) = typed_layout.as_ref() {
+                    emit_object_typed_shape_init(ctx, obj_handle, layout);
+                }
+                Ok(nanbox_pointer_inline(ctx.block(), obj_handle))
+            },
+        );
     }
 
     let obj_handle = ctx
         .block()
         .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
-    let rooted = rooted_handle_begin(ctx, &obj_handle, protect_handle);
 
-    // Track `(temp_root_slot, closure_value_double, reserved_this_slot_idx)`
-    // for each method closure that needs `this` patched after the object is
-    // fully built. Enables `calc.add(n) { this.value = ... }`.
+    // `(closure_value_double, reserved_this_slot_idx)` for each method closure
+    // that needs `this` patched after the object is fully built. Enables
+    // `calc.add(n) { this.value = ... }`.
     //
-    // #6951: the closure value is *deferred* — it is reused after every
-    // remaining property has been lowered, so it sits in an SSA register
-    // across all of their allocations. Root it whenever any initializer can
-    // collect, and re-read it before the patch loop.
-    let mut this_patches: Vec<(Option<String>, String, u32)> = Vec::new();
+    // A `RefCell` rather than a plain `&mut`: `build` fills it and `finish`
+    // reads it, and the two closures are handed to `with_rooted_accumulator`
+    // together — a `&mut` in one and a `&` in the other is `E0499`. Nothing
+    // here is re-entrant, so the borrow discipline is trivially satisfied.
+    let this_patches: std::cell::RefCell<Vec<(String, u32)>> = std::cell::RefCell::new(Vec::new());
 
-    for (key, value_expr) in props {
-        let key_idx = ctx.strings.intern(key);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    rooting::with_rooted_accumulator(
+        ctx,
+        Repr::Ptr,
+        &obj_handle,
+        protect_handle,
+        |ctx, obj| {
+            let mut patches = lower_by_name_props(ctx, obj, props, 0, protect_handle)?;
+            // `lower_by_name_props` returns innermost-first, i.e. the LAST
+            // method closure in source order first, because each nesting
+            // appends its own value after the suffix it wrapped.
+            patches.reverse();
+            *this_patches.borrow_mut() = patches;
+            Ok(())
+        },
+        |ctx, obj_handle| {
+            // Patch each method closure's reserved `this` slot with the object
+            // pointer (NaN-boxed). Done AFTER all fields are set so every
+            // method sees the fully-initialized object. Every closure value
+            // reaching here was read in its own `finish`, i.e. below the last
+            // initializer that could have relocated it.
+            let this_patches = this_patches.borrow();
+            if !this_patches.is_empty() {
+                let blk = ctx.block();
+                let obj_tagged = {
+                    let tagged = blk.or(I64, obj_handle, crate::nanbox::POINTER_TAG_I64);
+                    blk.bitcast_i64_to_double(&tagged)
+                };
+                for (closure_val, this_idx) in this_patches.iter() {
+                    let bits = blk.bitcast_double_to_i64(closure_val);
+                    let closure_handle = blk.and(I64, &bits, POINTER_MASK_I64);
+                    let idx_str = this_idx.to_string();
+                    let obj_bits = blk.bitcast_double_to_i64(&obj_tagged);
+                    blk.call_void(
+                        "js_closure_set_capture_bits",
+                        &[(I64, &closure_handle), (I32, &idx_str), (I64, &obj_bits)],
+                    );
+                }
+            }
 
-        if let Expr::Closure {
-            params: cparams,
-            body: cbody,
-            captures: ccaps,
-            captures_this: true,
-            ..
-        } = value_expr
-        {
-            let auto_caps = compute_auto_captures(ctx, cparams, cbody, ccaps);
-            let this_idx = auto_caps.len() as u32;
+            if let Some(layout) = typed_layout.as_ref() {
+                emit_object_typed_shape_init(ctx, obj_handle, layout);
+            }
 
-            let v = lower_expr(ctx, value_expr)?;
-            // No explicit release for these: `js_gc_temp_root_truncate` is a
-            // stack CUT, not a pop, and `rooted` was pushed before the loop —
-            // so the single `rooted_handle_release` at the end of this function
-            // drops the object handle AND every closure root above it. That
-            // depends on the push order, so keep `rooted_handle_begin` ahead of
-            // this loop and the release after the patch loop.
-            // (`gc::tests::temp_roots::truncate_drops_every_slot_above_the_base`
-            // pins the cut semantics.)
-            let closure_root = protect_handle.then(|| temp_root_push_double(ctx, &v));
-            this_patches.push((closure_root, v.clone(), this_idx));
-
-            let obj_handle = rooted_handle_get(ctx, &rooted);
-            let blk = ctx.block();
-            let key_box = blk.load(DOUBLE, &key_handle_global);
-            let key_bits = blk.bitcast_double_to_i64(&key_box);
-            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-            blk.call_void(
-                "js_object_set_field_by_name",
-                &[(I64, &obj_handle), (I64, &key_raw), (DOUBLE, &v)],
-            );
-            continue;
-        }
-
-        let v = lower_expr(ctx, value_expr)?;
-        let obj_handle = rooted_handle_get(ctx, &rooted);
-        let blk = ctx.block();
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        blk.call_void(
-            "js_object_set_field_by_name",
-            &[(I64, &obj_handle), (I64, &key_raw), (DOUBLE, &v)],
-        );
-    }
-
-    // Patch each method closure's reserved `this` slot with the object
-    // pointer (NaN-boxed). Done AFTER all fields are set so every
-    // method sees the fully-initialized object.
-    // Refresh every deferred closure value from its root BEFORE taking the
-    // block builder — an evacuating cycle during a later property's
-    // initializer rewrote the slot, and the register queued above is stale.
-    let this_patches: Vec<(String, u32)> = this_patches
-        .into_iter()
-        .map(|(root, value, this_idx)| match root {
-            Some(idx) => (temp_root_get_double(ctx, &idx), this_idx),
-            None => (value, this_idx),
-        })
-        .collect();
-    let obj_handle = rooted_handle_get(ctx, &rooted);
-    if !this_patches.is_empty() {
-        let blk = ctx.block();
-        let obj_tagged = {
-            let tagged = blk.or(I64, &obj_handle, crate::nanbox::POINTER_TAG_I64);
-            blk.bitcast_i64_to_double(&tagged)
-        };
-        for (closure_val, this_idx) in &this_patches {
-            let bits = blk.bitcast_double_to_i64(closure_val);
-            let closure_handle = blk.and(I64, &bits, POINTER_MASK_I64);
-            let idx_str = this_idx.to_string();
-            let obj_bits = blk.bitcast_double_to_i64(&obj_tagged);
-            blk.call_void(
-                "js_closure_set_capture_bits",
-                &[(I64, &closure_handle), (I32, &idx_str), (I64, &obj_bits)],
-            );
-        }
-    }
-
-    if let Some(layout) = typed_layout.as_ref() {
-        emit_object_typed_shape_init(ctx, &obj_handle, layout);
-    }
-
-    let boxed = nanbox_pointer_inline(ctx.block(), &obj_handle);
-    rooted_handle_release(ctx, rooted);
-    Ok(boxed)
+            Ok(nanbox_pointer_inline(ctx.block(), obj_handle))
+        },
+    )
 }

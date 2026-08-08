@@ -804,6 +804,15 @@ pub(crate) fn with_rooted_accumulator<'f, R>(
 /// committed source and not only under sabotage. The sabotage arm was still run
 /// per module — the assert stops at the first offender, so one run cannot speak
 /// for three.
+///
+/// Slice 3 is three of each. `objects_arrays_lit.rs`, `array_literal.rs` and
+/// `object_literal.rs` all named `expr::temp_root` before the migration
+/// (`temp_root_{push,get,set}_i64`, `lower_exprs_rooted`/`temp_root_release`,
+/// `rooted_handle_*`/`temp_root_{push,get}_double`), so their lines are
+/// load-bearing. `array_push.rs` named none and its line is vacuous on the
+/// committed source — the sabotage arm is the only thing that makes it an
+/// assertion, exactly as for both slice-1 modules, and the audit that earned
+/// the listing is written into that file's header rather than into this one.
 #[cfg(test)]
 const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
@@ -833,6 +842,22 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
         "crates/perry-codegen/src/lower_call/property_get/map_set.rs",
         include_str!("lower_call/property_get/map_set.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/objects_arrays_lit.rs",
+        include_str!("expr/objects_arrays_lit.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/array_literal.rs",
+        include_str!("expr/array_literal.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/object_literal.rs",
+        include_str!("expr/object_literal.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/array_push.rs",
+        include_str!("expr/array_push.rs"),
     ),
 ];
 

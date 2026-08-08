@@ -3,6 +3,38 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Layer 1 migrated module (#7615, slice 3)
+//!
+//! Nothing here names `expr::temp_root`, and nothing here did before the
+//! migration either — so the ledger line is **vacuous on the committed source**
+//! and only means something because the slice ran the sabotage arm (a real
+//! `temp_root_push_i64` / `temp_root_truncate` pair injected here turns
+//! `migrated_modules_do_not_reach_past_the_rooting_api` red). Slices 1a and 1b
+//! carried the same caveat. `ArrayPushSpread`'s operand pair goes through
+//! [`crate::rooting::with_operands_rooted`], which is a documentation change
+//! rather than a repair: the group's window is empty, so it emits nothing.
+//!
+//! ## Why `Expr::ArrayPush` has no window — and what that rests on
+//!
+//! Both arms lower the **pushed value first and the receiver second**, and the
+//! receiver is `Expr::LocalGet`, i.e. a load from the local's alloca / box /
+//! module global. A load taken *after* the value's arbitrary user code observes
+//! whatever an evacuating cycle wrote back into that storage, so there is no
+//! stale register to repair and `operand_protection` would answer `Reuse`.
+//! Everything the arms emit below that point — `js_array_push_f64`,
+//! `js_array_concat`, the header probes, `js_gc_note_slot_layout`,
+//! `js_write_barrier_slot`, `js_array_length` — either consumes the pointer it
+//! is handed or cannot re-enter user code, so no value crosses a moving window.
+//!
+//! That safety is a **consequence of an evaluation order the spec does not
+//! permit**, which is what this audit found: `a.push(f())` must push onto the
+//! array `a.push` resolved *before* `f` ran, and perry pushes onto whatever `a`
+//! names afterwards. Reported separately rather than fixed here — the fix is to
+//! lower the receiver first and carry it across the value with
+//! `with_operands_rooted_across`, which turns a today-free arm into one that
+//! roots on every pointer-valued push, and this slice is a behaviour-preserving
+//! refactor with no mandate to measure that.
 
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
@@ -12,6 +44,7 @@ use crate::native_value::{
     BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
     NativeRep, SemanticKind,
 };
+use crate::rooting;
 use crate::type_analysis::is_numeric_expr;
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
@@ -679,76 +712,86 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
         // return pointer, and write back to whichever storage backs
         // `array_id`. Issue #248.
         Expr::ArrayPushSpread { array_id, source } => {
-            let src_box = lower_expr(ctx, source)?;
-            let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
-            let blk = ctx.block();
-            let dst_handle = unbox_to_i64(blk, &arr_box);
-            let src_handle = unbox_to_i64(blk, &src_box);
-            let new_handle = blk.call(
-                I64,
-                "js_array_concat",
-                &[(I64, &dst_handle), (I64, &src_handle)],
-            );
-            let new_box = nanbox_pointer_inline(blk, &new_handle);
-            if ctx.boxed_vars.contains(array_id) {
+            let array_expr = Expr::LocalGet(*array_id);
+            // The operand pair, stated through the API instead of by statement
+            // order. The window is EMPTY and stays empty: the only thing lowered
+            // after `source` is the receiver, which is a slot read, so
+            // `operand_protection` answers `Reuse` for both and this emits no
+            // rooting IR at all. It is here so that a later edit which inserts a
+            // lowering between the two is a change to a rooted group rather than
+            // a silent reopening.
+            rooting::with_operands_rooted(ctx, &[source.as_ref(), &array_expr], |ctx, vals| {
+                let blk = ctx.block();
+                let dst_handle = unbox_to_i64(blk, &vals[1]);
+                let src_handle = unbox_to_i64(blk, &vals[0]);
+                let new_handle = blk.call(
+                    I64,
+                    "js_array_concat",
+                    &[(I64, &dst_handle), (I64, &src_handle)],
+                );
+                let new_box = nanbox_pointer_inline(blk, &new_handle);
+                if ctx.boxed_vars.contains(array_id) {
+                    if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
+                        let closure_ptr = super::current_closure_ptr_value(
+                            ctx,
+                            "ArrayPushSpread boxed captured",
+                        )?;
+                        let idx_str = capture_idx.to_string();
+                        let blk = ctx.block();
+                        let box_ptr = blk.call(
+                            I64,
+                            "js_closure_get_capture_bits",
+                            &[(I64, &closure_ptr), (I32, &idx_str)],
+                        );
+                        let new_bits = blk.bitcast_double_to_i64(&new_box);
+                        blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                        // Gen-GC Phase C2: the realloc'd array head is a (possibly
+                        // young) heap pointer stored into an existing box — barrier
+                        // the box parent so a minor GC can't miss it.
+                        emit_write_barrier(ctx, &box_ptr, &new_bits);
+                        // Box content is the shared storage; the capture slot must keep
+                        // pointing at the box. Return so we don't fall through to the
+                        // capture-slot store, which would clobber the box pointer (see
+                        // the matching note in `Expr::ArrayPush`).
+                        return Ok(emit_array_handle_length(ctx, &new_handle, value_discarded));
+                    } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
+                        let blk = ctx.block();
+                        let box_ptr = blk.load(I64, &slot);
+                        let new_bits = blk.bitcast_double_to_i64(&new_box);
+                        blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                        // Gen-GC Phase C2: barrier the box parent (see capture path).
+                        emit_write_barrier(ctx, &box_ptr, &new_bits);
+                        return Ok(emit_array_handle_length(ctx, &new_handle, value_discarded));
+                    }
+                    // #5459: in `boxed_vars` but no box location here — a module-level
+                    // global accessed directly from a nested function. Fall through to
+                    // the module-global store-back so the relocated head reaches the
+                    // GC-root slot (see the matching note in `Expr::ArrayPush`).
+                }
                 if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
                     let closure_ptr =
-                        super::current_closure_ptr_value(ctx, "ArrayPushSpread boxed captured")?;
+                        super::current_closure_ptr_value(ctx, "ArrayPushSpread captured")?;
                     let idx_str = capture_idx.to_string();
-                    let blk = ctx.block();
-                    let box_ptr = blk.call(
-                        I64,
-                        "js_closure_get_capture_bits",
-                        &[(I64, &closure_ptr), (I32, &idx_str)],
+                    let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
+                    ctx.block().call_void(
+                        "js_closure_set_capture_bits",
+                        &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                     );
-                    let new_bits = blk.bitcast_double_to_i64(&new_box);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-                    // Gen-GC Phase C2: the realloc'd array head is a (possibly
-                    // young) heap pointer stored into an existing box — barrier
-                    // the box parent so a minor GC can't miss it.
-                    emit_write_barrier(ctx, &box_ptr, &new_bits);
-                    // Box content is the shared storage; the capture slot must keep
-                    // pointing at the box. Return so we don't fall through to the
-                    // capture-slot store, which would clobber the box pointer (see
-                    // the matching note in `Expr::ArrayPush`).
-                    return Ok(emit_array_handle_length(ctx, &new_handle, value_discarded));
+                    // Gen-GC Phase C2: the realloc'd array head stored into the
+                    // closure capture is a (possibly young) heap pointer — barrier
+                    // the closure parent.
+                    emit_write_barrier(ctx, &closure_ptr, &new_bits);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                    let blk = ctx.block();
-                    let box_ptr = blk.load(I64, &slot);
-                    let new_bits = blk.bitcast_double_to_i64(&new_box);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-                    // Gen-GC Phase C2: barrier the box parent (see capture path).
-                    emit_write_barrier(ctx, &box_ptr, &new_bits);
-                    return Ok(emit_array_handle_length(ctx, &new_handle, value_discarded));
+                    ctx.block().store(DOUBLE, &new_box, &slot);
+                } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
+                    let g_ref = format!("@{}", global_name);
+                    // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
+                    emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+                } else {
+                    return Err(anyhow!("ArrayPushSpread({}): local not in scope", array_id));
                 }
-                // #5459: in `boxed_vars` but no box location here — a module-level
-                // global accessed directly from a nested function. Fall through to
-                // the module-global store-back so the relocated head reaches the
-                // GC-root slot (see the matching note in `Expr::ArrayPush`).
-            }
-            if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                let closure_ptr =
-                    super::current_closure_ptr_value(ctx, "ArrayPushSpread captured")?;
-                let idx_str = capture_idx.to_string();
-                let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
-                ctx.block().call_void(
-                    "js_closure_set_capture_bits",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
-                );
-                // Gen-GC Phase C2: the realloc'd array head stored into the
-                // closure capture is a (possibly young) heap pointer — barrier
-                // the closure parent.
-                emit_write_barrier(ctx, &closure_ptr, &new_bits);
-            } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                ctx.block().store(DOUBLE, &new_box, &slot);
-            } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
-                let g_ref = format!("@{}", global_name);
-                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
-                emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-            } else {
-                return Err(anyhow!("ArrayPushSpread({}): local not in scope", array_id));
-            }
-            Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
+                Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
+            })
         }
 
         // -------- Closures (Phase D.1) --------
