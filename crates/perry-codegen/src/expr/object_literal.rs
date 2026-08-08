@@ -224,6 +224,11 @@ pub(crate) fn lower_object_literal(
     props: &[(String, Expr)],
     expected_ty: Option<&HirType>,
 ) -> Result<String> {
+    // #7598: TAKEN here so it covers exactly this literal — field initializers
+    // containing nested literals lower below with the flag already cleared
+    // (the #7590 take discipline). Only the shaped fast path honors it; the
+    // by-name fallback (method closures) simply allocates young.
+    let pretenure = std::mem::take(&mut ctx.pretenure_next_object_literal);
     // #6951: the object handle is allocated BEFORE the property values are
     // lowered and lives in an SSA register across all of them. `{ a: s, b: f() }`
     // therefore had its half-built object swept by `f`'s collection, and the
@@ -283,9 +288,14 @@ pub(crate) fn lower_object_literal(
         }
         let shape_id_str = shape_id.to_string();
 
+        let alloc_fn = if pretenure {
+            "js_object_alloc_with_shape_pretenured"
+        } else {
+            "js_object_alloc_with_shape"
+        };
         let obj_handle = ctx.block().call(
             I64,
-            "js_object_alloc_with_shape",
+            alloc_fn,
             &[
                 (I32, &shape_id_str),
                 (I32, &n_str),

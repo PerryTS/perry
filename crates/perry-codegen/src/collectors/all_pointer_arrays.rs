@@ -194,6 +194,159 @@ pub(crate) fn collect_all_pointer_array_locals(
 /// distinct, so seeing it here is harmless — the kill walk above descends into
 /// closures too, and every use of such an id is inside the closure body it is
 /// scoped to.
+/// #7598 — the subset of [`collect_all_pointer_array_locals`]-admitted locals
+/// whose pushed objects should be born TENURED in old-gen.
+///
+/// The all-pointer terms already prove the accumulator *shape* (one binding,
+/// never rebound, every store a push of a fresh allocation, no captures /
+/// boxes / globals). What they do not prove is *cohort lifetime*, and that is
+/// the entire pretenuring bet: an object born old that dies young sits in
+/// old-gen until a full reclaim. The discriminator is loop position:
+///
+/// - the `let` must sit at **loop depth 0** — a per-iteration accumulator
+///   (`for (…) { const keep = []; … keep.push(x) … }`) dies every iteration,
+///   and pretenuring it floods old-gen with garbage at allocation rate;
+/// - every push must sit at **depth ≥ 1** — the cohort accumulates across
+///   iterations, so it is live for the remainder of the loop by construction.
+///
+/// This is deliberately NOT a proof the array outlives the function; a
+/// depth-0 accumulator that is dropped at function exit still pretenures, and
+/// its cohort is then reclaimed by the proportional-band full cycles (#7596)
+/// instead of dying free in the nursery. That trade is measured, not assumed —
+/// see the adversarial arm in the PR.
+pub(crate) fn collect_pretenure_accumulator_locals(
+    stmts: &[Stmt],
+    all_pointer_admitted: &HashSet<u32>,
+) -> HashSet<u32> {
+    if all_pointer_admitted.is_empty() {
+        return HashSet::new();
+    }
+    let mut decl_depth: HashMap<u32, u32> = HashMap::new();
+    let mut push_depths: HashMap<u32, Vec<u32>> = HashMap::new();
+    scan_depths(stmts, 0, &mut decl_depth, &mut push_depths);
+    all_pointer_admitted
+        .iter()
+        .copied()
+        .filter(|id| {
+            decl_depth.get(id) == Some(&0)
+                && push_depths
+                    .get(id)
+                    .is_some_and(|ds| !ds.is_empty() && ds.iter().all(|&d| d >= 1))
+        })
+        .collect()
+}
+
+/// Depth-attributed scan: bindings and pushes recorded with their enclosing
+/// real-loop count. Expressions directly attached to a statement (conditions,
+/// initializers, the statement expression itself) are scanned deeply at that
+/// statement's depth — a push nested inside a larger expression still counts,
+/// at the depth of the statement carrying it. `for_each_expr` descends into
+/// closure bodies too; a push on the same id from inside a closure records the
+/// enclosing statement's depth, which is harmless — a captured id was already
+/// refused by the all-pointer capture kill.
+fn scan_depths(
+    stmts: &[Stmt],
+    depth: u32,
+    decl_depth: &mut HashMap<u32, u32>,
+    push_depths: &mut HashMap<u32, Vec<u32>>,
+) {
+    let mut record = |expr: &Expr, at: u32, push_depths: &mut HashMap<u32, Vec<u32>>| {
+        super::scalar_method_dispatch::for_each_expr(expr, &mut |e| {
+            if let Expr::ArrayPush { array_id, .. } = e {
+                push_depths.entry(*array_id).or_default().push(at);
+            }
+        });
+    };
+    for s in stmts {
+        match s {
+            Stmt::Let { id, init, .. } => {
+                if let Some(Expr::Array(_)) = init {
+                    // First binding wins; a rebind was refused upstream.
+                    decl_depth.entry(*id).or_insert(depth);
+                }
+                if let Some(init) = init {
+                    record(init, depth, push_depths);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+                record(expr, depth, push_depths);
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                record(condition, depth, push_depths);
+                scan_depths(then_branch, depth, decl_depth, push_depths);
+                if let Some(eb) = else_branch {
+                    scan_depths(eb, depth, decl_depth, push_depths);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                record(condition, depth + 1, push_depths);
+                scan_depths(body, depth + 1, decl_depth, push_depths);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    // The initializer runs once, outside the iteration.
+                    scan_depths(
+                        std::slice::from_ref(init.as_ref()),
+                        depth,
+                        decl_depth,
+                        push_depths,
+                    );
+                }
+                if let Some(condition) = condition {
+                    record(condition, depth + 1, push_depths);
+                }
+                if let Some(update) = update {
+                    record(update, depth + 1, push_depths);
+                }
+                scan_depths(body, depth + 1, decl_depth, push_depths);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                scan_depths(body, depth, decl_depth, push_depths);
+                if let Some(c) = catch {
+                    scan_depths(&c.body, depth, decl_depth, push_depths);
+                }
+                if let Some(fin) = finally {
+                    scan_depths(fin, depth, decl_depth, push_depths);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                record(discriminant, depth, push_depths);
+                for c in cases {
+                    if let Some(test) = &c.test {
+                        record(test, depth, push_depths);
+                    }
+                    scan_depths(&c.body, depth, decl_depth, push_depths);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                scan_depths(
+                    std::slice::from_ref(body.as_ref()),
+                    depth,
+                    decl_depth,
+                    push_depths,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
     for s in stmts {
         f(s);
@@ -444,5 +597,89 @@ mod tests {
             }),
         ];
         assert!(!collect(&stmts).contains(&1));
+    }
+
+    // ---- #7598 pretenure-accumulator loop-position terms -------------------
+
+    fn while_loop(body: Vec<Stmt>) -> Stmt {
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body,
+        }
+    }
+
+    fn collect_pretenure(stmts: &[Stmt]) -> HashSet<u32> {
+        let admitted = collect(stmts);
+        collect_pretenure_accumulator_locals(stmts, &admitted)
+    }
+
+    /// The target shape: `const out = []` outside every loop, pushes inside.
+    #[test]
+    fn pretenure_admits_the_outer_accumulator_inner_push_shape() {
+        let stmts = vec![
+            let_array(1, vec![]),
+            while_loop(vec![push(1, object_literal())]),
+        ];
+        assert!(collect_pretenure(&stmts).contains(&1));
+    }
+
+    /// The per-iteration accumulator dies every iteration; pretenuring it
+    /// would flood old-gen with garbage at allocation rate. This is
+    /// push_bench's exact shape and MUST stay refused.
+    #[test]
+    fn pretenure_refuses_a_loop_local_accumulator() {
+        let stmts = vec![while_loop(vec![
+            let_array(1, vec![]),
+            push(1, object_literal()),
+        ])];
+        assert!(!collect_pretenure(&stmts).contains(&1));
+    }
+
+    /// A one-shot push outside any loop has no cohort to speak of.
+    #[test]
+    fn pretenure_refuses_pushes_outside_loops() {
+        let stmts = vec![let_array(1, vec![]), push(1, object_literal())];
+        assert!(!collect_pretenure(&stmts).contains(&1));
+    }
+
+    /// One depth-0 push alongside loop pushes: refused — every push must be
+    /// inside a loop for the cohort claim to hold.
+    #[test]
+    fn pretenure_refuses_mixed_depth_pushes() {
+        let stmts = vec![
+            let_array(1, vec![]),
+            push(1, object_literal()),
+            while_loop(vec![push(1, object_literal())]),
+        ];
+        assert!(!collect_pretenure(&stmts).contains(&1));
+    }
+
+    /// A push nested inside a larger expression still counts, at the depth of
+    /// the statement carrying it — the depth scan is not statement-position
+    /// only.
+    #[test]
+    fn pretenure_sees_a_push_nested_in_an_expression() {
+        let stmts = vec![
+            let_array(1, vec![]),
+            while_loop(vec![Stmt::Expr(Expr::BooleanCoerce(Box::new(
+                Expr::ArrayPush {
+                    array_id: 1,
+                    value: Box::new(object_literal()),
+                },
+            )))]),
+        ];
+        assert!(collect_pretenure(&stmts).contains(&1));
+    }
+
+    /// The all-pointer terms remain a prerequisite: a local they refuse
+    /// (rebind) is never pretenured, whatever its loop position.
+    #[test]
+    fn pretenure_requires_all_pointer_admission() {
+        let stmts = vec![
+            let_array(1, vec![]),
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![])))),
+            while_loop(vec![push(1, object_literal())]),
+        ];
+        assert!(!collect_pretenure(&stmts).contains(&1));
     }
 }

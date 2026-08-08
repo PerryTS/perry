@@ -245,6 +245,50 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
     field_count: u32,
     keys_array: *mut ArrayHeader,
 ) -> *mut ObjectHeader {
+    alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array, false)
+}
+
+/// #7598: `js_object_alloc_class_inline_keys` for an allocation site codegen
+/// proved to feed a long-lived accumulator (`out = []` outside every loop,
+/// filled by `out.push(...)` inside one — object literals arrive here as
+/// synthesized AnonShape classes). The instance is born in old-gen with
+/// `GC_FLAG_TENURED`, so the copying minor never pays the
+/// Eden→survivor→old double copy its cohort was measured to cost (#7592:
+/// 3.9 s of a 5.1 s phase). Constructor field stores need no special casing:
+/// they funnel through `runtime_store_jsvalue_slot` / the #7602-gated
+/// barrier, both of which read the LIVE parent header and remember old→young
+/// edges exactly as for a promoted object. The `Old ⟹ TENURED` invariant
+/// holds by construction: `arena_alloc_gc_old_born_tenured` sets the bit
+/// itself and is pinned by `every_old_gen_birth_path_sets_tenured`.
+#[no_mangle]
+pub extern "C" fn js_object_alloc_class_inline_keys_pretenured(
+    class_id: u32,
+    parent_class_id: u32,
+    field_count: u32,
+    keys_array: *mut ArrayHeader,
+) -> *mut ObjectHeader {
+    alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array, true)
+}
+
+/// Keepalive anchor — `js_object_alloc_class_inline_keys_pretenured` is a
+/// generated-code-only callee, so the auto-optimize whole-program build would
+/// otherwise dead-strip it (see the FFI-symbol-link-break class).
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_OBJECT_ALLOC_CLASS_INLINE_KEYS_PRETENURED: extern "C" fn(
+    u32,
+    u32,
+    u32,
+    *mut ArrayHeader,
+) -> *mut ObjectHeader = js_object_alloc_class_inline_keys_pretenured;
+
+fn alloc_class_inline_keys_impl(
+    class_id: u32,
+    parent_class_id: u32,
+    field_count: u32,
+    keys_array: *mut ArrayHeader,
+    pretenure: bool,
+) -> *mut ObjectHeader {
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
     }
@@ -263,7 +307,14 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    // Both allocators take the PAYLOAD size and pad the GcHeader in
+    // themselves; the branches differ only in which generation a small object
+    // is born into.
+    let ptr = if pretenure {
+        crate::arena::arena_alloc_gc_old_born_tenured(total_size, 8, crate::gc::GC_TYPE_OBJECT)
+    } else {
+        arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT)
+    } as *mut ObjectHeader;
 
     unsafe {
         (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
@@ -608,12 +659,65 @@ pub extern "C" fn js_object_alloc_with_shape(
     packed_keys: *const u8,
     packed_keys_len: u32,
 ) -> *mut ObjectHeader {
+    alloc_with_shape_impl(shape_id, field_count, packed_keys, packed_keys_len, false)
+}
+
+/// #7598: `js_object_alloc_with_shape` for an allocation site codegen proved
+/// to feed a long-lived accumulator (`out = []` outside every loop, filled by
+/// `out.push({...})` inside one). The object is born in old-gen with
+/// `GC_FLAG_TENURED`, so the copying minor never pays the Eden→survivor→old
+/// double copy its cohort was measured to cost (#7592: 3.9 s of a 5.1 s
+/// phase). Field stores need no special casing: they funnel through
+/// `runtime_store_jsvalue_slot`, whose write barrier reads the LIVE parent
+/// header — a born-tenured parent takes the old-parent path and remembers
+/// old→young field edges exactly as a promoted object would.
+///
+/// The `Old ⟹ TENURED` invariant #7602's gate rests on holds by construction
+/// here: `arena_alloc_gc_old_born_tenured` sets the bit itself and is pinned
+/// by `every_old_gen_birth_path_sets_tenured`.
+#[no_mangle]
+pub extern "C" fn js_object_alloc_with_shape_pretenured(
+    shape_id: u32,
+    field_count: u32,
+    packed_keys: *const u8,
+    packed_keys_len: u32,
+) -> *mut ObjectHeader {
+    alloc_with_shape_impl(shape_id, field_count, packed_keys, packed_keys_len, true)
+}
+
+/// Keepalive anchor — `js_object_alloc_with_shape_pretenured` is a
+/// generated-code-only callee, so the auto-optimize whole-program build would
+/// otherwise dead-strip it (see the FFI-symbol-link-break class).
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_OBJECT_ALLOC_WITH_SHAPE_PRETENURED: extern "C" fn(
+    u32,
+    u32,
+    *const u8,
+    u32,
+) -> *mut ObjectHeader = js_object_alloc_with_shape_pretenured;
+
+fn alloc_with_shape_impl(
+    shape_id: u32,
+    field_count: u32,
+    packed_keys: *const u8,
+    packed_keys_len: u32,
+    pretenure: bool,
+) -> *mut ObjectHeader {
     let header_size = std::mem::size_of::<ObjectHeader>();
     // Allocate extra field slots for dynamic property growth (plain objects may get new fields)
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * 8;
     let total_size = header_size + fields_size;
-    let obj_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    // Both allocators take the PAYLOAD size and pad the GcHeader in themselves;
+    // `arena_alloc_gc`'s own large-object arm is exactly the born-tenured
+    // shape, so the two branches differ only in which generation a small
+    // object is born into.
+    let obj_ptr = if pretenure {
+        crate::arena::arena_alloc_gc_old_born_tenured(total_size, 8, crate::gc::GC_TYPE_OBJECT)
+    } else {
+        arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT)
+    } as *mut ObjectHeader;
 
     unsafe {
         (*obj_ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;

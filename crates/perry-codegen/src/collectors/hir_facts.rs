@@ -97,6 +97,12 @@ pub(crate) struct ArrayFacts {
     /// why this fact governs *profitability* rather than the soundness of the
     /// elided per-store note (which the emitted header test owns).
     pub all_pointer_element_locals: HashSet<u32>,
+    /// #7598: the subset of `all_pointer_element_locals` whose pushed object
+    /// literals should be born TENURED in old-gen — an accumulator declared
+    /// outside every loop, filled only from inside one, so its cohort is live
+    /// for the remainder of the loop by construction. See
+    /// `collect_pretenure_accumulator_locals` for the loop-position terms.
+    pub pretenure_accumulator_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -259,6 +265,11 @@ impl TypeFacts {
     /// `collectors/all_pointer_arrays.rs`.
     pub(crate) fn declares_all_pointer_elements(&self, local_id: u32) -> bool {
         self.arrays.all_pointer_element_locals.contains(&local_id)
+    }
+
+    /// #7598: object literals pushed into this local should be born tenured.
+    pub(crate) fn pretenure_accumulator(&self, local_id: u32) -> bool {
+        self.arrays.pretenure_accumulator_locals.contains(&local_id)
     }
 
     pub(crate) fn array_length_mutation_locals(&self) -> &HashSet<u32> {
@@ -485,6 +496,12 @@ pub(crate) fn collect_type_facts(
             stmts,
             boxed_vars,
             module_globals,
+        );
+    // #7598: the loop-position subset whose pushed literals are born tenured.
+    array_facts.pretenure_accumulator_locals =
+        super::all_pointer_arrays::collect_pretenure_accumulator_locals(
+            stmts,
+            &array_facts.all_pointer_element_locals,
         );
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     // Repsel Phase 1: under `PERRY_CANONICAL_I32_LOCALS` (default on), a
@@ -1406,6 +1423,7 @@ impl ArrayFactCollector {
                 // Filled in by `collect_type_facts` — its own walk, with its
                 // own admission terms, over the same statements.
                 all_pointer_element_locals: HashSet::new(),
+                pretenure_accumulator_locals: HashSet::new(),
             },
             EffectFacts {
                 unknown_call_escape: self.unknown_call_escape,

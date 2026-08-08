@@ -250,6 +250,15 @@ pub(crate) struct FnCtx<'a> {
     /// reading the field, because they consult it *after* lowering their
     /// operands, by which point the field has been taken again.
     pub discard_this_expr: bool,
+    /// #7598: the next object literal lowered is a pretenure-accumulator push
+    /// value and should allocate born-tenured in old-gen. Set by
+    /// `array_push::lower` immediately before lowering the pushed value when
+    /// the target local is `native_facts.pretenure_accumulator`-admitted and
+    /// the value is a plain object literal; **taken** (`mem::take`) at the top
+    /// of `lower_object_literal`, so it reaches exactly the root literal —
+    /// nested literals in field initializers read `false` (the #7590 take
+    /// discipline). The push site asserts it was consumed after lowering.
+    pub pretenure_next_object_literal: bool,
     /// HIR FuncId → LLVM function name. Resolved at the top of
     /// `compile_module` so `FuncRef(id)` calls know what to emit.
     pub func_names: &'a std::collections::HashMap<u32, String>,

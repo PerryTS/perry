@@ -72,6 +72,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // so subsequent field stores can use index-based set_field (skipping the
     // per-call linear key-search done by js_object_set_field_by_name).
     module.declare_function("js_object_alloc_with_shape", I64, &[I32, I32, PTR, I32]);
+    // #7598: born-tenured variant for pretenure-accumulator push literals.
+    module.declare_function(
+        "js_object_alloc_with_shape_pretenured",
+        I64,
+        &[I32, I32, PTR, I32],
+    );
     // Index-based field setter (no key lookup). Hot-path target for object
     // literals with statically-known keys; the i-th field directly maps to
     // the i-th packed-keys entry above.
