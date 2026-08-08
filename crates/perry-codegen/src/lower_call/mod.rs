@@ -62,6 +62,10 @@ mod options;
 /// the same condition that routes it (#7592).
 pub(crate) mod property_get;
 mod scalar_method;
+/// Rooting coverage for the two-argument timer arms slice 5 repaired — see the
+/// module header for why the default build cannot fault on them.
+#[cfg(test)]
+mod timer_rooting_tests;
 /// #7510: which of the two typed-shape layout entry points a `new` site emits,
 /// and where. Split out of `new.rs` to keep it under the 2000-line cap.
 mod typed_shape_init;
