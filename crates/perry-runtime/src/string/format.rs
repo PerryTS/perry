@@ -84,10 +84,11 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
             // Mark as shared so it's never mutated in-place
             (*ptr).refcount = 0;
             // Mark as pinned so GC keeps it live for the lifetime of this
-            // thread's arena.
+            // thread's arena. Longlived-space (see the allocation above), so
+            // this does not arm the young-pin latch (#7645).
             let gc_header =
                 (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            (*gc_header).gc_flags |= crate::gc::GC_FLAG_PINNED;
+            crate::gc::pin_object(gc_header);
         }
         SMALL_INT_CACHE.with(|c| unsafe {
             // GC_STORE_AUDIT(ROOT): SMALL_INT_CACHE is scanned by scan_small_int_cache_roots_mut.

@@ -222,6 +222,12 @@ pub(super) struct CopyingNurseryTraceStats {
     pub(super) malloc_validation_lookups: usize,
     pub(super) malloc_registry_rebuilds: u64,
     pub(super) malloc_sweep_due: bool,
+    /// #7645: the eligibility preflight's two young-graph walks were provably
+    /// no-ops (no young pin has ever been created, and the malloc-registry
+    /// question was already answered) and were skipped. This is the live-
+    /// subject flag for the "the second traversal is gone" claim: a row with
+    /// `eligible=true` and `preflight_skipped=false` did the old work.
+    pub(super) preflight_skipped: bool,
     pub(super) fallback_reason: CopiedMinorFallbackReason,
 }
 

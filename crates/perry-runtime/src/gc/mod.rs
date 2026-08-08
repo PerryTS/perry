@@ -96,6 +96,16 @@ mod barrier_arming;
 // rustc warned. A plain `use` brings them into `gc`'s namespace, which is all
 // the in-module callers (`telemetry.rs`, `cycle.rs`) actually need.
 use barrier_arming::*;
+/// #7645: `GC_FLAG_PINNED` custody + the young-pin latch the copying minor's
+/// eligibility preflight is skipped on. Every write of the bit goes through
+/// `pin::pin_object`; `scripts/gc_pin_sites.py` enforces that in `lint`.
+mod pin;
+#[cfg(test)]
+pub(crate) use pin::test_reset_young_pin_latch;
+pub use pin::{
+    copied_minor_preflight_skips, copied_minor_preflight_walks, pin_object, unpin_object,
+};
+use pin::{note_preflight_skipped, note_preflight_walked, young_pin_latch_armed};
 mod copying;
 use copying::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry

@@ -50,7 +50,9 @@ pub unsafe fn pin_promise_for_native_resolution(promise_ptr: usize) {
     }
     let header = (promise_ptr as *mut u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
         as *mut perry_runtime::gc::GcHeader;
-    (*header).gc_flags |= perry_runtime::gc::GC_FLAG_PINNED;
+    // `js_promise_new()` allocates in the arena (Eden) unless promise hooks are
+    // active, so this pin DOES arm the copying minor's young-pin latch (#7645).
+    perry_runtime::gc::pin_object(header);
 }
 
 /// Inverse of [`pin_promise_for_native_resolution`]; called from
@@ -64,7 +66,7 @@ unsafe fn unpin_promise_after_native_resolution(promise_ptr: usize) {
     }
     let header = (promise_ptr as *mut u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
         as *mut perry_runtime::gc::GcHeader;
-    (*header).gc_flags &= !perry_runtime::gc::GC_FLAG_PINNED;
+    perry_runtime::gc::unpin_object(header);
 }
 
 /// Allocate a fresh Promise and pin it for cross-thread resolution.

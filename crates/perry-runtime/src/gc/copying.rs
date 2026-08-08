@@ -578,6 +578,20 @@ impl CopyingNurseryCollector {
             return self.mark_addr(forwarded).unwrap_or(forwarded);
         }
 
+        // #7645: on a cycle that skipped the eligibility preflight, this is the
+        // exact instant an incomplete young-pin latch turns into a
+        // use-after-move: the collector is about to relocate a pinned object
+        // whose holder (the cross-thread promise queue, an AppKit string
+        // return) keeps a raw address no scanner will rewrite. `flags` is
+        // already loaded, so the check is one `and` and a never-taken branch.
+        // It is deliberately NOT applied when the preflight ran: that path is
+        // unchanged from before this issue, and a divergence between the
+        // preflight's traversal and the copier's is a separate bug that should
+        // not newly abort a program.
+        if self.stats.preflight_skipped && flags & GC_FLAG_PINNED != 0 {
+            pinned_young_move_under_skipped_preflight(header);
+        }
+
         let total = (*header).size as usize;
         // Safety net (partial mitigation, NOT a full fix): a genuine
         // young/survivor object is always small — large objects are allocated
@@ -838,6 +852,32 @@ pub(super) fn scan_remembered_dirty_slots_copying(
     stats
 }
 
+/// The young-pin latch was clear, the preflight was skipped on that proof, and
+/// the copier then met a pinned young object anyway — so the latch is
+/// incomplete and a pin site exists that does not go through `gc::pin_object`.
+///
+/// There is no recovery: leaving the object in from-space strands the
+/// referring slot on memory `copying_reset_from_spaces_and_flip` is about to
+/// retire, and moving it invalidates a raw address nothing will rewrite. Abort
+/// loudly at the faulting site instead of corrupting the heap silently.
+#[cold]
+#[inline(never)]
+unsafe fn pinned_young_move_under_skipped_preflight(header: *mut GcHeader) -> ! {
+    eprintln!(
+        "[gc-pin-latch] FATAL: copying minor is about to relocate a PINNED young \
+         object on a preflight-skipped cycle. header={:#x} obj_type={} size={} \
+         flags={:#04x}\n\
+         The young-pin latch (gc/pin.rs) is incomplete: some site sets \
+         GC_FLAG_PINNED without going through gc::pin_object. Find it with \
+         `python3 scripts/gc_pin_sites.py` and route it through pin_object (#7645).",
+        header as usize,
+        (*header).obj_type,
+        (*header).size,
+        (*header).gc_flags,
+    );
+    std::process::abort()
+}
+
 pub(super) struct CopiedMinorEligibility {
     pub(super) eligible: bool,
     pub(super) fallback_reason: CopiedMinorFallbackReason,
@@ -845,6 +885,10 @@ pub(super) struct CopiedMinorEligibility {
     pub(super) malloc_validation_lookups: usize,
     pub(super) malloc_registry_rebuilds: u64,
     pub(super) legacy_root_stats: LegacyRootTraceStats,
+    /// #7645: both eligibility preflight walks were provably no-ops and were
+    /// skipped. Carried into the collector so `move_young` can abort rather
+    /// than relocate a pinned object on a cycle that took the unproven path.
+    pub(super) preflight_skipped: bool,
     pub(super) ptrs: Option<CopyingPointerSet>,
 }
 
@@ -880,21 +924,42 @@ impl CopiedMinorEligibility {
                 legacy_root_stats,
             );
         }
-        if let Some(reason) = Self::mutable_root_preflight_reason(&ptrs) {
-            return Self::fallback_with_ptrs_and_legacy(
-                reason,
-                malloc_sweep_due,
-                ptrs,
-                legacy_root_stats,
-            );
-        }
-        if let Some(reason) = Self::dirty_slot_preflight_reason(&ptrs) {
-            return Self::fallback_with_ptrs_and_legacy(
-                reason,
-                malloc_sweep_due,
-                ptrs,
-                legacy_root_stats,
-            );
+        // #7645: both walks below are a transitive traversal of the whole live
+        // young graph that answers two booleans and produces no collection
+        // result. When both booleans are already decided the traversal is
+        // provably a no-op, so skip it — see `preflight_walks_decided`.
+        let preflight_skipped = Self::preflight_walks_decided(&ptrs);
+        if preflight_skipped {
+            // The ONE side effect the skipped walks carried, kept at its
+            // original point in the cycle. `dirty_slot_preflight_reason` took
+            // a `remembered_dirty_snapshot()`, whose first call on a thread
+            // arms the barrier and rebuilds the remembered set from the heap
+            // — a walk that assumes "nothing is marked yet". Letting it fall
+            // through to the copy phase's snapshot would run it AFTER
+            // `visit_mutable_root_slots` had already evacuated root-reachable
+            // young objects, i.e. against a half-moved heap. It is a one-shot
+            // per thread (`REMEMBERED_SET_RECONSTRUCTED`), so on every later
+            // cycle this is a thread-local flag read.
+            arm_and_reconstruct_remembered_set_if_unarmed();
+            note_preflight_skipped();
+        } else {
+            note_preflight_walked();
+            if let Some(reason) = Self::mutable_root_preflight_reason(&ptrs) {
+                return Self::fallback_with_ptrs_and_legacy(
+                    reason,
+                    malloc_sweep_due,
+                    ptrs,
+                    legacy_root_stats,
+                );
+            }
+            if let Some(reason) = Self::dirty_slot_preflight_reason(&ptrs) {
+                return Self::fallback_with_ptrs_and_legacy(
+                    reason,
+                    malloc_sweep_due,
+                    ptrs,
+                    legacy_root_stats,
+                );
+            }
         }
 
         Self {
@@ -904,8 +969,36 @@ impl CopiedMinorEligibility {
             malloc_validation_lookups: ptrs.malloc_validation_lookups(),
             malloc_registry_rebuilds: ptrs.malloc_registry_rebuilds(),
             legacy_root_stats,
+            preflight_skipped,
             ptrs: Some(ptrs),
         }
+    }
+
+    /// Are both of the preflight walks' outputs already known?
+    ///
+    /// The walks can only produce three verdicts, and each has an O(1) proof
+    /// of absence:
+    ///
+    /// * `PinnedYoungRoot` / `PinnedYoungDirtySlot` / `PinnedYoungTransitive`
+    ///   come from `CopyingNurseryPreflight::check_ptr_with_reason`, which
+    ///   trips only on an `Eden`/`FromSurvivor` object carrying
+    ///   `GC_FLAG_PINNED`. `gc::pin` records every creation of such a pin in a
+    ///   monotone latch, so a clear latch means no such object exists — which
+    ///   is strictly stronger than "none is reachable".
+    /// * `MallocRegistryUnavailable` comes from
+    ///   `CopyingPointerSet::classify_for_preflight`, which returns it only
+    ///   when a non-arena candidate is met while the malloc registry is both
+    ///   unavailable *and* was non-empty at cycle start. If the registry is
+    ///   available, or was empty at start, no candidate can produce it.
+    ///
+    /// When either proof is unavailable the walk runs exactly as before, so
+    /// the decision this function guards is never *changed* — only skipped
+    /// when its outcome is already determined.
+    fn preflight_walks_decided(ptrs: &CopyingPointerSet) -> bool {
+        if young_pin_latch_armed() {
+            return false;
+        }
+        ptrs.malloc_registry_available.get() || ptrs.malloc_registry_empty_at_start
     }
 
     pub(super) fn fallback(reason: CopiedMinorFallbackReason, malloc_sweep_due: bool) -> Self {
@@ -916,6 +1009,7 @@ impl CopiedMinorEligibility {
             malloc_validation_lookups: 0,
             malloc_registry_rebuilds: 0,
             legacy_root_stats: LegacyRootTraceStats::default(),
+            preflight_skipped: false,
             ptrs: None,
         }
     }
@@ -933,6 +1027,7 @@ impl CopiedMinorEligibility {
             malloc_validation_lookups: ptrs.malloc_validation_lookups(),
             malloc_registry_rebuilds: ptrs.malloc_registry_rebuilds(),
             legacy_root_stats,
+            preflight_skipped: false,
             ptrs: Some(ptrs),
         }
     }
@@ -944,6 +1039,7 @@ impl CopiedMinorEligibility {
             malloc_sweep_due: self.malloc_sweep_due,
             malloc_validation_lookups: self.malloc_validation_lookups,
             malloc_registry_rebuilds: self.malloc_registry_rebuilds,
+            preflight_skipped: self.preflight_skipped,
             ..CopyingNurseryTraceStats::default()
         }
     }
@@ -1037,13 +1133,18 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             CopiedMinorFallbackReason::PinnedYoungTransitive => "pinned_young_transitive",
         };
         eprintln!(
-            "[gc-copy-minor] eligible={} fallback={}",
-            eligibility.eligible, reason
+            "[gc-copy-minor] eligible={} fallback={} preflight_skipped={} (skips={} walks={})",
+            eligibility.eligible,
+            reason,
+            eligibility.preflight_skipped,
+            super::copied_minor_preflight_skips(),
+            super::copied_minor_preflight_walks(),
         );
     }
     if !eligibility.eligible {
         return None;
     }
+    let preflight_skipped = eligibility.preflight_skipped;
     let malloc_sweep_due = eligibility.malloc_sweep_due;
     let ptrs = eligibility
         .ptrs
@@ -1055,6 +1156,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     collector.stats.eligible = true;
     collector.stats.fallback_reason = CopiedMinorFallbackReason::None;
     collector.stats.malloc_sweep_due = malloc_sweep_due;
+    collector.stats.preflight_skipped = preflight_skipped;
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
 
     let native_stack_walk = visit_mutable_root_slots(|slot| unsafe {

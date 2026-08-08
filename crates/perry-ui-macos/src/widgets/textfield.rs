@@ -1,4 +1,4 @@
-use crate::ffi::js_string_from_bytes;
+use crate::ffi::{js_gc_pin_user_ptr, js_string_from_bytes};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
@@ -263,13 +263,12 @@ pub fn get_string_value(handle: i64) -> *const u8 {
             let value = tf.stringValue();
             let bytes = value.to_string();
             let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-            // Pin the GC allocation so it won't be collected before the caller uses it.
-            // GcHeader layout: obj_type(u8) + gc_flags(u8) + reserved(u16) + size(u32) = 8 bytes
-            // GcHeader sits BEFORE the user pointer (ptr - 8). gc_flags is at offset 1.
-            // GC_FLAG_PINNED = 0x04
-            // Pin the GC allocation so it survives until the caller consumes it
-            let gc_flags_ptr = (ptr as *mut u8).sub(8).add(1);
-            *gc_flags_ptr |= 0x04; // GC_FLAG_PINNED
+            // Pin the GC allocation so it survives until the caller consumes
+            // it. This string is Eden-resident, so the pin also arms the
+            // copying minor's young-pin latch — which is exactly why it must
+            // go through the runtime helper and not a raw `|= 0x04` on the
+            // header byte (#7645).
+            js_gc_pin_user_ptr(ptr as *mut u8);
             return ptr as *const u8;
         }
     }
