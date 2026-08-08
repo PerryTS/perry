@@ -818,7 +818,8 @@ fn manual_gc_scan_guard_forces_full_scan_only_when_unpinned() {
     // forced scan and deleted that variant, so this exercises the guard through
     // `perry/gc` `minor()`, which still engages it.)
     {
-        let _scan = ManualGcScanGuard::force_full_scan(crate::gc::ConservativeScanSite::ManualMinor);
+        let _scan =
+            ManualGcScanGuard::force_full_scan(crate::gc::ConservativeScanSite::ManualMinor);
         assert_eq!(
             CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()),
             Some(ConservativeStackScanMode::Full)
@@ -830,7 +831,8 @@ fn manual_gc_scan_guard_forces_full_scan_only_when_unpinned() {
     // reclaim native-stack locals): the guard must not replace the override.
     set_conservative_stack_scan_override(Some(ConservativeStackScanMode::Auto));
     {
-        let _scan = ManualGcScanGuard::force_full_scan(crate::gc::ConservativeScanSite::ManualMinor);
+        let _scan =
+            ManualGcScanGuard::force_full_scan(crate::gc::ConservativeScanSite::ManualMinor);
         assert_eq!(
             CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()),
             Some(ConservativeStackScanMode::Auto)
