@@ -54,6 +54,7 @@ fn class_with_fields(name: &str, fields: &[&str]) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
         static_accessor_names: Vec::new(),
         static_accessor_fn_ids: Vec::new(),
     }

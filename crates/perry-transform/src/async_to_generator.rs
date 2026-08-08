@@ -1868,6 +1868,7 @@ mod computed_and_field_async_tests {
             aliases: Vec::new(),
             is_nested: false,
             alloc_width_hint: 0,
+            specialized_from: None,
         }
     }
 

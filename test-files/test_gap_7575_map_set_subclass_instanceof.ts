@@ -2,12 +2,16 @@
 // instance while `m instanceof Map` was `true` — the LEAF/intermediate class
 // edge was lost and only the native base edge survived.
 //
-// Sibling of #7573/#7603 but a different mechanism: not header branding, but
-// which class id ends up stamped on the instance and what the class-registry
-// parent chain looks like from there. `js_instanceof` walks
-// `ObjectHeader.class_id` up through `get_parent_class_id`; if the instance
-// carries the NATIVE BASE's reserved id rather than the subclass's, the walk
-// can only ever answer for the base.
+// The mechanism turned out to have nothing to do with Map/Set, or with native
+// bases, or with prototype chains: it is MONOMORPHIZATION. Perry specializes
+// generic classes, so `new MyMap<string, number>()` constructs a second class
+// `MyMap$str_num` (`monomorph::mangle::generate_specialized_name`) carrying its
+// own class id, and the instance is stamped with THAT id — while
+// `x instanceof MyMap` resolves the RHS to the GENERIC's id, which appears
+// nowhere in the specialization's parent chain. `class MyMap<K, V> extends
+// Map<K, V>` is just the idiomatic spelling, which is why it surfaced there;
+// section 9 below shows a generic class with a plain base, and one with NO
+// base, failing identically before the fix.
 //
 // `test_gap_6325_map_set_subclass.ts` and `test_gap_7570_map_set_declared_base_type.ts`
 // both asserted only `instanceof Map` / `instanceof Set`, which is why this
@@ -102,10 +106,35 @@ const ctor: unknown = MyMap;
 // deno-lint-ignore no-explicit-any
 console.log("8 dynamic:", a instanceof (ctor as any), b instanceof (ctor as any));
 
-// ── 9. `instanceof` inside a function, over a parameter (no local type proof) ──
+// ── 9. it was never about Map/Set: a generic subclass of ANY base, and of no
+//       base at all, failed identically. This is the real shape of the bug. ──
+class PlainBase {}
+class GenPlain<T> extends PlainBase {}
+class GenNoBase<T> {}
+class GenArr<T> extends Array<T> {}
+
+const gp = new GenPlain<number>();
+console.log("9 gen plain :", gp instanceof GenPlain, gp instanceof PlainBase);
+const gn = new GenNoBase<number>();
+console.log("9 gen nobase:", gn instanceof GenNoBase, gn instanceof PlainBase);
+const ga = new GenArr<number>();
+console.log("9 gen array :", ga instanceof GenArr, ga instanceof Array);
+// ...and the NON-generic spellings, which already worked and must keep working.
+class ConcPlain extends PlainBase {}
+class ConcArr extends Array {}
+console.log("9 concrete  :", new ConcPlain() instanceof ConcPlain, new ConcArr() instanceof ConcArr);
+// The same generic class instantiated without type arguments takes a different
+// specialization (none at all), and must answer the same way.
+console.log("9 no-typearg:", new GenPlain() instanceof GenPlain, new GenArr() instanceof GenArr);
+// Two specializations of one generic are siblings, not ancestors: `instanceof`
+// must not have been widened into "shares a generic origin".
+const gs = new GenPlain<string>();
+console.log("9 siblings  :", gs instanceof GenPlain, gp instanceof GenPlain, gs instanceof PlainBase);
+
+// ── 10. `instanceof` inside a function, over a parameter (no local type proof) ──
 function isMine(v: unknown): string {
   return `${v instanceof MyMap} ${v instanceof Map} ${v instanceof MySet}`;
 }
-console.log("9 param:", isMine(a));
-console.log("9 param:", isMine(sa));
-console.log("9 param:", isMine(new Map()));
+console.log("10 param:", isMine(a));
+console.log("10 param:", isMine(sa));
+console.log("10 param:", isMine(new Map()));

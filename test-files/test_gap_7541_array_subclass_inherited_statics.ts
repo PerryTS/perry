@@ -9,8 +9,15 @@
 //
 // KNOWN GAP, deliberately not asserted here: the property-GET form
 // (`typeof MyArr.from`) still reports `undefined` — only the CALL form is
-// dispatched. Same for `sub instanceof MyArr`, a pre-existing class-registry
-// parent-edge gap (#7575's Map/Set sibling).
+// dispatched.
+//
+// The note that used to sit here claiming `sub instanceof MyArr` was also a gap
+// was STALE and is removed: #7575 measured it on pristine `main` and every
+// NON-generic Array-subclass `instanceof` — `new MyArr()`, `new Indirect()`,
+// and `MyArr.from([...])` — already held. Only the GENERIC spelling
+// (`class GenArr<T> extends Array<T>`) was broken, because Perry monomorphizes
+// generics and the instance carried `GenArr$num`'s class id; that is fixed in
+// #7575 and asserted in test_gap_7575_map_set_subclass_instanceof.ts.
 
 class MyArr extends Array {}
 class Indirect extends MyArr {}

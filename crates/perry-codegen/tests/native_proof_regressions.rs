@@ -236,6 +236,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 

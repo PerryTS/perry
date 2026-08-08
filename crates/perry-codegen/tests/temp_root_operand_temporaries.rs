@@ -309,6 +309,7 @@ fn module_with_new(name: &str, args: Vec<Expr>) -> Module {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }];
     module
 }

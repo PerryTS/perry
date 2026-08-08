@@ -157,6 +157,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>, methods: Vec<Function>) -
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
