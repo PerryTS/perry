@@ -709,10 +709,20 @@ pub(crate) struct RootedGroup<'a> {
     operands: crate::expr::temp_root::RootedOperands,
     exprs: Vec<&'a Expr>,
     accs: Vec<String>,
+    emitted: Vec<RootedSlot>,
     /// The LOWEST slot this group pushed, of either kind. One truncate at it
     /// drops the whole scope, because a truncate is a stack cut.
     first_slot: Option<String>,
 }
+
+/// A handle on one **emitted** value inside a [`RootedGroup`] —
+/// see [`RootedGroup::adopt_emitted`].
+///
+/// Opaque and `Copy`, for the same reason [`AccArray`] is: it is not a slot
+/// index, so it cannot be truncated, mis-ordered or released. The same
+/// not-branded-per-group caveat applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EmittedValue(usize);
 
 /// A handle on one accumulator array inside a [`RootedGroup`].
 ///
@@ -736,6 +746,7 @@ impl<'a> RootedGroup<'a> {
             operands: crate::expr::temp_root::root_operands_begin(capacity),
             exprs: Vec::with_capacity(capacity),
             accs: Vec::new(),
+            emitted: Vec::new(),
             first_slot: None,
         }
     }
@@ -809,6 +820,69 @@ impl<'a> RootedGroup<'a> {
     /// How many operands the group holds.
     pub(crate) fn len(&self) -> usize {
         self.exprs.len()
+    }
+
+    /// Root a value that an **emitted step** produced, rather than one lowered
+    /// from an expression.
+    ///
+    /// # Why this exists, and why it took until slice 7
+    ///
+    /// This file deleted a `root_i64(ctx, reg) -> RootedSlot` combinator unused
+    /// and recorded the terms on which a replacement could return: "it should
+    /// arrive with its caller and with a written argument for why
+    /// [`call_rooted`] cannot serve". Slice 7 found two callers, and they are
+    /// the same shape:
+    ///
+    ///  * `expr/proxy_reflect.rs` — `process.env[k] = v` must coerce the key
+    ///    (`js_to_property_key`, which runs a user `Symbol.toPrimitive`) ABOVE
+    ///    the value's evaluation, because ES2022 moved `ToPropertyKey` before
+    ///    the RHS. The **coerced** key is what has to survive that evaluation,
+    ///    and it is a fresh heap string with no other root;
+    ///  * `expr/fs_await.rs` — the await loop polls the promise that
+    ///    `js_assimilate_thenable` + `js_await_any_promise` produced, which for
+    ///    a thenable is a **wrapper** the assimilation allocated, not the
+    ///    operand.
+    ///
+    /// **Why [`call_rooted`] cannot serve.** It fuses the root store to a call
+    /// it emits itself and hardcodes [`Repr::Ptr`], so it can only root the
+    /// direct `i64` result of one call. Neither value is that: the property key
+    /// is a `double` whose raw pointer must be taken BELOW the window, and the
+    /// promise is used boxed (`js_value_is_promise`) and unboxed
+    /// (`js_promise_state`) in six different basic blocks.
+    ///
+    /// **Why there is no protection decision to make.** Every other entry point
+    /// asks `operand_protection`; this value has no `Expr` to ask about, and
+    /// two of the three answers are unavailable on principle rather than by
+    /// choice. `Reload` cannot re-derive it — re-emitting the producing call
+    /// would call it a *second* time, and both producers are observable. And
+    /// `Reuse` is the bug. So the answer is always `Root`, there is no flag,
+    /// and a caller cannot pick the wrong one.
+    ///
+    /// **What it does weaken, stated plainly.** `value` is a register the
+    /// caller produced, so "produce it, let something collect, THEN root it" —
+    /// #7192 — is writable here, exactly as it is in
+    /// [`with_rooted_accumulator`], which has taken a caller-produced `initial`
+    /// since slice 3. Call this on the line below the emission that produced
+    /// the value.
+    pub(crate) fn adopt_emitted(
+        &mut self,
+        ctx: &mut FnCtx<'_>,
+        repr: Repr,
+        value: &str,
+    ) -> EmittedValue {
+        let idx = match repr {
+            Repr::Ptr => crate::expr::temp_root::temp_root_push_i64(ctx, value),
+            Repr::Boxed => crate::expr::temp_root::temp_root_push_double(ctx, value),
+        };
+        self.note_slot(Some(idx.clone()));
+        self.emitted.push(RootedSlot { idx, repr });
+        EmittedValue(self.emitted.len() - 1)
+    }
+
+    /// Re-read an [`adopt_emitted`](RootedGroup::adopt_emitted) value **here**,
+    /// in the representation it was pushed with.
+    pub(crate) fn reread_emitted(&self, ctx: &mut FnCtx<'_>, value: EmittedValue) -> String {
+        read_slot(ctx, &self.emitted[value.0])
     }
 
     /// Allocate an argument-accumulator array of capacity `cap` and root it in
@@ -1241,6 +1315,30 @@ pub(crate) fn with_rooted_accumulator<'f, R>(
 /// every rooting decision through this API, and nobody has read those four
 /// modules for windows with no decision at all. An unlisted module is honest;
 /// a listed unaudited one is the distinction slice 4 had to draw the hard way.
+///
+/// Slice 7 lists three `expr/` modules, all load-bearing on the committed
+/// source (`temp_root_{push,get}_double`, `temp_root_truncate`,
+/// `guard_store_operand{,_across}`, `reread_store_operand`,
+/// `release_store_operand`, `expr_may_trigger_gc`):
+///
+///   * `expr/child_proc.rs` — every `child_process` entry point. Three arms
+///     rooted unconditionally through the raw API and five rooted nothing at
+///     all while holding RAW heap pointers across arbitrary user lowerings.
+///   * `expr/proxy_reflect.rs` — the densest unaudited module in the campaign.
+///     One arm made a rooting decision (the `PutValueSet` write-IC, #7201) and
+///     twenty-eight made none.
+///   * `expr/fs_await.rs` — the await loop, whose root was correct and simply
+///     never released.
+///
+/// **Slice 7 added the one combinator this file had refused to add ahead of a
+/// caller**, and the refusal was right: the shape it predicted is the shape
+/// that turned up. [`RootedGroup::adopt_emitted`] roots a GC-managed value that
+/// an emitted step produced rather than one lowered from an `Expr` — the
+/// coerced key of `process.env[k] = v`, and the assimilated promise the await
+/// loop polls. Its doc carries the argument for why [`call_rooted`] cannot
+/// serve and the note on what it weakens. Which is the shape of the answer this
+/// campaign keeps arriving at: an API gap recorded in slice N is a combinator
+/// in slice N+1, and writing the gap down is what makes the next slice cheap.
 #[cfg(test)]
 const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
@@ -1342,6 +1440,18 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
     (
         "crates/perry-codegen/src/lower_call/console_promise.rs",
         include_str!("lower_call/console_promise.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/child_proc.rs",
+        include_str!("expr/child_proc.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/proxy_reflect.rs",
+        include_str!("expr/proxy_reflect.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/expr/fs_await.rs",
+        include_str!("expr/fs_await.rs"),
     ),
 ];
 

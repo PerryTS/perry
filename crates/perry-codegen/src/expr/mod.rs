@@ -76,8 +76,8 @@ pub(crate) use helpers::{
     emit_all_pointer_array_declaration, expr_has_numeric_pointer_free_array_layout,
     expr_produces_fresh_heap_allocation, expr_produces_non_pointer_bits_by_construction,
     is_global_this_builtin_function_name, is_global_this_builtin_name,
-    lower_expr_with_expected_type, lower_js_args_array, proxy_build_args_array,
-    store_needs_string_addref, unbox_str_handle, unbox_to_i64,
+    lower_expr_with_expected_type, lower_js_args_array, store_needs_string_addref,
+    unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
@@ -137,6 +137,8 @@ mod repsel_gates;
 mod scalar_slot_root;
 pub(crate) mod shadow_inline;
 mod shadow_slot;
+#[cfg(test)]
+mod slice7_rooting_tests;
 mod slot_rep;
 pub(crate) mod temp_root;
 // #7128: the env-knob table and the pure `gates -> context flags` derivation.

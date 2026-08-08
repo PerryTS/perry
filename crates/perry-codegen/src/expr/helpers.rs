@@ -9,7 +9,7 @@ use perry_hir::{BinaryOp, Expr, UnaryOp};
 use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I64};
 
 /// Static-type predicate: the type's runtime array layout has no pointer
 /// payloads, so a pointer-mask layout note isn't necessary for stores.
@@ -335,19 +335,13 @@ pub(crate) fn lower_expr_with_expected_type(
     }
 }
 
-/// Build a NaN-boxed Array JSValue from a slice of Expr arguments.
-pub(crate) fn proxy_build_args_array(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<String> {
-    let cap = (args.len() as u32).to_string();
-    let arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-    let mut current = arr;
-    for a in args {
-        let v = lower_expr(ctx, a)?;
-        current = ctx
-            .block()
-            .call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
-    }
-    Ok(current)
-}
+// `proxy_build_args_array` lived here and was deleted by #7615 slice 7. It
+// threaded the array's raw `*mut ArrayHeader` through its push loop in a bare
+// SSA register while each element — arbitrary user code — was lowered, which is
+// #7154's accumulator bug, and it had no way to root the CALLER's receiver
+// across the same loop. Its four call sites now build the array inside a
+// `crate::rooting::RootedGroup` that holds the receiver too
+// (`expr::proxy_reflect::build_args_array`).
 
 /// Build the `, !alias.scope !N, !noalias !M` suffix attached to Buffer
 /// load/store instructions on the GEP fast path. `scope_idx` is the per-

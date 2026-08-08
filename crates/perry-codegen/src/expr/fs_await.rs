@@ -1,13 +1,29 @@
 //! FsUnlinkSync + Await.
 //!
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
-//! Pure mechanical move — match arm bodies are verbatim copies, called from
-//! `lower_expr`'s outer dispatch.
+//!
+//! # Layer 1 rooting (#7615 slice 7)
+//!
+//! The await loop's promise root was correct in every respect but one: it was
+//! **never released**. `temp_root_push_double` ran unconditionally at the top of
+//! the arm and no path emitted a truncate, so the slot stayed bound for the rest
+//! of the function on every path out — and in the FFI-fallback lowering
+//! (`temp_pool_acquire` returns `None` when the function has no shadow frame)
+//! that is a `js_gc_temp_root_push` per EXECUTION with no matching
+//! `js_gc_temp_root_truncate`, which is #7462's unbounded-growth shape for an
+//! `await` inside a loop.
+//!
+//! The scope is now a `crate::rooting::RootedGroup` whose release is owned by
+//! `with_rooted_group`, so it is emitted in the merge block on every path that
+//! reaches it and cannot be forgotten. The two paths that do NOT reach the merge
+//! (`await.reject`'s `js_throw`, `await.unsettled_exit`) end in `unreachable`
+//! or a `ret`, where over-retention is unobservable.
 
 use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::nanbox::double_literal;
+use crate::rooting::{with_rooted_group, Repr};
 use crate::types::{DOUBLE, I1, I32, I64};
 
 use super::{lower_expr, unbox_to_i64, FnCtx};
@@ -15,6 +31,7 @@ use super::{lower_expr, unbox_to_i64, FnCtx};
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::FsUnlinkSync(path) => {
+            // One operand, consumed by the very next emission: no window.
             let p = lower_expr(ctx, path)?;
             let _ = ctx.block().call(I32, "js_fs_unlink_sync", &[(DOUBLE, &p)]);
             Ok(double_literal(0.0))
@@ -74,209 +91,210 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_await_any_promise",
                 &[(DOUBLE, &assimilated_box)],
             );
+            with_rooted_group(ctx, 1, |ctx, g| {
+                // Defensive guard: if the operand is not actually a
+                // Promise (e.g. `await someNumber` or an unsupported
+                // runtime function that returned a raw handle), fall
+                // back to JS semantics — "await non-promise returns
+                // the value itself" — instead of unboxing garbage bits
+                // and polling `js_promise_state` on a random pointer.
+                //
+                // We call `js_value_is_promise(f64) -> i32` (GC-type
+                // check) and branch: truthy → existing polling path,
+                // falsy → store the box into a result slot and jump
+                // straight to the merge block.
+                //
+                // The result is materialized via an `alloca` slot so the
+                // merge block can reload a single SSA value without
+                // having to thread explicit phi nodes through every
+                // intermediate block. Hoisted to the entry block so the
+                // slot dominates the merge block even when this Await is
+                // itself nested inside an if-arm.
+                // #7341: root the promise for the whole await loop.
+                //
+                // `wait` calls `js_promise_run_microtasks_await_loop`,
+                // `js_run_stdlib_pump` and `js_await_loop_tick_timers`, every one of
+                // which allocates and can drive an evacuating minor — then branches
+                // back to `check`, which re-unboxes the SAME SSA value. The comment
+                // below about unboxing per block solves LLVM dominance, not GC
+                // movement: the box names the pre-collection promise, so after one
+                // pump the loop polls retired from-space and `js_promise_state`
+                // dereferences it.
+                //
+                // 4 of the 31 catches in #7341 are this, all `obj_type=5`
+                // (GC_TYPE_PROMISE) with frame #1 in generated code. The temp-root
+                // slot is what the collector rewrites, so every block re-reads it
+                // instead of reusing the register.
+                let promise_root = g.adopt_emitted(ctx, Repr::Boxed, &promise_box);
+                let result_slot = ctx.func.alloca_entry(DOUBLE);
+                // Pre-seed with the boxed operand so the non-promise
+                // branch just needs to jump to merge.
+                ctx.block().store(DOUBLE, &promise_box, &result_slot);
 
-            // Defensive guard: if the operand is not actually a
-            // Promise (e.g. `await someNumber` or an unsupported
-            // runtime function that returned a raw handle), fall
-            // back to JS semantics — "await non-promise returns
-            // the value itself" — instead of unboxing garbage bits
-            // and polling `js_promise_state` on a random pointer.
-            //
-            // We call `js_value_is_promise(f64) -> i32` (GC-type
-            // check) and branch: truthy → existing polling path,
-            // falsy → store the box into a result slot and jump
-            // straight to the merge block.
-            //
-            // The result is materialized via an `alloca` slot so the
-            // merge block can reload a single SSA value without
-            // having to thread explicit phi nodes through every
-            // intermediate block. Hoisted to the entry block so the
-            // slot dominates the merge block even when this Await is
-            // itself nested inside an if-arm.
-            // #7341: root the promise for the whole await loop.
-            //
-            // `wait` calls `js_promise_run_microtasks_await_loop`,
-            // `js_run_stdlib_pump` and `js_await_loop_tick_timers`, every one of
-            // which allocates and can drive an evacuating minor — then branches
-            // back to `check`, which re-unboxes the SAME SSA value. The comment
-            // below about unboxing per block solves LLVM dominance, not GC
-            // movement: the box names the pre-collection promise, so after one
-            // pump the loop polls retired from-space and `js_promise_state`
-            // dereferences it.
-            //
-            // 4 of the 31 catches in #7341 are this, all `obj_type=5`
-            // (GC_TYPE_PROMISE) with frame #1 in generated code. The temp-root
-            // slot is what the collector rewrites, so every block re-reads it
-            // instead of reusing the register.
-            let promise_root = crate::expr::temp_root::temp_root_push_double(ctx, &promise_box);
-            let result_slot = ctx.func.alloca_entry(DOUBLE);
-            // Pre-seed with the boxed operand so the non-promise
-            // branch just needs to jump to merge.
-            ctx.block().store(DOUBLE, &promise_box, &result_slot);
-
-            let is_promise_i32 =
-                ctx.block()
-                    .call(I32, "js_value_is_promise", &[(DOUBLE, &promise_box)]);
-            let is_promise_bool = ctx.block().icmp_ne(I32, &is_promise_i32, "0");
-
-            let drain_once_idx = ctx.new_block("await.drain_once");
-            let check_idx = ctx.new_block("await.check");
-            let wait_idx = ctx.new_block("await.wait");
-            let settled_idx = ctx.new_block("await.settled");
-            let reject_idx = ctx.new_block("await.reject");
-            let done_idx = ctx.new_block("await.done");
-            let merge_idx = ctx.new_block("await.merge");
-
-            let drain_once_label = ctx.block_label(drain_once_idx);
-            let check_label = ctx.block_label(check_idx);
-            let wait_label = ctx.block_label(wait_idx);
-            let settled_label = ctx.block_label(settled_idx);
-            let reject_label = ctx.block_label(reject_idx);
-            let done_label = ctx.block_label(done_idx);
-            let merge_label = ctx.block_label(merge_idx);
-
-            ctx.block()
-                .cond_br(&is_promise_bool, &drain_once_label, &merge_label);
-
-            // === drain_once ===
-            // Run pending promise/queueMicrotask jobs before the first state
-            // check. When the promise is already settled (e.g.
-            // `await Promise.resolve()`) the wait loop below is never
-            // entered, so jobs queued before this await would never fire
-            // before execution continues. Promise jobs ONLY — nextTick
-            // callbacks queued in the same synchronous stretch wait for the
-            // next real tick boundary, matching Node's checkpoint ordering
-            // (#788; previously this drained the tick queue instead, so a
-            // nextTick callback overtook earlier-queued microtasks). The
-            // wait loop covers ticks/timers for pending promises.
-            ctx.current_block = drain_once_idx;
-            let _ = ctx.block().call(I32, "js_promise_run_promise_jobs", &[]);
-            ctx.block().br(&check_label);
-
-            // === check ===
-            // Unbox the promise in each block that uses it — LLVM's
-            // SSA form requires every value definition to dominate
-            // its uses, and there's no single predecessor block we
-            // could hoist the unbox into (check is reachable from
-            // both the initial branch AND from `wait`).
-            ctx.current_block = check_idx;
-            let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
-            let promise_handle = unbox_to_i64(ctx.block(), &promise_box);
-            let state = ctx
-                .block()
-                .call(I32, "js_promise_state", &[(I64, &promise_handle)]);
-            let is_pending = ctx.block().icmp_eq(I32, &state, "0");
-            ctx.block()
-                .cond_br(&is_pending, &wait_label, &settled_label);
-
-            // === wait ===
-            // Drive microtasks AND pending timers on each tick so that
-            // `await new Promise(r => setTimeout(r, 1))` and similar
-            // patterns eventually resolve. Without the timer ticks the
-            // await loop busy-waits forever.
-            ctx.current_block = wait_idx;
-            ctx.block()
-                .call_void("js_promise_run_microtasks_await_loop", &[]);
-            // Drain the stdlib's tokio async queue — fetch, database
-            // queries, and other async stdlib operations queue their
-            // results via queue_promise_resolution and need this pump
-            // to actually resolve the promises on the main thread.
-            ctx.block().call_void("js_run_stdlib_pump", &[]);
-            // #5437: tick through the await-loop entry, which suspends the
-            // timer dispatch guard — a busy-wait await inside a timer /
-            // setImmediate callback (every HTTP request handler) must still
-            // fire due timers or a setImmediate-scheduled resolution (React's
-            // server renderer) can never settle.
-            let _ = ctx.block().call(I32, "js_await_loop_tick_timers", &[]);
-
-            if !ctx.is_async_fn {
-                let wait_for_event_idx = ctx.new_block("await.wait_for_event");
-                let unsettled_exit_idx = ctx.new_block("await.unsettled_exit");
-                let wait_for_event_label = ctx.block_label(wait_for_event_idx);
-                let unsettled_exit_label = ctx.block_label(unsettled_exit_idx);
-
-                let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
-                let promise_handle_wait = unbox_to_i64(ctx.block(), &promise_box);
-                let state_after_tick =
+                let is_promise_i32 =
                     ctx.block()
-                        .call(I32, "js_promise_state", &[(I64, &promise_handle_wait)]);
-                let still_pending = ctx.block().icmp_eq(I32, &state_after_tick, "0");
-                let has_timers = ctx.block().call(I32, "js_timer_has_pending", &[]);
-                let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
-                let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
-                let has_stdlib = ctx.block().call(I32, "js_stdlib_has_active_handles", &[]);
-                let has_microtasks = ctx.block().call(I32, "js_microtasks_pending", &[]);
-                let any1 = ctx.block().or(I32, &has_timers, &has_callbacks);
-                let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
-                let any3 = ctx.block().or(I32, &any1, &any2);
-                let any = ctx.block().or(I32, &any3, &has_microtasks);
-                let no_refed_work = ctx.block().icmp_eq(I32, &any, "0");
-                let should_exit = ctx.block().and(I1, &still_pending, &no_refed_work);
+                        .call(I32, "js_value_is_promise", &[(DOUBLE, &promise_box)]);
+                let is_promise_bool = ctx.block().icmp_ne(I32, &is_promise_i32, "0");
+
+                let drain_once_idx = ctx.new_block("await.drain_once");
+                let check_idx = ctx.new_block("await.check");
+                let wait_idx = ctx.new_block("await.wait");
+                let settled_idx = ctx.new_block("await.settled");
+                let reject_idx = ctx.new_block("await.reject");
+                let done_idx = ctx.new_block("await.done");
+                let merge_idx = ctx.new_block("await.merge");
+
+                let drain_once_label = ctx.block_label(drain_once_idx);
+                let check_label = ctx.block_label(check_idx);
+                let wait_label = ctx.block_label(wait_idx);
+                let settled_label = ctx.block_label(settled_idx);
+                let reject_label = ctx.block_label(reject_idx);
+                let done_label = ctx.block_label(done_idx);
+                let merge_label = ctx.block_label(merge_idx);
+
                 ctx.block()
-                    .cond_br(&should_exit, &unsettled_exit_label, &wait_for_event_label);
+                    .cond_br(&is_promise_bool, &drain_once_label, &merge_label);
 
-                ctx.current_block = unsettled_exit_idx;
+                // === drain_once ===
+                // Run pending promise/queueMicrotask jobs before the first state
+                // check. When the promise is already settled (e.g.
+                // `await Promise.resolve()`) the wait loop below is never
+                // entered, so jobs queued before this await would never fire
+                // before execution continues. Promise jobs ONLY — nextTick
+                // callbacks queued in the same synchronous stretch wait for the
+                // next real tick boundary, matching Node's checkpoint ordering
+                // (#788; previously this drained the tick queue instead, so a
+                // nextTick callback overtook earlier-queued microtasks). The
+                // wait loop covers ticks/timers for pending promises.
+                ctx.current_block = drain_once_idx;
+                let _ = ctx.block().call(I32, "js_promise_run_promise_jobs", &[]);
+                ctx.block().br(&check_label);
+
+                // === check ===
+                // Unbox the promise in each block that uses it — LLVM's
+                // SSA form requires every value definition to dominate
+                // its uses, and there's no single predecessor block we
+                // could hoist the unbox into (check is reachable from
+                // both the initial branch AND from `wait`).
+                ctx.current_block = check_idx;
+                let promise_box = g.reread_emitted(ctx, promise_root);
+                let promise_handle = unbox_to_i64(ctx.block(), &promise_box);
+                let state = ctx
+                    .block()
+                    .call(I32, "js_promise_state", &[(I64, &promise_handle)]);
+                let is_pending = ctx.block().icmp_eq(I32, &state, "0");
                 ctx.block()
-                    .call_void("js_unsettled_top_level_await_exit", &[]);
-                ctx.block().unreachable();
+                    .cond_br(&is_pending, &wait_label, &settled_label);
 
-                ctx.current_block = wait_for_event_idx;
-            }
+                // === wait ===
+                // Drive microtasks AND pending timers on each tick so that
+                // `await new Promise(r => setTimeout(r, 1))` and similar
+                // patterns eventually resolve. Without the timer ticks the
+                // await loop busy-waits forever.
+                ctx.current_block = wait_idx;
+                ctx.block()
+                    .call_void("js_promise_run_microtasks_await_loop", &[]);
+                // Drain the stdlib's tokio async queue — fetch, database
+                // queries, and other async stdlib operations queue their
+                // results via queue_promise_resolution and need this pump
+                // to actually resolve the promises on the main thread.
+                ctx.block().call_void("js_run_stdlib_pump", &[]);
+                // #5437: tick through the await-loop entry, which suspends the
+                // timer dispatch guard — a busy-wait await inside a timer /
+                // setImmediate callback (every HTTP request handler) must still
+                // fire due timers or a setImmediate-scheduled resolution (React's
+                // server renderer) can never settle.
+                let _ = ctx.block().call(I32, "js_await_loop_tick_timers", &[]);
 
-            // Issue #84: condvar wait — wakes the instant the awaited
-            // promise's resolver (or any other tokio queue push) calls
-            // js_notify_main_thread, instead of paying the old 1 ms
-            // hard-sleep quantum per await iteration.
-            ctx.block().call_void("js_wait_for_event", &[]);
-            ctx.block().br(&check_label);
+                if !ctx.is_async_fn {
+                    let wait_for_event_idx = ctx.new_block("await.wait_for_event");
+                    let unsettled_exit_idx = ctx.new_block("await.unsettled_exit");
+                    let wait_for_event_label = ctx.block_label(wait_for_event_idx);
+                    let unsettled_exit_label = ctx.block_label(unsettled_exit_idx);
 
-            // === settled ===
-            ctx.current_block = settled_idx;
-            let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
-            let promise_handle2 = unbox_to_i64(ctx.block(), &promise_box);
-            let state2 = ctx
-                .block()
-                .call(I32, "js_promise_state", &[(I64, &promise_handle2)]);
-            let is_rejected = ctx.block().icmp_eq(I32, &state2, "2");
-            ctx.block()
-                .cond_br(&is_rejected, &reject_label, &done_label);
+                    let promise_box = g.reread_emitted(ctx, promise_root);
+                    let promise_handle_wait = unbox_to_i64(ctx.block(), &promise_box);
+                    let state_after_tick =
+                        ctx.block()
+                            .call(I32, "js_promise_state", &[(I64, &promise_handle_wait)]);
+                    let still_pending = ctx.block().icmp_eq(I32, &state_after_tick, "0");
+                    let has_timers = ctx.block().call(I32, "js_timer_has_pending", &[]);
+                    let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
+                    let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
+                    let has_stdlib = ctx.block().call(I32, "js_stdlib_has_active_handles", &[]);
+                    let has_microtasks = ctx.block().call(I32, "js_microtasks_pending", &[]);
+                    let any1 = ctx.block().or(I32, &has_timers, &has_callbacks);
+                    let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
+                    let any3 = ctx.block().or(I32, &any1, &any2);
+                    let any = ctx.block().or(I32, &any3, &has_microtasks);
+                    let no_refed_work = ctx.block().icmp_eq(I32, &any, "0");
+                    let should_exit = ctx.block().and(I1, &still_pending, &no_refed_work);
+                    ctx.block()
+                        .cond_br(&should_exit, &unsettled_exit_label, &wait_for_event_label);
 
-            // === reject ===
-            // Same spec-corner as `Stmt::Throw`: inside an async function
-            // with no enclosing user try-frame, an awaited rejection must
-            // settle the caller's promise as rejected — not unwind. Without
-            // this, `async function f() { await Promise.reject(e); }`
-            // would terminate the process because `js_throw` longjmps
-            // through a non-existent handler frame.
-            ctx.current_block = reject_idx;
-            let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
-            let promise_handle3 = unbox_to_i64(ctx.block(), &promise_box);
-            let reason = ctx
-                .block()
-                .call(DOUBLE, "js_promise_reason", &[(I64, &promise_handle3)]);
-            if ctx.is_async_fn && ctx.try_depth == 0 {
-                let blk = ctx.block();
-                let handle = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &reason)]);
-                let boxed = crate::expr::nanbox_pointer_inline_pub(blk, &handle);
-                blk.ret(DOUBLE, &boxed);
-            } else {
-                ctx.block().call_void("js_throw", &[(DOUBLE, &reason)]);
-                ctx.block().unreachable();
-            }
+                    ctx.current_block = unsettled_exit_idx;
+                    ctx.block()
+                        .call_void("js_unsettled_top_level_await_exit", &[]);
+                    ctx.block().unreachable();
 
-            // === done ===
-            ctx.current_block = done_idx;
-            let promise_box = crate::expr::temp_root::temp_root_get_double(ctx, &promise_root);
-            let promise_handle4 = unbox_to_i64(ctx.block(), &promise_box);
-            let value = ctx
-                .block()
-                .call(DOUBLE, "js_promise_value", &[(I64, &promise_handle4)]);
-            ctx.block().store(DOUBLE, &value, &result_slot);
-            ctx.block().br(&merge_label);
+                    ctx.current_block = wait_for_event_idx;
+                }
 
-            // === merge ===
-            ctx.current_block = merge_idx;
-            Ok(ctx.block().load(DOUBLE, &result_slot))
+                // Issue #84: condvar wait — wakes the instant the awaited
+                // promise's resolver (or any other tokio queue push) calls
+                // js_notify_main_thread, instead of paying the old 1 ms
+                // hard-sleep quantum per await iteration.
+                ctx.block().call_void("js_wait_for_event", &[]);
+                ctx.block().br(&check_label);
+
+                // === settled ===
+                ctx.current_block = settled_idx;
+                let promise_box = g.reread_emitted(ctx, promise_root);
+                let promise_handle2 = unbox_to_i64(ctx.block(), &promise_box);
+                let state2 = ctx
+                    .block()
+                    .call(I32, "js_promise_state", &[(I64, &promise_handle2)]);
+                let is_rejected = ctx.block().icmp_eq(I32, &state2, "2");
+                ctx.block()
+                    .cond_br(&is_rejected, &reject_label, &done_label);
+
+                // === reject ===
+                // Same spec-corner as `Stmt::Throw`: inside an async function
+                // with no enclosing user try-frame, an awaited rejection must
+                // settle the caller's promise as rejected — not unwind. Without
+                // this, `async function f() { await Promise.reject(e); }`
+                // would terminate the process because `js_throw` longjmps
+                // through a non-existent handler frame.
+                ctx.current_block = reject_idx;
+                let promise_box = g.reread_emitted(ctx, promise_root);
+                let promise_handle3 = unbox_to_i64(ctx.block(), &promise_box);
+                let reason =
+                    ctx.block()
+                        .call(DOUBLE, "js_promise_reason", &[(I64, &promise_handle3)]);
+                if ctx.is_async_fn && ctx.try_depth == 0 {
+                    let blk = ctx.block();
+                    let handle = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &reason)]);
+                    let boxed = crate::expr::nanbox_pointer_inline_pub(blk, &handle);
+                    blk.ret(DOUBLE, &boxed);
+                } else {
+                    ctx.block().call_void("js_throw", &[(DOUBLE, &reason)]);
+                    ctx.block().unreachable();
+                }
+
+                // === done ===
+                ctx.current_block = done_idx;
+                let promise_box = g.reread_emitted(ctx, promise_root);
+                let promise_handle4 = unbox_to_i64(ctx.block(), &promise_box);
+                let value =
+                    ctx.block()
+                        .call(DOUBLE, "js_promise_value", &[(I64, &promise_handle4)]);
+                ctx.block().store(DOUBLE, &value, &result_slot);
+                ctx.block().br(&merge_label);
+
+                // === merge ===
+                ctx.current_block = merge_idx;
+                Ok(ctx.block().load(DOUBLE, &result_slot))
+            })
         }
 
         // -------- StaticFieldGet/Set --------
