@@ -14,7 +14,7 @@
 //! inside them. The class-field guard diamond does hold a derived
 //! `obj_bits`/`obj_handle` across `js_typed_feedback_class_field_get_guard`;
 //! that shape is a *derived raw pointer*, which no temp root can name and which
-//! `crate::rooting` therefore cannot express — it is recorded in #7648, not
+//! `crate::rooting` therefore cannot express — it is recorded in #7640, not
 //! papered over here.
 
 use super::*;

@@ -1848,6 +1848,10 @@ mod ptr_numarray_access;
 mod ta_param_f64_read;
 pub(crate) use index_get::packed_f64_loop_index_parts;
 pub(crate) use masked_window::masked_window_fact_for_index;
+/// Rooting coverage for the computed-store arms the TS corpora cannot reach
+/// (#7637, #7638, #7639) — see the module header for why they cannot.
+#[cfg(test)]
+mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_typed_array;
 mod instance_misc1;

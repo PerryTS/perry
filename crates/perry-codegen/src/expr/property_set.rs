@@ -16,7 +16,7 @@
 //! `lower_value_for_dynamic_property_set`, which this API cannot produce).
 //!
 //! The migration found one arm that had no guard at all: `arr.length = f()`
-//! (#7645). It is the same #7154 window every sibling arm already closed, and
+//! (#7637). It is the same #7154 window every sibling arm already closed, and
 //! it is closed here by putting the receiver in an operand group rather than by
 //! a fourth hand-written guard.
 
@@ -398,7 +398,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // an array). Deliberately out of scope here; the static-typed
             // case covers the issue's repro.
             if property == "length" && crate::type_analysis::is_array_expr(ctx, object) {
-                // #7645: this arm had NO store-operand guard, while every other
+                // #7637: this arm had NO store-operand guard, while every other
                 // `PropertySet` arm in this file has had one since #7154. It is
                 // the same window: `arr.length = f()` lowers the receiver first
                 // (spec order), `f()` allocates and can drive an evacuating

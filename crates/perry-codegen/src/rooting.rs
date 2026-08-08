@@ -837,9 +837,9 @@ pub(crate) fn with_rooted_accumulator<'f, R>(
 /// bounded-index array store and ten arms of `index_get.rs` lower a receiver,
 /// then lower more user code, then use the receiver — and root nothing. Three
 /// of those were adjacent to arms this slice was already rewriting and are
-/// fixed here (#7645, #7646, #7647); the rest are filed (#7647, #7648) rather
-/// than fixed, because they sit on inline fast paths where a temp root is a
-/// measured cost rather than plumbing.
+/// fixed here (#7637, #7638, #7639); the rest are filed as #7640 rather than
+/// fixed, because they sit on inline fast paths where a temp root is a measured
+/// cost rather than plumbing.
 ///
 /// So do not read a ledger line as "this module has no rooting bugs". It says
 /// the module cannot make an ORDERING mistake against the raw API, because it

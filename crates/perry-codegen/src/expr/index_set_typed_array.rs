@@ -15,7 +15,7 @@
 //! out-of-line `js_dyn_index_set` fallback — no user expression is lowered
 //! here, so no window opens. The receiver's exposure across the VALUE's
 //! lowering is the caller's to close, and `index_set.rs`'s `#5525` arm is one
-//! of the sites #7647 records as still open.
+//! of the sites #7640 records as still open.
 
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 

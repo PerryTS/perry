@@ -20,7 +20,7 @@
 //! window rather than restating it: #7201's disjunction — the receiver is live
 //! across BOTH the key and the value — falls out of the list order instead of
 //! being a hand-written `recv_collects`, and the two arms that got that flag
-//! wrong are exactly the two bugs this slice fixed (#7646, #7647).
+//! wrong are exactly the two bugs this slice fixed (#7638, #7639).
 //!
 //! Nesting note that no longer applies: the dynamic-string-key arm used to push
 //! two guards and release them inner-to-outer, because `temp_root_truncate` is a
@@ -980,7 +980,7 @@ pub(crate) fn lower(
             // to `js_array_set_f64_extend`, falling back to object-property
             // set on non-numeric keys per spec.
             if is_array_expr(ctx, object) && is_string_expr(ctx, index) {
-                // #7646: neither operand was guarded. The receiver AND the key
+                // #7638: neither operand was guarded. The receiver AND the key
                 // are lowered before the value, and the key is a heap string by
                 // construction on this arm (`is_string_expr`) with no
                 // registered root of its own — `unbox_str_handle` below would
@@ -1041,7 +1041,7 @@ pub(crate) fn lower(
             if is_array_expr(ctx, object) && !is_numeric_expr(ctx, index) {
                 // #7341: receiver live across `index` and `value` lowering.
                 //
-                // #7646: the KEY was live across `value` too, and was not
+                // #7638: the KEY was live across `value` too, and was not
                 // rooted. This arm fires exactly when the index is NOT
                 // statically numeric — a `forEach` callback's `(item, k)` where
                 // `k` came from a for-in over object keys, say — so `idx_double`
@@ -1607,7 +1607,7 @@ pub(crate) fn lower(
                 // `unbox_str_handle` below would hand the setter a pre-move
                 // `StringHeader*` and the field would land under a garbage key.
                 //
-                // #7647: the receiver's window used to be derived from `value`
+                // #7639: the receiver's window used to be derived from `value`
                 // ALONE, which is the half-measure #7201 named. The receiver is
                 // lowered before the KEY as well, so `o[f()] = 1` — a literal
                 // RHS that cannot collect, an allocating key that can — left it
@@ -1681,7 +1681,7 @@ pub(crate) fn lower(
             // symbol-property side table. Otherwise fall through to the
             // string/numeric dispatch.
             //
-            // #7647: this arm had NO store-operand guard on either operand,
+            // #7639: this arm had NO store-operand guard on either operand,
             // while every sibling arm above has had one since #7154. It is the
             // most exposed of them all — it is reached precisely when NOTHING
             // about the receiver or the key is statically known, so both are
