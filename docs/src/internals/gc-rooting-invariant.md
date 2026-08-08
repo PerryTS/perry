@@ -24,7 +24,13 @@ A "collection point" is any of:
   transition. `js_object_get_property` allocates: it can run a getter, which is
   user code;
 - `js_gc_loop_safepoint`, the back-edge poll (only emitted under
-  `PERRY_GC_MOVING_LOOP_POLLS=1`, off by default since #7161).
+  `PERRY_GC_MOVING_LOOP_POLLS=1`, off by default since #7161);
+- `js_gc_collect` — a JS-level `gc()`. Since #7558 this runs a full mark-sweep
+  on **precise roots** like everything else, so a value live across it and not
+  reachable from a root is *freed*. It used to force the conservative
+  native-stack scan (#4977), which hid exactly this shape; it does not any more.
+  Note that a `gc()`-only window is invisible to `--moving-only`, because a full
+  mark-sweep frees rather than moves — check such a function without that flag.
 
 The safe default is that **a call collects unless you have read the runtime
 source and proved otherwise**. The checker described below encodes exactly this
