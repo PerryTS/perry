@@ -906,7 +906,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
 /// encoder could still drop on the floor. Absence of a block is an `Err`, not
 /// an empty `Ok`: "there were no roots" and "there was no map" must not be the
 /// same answer to a caller that is about to assert a root count is zero.
-#[cfg(test)]
+#[cfg(all(test, feature = "llvm-inprocess"))]
 #[allow(clippy::type_complexity)]
 pub(crate) fn decode_stack_map_roots(
     asm: &str,

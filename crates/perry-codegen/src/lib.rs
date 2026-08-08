@@ -32,7 +32,12 @@ pub mod native_emit;
 /// Coverage for the native-roots (RS4GC statepoint) lowering that ships —
 /// #7502. Test-only; see the module docs for what it asserts and why the
 /// shadow-pinned suites are not a substitute.
-#[cfg(test)]
+///
+/// Gated on `llvm-inprocess` as well as `test`: two of its three vantages run
+/// the statepoint rewrite and emit assembly through that pipeline, so under
+/// `--no-default-features` (the text path, kept for bisection) there is nothing
+/// for it to assert against.
+#[cfg(all(test, feature = "llvm-inprocess"))]
 mod native_root_coverage;
 pub(crate) mod native_value;
 pub(crate) mod nm_install;
