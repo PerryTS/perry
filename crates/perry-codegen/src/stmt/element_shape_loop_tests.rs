@@ -199,13 +199,26 @@ fn emit(m: &Module) -> String {
 }
 
 /// The blocks that exist only when the clone was really built AND entered.
-const CLONE_LABELS: [&str; 5] = [
+const CLONE_LABELS: [&str; 6] = [
     "element_shape.loop.preheader.brand",
+    "element_shape.loop.preheader.repair",
     "element_shape.loop.preheader.query",
     "element_shape.loop.preheader.deref",
     "element_shape.loop.fast.preheader",
     "element_shape.load",
 ];
+
+/// The emitted text of one named block, up to the next block label.
+fn block_slice<'a>(ir: &'a str, label: &str) -> &'a str {
+    let start = ir
+        .find(&format!("\n{label}"))
+        .unwrap_or_else(|| panic!("block `{label}` should be present in the emitted IR"));
+    let body = &ir[start + 1..];
+    let end = body
+        .find("\n\n")
+        .unwrap_or_else(|| panic!("block `{label}` should be terminated by a blank line"));
+    &body[..end]
+}
 
 /// The emitted text the fast clone owns: from its cond block to the slow
 /// clone's.
@@ -397,5 +410,120 @@ fn a_program_with_no_qualifying_loop_pays_nothing() {
     assert!(
         !ir.contains("call i32 @js_array_ensure_element_shape"),
         "a module with no qualifying loop must not call the guard"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #7480: growth-forwarding repair.
+//
+// `js_array_grow` allocates the larger array elsewhere and leaves a forwarding
+// stub behind whose first payload word (`length`‖`capacity`) is OVERWRITTEN
+// with the new head. Every runtime entry point resolves the chain, so the
+// guard call answers about the LIVE array — but the emitted code reads
+// `length` and the elements base off the raw pointer, and on a stub both are
+// wrong in the worst possible combination: `length` reads the low half of a
+// heap pointer (a huge number, so the `length >= bound` test PASSES), while
+// the base still addresses the pre-growth buffer. The clone then reads correct
+// elements up to the old capacity and runs off the end of the block after it —
+// masked, dereferenced at `-8`, SIGBUS. With `MIN_ARRAY_CAPACITY == 16` that
+// is exactly the "right answer at 16 elements, bus error at 17" shape #7480
+// reproduced.
+//
+// The repair is repsel 4a.2's (#6904) self-heal: follow the chain once and
+// write the live head back to the binding, BEFORE the guard call — the refresh
+// can itself allocate (a lazy array materializes inside `clean_arr_ptr`), so
+// doing it afterwards would reintroduce the very "base derived across an
+// allocating call" hazard that step (4) exists to avoid.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn preheader_repairs_the_array_head_before_the_guard_call() {
+    let ir = emit(&element_shape_module(
+        vec![accumulate_stmt(
+            SUM_ID,
+            ARRAY_ID,
+            Expr::LocalGet(COUNTER_ID),
+        )],
+        None,
+    ));
+    let repair = block_slice(&ir, "element_shape.loop.preheader.repair");
+    assert!(
+        repair.contains("call double @js_array_refresh_local_head"),
+        "the repair block must follow the growth-forwarding chain; emitted:\n{repair}"
+    );
+
+    // Ordering is the whole fix. A refresh emitted AFTER the guard call would
+    // leave the elements base derived from the stub.
+    let refresh_at = ir
+        .find("call double @js_array_refresh_local_head")
+        .expect("growth-forwarding refresh call");
+    let query_at = ir
+        .find("call i32 @js_array_ensure_element_shape")
+        .expect("element-shape guard call");
+    assert!(
+        refresh_at < query_at,
+        "the growth-forwarding refresh must precede the element-shape query"
+    );
+}
+
+#[test]
+fn the_repaired_head_is_written_back_to_the_binding() {
+    let ir = emit(&element_shape_module(
+        vec![accumulate_stmt(
+            SUM_ID,
+            ARRAY_ID,
+            Expr::LocalGet(COUNTER_ID),
+        )],
+        None,
+    ));
+    let repair = block_slice(&ir, "element_shape.loop.preheader.repair");
+
+    // WITHOUT a write-back the repair would be inert: the query and deref
+    // blocks both RE-READ the binding, so they would read the stub straight
+    // back out — which is precisely how the bug shipped. So the assertion is
+    // not "a store exists" but "the value stored is the refresh's result".
+    let refreshed = repair
+        .lines()
+        .find_map(|l| l.trim().split_once(" = call double @js_array_refresh_local_head"))
+        .map(|(reg, _)| reg.to_string())
+        .expect("the refresh call should bind a register");
+    assert!(
+        repair.lines().any(|l| l.trim().starts_with("store ")),
+        "the repair block must write the live head back; emitted:\n{repair}"
+    );
+    // A root-slot store is rewritten by `function/precise_roots.rs` into
+    // `bitcast double <reg> to i64` + `inttoptr` + `store ptr addrspace(1)`,
+    // so the bitcast naming the refresh's result IS the write-back.
+    assert!(
+        repair.lines().any(|l| {
+            let l = l.trim();
+            l.starts_with("%rs4gc.b") && l.contains(&format!("bitcast double {refreshed} to i64"))
+        }),
+        "the value stored back must be the refreshed head {refreshed}; emitted:\n{repair}"
+    );
+}
+
+#[test]
+fn the_repair_does_not_put_a_call_inside_the_fast_clone() {
+    let ir = emit(&element_shape_module(
+        vec![accumulate_stmt(
+            SUM_ID,
+            ARRAY_ID,
+            Expr::LocalGet(COUNTER_ID),
+        )],
+        None,
+    ));
+    // The repair adds a call to the PREHEADER, which is fine. One inside the
+    // clone would void the revocation argument — and, because the lowering
+    // then branches unconditionally to the slow clone, would silently delete
+    // the optimization instead of failing.
+    let fast = fast_clone_slice(&ir);
+    assert!(
+        !fast.contains("call "),
+        "the fast clone must stay call-free after the #7480 repair; emitted:\n{fast}"
+    );
+    assert!(
+        ir.contains("element_shape.loop.fast.preheader"),
+        "the clone must still be reached after the #7480 repair"
     );
 }

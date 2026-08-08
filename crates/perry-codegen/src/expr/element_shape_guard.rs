@@ -106,9 +106,11 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     slow_label: &str,
 ) -> anyhow::Result<(String, String, String)> {
     let brand_idx = ctx.new_block("element_shape.loop.preheader.brand");
+    let repair_idx = ctx.new_block("element_shape.loop.preheader.repair");
     let query_idx = ctx.new_block("element_shape.loop.preheader.query");
     let deref_idx = ctx.new_block("element_shape.loop.preheader.deref");
     let brand_label = ctx.block_label(brand_idx);
+    let repair_label = ctx.block_label(repair_idx);
     let query_label = ctx.block_label(query_idx);
     let deref_label = ctx.block_label(deref_idx);
 
@@ -141,7 +143,61 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
         let gt_ptr = blk.inttoptr(I64, &gt_addr);
         let gc_type = blk.load(I8, &gt_ptr);
         let is_array = blk.icmp_eq(I8, &gc_type, GC_TYPE_ARRAY);
-        blk.cond_br(&is_array, &query_label, slow_label);
+        blk.cond_br(&is_array, &repair_label, slow_label);
+    }
+
+    // (2b) GROWTH-FORWARDING REPAIR (#7480). The binding may hold a *stale*
+    // array head: `js_array_grow` allocates the larger array elsewhere and
+    // leaves a forwarding stub at the old address, and only the bindings the
+    // growing code itself wrote through are re-pointed. Every runtime entry
+    // point resolves the chain (`clean_arr_ptr`) — including
+    // `js_array_ensure_element_shape` below, which therefore answers about the
+    // LIVE array — but the emitted code below reads `length` and the elements
+    // base off the raw pointer, and on a stub those are catastrophically wrong:
+    // growth overwrites the stub's first payload word (`length`‖`capacity`)
+    // with the forwarding address, so `length` reads the low 32 bits of a heap
+    // pointer (a huge number that passes `len_ok`), while the elements base
+    // still addresses the pre-growth buffer. Elements below the old capacity
+    // read stale-but-valid pointers and everything above it runs off the end of
+    // the block into whatever allocation follows — masked, dereferenced at
+    // `-8`, SIGBUS. With `MIN_ARRAY_CAPACITY == 16` that is exactly the
+    // "correct for a 16-element array, faults at 17" shape #7480 reproduced.
+    //
+    // The repair is repsel 4a.2's (#6904) documented self-heal: follow the
+    // chain once and write the live head back to the binding. It must happen
+    // BEFORE the query call, not after, because `js_array_refresh_local_head`
+    // can allocate (a lazy array materializes inside `clean_arr_ptr`) — putting
+    // it here keeps the "no call after the base is derived" invariant intact,
+    // and the write-back means step (4)'s re-load of the rooted slot picks up
+    // the repaired head no matter what the query call moved.
+    ctx.current_block = repair_idx;
+    {
+        let fresh = ctx.block().call(
+            DOUBLE,
+            "js_array_refresh_local_head",
+            &[(DOUBLE, arr0.as_str())],
+        );
+        // The matcher (`stmt/element_shape_loop.rs`) admits only bindings one
+        // of these two arms covers, so the head is always repairable here.
+        if let Some(slot) = ctx.locals.get(&array_local_id).cloned() {
+            ctx.block().store(DOUBLE, &fresh, &slot);
+        } else if let Some(global_name) = ctx.module_globals.get(&array_local_id).cloned() {
+            let g_ref = format!("@{global_name}");
+            // GC_STORE_AUDIT(ROOT): module global array slot is a registered
+            // mutable GC root; the value is the same JS array's live head.
+            super::write_barrier::emit_root_nanbox_store_on_block(ctx.block(), &fresh, &g_ref);
+        }
+        // Re-derive from the repaired head. `js_array_refresh_local_head`
+        // returns its input untouched when there was nothing to follow, so
+        // this repeats (1) rather than replacing it.
+        let blk = ctx.block();
+        let bitsr = blk.bitcast_double_to_i64(&fresh);
+        let tagr = blk.lshr(I64, &bitsr, "48");
+        let is_ptrr = blk.icmp_eq(I64, &tagr, POINTER_TAG_HI16);
+        let handler = blk.and(I64, &bitsr, crate::nanbox::POINTER_MASK_I64);
+        let abover = blk.icmp_ugt(I64, &handler, HANDLE_BAND_TOP);
+        let okr = blk.and(I1, &is_ptrr, &abover);
+        blk.cond_br(&okr, &query_label, slow_label);
     }
 
     // (3) The live-header query. `js_array_ensure_element_shape` establishes
@@ -149,10 +205,17 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     // either way it reads the array's CURRENT `GcHeader` bit and its record,
     // and self-heals (clearing the bit) when the record went stale. Static
     // declarations are never consulted — #7501's lesson.
+    //
+    // Deliberately re-loads the (now repaired) binding rather than reusing the
+    // repair block's handle: `js_array_refresh_local_head` can allocate, so a
+    // handle derived before it is a pre-move address.
     ctx.current_block = query_idx;
+    let arrq = super::lower_expr(ctx, &perry_hir::Expr::LocalGet(array_local_id))?;
     {
         let blk = ctx.block();
-        let class_id = blk.call(I32, "js_array_ensure_element_shape", &[(I64, &handle0)]);
+        let bitsq = blk.bitcast_double_to_i64(&arrq);
+        let handleq = blk.and(I64, &bitsq, crate::nanbox::POINTER_MASK_I64);
+        let class_id = blk.call(I32, "js_array_ensure_element_shape", &[(I64, &handleq)]);
         let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
         blk.cond_br(&cid_ok, &deref_label, slow_label);
     }

@@ -265,3 +265,53 @@ for (let j = 0; j < 4; j++) {
   overOut += row === undefined ? "_" : String(row.v);
 }
 console.log("bound-past-length:", overOut);
+
+// ---------------------------------------------------------------------------
+// 10. GROWTH FORWARDING (#7480). Every case above builds its array in the same
+//     scope that reads it, so the binding always held the LIVE head and the
+//     preheader's raw-pointer derivation happened to be right. It is not right
+//     in general: `js_array_grow` moves the array and leaves a forwarding stub
+//     whose first payload word (length‖capacity) is overwritten with the new
+//     head. The runtime resolves the chain, so the guard call still answers
+//     about the live array; a preheader that derived `length` and the elements
+//     base from the stub instead read the low half of a heap pointer as
+//     `length` (so the bound check PASSED) and addressed the pre-growth
+//     buffer — correct answers up to the initial capacity of 16, and a bus
+//     error at 17.
+//
+//     Both shapes below cross that boundary. Keep the counts above 16.
+// ---------------------------------------------------------------------------
+function buildRows(n: number): Node[] {
+  const rows: Node[] = [];
+  for (let i = 0; i < n; i++) {
+    rows.push(new Node(i, i * 2));
+  }
+  return rows;
+}
+
+const returned = buildRows(40);
+console.log("grown-callee-built:", sumField(returned, returned.length));
+// Re-entering must still be right: the binding is repaired in place, so the
+// second visit takes the O(1) confirm path on an already-live head.
+console.log("grown-callee-built-again:", sumField(returned, returned.length));
+
+// A prefix of the same array — the index where a stale base first runs off the
+// pre-growth block.
+let prefix = 0;
+for (let j = 0; j < 17; j++) {
+  prefix += returned[j].v;
+}
+console.log("grown-prefix-17:", prefix);
+
+// The canonical stale-head shape: the CALLER allocates, the CALLEE grows. The
+// callee's write-backs update its own parameter slot, so the caller's binding
+// keeps the pre-growth head.
+function fill(rows: Node[], n: number): void {
+  for (let i = 0; i < n; i++) {
+    rows.push(new Node(i, i * 3));
+  }
+}
+
+const callerOwned: Node[] = [];
+fill(callerOwned, 40);
+console.log("grown-callee-filled:", sumField(callerOwned, callerOwned.length));

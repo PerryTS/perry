@@ -371,6 +371,15 @@ fn match_element_shape_versioned_loop(
     if !ctx.locals.contains_key(&array_id) && !ctx.module_globals.contains_key(&array_id) {
         return None;
     }
+    // #7480: the preheader must be able to write the growth-forwarding-repaired
+    // head BACK into the binding (see
+    // `expr::element_shape_guard::emit_element_shape_loop_preheader_check`
+    // step 2b). A closure-captured array lives in a capture cell that a plain
+    // slot store would not update, so the two views could disagree; decline
+    // rather than repair only half of them.
+    if ctx.closure_captures.contains_key(&array_id) {
+        return None;
+    }
     if !local_bound_is_loop_invariant(condition?, update, body, array_id) {
         return None;
     }
