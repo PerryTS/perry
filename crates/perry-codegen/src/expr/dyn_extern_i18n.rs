@@ -9,6 +9,7 @@ use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::rooting::{with_rooted_accumulator, Arg, Repr};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{
@@ -942,38 +943,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // core` materializes 269 members here, and the emitted IR
                     // carried ZERO `js_gc_temp_root_*` calls beside its 269
                     // allocating stores.
-                    let rooted = super::temp_root::rooted_handle_begin(ctx, &handle, true);
-                    for member in &members {
-                        let member_get = Expr::PropertyGet {
-                            byte_offset: 0,
-                            object: Box::new(Expr::ExternFuncRef {
-                                name: name.clone(),
-                                param_types: Vec::new(),
-                                return_type: HirType::Any,
-                            }),
-                            property: member.clone(),
-                        };
-                        let v_box = lower_expr(ctx, &member_get)?;
-                        let key_idx = ctx.strings.intern(member);
-                        let key_handle_global =
-                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                        // Re-read AFTER the member resolution: that is the
-                        // collection point, so a register captured before it is
-                        // the stale one.
-                        let handle = super::temp_root::rooted_handle_get(ctx, &rooted);
-                        let blk = ctx.block();
-                        let key_box = blk.load(DOUBLE, &key_handle_global);
-                        let key_bits = blk.bitcast_double_to_i64(&key_box);
-                        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                        blk.call_void(
-                            "js_object_set_field_by_name",
-                            &[(I64, &handle), (I64, &key_raw), (DOUBLE, &v_box)],
-                        );
-                    }
-                    let handle = super::temp_root::rooted_handle_get(ctx, &rooted);
-                    let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-                    super::temp_root::rooted_handle_release(ctx, rooted);
-                    return Ok(boxed);
+                    //
+                    // #7615 slice 8: this is `with_rooted_accumulator`'s shape
+                    // exactly — a half-built container written once per member
+                    // with arbitrary user code lowered between the writes — so
+                    // the re-read is fused to the emission that consumes it
+                    // (`RootedAcc::call_void` materialises argument 0 from the
+                    // slot immediately before the call) instead of being a
+                    // register the loop holds. `protect` is unconditionally
+                    // `true` because both halves of the loop body collect on
+                    // every iteration, which is what the paragraph above
+                    // establishes.
+                    return with_rooted_accumulator(
+                        ctx,
+                        Repr::Ptr,
+                        &handle,
+                        true,
+                        |ctx, acc| {
+                            for member in &members {
+                                let member_get = Expr::PropertyGet {
+                                    byte_offset: 0,
+                                    object: Box::new(Expr::ExternFuncRef {
+                                        name: name.clone(),
+                                        param_types: Vec::new(),
+                                        return_type: HirType::Any,
+                                    }),
+                                    property: member.clone(),
+                                };
+                                let v_box = lower_expr(ctx, &member_get)?;
+                                let key_idx = ctx.strings.intern(member);
+                                let key_handle_global =
+                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                                let key_raw = {
+                                    let blk = ctx.block();
+                                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                    blk.and(I64, &key_bits, POINTER_MASK_I64)
+                                };
+                                acc.call_void(
+                                    ctx,
+                                    "js_object_set_field_by_name",
+                                    &[Arg::Plain(I64, &key_raw), Arg::Plain(DOUBLE, &v_box)],
+                                );
+                            }
+                            Ok(())
+                        },
+                        |ctx, handle| Ok(nanbox_pointer_inline(ctx.block(), handle)),
+                    );
                 }
                 return Ok(ctx
                     .block()

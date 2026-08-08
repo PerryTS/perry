@@ -10,7 +10,7 @@ use crate::expr::FnCtx;
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64};
 
-use super::str_operand_handle_tag_dispatched;
+use crate::lower_string_concat::str_operand_handle_tag_dispatched;
 
 // `StringHeader` layout the fast path reads, from
 // `crates/perry-runtime/src/string/mod.rs`. That struct is `#[repr(C)]` with

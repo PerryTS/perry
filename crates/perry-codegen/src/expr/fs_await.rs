@@ -125,7 +125,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // (GC_TYPE_PROMISE) with frame #1 in generated code. The temp-root
                 // slot is what the collector rewrites, so every block re-reads it
                 // instead of reusing the register.
-                let promise_root = g.adopt_emitted(ctx, Repr::Boxed, &promise_box);
+                let promise_root = g.adopt_emitted(ctx, Repr::Boxed, &promise_box, true);
                 let result_slot = ctx.func.alloca_entry(DOUBLE);
                 // Pre-seed with the boxed operand so the non-promise
                 // branch just needs to jump to merge.

@@ -8,7 +8,7 @@ use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr};
 
-use crate::expr::temp_root;
+use crate::rooting::{operand_may_collect, with_operands_rooted, with_rooted_group, RootedGroup};
 use crate::type_analysis::{is_definitely_string_expr, is_numeric_expr, map_static_type_args};
 use crate::types::{DOUBLE, F32, I1, I32, I64};
 
@@ -277,11 +277,10 @@ fn guarded_map_number_key_set(
 /// `m_handle_unrooted` is the eagerly computed handle, so nothing is emitted.
 fn reread_map_set_receiver_and_key(
     ctx: &mut FnCtx<'_>,
-    roots: &temp_root::RootedOperands,
-    operands: &[&Expr; 2],
+    group: &RootedGroup<'_>,
     m_handle_unrooted: &Option<String>,
 ) -> Result<(String, String)> {
-    let values = roots.reread(ctx, operands)?;
+    let values = group.reread_all(ctx)?;
     let k_box = values[1].clone();
     let m_handle = match m_handle_unrooted {
         Some(handle) => handle.clone(),
@@ -502,24 +501,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // calls it for each element. The callback expression usually
         // lowers to a NaN-boxed closure value, which we unbox to i64.
         Expr::ArrayMap { array, callback } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
-            let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            // #4091: throw TypeError for a non-callable callback before iterating.
-            // `map` uses a receiver-aware validator (TypedArray.map renders its
-            // non-callable message differently than Array.prototype.map).
-            let cb_handle = blk.call(
-                I64,
-                "js_validate_array_map_callback",
-                &[(I64, &arr_handle), (DOUBLE, &cb_box)],
-            );
-            let result = blk.call(
-                I64,
-                "js_array_map",
-                &[(I64, &arr_handle), (I64, &cb_handle)],
-            );
-            Ok(nanbox_pointer_inline(blk, &result))
+            // #7615 slice 8: the receiver was lowered, then `callback` was
+            // lowered, and only THEN was the receiver unboxed — so the unbox
+            // sat *below* its own window and masked a stale box rather than
+            // repairing it (#7280 taxonomy (c): an operand-to-operand window).
+            // `arr.map(x => …)` allocates a closure for the callback at
+            // minimum, and an arbitrary callback expression runs user code, so
+            // the window is not hypothetical.
+            //
+            // `js_validate_array_map_callback` between the unbox and
+            // `js_array_map` is deliberately NOT treated as a second window:
+            // it is `AllocNoReentry` in `gc_call_effects.rs` (a type check plus
+            // a static-message throw), and #7198's position is that a helper
+            // which merely allocates cannot initiate a moving collection.
+            with_operands_rooted(ctx, &[array, callback], |ctx, values| {
+                let blk = ctx.block();
+                let arr_handle = unbox_to_i64(blk, &values[0]);
+                // #4091: throw TypeError for a non-callable callback before iterating.
+                // `map` uses a receiver-aware validator (TypedArray.map renders its
+                // non-callable message differently than Array.prototype.map).
+                let cb_handle = blk.call(
+                    I64,
+                    "js_validate_array_map_callback",
+                    &[(I64, &arr_handle), (DOUBLE, &values[1])],
+                );
+                let result = blk.call(
+                    I64,
+                    "js_array_map",
+                    &[(I64, &arr_handle), (I64, &cb_handle)],
+                );
+                Ok(nanbox_pointer_inline(blk, &result))
+            })
         }
 
         // -------- map.set(key, value) / .get / .has --------
@@ -561,352 +573,319 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // and rooting a list that is already lowered can publish an
             // already-dangling pointer into a scanned slot — strictly worse
             // than not rooting at all.
-            let key_collects = temp_root::expr_may_trigger_gc(ctx, key);
-            let value_collects = temp_root::expr_may_trigger_gc(ctx, value);
-            let map_key_operands: [&Expr; 2] = [map, key];
-            let mut roots = temp_root::root_operands_begin(2);
-            let m_box = lower_expr(ctx, map)?;
-            roots.push(ctx, map, &m_box, key_collects || value_collects);
-            let k_box = lower_expr(ctx, key)?;
-            roots.push(ctx, key, &k_box, value_collects);
-            // Unbox eagerly only on the unprotected path, so its IR — including
-            // register numbering — is exactly what it was before this change.
-            // On the protected path the handle has to come from the *re-read*
-            // box, so it is derived after `value` is lowered instead.
-            let m_handle_unrooted = (!roots.is_rooted()).then(|| {
-                let blk = ctx.block();
-                unbox_to_i64(blk, &m_box)
-            });
-            let new_handle = if use_string_i32_map {
-                let value_i32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let (k_handle, new_handle) = {
+            let key_collects = operand_may_collect(ctx, key);
+            let value_collects = operand_may_collect(ctx, value);
+            let new_handle = with_rooted_group(ctx, 2, |ctx, group| {
+                group.lower(ctx, map, key_collects || value_collects)?;
+                group.lower(ctx, key, value_collects)?;
+                // Unbox eagerly only on the unprotected path, so its IR — including
+                // register numbering — is exactly what it was before this change.
+                // On the protected path the handle has to come from the *re-read*
+                // box, so it is derived after `value` is lowered instead.
+                //
+                // `reread` of an UNROOTED operand emits nothing and hands the
+                // original register back, so this is the same eager unbox it was:
+                // a Map receiver is never `Expr::String`, the only expression
+                // `operand_is_reloadable` would re-lower here.
+                let m_handle_unrooted = if group.is_rooted() {
+                    None
+                } else {
+                    let m_box = group.reread(ctx, 0)?;
                     let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_map_set_string_i32",
-                        &[(I64, &m_handle), (I64, &k_handle), (I32, &value_i32.value)],
-                    );
-                    (k_handle, new_handle)
+                    Some(unbox_to_i64(blk, &m_box))
                 };
-                record_collection_string_key_value_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_i32",
-                    &value_i32,
-                    "map",
-                    "int32_value_helper",
-                    "js_map_set_string_i32",
-                );
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_i32_key",
-                    &k_handle,
-                    "map",
-                    "js_map_set_string_i32",
-                );
-                new_handle
-            } else if use_string_u32_map {
-                let value_u32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let (k_handle, new_handle) = {
-                    let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_map_set_string_u32",
-                        &[(I64, &m_handle), (I64, &k_handle), (I32, &value_u32.value)],
-                    );
-                    (k_handle, new_handle)
-                };
-                record_collection_string_key_value_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_u32",
-                    &value_u32,
-                    "map",
-                    "uint32_value_helper",
-                    "js_map_set_string_u32",
-                );
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_u32_key",
-                    &k_handle,
-                    "map",
-                    "js_map_set_string_u32",
-                );
-                new_handle
-            } else if use_string_f32_map {
-                let value_f32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let (k_handle, new_handle) = {
-                    let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_map_set_string_f32",
-                        &[(I64, &m_handle), (I64, &k_handle), (F32, &value_f32.value)],
-                    );
-                    (k_handle, new_handle)
-                };
-                record_collection_string_key_value_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_f32",
-                    &value_f32,
-                    "map",
-                    "float32_value_helper",
-                    "js_map_set_string_f32",
-                );
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_f32_key",
-                    &k_handle,
-                    "map",
-                    "js_map_set_string_f32",
-                );
-                new_handle
-            } else if use_string_number_map {
-                let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let (k_handle, new_handle) = {
-                    let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_map_set_string_number",
-                        &[(I64, &m_handle), (I64, &k_handle), (DOUBLE, &v_box)],
-                    );
-                    (k_handle, new_handle)
-                };
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_number",
-                    &k_handle,
-                    "map",
-                    "js_map_set_string_number",
-                );
-                new_handle
-            } else if use_string_boolean_map {
-                let value_i1 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let (k_handle, new_handle) = {
-                    let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let value_i32 = blk.zext(I1, &value_i1.value, I32);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_map_set_string_bool",
-                        &[(I64, &m_handle), (I64, &k_handle), (I32, &value_i32)],
-                    );
-                    (k_handle, new_handle)
-                };
-                record_collection_string_key_value_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_bool",
-                    &value_i1,
-                    "map",
-                    "boolean_value_helper",
-                    "js_map_set_string_bool",
-                );
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_bool_key",
-                    &k_handle,
-                    "map",
-                    "js_map_set_string_bool",
-                );
-                new_handle
-            } else if use_string_string_map {
-                let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let (k_handle, v_handle, new_handle) = {
-                    let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let v_handle = unbox_str_handle(blk, &v_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_map_set_string_string",
-                        &[(I64, &m_handle), (I64, &k_handle), (I64, &v_handle)],
-                    );
-                    (k_handle, v_handle, new_handle)
-                };
-                let lowered_value = crate::native_value::LoweredValue::string_ref(&v_handle);
-                record_collection_string_key_value_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_string",
-                    &lowered_value,
-                    "map",
-                    "string_value_helper",
-                    "js_map_set_string_string",
-                );
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_string_key",
-                    &k_handle,
-                    "map",
-                    "js_map_set_string_string",
-                );
-                new_handle
-            } else if has_string_key_map {
-                let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let (k_handle, new_handle) = {
-                    let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_map_set_string_key",
-                        &[(I64, &m_handle), (I64, &k_handle), (DOUBLE, &v_box)],
-                    );
-                    (k_handle, new_handle)
-                };
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_string_key",
-                    &k_handle,
-                    "map",
-                    "js_map_set_string_key",
-                );
-                if static_string_boolean_map {
-                    record_collection_typed_value_fallback(
+                let new_handle = if use_string_i32_map {
+                    let value_i32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let (k_handle, new_handle) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_map_set_string_i32",
+                            &[(I64, &m_handle), (I64, &k_handle), (I32, &value_i32.value)],
+                        );
+                        (k_handle, new_handle)
+                    };
+                    record_collection_string_key_value_selected(
                         ctx,
                         "MapSet",
-                        "collection_typed_value.map_set_string_bool_generic",
-                        &v_box,
+                        "collection_string_key.map_set_string_i32",
+                        &value_i32,
+                        "map",
+                        "int32_value_helper",
+                        "js_map_set_string_i32",
+                    );
+                    record_collection_string_key_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_i32_key",
+                        &k_handle,
+                        "map",
+                        "js_map_set_string_i32",
+                    );
+                    new_handle
+                } else if use_string_u32_map {
+                    let value_u32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let (k_handle, new_handle) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_map_set_string_u32",
+                            &[(I64, &m_handle), (I64, &k_handle), (I32, &value_u32.value)],
+                        );
+                        (k_handle, new_handle)
+                    };
+                    record_collection_string_key_value_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_u32",
+                        &value_u32,
+                        "map",
+                        "uint32_value_helper",
+                        "js_map_set_string_u32",
+                    );
+                    record_collection_string_key_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_u32_key",
+                        &k_handle,
+                        "map",
+                        "js_map_set_string_u32",
+                    );
+                    new_handle
+                } else if use_string_f32_map {
+                    let value_f32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let (k_handle, new_handle) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_map_set_string_f32",
+                            &[(I64, &m_handle), (I64, &k_handle), (F32, &value_f32.value)],
+                        );
+                        (k_handle, new_handle)
+                    };
+                    record_collection_string_key_value_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_f32",
+                        &value_f32,
+                        "map",
+                        "float32_value_helper",
+                        "js_map_set_string_f32",
+                    );
+                    record_collection_string_key_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_f32_key",
+                        &k_handle,
+                        "map",
+                        "js_map_set_string_f32",
+                    );
+                    new_handle
+                } else if use_string_number_map {
+                    let v_box = lower_expr(ctx, value)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let (k_handle, new_handle) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_map_set_string_number",
+                            &[(I64, &m_handle), (I64, &k_handle), (DOUBLE, &v_box)],
+                        );
+                        (k_handle, new_handle)
+                    };
+                    record_collection_string_key_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_number",
+                        &k_handle,
+                        "map",
+                        "js_map_set_string_number",
+                    );
+                    new_handle
+                } else if use_string_boolean_map {
+                    let value_i1 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let (k_handle, new_handle) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let value_i32 = blk.zext(I1, &value_i1.value, I32);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_map_set_string_bool",
+                            &[(I64, &m_handle), (I64, &k_handle), (I32, &value_i32)],
+                        );
+                        (k_handle, new_handle)
+                    };
+                    record_collection_string_key_value_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_bool",
+                        &value_i1,
                         "map",
                         "boolean_value_helper",
-                        "js_map_set_string_key",
-                        "value_expr_not_native_i1",
+                        "js_map_set_string_bool",
                     );
-                }
-                new_handle
-            } else if use_number_string_map {
-                let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let (v_handle, v_slot_box) = {
-                    let blk = ctx.block();
-                    let v_handle = unbox_str_handle(blk, &v_box);
-                    let v_slot_box = nanbox_string_inline(blk, &v_handle);
-                    (v_handle, v_slot_box)
-                };
-                let lowered_value = crate::native_value::LoweredValue::string_ref(&v_handle);
-                record_collection_typed_value_selected(
-                    ctx,
-                    "MapSet",
-                    "collection_typed_value.map_set_number_string",
-                    &lowered_value,
-                    "map",
-                    "string_value_helper",
-                    "js_map_set_number_key",
-                    "map_slot",
-                );
-                guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_slot_box)
-            } else if use_number_key_map {
-                let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                if static_number_string_map {
-                    record_collection_typed_value_fallback(
+                    record_collection_string_key_selected(
                         ctx,
                         "MapSet",
-                        "collection_typed_value.map_set_number_string_generic",
-                        &v_box,
+                        "collection_string_key.map_set_string_bool_key",
+                        &k_handle,
+                        "map",
+                        "js_map_set_string_bool",
+                    );
+                    new_handle
+                } else if use_string_string_map {
+                    let v_box = lower_expr(ctx, value)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let (k_handle, v_handle, new_handle) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let v_handle = unbox_str_handle(blk, &v_box);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_map_set_string_string",
+                            &[(I64, &m_handle), (I64, &k_handle), (I64, &v_handle)],
+                        );
+                        (k_handle, v_handle, new_handle)
+                    };
+                    let lowered_value = crate::native_value::LoweredValue::string_ref(&v_handle);
+                    record_collection_string_key_value_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_string",
+                        &lowered_value,
+                        "map",
+                        "string_value_helper",
+                        "js_map_set_string_string",
+                    );
+                    record_collection_string_key_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_string_key",
+                        &k_handle,
+                        "map",
+                        "js_map_set_string_string",
+                    );
+                    new_handle
+                } else if has_string_key_map {
+                    let v_box = lower_expr(ctx, value)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let (k_handle, new_handle) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_map_set_string_key",
+                            &[(I64, &m_handle), (I64, &k_handle), (DOUBLE, &v_box)],
+                        );
+                        (k_handle, new_handle)
+                    };
+                    record_collection_string_key_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_string_key",
+                        &k_handle,
+                        "map",
+                        "js_map_set_string_key",
+                    );
+                    if static_string_boolean_map {
+                        record_collection_typed_value_fallback(
+                            ctx,
+                            "MapSet",
+                            "collection_typed_value.map_set_string_bool_generic",
+                            &v_box,
+                            "map",
+                            "boolean_value_helper",
+                            "js_map_set_string_key",
+                            "value_expr_not_native_i1",
+                        );
+                    }
+                    new_handle
+                } else if use_number_string_map {
+                    let v_box = lower_expr(ctx, value)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let (v_handle, v_slot_box) = {
+                        let blk = ctx.block();
+                        let v_handle = unbox_str_handle(blk, &v_box);
+                        let v_slot_box = nanbox_string_inline(blk, &v_handle);
+                        (v_handle, v_slot_box)
+                    };
+                    let lowered_value = crate::native_value::LoweredValue::string_ref(&v_handle);
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "MapSet",
+                        "collection_typed_value.map_set_number_string",
+                        &lowered_value,
                         "map",
                         "string_value_helper",
                         "js_map_set_number_key",
-                        "value_expr_not_definitely_string",
+                        "map_slot",
                     );
-                }
-                guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_box)
-            } else {
-                let v_box = lower_expr(ctx, value)?;
-                let (m_handle, k_box) = reread_map_set_receiver_and_key(
-                    ctx,
-                    &roots,
-                    &map_key_operands,
-                    &m_handle_unrooted,
-                )?;
-                let new_handle = {
-                    let blk = ctx.block();
-                    blk.call(
-                        I64,
+                    guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_slot_box)
+                } else if use_number_key_map {
+                    let v_box = lower_expr(ctx, value)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    if static_number_string_map {
+                        record_collection_typed_value_fallback(
+                            ctx,
+                            "MapSet",
+                            "collection_typed_value.map_set_number_string_generic",
+                            &v_box,
+                            "map",
+                            "string_value_helper",
+                            "js_map_set_number_key",
+                            "value_expr_not_definitely_string",
+                        );
+                    }
+                    guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_box)
+                } else {
+                    let v_box = lower_expr(ctx, value)?;
+                    let (m_handle, k_box) =
+                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                    let new_handle = {
+                        let blk = ctx.block();
+                        blk.call(
+                            I64,
+                            "js_map_set",
+                            &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
+                        )
+                    };
+                    record_collection_string_key_fallback(
+                        ctx,
+                        "MapSet",
+                        "collection_string_key.map_set_generic",
+                        &k_box,
+                        "map",
                         "js_map_set",
-                        &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
-                    )
+                        "receiver_or_key_not_static_string",
+                    );
+                    new_handle
                 };
-                record_collection_string_key_fallback(
-                    ctx,
-                    "MapSet",
-                    "collection_string_key.map_set_generic",
-                    &k_box,
-                    "map",
-                    "js_map_set",
-                    "receiver_or_key_not_static_string",
-                );
-                new_handle
-            };
-            // Released only now: the runtime call above allocates while it
-            // reads the key, so the group has to stay rooted across it.
-            roots.release(ctx);
+                // Released by `with_rooted_group` on every path out, including the
+                // `?` of a value lowering above: the runtime call allocates while
+                // it reads the key, so the group stays rooted across it.
+                Ok(new_handle)
+            })?;
             // map.set returns the (possibly-realloc'd) map. Re-NaN-box
             // and return. The caller may need to write this back to a
             // local; that's the caller's problem if Map is held in a
@@ -922,50 +901,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 && is_numeric_expr(ctx, key);
             // #6970: `key` is lowered after the receiver and can collect, so the
             // receiver would otherwise sit unrooted in an SSA register across it.
-            let (m_box, k_box, guard) = temp_root::lower_operand_pair_rooted(ctx, map, key)?;
-            let m_handle = {
-                let blk = ctx.block();
-                unbox_to_i64(blk, &m_box)
-            };
-            let value = if use_string_key_map {
-                let (k_handle, value) = {
+            let value = with_operands_rooted(ctx, &[map, key], |ctx, values| {
+                let (m_box, k_box) = (values[0].clone(), values[1].clone());
+                let m_handle = {
                     let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let value = blk.call(
-                        DOUBLE,
+                    unbox_to_i64(blk, &m_box)
+                };
+                let value = if use_string_key_map {
+                    let (k_handle, value) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let value = blk.call(
+                            DOUBLE,
+                            "js_map_get_string_key",
+                            &[(I64, &m_handle), (I64, &k_handle)],
+                        );
+                        (k_handle, value)
+                    };
+                    record_collection_string_key_selected(
+                        ctx,
+                        "MapGet",
+                        "collection_string_key.map_get",
+                        &k_handle,
+                        "map",
                         "js_map_get_string_key",
-                        &[(I64, &m_handle), (I64, &k_handle)],
                     );
-                    (k_handle, value)
+                    value
+                } else if use_number_key_map {
+                    guarded_map_number_key_get(ctx, &m_handle, &k_box)
+                } else {
+                    let value = {
+                        let blk = ctx.block();
+                        blk.call(DOUBLE, "js_map_get", &[(I64, &m_handle), (DOUBLE, &k_box)])
+                    };
+                    record_collection_string_key_fallback(
+                        ctx,
+                        "MapGet",
+                        "collection_string_key.map_get_generic",
+                        &k_box,
+                        "map",
+                        "js_map_get",
+                        "receiver_or_key_not_static_string",
+                    );
+                    value
                 };
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapGet",
-                    "collection_string_key.map_get",
-                    &k_handle,
-                    "map",
-                    "js_map_get_string_key",
-                );
-                value
-            } else if use_number_key_map {
-                guarded_map_number_key_get(ctx, &m_handle, &k_box)
-            } else {
-                let value = {
-                    let blk = ctx.block();
-                    blk.call(DOUBLE, "js_map_get", &[(I64, &m_handle), (DOUBLE, &k_box)])
-                };
-                record_collection_string_key_fallback(
-                    ctx,
-                    "MapGet",
-                    "collection_string_key.map_get_generic",
-                    &k_box,
-                    "map",
-                    "js_map_get",
-                    "receiver_or_key_not_static_string",
-                );
-                value
-            };
-            temp_root::temp_root_release(ctx, guard);
+                Ok(value)
+            })?;
             Ok(value)
         }
         Expr::MapHas { map, key } => {
@@ -976,50 +957,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 && is_numeric_expr(ctx, key);
             // #6970: same hazard as `MapGet` — the key's lowering can collect
             // while the receiver is live only in an SSA register.
-            let (m_box, k_box, guard) = temp_root::lower_operand_pair_rooted(ctx, map, key)?;
-            let m_handle = {
-                let blk = ctx.block();
-                unbox_to_i64(blk, &m_box)
-            };
-            let i32_v = if use_string_key_map {
-                let (k_handle, i32_v) = {
+            let i32_v = with_operands_rooted(ctx, &[map, key], |ctx, values| {
+                let (m_box, k_box) = (values[0].clone(), values[1].clone());
+                let m_handle = {
                     let blk = ctx.block();
-                    let k_handle = unbox_str_handle(blk, &k_box);
-                    let i32_v = blk.call(
-                        I32,
+                    unbox_to_i64(blk, &m_box)
+                };
+                let i32_v = if use_string_key_map {
+                    let (k_handle, i32_v) = {
+                        let blk = ctx.block();
+                        let k_handle = unbox_str_handle(blk, &k_box);
+                        let i32_v = blk.call(
+                            I32,
+                            "js_map_has_string_key",
+                            &[(I64, &m_handle), (I64, &k_handle)],
+                        );
+                        (k_handle, i32_v)
+                    };
+                    record_collection_string_key_selected(
+                        ctx,
+                        "MapHas",
+                        "collection_string_key.map_has",
+                        &k_handle,
+                        "map",
                         "js_map_has_string_key",
-                        &[(I64, &m_handle), (I64, &k_handle)],
                     );
-                    (k_handle, i32_v)
+                    i32_v
+                } else if use_number_key_map {
+                    guarded_map_number_key_has(ctx, &m_handle, &k_box)
+                } else {
+                    let i32_v = {
+                        let blk = ctx.block();
+                        blk.call(I32, "js_map_has", &[(I64, &m_handle), (DOUBLE, &k_box)])
+                    };
+                    record_collection_string_key_fallback(
+                        ctx,
+                        "MapHas",
+                        "collection_string_key.map_has_generic",
+                        &k_box,
+                        "map",
+                        "js_map_has",
+                        "receiver_or_key_not_static_string",
+                    );
+                    i32_v
                 };
-                record_collection_string_key_selected(
-                    ctx,
-                    "MapHas",
-                    "collection_string_key.map_has",
-                    &k_handle,
-                    "map",
-                    "js_map_has_string_key",
-                );
-                i32_v
-            } else if use_number_key_map {
-                guarded_map_number_key_has(ctx, &m_handle, &k_box)
-            } else {
-                let i32_v = {
-                    let blk = ctx.block();
-                    blk.call(I32, "js_map_has", &[(I64, &m_handle), (DOUBLE, &k_box)])
-                };
-                record_collection_string_key_fallback(
-                    ctx,
-                    "MapHas",
-                    "collection_string_key.map_has_generic",
-                    &k_box,
-                    "map",
-                    "js_map_has",
-                    "receiver_or_key_not_static_string",
-                );
-                i32_v
-            };
-            temp_root::temp_root_release(ctx, guard);
+                Ok(i32_v)
+            })?;
             // NaN-tagged boolean for "true"/"false" printing.
             let blk = ctx.block();
             let bit = blk.icmp_ne(I32, &i32_v, "0");

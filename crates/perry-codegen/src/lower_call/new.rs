@@ -20,8 +20,9 @@ use super::new_helpers::{
     ctor_body_has_value_return, ctor_body_uses_this, ctor_chain_uses_new_target,
     emit_promise_subclass_init, local_constructor_symbol_exists, node_stream_parent_kind,
 };
-use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, temp_root, FnCtx};
+use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::rooting::{open_rooted_group, EmittedValue, Repr, RootedGroup};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Does `new <class_name>(…)` run user code — an own or inherited constructor
@@ -46,7 +47,7 @@ fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     // `ctx.imported_class_ctors[class_name]` (its `has_imported_ctor` arm, and
     // the `Stmt::Return` writer at the tail of this file). That left BOTH
     // consumers of this predicate unprotected across a real constructor body:
-    // #7192's `instance_root`, and the `this`-slot bind added for #7202.
+    // #7192's instance root, and the `this`-slot bind added for #7202.
     //
     // Keeping it ONE predicate rather than two is the point — the consumers
     // have to agree by construction, which is what stops the divergence
@@ -73,16 +74,29 @@ fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
 /// keep their old IR byte for byte.
 fn reload_instance(
     ctx: &mut FnCtx<'_>,
-    instance_root: &Option<String>,
+    group: &RootedGroup<'_>,
+    instance: &Instance,
     obj_handle: &str,
     obj_box: &str,
 ) -> (String, String) {
-    let Some(idx) = instance_root.clone() else {
+    if !instance.protected {
         return (obj_handle.to_string(), obj_box.to_string());
-    };
-    let handle = temp_root::temp_root_get_i64(ctx, &idx);
+    }
+    let handle = group.reread_emitted(ctx, instance.root);
     let boxed = nanbox_pointer_inline(ctx.block(), &handle);
     (handle, boxed)
+}
+
+/// The freshly-allocated instance's place in the `new` scope.
+///
+/// `protected` is `construction_runs_user_code`, taken ONCE. It gates three
+/// things that must agree — the temp root, the `this`-slot bind (#7202), and
+/// whether [`reload_instance`] re-reads at all — and the reason it is a field
+/// rather than three calls is the same reason `construction_runs_user_code` is
+/// one predicate rather than two: a fork here is how #7114's pair diverged.
+struct Instance {
+    root: EmittedValue,
+    protected: bool,
 }
 
 pub(crate) use super::capture_writeback::emit_class_capture_writeback;
@@ -148,8 +162,8 @@ pub(crate) fn lower_new_member_captured(
 ///   *mutable* root that an evacuating cycle rewrites in place, leaving the
 ///   register pushed beforehand stale;
 /// - an argument that was NOT rooted because it reads an *immutable* registered
-///   root — a string literal, the only `temp_root::operand_is_reloadable` case
-///   — is **re-loaded**. It is never swept, but evacuation rewrote its handle
+///   root — a string literal, the only `operand_is_reloadable` case — is
+///   **re-loaded**. It is never swept, but evacuation rewrote its handle
 ///   global too, so the cached register points at where the string used to be.
 ///   Re-lowering emits the load again and costs no runtime call. (A
 ///   shadow-slotted local or a module global is a registered root as well, but
@@ -159,25 +173,21 @@ pub(crate) fn lower_new_member_captured(
 /// Called after the instance allocation and again before the late consumers
 /// that sit behind further arbitrary lowering (field initializers, an inlined
 /// constructor body) — each of those is another chance to relocate.
-fn refresh_rooted_args(
-    ctx: &mut FnCtx<'_>,
-    args: &[Expr],
-    lowered_args: &mut [String],
-    arg_roots: &[Option<String>],
-) -> Result<()> {
-    for (i, (value, slot)) in lowered_args.iter_mut().zip(arg_roots.iter()).enumerate() {
-        match slot {
-            Some(idx) => {
-                let idx = idx.clone();
-                *value = temp_root::temp_root_get_double(ctx, &idx);
-            }
-            None if temp_root::operand_is_reloadable(&args[i]) => {
-                *value = lower_constructor_arg(ctx, &args[i])?;
-            }
-            None => {}
-        }
-    }
-    Ok(())
+fn refresh_rooted_args(ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>) -> Result<Vec<String>> {
+    // `RootedGroup`'s re-read re-lowers a `Reload` operand through
+    // `crate::expr::lower_expr`, while the ORIGINAL lowering of every
+    // constructor argument went through `lower_constructor_arg` — which is
+    // `lower_expr` with `discard_expr_value` forced false (#7590: the flag
+    // means "this STATEMENT's value is discarded" and is not cleared on
+    // recursion). Re-lowering under a different flag would be free to pick
+    // `materialize_js_value_without_record`, so the re-read is wrapped in the
+    // same suppression the first lowering had. A no-op for `Root` and `Reuse`
+    // operands, which emit no lowering at all.
+    let prev_discard = ctx.discard_expr_value;
+    ctx.discard_expr_value = false;
+    let out = group.reread_all(ctx);
+    ctx.discard_expr_value = prev_discard;
+    out
 }
 
 fn lower_new_impl(
@@ -186,30 +196,35 @@ fn lower_new_impl(
     args: &[Expr],
     caps_absent_from_args: bool,
 ) -> Result<String> {
-    // #6969: expression-scope temp-root barrier. The body below roots its
+    // #6969: one expression-scope temp-root barrier. The body below roots its
     // constructor arguments across the instance allocation, and it has ~20
     // return paths with `lowered_args` consumed at a dozen of them — one cut
-    // here releases the group whichever path ran, instead of a
-    // `temp_root_release` at each that reviewers and future edits must keep
-    // balanced.
+    // here releases the group whichever path ran, instead of a release at each
+    // that reviewers and future edits must keep balanced.
     //
-    // #7154: the body also roots the freshly-allocated instance across the
-    // constructor body, so the marker is required whenever construction runs
-    // user code — not only when an argument needs a root. `new C()` with no
-    // arguments is exactly the shape that would otherwise push a slot with no
-    // marker above it to cut.
-    let scope =
-        temp_root::temp_root_scope_begin(ctx, args, construction_runs_user_code(ctx, class_name));
-    let result = lower_new_impl_inner(ctx, class_name, args, caps_absent_from_args);
-    temp_root::temp_root_scope_end(ctx, scope);
+    // #7615 slice 8: this is [`open_rooted_group`], and the escaping form is
+    // the right one for exactly the reason its doc names — the release has to
+    // post-dominate every one of those return paths, which no closure form can
+    // own without swallowing the whole 1,000-line dispatch.
+    //
+    // The null MARKER slot `temp_root_scope_begin` used to push is gone with
+    // it. It existed only because a raw truncate needs a base index even when
+    // nothing else was pushed; `RootedGroup::release` truncates at the group's
+    // own lowest slot and emits nothing at all when the group is empty, so the
+    // marker has no work left to do. One fewer slot and one fewer push per
+    // `new` site that roots anything.
+    let mut group = open_rooted_group(args.len() + 1);
+    let result = lower_new_impl_inner(ctx, class_name, args, caps_absent_from_args, &mut group);
+    group.release(ctx);
     result
 }
 
-fn lower_new_impl_inner(
+fn lower_new_impl_inner<'a>(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
-    args: &[Expr],
+    args: &'a [Expr],
     caps_absent_from_args: bool,
+    group: &mut RootedGroup<'a>,
 ) -> Result<String> {
     // Built-in Web classes that the runtime provides constructors for.
     // These are checked BEFORE the ctx.classes lookup because the user
@@ -408,16 +423,14 @@ fn lower_new_impl_inner(
     // collects; the re-read is immediately after it (see `obj_box`), and the
     // scope cut in `lower_new_impl` is the release.
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-    let mut arg_roots: Vec<Option<String>> = Vec::with_capacity(args.len());
     for a in args {
         let value = lower_constructor_arg(ctx, a)?;
-        let slot = if temp_root::operand_needs_root(ctx, a) {
-            Some(temp_root::temp_root_push_double(ctx, &value))
-        } else {
-            None
-        };
+        // `collects` is unconditionally true: the instance allocation below
+        // always collects, so every argument is live across it. That is the
+        // same answer the pre-migration code gave by consulting
+        // `operand_needs_root` with no window test at all.
+        group.adopt(ctx, a, &value, true);
         lowered_args.push(value);
-        arg_roots.push(slot);
     }
 
     // #7615 slice 8: the field-count computation and the three-arm instance
@@ -452,15 +465,20 @@ fn lower_new_impl_inner(
     // intact-bit guard (#7512). Gated and suppressed as one — see
     // `layout_declared_at_allocation`.
     //
-    // Before the temp-root push, so the handle this names is the one the
+    // Before the instance root's push, so the handle this names is the one the
     // allocator returned: nothing between here and there can collect.
     emit_typed_shape_layout_declare(ctx, class_name, &obj_handle);
-    let instance_root = construction_runs_user_code(ctx, class_name)
-        .then(|| temp_root::temp_root_push_i64(ctx, &obj_handle));
+    let instance = {
+        let protected = construction_runs_user_code(ctx, class_name);
+        Instance {
+            root: group.adopt_emitted(ctx, Repr::Ptr, &obj_handle, protected),
+            protected,
+        }
+    };
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);
     // #6969: the instance allocation has run, so refresh every argument before
     // the constructor consumes them.
-    refresh_rooted_args(ctx, args, &mut lowered_args, &arg_roots)?;
+    lowered_args = refresh_rooted_args(ctx, group)?;
 
     // Constructor bodies may contain terminating recursive construction
     // shapes such as `if (typeof opts === "function") return new C(...)`.
@@ -560,7 +578,8 @@ fn lower_new_impl_inner(
             // would otherwise install the layout descriptor on the abandoned
             // from-space copy, and `js_ctor_return_override` would hand the
             // caller that copy's address.
-            let (obj_handle, obj_box) = reload_instance(ctx, &instance_root, &obj_handle, &obj_box);
+            let (obj_handle, obj_box) =
+                reload_instance(ctx, group, &instance, &obj_handle, &obj_box);
             // The constructor body has run and set the declared fields; register
             // the typed raw-f64/pointer slot layout so class-field accesses hit
             // the slot-direct fast path instead of the by-name hashmap fallback.
@@ -651,7 +670,7 @@ fn lower_new_impl_inner(
     // it, and every `this.x = …` after that collection stores into abandoned
     // from-space memory.
     //
-    // #7192 rooted the instance for the *caller* (`instance_root` above,
+    // #7192 rooted the instance for the *caller* (`instance.root` above,
     // re-read by `reload_instance` at the tail) precisely because this window
     // collects — so the object survives and MOVES. That made the caller's copy
     // correct and left this one behind: the same address, taken one line later,
@@ -661,7 +680,7 @@ fn lower_new_impl_inner(
     // Reachability is the default, not an opt-in: `force_ctor_call` requires
     // `class.constructor.is_some()`, so `class C { payload = mk() }` and
     // `class C extends B {}` take this path with `PERRY_INLINE_CTOR` unset —
-    // and `construction_runs_user_code` (which gates `instance_root`) is true
+    // and `construction_runs_user_code` (which gates `instance.root`) is true
     // for exactly those, i.e. the code already asserts this window collects.
     //
     // Binding it — rather than routing `Expr::This` through a temp root —
@@ -671,14 +690,14 @@ fn lower_new_impl_inner(
     // contract: the bind is hoisted to entry setup, so the slot is live to the
     // collector before this store executes.
     //
-    // Gated on `instance_root.is_some()`, i.e. on the very same
+    // Gated on `instance.protected`, i.e. on the very same
     // `construction_runs_user_code` predicate that decided the instance needed
     // a temp root at all. When it is false no user code runs between this store
     // and the pop, so nothing in the window can collect and the slot cannot go
     // stale — and a class with no constructor, no fields and no heritage keeps
     // its previous IR exactly, frame size included. One predicate, one place:
     // forking a second one here is how #7114's two predicates diverged.
-    if instance_root.is_some() {
+    if instance.protected {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         ctx.func
             .entry_allocas_push_store(DOUBLE, &undef, &this_slot);
@@ -1248,7 +1267,7 @@ fn lower_new_impl_inner(
                 // for the final slot (mirrors method_has_rest, #672).
                 // Field initializers / an inlined constructor body were lowered
                 // between the instance allocation and here, so refresh again.
-                refresh_rooted_args(ctx, args, &mut lowered_args, &arg_roots)?;
+                lowered_args = refresh_rooted_args(ctx, group)?;
                 let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args);
                 let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
                     Vec::with_capacity(1 + marshalled.len());
@@ -1285,7 +1304,7 @@ fn lower_new_impl_inner(
                 // slot into an array when the ctor's last param is `...rest`.
                 // Field initializers / an inlined constructor body were lowered
                 // between the instance allocation and here, so refresh again.
-                refresh_rooted_args(ctx, args, &mut lowered_args, &arg_roots)?;
+                lowered_args = refresh_rooted_args(ctx, group)?;
                 let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args);
                 // Pass `this` as NaN-boxed double (same as compile_method's this_arg).
                 let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
@@ -1371,7 +1390,7 @@ fn lower_new_impl_inner(
                 );
                 // Same here: the dynamic-parent `super(...)` buffer is filled long
                 // after the allocation, behind further lowering.
-                refresh_rooted_args(ctx, args, &mut lowered_args, &arg_roots)?;
+                lowered_args = refresh_rooted_args(ctx, group)?;
                 let (args_ptr, args_len) = if lowered_args.is_empty() {
                     ("null".to_string(), "0".to_string())
                 } else {
@@ -1461,7 +1480,7 @@ fn lower_new_impl_inner(
     // constructor body (field initializers, `super(...)`, nested `new`s) can
     // reach a back-edge poll, and the evacuating minor there relocates the
     // instance out from under `obj_handle`/`obj_box`.
-    let (obj_handle, obj_box) = reload_instance(ctx, &instance_root, &obj_handle, &obj_box);
+    let (obj_handle, obj_box) = reload_instance(ctx, group, &instance, &obj_handle, &obj_box);
     emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
 
     // Close the inline-constructor return: fall through (or branch) to the

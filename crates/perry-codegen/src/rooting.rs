@@ -709,10 +709,24 @@ pub(crate) struct RootedGroup<'a> {
     operands: crate::expr::temp_root::RootedOperands,
     exprs: Vec<&'a Expr>,
     accs: Vec<String>,
-    emitted: Vec<RootedSlot>,
+    emitted: Vec<EmittedRoot>,
     /// The LOWEST slot this group pushed, of either kind. One truncate at it
     /// drops the whole scope, because a truncate is a stack cut.
     first_slot: Option<String>,
+}
+
+/// What [`RootedGroup::adopt_emitted`] recorded for one emitted value.
+///
+/// The `Reused` arm is the `protect == false` answer, and it exists for the
+/// same reason [`RootedAcc`]'s `value` field does: a site whose window
+/// provably cannot collect must keep the IR it had before it was rooted at
+/// all, register numbering included. It is NOT a third protection strategy —
+/// `operand_protection`'s `Reload` is still unavailable here (re-emitting the
+/// producing call would call it twice) and `Reuse`-across-a-real-window is
+/// still the bug. It only records that there was no window.
+enum EmittedRoot {
+    Rooted(RootedSlot),
+    Reused(String),
 }
 
 /// A handle on one **emitted** value inside a [`RootedGroup`] —
@@ -822,6 +836,17 @@ impl<'a> RootedGroup<'a> {
         self.exprs.len()
     }
 
+    /// True when this group actually pushed a slot.
+    ///
+    /// The signal a caller uses to keep an eager unbox — and therefore its
+    /// exact register numbering — on the unprotected path, exactly as
+    /// `RootedOperands::is_rooted` served `math_simple.rs`'s `MapSet` before
+    /// the migration. It reports whether a slot exists, never which one, so it
+    /// cannot be turned into a release.
+    pub(crate) fn is_rooted(&self) -> bool {
+        self.first_slot.is_some()
+    }
+
     /// Root a value that an **emitted step** produced, rather than one lowered
     /// from an expression.
     ///
@@ -864,25 +889,58 @@ impl<'a> RootedGroup<'a> {
     /// [`with_rooted_accumulator`], which has taken a caller-produced `initial`
     /// since slice 3. Call this on the line below the emission that produced
     /// the value.
+    ///
+    /// # `protect` states the WINDOW, not the strategy (slice 8)
+    ///
+    /// Slice 7 shipped this without a flag and said so: "there is no flag, and
+    /// a caller cannot pick the wrong one". That claim was about the
+    /// *strategy* — `Reload` and `Reuse` are unavailable for an emitted value
+    /// on principle — and it still holds. `protect` answers the other
+    /// question, the one every combinator in this file already takes from its
+    /// caller in some form: **does anything between here and the last use
+    /// collect?** [`with_rooted_accumulator`] has taken it as `protect` since
+    /// slice 3, `RootedGroup::lower`/`adopt` take it as `collects`, and
+    /// `with_operands_rooted_across_call` hardcodes it to `true`.
+    ///
+    /// Slice 8 needed it for `expr/static_field_meta.rs`: a `ClassExprFresh`
+    /// with no statics, no captures, no symbol statics and no `static { … }`
+    /// block emits nothing at all between the class object's allocation and
+    /// the `nanbox_pointer_inline` that returns it, and that shape is
+    /// reachable (`lower_decl/body_stmt.rs`'s `fresh_binding` arm builds one
+    /// with three empty vectors). `protect == false` emits no push, no
+    /// re-reads and no truncate, so it keeps the pre-rooting IR byte for byte
+    /// — the same contract `rooted_handle_begin(ctx, h, false)` had.
     pub(crate) fn adopt_emitted(
         &mut self,
         ctx: &mut FnCtx<'_>,
         repr: Repr,
         value: &str,
+        protect: bool,
     ) -> EmittedValue {
-        let idx = match repr {
-            Repr::Ptr => crate::expr::temp_root::temp_root_push_i64(ctx, value),
-            Repr::Boxed => crate::expr::temp_root::temp_root_push_double(ctx, value),
+        let root = if protect {
+            let idx = match repr {
+                Repr::Ptr => crate::expr::temp_root::temp_root_push_i64(ctx, value),
+                Repr::Boxed => crate::expr::temp_root::temp_root_push_double(ctx, value),
+            };
+            self.note_slot(Some(idx.clone()));
+            EmittedRoot::Rooted(RootedSlot { idx, repr })
+        } else {
+            EmittedRoot::Reused(value.to_string())
         };
-        self.note_slot(Some(idx.clone()));
-        self.emitted.push(RootedSlot { idx, repr });
+        self.emitted.push(root);
         EmittedValue(self.emitted.len() - 1)
     }
 
     /// Re-read an [`adopt_emitted`](RootedGroup::adopt_emitted) value **here**,
     /// in the representation it was pushed with.
+    ///
+    /// An unprotected value hands its original register back and emits
+    /// nothing, exactly as `RootedOperands::reread_one`'s `Reuse` arm does.
     pub(crate) fn reread_emitted(&self, ctx: &mut FnCtx<'_>, value: EmittedValue) -> String {
-        read_slot(ctx, &self.emitted[value.0])
+        match &self.emitted[value.0] {
+            EmittedRoot::Rooted(slot) => read_slot(ctx, slot),
+            EmittedRoot::Reused(reg) => reg.clone(),
+        }
     }
 
     /// Allocate an argument-accumulator array of capacity `cap` and root it in

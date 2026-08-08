@@ -1252,7 +1252,7 @@ fn try_lower_process_env_put_value_set(
         let property_key = ctx
             .block()
             .call(DOUBLE, "js_to_property_key", &[(DOUBLE, &key_box)]);
-        let key_slot = g.adopt_emitted(ctx, Repr::Boxed, &property_key);
+        let key_slot = g.adopt_emitted(ctx, Repr::Boxed, &property_key, true);
         let val_double = lower_expr(ctx, value)?;
         // The strip happens BELOW the window, never above it.
         let key_box = g.reread_emitted(ctx, key_slot);

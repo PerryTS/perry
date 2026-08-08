@@ -8,7 +8,7 @@ use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, UpdateOp};
 
-use crate::lower_string_method::lower_string_self_append;
+use crate::lower_string_concat::lower_string_self_append;
 use crate::nanbox::double_literal;
 use crate::native_value::MaterializationReason;
 use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};

@@ -7,7 +7,7 @@
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr, LogicalOp};
 
-use crate::lower_string_method::{
+use crate::lower_string_concat::{
     flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
     lower_string_concat_chain,
 };
@@ -22,8 +22,34 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, I1, I128, I32, I64};
 
-use super::temp_root::{lower_operand_pair_rooted, temp_root_release};
+use crate::rooting::with_operands_rooted;
+
 use super::{is_known_finite, lower_expr, FnCtx};
+
+/// `helper(left, right)` with each operand rooted across the other's lowering
+/// and the group released on every path out (#6951).
+///
+/// All five dynamic-dispatch arms below are this one shape — the operand pair
+/// feeds a runtime helper that runs `ToPrimitive` / `ToNumeric` on both sides,
+/// so a pointer-bearing left operand has to survive the right operand's
+/// evaluation. Before #7615 slice 8 each spelled it out as
+/// `lower_operand_pair_rooted` + a `temp_root_release` on its own `return`
+/// path; that is five chances to place the release wrong, and #7462 is what
+/// one misplaced release costs.
+fn lower_rooted_dynamic_binary(
+    ctx: &mut FnCtx<'_>,
+    helper: &str,
+    left: &Expr,
+    right: &Expr,
+) -> Result<String> {
+    with_operands_rooted(ctx, &[left, right], |ctx, values| {
+        Ok(ctx.block().call(
+            DOUBLE,
+            helper,
+            &[(DOUBLE, &values[0]), (DOUBLE, &values[1])],
+        ))
+    })
+}
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
     // #6884: a statically typed numeric TypedArray read is Number|undefined,
@@ -435,14 +461,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if other_known_primitive {
                         return lower_string_coerce_concat(ctx, left, right, l_is_str, r_is_str);
                     }
-                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                    let sum = ctx.block().call(
-                        DOUBLE,
+                    return lower_rooted_dynamic_binary(
+                        ctx,
                         "js_dynamic_string_or_number_add",
-                        &[(DOUBLE, &l), (DOUBLE, &r)],
+                        left,
+                        right,
                     );
-                    temp_root_release(ctx, guard);
-                    return Ok(sum);
                 }
                 if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) {
                     if let Some(value) = try_lower_small_bigint_literal_binary(
@@ -453,12 +477,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ) {
                         return Ok(value);
                     }
-                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                    let sum =
-                        ctx.block()
-                            .call(DOUBLE, "js_dynamic_add", &[(DOUBLE, &l), (DOUBLE, &r)]);
-                    temp_root_release(ctx, guard);
-                    return Ok(sum);
+                    return lower_rooted_dynamic_binary(ctx, "js_dynamic_add", left, right);
                 }
                 // Refs #486: neither operand is statically known. Per JS
                 // spec for `+`, if EITHER side is a string at runtime, the
@@ -478,14 +497,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && crate::type_analysis::is_numeric_expr(ctx, right))
                     || add_operands_have_pod_materialization_hazard(ctx, left, right)
                 {
-                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                    let sum = ctx.block().call(
-                        DOUBLE,
+                    return lower_rooted_dynamic_binary(
+                        ctx,
                         "js_dynamic_string_or_number_add",
-                        &[(DOUBLE, &l), (DOUBLE, &r)],
+                        left,
+                        right,
                     );
-                    temp_root_release(ctx, guard);
-                    return Ok(sum);
                 }
             }
             // BigInt arithmetic fast path. NaN-tagged bigints compare
@@ -508,12 +525,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return Ok(value);
                 }
-                let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                let value = ctx
-                    .block()
-                    .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
-                temp_root_release(ctx, guard);
-                return Ok(value);
+                return lower_rooted_dynamic_binary(ctx, fname, left, right);
             }
             // A non-primitive operand may `ToNumeric` to a BigInt at runtime
             // (`Object(1n)`, or an object with a BigInt-returning
@@ -568,12 +580,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // operands, so a pointer-bearing left operand must
                         // survive the right operand's evaluation.
                         let fname = bigint_dynamic_helper(*op);
-                        let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                        let value = ctx
-                            .block()
-                            .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
-                        temp_root_release(ctx, guard);
-                        return Ok(value);
+                        return lower_rooted_dynamic_binary(ctx, fname, left, right);
                     }
                 }
             }
