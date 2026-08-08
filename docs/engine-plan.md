@@ -6,7 +6,16 @@
 every dated status section, incident narrative and superseded sequencing lives
 in [`engine-plan-history.md`](engine-plan-history.md); this file holds only the
 current state and the remaining work so it stays readable across context loads.
-Last synced **2026-08-08** (v0.5.1345). The v0.5.1299 public-baseline sweep is
+Last synced **2026-08-08** (v0.5.1350). Since v0.5.1345: the gc-ratchet is
+repaired, re-pinned, and liveness-proven (#7609 — fail open per cell, fail
+closed on the verdict; owner action: promote to required after its first green
+`main` run); the element-shape invariant gained a real revocation matrix
+(#7608) and its first consumer — the versioned loop clone, `keep[j].v` at
+**node parity**, 3.15× (#7612); and promote-on-first-copy landed (#7613):
+`json_pipeline` 500k copies the 268 MB cohort ONCE — wall −24.6% AND peak RSS
+−21%, the first change to improve both goal axes at once. #7592 total:
+**60.4 s → 3.86 s (~6× bun)**, `JSON.parse` (~742 ms) is the remaining tail.
+The last unstarted track is the **Layer-1 emitter migration**. The v0.5.1299 public-baseline sweep is
 kept as the baseline measurement event; rows fixed since are annotated in place
 rather than overwritten, because they were measured individually rather than in
 a fresh sweep.
