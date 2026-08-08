@@ -78,7 +78,7 @@ Two consequences worth recording:
   first, so no reader can observe a stale bit. They stay flush-free so the
   per-object sweep path pays nothing.
 
-**Tests.** Seven unit tests in `arena/tests.rs`, one per obligation, all
+**Tests.** Seven per-obligation unit tests in `arena/tests.rs`, all
 **sabotage-verified**: a harness removes one flush site at a time and requires
 the matching test to go red — 9 cases, 9 caught. That includes "revert the
 promote path to eager registration", which turns
@@ -88,5 +88,14 @@ failure mode). `every_cycle_constructor_routes_through_the_flush_point` is the
 second half of the cycle-start claim: one test proves
 `old_pages_begin_gc_cycle` flushes, that one proves all three constructors
 still call it. `every_old_gen_birth_path_sets_tenured` stays green.
+
+Those seven pin the flush sites that exist *today*; they are blind to one added
+later. `deferred_registration_flush_sites` closes that — it enumerates every
+function in `page_meta.rs` touching either table and requires a flush or a
+written exemption, and fails on a **stale** exemption too so the list cannot rot
+into suppression. It is not hypothetical: on its first run it caught
+`OldArenaPageObjectCursor::next` (deliberately flush-free, now exempt with the
+argument attached). Both of its arms are sabotage-verified — a bogus exemption
+and a newly added unflushed toucher each turn it red.
 
 <!--MEASUREMENTS-->
