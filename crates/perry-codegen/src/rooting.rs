@@ -481,11 +481,25 @@ pub(crate) fn with_operands_rooted<'f, R>(
 ///
 /// Adding a line here is how a migration slice finishes. Removing one is a
 /// regression, not a cleanup.
+/// A module is listed here only when it is migrated **end to end**. Slice 1's
+/// `lower_array_method.rs` is one file and lands whole; `expr/url_main.rs` sat
+/// half-migrated from #7461 to #7617, which is the reason the rule exists. When
+/// a module genuinely cannot land in one PR, the boundary goes in this comment
+/// with the slice that will finish it — an unlisted module is indistinguishable
+/// from an unstarted one, and that is what let the half-migration hide.
+///
+/// No boundary is outstanding today.
 #[cfg(test)]
-const MIGRATED_MODULES: &[(&str, &str)] = &[(
-    "crates/perry-codegen/src/expr/url_main.rs",
-    include_str!("expr/url_main.rs"),
-)];
+const MIGRATED_MODULES: &[(&str, &str)] = &[
+    (
+        "crates/perry-codegen/src/expr/url_main.rs",
+        include_str!("expr/url_main.rs"),
+    ),
+    (
+        "crates/perry-codegen/src/lower_array_method.rs",
+        include_str!("lower_array_method.rs"),
+    ),
+];
 
 /// Lines in `src` that reach past [`crate::rooting`] into the raw rooting API.
 #[cfg(test)]
