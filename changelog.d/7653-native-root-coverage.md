@@ -11,8 +11,10 @@ asserted `js_shadow_slot_bind` was *absent*, which under the native default is
 true of every program, rooted or not (CLAUDE.md hazard 4).
 
 `crates/perry-codegen/src/native_root_coverage/` adds **8 mechanic tests and 5
-harness self-tests**, in-crate `#[cfg(test)]` so they run in the per-PR
-`cargo-test` gate rather than the nightly-only `tests/*.rs` tier (#5960).
+harness self-tests**, in-crate `#[cfg(all(test, feature = "llvm-inprocess"))]`
+so they run in the per-PR `cargo-test` gate rather than the nightly-only
+`tests/*.rs` tier (#5960), and so `--no-default-features` (the text path kept
+for bisection) still builds — two of the three vantages need that pipeline.
 
 **Three vantages, because each is blind to what the next one catches.**
 
