@@ -85,6 +85,30 @@ arm is empty, and against the baseline it is four hunks.
    exists; a thrown `TypeError` would only have been evidence that it is
    reachable in one arrangement.
 
+**Two more unprotected windows in the same module, found by reading the arms the
+migration did not have to touch** — which is the "listed ≠ audited" distinction
+being paid for rather than restated:
+
+* **`Promise.try(cb, ...extra)` was #7154's accumulator shape verbatim.**
+  `current_arr` was a raw `*mut ArrayHeader` threaded through the push loop in a
+  bare SSA register, holding the only reference to everything pushed so far while
+  the NEXT argument — arbitrary user code — was lowered, and `callback` sat in
+  another bare register across `js_array_alloc`, every push and every one of
+  those lowerings. Identical to the `namespace_call.rs` rest-path defect slice 5
+  called the most serious of its four. The pre-fix IR threads
+  `%r55 → %r60 → %r65` through three `churn()` calls with no root; the fixed IR
+  re-reads the accumulator from its slot between every push.
+* **`Array.fromAsync(input, mapFn, thisArg)` held three operands across each
+  other's lowering** — #7280 taxonomy (c), which `root_reload` cannot repair.
+  One re-read point serves, so this is the plain `with_operands_rooted` form.
+
+Neither faults in the arrangements tried (including `PERRY_GC_ZEAL=1` on a
+`PERRY_GC_MOVING_LOOP_POLLS=1` build); the IR ordering is the evidence.
+`Array.fromAsync` deliberately keeps `take(3)`, so this is a pure rooting fix:
+the `Promise.*` statics and `Array.fromAsync` all fail to EVALUATE their surplus
+arguments, which is the same node-visible defect as `console.time`'s above, and
+fixing that family belongs in its own change with its own oracle A/B.
+
 **Cost is zero where the window cannot collect, and it is measured.** A probe
 exercising direct calls, rest calls, `arguments`, `new`, method dispatch,
 dynamic closure calls, `Map.set` and eight `console.*` arms was compiled under

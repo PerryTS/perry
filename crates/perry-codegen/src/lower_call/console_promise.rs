@@ -663,29 +663,39 @@ pub fn try_lower_promise_static_call(
                     return Ok(Some(nanbox_pointer_inline(blk, &handle)));
                 }
                 "try" => {
-                    let callback = if args.is_empty() {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    } else {
-                        lower_expr(ctx, &args[0])?
-                    };
+                    // #7154's accumulator shape verbatim, with the callback on
+                    // top of it. `current_arr` was a raw `*mut ArrayHeader` in a
+                    // bare SSA register threaded through the push loop, holding
+                    // the only reference to everything pushed so far while the
+                    // NEXT argument — arbitrary user code — was lowered; and
+                    // `callback` sat in another bare register across
+                    // `js_array_alloc`, every push and every one of those
+                    // lowerings. Identical to the `namespace_call.rs` rest-path
+                    // defect slice 5 found, which printed a wrong answer on the
+                    // default build with no GC instrumentation at all.
                     let extra_count = args.len().saturating_sub(1);
-                    let mut current_arr =
-                        ctx.block()
-                            .call(I64, "js_array_alloc", &[(I32, &extra_count.to_string())]);
-                    for arg in args.iter().skip(1) {
-                        let value = lower_expr(ctx, arg)?;
-                        current_arr = ctx.block().call(
+                    let handle = with_rooted_group(ctx, 1, |ctx, group| {
+                        let callback = match args.first() {
+                            Some(cb) => Some(group.lower(ctx, cb, true)?),
+                            None => None,
+                        };
+                        let acc = group.begin_array(ctx, &extra_count.to_string());
+                        for arg in args.iter().skip(1) {
+                            let value = lower_expr(ctx, arg)?;
+                            group.push_array(ctx, acc, &value);
+                        }
+                        let current_arr = group.read_array(ctx, acc);
+                        let callback = match callback {
+                            Some(i) => group.reread(ctx, i)?,
+                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                        };
+                        Ok(ctx.block().call(
                             I64,
-                            "js_array_push_f64",
-                            &[(I64, &current_arr), (DOUBLE, &value)],
-                        );
-                    }
+                            "js_promise_try",
+                            &[(DOUBLE, &callback), (I64, &current_arr)],
+                        ))
+                    })?;
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_promise_try",
-                        &[(DOUBLE, &callback), (I64, &current_arr)],
-                    );
                     return Ok(Some(nanbox_pointer_inline(blk, &handle)));
                 }
                 _ => {}
@@ -693,28 +703,28 @@ pub fn try_lower_promise_static_call(
         }
         // `Array.fromAsync(input, mapFn?, thisArg?)` — Node 22+ static method.
         if is_global_constructor_expr(object, "Array") && property == "fromAsync" {
-            let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let input = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                undefined.clone()
-            };
-            let map_fn = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                undefined.clone()
-            };
-            let this_arg = if let Some(arg) = args.get(2) {
-                lower_expr(ctx, arg)?
-            } else {
-                undefined
-            };
-            let blk = ctx.block();
-            return Ok(Some(blk.call(
-                DOUBLE,
-                "js_array_from_async",
-                &[(DOUBLE, &input), (DOUBLE, &map_fn), (DOUBLE, &this_arg)],
-            )));
+            // Operand-to-operand windows, three deep: `input` was held in a bare
+            // register across `mapFn`'s and `thisArg`'s lowering and `mapFn`
+            // across `thisArg`'s, both of which are arbitrary user code.
+            // #7280 taxonomy (c), which `root_reload` cannot repair.
+            //
+            // One re-read point serves: all three are consumed by the single
+            // `js_array_from_async` below. `take(3)` keeps this a pure rooting
+            // fix — surplus arguments are not evaluated here today, which is a
+            // separate (node-visible) defect shared with the `Promise.*` statics
+            // above, and changing it belongs with theirs.
+            let operands: Vec<&Expr> = args.iter().take(3).collect();
+            return with_operands_rooted(ctx, &operands, |ctx, values| {
+                let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let input = values.first().cloned().unwrap_or_else(|| undefined.clone());
+                let map_fn = values.get(1).cloned().unwrap_or_else(|| undefined.clone());
+                let this_arg = values.get(2).cloned().unwrap_or(undefined);
+                Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_array_from_async",
+                    &[(DOUBLE, &input), (DOUBLE, &map_fn), (DOUBLE, &this_arg)],
+                )))
+            });
         }
     }
     Ok(None)
