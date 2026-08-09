@@ -215,17 +215,71 @@ pub(crate) fn array_store_needs_write_barrier(ctx: &FnCtx<'_>, value: &Expr) -> 
 ///   user-address range and are rejected — and the evacuation rewrite path
 ///   routes through the same function.
 ///
-/// **Deliberately NOT elided: a pointer-valued store into a pointer-masked
-/// slot.** That would be a no-op under an intact descriptor, but the receiver
-/// is not guaranteed to have one — `lower_new_impl` has an exit
-/// (`lower_call/new.rs`, the standalone-ctor-symbol branch where
-/// `call_local_constructor_symbol` yields `None`) that returns a freshly
-/// allocated instance *without* emitting `js_gc_init_typed_shape_layout`. Such
-/// an object sits at `GC_LAYOUT_POINTER_FREE`, where the note is the only thing
-/// that ever sets the pointer-mask bit the collector reads. Closing that exit
-/// (#6921) is the prerequisite for the stronger elision.
+/// A pointer-valued store into a pointer-masked slot is handled separately, by
+/// [`class_field_store_layout_note_is_conforming`] — see there.
 pub(crate) fn class_field_store_needs_layout_note(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     !expr_produces_non_pointer_bits_by_construction(ctx, value)
+}
+
+/// Phase 4b.2 (#5094, refs #7510): is this class-field store's layout note a
+/// *provable no-op whenever the receiver carries an intact side-mask
+/// descriptor*?
+///
+/// [`class_field_store_needs_layout_note`] above elides the note for a value
+/// that is a non-pointer by construction. The complementary case — a **pointer
+/// stored into a slot the class's own compile-time pointer mask declares** —
+/// was deliberately left un-elided, because "the receiver has a descriptor" was
+/// not total: `lower_new_impl`'s standalone-ctor-symbol branch could return a
+/// freshly allocated instance with none, sitting at `GC_LAYOUT_POINTER_FREE`,
+/// where the note is the only thing that ever sets the pointer-mask bit the
+/// collector reads. **#6921 closed that exit** (`lower_call/new.rs` now emits
+/// the init there too), so the elision is available — but this returns only
+/// *elidable under a header test*, not *elidable outright*, and the emitter
+/// pairs it with that test. A descriptor-less receiver from any path this
+/// reasoning did not enumerate still takes the full note.
+///
+/// The test the emitter pairs this with is
+/// `_reserved & (STATE_MASK | TYPED_LAYOUT_INTACT) == SIDE_MASK | INTACT`, and
+/// together the two prove `layout_note_slot` would return `Conforms` without
+/// touching anything:
+///
+/// * The `#5093` inline precheck has already proven, on this path, that the
+///   receiver's `keys_array` equals **this class's** keys global and its
+///   `field_count` exceeds the slot index. So the descriptor reachable for it
+///   was installed from this class's mask globals — shared by shape under that
+///   same key (`SHAPE_LAYOUTS`), or per-object if that key was poisoned
+///   ambiguous, and in both cases from these same words.
+/// * `slot` is in that mask's `pointer_mask` and (checked in
+///   [`crate::typed_shape::layout_declares_pointer_slot`]) not in its
+///   `raw_f64_mask`, so neither `layout_note_slot` downgrade arm can fire: the
+///   raw-f64 arm is not this slot's, and the pointer arm's condition is
+///   `!pointer_mask.contains(slot)`.
+/// * `INTACT` set is exactly the runtime's own invariant that *some* descriptor
+///   is reachable; `SIDE_MASK` is the state a non-empty pointer mask installs.
+///   A cleared bit or any other state routes to the real note, which is the
+///   pre-change behaviour.
+///
+/// Deliberately keyed on the DECLARED field type, not on the value: the value
+/// is already known pointer-bearing at this point (the emitter's live
+/// `may_carry_heap_pointer` test gates the whole bookkeeping block), and the
+/// mask is what the collector will read.
+pub(crate) fn class_field_store_layout_note_is_conforming(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    field_index: u32,
+) -> bool {
+    // No keys global ⟹ no mask globals are emitted for this class and no
+    // descriptor is ever installed, so the header test could never pass. Skip
+    // the extra IR rather than emit a branch that is always taken.
+    if !ctx.class_keys_globals.contains_key(class_name) {
+        return false;
+    }
+    let layout = ctx
+        .class_init_chains
+        .get(class_name)
+        .map(|chain| crate::typed_shape::class_typed_layout_from_chain(chain))
+        .unwrap_or_else(|| crate::typed_shape::class_typed_layout(ctx.classes, class_name));
+    crate::typed_shape::layout_declares_pointer_slot(&layout, field_index)
 }
 
 /// `js_string_addref_if_heap_string` demotes a uniquely-owned (refcount==1)

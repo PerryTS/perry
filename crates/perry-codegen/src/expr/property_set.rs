@@ -36,11 +36,11 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
-    class_field_store_needs_layout_note, class_field_store_needs_string_addref,
-    emit_jsvalue_slot_store_pointer_tested, emit_typed_feedback_register_site,
-    expr_produces_non_pointer_bits_by_construction, lower_expr, lower_expr_native,
-    raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
+    class_field_store_layout_note_is_conforming, class_field_store_needs_layout_note,
+    class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested,
+    emit_typed_feedback_register_site, expr_produces_non_pointer_bits_by_construction, lower_expr,
+    lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn canonicalize_raw_f64_numeric_store_value(
@@ -159,6 +159,7 @@ pub(crate) fn try_lower_sloppy_class_field_store(
             field_index,
             expected_class_id,
             &keys_global_name,
+            &class_name,
         );
     }
 
@@ -337,6 +338,7 @@ fn try_lower_sloppy_class_field_boxed_store(
     field_index: u32,
     expected_class_id: u32,
     keys_global_name: &str,
+    class_name: &str,
 ) -> Result<Option<String>> {
     // Operand order mirrors the raw-f64 arm and the strict class-field arm
     // verbatim: the assignment reference is evaluated before the RHS, and the
@@ -426,6 +428,7 @@ fn try_lower_sloppy_class_field_boxed_store(
             &obj_bits,
             &field_addr,
             barrier_needed,
+            class_field_store_layout_note_is_conforming(ctx, class_name, field_index),
         );
         ctx.block().br(&merge_label);
     }
@@ -1094,6 +1097,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &obj_bits,
                                     &field_addr,
                                     field_set_barrier_needed,
+                                    class_field_store_layout_note_is_conforming(
+                                        ctx,
+                                        &class_name,
+                                        field_index,
+                                    ),
                                 );
                             }
                             let (semantic, rep) = if requires_raw_f64 {
@@ -1320,6 +1328,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &obj_bits,
                                     &field_addr,
                                     field_set_barrier_needed,
+                                    class_field_store_layout_note_is_conforming(
+                                        ctx,
+                                        &class_name,
+                                        field_index,
+                                    ),
                                 );
                                 None
                             };

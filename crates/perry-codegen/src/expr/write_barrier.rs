@@ -9,7 +9,14 @@ use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
-use crate::types::{DOUBLE, I1, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
+
+/// `GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (`0xD000`) as a signed
+/// i16 — the emitted IR is textual, so the constant is written the way LLVM
+/// parses an i16 literal (mirrors `class_field_inline_guard`'s convention).
+const LAYOUT_STATE_AND_INTACT_MASK_I16: &str = "-12288";
+/// `GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (`0x9000`), same encoding.
+const LAYOUT_SIDE_MASK_INTACT_I16: &str = "-28672";
 
 /// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
 /// by default. Only explicit `PERRY_WRITE_BARRIERS=0`/`off`/`false`
@@ -502,6 +509,7 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
     barrier_parent_bits: &str,
     slot_addr: &str,
     write_barrier_needed: bool,
+    layout_note_conforming: bool,
 ) -> Option<String> {
     {
         let blk = ctx.block();
@@ -536,9 +544,46 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
         if string_addref_needed {
             blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
         }
-        if layout_note_needed {
-            emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
+    }
+    // Phase 4b.2 (#5094): a pointer stored into a slot the class's own pointer
+    // mask declares is a `Conforms` no-op inside `layout_note_slot` for every
+    // receiver that carries an intact side-mask descriptor. Test that header
+    // state inline and skip the cross-crate call — see
+    // `class_field_store_layout_note_is_conforming` for why the two together
+    // are a proof, and why the fallback arm is kept rather than eliding
+    // outright.
+    if layout_note_needed && layout_note_conforming {
+        let note_idx = ctx.new_block("class_field_set.layout_note");
+        let after_idx = ctx.new_block("class_field_set.layout_note.done");
+        let note_label = ctx.block_label(note_idx);
+        let after_label = ctx.block_label(after_idx);
+        {
+            let blk = ctx.block();
+            // GcHeader precedes the object by 8 bytes; `_reserved` is the i16 at
+            // -6 (same derivation as `class_field_inline_guard`).
+            let obj_ptr = blk.inttoptr(I64, layout_parent_bits);
+            let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+            let reserved = blk.load(I16, &res_ptr);
+            // (GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT) == 0xD000,
+            // and the conforming value (GC_LAYOUT_SIDE_MASK | INTACT) == 0x9000.
+            // Written signed because the emitted IR is textual i16.
+            let masked = blk.and(I16, &reserved, LAYOUT_STATE_AND_INTACT_MASK_I16);
+            let conforming = blk.icmp_eq(I16, &masked, LAYOUT_SIDE_MASK_INTACT_I16);
+            blk.cond_br(&conforming, &after_label, &note_label);
         }
+        ctx.current_block = note_idx;
+        {
+            let blk = ctx.block();
+            emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
+            blk.br(&after_label);
+        }
+        ctx.current_block = after_idx;
+    } else if layout_note_needed {
+        let blk = ctx.block();
+        emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
+    }
+    {
+        let blk = ctx.block();
         if write_barrier_emitted {
             emit_write_barrier_slot_on_block(blk, barrier_parent_bits, slot_addr, &value_bits);
         }

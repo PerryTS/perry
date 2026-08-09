@@ -271,6 +271,36 @@ fn typed_layout_from_fields<'a>(
     }
 }
 
+/// Does `layout`'s **pointer** mask declare `slot`?
+///
+/// The masks are word-packed exactly as `typed_layout_from_fields` builds them
+/// and as `js_gc_{init,declare}_typed_shape_layout` consumes them, so a `true`
+/// here is the same bit the runtime's `TypedLayoutDescriptor::pointer_mask`
+/// will carry for this shape.
+pub(crate) fn layout_declares_pointer_slot(layout: &TypedShapeLayout, slot: u32) -> bool {
+    let slot = slot as usize;
+    if slot >= layout.slot_count as usize {
+        return false;
+    }
+    let word = slot / 64;
+    // A pointer-masked slot may not also be raw-f64-masked. `init_typed_shape_layout`
+    // rejects an intersecting pair outright (`words_intersect` -> UNKNOWN), so a
+    // shape that reaches an installed descriptor has disjoint masks — but this
+    // predicate licenses eliding a store's layout note, so it re-establishes
+    // disjointness locally rather than importing it.
+    let raw_f64_here = layout
+        .raw_f64_mask_words
+        .get(word)
+        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0);
+    if raw_f64_here {
+        return false;
+    }
+    layout
+        .pointer_mask_words
+        .get(word)
+        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0)
+}
+
 pub(crate) fn mask_global_name_from_keys_global(keys_global_name: &str) -> String {
     keys_global_name
         .strip_prefix("perry_class_keys_")
