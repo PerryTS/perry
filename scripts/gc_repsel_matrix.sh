@@ -166,16 +166,22 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 # collector's evacuating path is exercised; it does not say the shipped default
 # reaches that path.
 #
-# THE SHIPPED DEFAULT DOES NOT REACH IT TODAY. #7019/#7024 made it reach it by
-# the sound route -- defer the alloc-point trigger to a precise-root safepoint
-# and run the copying minor there -- and #7161 then turned that route off by
-# default, pending #7154. So the WHERE distinction still stands and still
+# THE SHIPPED DEFAULT REACHES IT AGAIN SINCE #7682. #7019/#7024 made it reach
+# the path by the sound route -- defer the alloc-point trigger to a precise-root
+# safepoint and run the copying minor there -- #7161 turned that route off
+# pending #7154, and #7682 turned it back on once #7154 closed and the poll
+# became allocation-gated. So the WHERE distinction still stands and still
 # matters (a safepoint has an unwound JS stack and roots precise by
 # construction; %E% forces relocation at the register-imprecise allocation
-# point, which is the only place an unrooted runtime-side local is exposed),
-# but the arm that carries the safepoint route is `safepoint_minor`, which opts
-# the polls back in at compile AND run time. `default` is registered known-inert
-# in test-parity/gc_matrix_inert_arms.txt until the stopgap lifts.
+# point, which is the only place an unrooted runtime-side local is exposed) --
+# but `default` now carries the safepoint route itself, alongside
+# `safepoint_minor`, and its known-inert registration is deleted.
+#
+# #7682 is also why %E% is now a strictly-measurement configuration in a
+# stronger sense than before: `PERRY_CONSERVATIVE_STACK_SCAN=off` is what lets
+# it relocate at the alloc point at all, and the shipped default no longer can
+# -- the guard there is unconditional. An %E% arm therefore exercises a
+# relocation the default build will not perform, which is the point of it.
 #
 # ***AND WHEN THESE ARMS FIRST MOVED, THEY WERE RED.*** The first `--arms all`
 # run in which anything actually moved failed 14 of the 20 corpus files then in
