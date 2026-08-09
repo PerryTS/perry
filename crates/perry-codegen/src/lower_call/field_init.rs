@@ -39,9 +39,9 @@ use crate::types::{DOUBLE, I32, I64};
 /// overwrite.
 ///
 /// The proof obligation is identical for both shapes and is entirely about the
-/// *operand* expressions, not the store opcode: `This` and `LocalGet(<plain
-/// param>)` cannot throw, allocate, or observe `this`, so the assignment is
-/// reached before any other effect of the constructor.
+/// *operand* expressions, not the store opcode: neither `This` nor any RHS
+/// [`prologue_rhs_cannot_observe_this`] admits can observe `this`, so the
+/// assignment is reached before anything that could read the field.
 ///
 /// **What the elided write is NOT** (the obvious objection, and it is
 /// measurably wrong — `test-files/test_class_field_init_proto_setter.ts`): it
@@ -66,14 +66,14 @@ fn prologue_assigned_field<'a>(
     stmt: &'a Stmt,
     param_ids: &std::collections::HashSet<u32>,
 ) -> Option<&'a str> {
-    let is_plain_param = |e: &Expr| matches!(e, Expr::LocalGet(id) if param_ids.contains(id));
+    let admissible = |e: &Expr| prologue_rhs_cannot_observe_this(e, param_ids);
     match stmt {
         // Synthesized (anon-shape ctor, destructuring lowering).
         Stmt::Expr(Expr::PropertySet {
             object,
             property,
             value,
-        }) if matches!(object.as_ref(), Expr::This) && is_plain_param(value.as_ref()) => {
+        }) if matches!(object.as_ref(), Expr::This) && admissible(value.as_ref()) => {
             Some(property.as_str())
         }
         // User-written `this.f = p;`.
@@ -85,7 +85,7 @@ fn prologue_assigned_field<'a>(
             strict: _,
         }) if matches!(target.as_ref(), Expr::This)
             && matches!(receiver.as_ref(), Expr::This)
-            && is_plain_param(value.as_ref()) =>
+            && admissible(value.as_ref()) =>
         {
             match key.as_ref() {
                 Expr::String(property) => Some(property.as_str()),
@@ -93,6 +93,60 @@ fn prologue_assigned_field<'a>(
             }
         }
         _ => None,
+    }
+}
+
+/// The RHS forms a prologue statement may carry.
+///
+/// The whole prologue guarantee is "this statement cannot throw, allocate, or
+/// **observe `this`**" — see [`ctor_prologue_param_assigned_fields`]. A plain
+/// parameter read was the original (and only) admitted form; #7469's widening
+/// adds the two other expression families that satisfy it by construction:
+///
+/// * **Literals** (`null`, `undefined`, a number, a string, a bool). `this.next
+///   = null` is the single most common opening statement of a linked-structure
+///   constructor, and refusing it truncated the prologue at statement 0 —
+///   which, since #7510 consults the same set, also denied the class an
+///   at-allocation layout declaration and left every store in its constructor
+///   on the by-name fallback.
+/// * **Pure operator trees over those two** (`s + 1`, `-n`, `a * b + 1`). Every
+///   leaf is a parameter read or a literal, and `Binary`/`Unary`/`Compare`/
+///   `Logical` evaluate their operands and combine them — no member access, no
+///   call, no `new`, no closure, and (decisively) no `This` anywhere in the
+///   tree. `s + 1` can still *allocate* when `s` is a string, and that is fine:
+///   the guarantee this predicate underwrites is about observability of `this`,
+///   not about the absence of a collection. A GC that scans the
+///   still-constructing instance reads the allocator's `undefined` fill through
+///   the declared descriptor and rejects it at the tag check.
+///
+/// Deliberately NOT admitted: `PropertyGet` (a getter runs user code),
+/// `Call`/`New` (arbitrary user code), `Closure` (captures), `Await`/`Yield`
+/// (suspension), and anything containing `This`. None of those can reach the
+/// half-built instance today — it has not escaped — but each makes the
+/// "cannot observe `this`" claim rest on a reachability argument instead of on
+/// the expression's own shape, and this predicate is consumed by two callers
+/// with different failure modes (a dead-store elision and a GC layout
+/// declaration).
+fn prologue_rhs_cannot_observe_this(
+    expr: &Expr,
+    param_ids: &std::collections::HashSet<u32>,
+) -> bool {
+    match expr {
+        Expr::LocalGet(id) => param_ids.contains(id),
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_) => true,
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
+            prologue_rhs_cannot_observe_this(left, param_ids)
+                && prologue_rhs_cannot_observe_this(right, param_ids)
+        }
+        Expr::Unary { operand, .. } => prologue_rhs_cannot_observe_this(operand, param_ids),
+        _ => false,
     }
 }
 
@@ -141,11 +195,19 @@ fn prologue_assigned_field<'a>(
 ///   `key_expr` none).
 ///
 /// The prologue is the maximal leading run of statements that
-/// [`prologue_assigned_field`] recognizes as `this.<f> = <plain param>`. A
-/// `LocalGet` of a plain parameter cannot throw, allocate, or observe `this`,
-/// so every field it assigns is written before ANY other effect of the
-/// constructor — which is exactly the guarantee that makes the earlier
-/// `undefined` write dead.
+/// [`prologue_assigned_field`] recognizes as `this.<f> = <expr that cannot
+/// observe `this`>` — a plain parameter read, a literal, or a pure operator
+/// tree over those (see [`prologue_rhs_cannot_observe_this`] for why those
+/// three and nothing else). None of them can reach the half-built instance, so
+/// every field they assign is written before anything can read it — which is
+/// exactly the guarantee that makes the earlier `undefined` write dead.
+///
+/// Admitting literals is not a cosmetic widening. `constructor(v) { this.next
+/// = null; this.v = v; }` is the canonical linked-structure constructor, and
+/// under the param-only rule its prologue truncated at statement 0 and came
+/// back EMPTY — so neither field's dead `undefined` write was elided and, since
+/// #7510 consults the same set, the class was also refused an at-allocation
+/// layout declaration.
 pub(crate) fn ctor_prologue_param_assigned_fields(
     class: &perry_hir::Class,
 ) -> std::collections::HashSet<String> {
