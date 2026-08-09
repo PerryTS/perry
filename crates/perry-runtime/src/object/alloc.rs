@@ -754,6 +754,15 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         (*new_ptr).field_count = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*new_ptr).meta = ptr::null_mut();
+        // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array
+        // edge (#7683). This MUST precede the `js_array_alloc` below: that call
+        // allocates, so it can collect, and the collector reads this slot
+        // through `object::gc_keys_array_slot` as a child edge. Every sibling
+        // allocator in this file already nulls it here; this function was the
+        // one that did not, and `arena_alloc_gc_old`'s fast path deliberately
+        // reuses a swept, NON-zeroed hole (#7437), so the slot holds real
+        // leftover heap bytes rather than zeros.
+        (*new_ptr).keys_array = ptr::null_mut();
         let fields_ptr = (new_ptr as *mut u8).add(header_size) as *mut u64;
         for i in 0..phys_slots as usize {
             // GC_STORE_AUDIT(INIT): freshly allocated clone field slot is initialized pointer-free.
@@ -786,6 +795,15 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     (*new_ptr).field_count = src_field_count;
     // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
     (*new_ptr).meta = ptr::null_mut();
+    // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array
+    // edge (#7683). This MUST precede the `js_array_alloc` below: that call
+    // allocates, so it can collect, and the collector reads this slot
+    // through `object::gc_keys_array_slot` as a child edge. Every sibling
+    // allocator in this file already nulls it here; this function was the
+    // one that did not, and `arena_alloc_gc_old`'s fast path deliberately
+    // reuses a swept, NON-zeroed hole (#7437), so the slot holds real
+    // leftover heap bytes rather than zeros.
+    (*new_ptr).keys_array = ptr::null_mut();
 
     // Copy source fields (as raw f64/u64 words — preserves NaN-boxing)
     let src_fields = (src_ptr as *const u8).add(header_size) as *const u64;
