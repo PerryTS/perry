@@ -34,10 +34,11 @@ was reaching for. Call sites are unchanged: `PerThread<T>` derefs to `T`, so
 `SYMBOL_REGISTRY.lock()` and `CLASS_PROTOTYPE_OBJECTS.read()` keep working as
 written, and this is a declaration-site change rather than a 300-site rewrite.
 
-**26 tables converted**, across every family the guards clear: closure dynamic
-props (3), symbol side tables (5), the class-registry `RwLock`s (7), the timer
-queues (3), the object-constant caches and `GLOBAL_THIS_PTR` (9), `geisterhand`
-(2), `ui_text_registry` (2), and the `console.log` singleton.
+**37 statics converted across 13 files**, covering every family the guards clear:
+closure dynamic props (3), symbol side tables (5), the class-registry tables (9),
+the timer queues (3), the object-constant caches and `GLOBAL_THIS_PTR` (9),
+`geisterhand` (2), `ui_text_registry` (2), the `console.log` singleton — plus the
+two the soak found (`tui::tree` 2, the write-barrier flag 1).
 
 ### Both halves are shown able to fail
 
