@@ -1424,3 +1424,71 @@ fn array_receiver_is_never_read_as_a_class_id() {
         "a real class instance must still resolve to its class id"
     );
 }
+
+/// #7689: `const f = C.m; f(...)` — a method value read off a CONSTRUCTOR
+/// class ref — must invoke the STATIC method when the class declares both a
+/// static and an instance method of the same name.
+///
+/// `js_class_method_bind`'s #446 method-identity canonicalization resolved
+/// the name against the INSTANCE vtable (`class_id_from_method_receiver`
+/// treats a class ref like an instance receiver), so the extracted value was
+/// the prototype method. marked's `Lexer` has exactly this collision
+/// (`static lex` + instance `lex`): `const lexer2 = _Lexer.lex;
+/// lexer2(src, opt)` ran the instance `lex` with no constructed receiver and
+/// every `marked.parse` threw "Cannot read properties of undefined (reading
+/// 'pedantic')".
+#[test]
+fn constructor_ref_method_value_resolves_static_over_instance_method() {
+    // Unique id so the process-global registries don't collide with other tests.
+    const CLASS_ID: u32 = 0x7689;
+    const NAME: &[u8] = b"lex";
+
+    extern "C" fn static_lex_7689() -> f64 {
+        42.0
+    }
+    extern "C" fn instance_lex_7689(_this: f64) -> f64 {
+        7.0
+    }
+
+    unsafe {
+        super::class_registry::js_register_class_method(
+            CLASS_ID as i64,
+            NAME.as_ptr(),
+            NAME.len() as i64,
+            instance_lex_7689 as usize as i64,
+            0,
+            0,
+            0,
+        );
+        super::class_registry::js_register_class_static_method(
+            CLASS_ID as i64,
+            NAME.as_ptr(),
+            NAME.len() as i64,
+            static_lex_7689 as usize as i64,
+            0,
+            0,
+        );
+    }
+
+    let class_ref = super::native_module::class_constructor_ref_value(CLASS_ID);
+    let bound = super::native_module::js_class_method_bind(class_ref, NAME.as_ptr(), NAME.len());
+    let result = unsafe { crate::closure::js_native_call_value(bound, std::ptr::null(), 0) };
+    assert_eq!(
+        result, 42.0,
+        "a method value extracted off the CONSTRUCTOR ref must dispatch the \
+         static `lex`, not the same-named instance method"
+    );
+
+    // The guard must not over-narrow: the PROTOTYPE ref names the instance
+    // method, and an extracted `C.prototype.lex` must keep resolving it.
+    let proto_ref = super::native_module::class_prototype_ref_value(CLASS_ID);
+    let bound_proto =
+        super::native_module::js_class_method_bind(proto_ref, NAME.as_ptr(), NAME.len());
+    let result_proto =
+        unsafe { crate::closure::js_native_call_value(bound_proto, std::ptr::null(), 0) };
+    assert_eq!(
+        result_proto, 7.0,
+        "a method value extracted off the PROTOTYPE ref must still dispatch \
+         the instance `lex`"
+    );
+}

@@ -1051,7 +1051,22 @@ pub extern "C" fn js_class_method_bind(
         if let Ok(name) = unsafe {
             std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
         } {
-            if bound_native_method_length(name).is_none() {
+            // #7689: a CONSTRUCTOR class-ref receiver (`const f = C.m`) must
+            // never canonicalize to the INSTANCE vtable method of the same
+            // name — in JS `C.m` sees only statics (`class C { static lex(){}
+            // lex(){} }` has `C.lex` === the static; the instance `lex` lives
+            // on `C.prototype`). `class_id_from_method_receiver` treats a
+            // class ref like an instance, so marked's `const lexer2 =
+            // _Lexer.lex; lexer2(src, opt)` extracted the instance `lex`,
+            // whose bare invocation read `this.options` off an unconstructed
+            // receiver. Fall through to `build_bound_method_closure`: its
+            // call-time dispatch (`js_native_call_method`'s 0x7FFE arm)
+            // resolves statics-first for constructor refs. PROTOTYPE refs
+            // (`C.prototype.m`) keep the canonical path — the instance method
+            // is exactly what they name.
+            let receiver_is_constructor_ref =
+                class_ref_id(instance).is_some() && class_prototype_ref_id(instance).is_none();
+            if !receiver_is_constructor_ref && bound_native_method_length(name).is_none() {
                 if let Some(class_id) = class_id_from_method_receiver(instance) {
                     if let Some(owner) =
                         super::class_registry::method_owner_class_id(class_id, name)
