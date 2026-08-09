@@ -452,7 +452,23 @@ NONCOLLECTING = {
     "js_gc_temp_root_push", "js_gc_temp_root_get", "js_gc_temp_root_set",
     "js_gc_temp_root_truncate",
     # layout / barrier bookkeeping (no allocation)
-    "js_gc_init_typed_shape_layout", "js_gc_layout_note_slot",
+    #
+    # This block is a second copy of a fact the compiler already states:
+    # `perry-codegen/src/gc_call_effects.rs` answers `GcCallEffect::CannotCollect`
+    # for the same helpers. The two lists must agree, and `js_gc_declare_typed_shape_layout`
+    # is where they drifted -- #7510 added it beside `js_gc_init_typed_shape_layout`
+    # in the Rust match and not here, which stayed invisible only because the
+    # corpus then contained no class the #7510 gate admitted. #5094 widened that
+    # gate to pointer-bearing classes and the omission printed 358 violations, all
+    # of them `js_object_alloc_class_inline_keys->js_gc_declare_typed_shape_layout`
+    # and every one spurious. The two entry points share a body
+    # (`typed_shape_layout_entry` -> `init_typed_shape_layout`) and differ only in
+    # a `TypedShapeProof` that makes `declare` do strictly LESS: it skips the slot
+    # validation loop. So `declare` cannot collect for exactly the reason `init`
+    # cannot -- side-table metadata writes through the system allocator, which
+    # arms no Perry GC trigger.
+    "js_gc_init_typed_shape_layout", "js_gc_declare_typed_shape_layout",
+    "js_gc_layout_note_slot",
     "js_write_barrier_root_nanbox", "js_write_barrier_slot",
     "js_runtime_write_barrier_slot", "js_gc_register_global_root",
     # pure value predicates / bit twiddling
