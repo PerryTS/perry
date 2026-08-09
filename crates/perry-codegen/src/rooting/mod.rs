@@ -1127,7 +1127,7 @@ pub(crate) struct NewTargetSave {
 /// Set `new.target` to `new_target` and root the value it displaced.
 pub(crate) fn new_target_save(ctx: &mut FnCtx<'_>, new_target: &str) -> NewTargetSave {
     let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
-    let idx = crate::expr::temp_root::temp_root_push_double(ctx, &prev);
+    let idx = temp_root::temp_root_push_double(ctx, &prev);
     ctx.block()
         .call(DOUBLE, "js_new_target_set", &[(DOUBLE, new_target)]);
     NewTargetSave {
