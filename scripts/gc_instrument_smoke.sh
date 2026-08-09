@@ -324,7 +324,10 @@ TS
 
 "$PERRY_BIN" compile "$WORK/scale.ts" -o "$WORK/scale" >/dev/null
 
-ZEAL_BUDGET_S="${PERRY_ZEAL_SMOKE_BUDGET_S:-60}"
+# 90s, against a paced cost of a few seconds and an unpaced ~200s on the quiet
+# host. Wide enough that a slow shared runner does not flake it, narrow enough
+# that the unpaced 1:1 behaviour cannot fit inside it.
+ZEAL_BUDGET_S="${PERRY_ZEAL_SMOKE_BUDGET_S:-90}"
 scale_start=$(date +%s)
 set +e
 # `env -u` so the every-poll pin from the top of the file does NOT apply: this

@@ -1206,7 +1206,10 @@ jobs:
       # run zero copying minors (the #6942 / #7024 / #7025 failure mode).
       # The detection property itself is a required-gate unit test:
       # gc/tests/fromspace_protect.rs::quarantine_catches_a_planted_stale_from_space_deref.
-      # ~20s: the fixture is sized for ~1200 back-edge polls, not #7154's 240k.
+      # Arms 1-3/5 use a fixture sized for ~1200 back-edge polls (not #7154's
+      # 240k), pinned to every-poll zeal. Arm 6 (#7728) is the budgeted one:
+      # a realistic poll count at the SHIPPED default, which is the axis that
+      # a ~1200-poll fixture structurally cannot see.
       - name: GC rooting-bug instruments (inert-when-off, live-when-on)
         run: ./scripts/gc_instrument_smoke.sh target/release/perry
 
