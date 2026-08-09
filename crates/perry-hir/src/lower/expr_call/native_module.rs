@@ -262,23 +262,36 @@ fn is_node_core(module: &str) -> bool {
     crate::ir::is_node_builtin_module(module.strip_prefix("node:").unwrap_or(module))
 }
 
+/// Sub-namespaces of a node-core module that the runtime by-name dispatcher has
+/// a bucket for — the DOTTED tags in `nm_module_index` (perry-runtime), which
+/// perry-codegen mirrors in `nm_install_symbol`. This is the third mirror and is
+/// deliberately kept to the handful that matter.
+///
+/// The list is an allowlist, not a derivation from `NODE_BUILTIN_MODULES`:
+/// `fs/promises` and `dns/promises` are real node-core module names, but there
+/// is no `fs.promises` / `dns.promises` dispatch bucket, so treating the
+/// property as a namespace and routing `promises.readFile(...args)` to the
+/// dynamic path yields `TypeError: value is not a function` — worse than the
+/// positional fold it replaced. Measured, not assumed (#7720 follow-up).
+pub(super) fn sub_namespace_has_dispatch_bucket(module: &str, sub: &str) -> bool {
+    matches!(
+        (module.strip_prefix("node:").unwrap_or(module), sub),
+        ("path", "posix" | "win32")
+            | ("util", "types")
+            | ("crypto", "subtle" | "webcrypto")
+            | ("punycode", "ucs2")
+    )
+}
+
 /// Is the named export `export` of node-core `module` itself a NAMESPACE
-/// (`import { posix } from "node:path"`, `import { promises } from "node:fs"`)
-/// rather than a class or function value?
+/// (`import { posix } from "node:path"`) rather than a class or function value?
 ///
 /// The distinction decides whether `<export>.<method>(...)` is a module call.
 /// `Buffer.concat(...)` / `URL.parse(...)` are class statics reached through a
 /// different lowering family, and their by-name runtime dispatch does not cover
 /// the same surface, so they stay on their existing path.
 fn is_submodule_export(module: &str, export: &str) -> bool {
-    let module = module.strip_prefix("node:").unwrap_or(module);
-    export == "default"
-        || crate::ir::is_node_builtin_module(&format!("{module}/{export}"))
-        // Sub-namespaces that are properties rather than sub-modules.
-        || matches!(
-            (module, export),
-            ("crypto", "subtle" | "webcrypto") | ("punycode", "ucs2") | ("path", "posix" | "win32")
-        )
+    export == "default" || sub_namespace_has_dispatch_bucket(module, export)
 }
 
 /// Does `name` denote a node-core module NAMESPACE in this scope — a
@@ -292,12 +305,30 @@ fn is_submodule_export(module: &str, export: &str) -> bool {
 /// resolves through `dispatch_native_module_method` in the runtime.
 fn name_is_node_builtin_namespace(ctx: &LoweringContext, name: &str) -> bool {
     if let Some((module, export)) = ctx.lookup_native_module(name) {
-        if is_node_core(module) && export.is_none_or(|e| is_submodule_export(module, e)) {
+        if is_node_core(module)
+            && is_top_level_module(module)
+            && export.is_none_or(|e| is_submodule_export(module, e))
+        {
             return true;
         }
     }
     ctx.lookup_builtin_module_alias(name)
-        .is_some_and(is_node_core)
+        .is_some_and(|m| is_node_core(m) && is_top_level_module(m))
+}
+
+/// Reject the slash sub-module tags (`fs/promises`, `dns/promises`,
+/// `assert/strict`).
+///
+/// A NAMED import of one (`import { promises } from "node:fs"`) registers under
+/// the slash tag, but its local does not read back as a dispatchable namespace
+/// value — diverting `promises.readFile(...args)` turned a rejected promise into
+/// a synchronous `TypeError: value is not a function`, which is worse than the
+/// wrong error code it replaced. The DIRECT import
+/// (`import fsp from "node:fs/promises"`) needs no help from the bail: it
+/// already reaches the generic tail on its own (measured — identical HIR and
+/// `ENOENT` output on both arms), so excluding the slash tags costs nothing.
+fn is_top_level_module(module: &str) -> bool {
+    !module.strip_prefix("node:").unwrap_or(module).contains('/')
 }
 
 /// Is `recv` (a call's RECEIVER) a node-core module namespace, or a
@@ -313,8 +344,25 @@ fn receiver_is_node_builtin_module(ctx: &LoweringContext, recv: &ast::Expr) -> b
                     .lookup_subns_path_alias(name)
                     .is_some_and(|(root, _)| name_is_node_builtin_namespace(ctx, root))
         }
-        // 3-level sub-namespace: recurse to the root identifier.
-        ast::Expr::Member(inner) => receiver_is_node_builtin_module(ctx, inner.obj.as_ref()),
+        // 3-level sub-namespace (`path.posix.join`, `util.types.isDate`): the
+        // ROOT must be a module namespace AND the property must be a
+        // bucket-backed sub-namespace. Recursing on the root alone claimed
+        // `fs.promises.readFile(...)` / `dns.promises.lookup(...)` too, which
+        // have no bucket.
+        ast::Expr::Member(inner) => {
+            let ast::Expr::Ident(root) = unwrap_ts_wrappers(inner.obj.as_ref()) else {
+                return false;
+            };
+            let Some(sub) = super::static_call_prop_name(&inner.prop) else {
+                return false;
+            };
+            let Some((module, export)) = ctx.lookup_native_module(root.sym.as_ref()) else {
+                return false;
+            };
+            is_node_core(module)
+                && matches!(export, None | Some("default"))
+                && sub_namespace_has_dispatch_bucket(module, sub)
+        }
         // `require("node:path").join(...)` — the inline-require shape.
         other => require_literal_native_module(ctx, other)
             .is_some_and(|m| crate::ir::is_node_builtin_module(&m)),

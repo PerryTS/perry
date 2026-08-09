@@ -228,6 +228,17 @@ pub unsafe extern "C" fn js_querystring_unescape_buffer(
 
 /// Runtime bridge for captured native-module callables such as
 /// `const f = querystring.unescapeBuffer; f(...)`.
+///
+/// #7720 follow-up: this used to implement ONLY `unescapeBuffer` while the
+/// runtime arm that calls it advertised the whole set
+/// (`nm_dispatch_querystring` matches `"unescapeBuffer" | "unescape" |
+/// "escape" | "stringify" | "encode" | "parse" | "decode"`). Every other name
+/// fell to `_ => undefined`, so EVERY dynamic form silently produced
+/// `undefined` — `const d: any = qs; d.escape("a b")`, `const e = qs.escape;
+/// e("a b")`, and (once spread calls started routing here) `qs.escape(...args)`.
+/// The `js_querystring_*` FFI entry points all existed already; only this
+/// bridge was missing, which is why the statically-dispatched
+/// `qs.escape("a b")` was always correct and every indirection was not.
 #[no_mangle]
 pub unsafe extern "C" fn js_querystring_native_dispatch(
     method: *const u8,
@@ -254,6 +265,18 @@ pub unsafe extern "C" fn js_querystring_native_dispatch(
                 undefined
             } else {
                 f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+            }
+        }
+        "escape" => js_querystring_escape(arg(0)),
+        "unescape" => js_querystring_unescape(arg(0)),
+        // Node aliases `encode`→`stringify` and `decode`→`parse`.
+        "stringify" | "encode" => js_querystring_stringify(arg(0), arg(1), arg(2), arg(3)),
+        "parse" | "decode" => {
+            let obj = js_querystring_parse(arg(0), arg(1), arg(2), arg(3));
+            if obj.is_null() {
+                undefined
+            } else {
+                f64::from_bits(JSValue::pointer(obj as *const u8).bits())
             }
         }
         _ => undefined,

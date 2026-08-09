@@ -134,6 +134,67 @@ fn class_statics_keep_their_lowering() {
 }
 
 #[test]
+fn sub_namespace_allowlist_is_the_runtime_bucket_set() {
+    // NOT derived from `NODE_BUILTIN_MODULES`: `fs/promises` and `dns/promises`
+    // are real node-core module names, but the runtime by-name dispatcher has
+    // no `fs.promises` / `dns.promises` BUCKET. Re-deriving this list from the
+    // module names is the exact mistake that shipped, so pin it.
+    for (module, sub) in [
+        ("path", "posix"),
+        ("path", "win32"),
+        ("util", "types"),
+        ("crypto", "subtle"),
+        ("punycode", "ucs2"),
+    ] {
+        assert!(
+            super::native_module::sub_namespace_has_dispatch_bucket(module, sub),
+            "{module}.{sub} should be diverted"
+        );
+    }
+    for (module, sub) in [("fs", "promises"), ("dns", "promises"), ("stream", "web")] {
+        assert!(
+            !super::native_module::sub_namespace_has_dispatch_bucket(module, sub),
+            "{module}.{sub} has no dispatch bucket and must keep its lowering"
+        );
+    }
+}
+
+#[test]
+fn bucketless_sub_namespaces_keep_their_lowering() {
+    // `dns.promises.lookup(...)` had a fast path (it threw
+    // `ERR_INVALID_ARG_TYPE`); diverting it produced a silent `undefined`.
+    // `import { promises } from 'node:fs'` registers under the `fs/promises`
+    // slash tag, and diverting it turned a rejected promise into a synchronous
+    // `TypeError: value is not a function`. Both must stay put.
+    //
+    // (`fs.promises.readFile(...args)` is deliberately absent: it already
+    // reached the generic tail before this change, so a `CallSpread` there is
+    // pre-existing and asserting on it would test nothing.)
+    for src in [
+        "import dns from 'node:dns'; const a = ['localhost']; dns.promises.lookup(...a);",
+        "import { promises } from 'node:fs'; const a = ['/x','utf8']; promises.readFile(...a);",
+    ] {
+        let h = hir(src);
+        assert!(
+            !h.contains("CallSpread"),
+            "bucket-less sub-namespace was diverted: {src}"
+        );
+    }
+}
+
+#[test]
+fn bucket_backed_sub_namespaces_are_diverted() {
+    // The dotted tags `nm_module_index` really has a bucket for.
+    for src in [
+        "import path from 'node:path'; const a = ['/x','y']; console.log(path.posix.join(...a));",
+        "import path from 'node:path'; const a = ['/x','y']; console.log(path.win32.join(...a));",
+        "import util from 'node:util'; const a = [new Date()]; console.log(util.types.isDate(...a));",
+    ] {
+        assert!(declined_fast_path(src), "still folded positionally: {src}");
+    }
+}
+
+#[test]
 fn non_module_spread_intrinsics_are_untouched() {
     // `Math` / `Object` / array receivers are not node-core modules, so their
     // spread-aware fast paths keep firing.
