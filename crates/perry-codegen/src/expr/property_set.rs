@@ -164,9 +164,42 @@ pub(crate) fn try_lower_sloppy_class_field_store(
     }
 
     // Operand order mirrors the strict class-field arm below verbatim: the
-    // assignment reference is evaluated before the RHS, and the receiver's
-    // relocation across an allocating RHS is handled by the same statepoint
-    // re-read that arm relies on.
+    // assignment reference is evaluated before the RHS.
+    //
+    // #7640 section C: this used to claim the receiver's relocation across an
+    // allocating RHS was "handled by the same statepoint re-read that arm
+    // relies on". That mechanism doesn't exist — RS4GC only relocates a value
+    // that is still `ptr addrspace(1)`-typed and live across the safepoint,
+    // and `recv_box` crosses it as a plain `double` (a `bitcast`/`ptrtoint`
+    // chain, dead before the call, per `function/precise_roots.rs`). The
+    // claim is TRUE for exactly one shape and OPEN for everything else:
+    //
+    //  * `object` a bare `Expr::LocalGet`/`Expr::This` — its value IS a load
+    //    out of a shadow slot, and `root_reload.rs` (#7280) re-materialises
+    //    that load (plus any pure `bitcast`/`ptrtoint`/`and`/… derived from
+    //    it) below any collection point it doesn't dominate. Unconditional
+    //    on RS4GC — it runs before either root lowering sees the IR, so it
+    //    protects shadow (`PERRY_RS4GC=0`) and native (`=1`, default)
+    //    identically. Verified: `scripts/gc_root_dominance_check.py
+    //    --stale-registers`/`--statepoints`, both lowerings, on
+    //    `test-files/test_gap_gc_class_field_receiver_rooting.ts`'s
+    //    `setRawF64`/`setBoxed`/`setViaSetter` — zero hazards.
+    //  * `object` anything else — e.g. `this.target.x = allocPoint(n).x`,
+    //    where the receiver is itself a class-field READ — is genuinely
+    //    UNPROTECTED, and neither instrument above catches it: the receiver
+    //    is a `phi` over two field-get paths, not a direct shadow-slot load,
+    //    so `root_reload` has no root to re-derive from, and
+    //    `--stale-registers`' pattern match only anchors on a direct
+    //    `load double, ptr <root>` source. Confirmed by hand on this exact
+    //    shape (`Holder.setOnThis` in the test above): the field-get result
+    //    register is reused, unreloaded, after `allocPoint`'s call in the
+    //    emitted IR. Left unfixed here: rooting it unconditionally would add
+    //    a real store+bind+reread to the common `LocalGet`/`This` case this
+    //    comment just proved needs none, on what the issue that tracks this
+    //    (#7640) calls "the hottest store path in the compiler" — a
+    //    measured-cost change, not a rooting-API mechanical one, and
+    //    deliberately left for a follow-up that can benchmark it. See
+    //    changelog.d/7640-abc-rooting-residue.md.
     let recv_box = lower_expr(ctx, object)?;
     let val_double = lower_expr(ctx, value)?;
 
@@ -341,9 +374,10 @@ fn try_lower_sloppy_class_field_boxed_store(
     class_name: &str,
 ) -> Result<Option<String>> {
     // Operand order mirrors the raw-f64 arm and the strict class-field arm
-    // verbatim: the assignment reference is evaluated before the RHS, and the
-    // receiver's relocation across an allocating RHS is handled by the same
-    // statepoint re-read those arms rely on.
+    // verbatim: the assignment reference is evaluated before the RHS. See
+    // `try_lower_sloppy_class_field_store`'s #7640-section-C note above for
+    // why this is safe and what actually makes it so (`root_reload.rs`, not
+    // a statepoint-specific mechanism) — same shape, same fix, same proof.
     let recv_box = lower_expr(ctx, object)?;
     let val_double = lower_expr(ctx, value)?;
 
@@ -809,6 +843,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // __set_<property> method instead of doing a raw field
             // store. The setter takes (this, value) and returns
             // undefined; we forward `value` as the expression result.
+            //
+            // #7640 section C: `recv_box` below is lowered before `value`
+            // exactly like the class-field arms, and the same split answer
+            // applies — see `try_lower_sloppy_class_field_store`'s note: safe
+            // for a `LocalGet`/`This` receiver (`root_reload.rs`, verified),
+            // open for a compound one (`this.target.y = allocPoint(n).x`,
+            // same test file).
             if let Some(class_name) = receiver_class_name(ctx, object) {
                 if class_has_computed_runtime_members(ctx, &class_name) {
                     return lower_runtime_property_set_by_name(ctx, object, property, value);
@@ -836,6 +877,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Fast path: known class instance + plain instance field.
                 // The runtime guard checks the receiver's class/shape and
                 // descriptor state before this block touches the raw slot.
+                //
+                // This is "the strict class-field arm below" the sloppy arms
+                // in `try_lower_sloppy_class_field_store` name — same
+                // `recv_box`-before-`value` order, same #7640 section C
+                // answer (safe for `LocalGet`/`This`, open for a compound
+                // receiver), same evidence.
                 if let Some(field_index) =
                     crate::type_analysis::class_field_global_index(ctx, &class_name, property)
                 {

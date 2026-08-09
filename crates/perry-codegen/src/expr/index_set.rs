@@ -748,33 +748,47 @@ pub(crate) fn lower(
                 && (matches!(index.as_ref(), Expr::String(_)) || is_string_expr(ctx, index))
             {
                 let global_box = ctx.block().call(DOUBLE, "js_get_global_this", &[]);
-                let key_box = lower_expr(ctx, index)?;
-                let val_double = lower_expr(ctx, value)?;
-                let (obj_handle, key_handle) = {
-                    let blk = ctx.block();
-                    // #7640 section D: key first — `unbox_str_handle` can
-                    // allocate (SSO materialisation), and a raw receiver pointer
-                    // taken above it is unrootable.
-                    let key_handle = unbox_str_handle(blk, &key_box);
-                    let obj_handle = unbox_to_i64(blk, &global_box);
-                    (obj_handle, key_handle)
-                };
-                let site_id = emit_typed_feedback_register_site(
-                    ctx,
-                    TypedFeedbackKind::PropertySet,
-                    "globalThis[index]",
-                    TypedFeedbackContract::object_set_by_name(),
-                );
-                ctx.block().call_void(
-                    "js_typed_feedback_object_set_field_by_name",
-                    &[
-                        (I64, &site_id),
-                        (I64, &obj_handle),
-                        (I64, &key_handle),
-                        (DOUBLE, &val_double),
-                    ],
-                );
-                return Ok(val_double);
+                // #7640 section A: `key_box` is a heap string by construction
+                // on this arm (`is_string_expr`) and `global_box` a copy of
+                // the (registered-root-backed, but movable) globalThis
+                // singleton — both were held as bare registers across
+                // `value`'s lowering, which is arbitrary user code and can
+                // allocate. Root both in one group; `index`'s own window ends
+                // at `value` (nothing else is lowered after it), so `value`
+                // itself takes no slot.
+                return rooting::with_rooted_group(ctx, 2, |ctx, group| {
+                    let global_idx =
+                        group.adopt_emitted(ctx, rooting::Repr::Boxed, &global_box, true);
+                    let key_idx = group.lower(ctx, index, true)?;
+                    let val_double = lower_expr(ctx, value)?;
+                    let key_box = group.reread(ctx, key_idx)?;
+                    let global_box = group.reread_emitted(ctx, global_idx);
+                    let (obj_handle, key_handle) = {
+                        let blk = ctx.block();
+                        // #7640 section D: key first — `unbox_str_handle` can
+                        // allocate (SSO materialisation), and a raw receiver
+                        // pointer taken above it is unrootable.
+                        let key_handle = unbox_str_handle(blk, &key_box);
+                        let obj_handle = unbox_to_i64(blk, &global_box);
+                        (obj_handle, key_handle)
+                    };
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::PropertySet,
+                        "globalThis[index]",
+                        TypedFeedbackContract::object_set_by_name(),
+                    );
+                    ctx.block().call_void(
+                        "js_typed_feedback_object_set_field_by_name",
+                        &[
+                            (I64, &site_id),
+                            (I64, &obj_handle),
+                            (I64, &key_handle),
+                            (DOUBLE, &val_double),
+                        ],
+                    );
+                    Ok(val_double)
+                });
             }
             if is_width_tracked_typed_array_receiver(ctx, object) {
                 // A non-numeric index (a Symbol, or a string property name) is
@@ -788,21 +802,29 @@ pub(crate) fn lower(
                 // literal / loop-counter index stays `is_numeric_expr`, so every
                 // proven element fast path below is preserved.
                 if !is_numeric_expr(ctx, index) {
-                    let arr_box = lower_expr(ctx, object)?;
-                    let idx_double = lower_expr(ctx, index)?;
-                    let val_double = lower_expr(ctx, value)?;
-                    let blk = ctx.block();
-                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_typed_array_index_set_dynamic",
-                        &[
-                            (I64, &arr_i64),
-                            (DOUBLE, &idx_double),
-                            (DOUBLE, &val_double),
-                        ],
-                    ));
+                    // #7640 section A: receiver AND key were both lowered
+                    // before `value`, with no rooting decision at all. The
+                    // typed-array object itself is old-arena/non-movable
+                    // (CLAUDE.md's GC section), but the KEY is not — a
+                    // non-numeric index here is a Symbol or string, and a
+                    // `Symbol()`/computed-key expression can allocate the
+                    // interned symbol, leaving a from-space key by the time
+                    // `value`'s own (arbitrary, allocating) evaluation runs.
+                    return rooting::with_operands_rooted(
+                        ctx,
+                        &[object, index, value],
+                        |ctx, vals| {
+                            let (arr_box, idx_double, val_double) = (&vals[0], &vals[1], &vals[2]);
+                            let blk = ctx.block();
+                            let arr_bits = blk.bitcast_double_to_i64(arr_box);
+                            let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                            Ok(blk.call(
+                                DOUBLE,
+                                "js_typed_array_index_set_dynamic",
+                                &[(I64, &arr_i64), (DOUBLE, idx_double), (DOUBLE, val_double)],
+                            ))
+                        },
+                    );
                 }
                 if let Some(store) = lower_typed_array_store(ctx, object, index, value)? {
                     if value_discarded {
@@ -1190,190 +1212,219 @@ pub(crate) fn lower(
                         let value_is_numeric = is_numeric_expr(ctx, value);
                         let require_numeric_layout = value_is_numeric
                             && expr_has_numeric_pointer_free_array_layout(ctx, object);
-                        let arr_box = lower_expr(ctx, object)?;
-                        let idx_double = lower_expr(ctx, index)?;
-                        let idx_i32 = ctx.block().load(I32, &i32_slot);
-                        let val_double = lower_expr(ctx, value)?;
-                        if require_numeric_layout {
-                            let feedback_site_id = emit_typed_feedback_register_site(
-                                ctx,
-                                TypedFeedbackKind::ArrayElement,
-                                "array[index]=",
-                                TypedFeedbackContract::numeric_array_set_index(),
-                            );
-                            let fast_idx = ctx.new_block("idxset.bounded_numeric_fast");
-                            let fallback_idx = ctx.new_block("idxset.bounded_numeric_fallback");
-                            let merge_idx = ctx.new_block("idxset.bounded_numeric_merge");
-                            let fast_label = ctx.block_label(fast_idx);
-                            let fallback_label = ctx.block_label(fallback_idx);
-                            let merge_label = ctx.block_label(merge_idx);
-
-                            let guard_ok = {
-                                let blk = ctx.block();
-                                let guard_i32 = blk.call(
-                                    I32,
-                                    "js_typed_feedback_numeric_array_index_set_guard",
-                                    &[
-                                        (I64, &feedback_site_id),
-                                        (DOUBLE, &arr_box),
-                                        (I32, &idx_i32),
-                                        (DOUBLE, &val_double),
-                                        (I32, "1"),
-                                    ],
+                        // #7640 section A: the receiver was lowered, then the
+                        // index, then — the hazard — the VALUE, with no
+                        // rooting decision at all. `classify_for_length_hoist`'s
+                        // body predicate accepts an allocating RHS
+                        // (`Expr::Object` / `Array` / `ArraySpread`) at exactly
+                        // this call site, so `for (let i=0;i<a.length;i++) a[i]
+                        // = {v:i};` left `arr_box` a bare SSA register across
+                        // the object literal's allocation — sharpened by
+                        // sitting immediately above the generic array-store arm
+                        // #7341 already closed. Root [object, index, value] in
+                        // one group; `idx_i32` is a plain loop-counter i32 read
+                        // (never GC-managed) and stays exactly where it was —
+                        // between the index and value lowerings — so the
+                        // counter's observed value is unchanged even if `value`
+                        // has side effects.
+                        return rooting::with_rooted_group(ctx, 3, |ctx, group| {
+                            let recv_idx = group.lower(ctx, object, true)?;
+                            let index_idx = group.lower(ctx, index, true)?;
+                            let idx_i32 = ctx.block().load(I32, &i32_slot);
+                            let value_idx = group.lower(ctx, value, true)?;
+                            let arr_box = group.reread(ctx, recv_idx)?;
+                            let idx_double = group.reread(ctx, index_idx)?;
+                            let val_double = group.reread(ctx, value_idx)?;
+                            if require_numeric_layout {
+                                let feedback_site_id = emit_typed_feedback_register_site(
+                                    ctx,
+                                    TypedFeedbackKind::ArrayElement,
+                                    "array[index]=",
+                                    TypedFeedbackContract::numeric_array_set_index(),
                                 );
-                                blk.icmp_ne(I32, &guard_i32, "0")
-                            };
-                            ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+                                let fast_idx = ctx.new_block("idxset.bounded_numeric_fast");
+                                let fallback_idx = ctx.new_block("idxset.bounded_numeric_fallback");
+                                let merge_idx = ctx.new_block("idxset.bounded_numeric_merge");
+                                let fast_label = ctx.block_label(fast_idx);
+                                let fallback_label = ctx.block_label(fallback_idx);
+                                let merge_label = ctx.block_label(merge_idx);
 
-                            ctx.current_block = fallback_idx;
-                            {
-                                let fallback_box = ctx.block().call(
-                                    DOUBLE,
-                                    "js_typed_feedback_array_index_set_fallback_boxed",
-                                    &[
-                                        (I64, &feedback_site_id),
-                                        (DOUBLE, &arr_box),
-                                        (DOUBLE, &idx_double),
-                                        (DOUBLE, &val_double),
-                                    ],
-                                );
-                                if let Some(slot) = ctx.locals.get(arr_id).cloned() {
-                                    ctx.block().store(DOUBLE, &fallback_box, &slot);
+                                let guard_ok = {
+                                    let blk = ctx.block();
+                                    let guard_i32 = blk.call(
+                                        I32,
+                                        "js_typed_feedback_numeric_array_index_set_guard",
+                                        &[
+                                            (I64, &feedback_site_id),
+                                            (DOUBLE, &arr_box),
+                                            (I32, &idx_i32),
+                                            (DOUBLE, &val_double),
+                                            (I32, "1"),
+                                        ],
+                                    );
+                                    blk.icmp_ne(I32, &guard_i32, "0")
+                                };
+                                ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+
+                                ctx.current_block = fallback_idx;
+                                {
+                                    let fallback_box = ctx.block().call(
+                                        DOUBLE,
+                                        "js_typed_feedback_array_index_set_fallback_boxed",
+                                        &[
+                                            (I64, &feedback_site_id),
+                                            (DOUBLE, &arr_box),
+                                            (DOUBLE, &idx_double),
+                                            (DOUBLE, &val_double),
+                                        ],
+                                    );
+                                    if let Some(slot) = ctx.locals.get(arr_id).cloned() {
+                                        ctx.block().store(DOUBLE, &fallback_box, &slot);
+                                    }
+                                    ctx.block().br(&merge_label);
+                                    let fallback = LoweredValue {
+                                        semantic: SemanticKind::JsValue,
+                                        rep: NativeRep::JsValue,
+                                        llvm_ty: DOUBLE,
+                                        value: fallback_box,
+                                    };
+                                    ctx.record_lowered_value_with_access_mode_and_facts(
+                                        "NumericArrayIndexSet",
+                                        Some(*arr_id),
+                                        "js_typed_feedback_array_index_set_fallback_boxed",
+                                        &fallback,
+                                        Some(BoundsState::Unknown),
+                                        None,
+                                        Some(BufferAccessMode::DynamicFallback),
+                                        Some(MaterializationReason::RuntimeApi),
+                                        None,
+                                        None,
+                                        Vec::new(),
+                                        vec![
+                                            raw_f64_layout_fact(
+                                                Some(*arr_id),
+                                                "rejected",
+                                                "numeric_array_index_set_guard",
+                                                Some(MaterializationReason::RuntimeApi),
+                                            ),
+                                            raw_f64_layout_fact(
+                                                Some(*arr_id),
+                                                "invalidated",
+                                                "runtime_api",
+                                                Some(MaterializationReason::RuntimeApi),
+                                            ),
+                                        ],
+                                        false,
+                                        false,
+                                        Vec::new(),
+                                    );
                                 }
-                                ctx.block().br(&merge_label);
-                                let fallback = LoweredValue {
-                                    semantic: SemanticKind::JsValue,
-                                    rep: NativeRep::JsValue,
+
+                                ctx.current_block = fast_idx;
+                                let value_is_canonical_raw_f64 =
+                                    crate::type_analysis::expr_produces_canonical_raw_f64(
+                                        ctx, value,
+                                    );
+                                {
+                                    let blk = ctx.block();
+                                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                                    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                                    // The numeric-array set guard above was called with
+                                    // `in_bounds=true`, so it has already proved a live,
+                                    // non-forwarded plain Array in raw-f64 layout, a numeric
+                                    // RHS, and an in-bounds index. Store the f64 slot inline
+                                    // instead of calling the helper that re-validates the same
+                                    // facts before doing this store.
+                                    let idx_i64 = blk.zext(I32, &idx_i32, I64);
+                                    let byte_offset = blk.shl(I64, &idx_i64, "3");
+                                    let with_header = blk.add(I64, &byte_offset, "8");
+                                    let element_addr = blk.add(I64, &arr_handle, &with_header);
+                                    let element_ptr = blk.inttoptr(I64, &element_addr);
+                                    // GC_STORE_AUDIT(POINTER_FREE): guarded raw-f64
+                                    // numeric store — the (canonical) value is a
+                                    // plain f64, never a GC pointer, so no barrier.
+                                    if value_is_canonical_raw_f64 {
+                                        // Repsel 4a.0: canonical by construction —
+                                        // skip js_array_numeric_value_to_raw_f64.
+                                        blk.store(DOUBLE, &val_double, &element_ptr);
+                                    } else {
+                                        let numeric_value =
+                                            canonicalize_raw_f64_numeric_store_value(
+                                                blk,
+                                                &val_double,
+                                            );
+                                        // GC_STORE_AUDIT(POINTER_FREE): the
+                                        // canonicalizer returns a plain unboxed
+                                        // f64, never a GC pointer — no barrier.
+                                        blk.store(DOUBLE, &numeric_value, &element_ptr);
+                                    }
+                                    blk.br(&merge_label);
+                                }
+                                let stored = LoweredValue {
+                                    semantic: SemanticKind::JsNumber,
+                                    rep: NativeRep::F64,
                                     llvm_ty: DOUBLE,
-                                    value: fallback_box,
+                                    value: val_double.clone(),
                                 };
                                 ctx.record_lowered_value_with_access_mode_and_facts(
                                     "NumericArrayIndexSet",
                                     Some(*arr_id),
-                                    "js_typed_feedback_array_index_set_fallback_boxed",
-                                    &fallback,
-                                    Some(BoundsState::Unknown),
+                                    "js_array_numeric_set_f64_unboxed",
+                                    &stored,
+                                    Some(BoundsState::Guarded {
+                                        guard_id: "numeric_array_index_set_guard".to_string(),
+                                    }),
                                     None,
-                                    Some(BufferAccessMode::DynamicFallback),
-                                    Some(MaterializationReason::RuntimeApi),
+                                    Some(BufferAccessMode::CheckedNative),
                                     None,
                                     None,
+                                    None,
+                                    vec![raw_f64_layout_fact(
+                                        Some(*arr_id),
+                                        "consumed",
+                                        "numeric_array_index_set_guard",
+                                        None,
+                                    )],
                                     Vec::new(),
-                                    vec![
-                                        raw_f64_layout_fact(
-                                            Some(*arr_id),
-                                            "rejected",
-                                            "numeric_array_index_set_guard",
-                                            Some(MaterializationReason::RuntimeApi),
-                                        ),
-                                        raw_f64_layout_fact(
-                                            Some(*arr_id),
-                                            "invalidated",
-                                            "runtime_api",
-                                            Some(MaterializationReason::RuntimeApi),
-                                        ),
-                                    ],
                                     false,
                                     false,
                                     Vec::new(),
                                 );
-                            }
 
-                            ctx.current_block = fast_idx;
-                            let value_is_canonical_raw_f64 =
-                                crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
-                            {
-                                let blk = ctx.block();
-                                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                                // The numeric-array set guard above was called with
-                                // `in_bounds=true`, so it has already proved a live,
-                                // non-forwarded plain Array in raw-f64 layout, a numeric
-                                // RHS, and an in-bounds index. Store the f64 slot inline
-                                // instead of calling the helper that re-validates the same
-                                // facts before doing this store.
-                                let idx_i64 = blk.zext(I32, &idx_i32, I64);
-                                let byte_offset = blk.shl(I64, &idx_i64, "3");
-                                let with_header = blk.add(I64, &byte_offset, "8");
-                                let element_addr = blk.add(I64, &arr_handle, &with_header);
-                                let element_ptr = blk.inttoptr(I64, &element_addr);
-                                // GC_STORE_AUDIT(POINTER_FREE): guarded raw-f64
-                                // numeric store — the (canonical) value is a
-                                // plain f64, never a GC pointer, so no barrier.
-                                if value_is_canonical_raw_f64 {
-                                    // Repsel 4a.0: canonical by construction —
-                                    // skip js_array_numeric_value_to_raw_f64.
-                                    blk.store(DOUBLE, &val_double, &element_ptr);
-                                } else {
-                                    let numeric_value =
-                                        canonicalize_raw_f64_numeric_store_value(blk, &val_double);
-                                    // GC_STORE_AUDIT(POINTER_FREE): the
-                                    // canonicalizer returns a plain unboxed
-                                    // f64, never a GC pointer — no barrier.
-                                    blk.store(DOUBLE, &numeric_value, &element_ptr);
-                                }
-                                blk.br(&merge_label);
+                                ctx.current_block = merge_idx;
+                                return Ok(val_double);
                             }
-                            let stored = LoweredValue {
-                                semantic: SemanticKind::JsNumber,
-                                rep: NativeRep::F64,
-                                llvm_ty: DOUBLE,
-                                value: val_double.clone(),
-                            };
-                            ctx.record_lowered_value_with_access_mode_and_facts(
-                                "NumericArrayIndexSet",
-                                Some(*arr_id),
-                                "js_array_numeric_set_f64_unboxed",
-                                &stored,
-                                Some(BoundsState::Guarded {
-                                    guard_id: "numeric_array_index_set_guard".to_string(),
-                                }),
-                                None,
-                                Some(BufferAccessMode::CheckedNative),
-                                None,
-                                None,
-                                None,
-                                vec![raw_f64_layout_fact(
-                                    Some(*arr_id),
-                                    "consumed",
-                                    "numeric_array_index_set_guard",
-                                    None,
-                                )],
-                                Vec::new(),
-                                false,
-                                false,
-                                Vec::new(),
+                            let blk = ctx.block();
+                            let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                            // ptr = arr_handle + 8 + idx*8
+                            let idx_i64 = blk.zext(I32, &idx_i32, I64);
+                            let byte_offset = blk.shl(I64, &idx_i64, "3");
+                            let with_header = blk.add(I64, &byte_offset, "8");
+                            let element_addr = blk.add(I64, &arr_handle, &with_header);
+                            let element_ptr = blk.inttoptr(I64, &element_addr);
+                            let value_bits = emit_jsvalue_slot_store_on_block(
+                                blk,
+                                &element_ptr,
+                                &val_double,
+                                &arr_handle,
+                                &idx_i32,
+                                layout_note_needed,
+                                &arr_handle,
+                                &element_addr,
+                                write_barrier_needed,
                             );
-
-                            ctx.current_block = merge_idx;
-                            return Ok(val_double);
-                        }
-                        let blk = ctx.block();
-                        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        // ptr = arr_handle + 8 + idx*8
-                        let idx_i64 = blk.zext(I32, &idx_i32, I64);
-                        let byte_offset = blk.shl(I64, &idx_i64, "3");
-                        let with_header = blk.add(I64, &byte_offset, "8");
-                        let element_addr = blk.add(I64, &arr_handle, &with_header);
-                        let element_ptr = blk.inttoptr(I64, &element_addr);
-                        let value_bits = emit_jsvalue_slot_store_on_block(
-                            blk,
-                            &element_ptr,
-                            &val_double,
-                            &arr_handle,
-                            &idx_i32,
-                            layout_note_needed,
-                            &arr_handle,
-                            &element_addr,
-                            write_barrier_needed,
-                        );
-                        if !value_is_numeric {
-                            let value_bits = value_bits
-                                .unwrap_or_else(|| blk.bitcast_double_to_i64(&val_double));
-                            emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
-                        }
-                        return Ok(val_double);
+                            if !value_is_numeric {
+                                let value_bits = value_bits
+                                    .unwrap_or_else(|| blk.bitcast_double_to_i64(&val_double));
+                                emit_array_numeric_write_note_on_block(
+                                    blk,
+                                    &arr_handle,
+                                    &value_bits,
+                                );
+                            }
+                            Ok(val_double)
+                        });
                     }
                 }
 
