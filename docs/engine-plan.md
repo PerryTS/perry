@@ -15,8 +15,11 @@ closed on the verdict; owner action: promote to required after its first green
 `json_pipeline` 500k copies the 268 MB cohort ONCE — wall −24.6% AND peak RSS
 −21%, the first change to improve both goal axes at once. #7592 total:
 **60.4 s → 3.86 s (~6× bun)**, `JSON.parse` (~742 ms) is the remaining tail.
-The Layer-1 emitter migration is **started** (#7615: campaign map, per-module ledger,
-1 of 88 modules done). The v0.5.1299 public-baseline sweep is
+The Layer-1 emitter migration is **finished at its stated terminal condition**
+(#7615, slice 8): the raw rooting API is now `crate::rooting::temp_root`, a
+PRIVATE module whose accessors carry `pub(in crate::rooting)`, so a lowering
+cannot reach past the combinators — unreachable, not merely uncounted. 36
+modules on the ledger; fourteen raw entry points deleted for want of a caller. The v0.5.1299 public-baseline sweep is
 kept as the baseline measurement event; rows fixed since are annotated in place
 rather than overwritten, because they were measured individually rather than in
 a fresh sweep.
@@ -67,8 +70,8 @@ subclasses, static-method GET form, `instanceof` a subclass (#7575).
 promotion copies 268 MB twice — promote-on-first-copy design is on the issue
 with the fixed-point trap named; and `JSON.parse` 742 ms); class-field-store
 barriers (the half #7602 could not reach); #7480 repsel element-shape proofs;
-Layer-1 emitter migration (#7615 — campaign map published, template slice landed,
-1 of 88 modules).
+Layer-3 ceiling list (#7615's sibling half — Layer 1 reached its terminal
+condition in slice 8, so the remaining rooting work is runtime-side).
 
 **Gate debt still open:** #7554 (gc-ratchet CI has measured nothing since
 2026-08-05 — REPAIR THIS BEFORE the next GC-pacing change, which needs it),
@@ -85,7 +88,7 @@ has three homes, each needing its own mechanism.*
 | Layer | Home | Mechanism | Status |
 |---|---|---|---|
 | **0** | *enabler* | in-process LLVM | ✅ shipped (#7301), default cargo feature (#7353) |
-| **1** | `perry-codegen` lowering code | `Raw`/`Rooted` discipline | design **validated & corrected** (#7459 — the RFC's own constructor was `E0499`); combinator form proven on the real emitter (#7461); the raw-pointer-across-lowering bug shape **eliminated crate-wide** (#7453, #7462–#7465). **Migration started**: campaign map + per-module ledger in **#7615**; `expr/url_main.rs` migrated end to end as the template slice (#7617), which found `URL.canParse`/`URL.parse` still carrying #7453's window. 1 of 88 modules; 262 hazard sites remain. **Measured limit, stated once: on the real emitter this does NOT make the bug fail to compile** — `FnCtx` has no interior mutability, so the borrow form is unbuildable on it; the combinator removes the bug from the path of least resistance and the ledger denies the escape hatch, and that is all |
+| **1** | `perry-codegen` lowering code | `Raw`/`Rooted` discipline | design **validated & corrected** (#7459 — the RFC's own constructor was `E0499`); combinator form proven on the real emitter (#7461); the raw-pointer-across-lowering bug shape **eliminated crate-wide** (#7453, #7462–#7465). **Migration COMPLETE at its terminal condition (#7615, slices 1-8)**: `expr/temp_root.rs` is now the private `crate::rooting::temp_root`, every accessor `pub(in crate::rooting)`, so the raw API is unreachable from a lowering rather than merely unnamed — asserted by a source-level test with its own sabotage arm. 36 modules on the ledger; fourteen raw entry points (the `StoreOperandGuard` and `RootedHandle` families, `lower_exprs_rooted`, `lower_operand_pair_rooted`, `temp_root_scope_*`, …) DELETED for want of a caller. ★ Read the ledger's own caveat: a listed module cannot make an ORDERING mistake, which is not the same as "every window in it has a decision" — that audit half is per-module reading and is what remains. **Measured limit, stated once: on the real emitter this does NOT make the bug fail to compile** — `FnCtx` has no interior mutability, so the borrow form is unbuildable on it; the combinator removes the bug from the path of least resistance and the ledger denies the escape hatch, and that is all |
 | **2** | emitted code's liveness | statepoints | ✅ **the default**, target-aware (#7370): native roots where the runtime can walk frames, shadow stack elsewhere |
 | **3** | `perry-runtime` hand-written Rust | `RuntimeHandleScope`, non-optional | per-module ceilings (#7457): **595 of 705 modules locked at zero**, 107 listed with ceilings, 999 sites, and the list can only shrink — a cleaned module cannot regress (#7458). `across_*` combinators are the prescribed form (#7455). **End state not reached:** the raw accessor is still reachable inside listed modules |
 
@@ -529,14 +532,31 @@ already working, on a workload that happens to reach it through `JSON.parse`.
    cannot pass on an empty subject again. Same family as #7024/#7025: the gate
    ran, its subject did not.
 
-7. **Layer 1** — migrate remaining lowerings onto the rooted-combinator API
-   (`crates/perry-codegen/src/rooting.rs`). **#7615 is the ordered worklist**:
-   88 modules, 694 raw-pointer sites, 262 hazard sites, grouped into ten
-   slices by hazard density. A slice finishes by adding its modules to
-   `MIGRATED_MODULES`, which denies `expr::temp_root` in them. The terminal
-   condition is `expr/temp_root.rs` going `pub(in crate::rooting)` — the raw
-   accessor unreachable, not merely uncounted. **Layer 3** — shrink the
-   107-module ceiling list toward empty; same end state, same reason.
+7. ~~**Layer 1** — migrate remaining lowerings onto the rooted-combinator
+   API~~ — **done at the stated terminal condition** (#7615, eight slices).
+   The condition was "`expr/temp_root.rs` going `pub(in crate::rooting)` — the
+   raw accessor unreachable, not merely uncounted". As literally spelled it is
+   not expressible in Rust (`pub(in path)` needs `path` to be an ANCESTOR of
+   the item — E0742), so the file MOVED: it is `crate::rooting::temp_root`,
+   declared `mod temp_root;` (private) with `pub(in crate::rooting)` on every
+   accessor. Both belts, because either alone is one keyword from being undone.
+   A raw call planted in a migrated module no longer compiles (E0603); that is
+   the sabotage arm, and it is the difference between this and a ledger line.
+
+   Two items keep `pub(crate)` and are re-exported, neither an accessor:
+   `TempRootPool` (compile-time slot bookkeeping) and `expr_is_inert_primitive`
+   (the purity predicate the loop back-edge poll shares). Fourteen raw entry
+   points were DELETED rather than narrowed, per CLAUDE.md's kill-policy.
+
+   ★ **What this does NOT claim.** The ledger's own caveat, drawn the hard way
+   in slice 4: a listed module cannot make an ORDERING mistake against the raw
+   API, because it no longer names it. A window with **no rooting decision at
+   all** is invisible to that check, and the only instrument for it is reading
+   the module. 36 modules are listed; the remaining audit is per-module reading
+   and #7640 is where the deferred sites live.
+
+   **Layer 3** — shrink the 107-module ceiling list toward empty; same end
+   state, same reason. That is now the whole of the remaining rooting work.
 8. **Statepoint-side static checker** — teach `gc_root_dominance_check.py` to
    read relocation bundles, closing the gap the #7452/#7460 repairs named.
 9. ~~**RSS re-derivation under the statepoint default** (#7056)~~ — **done, and

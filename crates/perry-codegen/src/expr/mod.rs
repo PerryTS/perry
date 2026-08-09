@@ -142,6 +142,8 @@ pub(crate) mod shadow_inline;
 pub(crate) mod shadow_slot;
 #[cfg(test)]
 mod slice7_rooting_tests;
+#[cfg(test)]
+mod slice8_rooting_tests;
 mod slot_rep;
 // #7128: the env-knob table and the pure `gates -> context flags` derivation.
 // Every `FnCtx` construction site goes through `RepselContextFlags` so that a

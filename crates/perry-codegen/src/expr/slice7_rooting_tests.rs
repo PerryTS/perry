@@ -54,7 +54,7 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
 }
 
 /// A heap value whose lowering allocates, so the window it sits in collects.
-fn allocating(tag: &str) -> Expr {
+pub(super) fn allocating(tag: &str) -> Expr {
     Expr::Object(vec![(tag.to_string(), Expr::Number(1.0))])
 }
 
@@ -69,7 +69,7 @@ fn call_line(ir: &str, callee: &str) -> Option<usize> {
         .position(|l| l.contains(&needle) && !l.trim_start().starts_with("declare"))
 }
 
-fn require_call_line(ir: &str, callee: &str) -> usize {
+pub(super) fn require_call_line(ir: &str, callee: &str) -> usize {
     call_line(ir, callee).unwrap_or_else(|| panic!("no call to {callee} in:\n{ir}"))
 }
 
@@ -120,7 +120,7 @@ fn last_alloc(ir: &str) -> usize {
 
 /// Temp-root traffic, excluding the `declare` lines that name the helpers
 /// whether or not anything calls them.
-fn temp_root_calls(ir: &str) -> usize {
+pub(super) fn temp_root_calls(ir: &str) -> usize {
     ir.lines()
         .filter(|l| !l.trim_start().starts_with("declare"))
         .filter(|l| l.contains("js_gc_temp_root"))
@@ -130,7 +130,7 @@ fn temp_root_calls(ir: &str) -> usize {
 /// Assert that the register `callee` reads as operand `n` is defined below the
 /// last allocation above the call — i.e. that the value was re-read after the
 /// window rather than carried across it.
-fn assert_operand_survives_the_window(ir: &str, callee: &str, n: usize, what: &str) {
+pub(super) fn assert_operand_survives_the_window(ir: &str, callee: &str, n: usize, what: &str) {
     let call = require_call_line(ir, callee);
     let reg = call_operand(ir, callee, n);
     let def = require_definition_line(ir, &reg);
