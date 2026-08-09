@@ -10,32 +10,58 @@
 //! recorded, so its coverage is exactly the proof rate `--opt-report` measures
 //! and nothing this module does can widen it.
 //!
+//! ## The headline result: a representation is not a type
+//!
+//! Perry has five representation analyses. **One of them licenses a TypeScript
+//! type.** That is the finding, and it is why this stays experimental:
+//!
+//! | analysis | emitted? | why |
+//! |---|---|---|
+//! | `PtrShape` | **yes** | a genuine value proof — exact dynamic class, provenance + containment |
+//! | `CanonicalSlot` (`I32`/`U32`) | no | storage proof; the value can still be `undefined` or `bigint` |
+//! | `CanonicalSlot` (`Str`) | no | annotation-derived, and *designed* to tolerate a false annotation |
+//! | `IntValuedTa` | no | sound only because the value is never observed; annotating it publishes it |
+//! | `PtrNumArray` | no | admits holes that read back `undefined`; also only echoes an annotation |
+//! | `SpecAbi` | no | reads `param.ty`, which only an annotation populates |
+//!
+//! The per-arm reasoning, with the source each claim comes from, is in
+//! [`recovered_type`]. The pattern is consistent: these representations were
+//! chosen to be *observationally equivalent* to the boxed form, which is a
+//! weaker property than "the value has this type" — and in three cases the
+//! equivalence holds precisely because the value is never observed in a
+//! context that could tell the difference. Publishing an annotation is exactly
+//! such an observation.
+//!
 //! ## The one rule
 //!
 //! **Never emit a wrong type.** A missing annotation costs nothing; a wrong one
-//! poisons a downstream `tsc`. Every mapping below is an omission unless the
+//! poisons a downstream `tsc`. Every mapping is an omission unless the
 //! representation *proves* the TypeScript type, and the three places where the
 //! proof is conditional are omissions rather than guesses:
 //!
-//! - **A representation whose proof is a restatement of the source annotation**
-//!   is not recovered information. [`Analysis::SpecAbi`] is exactly that:
-//!   `codegen/typed_abi.rs::typed_param_rep_for_type` reads `param.ty`, which
-//!   is populated from the TypeScript annotation and by nothing else — no
-//!   inference writes it (the only assignments in `perry-hir` *widen* it to
-//!   `Any`, `lower/shared_mutable_capture.rs:363`). Echoing it back would
-//!   inflate any round-trip accuracy number to meaninglessness while
-//!   recovering nothing, so spec-ABI entries are dropped. See
-//!   [`recovered_type`].
+//! - **A majority is not a proof.** [`Analysis::SpecAbi`] is the trap here, and
+//!   it is worth stating precisely because the obvious reading is wrong. A
+//!   specialized entry is *not* derived from the parameter's annotation: it
+//!   comes from `codegen/spec_abi.rs::select_dominant_tuple`, which counts the
+//!   argument-type tuples at the **call sites** and picks the most frequent
+//!   one, demoting the rest to `Boxed` behind a guarded entry. So it fires on
+//!   completely unannotated JavaScript — measured — and it fires even when a
+//!   caller disagrees: a function called four times with numbers and once with
+//!   a string still reports `i32,i32`. Emitting `a: number` there would be
+//!   flatly wrong, because a real caller passes a string. Spec-ABI entries are
+//!   therefore dropped. See [`recovered_type`].
 //! - **A binding two entries disagree about** is dropped entirely rather than
 //!   resolved by a precedence rule. A function can be lowered more than once (a
 //!   boxed entry plus a typed clone) and the two lowerings can select different
 //!   representations; picking a winner would be picking which of two proofs to
 //!   believe. See [`recover`].
-//! - **A synthetic class name is not a TypeScript type.** A `Ptr<Shape>` local
-//!   whose provenance class is a compiler-synthesized `__AnonShape_*` /
-//!   `__EmptySite_*` shape has no source-level name to emit. It becomes a
-//!   structural interface when the field set is known, and is omitted when it
-//!   is not — never emitted under its synthetic name.
+//! - **A compiler-minted class name is not a TypeScript type.** A `Ptr<Shape>`
+//!   local whose provenance class is `__AnonShape_*`, `__anon_class_*`, or a
+//!   `$`-mangled monomorphization/collision rename has no source-level name to
+//!   emit. It becomes a structural interface when the field set is known, and
+//!   is omitted when it is not — never emitted under the minted name. See
+//!   [`is_synthetic_class`], whose `$` case is the one a prefix-only filter
+//!   misses.
 //!
 //! ## What it cannot do, stated rather than worked around
 //!
@@ -50,15 +76,39 @@ use crate::opt_report::{Analysis, Entry, Outcome, Position};
 use perry_hir::types::Type;
 use std::collections::BTreeMap;
 
-/// Prefixes the HIR lowering uses for classes it synthesizes for object
-/// literals, which therefore have no source-level name a `.ts` file could
-/// refer to (`perry-hir/src/lower/expr_object.rs`).
-const SYNTHETIC_CLASS_PREFIXES: [&str; 2] = ["__AnonShape_", "__EmptySite_"];
+/// Class-name forms the compiler mints itself, which therefore name nothing a
+/// `.ts` file could refer to. Emitting one would produce TypeScript that does
+/// not compile, so each is either turned into structure or omitted.
+///
+/// The list is the audited set, not a guess — an earlier version carried only
+/// the first entry plus a `__EmptySite_` that **matches nothing in the tree**
+/// (empty literals also mint `__AnonShape_<hash>`), while three real families
+/// leaked straight through:
+///
+/// * `__AnonShape_<16 hex>` — object literals, incl. `{}`
+///   (`perry-hir/src/lower/context.rs`, a content-addressed FNV-1a of the
+///   shape key, not a counter).
+/// * `__anon_class_<id>` — `new (class {})()`
+///   (`perry-hir/src/lower/expr_new/non_ident.rs`).
+/// * `__inline_` / `__anon_dup_` — transform-minted specializations
+///   (`perry-transform/src/inline/factory_specialize.rs`).
+const SYNTHETIC_CLASS_PREFIXES: [&str; 4] =
+    ["__AnonShape_", "__anon_class_", "__inline_", "__anon_dup_"];
 
+/// Is this class name compiler-minted rather than source-level?
+///
+/// The `$` test is the load-bearing one and is deliberately a *substring*
+/// check, not a prefix: generic monomorphization rewrites the `New` site's
+/// class to `Box$num` (`perry-hir/src/monomorph/mangle.rs`) and a scope
+/// collision renames a class to `Name$2`. Both are real class names reachable
+/// at a `Ptr<Shape>` provenance site, and both would emit TypeScript naming a
+/// type that does not exist. `$` is already this repo's reserved
+/// generated-suffix namespace (`collectors/proven_this.rs`), so no source
+/// identifier can contain one.
 fn is_synthetic_class(name: &str) -> bool {
-    SYNTHETIC_CLASS_PREFIXES
-        .iter()
-        .any(|p| name.starts_with(p))
+    name.contains('$')
+        || SYNTHETIC_CLASS_PREFIXES.iter().any(|p| name.starts_with(p))
+        || name.contains("__inline_")
 }
 
 /// A binding name the collectors invented because the source had none. Such a
@@ -112,6 +162,53 @@ pub struct ShapeField {
     pub ts_type: Option<String>,
 }
 
+/// The declared field set of a proven class chain, as this module consumes it.
+///
+/// Report-only; never consulted by codegen, and called only when
+/// `opt_report::enabled()`. It lives here rather than in the collector so that
+/// the whole field-to-TypeScript mapping has exactly one home.
+///
+/// Two field kinds are recorded name-only, with no type, rather than
+/// approximated — and because [`Shape::is_emittable`] requires a type for
+/// *every* field, either one refuses the whole interface rather than silently
+/// narrowing it:
+///
+/// * a **computed key** (`key_expr: Some(..)`), whose `name` is a synthetic
+///   placeholder for HIR identity and not the runtime property name at all;
+/// * a **private** field, which is not part of an object's structural type.
+fn declared_shape_fields(chain: &[&perry_hir::Class]) -> Vec<ShapeField> {
+    let mut out = Vec::new();
+    for class in chain {
+        for field in &class.fields {
+            let ts_type = if field.key_expr.is_some() || field.is_private {
+                None
+            } else {
+                ts_type_for_hir_type(&field.ty)
+            };
+            out.push(ShapeField {
+                name: field.name.clone(),
+                ts_type,
+            });
+        }
+    }
+    out
+}
+
+/// Build the `Ptr<Shape>` payload the `--opt-report` selection carries.
+///
+/// The collector calls this instead of assembling the struct itself, so the
+/// class name and the field mapping are produced in one place and the collector
+/// keeps no `--emit-types` state of its own.
+pub(crate) fn selected_shape(
+    class_name: &str,
+    chain: &[&perry_hir::Class],
+) -> crate::opt_report::SelectedShape {
+    crate::opt_report::SelectedShape {
+        class_name: class_name.to_string(),
+        fields: declared_shape_fields(chain),
+    }
+}
+
 /// A structural shape recovered from a `Ptr<Shape>` selection whose provenance
 /// class is compiler-synthesized.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,11 +231,7 @@ impl Shape {
         let body = self
             .fields
             .iter()
-            .filter_map(|f| {
-                f.ts_type
-                    .as_ref()
-                    .map(|t| format!("  {}: {};", f.name, t))
-            })
+            .filter_map(|f| f.ts_type.as_ref().map(|t| format!("  {}: {};", f.name, t)))
             .collect::<Vec<_>>()
             .join("\n");
         format!("{{\n{body}\n}}")
@@ -186,25 +279,60 @@ fn recovered_type(entry: &Entry) -> Option<TypeOrShape> {
         return None;
     }
     match entry.analysis {
-        // A restatement of the source annotation, not recovered information.
-        // See the module doc.
+        // ── The four analyses that do NOT license a TypeScript type ──────────
+        //
+        // Each of these looks like an obvious mapping and is not one. They are
+        // listed explicitly, with the reason, so that re-adding one requires
+        // arguing with the reason rather than noticing an absent arm.
+        //
+        // A MAJORITY VOTE over call sites, not a proof about the parameter.
+        // `spec_abi::select_dominant_tuple` counts the argument-type tuples at
+        // every call site and keeps the most frequent, demoting disagreeing
+        // params to `Boxed` behind a guarded entry. Measured: a function called
+        // four times with numbers and once with a string still reports
+        // `i32,i32`, so `a: number` would be wrong for a caller that exists.
+        // (It is also NOT annotation-derived, which is the natural guess — it
+        // fires on wholly unannotated JavaScript.)
         Analysis::SpecAbi => None,
-        Analysis::CanonicalSlot => match entry.rep.as_str() {
-            // `SlotRep`'s `Debug` spelling (`expr/slot_rep.rs`). `U32` is a
-            // number in TypeScript exactly as `I32` is — the distinction is a
-            // storage one.
-            "I32" | "U32" => Some(TypeOrShape::Ts("number".to_string())),
-            "Str" => Some(TypeOrShape::Ts("string".to_string())),
-            _ => None,
-        },
-        Analysis::IntValuedTa => match entry.rep.as_str() {
-            "IntValued" => Some(TypeOrShape::Ts("number".to_string())),
-            _ => None,
-        },
-        Analysis::PtrNumArray => match entry.rep.as_str() {
-            "Ptr<NumArray>" => Some(TypeOrShape::Ts("number[]".to_string())),
-            _ => None,
-        },
+        // `I32`/`U32` are STORAGE proofs, not value proofs, and the local's JS
+        // value can leave `number` three ways: the scaffolding seed admits
+        // `var x;` with later non-dominating writes (JS reads `undefined`,
+        // Perry reads the entry-block `store i32 0`); `int_valued_ta` members
+        // are merged straight into `integer_locals` and carry §3's hazard; and
+        // the bitwise arm treats every `Binary` as int32-producing regardless
+        // of operand type, so `a & b` on BigInts is a `bigint`
+        // (`not_bigint_locals` is computed but is not a term in the admission
+        // conjunction). `Str` is worse than unproven — it is annotation-derived
+        // (`refined_ty` is the declared type verbatim when it is not `Any`, and
+        // nothing checks the initializer), and the representation is
+        // *designed* to tolerate the annotation being false: "a type-annotation
+        // lie degrades to today's behavior" (`expr/slot_rep.rs`). That is the
+        // same defect the `SpecAbi` arm above is rejected for.
+        //
+        // The `Entry` stream carries only `rep: "I32"`, not which admitting set
+        // licensed it, so the sound subsets (`loop_bounded_i32_locals`,
+        // `unsigned_i32_locals`) cannot be separated out here. Recovering them
+        // needs the collector to record provenance.
+        Analysis::CanonicalSlot => None,
+        // Self-refuting. `collectors/int_valued_ta_locals.rs`'s own module doc:
+        // an OOB / negative / fractional typed-array read "yields `undefined`
+        // …, NOT an integer", and the representation is sound *only* because
+        // rule (2) forbids every context in which `undefined` and an integer
+        // are distinguishable. Writing the annotation publishes a value whose
+        // safety depends on it never being observed.
+        Analysis::IntValuedTa => None,
+        // `NumArrayDensity::HolesOk` is the PRIMARY provenance (`new Array(n)`),
+        // and its slots read back as `undefined`. The repo pins the observable
+        // itself: `test-files/test_gap_repsel_p4a3_ptr_numarray.ts` asserts
+        // `console.log(c[0], c[1], c[3])` prints `undefined 2 undefined` for a
+        // promoted local, so the true type is `(number | undefined)[]`.
+        // Gating on `Dense` would not rescue it — the `IndexSet` arm never
+        // compares the index against the length, so `const a = []; a[3] = 1;`
+        // is `Dense` while the runtime hole-fills 0..2. And admission already
+        // REQUIRES the declared type be `number[]`, so this arm could only ever
+        // echo an annotation back.
+        Analysis::PtrNumArray => None,
+        // ── The one that survives ────────────────────────────────────────────
         Analysis::PtrShape => {
             let class = entry.shape_class.as_deref()?;
             if is_synthetic_class(class) {
@@ -230,13 +358,24 @@ enum TypeOrShape {
 type BindingKey = (String, String, String, Option<u32>);
 
 /// Reduce the entry stream to one type per binding, dropping every binding the
-/// stream disagrees about.
+/// stream disagrees about. A function lowered twice (a boxed entry plus a typed
+/// clone) contributes two rows per binding, and if the two lowerings selected
+/// different representations there is no principled winner.
 ///
-/// The disagreement case is not hypothetical bookkeeping: a function lowered
-/// twice (a boxed entry plus a typed clone) contributes two rows per binding,
-/// and `--opt-report`'s own `dedup_key` keeps them apart on purpose. If the two
-/// lowerings selected different representations, there is no principled winner,
-/// so the binding is omitted.
+/// **This guard cannot currently fire on a real compile, and saying so is the
+/// point.** `opt_report::take_entries` de-duplicates *before* any consumer sees
+/// the stream, and `Entry::dedup_key` omits `local_id`, `rep`, `shape_class`
+/// and `shape_fields` — so two `Selected` rows for one name in one function
+/// with **different classes** collapse to whichever arrived first, and the
+/// disagreement is destroyed upstream rather than detected here. Two distinct
+/// bindings that share a name (`{const r = new A();} {const r = new B();}`)
+/// collapse the same way, so a rendered row can name an ambiguous binding.
+///
+/// The guard is kept because it is the correct behaviour for the stream this
+/// module is handed, and because the unit tests exercise it directly. But it is
+/// a guard whose subject never arrives — CLAUDE.md's fourth way a gate cannot
+/// fail — and closing it means widening `dedup_key`, which is `--opt-report`'s
+/// contract and not this prototype's to change.
 fn recover(entries: &[Entry]) -> (Vec<Recovered>, Vec<Shape>) {
     let mut by_binding: BTreeMap<BindingKey, Option<(TypeOrShape, &Entry)>> = BTreeMap::new();
     for entry in entries {
@@ -319,9 +458,17 @@ const HEADER: &str = "\
 // A binding absent from this file is NOT untyped — it is unproven. Nothing here
 // is a guess: where the proof was conditional, the binding was omitted.
 //
-// Parameter and return types are NOT recovered. Perry's specialized-ABI
-// analysis derives them from the source annotation, so on unannotated
-// JavaScript it proves nothing and this file will contain no signatures.
+// Parameter and return types are NOT recovered, so this file contains no
+// function signatures. Perry's specialized-ABI analysis picks the most frequent
+// argument-type tuple across a function's call sites and guards the rest — a
+// majority, not a proof — so it cannot license a parameter annotation.
+//
+// Only ONE of Perry's five representation analyses licenses a TypeScript type:
+// the Ptr<Shape> object proof. The numeric and string slot representations are
+// storage decisions that survive a false annotation, and the array proof admits
+// holes that read back as undefined — none of them is a value proof, so none is
+// emitted. See crates/perry-codegen/src/emit_types.rs for the case-by-case
+// reasoning.
 ";
 
 /// Render the recovered types as TypeScript.
@@ -341,7 +488,9 @@ pub fn render_ts(entries: &[Entry]) -> String {
     }
 
     if !shapes.is_empty() {
-        out.push_str("\n// ── Recovered structural shapes ──────────────────────────────────────────\n");
+        out.push_str(
+            "\n// ── Recovered structural shapes ──────────────────────────────────────────\n",
+        );
         out.push_str("// Object literals whose field set Perry proved closed and immutable.\n\n");
         for (i, shape) in shapes.iter().enumerate() {
             out.push_str(&format!(
@@ -353,7 +502,9 @@ pub fn render_ts(entries: &[Entry]) -> String {
     }
 
     if !recovered.is_empty() {
-        out.push_str("// ── Recovered local bindings ─────────────────────────────────────────────\n");
+        out.push_str(
+            "// ── Recovered local bindings ─────────────────────────────────────────────\n",
+        );
         out.push_str(
             "// Comments, not declarations: TypeScript cannot declare another file's\n\
              // function-local, and HIR carries no source span to rewrite in place.\n",
@@ -388,9 +539,7 @@ pub fn render_json(entries: &[Entry]) -> String {
     let shapes_json: Vec<_> = shapes
         .iter()
         .enumerate()
-        .map(|(i, s)| {
-            serde_json::json!({ "name": shape_name(i), "fields": s.fields })
-        })
+        .map(|(i, s)| serde_json::json!({ "name": shape_name(i), "fields": s.fields }))
         .collect();
     let doc = serde_json::json!({
         "schema_version": 1,

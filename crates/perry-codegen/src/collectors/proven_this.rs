@@ -209,11 +209,6 @@ pub(crate) fn method_proven_this(
         numeric_fields: HashSet::new(),
         // Phase 5a's promoted value is the receiver, not a named binding.
         report_name: crate::opt_report::enabled().then(|| String::from("this")),
-        // Never claimed for a proven `this`, for the same reason
-        // `numeric_fields` is not: this fact is about a receiver whose shape
-        // the caller proved, and `--emit-types` has no source-level binding
-        // here to annotate.
-        report_fields: None,
     })
 }
 
@@ -291,7 +286,6 @@ mod tests {
             class_name: "C".to_string(),
             numeric_fields: HashSet::new(),
             report_name: None,
-            report_fields: None,
         };
         let k = |m: &str| ("C".to_string(), m.to_string());
 

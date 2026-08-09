@@ -195,24 +195,33 @@ TypeScript. Like `--opt-report` it is observational (emitted code is
 byte-identical with it on and off) and it disables cache reuse for its own run,
 because a cache hit skips codegen and there would be nothing to report.
 
-**What it recovers**, and the representation each type comes from:
+**What it recovers — and the headline result: a representation is not a type.**
+Perry has five representation analyses. Exactly **one** licenses a TypeScript
+type:
 
-| Representation | TypeScript | Notes |
+| Analysis | Emitted | Why |
 |---|---|---|
-| canonical `I32` / `U32` slot | `number` | |
-| canonical `Str` slot | `string` | |
-| `IntValued` | `number` | |
-| `Ptr<NumArray>` | `number[]` | |
-| `Ptr<Shape>` of a source class | that class name | e.g. `Point` |
-| `Ptr<Shape>` of an object literal | a generated `interface` | the differentiating case |
-| anything else | *omitted* | |
+| `Ptr<Shape>` of a source class | that class name (`Point`) | a real value proof: exact dynamic class, by provenance + containment |
+| `Ptr<Shape>` of an object literal | a generated `interface` | the differentiating case — a field set recovered from untyped JS |
+| canonical `I32` / `U32` | *omitted* | a **storage** proof. The JS value can still be `undefined` (non-dominating writes to a `var` seed) or `bigint` (the bitwise arm ignores operand types) |
+| canonical `Str` | *omitted* | derived from the annotation, and the representation is *designed* to tolerate that annotation being false ("a type-annotation lie degrades to today's behavior") |
+| `IntValued` | *omitted* | sound **only because the value is never observed** — an out-of-bounds typed-array read is `undefined`. Writing the annotation observes it |
+| `Ptr<NumArray>` | *omitted* | `new Array(n)` holes read back as `undefined`; the true type is `(number \| undefined)[]`. Also only echoes an annotation |
+| spec-ABI params/returns | *omitted* | the **most frequent** argument-type tuple across the call sites, with disagreeing callers demoted to a guarded boxed entry — a majority, not a proof. A function called 4× with numbers and 1× with a string still reports `i32,i32` |
 
-**What it does not recover, and will not.** Parameter and return types.
-Perry's specialized-ABI analysis reads `param.ty`, which is populated from the
-source annotation and by nothing else — no inference writes it. On annotated
-TypeScript it would hand your own annotations back; on unannotated JavaScript
-it proves nothing. Those entries are therefore dropped rather than emitted, so
-this flag cannot produce a `.d.ts` of function signatures. It reports *locals*.
+That table is the finding, not a limitation to route around. These
+representations were chosen to be *observationally equivalent* to the boxed
+form, which is strictly weaker than "the value has this type" — and in three
+cases the equivalence holds precisely **because** the value is never observed in
+a context that could tell the difference. An annotation is such an observation.
+
+**What it does not recover, and will not.** Parameter and return types, so this
+flag cannot produce a `.d.ts` of function signatures — it reports *locals*.
+Perry does specialize function entries by argument type, and that analysis does
+run on unannotated JavaScript, but it selects the **most frequent** argument
+tuple across the call sites and demotes disagreeing callers to a guarded boxed
+entry. A majority of call sites is not a proof about the parameter, so those
+entries are dropped rather than emitted.
 
 **It omits rather than guesses.** A missing annotation costs nothing; a wrong
 one poisons a downstream `tsc`. So: `any` is never emitted (it is a claim, not

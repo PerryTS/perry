@@ -1062,7 +1062,9 @@ pub(crate) fn select(
     loop_depth: u32,
     detail: Option<String>,
 ) {
-    select_with_shape(position, name, local_id, analysis, rep, loop_depth, detail, None)
+    select_with_shape(
+        position, name, local_id, analysis, rep, loop_depth, detail, None,
+    )
 }
 
 /// Record a win from a site that already knows its own function and module
