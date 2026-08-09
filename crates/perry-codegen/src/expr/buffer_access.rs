@@ -616,6 +616,45 @@ pub(crate) fn lower_typed_array_load(
     Ok(Some(result))
 }
 
+/// Numeric-context sink for a buffer-view-tracked typed-array element read.
+///
+/// `ta_param_f64_read::checked_typed_array_f64_kind` declines outright for a
+/// receiver tracked in `ctx.buffer_view_slots` — its own doc comment says the
+/// tracked view "owns this receiver via its own (stronger-bounds) native
+/// path", i.e. [`lower_typed_array_load`] above. That path is real (the
+/// general, non-arithmetic `IndexGet` dispatch already calls it), but until
+/// now nothing routed an ARITHMETIC-operand read through it: the "don't
+/// shadow" exclusion only stops the WEAKER guarded tier from running, it does
+/// not on its own get a number-context caller to the STRONGER one, so the
+/// read fell through the number-context helpers to the generic `lower_expr`
+/// path with `fallback_coerced = false`. `expr_may_return_boxed_value_from_
+/// raw_f64_fallback`'s `IndexGet` arm cannot tell which concrete lowering a
+/// given call site will take — it only sees "numeric typed array class",
+/// which can ALSO resolve to the boxed `js_typed_array_get` / `js_dyn_index_
+/// get` fallbacks — so it conservatively answers "may be boxed" and the
+/// arithmetic caller inserted a redundant `js_number_coerce` on every proven
+/// in-bounds element.
+///
+/// [`lower_typed_array_load`] either produces a value from a proven in-bounds
+/// native load (bounds, alias and view-tracking all checked by `lower_buffer_
+/// access_proof`) — which is a real double or int/float widened to one, NEVER
+/// a NaN-boxed fallback bit pattern — or declines (unproven bounds, mutable
+/// alias, not width-tracked, or not `BufferIndexUnit::Element`), in which
+/// case the caller keeps trying its other, coercion-aware tiers exactly as
+/// before this function existed. So a `Some` here never needs the residual
+/// coerce; the caller should treat it exactly like the guarded-tier hit above
+/// it (`fallback_coerced = true`).
+pub(crate) fn try_lower_typed_array_f64_read_for_number_context(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+) -> Result<Option<String>> {
+    let Some(lowered) = lower_typed_array_load(ctx, object, index)? else {
+        return Ok(None);
+    };
+    Ok(super::native_number_to_f64(ctx, &lowered))
+}
+
 pub(crate) fn lower_typed_array_store(
     ctx: &mut FnCtx<'_>,
     array_expr: &Expr,

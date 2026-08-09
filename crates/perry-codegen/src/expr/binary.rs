@@ -62,6 +62,21 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
         {
             return Ok((value, true));
         }
+        // #7494: the guarded tier above declines outright for a receiver
+        // tracked in `ctx.buffer_view_slots` (its own "don't shadow" comment)
+        // because that tracked view owns a STRONGER-bounds native path
+        // (`lower_typed_array_load`). Nothing routed a number-context read to
+        // it, so a proven in-bounds buffer-view typed-array read still fell
+        // through to the generic `lower_expr` tier below and picked up a
+        // redundant `js_number_coerce` from the residual-coerce rule, which
+        // cannot see which concrete lowering actually ran.
+        if let Some(value) =
+            super::buffer_access::try_lower_typed_array_f64_read_for_number_context(
+                ctx, object, index,
+            )?
+        {
+            return Ok((value, true));
+        }
     }
     // Repsel Phase 4a.0 (#6904): a numeric-proven `a || b` / `a && b` /
     // `a ?? b` consumed as an arithmetic operand lowers with BOTH sides in

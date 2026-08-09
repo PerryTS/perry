@@ -47,10 +47,33 @@ use guarded_array::{
 };
 use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
 
+/// #7494: deliberately `static_type_of`, not `receiver_class_name`.
+///
+/// `receiver_class_name` returns `None` for any `Expr::LocalGet(id)` with
+/// `ctx.reassigned_locals.contains(id)` — correct for its OTHER callers,
+/// which use the resolved name for FIXED-OFFSET class-layout dispatch that
+/// really would be unsound against a value an `as any` reassignment swapped
+/// in (#6906). Every consumer gated on THIS predicate is different: either a
+/// `ctx.buffer_view_slots`-tracked proof that reassignment already
+/// invalidates on its own (`lower_typed_array_store`, `try_lower_proven_
+/// view_checked_store`/`proven_view_for` — see their own `buffer_view_slots`
+/// lookups), or a genuinely dynamic runtime call (`js_typed_array_set`,
+/// `js_typed_array_get`, `js_typed_array_index_{get,set}_dynamic`) that
+/// re-validates the object's actual GC kind before touching memory, exactly
+/// like `js_array_push_f64` does for a non-array receiver (#7574). The
+/// dynamic-fallback arm's own comment already promises this: "aliases,
+/// reassigned locals, and unknown bounds stay on the runtime helper" — a
+/// promise `receiver_class_name` silently broke by answering `None` for a
+/// reassigned local before that arm was ever reached, which sent the access
+/// on to `is_array_expr`'s PLAIN-array layout instead (element 0 at byte 8,
+/// not the typed-array data region at byte 16) for a real typed-array
+/// object: a type-confused, `unbox`ed-pointer-plus-wrong-offset write,
+/// not merely a missed optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(
-        receiver_class_name(ctx, object).as_deref(),
-        Some(
+        crate::type_analysis::static_type_of(ctx, object),
+        Some(HirType::Named(name)) if matches!(
+            name.as_str(),
             "Int8Array"
                 | "Uint8ClampedArray"
                 | "Int16Array"

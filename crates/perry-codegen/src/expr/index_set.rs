@@ -115,10 +115,23 @@ fn lower_value_for_dynamic_index_set(
     Ok((value_double, value_bits))
 }
 
+/// #7494: `static_type_of`, not `receiver_class_name` — see the sibling in
+/// `index_get.rs` for the full rationale. In short: every tier this predicate
+/// gates is either `ctx.buffer_view_slots`-tracked (which reassignment
+/// already invalidates on its own) or a genuinely dynamic runtime call that
+/// re-validates the object's actual GC kind, so `receiver_class_name`'s
+/// blanket "reassigned local → unknown" answer only broke the dynamic-
+/// fallback arm's own documented promise ("aliases, reassigned locals, and
+/// unknown bounds stay on the runtime helper") by never letting execution
+/// reach it — sending a reassigned typed array's `arr[i] = v` on to
+/// `is_array_expr`'s PLAIN-array element layout (byte 8) against a real
+/// typed-array object (data at byte 16): a type-confused write, not a missed
+/// optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(
-        receiver_class_name(ctx, object).as_deref(),
-        Some(
+        crate::type_analysis::static_type_of(ctx, object),
+        Some(perry_hir::types::Type::Named(name)) if matches!(
+            name.as_str(),
             "Int8Array"
                 | "Uint8ClampedArray"
                 | "Int16Array"

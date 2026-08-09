@@ -398,7 +398,30 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
 /// - **NativeMethodCall results where the runtime returns an array**
 ///   (e.g. `arr.map(...)` — but those use the special Expr::ArrayMap
 ///   variant which is already handled)
+///
+/// #7494: a reassigned local is excluded up front, mirroring
+/// [`receiver_class_name`]'s own `ctx.reassigned_locals` guard just above.
+/// This function's `Some(HirType::Named(..))` arm below trusts the same
+/// DECLARED type that guard exists to distrust — for a plain `number[]`
+/// local, `static_type_of` and `receiver_class_name` normally agree, but a
+/// typed-array class name (`Int32Array`, …) is authoritative for BOTH the
+/// generic plain-array element layout this function feeds (length at byte 0,
+/// data at byte 8, 8-byte f64 slots) and the typed-array layout
+/// `is_width_tracked_typed_array_receiver` feeds (data at byte 16, narrower
+/// per-kind elements) — two INCOMPATIBLE memory layouts selected by the same
+/// declared name. Before this guard, `array[i] = v` on a *reassigned*
+/// `Int32Array` local skipped the typed-array dispatch (whose own
+/// `receiver_class_name` check already declined) and fell through to this
+/// function, which still answered `true` from the stale declared type — so
+/// the store ran the PLAIN-ARRAY fast path (`lower_index_set_fast`) against
+/// actual typed-array-object bytes: a real type-confusion write into the
+/// typed array's header/data region, not a benign missed optimization.
 pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if let Expr::LocalGet(id) = e {
+        if ctx.reassigned_locals.contains(id) {
+            return false;
+        }
+    }
     match static_type_of(ctx, e) {
         Some(HirType::Array(_)) | Some(HirType::Tuple(_)) => true,
         Some(HirType::Generic { ref base, .. }) if base == "Array" => true,
