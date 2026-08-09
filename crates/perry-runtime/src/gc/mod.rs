@@ -411,17 +411,39 @@ fn gc_verify_evacuation_enabled() -> bool {
 /// the #6987 shape CLAUDE.md warns about, and this time the stale half was the
 /// one carrying the soundness argument.
 ///
-/// **Kill-policy disposition, stated rather than left implicit.** After #7682
-/// the flag's only production reader is the arm condition in
-/// `gc_check_trigger`, where it sits in a disjunction with
-/// `registered_root_scanners_block_budgeted_gc()` — and that arm's own comment
-/// records that the latter holds for *every compiled program*, since codegen
-/// registers synchronous scanners at startup. So for a compiled binary this
-/// knob is now very close to inert, which by CLAUDE.md's rule means it should
-/// be deleted rather than kept as a configuration nobody exercises. Not done
-/// here: a P0 correctness fix should not also be the change that decides a
-/// knob's fate, and the decision wants a measurement of the arm condition's
-/// three disjuncts on real programs, not an argument.
+/// **Kill-policy disposition, stated rather than left implicit — and stated
+/// for the configuration that now ships.** The flag's only production reader is
+/// the arm condition in `gc_check_trigger`, a three-way disjunction:
+/// `gc_scavenge_enabled() || gc_moving_loop_polls_enabled() ||
+/// registered_root_scanners_block_budgeted_gc()`.
+///
+///  * **With polls ON (the default since #7682's follow-up)** the second
+///    disjunct carries the arm, and this flag decides nothing. It is redundant,
+///    not load-bearing.
+///  * **With `PERRY_GC_MOVING_LOOP_POLLS=0`** it is the only thing holding the
+///    arm open, and dropping it would route nursery pressure to the budgeted
+///    stepper, which is non-moving *and* reclaims almost nothing on a
+///    reallocation loop. The third disjunct does NOT rescue that case: under
+///    `gc_incremental_enabled()` (the default) it reduces to "any COPY-ONLY
+///    scanner", and a compiled program has none — the reasoning
+///    `test-parity/gc_matrix_inert_arms.txt` recorded for the `cons_scan_off`
+///    arm, and the thing that made a first attempt at repairing
+///    `generator_attach_prototype` fail for a third distinct reason.
+///
+/// So the honest summary is: this knob is now a modifier on the kill switch,
+/// not a mode of its own. By CLAUDE.md's rule that is a candidate for deletion —
+/// fold its behaviour into the polls-off path and stop having two flags whose
+/// interaction nobody exercises. Deliberately NOT done here: this PR already
+/// changes two defaults, and a third would make one bisect answer three
+/// questions. The decision wants the arm condition's three disjuncts measured
+/// on real programs, which is a separate change with a separate A/B.
+///
+/// An earlier draft of this comment claimed the knob was "very close to inert
+/// for a compiled binary" on the strength of the third disjunct holding for
+/// every compiled program. That is wrong under the default incremental stepper,
+/// for the reason above. It is recorded rather than quietly deleted because
+/// this whole PR exists because a stale half of a doc comment kept carrying a
+/// soundness argument after it stopped being true.
 #[cfg(test)]
 thread_local! {
     /// Test-only override, consulted BEFORE the process-wide OnceLock so a
@@ -459,12 +481,15 @@ pub(super) fn gc_scavenge_enabled() -> bool {
         //
         // What this does NOT do, despite what this comment used to claim: it
         // does not defer alloc-point collections to a precise safepoint. That
-        // deferral is gated on `gc_moving_loop_polls_enabled()`, which has been
-        // OFF by default since #7161 — so in the shipped configuration the two
-        // flags disagree, the deferral is dead, and the alloc-point minor runs
-        // right there. It is sound because that minor is non-moving
-        // (`force_full_scan`), not because it was moved somewhere precise
-        // (#7682).
+        // deferral is gated on `gc_moving_loop_polls_enabled()`, a DIFFERENT
+        // flag, and for the whole #7161 stopgap the two disagreed — the
+        // deferral was dead and the alloc-point minor ran right there, moving
+        // objects at a register-imprecise point. That is #7682.
+        //
+        // The deferral is live again now that polls default ON, so the shipped
+        // default does reach a precise safepoint — but not because of THIS
+        // flag, and the alloc-point minor is sound on its own terms either way,
+        // by being non-moving (`force_full_scan`).
         !matches!(
             std::env::var("PERRY_GC_SCAVENGE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")

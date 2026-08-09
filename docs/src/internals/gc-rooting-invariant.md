@@ -24,7 +24,7 @@ A "collection point" is any of:
   transition. `js_object_get_property` allocates: it can run a getter, which is
   user code;
 - `js_gc_loop_safepoint`, the back-edge poll (only emitted under
-  `PERRY_GC_MOVING_LOOP_POLLS=1`, off by default since #7161);
+  `PERRY_GC_MOVING_LOOP_POLLS`, ON by default again, kill switch `=0`);
 - `js_gc_collect` — a JS-level `gc()`. Since #7558 this runs a full mark-sweep
   on **precise roots** like everything else, so a value live across it and not
   reachable from a root is *freed*. It used to force the conservative
