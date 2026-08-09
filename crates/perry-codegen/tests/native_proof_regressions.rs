@@ -14061,6 +14061,108 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
     );
 }
 
+/// P1 (#5094): the sibling of the test above for a POINTER-typed field.
+///
+/// #7288 took only the raw-f64 slots, so `node.next = other` in a sloppy script
+/// — the shape of every linked structure — stayed on the `PutValue` write IC
+/// whose miss is `js_put_value_set` → `js_object_set_field_by_name`: by-name
+/// dispatch and a `RuntimeHandleScope` for a store whose slot index is a
+/// compile-time constant.
+///
+/// Asserts the codegen decision AND that the GC bookkeeping survived, because
+/// that is the half where a mistake is a use-after-free rather than a slowdown:
+/// a pointer store into a boxed slot must still reach the write barrier. The
+/// value here is an opaque parameter read, so none of the three value-side
+/// elisions (`expr_produces_non_pointer_bits_by_construction` and friends) can
+/// fire and the emitted bookkeeping block must be present.
+#[test]
+fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
+    fn probe_body(ir: &str) -> &str {
+        let start = ir
+            .find("define double @perry_fn_sloppy_class_field_ptr_store_ts__probe")
+            .expect("probe function must be emitted");
+        let rest = &ir[start..];
+        let end = rest[1..]
+            .find("\ndefine ")
+            .map(|offset| offset + 1)
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    fn ir_for(strict: bool) -> String {
+        let node = class(
+            218,
+            "LNode",
+            vec![class_field("next", Type::Named("LNode".to_string()))],
+        );
+        let module = module_with_classes_and_params(
+            "sloppy_class_field_ptr_store.ts",
+            vec![node],
+            vec![
+                param(1, "node", Type::Named("LNode".to_string())),
+                param(2, "other", Type::Named("LNode".to_string())),
+            ],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PutValueSet {
+                    target: Box::new(local(1)),
+                    key: Box::new(Expr::String("next".to_string())),
+                    value: Box::new(local(2)),
+                    receiver: Box::new(local(1)),
+                    strict,
+                }),
+                Stmt::Return(Some(int(0))),
+            ],
+        );
+        compile_ir_for_module_with_opts(module, empty_opts()).unwrap()
+    }
+
+    let sloppy_module = ir_for(false);
+    let sloppy = probe_body(&sloppy_module);
+    assert!(
+        sloppy.contains("class_field_sloppy_set.boxed_fast"),
+        "a sloppy pointer-field store must reach the inline class-field boxed \
+         store (#5094 P1):\n{sloppy}"
+    );
+    assert!(
+        sloppy.contains("class_field_inline.deref"),
+        "the boxed arm must be fronted by the #5093 shape/flags precheck — it \
+         is what rejects the frozen / descriptor-bearing receivers sloppy and \
+         strict disagree about:\n{sloppy}"
+    );
+    let miss_call = sloppy
+        .lines()
+        .find(|line| line.contains("call double @js_put_value_set("))
+        .unwrap_or_else(|| {
+            panic!("the boxed arm's miss must CALL `js_put_value_set` (#5094):\n{sloppy}")
+        });
+    assert!(
+        miss_call.trim_end().ends_with("i32 0)"),
+        "the sloppy miss must pass strict = 0 (#5094):\n  {miss_call}"
+    );
+    // The GC half. An opaque parameter can carry a heap pointer, so the store
+    // must be followed by the pointer-tested bookkeeping block that reaches the
+    // remembered set. Without this assertion the test would pass just as
+    // happily on a lowering that dropped the barrier outright.
+    assert!(
+        sloppy.contains("class_field_set.gc_bookkeeping"),
+        "a boxed slot store of a possibly-pointer value must keep the \
+         pointer-tested write barrier / layout note (#5094):\n{sloppy}"
+    );
+    assert!(
+        !sloppy.contains("call void @js_class_field_set_fallback"),
+        "the sloppy arm must not CALL the throwing strict fallback:\n{sloppy}"
+    );
+
+    // Negative control: the strict arm keeps its own (unchanged) lowering.
+    let strict_module = ir_for(true);
+    let strict = probe_body(&strict_module);
+    assert!(
+        !strict.contains("class_field_sloppy_set"),
+        "the strict arm must keep its existing lowering:\n{strict}"
+    );
+}
+
 #[path = "native_proof_regressions/invalidation.rs"]
 mod invalidation;
 

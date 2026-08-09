@@ -140,12 +140,19 @@ pub(crate) fn class_layout_declarable_at_allocation(
     if prologue.is_empty() {
         return false;
     }
-    let mut has_slot = false;
+    // The declaration costs one call per construction, so it must buy at least
+    // one mask bit. A class whose every field is `boolean` declares two empty
+    // masks: the boxed store arm does not read the intact bit at all
+    // (`require_raw_f64 = false`), and the collector's view is already
+    // `POINTER_FREE` from `layout_init_pointer_free`. Nothing to unlock.
+    let mut worth_declaring = false;
     for field in &class.fields {
         if field.key_expr.is_some() {
             continue;
         }
-        has_slot = true;
+        if type_is_pointer_bearing(&field.ty) {
+            worth_declaring = true;
+        }
         // Obligation 1 applies to raw-f64 slots ONLY. A pointer-masked slot
         // read before its first write yields `undefined`, which is the correct
         // answer; a raw-f64 slot read before its first write reinterprets
@@ -159,11 +166,14 @@ pub(crate) fn class_layout_declarable_at_allocation(
         // (`ctor_prologue_param_assigned_fields`, the same set), so it never
         // happens. The two consumers of `prologue` have to agree here, and
         // they agree because it is literally one set.
-        if type_is_raw_f64_candidate(&field.ty) && !prologue.contains(&field.name) {
-            return false;
+        if type_is_raw_f64_candidate(&field.ty) {
+            worth_declaring = true;
+            if !prologue.contains(&field.name) {
+                return false;
+            }
         }
     }
-    has_slot
+    worth_declaring
 }
 
 #[derive(Clone, Debug, Default)]
