@@ -94,6 +94,19 @@ fn with_file_types_options_object(_trigger_guard: &GcTriggerThresholdTestGuard) 
 
 #[test]
 fn readdir_options_object_survives_the_with_file_types_key_allocation() {
+    // This test needs nursery pressure to reach the DIRECT allocation-point
+    // minor: it asserts both that a bounded assist ran and — as its liveness
+    // witness — that the minor EVACUATED. The default moving-loop pacing routes
+    // that pressure into the safepoint deferral instead, and a Rust unit test
+    // has no loop back-edge poll to drain it, so no collection happens at all.
+    // Legacy pacing is not the answer either: it hands the work to the budgeted
+    // stepper, which is deliberately non-moving, and the evacuation witness then
+    // correctly refuses to certify an empty run. `force_alloc_point_minor_pacing`
+    // is the combination this test was written against and the only one in which
+    // both halves hold. The moving default's rooting coverage for these helpers
+    // is the gap suite's `test_gap_gc_*_rooting.ts` cases plus the zeal +
+    // from-space-protect runs, not this vehicle.
+    let _alloc_point_pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
@@ -145,6 +158,19 @@ fn readdir_options_object_survives_the_with_file_types_key_allocation() {
 /// reads its passing as evidence about the rooting.
 #[test]
 fn readdir_options_without_the_field_stays_false_across_the_key_allocation() {
+    // This test needs nursery pressure to reach the DIRECT allocation-point
+    // minor: it asserts both that a bounded assist ran and — as its liveness
+    // witness — that the minor EVACUATED. The default moving-loop pacing routes
+    // that pressure into the safepoint deferral instead, and a Rust unit test
+    // has no loop back-edge poll to drain it, so no collection happens at all.
+    // Legacy pacing is not the answer either: it hands the work to the budgeted
+    // stepper, which is deliberately non-moving, and the evacuation witness then
+    // correctly refuses to certify an empty run. `force_alloc_point_minor_pacing`
+    // is the combination this test was written against and the only one in which
+    // both halves hold. The moving default's rooting coverage for these helpers
+    // is the gap suite's `test_gap_gc_*_rooting.ts` cases plus the zeal +
+    // from-space-protect runs, not this vehicle.
+    let _alloc_point_pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();

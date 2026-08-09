@@ -67,6 +67,17 @@ fn a_fresh_symbol_stores_no_heap_pointer_in_its_payload() {
 /// reason — the classic vacuous GC probe.
 #[test]
 fn a_symbols_description_survives_reclamation_of_the_string_it_came_from() {
+    // These assertions are about the BUDGETED, non-moving assist —
+    // `assert_automatic_minor_gc_progressed` requires a bounded assist to finish
+    // or a budgeted cycle to be left ACTIVE. The default moving-loop pacing
+    // deliberately routes nursery pressure AWAY from the budgeted stepper and
+    // into the safepoint deferral, which in a Rust unit test has no loop
+    // back-edge poll to drain it, so the assist is never entered. Pin the pacing
+    // whose collection point this assertion describes, exactly as the
+    // `debt_pacer` tests do. The moving default's rooting coverage for these
+    // helpers is the gap suite's `test_gap_gc_*_rooting.ts` cases plus the
+    // zeal + from-space-protect runs, not this vehicle.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
