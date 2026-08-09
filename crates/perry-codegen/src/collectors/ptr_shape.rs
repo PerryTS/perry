@@ -177,6 +177,50 @@ pub struct PtrShapeLocal {
     /// "some local was consumed" but never "`totals` was **not**", and naming
     /// the value is the entire point of the distinction.
     pub report_name: Option<String>,
+    /// The class chain's declared field set, for `--emit-types` (#7685).
+    ///
+    /// `Some` exclusively when [`crate::opt_report::enabled`], like
+    /// [`Self::report_name`] — an ordinary build allocates nothing for it.
+    ///
+    /// This is the input to the one output `--emit-types` has that a
+    /// JavaScript-only inferencer does not: a *structural interface* recovered
+    /// for an object literal. It exists here only because representation
+    /// selection had to answer "what is this object's exact field set?" in
+    /// order to pick `Ptr<Shape>` at all.
+    ///
+    /// `None` rather than an empty vector when the report is off, so the two
+    /// states stay distinguishable: "no fields" and "not collected" would
+    /// otherwise both render as an empty interface.
+    pub report_fields: Option<Vec<crate::emit_types::ShapeField>>,
+}
+
+/// The declared field set of a proven class chain, as `--emit-types` consumes
+/// it. Report-only; never consulted by codegen.
+///
+/// Two field kinds are recorded name-only, with no type, rather than
+/// approximated — and because `emit_types::Shape::is_emittable` requires a type
+/// for *every* field, either one refuses the whole interface rather than
+/// silently narrowing it:
+///
+/// * a **computed key** (`key_expr: Some(..)`), whose `name` is a synthetic
+///   placeholder for HIR identity and not the runtime property name at all;
+/// * a **private** field, which is not part of an object's structural type.
+fn declared_shape_fields(chain: &[&Class]) -> Vec<crate::emit_types::ShapeField> {
+    let mut out = Vec::new();
+    for class in chain {
+        for field in &class.fields {
+            let ts_type = if field.key_expr.is_some() || field.is_private {
+                None
+            } else {
+                crate::emit_types::ts_type_for_hir_type(&field.ty)
+            };
+            out.push(crate::emit_types::ShapeField {
+                name: field.name.clone(),
+                ts_type,
+            });
+        }
+    }
+    out
 }
 
 /// Whether an expression node is a §5.2 shape barrier for the module-wide
@@ -230,7 +274,7 @@ fn note_ptr_shape_local(
     if opt_report::enabled() {
         let fallback = format!("<local {id}>");
         let name = names.get(&id).map(String::as_str).unwrap_or(&fallback);
-        opt_report::select(
+        opt_report::select_with_shape(
             opt_report::Position::Local,
             name,
             Some(id),
@@ -242,6 +286,14 @@ fn note_ptr_shape_local(
                 fact.class_name,
                 fact.numeric_fields.len()
             )),
+            // The class name and field set as DATA, for `--emit-types`
+            // (#7685). The `detail` string above still renders them as prose
+            // for the human report; a consumer that turns them into a
+            // TypeScript type must not have to parse that sentence.
+            Some(opt_report::SelectedShape {
+                class_name: fact.class_name.clone(),
+                fields: fact.report_fields.clone().unwrap_or_default(),
+            }),
         );
     }
     if !repsel_debug_enabled() {
@@ -552,6 +604,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
                     .cloned()
                     .unwrap_or_else(|| format!("<local {id}>"))
             }),
+            report_fields: opt_report::enabled().then(|| declared_shape_fields(&chain)),
         };
         note_ptr_shape_local(*id, &fact, &names, &depths);
         // Aliases carry the same fact: they hold the same object, their slots

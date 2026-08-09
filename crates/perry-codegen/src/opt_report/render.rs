@@ -532,6 +532,8 @@ mod tests {
             site: None,
             alloc_context: None,
             alloc_ordinal: None,
+            shape_class: None,
+            shape_fields: None,
         }
     }
 
@@ -557,6 +559,8 @@ mod tests {
             site: None,
             alloc_context: None,
             alloc_ordinal: None,
+            shape_class: None,
+            shape_fields: None,
         }
     }
 
@@ -884,6 +888,8 @@ mod r0_bucket_tests {
             site: None,
             alloc_context: Some(context.into()),
             alloc_ordinal: Some(ordinal),
+            shape_class: None,
+            shape_fields: None,
         }
     }
 

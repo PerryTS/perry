@@ -422,6 +422,14 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.opt_report.is_some() || std::env::var("PERRY_OPT_REPORT").is_ok() {
         return Err("opt-report".to_string());
     }
+    // #7685: `--emit-types` reads the same codegen-recorded entry stream, so it
+    // needs codegen to run for exactly the reason above. Without this the flag
+    // would silently write an EMPTY types file on the second run of an
+    // unchanged program — the worst failure mode for this feature, because an
+    // empty file is indistinguishable from "nothing was provable".
+    if args.emit_types.is_some() {
+        return Err("emit-types".to_string());
+    }
     if args.verify_native_regions || args.emit_attest || args.emit_sandbox {
         return Err("sidecar-or-verify".to_string());
     }

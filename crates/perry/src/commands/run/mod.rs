@@ -226,6 +226,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         disable_buffer_fast_path: false,
         explain_lowering: false,
         opt_report: None,
+        emit_types: None,
         statepoint_report: None,
         emit_attest: false,
         emit_sandbox: false,

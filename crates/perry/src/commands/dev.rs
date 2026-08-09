@@ -314,6 +314,7 @@ fn build_once(
         disable_buffer_fast_path: false,
         explain_lowering: false,
         opt_report: None,
+        emit_types: None,
         statepoint_report: None,
         emit_attest: false,
         emit_sandbox: false,

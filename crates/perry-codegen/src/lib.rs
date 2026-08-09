@@ -42,6 +42,7 @@ pub mod native_emit;
 mod native_root_coverage;
 pub(crate) mod native_value;
 pub(crate) mod nm_install;
+pub mod emit_types;
 pub mod opt_report;
 pub(crate) mod root_reload;
 pub mod rooting;

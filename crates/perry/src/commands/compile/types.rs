@@ -506,6 +506,29 @@ pub struct CompileArgs {
     /// codegen executes and produces records.
     #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "text")]
     pub statepoint_report: Option<StatepointReportFormat>,
+
+    /// **EXPERIMENTAL** (#7685). Write the types Perry *proved* to a file.
+    ///
+    /// Representation selection has to prove a static type before it can pick
+    /// an unboxed representation. `--opt-report` surfaces the half of that
+    /// analysis which FAILED; this writes out the half that succeeded, as
+    /// TypeScript.
+    ///
+    /// The format follows the extension: `.json` emits machine-readable
+    /// records, anything else emits TypeScript.
+    ///
+    /// Coverage is exactly Perry's proof rate, which is low on code that was
+    /// not written for it — expect most bindings to be absent. Absent means
+    /// *unproven*, never *untyped*, and nothing is guessed: where the proof was
+    /// conditional the binding is omitted. **Parameter and return types are not
+    /// recovered at all** — Perry derives those from the source annotation, so
+    /// on unannotated JavaScript there is nothing to recover.
+    ///
+    /// Observational only: emitted code is byte-identical with the flag on and
+    /// off. Like `--opt-report` it disables build/object cache reuse for its
+    /// own run, so that codegen actually executes and has something to report.
+    #[arg(long, value_name = "PATH")]
+    pub emit_types: Option<std::path::PathBuf>,
 }
 
 /// Output format for `--opt-report`.

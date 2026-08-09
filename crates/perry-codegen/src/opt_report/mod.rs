@@ -493,6 +493,28 @@ pub struct Entry {
     /// with no map iteration, so a function lowered twice (a boxed entry plus
     /// a typed clone) produces the same ordinals and still de-duplicates.
     pub alloc_ordinal: Option<u32>,
+    /// For a `Ptr<Shape>` selection: the provenance class name, verbatim.
+    ///
+    /// `detail` already renders it into prose (`class Point (0 numeric
+    /// field(s) proven)`), but `--emit-types` (#7685) turns this into a
+    /// TypeScript type, and recovering a type by parsing an English sentence
+    /// is a wrong-type bug waiting for the day somebody rewords the sentence.
+    /// A consumer that must not guess gets a field, not a substring.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape_class: Option<String>,
+    /// For a `Ptr<Shape>` selection whose class is a compiler-synthesized
+    /// object-literal shape: the declared field set of the class chain.
+    ///
+    /// This is the field set `--emit-types` renders as a structural interface —
+    /// the one output a JavaScript-only inferencer has no representation-
+    /// selection pressure to force. Populated only when [`enabled`], like
+    /// `PtrShapeLocal::report_name`, so an ordinary build allocates nothing.
+    ///
+    /// Both fields are `skip_serializing_if` so an entry that has neither
+    /// serializes byte-identically to the pre-#7685 schema; only a `Ptr<Shape>`
+    /// selection gains keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape_fields: Option<Vec<crate::emit_types::ShapeField>>,
 }
 
 impl Entry {
@@ -545,6 +567,11 @@ impl Entry {
     ///   of the site, so the ordinal already implies it, and a second
     ///   enforcement point that no sabotage can kill is how #7171 ended up
     ///   with four green holes in its first pass. One discriminant, one test.
+    ///
+    ///   `shape_class` / `shape_fields` are likewise **not** in this key, for
+    ///   the same reason: both are functions of the selected representation
+    ///   this row already identifies, so adding them could only split a row
+    ///   from itself.
     #[allow(clippy::type_complexity)]
     fn dedup_key(
         &self,
@@ -907,6 +934,8 @@ fn deny_in_scope(d: Denial<'_>, alloc_context: Option<String>, alloc_ordinal: Op
         site: None,
         alloc_context,
         alloc_ordinal,
+        shape_class: None,
+        shape_fields: None,
     });
 }
 
@@ -939,6 +968,8 @@ pub(crate) fn deny_named(function: &str, region: RegionKind, d: Denial<'_>) {
         site: None,
         alloc_context: None,
         alloc_ordinal: None,
+        shape_class: None,
+        shape_fields: None,
     });
 }
 
@@ -952,7 +983,13 @@ pub(crate) fn enter_module(module: &str) -> ScopeGuard {
 /// Record a value that *did* get an unboxed representation, attributed to the
 /// active scope. Reporting wins matters: a report that only nags is less
 /// useful, and less trusted, than one that shows the ratio.
-pub(crate) fn select(
+///
+/// `shape` is `Some` only for a `Ptr<Shape>` selection; it carries the class
+/// name and field set as data rather than as prose inside `detail`, because
+/// `--emit-types` (#7685) turns them into a TypeScript type and must not
+/// recover one by parsing an English sentence.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn select_with_shape(
     position: Position,
     name: &str,
     local_id: Option<u32>,
@@ -960,6 +997,7 @@ pub(crate) fn select(
     rep: &str,
     loop_depth: u32,
     detail: Option<String>,
+    shape: Option<SelectedShape>,
 ) {
     if !enabled() {
         return;
@@ -999,7 +1037,32 @@ pub(crate) fn select(
         site: None,
         alloc_context: None,
         alloc_ordinal: None,
+        shape_class: shape.as_ref().map(|s| s.class_name.clone()),
+        shape_fields: shape.map(|s| s.fields),
     });
+}
+
+/// The `Ptr<Shape>` payload [`select_with_shape`] carries beyond an ordinary
+/// win: the provenance class and, for a compiler-synthesized object-literal
+/// shape, the declared field set `--emit-types` (#7685) renders as a structural
+/// interface.
+pub(crate) struct SelectedShape {
+    pub class_name: String,
+    pub fields: Vec<crate::emit_types::ShapeField>,
+}
+
+/// Record a value that *did* get an unboxed representation, attributed to the
+/// active scope. See [`select_with_shape`] for the `Ptr<Shape>` form.
+pub(crate) fn select(
+    position: Position,
+    name: &str,
+    local_id: Option<u32>,
+    analysis: Analysis,
+    rep: &str,
+    loop_depth: u32,
+    detail: Option<String>,
+) {
+    select_with_shape(position, name, local_id, analysis, rep, loop_depth, detail, None)
 }
 
 /// Record a win from a site that already knows its own function and module
@@ -1037,6 +1100,8 @@ pub(crate) fn select_explicit(
         site: None,
         alloc_context: None,
         alloc_ordinal: None,
+        shape_class: None,
+        shape_fields: None,
     });
 }
 
@@ -1108,6 +1173,8 @@ pub(crate) fn consume(
         site: Some(site.to_string()),
         alloc_context: None,
         alloc_ordinal: None,
+        shape_class: None,
+        shape_fields: None,
     });
 }
 
@@ -1158,6 +1225,8 @@ pub(crate) fn unconsumed(u: Unconsumed<'_>) {
         site: None,
         alloc_context: None,
         alloc_ordinal: None,
+        shape_class: None,
+        shape_fields: None,
     });
 }
 
@@ -1220,6 +1289,8 @@ mod tests {
             site: None,
             alloc_context: None,
             alloc_ordinal: None,
+            shape_class: None,
+            shape_fields: None,
         }
     }
 

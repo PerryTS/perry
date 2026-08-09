@@ -223,6 +223,17 @@ pub fn run_with_parse_cache(
         std::env::set_var("PERRY_NO_CACHE", "1");
     }
 
+    // `--emit-types` (#7685, EXPERIMENTAL) consumes the same recorded entry
+    // stream, so it turns the same recorder on — but it does NOT imply
+    // `--opt-report`, which would print a second, unrelated report to stderr.
+    // Both may be given; the env var is idempotent and the sink is drained once
+    // below, before either renderer reads it.
+    let emit_types_path = args.emit_types.clone();
+    if emit_types_path.is_some() {
+        std::env::set_var("PERRY_OPT_REPORT", "1");
+        std::env::set_var("PERRY_NO_CACHE", "1");
+    }
+
     // Native-stack GC root-pressure report. Like `--opt-report`, this is
     // observational and must be enabled before rayon starts module codegen.
     // Cache reuse is disabled because cached objects bypass the lowering that
@@ -4735,13 +4746,34 @@ pub fn run_with_parse_cache(
     // `--opt-report` (#6952). Drained once, after every module's codegen has
     // finished, and written to stderr so it never contaminates a `--format
     // json` stdout payload or a piped program output.
-    if let Some(fmt) = opt_report_format {
+    //
+    // `--emit-types` (#7685) reads the same stream, so the sink is drained ONCE
+    // here and both consumers read that snapshot. Draining per consumer would
+    // give the second one an empty vector and silently write an empty types
+    // file whenever both flags were passed.
+    if opt_report_format.is_some() || emit_types_path.is_some() {
         let entries = perry_codegen::opt_report::take_entries();
-        let rendered = match fmt {
-            OptReportFormat::Json => perry_codegen::opt_report::render_json(&entries),
-            OptReportFormat::Text => perry_codegen::opt_report::render_text(&entries),
-        };
-        eprintln!("{rendered}");
+        if let Some(fmt) = opt_report_format {
+            let rendered = match fmt {
+                OptReportFormat::Json => perry_codegen::opt_report::render_json(&entries),
+                OptReportFormat::Text => perry_codegen::opt_report::render_text(&entries),
+            };
+            eprintln!("{rendered}");
+        }
+        if let Some(path) = emit_types_path.as_ref() {
+            let json = path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("json"));
+            let rendered = if json {
+                perry_codegen::emit_types::render_json(&entries)
+            } else {
+                perry_codegen::emit_types::render_ts(&entries)
+            };
+            std::fs::write(path, rendered).map_err(|e| {
+                anyhow::anyhow!("--emit-types: could not write {}: {e}", path.display())
+            })?;
+            eprintln!("Wrote types: {}", path.display());
+        }
     }
 
     if let Some(fmt) = statepoint_report_format {

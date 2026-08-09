@@ -103,6 +103,7 @@ accept either the `$perryfs/<path>` virtual path or the embed-relative key.
 | `--no-codegen` | Skip the `package.json` `perry.codegen` build-time steps (also `PERRY_SKIP_CODEGEN=1`). See [Project Configuration](../getting-started/project-config.md) |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
 | `--opt-report[=json]` | Report which values Perry could **not** statically type, why, and whether you can fix it. Text by default; `--opt-report=json` emits a stable schema for tooling. Also settable via `PERRY_OPT_REPORT=1` |
+| `--emit-types <PATH>` | **EXPERIMENTAL** (#7685). Write the types Perry *proved* to `PATH` as TypeScript (`.json` for records). Locals only — parameter and return types are not recovered. |
 | `--statepoint-report[=json]` | Report native-stack GC root pressure: calls with live roots, audited non-collecting calls omitted, relocations, plain-map fallbacks, and live-root widths. Research-only; requires `PERRY_RS4GC=1`, the one native-root backend (the plain stack-map and explicit-bridge modes it also named are gone) |
 
 The `--trace`/`--focus` pair localizes "compiled to the wrong thing" bugs:
@@ -172,6 +173,63 @@ names through lowering but drops source positions, so there is no `file:line`
 yet. `--opt-report=json` carries the same data under `schema_version: 1`;
 diffing two builds' JSON is a cheap CI check against a representation
 silently regressing to zero.
+
+### `--emit-types` — write the proven types back out (EXPERIMENTAL)
+
+> **Experimental (#7685).** A prototype, not a product. It is not wired into
+> `perry check` and gates nothing. The output format may change or the flag may
+> be withdrawn.
+
+`--opt-report` above surfaces the *negative* half of representation selection.
+The positive half — the types Perry had to prove in order to pick an unboxed
+representation — was computed and discarded. `--emit-types <PATH>` writes it
+out instead:
+
+```bash
+$ perry compile app.ts --emit-types app.perry.d.ts     # TypeScript
+$ perry compile app.ts --emit-types types.json         # machine-readable
+```
+
+The format follows the extension: `.json` emits records, anything else emits
+TypeScript. Like `--opt-report` it is observational (emitted code is
+byte-identical with it on and off) and it disables cache reuse for its own run,
+because a cache hit skips codegen and there would be nothing to report.
+
+**What it recovers**, and the representation each type comes from:
+
+| Representation | TypeScript | Notes |
+|---|---|---|
+| canonical `I32` / `U32` slot | `number` | |
+| canonical `Str` slot | `string` | |
+| `IntValued` | `number` | |
+| `Ptr<NumArray>` | `number[]` | |
+| `Ptr<Shape>` of a source class | that class name | e.g. `Point` |
+| `Ptr<Shape>` of an object literal | a generated `interface` | the differentiating case |
+| anything else | *omitted* | |
+
+**What it does not recover, and will not.** Parameter and return types.
+Perry's specialized-ABI analysis reads `param.ty`, which is populated from the
+source annotation and by nothing else — no inference writes it. On annotated
+TypeScript it would hand your own annotations back; on unannotated JavaScript
+it proves nothing. Those entries are therefore dropped rather than emitted, so
+this flag cannot produce a `.d.ts` of function signatures. It reports *locals*.
+
+**It omits rather than guesses.** A missing annotation costs nothing; a wrong
+one poisons a downstream `tsc`. So: `any` is never emitted (it is a claim, not
+an absence); a binding two lowerings disagree about is dropped rather than
+resolved by precedence; a structural interface with even one untypeable field
+is refused whole, because a partial interface makes every use of the missing
+field an error. A binding absent from the output is **unproven, not untyped**.
+
+Coverage is exactly Perry's proof rate, which is low on code not written for
+it. Measure it rather than assuming it:
+
+```bash
+# accuracy: erase the annotations from .ts inputs, emit, diff against the original
+python3 scripts/emit_types_accuracy.py --perry ./perry --mode roundtrip --inputs test-files
+# coverage: real dependency JS has no annotations, so only coverage is measurable
+python3 scripts/emit_types_accuracy.py --perry ./perry --mode coverage --inputs node_modules
+```
 
 ## Output Optimization
 
