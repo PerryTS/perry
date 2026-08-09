@@ -865,6 +865,26 @@ thread_local! {
     /// Total arena in-use bytes measured right after the last FULL mark-sweep —
     /// the baseline for major-GC pacing (`arena_growth_full_escalation_due`).
     pub(super) static GC_LAST_FULL_ARENA_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Total arena in-use bytes measured when the last FULL mark-sweep STARTED.
+    /// Paired with `GC_LAST_FULL_ARENA_IN_USE_BYTES` to price what that full
+    /// actually reclaimed — see `GC_MAJOR_PACING_BACKOFF_SHIFT`.
+    pub(super) static GC_FULL_CYCLE_PRE_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Yield-adaptive backoff for major-GC pacing (#7726).
+    ///
+    /// `arena_growth_full_escalation_due` escalates a minor to a full once the
+    /// arena's live bytes pass K× the last full's live set. On a workload whose
+    /// live set genuinely GROWS — every record retained, nothing to reclaim —
+    /// that gate fires on the growth itself and buys nothing: measured on
+    /// `gc-handoff/bench/retain.ts`, the two escalated fulls cost 644 ms of a
+    /// 1.31 s run and moved arena in-use by 4 MB total, the second one by zero.
+    ///
+    /// So price each full by what it reclaimed and shift K left when the answer
+    /// is "almost nothing". A churn workload's fulls reclaim most of the heap,
+    /// keep the shift at 0, and pace exactly as before. The shift is capped and
+    /// resets on the first productive full, and it does not touch the
+    /// `OldReclaim` escalation — old-gen garbage still forces a full through
+    /// `old_reclaim_pressure_due` regardless of this backoff.
+    pub(super) static GC_MAJOR_PACING_BACKOFF_SHIFT: Cell<u32> = const { Cell::new(0) };
     /// Re-entrancy guard for the #5476 direct old-gen reclaim driven from
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
@@ -1475,8 +1495,83 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     // Record the TOTAL post-full live set for major-GC pacing (young+old): the
     // full sweep is the only collection that frees forwarding stubs, so this is
     // the "clean" size the arena returns to and the base for the K× growth gate.
-    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(crate::arena::arena_in_use_bytes()));
+    let post_in_use = crate::arena::arena_in_use_bytes();
+    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(post_in_use));
+    update_major_pacing_backoff(post_in_use);
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+}
+
+/// Percent of the pre-full live set a full must reclaim to count as productive.
+/// Below this the next arena-growth escalation is pushed out (see
+/// `GC_MAJOR_PACING_BACKOFF_SHIFT`).
+const MAJOR_PACING_PRODUCTIVE_YIELD_PCT: usize = 25;
+
+/// Cap on the backoff shift: the escalation multiplier tops out at
+/// `growth_num << 3`, i.e. 16× with the default `growth_num` of 2. Bounded so a
+/// long run of low-yield fulls cannot disable arena-growth pacing outright.
+const MAJOR_PACING_BACKOFF_SHIFT_MAX: u32 = 3;
+
+/// Record what the just-finished full reclaimed and adjust the pacing backoff.
+///
+/// `pre` is the arena in-use reading captured when the full cycle started
+/// (`note_full_cycle_started`); a full that shrinks it by less than
+/// `MAJOR_PACING_PRODUCTIVE_YIELD_PCT` shifts the next escalation threshold
+/// left by one, a productive full resets the shift to 0. Deliberately measured
+/// on the SAME metric the escalation gate reads (`arena_in_use_bytes`) so the
+/// two cannot disagree about whether a full helped.
+fn update_major_pacing_backoff(post_in_use: usize) {
+    let pre_in_use = GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.get());
+    if pre_in_use == 0 {
+        // No start reading (a full driven from a path that does not announce
+        // itself): leave the shift alone rather than guess a yield.
+        return;
+    }
+    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(0));
+    let reclaimed = pre_in_use.saturating_sub(post_in_use);
+    let productive = reclaimed.saturating_mul(100) / pre_in_use >= MAJOR_PACING_PRODUCTIVE_YIELD_PCT;
+    GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| {
+        if productive {
+            shift.set(0);
+        } else {
+            shift.set(shift.get().saturating_add(1).min(MAJOR_PACING_BACKOFF_SHIFT_MAX));
+        }
+    });
+}
+
+/// Announce the start of a FULL mark-sweep so `update_major_pacing_backoff`
+/// can price what it reclaimed.
+pub(super) fn note_full_cycle_started() {
+    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(crate::arena::arena_in_use_bytes()));
+}
+
+/// Current arena-growth escalation backoff shift.
+pub(super) fn major_pacing_backoff_shift() -> u32 {
+    GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get())
+}
+
+/// `(post-full baseline bytes, backoff shift, arena in-use bytes needed to
+/// escalate the next minor to a full)` — emitted in the GC trace so a gate can
+/// prove the backoff actually engaged rather than merely that nothing threw.
+/// A zero baseline means no full has run yet, and the threshold is reported as
+/// 0 because the `baseline == 0` clause escalates unconditionally.
+pub(super) fn major_pacing_snapshot() -> (usize, u32, usize) {
+    let (_floor, growth_num) = major_pacing_config();
+    let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
+    let shift = major_pacing_backoff_shift();
+    let threshold = baseline.saturating_mul(growth_num.saturating_mul(1usize << shift));
+    (baseline, shift, threshold)
+}
+
+#[cfg(test)]
+pub(super) fn test_reset_major_pacing_backoff() {
+    GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.set(0));
+    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn test_note_full_cycle_reclaimed(pre_in_use: usize, post_in_use: usize) {
+    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(pre_in_use));
+    update_major_pacing_backoff(post_in_use);
 }
 
 pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: usize) -> bool {
@@ -2404,11 +2499,13 @@ pub(super) fn test_start_budgeted_minor_fallback_state_with_trace(
 /// pay for a full, and by the K× ratio so a workload with a legitimately large
 /// *stable* live set (retain-style) does not over-escalate — its arena hovers
 /// near its own baseline, well under K×.
-pub(super) fn arena_growth_full_escalation_due() -> bool {
-    // Config is parsed ONCE — this runs on the minor-GC path, so no per-call
-    // env lookup / parse / String alloc. The env vars are for tuning and
-    // measurement (read at process start); defaults chosen so churn oscillates
-    // ~baseline..2×baseline and stays below node's peak.
+/// `(floor_bytes, growth_num)` for major-GC pacing.
+///
+/// Parsed ONCE — this runs on the minor-GC path, so no per-call env lookup /
+/// parse / String alloc. The env vars are for tuning and measurement (read at
+/// process start); defaults chosen so churn oscillates ~baseline..2×baseline
+/// and stays below node's peak.
+fn major_pacing_config() -> (usize, usize) {
     use std::sync::OnceLock;
     static CONFIG: OnceLock<(usize, usize)> = OnceLock::new();
     let &(floor_bytes, growth_num) = CONFIG.get_or_init(|| {
@@ -2426,6 +2523,11 @@ pub(super) fn arena_growth_full_escalation_due() -> bool {
             .unwrap_or(DEFAULT_GROWTH_NUM);
         (floor_bytes, growth_num)
     });
+    (floor_bytes, growth_num)
+}
+
+pub(super) fn arena_growth_full_escalation_due() -> bool {
+    let (floor_bytes, growth_num) = major_pacing_config();
     if floor_bytes == 0 {
         return false; // PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing
     }
@@ -2435,7 +2537,15 @@ pub(super) fn arena_growth_full_escalation_due() -> bool {
     }
     let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
     // No full yet (baseline 0): bound the initial growth once we clear the floor.
-    baseline == 0 || in_use > baseline.saturating_mul(growth_num)
+    if baseline == 0 {
+        return true;
+    }
+    // Yield-adaptive: a full that reclaimed almost nothing pushes the next
+    // escalation out (`GC_MAJOR_PACING_BACKOFF_SHIFT`). Shift the multiplier,
+    // not the baseline, so one productive full restores the original pacing.
+    let shift = GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get());
+    let growth = growth_num.saturating_mul(1usize << shift);
+    in_use > baseline.saturating_mul(growth)
 }
 
 fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option<BudgetedGcCycle> {
@@ -2464,6 +2574,7 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
                     progress_kind,
                 )
             } else {
+                note_full_cycle_started();
                 gc_start_budgeted_full_cycle(GcTriggerKind::ArenaBytes, rebaseline, progress_kind)
             }
         }
@@ -2479,6 +2590,7 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
                     progress_kind,
                 )
             } else {
+                note_full_cycle_started();
                 gc_start_budgeted_full_cycle(GcTriggerKind::MallocCount, rebaseline, progress_kind)
             }
         }

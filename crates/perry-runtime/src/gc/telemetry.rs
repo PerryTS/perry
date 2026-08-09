@@ -1116,6 +1116,13 @@ impl GcCycleTrace {
         let allocator_maintenance_json =
             allocator_maintenance_json(self.allocator_maintenance, self.progress_kind);
         let steps_value = steps_json(self.steps_before, steps_after);
+        let (pacing_baseline, pacing_shift, pacing_threshold) =
+            super::policy::major_pacing_snapshot();
+        let major_pacing_json = serde_json::json!({
+            "baseline_bytes": pacing_baseline,
+            "backoff_shift": pacing_shift,
+            "escalate_above_bytes": pacing_threshold,
+        });
         serde_json::json!({
             "event": "gc_cycle",
             "collection_kind": self.collection_kind.as_str(),
@@ -1148,6 +1155,7 @@ impl GcCycleTrace {
             "debt": debt_json,
             "allocator_maintenance": allocator_maintenance_json,
             "steps": steps_value,
+            "major_pacing": major_pacing_json,
         })
     }
 
