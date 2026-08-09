@@ -388,6 +388,11 @@ pub fn zero_seeded_slots(fn_ir: &str) -> std::collections::BTreeSet<String> {
             touched.insert(slot);
             continue;
         }
+        // Every other mention of the slot — a store of a real value, a load out
+        // of it, an operand — marks it touched. `, ptr %s` covers all of them,
+        // loads included (`%d = load i64, ptr %s`), so there is deliberately no
+        // second load-specific pass: an extra branch that re-inserts what this
+        // one already caught reads as coverage it does not add (#7675 review).
         for slot in line
             .split(", ptr ")
             .skip(1)
@@ -396,20 +401,6 @@ pub fn zero_seeded_slots(fn_ir: &str) -> std::collections::BTreeSet<String> {
             .filter(|slot| slot.starts_with('%'))
         {
             touched.insert(slot);
-        }
-        if let Some((_, def)) = line.split_once(" = ") {
-            for prefix in [
-                "load i64, ptr ",
-                "load double, ptr ",
-                "load ptr addrspace(1), ptr ",
-            ] {
-                if let Some(rest) = def.trim().strip_prefix(prefix) {
-                    let slot = rest.split(',').next().unwrap_or(rest).trim().to_string();
-                    if slot.starts_with('%') {
-                        touched.insert(slot);
-                    }
-                }
-            }
         }
     }
     seeded
@@ -445,9 +436,16 @@ pub fn temp_root_slots(fn_ir: &str) -> Vec<String> {
         .into_iter()
         .filter(|(slot, _)| seeded.contains(slot))
         .filter(|(slot, _)| {
+            // Match the alloca's TYPE, not the whole def text: one `align 8`
+            // suffix away, an exact comparison matches nothing, this filter
+            // empties the result and every `assert_no_temp_rooting` in the tree
+            // goes vacuous — the exact failure #7503 exists to remove. Raised by
+            // review on #7675.
             matches!(
-                defs.get(slot.as_str()),
-                Some(&"alloca i64") | Some(&"alloca ptr addrspace(1)")
+                defs.get(slot.as_str())
+                    .copied()
+                    .and_then(super::root_slots::alloca_type),
+                Some("i64") | Some("ptr addrspace(1)")
             )
         })
         .filter(|(_, events)| events.iter().any(|e| matches!(e, SlotEvent::Store { .. })))
@@ -598,6 +596,28 @@ entry.0:
             ))
             .is_err(),
             "a consuming call that reuses the pushed register must fail (#7114)"
+        );
+    }
+
+    /// An `align` suffix on the alloca must not empty the slot set.
+    ///
+    /// This is the shape the exact `Some(&"alloca i64")` compare could not see,
+    /// and its failure mode was the silent one: `temp_root_slots` returns
+    /// nothing, so every `assert_no_temp_rooting` in the tree passes for a
+    /// program that roots. Sabotage: restore the exact compare and this test
+    /// fails while none of the positives do.
+    #[test]
+    fn an_aligned_alloca_is_still_recognised_as_a_temp_slot() {
+        let aligned = SHADOW.replace("%s = alloca i64", "%s = alloca i64, align 8");
+        assert_ne!(aligned, SHADOW, "the substitution must actually apply");
+        assert_eq!(
+            temp_root_slots(&aligned),
+            vec!["%s".to_string()],
+            "an `align` suffix must not hide the slot — an emptied slot set \
+             makes every negative gate vacuous (#7675 review)"
+        );
+        assert!(
+            std::panic::catch_unwind(move || assert_no_temp_rooting(&aligned, "sabotage")).is_err()
         );
     }
 

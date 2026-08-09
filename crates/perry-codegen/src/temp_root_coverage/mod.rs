@@ -219,10 +219,13 @@ fn console_argument_accumulator_is_rooted_re_read_and_written_back() {
         let slot = slot_holding(&ir, &alloc).expect("assert_rooted_across just found it");
         let push = first_call_result(&ir, "js_array_push_f64")
             .unwrap_or_else(|| panic!("{lowering}: no push:\n{ir}"));
-        assert!(
-            slot_traffic(&ir)[&slot]
-                .iter()
-                .any(|e| matches!(e, SlotEvent::Store { value, .. } if *value == push)),
+        // Through `slot_holding`, not an exact register compare: the store-back
+        // is allowed the same one boxing step every other clause here tolerates,
+        // so an exact match would fail on a lowering that boxes the push result
+        // while the contract still holds (#7675 review).
+        assert_eq!(
+            slot_holding(&ir, &push).as_deref(),
+            Some(slot.as_str()),
             "{lowering}: the reallocated array {push} must be written BACK into \
              {slot}; rooting only the pre-push pointer protects the wrong \
              allocation (#6951):\n{ir}"
