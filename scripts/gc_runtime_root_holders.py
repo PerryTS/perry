@@ -78,6 +78,13 @@ Named, because an unstated limit is how a gate gets trusted past its subject.
 * **A holder reached by a scanner in a DIFFERENT file.** It reads as uncovered
   and needs an inventory entry saying so; `verdict: "covered_elsewhere"` is that
   entry, and it records which scanner.
+* **Module identity beyond the FIRST hop.** The registration text carries the
+  path (`crate::json::raw_json::scan_raw_json_key_root_mut`), so the registered
+  root set is resolved to a file — two modules defining `scan_tls_roots_mut`
+  (which perry-runtime and perry-stdlib really do) cannot certify each other's
+  holders. Deeper hops are matched on the bare name, because nothing in the text
+  says which module a call resolved to; that direction over-approximates
+  coverage, and an inventory entry is the correction.
 * **Whether a "covered" holder is covered CORRECTLY.** The scanner may visit
   three of a table's four slots — the shape #7239 found in
   `scan_parent_port_event_roots_mut`. Reading the body is the only way, and this
@@ -278,12 +285,24 @@ def scan(root: Path) -> tuple[list[dict], int]:
         except OSError:
             continue
 
-    # 1. registered scanner entry points
-    registered: set[str] = set()
+    # 1. registered scanner entry points, WITH the module path they were
+    #    registered under.
+    #
+    # Qualification matters at this hop specifically. `bodies` is keyed on the
+    # bare function name, so two modules defining `scan_roots_mut` share a key —
+    # and registering ONE of them would otherwise make the OTHER module's body
+    # reachable, marking a holder in that module covered when nothing scans it.
+    # This tree really does that: `perry-runtime` and `perry-stdlib` both define
+    # `scan_tls_roots_mut`, and `worker_threads` has several `scan_*_roots_mut`
+    # siblings. The registration text carries the path
+    # (`crate::json::raw_json::scan_raw_json_key_root_mut`), so the ROOT set can
+    # be resolved to a file even though later hops cannot.
+    registered_paths: list[tuple[str, list[str]]] = []
     for text in texts.values():
         for match in REGISTER_CALL.finditer(strip_comments(text)):
             for ident in re.findall(r"[A-Za-z_][\w:]*", match.group("args")):
-                registered.add(ident.rsplit("::", 1)[-1])
+                segments = ident.split("::")
+                registered_paths.append((segments[-1], segments[:-1]))
 
     # 2. call graph over every fn in both crates
     bodies: dict[str, list[tuple[Path, str]]] = {}
@@ -291,22 +310,58 @@ def scan(root: Path) -> tuple[list[dict], int]:
         for name, body in function_bodies(text).items():
             bodies.setdefault(name, []).append((path, body))
 
-    # Keep only names that are actually functions in these crates. The argument
-    # list also yields type names (`as MutableRootScanner`) and path segments,
-    # and a stray common identifier seeded into the frontier would make half the
-    # crate "reachable" — i.e. would make the gate certify holders nothing
-    # scans.
-    registered = {name for name in registered if name in bodies}
+    def path_matches(defining: Path, segments: list[str]) -> bool:
+        """Does `defining` plausibly hold the item named by `segments`?
+
+        `crate::json::raw_json::f` -> `.../json/raw_json.rs` or
+        `.../json/raw_json/mod.rs`. A bare `f` (no module path) matches
+        anything: nothing was asserted, so nothing is excluded.
+        """
+        mods = [s for s in segments if s not in ("crate", "self", "super")]
+        if not mods:
+            return True
+        parts = list(defining.with_suffix("").parts)
+        if parts and parts[-1] == "mod":
+            parts = parts[:-1]
+        return mods[-1] in parts
+
+    # Seed the frontier with (name, defining file) pairs the registration
+    # actually names. A name that resolves to exactly one definition needs no
+    # qualification; one that resolves to several must match the path.
+    seeds: set[str] = set()
+    seed_files: dict[str, set[Path]] = {}
+    for name, segments in registered_paths:
+        definitions = bodies.get(name)
+        if not definitions:
+            # Not a function in these crates — a type name (`as
+            # MutableRootScanner`) or a path segment. Seeding it would make half
+            # the crate reachable.
+            continue
+        if len(definitions) == 1:
+            matched = definitions
+        else:
+            matched = [(p, b) for (p, b) in definitions if path_matches(p, segments)]
+            if not matched:
+                matched = definitions  # unresolvable: fall back, over-approximate
+        seeds.add(name)
+        seed_files.setdefault(name, set()).update(p for p, _ in matched)
 
     reachable: set[str] = set()
-    frontier = set(registered)
-    for _ in range(MAX_SCANNER_DEPTH):
+    frontier = set(seeds)
+    # Files whose functions may be walked for a given reachable name. Root-level
+    # names are pinned to the registration's file(s); deeper hops are not
+    # (nothing in the text says which module a call resolved to), and the
+    # docstring says so.
+    for depth in range(MAX_SCANNER_DEPTH):
         nxt: set[str] = set()
         for name in frontier:
             if name in reachable:
                 continue
             reachable.add(name)
-            for _path, body in bodies.get(name, []):
+            allowed = seed_files.get(name) if depth == 0 else None
+            for path, body in bodies.get(name, []):
+                if allowed is not None and path not in allowed:
+                    continue
                 nxt.update(IDENT.findall(body))
         frontier = {n for n in nxt if n in bodies and n not in reachable}
         if not frontier:
@@ -315,7 +370,10 @@ def scan(root: Path) -> tuple[list[dict], int]:
     # per-file text of every reachable function defined in that file
     reachable_text_by_file: dict[Path, str] = {}
     for name in reachable:
+        allowed = seed_files.get(name)
         for path, body in bodies.get(name, []):
+            if allowed is not None and path not in allowed:
+                continue
             reachable_text_by_file[path] = reachable_text_by_file.get(path, "") + "\n" + body
 
     # 3. classify declarations
@@ -344,13 +402,74 @@ def scan(root: Path) -> tuple[list[dict], int]:
                 }
             )
     holders.sort(key=lambda h: (h["file"], h["line"]))
-    return holders, len(registered)
+    return holders, len(seeds)
+
+
+# The verdict vocabulary. An entry outside it is a typo or an invention, and
+# either way `apply_inventory` must not accept it as a classification.
+VERDICTS = {
+    "covered_elsewhere",  # a registered scanner in ANOTHER file visits it
+    "not_a_gc_pointer",  # id, counter, epoch, code address, .rodata, Rust-owned
+    "test_only",  # #[cfg(test)] storage
+    "open_gap",  # a real unrooted GC pointer, with an issue
+    "unverified",  # enumerated, verdict not established — a dated TODO
+}
+
+# `unverified` is the one verdict that classifies nothing. It exists so a hole
+# the gate CAN see is named rather than silent, and it is capped so the list
+# cannot quietly become the whole inventory — at which point the gate would be a
+# directory of unanswered questions rather than a decision record.
+MAX_UNVERIFIED = 2
 
 
 def load_inventory(path: Path) -> list[dict]:
     if not path.exists():
         return []
     return json.loads(path.read_text(encoding="utf-8"))["holders"]
+
+
+def inventory_problems(inventory: list[dict]) -> list[str]:
+    """Structural checks on the inventory itself.
+
+    Without these, `apply_inventory` accepts any object carrying a matching
+    (file, name): an entry with no reason, an invented verdict, or a
+    `covered_elsewhere` naming no scanner would each silence a holder. A
+    suppression whose justification cannot be read or checked is not a decision
+    record, it is a mute button.
+    """
+    problems: list[str] = []
+    unverified = 0
+    seen: set[tuple[str, str]] = set()
+    for entry in inventory:
+        label = f"{entry.get('file', '?')}:{entry.get('name', '?')}"
+        key = (entry.get("file", ""), entry.get("name", ""))
+        if key in seen:
+            problems.append(f"{label}: duplicate entry")
+        seen.add(key)
+        verdict = entry.get("verdict")
+        if verdict not in VERDICTS:
+            problems.append(f"{label}: verdict {verdict!r} is not one of {sorted(VERDICTS)}")
+        why = (entry.get("why") or "").strip()
+        if len(why) < 20:
+            problems.append(
+                f"{label}: `why` is missing or too short to be a reason ({why!r}) — an "
+                f"unreadable justification silences a holder just as effectively as no gate"
+            )
+        if verdict == "covered_elsewhere" and not (entry.get("scanner") or "").strip():
+            problems.append(
+                f"{label}: covered_elsewhere must name the `scanner` that covers it, or "
+                f"the claim cannot be checked or maintained"
+            )
+        if verdict == "open_gap" and not (entry.get("issue") or "").strip():
+            problems.append(f"{label}: open_gap must cite an `issue`")
+        if verdict == "unverified":
+            unverified += 1
+    if unverified > MAX_UNVERIFIED:
+        problems.append(
+            f"{unverified} `unverified` entries, cap is {MAX_UNVERIFIED}. `unverified` is "
+            f"a dated TODO, not an exemption — take some to a verdict before adding another."
+        )
+    return problems
 
 
 def apply_inventory(
@@ -416,8 +535,18 @@ def report(root: Path, quiet: bool = False) -> int:
 
     inventory = load_inventory(INVENTORY_PATH)
     unclassified, stale = apply_inventory(holders, inventory)
+    malformed = inventory_problems(inventory)
 
     status = 0
+    if malformed:
+        status = 1
+        print(
+            "\ngc_runtime_root_holders: the inventory itself is malformed. Each of\n"
+            "these entries silences a holder without recording a usable reason.\n",
+            file=sys.stderr,
+        )
+        for problem in malformed:
+            print(f"  {problem}", file=sys.stderr)
     if unclassified:
         status = 1
         print(
@@ -479,6 +608,7 @@ SELF_TEST_TREE = {
 pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::thing::scan_thing_roots_mut);
     gc_register_mutable_root_scanner(crate::other::scan_other_roots_mut);
+    gc_register_mutable_root_scanner(crate::dup_a::scan_dup_roots_mut);
 """ + "\n".join(
         f"    gc_register_mutable_root_scanner(crate::pad::scan_pad_{i}_mut);"
         for i in range(MIN_REGISTERED)
@@ -509,6 +639,18 @@ pub fn scan_other_roots_mut(v: &mut V) { for p in REGISTRY.borrow_mut().iter_mut
     "crates/perry-runtime/src/collide.rs": """
 static REGISTRY: RefCell<Vec<*mut StringHeader>> = RefCell::new(Vec::new());
 fn use_it() { let _ = js_string_from_bytes(std::ptr::null(), 0); }
+""",
+    # Two modules defining the SAME scanner name; only dup_a's is registered.
+    # dup_b's holder must stay uncovered — this is the shape a bare-name call
+    # graph gets wrong, and it exists for real (`scan_tls_roots_mut` is defined
+    # in both perry-runtime and perry-stdlib).
+    "crates/perry-runtime/src/dup_a.rs": """
+static DUP_A_TABLE: RefCell<Vec<*mut ObjectHeader>> = RefCell::new(Vec::new());
+pub fn scan_dup_roots_mut(v: &mut V) { for p in DUP_A_TABLE.borrow_mut().iter_mut() { v.visit(p); } }
+""",
+    "crates/perry-runtime/src/dup_b.rs": """
+static DUP_B_TABLE: RefCell<Vec<*mut ObjectHeader>> = RefCell::new(Vec::new());
+pub fn scan_dup_roots_mut(v: &mut V) { for p in DUP_B_TABLE.borrow_mut().iter_mut() { v.visit(p); } }
 """,
 }
 
@@ -595,6 +737,20 @@ def self_test() -> int:
         "SAME NAME as a covered holder in another file; a name-only match would "
         "certify the wrong one",
     )
+    expect(
+        "crates/perry-runtime/src/dup_a.rs",
+        "DUP_A_TABLE",
+        True,
+        "its scanner IS the registered one",
+    )
+    expect(
+        "crates/perry-runtime/src/dup_b.rs",
+        "DUP_B_TABLE",
+        False,
+        "its scanner shares a NAME with the registered one but is a different "
+        "function in a different module; registering dup_a's must not certify "
+        "dup_b's holder",
+    )
 
     # Classification is only half of it — the VERDICT machinery has to go red.
     # An empty inventory must leave every uncovered holder unclassified…
@@ -652,10 +808,25 @@ def self_test() -> int:
             "inventory has %d stale entr(y|ies): %s"
             % (len(stale), ", ".join(f"{e['file']}:{e['name']}" for e in stale))
         )
-    for entry in inventory:
-        for field in ("file", "name", "verdict", "why"):
-            if not entry.get(field):
-                failures.append(f"inventory entry {entry} is missing {field!r}")
+    failures.extend(inventory_problems(inventory))
+    # …and the structural checker must itself be able to fail.
+    long_why = "x" * 30
+    for bad, expect in (
+        ({"file": "f", "name": "N", "verdict": "invented", "why": long_why}, "verdict"),
+        ({"file": "f", "name": "N", "verdict": "not_a_gc_pointer", "why": "short"}, "why"),
+        ({"file": "f", "name": "N", "verdict": "covered_elsewhere", "why": long_why}, "scanner"),
+        ({"file": "f", "name": "N", "verdict": "open_gap", "why": long_why}, "issue"),
+    ):
+        if not any(expect in problem for problem in inventory_problems([bad])):
+            failures.append(
+                f"inventory_problems did not reject the malformed {expect!r} entry: {bad}"
+            )
+    over_cap = [
+        {"file": f"f{i}", "name": "N", "verdict": "unverified", "why": long_why}
+        for i in range(MAX_UNVERIFIED + 1)
+    ]
+    if not any("cap is" in problem for problem in inventory_problems(over_cap)):
+        failures.append("the `unverified` cap does not fire")
 
     if failures:
         print("gc_runtime_root_holders self-test FAILED:", file=sys.stderr)

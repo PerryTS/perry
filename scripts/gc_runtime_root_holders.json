@@ -32,7 +32,7 @@
       "file": "crates/perry-runtime/src/async_hooks.rs",
       "name": "ASYNC_RESOURCE_HANDLE_COUNT",
       "verdict": "not_a_gc_pointer",
-      "why": "Monotonic counter."
+      "why": "Monotonic counter of live async-resource handles. Holds no address at all; the resource objects live in RESOURCES, which scan_async_hooks_roots_mut visits."
     },
     {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
@@ -118,35 +118,35 @@
       "name": "ARRAY_ITERATOR_PROTOTYPE_PTR",
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "Same six-slot loop."
+      "why": "One of the six %IteratorPrototype%-style singletons visited by a single loop in object/mod.rs. Every iterator instance's [[Prototype]] points at one of them, so all six must stay live for the lifetime of any iterator."
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "MAP_ITERATOR_PROTOTYPE_PTR",
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "Same six-slot loop."
+      "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "SET_ITERATOR_PROTOTYPE_PTR",
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "Same six-slot loop."
+      "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "STRING_ITERATOR_PROTOTYPE_PTR",
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "Same six-slot loop."
+      "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR",
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
-      "why": "Same six-slot loop."
+      "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
     },
     {
       "file": "crates/perry-runtime/src/perf_hooks.rs",
@@ -215,7 +215,7 @@
       "file": "crates/perry-stdlib/src/streams/transform.rs",
       "name": "TRANSFORM_CALLS",
       "verdict": "not_a_gc_pointer",
-      "why": "Call counter."
+      "why": "Telemetry call counter for the transform path. Holds a count, never an address; no JS value ever reaches it."
     }
   ]
 }
