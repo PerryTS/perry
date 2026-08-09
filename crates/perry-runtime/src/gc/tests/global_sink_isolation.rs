@@ -52,7 +52,7 @@ fn foreign_guard_clear() {
 // The canary: a bare process-global sink, and proof the harness catches it.
 // ---------------------------------------------------------------------------
 
-/// Deliberately NOT `guard_cleared_global!`. This is the pre-#7672 shape of
+/// Deliberately NOT `per_test_global!`. This is the pre-#7672 shape of
 /// every table in this file, kept so the probe above is proven able to fail.
 static CANARY_SINK: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
 
@@ -127,7 +127,7 @@ fn closure_side_tables_survive_a_guard_clear_on_another_thread() {
         survived,
         "a closure dynamic property written on this thread was destroyed by the GC \
          test guards' state reset running on another thread (#7672 / #7671). The \
-         table's `guard_cleared_global!` declaration is what prevents this."
+         table's `per_test_global!` declaration is what prevents this."
     );
 }
 
@@ -281,6 +281,76 @@ fn ui_text_registry_survives_a_guard_clear_on_another_thread() {
         survived,
         "a UI text registry entry written on this thread was destroyed by the GC test \
          guards' state reset running on another thread (#7672)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The two instances that have no clear at all — found by soaking the fix for
+// the ones that do, and both diagnosed from the wrong VALUE.
+// ---------------------------------------------------------------------------
+
+/// `gc::barrier`'s `GENERATED_WRITE_BARRIERS_EMITTED` is owned by TWO guards
+/// under TWO DIFFERENT locks — `CopyingNurseryTestGuard` sets it under the
+/// copying-nursery isolation lock, `GeneratedWriteBarrierTestGuard` swaps it
+/// under `GENERATED_BARRIER_TEST_LOCK` — and every runtime write barrier reads
+/// it holding neither.
+///
+/// Observed at 1 run in 22:
+/// `sabotaged_parent_gate_strands_a_young_child_the_shipped_gate_keeps` failed
+/// with `missing_edges=1 ... slot_page_ever_dirty=false`. The barrier did not
+/// fire, because another thread's `GeneratedWriteBarrierTestGuard::inactive()`
+/// had zeroed the flag mid-test.
+#[test]
+fn the_generated_write_barrier_flag_is_not_zeroed_by_another_thread() {
+    super::super::barrier::js_gc_write_barriers_emitted(1);
+    assert!(
+        super::super::barrier::generated_write_barriers_emitted(),
+        "the probe did not arm the barrier flag, so its verdict would be vacuous"
+    );
+    // Exactly what `GeneratedWriteBarrierTestGuard::inactive()` does, on the
+    // thread the real guard would have run on.
+    std::thread::spawn(|| super::super::barrier::js_gc_write_barriers_emitted(0))
+        .join()
+        .expect("the clearing thread panicked");
+    let still_active = super::super::barrier::generated_write_barriers_emitted();
+    super::super::barrier::js_gc_write_barriers_emitted(0);
+    assert!(
+        still_active,
+        "another thread's write-barrier guard silenced this thread's runtime \
+         barrier (#7672). A store under a test that relies on the barrier then \
+         dirties no page, and the failure reads as a missing remembered-set \
+         edge rather than as a disabled barrier."
+    );
+}
+
+/// `tui::tree`'s `NEXT_HANDLE` / `REGISTRY` have no clear and no lock, and
+/// `register_increments_handle` asserts `h2 == h1 + 1` plus an exact registry
+/// length. Any concurrent `register()` breaks both. Observed at 1 run in 22.
+#[test]
+fn tui_tree_handles_are_not_perturbed_by_another_thread() {
+    fn text_node() -> crate::tui::tree::Node {
+        crate::tui::tree::Node::Text {
+            content: "probe7672".to_string(),
+            fg: crate::tui::color::Color::Default,
+            bg: crate::tui::color::Color::Default,
+            style: crate::tui::cell::Style::default(),
+        }
+    }
+    let h1 = crate::tui::tree::register(text_node());
+    std::thread::spawn(|| {
+        for _ in 0..64 {
+            crate::tui::tree::register(text_node());
+        }
+    })
+    .join()
+    .expect("the interfering thread panicked");
+    let h2 = crate::tui::tree::register(text_node());
+    assert_eq!(
+        h2,
+        h1 + 1,
+        "another thread's `register()` consumed handles out of this test's \
+         sequence (#7672): the tui handle table is process-global and nothing \
+         serializes it."
     );
 }
 

@@ -115,7 +115,7 @@ static SYMBOL_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None)
 // `is_registered_symbol` so the runtime's property/method dispatch can
 // detect symbol pointers safely without reading the (possibly nonexistent)
 // GcHeader byte.
-guard_cleared_global! {
+per_test_global! {
     static SYMBOL_POINTERS: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
 }
 
@@ -289,14 +289,14 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
 // Symbol-keyed property side tables. Object keys are metadata-only and get
 // rewritten when owners move; symbol keys and NaN-boxed values are GC roots.
 // Storage stays intentionally linear because per-object symbol keys are rare.
-guard_cleared_global! {
+per_test_global! {
     static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
 }
 
 // Descriptor attributes for symbol-keyed properties installed through
 // Object.defineProperty. Direct symbol assignment uses the normal data-property
 // defaults, so absence here means writable/enumerable/configurable are all true.
-guard_cleared_global! {
+per_test_global! {
     static SYMBOL_PROPERTY_ATTRS: Mutex<Option<HashMap<(usize, usize), crate::object::PropertyAttrs>>> =
         Mutex::new(None);
 }
@@ -564,7 +564,7 @@ pub(crate) fn store_class_static_symbol_root(class_id: u32, sym_key: usize, valu
     publish_symbol_side_table_root_edges(sym_key, value_bits);
 }
 
-guard_cleared_global! {
+per_test_global! {
     /// Class-id-keyed side table for static Symbol-keyed properties.
     /// drizzle's `static [entityKind] = "Table"` registers
     /// (class_id, sym_ptr) → value here at module init via

@@ -207,7 +207,7 @@ pub(crate) use this_binding::{
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 
-guard_cleared_global! {
+per_test_global! {
     static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
     static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
     static OS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);

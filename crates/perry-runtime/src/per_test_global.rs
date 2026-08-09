@@ -1,6 +1,21 @@
-//! `guard_cleared_global!` — a process-global side table that the GC test
-//! guards CLEAR wholesale, declared so that the clear cannot reach another
-//! test's data.
+//! `per_test_global!` — a process-global table whose test-time isolation no
+//! lock enforces, declared so that one test cannot reach another test's copy.
+//!
+//! The macro is named for what it *does* (a per-test instance in a test build)
+//! rather than for the sharpest instance of the hazard (the GC guards' clear),
+//! because two of its residents are not cleared by anything:
+//!
+//! * `tui::tree`'s `NEXT_HANDLE` / `REGISTRY` — no clear at all, just two
+//!   process-global counters and `assert_eq!(h2, h1 + 1)`. A concurrent
+//!   `register()` on any other test thread breaks it.
+//! * `gc::barrier`'s `GENERATED_WRITE_BARRIERS_EMITTED` — owned by TWO guards
+//!   under TWO DIFFERENT locks, and read by tests holding neither.
+//!
+//! Both of those failed inside a 22-run soak of the fix for the first case, and
+//! both were diagnosed from the wrong VALUE rather than the timing (a
+//! non-sequential handle; `slot_page_ever_dirty=false`, i.e. the barrier did not
+//! fire). Naming the macro after the clear would have made them look like
+//! misfits rather than the same defect.
 //!
 //! # The defect this exists to make structurally impossible (#7672)
 //!
@@ -65,7 +80,7 @@
 
 /// Per-thread instance of a process-global side table, for test builds.
 ///
-/// Constructed only by [`guard_cleared_global!`]. Derefs to `T`, so every call
+/// Constructed only by [`per_test_global!`]. Derefs to `T`, so every call
 /// site that used the `static` directly is unchanged.
 ///
 /// The instance is leaked (`Box::leak`) rather than dropped at thread exit:
@@ -128,22 +143,22 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Declare a process-global side table that the GC test guards clear.
+/// Declare a process-global table that must be per-test in a test build.
 ///
 /// Expands to the plain `static` outside a test build, and to a
 /// [`PerThread`] instance inside one. See the module docs for why.
 ///
 /// ```ignore
-/// guard_cleared_global! {
+/// per_test_global! {
 ///     /// Doc comments and attributes pass through.
 ///     static SYMBOL_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 /// }
 /// ```
 /// The trailing `;` is optional so a single-table declaration can be written
-/// `guard_cleared_global!(static X: T = init)` on one line — `timer.rs` sits
+/// `per_test_global!(static X: T = init)` on one line — `timer.rs` sits
 /// three lines under the 2000-line cap (`scripts/check_file_size.sh`) and the
 /// block form would push it over.
-macro_rules! guard_cleared_global {
+macro_rules! per_test_global {
     ($(
         $(#[$attr:meta])*
         $vis:vis static $name:ident : $ty:ty = $init:expr
@@ -154,7 +169,7 @@ macro_rules! guard_cleared_global {
 
         #[cfg(test)]
         $(#[$attr])*
-        $vis static $name: $crate::guard_cleared_global::PerThread<$ty> =
-            $crate::guard_cleared_global::PerThread::new(|| $init);
+        $vis static $name: $crate::per_test_global::PerThread<$ty> =
+            $crate::per_test_global::PerThread::new(|| $init);
     )+};
 }

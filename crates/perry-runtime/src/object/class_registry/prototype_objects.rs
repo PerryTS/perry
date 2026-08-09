@@ -116,7 +116,7 @@ pub(crate) fn ensure_function_prototype_object(
     proto
 }
 
-guard_cleared_global! {
+per_test_global! {
     /// Synthetic class id allocator for prototype-object classes. High bit
     /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
     /// (which start from 1 and grow by module). u32 wraparound is not a

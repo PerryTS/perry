@@ -25,7 +25,7 @@ shared lock for one call does not cover it, and a lock that does have to be take
 by the test, which is the opt-in the class is made of, on a reader population the
 issue counts at ~180 and growing.
 
-`guard_cleared_global!` expands to the plain `static` outside a test build (byte
+`per_test_global!` expands to the plain `static` outside a test build (byte
 for byte — `test_clear_*` is `#[cfg(test)]` and never runs in a shipped runtime)
 and to a per-thread instance inside one. libtest runs one thread per test, so
 "per thread" and "per test" coincide, and a guard on thread U empties U's

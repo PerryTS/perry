@@ -12,7 +12,7 @@ pub(super) struct SymbolAccessorDescriptor {
     pub(super) set: u64,
 }
 
-guard_cleared_global! {
+per_test_global! {
     static SYMBOL_ACCESSOR_PROPERTIES: Mutex<
         Option<HashMap<(usize, usize), SymbolAccessorDescriptor>>,
     > = Mutex::new(None);

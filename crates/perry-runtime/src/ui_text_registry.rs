@@ -231,7 +231,7 @@ pub extern "C" fn perry_arkts_set_text(id_handle: f64, val_handle: f64) {
 // Issue #535 — `perry/ui` `state<T>` runtime registry.
 // =============================================================================
 
-guard_cleared_global! {
+per_test_global! {
     static STATE_VALUES: Mutex<Option<std::collections::HashMap<String, f64>>> = Mutex::new(None);
 }
 
@@ -446,7 +446,7 @@ struct ForEachBinding {
     render_closure: f64,
 }
 
-guard_cleared_global! {
+per_test_global! {
     static FOREACH_REGISTRY: Mutex<Option<std::collections::HashMap<String, Vec<ForEachBinding>>>> =
         Mutex::new(None);
 }

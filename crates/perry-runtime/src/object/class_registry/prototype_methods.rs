@@ -25,7 +25,7 @@ pub unsafe extern "C" fn js_class_register_static_field(
     class_dynamic_prop_root_store(class_id, name, value);
 }
 
-guard_cleared_global! {
+per_test_global! {
     /// Issue #838: JS-classic prototype method assignment.
     ///
     /// `Class.prototype.method = function() {…}` (and the aliased form

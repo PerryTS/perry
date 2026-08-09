@@ -19,7 +19,7 @@ rather than the timing:
   #7665  ext_registry USED_PROVIDERS  "empty" failed with `ioredis` present
   #7671  closure CLOSURE_PROPS        a static method read back TAG_UNDEFINED
 
-The fix is per-thread storage in test builds (`guard_cleared_global!`), because
+The fix is per-thread storage in test builds (`per_test_global!`), because
 the damage window is "between this test's write and this test's read" and only
 the test knows that span — a lock the accessor takes for one call does not cover
 it, and a lock the test takes is the opt-in the class is made of.
@@ -30,7 +30,7 @@ It derives the clear list from the guards' own source, resolves the storage
 behind every helper, and classifies each `static` it writes to:
 
   * `thread_local!`                 -> safe by construction
-  * `guard_cleared_global!`         -> per-thread in test builds, safe
+  * `per_test_global!`         -> per-thread in test builds, safe
   * a bare `static`                 -> HAZARD
 
 A hazard fails the build unless it is named in ALLOWLIST below with the issue
@@ -55,6 +55,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_SRC = REPO_ROOT / "crates" / "perry-runtime" / "src"
 SUPPORT = RUNTIME_SRC / "gc" / "tests" / "support.rs"
 RESET_FN = "reset_copying_nursery_runtime_test_state"
+# 93 classify today; the floor only has to be high enough that a broken
+# matcher cannot pass as a clean tree.
+CLASSIFIED_FLOOR = 60
 
 # name -> issue that blocks converting it. An entry matching nothing FAILS.
 ALLOWLIST = {
@@ -76,6 +79,10 @@ ALLOWLIST = {
     # lock domain is the root cause in all three fixed flakes; this one is not
     # split.
     "REGISTRY": "#7672",
+    # A monotone unique-id source for test fixtures (`young_leaf_{id:x}` names,
+    # synthetic symbol ids). Nothing reads its VALUE back and nothing asserts on
+    # it; making it per-thread would only weaken the uniqueness it exists for.
+    "YOUNG_LEAF_COUNTER": "#7672",
 }
 
 
@@ -93,14 +100,18 @@ def rel(path) -> str:
         return str(path)
 
 
-def brace_body(text: str, open_idx: int) -> str:
-    """Body of the block whose opening brace is at/after `open_idx`."""
-    start = text.index("{", open_idx)
+PAIRS = {"{": "}", "(": ")", "[": "]"}
+
+
+def brace_body(text: str, open_idx: int, opener: str = "{") -> str:
+    """Body of the block whose `opener` is at/after `open_idx`."""
+    closer = PAIRS[opener]
+    start = text.index(opener, open_idx)
     depth = 0
     for i in range(start, len(text)):
-        if text[i] == "{":
+        if text[i] == opener:
             depth += 1
-        elif text[i] == "}":
+        elif text[i] == closer:
             depth -= 1
             if depth == 0:
                 return text[start + 1 : i]
@@ -144,17 +155,20 @@ def find_fn_body(sources: dict, name: str):
 
 
 def declaration_kind(sources: dict, ident: str, prefer=None):
-    """'thread_local' | 'guard_cleared' | 'static' | None, plus where.
+    """'thread_local' | 'per_test' | 'static' | None, plus where.
 
     `prefer` is the file that mentioned `ident`; Rust resolves a bare name in
     its own module first, and several of these names (`REGISTRY`) exist in more
     than one file. Searching the whole crate first named the wrong file and, for
-    `guard_cleared_global!`-converted tables, the wrong VERDICT.
+    `per_test_global!`-converted tables, the wrong VERDICT.
     """
     static_re = re.compile(
-        r"^([ \t]*)(?:pub(?:\([^)]*\))?\s+)?static\s+" + re.escape(ident) + r"\s*:", re.M
+        r"^([ \t]*)(?:pub(?:\([^)]*\))?\s+)?static\s+" + re.escape(ident) + r"\s*:\s*([^=]*)=", re.M
     )
     tls_re = re.compile(r"\b(?:pub(?:\([^)]*\))?\s+)?static\s+" + re.escape(ident) + r"\s*:")
+    inline_static_re = re.compile(
+        r"\b(?:pub(?:\([^)]*\))?\s+)?static\s+" + re.escape(ident) + r"\s*:\s*[^=]*="
+    )
     ordered = list(sources.items())
     if prefer is not None and prefer in sources:
         ordered.sort(key=lambda kv: 0 if kv[0] == prefer else 1)
@@ -164,29 +178,54 @@ def declaration_kind(sources: dict, ident: str, prefer=None):
             body = brace_body(text, tls.end() - 1)
             if tls_re.search(body):
                 return "thread_local", path
-        # guard_cleared_global! { ... static IDENT: ... }
-        for g in re.finditer(r"guard_cleared_global!\s*\{", text):
-            body = brace_body(text, g.end() - 1)
-            if static_re.search(body):
-                return "guard_cleared", path
-        if static_re.search(text):
+        # per_test_global! { ... } AND per_test_global!( ... ) — `timer.rs` uses
+        # the paren form to stay under the 2000-line cap, and a `{`-only regex
+        # silently dropped its three tables to "(no static storage)". A gate that
+        # stops matching is a gate that stops failing.
+        for g in re.finditer(r"per_test_global!\s*([\{\(\[])", text):
+            body = brace_body(text, g.end() - 1, g.group(1))
+            if static_re.search(body) or inline_static_re.search(body):
+                return "per_test", path
+        found = static_re.search(text)
+        if found:
+            declared = found.group(2).strip()
+            # A LOCK IS NOT DATA. `static X: Mutex<()>` carries no state; making
+            # it per-thread would turn it into a no-op, which is the opposite of
+            # the fix. Same for the global allocator.
+            if re.fullmatch(r"(std::sync::)?(Mutex|RwLock)\s*<\s*\(\s*\)\s*>", declared):
+                return "lock", path
+            if "#[global_allocator]" in text[max(0, found.start() - 80) : found.start()]:
+                return "allocator", path
             return "static", path
     return None, None
 
 
-def audit(sources: dict, support_text: str, allowlist: dict, out=sys.stdout):
+def audit(sources: dict, support_text: str, allowlist: dict, out=sys.stdout, floor=None):
     body = reset_body(support_text)
     helpers = clear_helpers(body)
     violations = []
     hazards = {}
     seen_idents = set()
 
+    # The guards' own module is audited as if it were a helper. #7672's FIFTH
+    # instance was `GENERATED_WRITE_BARRIERS_EMITTED`, which no `test_clear_*`
+    # touches: two guards in this very file own it under two DIFFERENT locks
+    # (`copying_nursery_isolation_lock` and `GENERATED_BARRIER_TEST_LOCK`) and
+    # every runtime write barrier reads it holding neither. Deriving the audit
+    # set from the clear list alone could not see it, and it cost one red run in
+    # a 22-run soak before anyone looked.
+    subjects = [(helper, None) for helper in helpers]
+    subjects.append(("gc/tests/support.rs (the guards themselves)", (SUPPORT, support_text)))
+
     out.write(
-        "guard-cleared sinks (#7672): %d clear helper(s) reached from %s\n"
-        % (len(helpers), RESET_FN)
+        "per-test global sinks (#7672): %d clear helper(s) reached from %s, "
+        "plus the guards' own module\n" % (len(helpers), RESET_FN)
     )
-    for helper in helpers:
-        path, helper_body = find_fn_body(sources, helper)
+    for helper, preloaded in subjects:
+        if preloaded is not None:
+            path, helper_body = preloaded
+        else:
+            path, helper_body = find_fn_body(sources, helper)
         if helper_body is None:
             violations.append(
                 "%s is called by %s but has no definition under crates/perry-runtime/src — "
@@ -222,9 +261,9 @@ def audit(sources: dict, support_text: str, allowlist: dict, out=sys.stdout):
 
     for ident, (helper, decl) in sorted(hazards.items()):
         violations.append(
-            "%s is a BARE process-global `static` (%s) cleared by %s. A guard running on "
-            "one libtest thread empties it under every other thread's test. Declare it "
-            "with `guard_cleared_global!` (crates/perry-runtime/src/guard_cleared_global.rs) "
+            "%s is a BARE process-global `static` (%s), written by %s. One libtest "
+            "thread's test then reaches another's copy of it. Declare it "
+            "with `per_test_global!` (crates/perry-runtime/src/per_test_global.rs) "
             "or, if it truly must stay process-wide, add it to ALLOWLIST in %s with the "
             "issue that says why."
             % (
@@ -247,6 +286,17 @@ def audit(sources: dict, support_text: str, allowlist: dict, out=sys.stdout):
         "  -> %d hazard(s), %d allowlisted, %d static(s) classified\n"
         % (len(hazards), len(allowlist), len(seen_idents))
     )
+    # FLOOR. Every check in this file is a regex over Rust source, and the
+    # `per_test_global!(...)` paren form already slipped past a `{`-only pattern
+    # once, silently taking the three timer tables to "(no static storage)". A
+    # gate whose matcher rots reports zero hazards and exits 0, which is
+    # indistinguishable from a clean tree. Refuse to be that.
+    if floor is not None and len(seen_idents) < floor:
+        violations.append(
+            "only %d static(s) were classified, below the floor of %d. The source "
+            "matchers have stopped matching — this run proves nothing, and a zero "
+            "hazard count from it means nothing." % (len(seen_idents), floor)
+        )
     return violations
 
 
@@ -259,13 +309,16 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::demo::test_clear_partitioned();
     crate::demo::test_clear_bare();
     crate::demo::test_clear_tls();
+    crate::demo::test_clear_paren();
 }
 """
 
 _FAKE_SRC = """
-guard_cleared_global! {
+per_test_global! {
     static PARTITIONED_TABLE: Mutex<u64> = Mutex::new(0);
 }
+per_test_global!(static PAREN_TABLE: Mutex<u64> = Mutex::new(0));
+static PURE_LOCK: Mutex<()> = Mutex::new(());
 static BARE_TABLE: Mutex<u64> = Mutex::new(0);
 thread_local! {
     static TLS_TABLE: RefCell<u64> = RefCell::new(0);
@@ -273,6 +326,7 @@ thread_local! {
 pub(crate) fn test_clear_partitioned() { *PARTITIONED_TABLE.lock().unwrap() = 0; }
 pub(crate) fn test_clear_bare() { *BARE_TABLE.lock().unwrap() = 0; }
 pub(crate) fn test_clear_tls() { TLS_TABLE.with(|t| *t.borrow_mut() = 0); }
+pub(crate) fn test_clear_paren() { *PAREN_TABLE.lock().unwrap() = 0; let _g = PURE_LOCK.lock(); }
 """
 
 
@@ -301,6 +355,30 @@ def self_test() -> int:
     if not any("GONE_TABLE" in v for v in stale):
         failures.append("a stale allowlist entry was accepted: %r" % (stale,))
 
+    # 3b. THE PAREN FORM. `per_test_global!(...)` on one line is how `timer.rs`
+    #     stays under the 2000-line cap, and a `{`-only matcher classified its
+    #     three tables as "(no static storage)" — a silent loss of coverage that
+    #     reads exactly like a clean tree.
+    if any("PAREN_TABLE" in v for v in audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink)):
+        failures.append("a per_test_global!(...) paren-form declaration was reported as a hazard")
+    kind, _ = declaration_kind(fake, "PAREN_TABLE")
+    if kind != "per_test":
+        failures.append("paren-form PAREN_TABLE classified as %r" % (kind,))
+
+    # 3c. A LOCK IS NOT DATA: `static X: Mutex<()>` must never be a hazard, or
+    #     the gate would demand that the serializers themselves be per-thread,
+    #     which would turn every one of them into a no-op.
+    kind, _ = declaration_kind(fake, "PURE_LOCK")
+    if kind != "lock":
+        failures.append("PURE_LOCK classified as %r, not 'lock'" % (kind,))
+    if any("PURE_LOCK" in v for v in audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink)):
+        failures.append("a Mutex<()> serializer was reported as a hazard")
+
+    # 3d. THE FLOOR: a matcher that stops matching must not read as clean.
+    floored = audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink, floor=99)
+    if not any("below the floor" in v for v in floored):
+        failures.append("the classified-statics floor did not fire: %r" % (floored,))
+
     # 4. A renamed/absent reset function must be an error, not an empty pass.
     for text, why in [
         ("fn something_else() { }", "missing reset fn"),
@@ -322,7 +400,7 @@ def self_test() -> int:
             failures.append("the real clear list is missing a helper it certainly calls: %r" % (helpers,))
         sources = rust_sources()
         kind, _ = declaration_kind(sources, "CLOSURE_PROPS")
-        if kind != "guard_cleared":
+        if kind != "per_test":
             failures.append("CLOSURE_PROPS classified as %r on the real tree" % (kind,))
         kind, _ = declaration_kind(sources, "ARGUMENTS_OBJECTS")
         if kind != "thread_local":
@@ -332,7 +410,7 @@ def self_test() -> int:
 
     for failure in failures:
         print("SELF-TEST FAIL: %s" % failure, file=sys.stderr)
-    print("self-test: 9 checks, %d failures" % len(failures))
+    print("self-test: 15 checks, %d failures" % len(failures))
     return 1 if failures else 0
 
 
@@ -345,7 +423,7 @@ def main() -> int:
         return self_test()
 
     try:
-        violations = audit(rust_sources(), SUPPORT.read_text(), ALLOWLIST)
+        violations = audit(rust_sources(), SUPPORT.read_text(), ALLOWLIST, floor=CLASSIFIED_FLOOR)
     except Violation as exc:
         print("ERROR: %s" % exc, file=sys.stderr)
         return 1

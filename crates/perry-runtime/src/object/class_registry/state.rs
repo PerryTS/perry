@@ -179,7 +179,7 @@ pub static CLASS_VTABLE_REGISTRY: RwLock<Option<HashMap<u32, ClassVTable>>> = Rw
 pub static CLASS_STATIC_METHODS: RwLock<Option<HashMap<u32, HashMap<String, (usize, u32, bool)>>>> =
     RwLock::new(None);
 
-guard_cleared_global! {
+per_test_global! {
     pub static CLASS_STATIC_ACCESSORS: RwLock<Option<HashMap<u32, HashMap<String, (usize, usize)>>>> =
         RwLock::new(None);
 }
@@ -201,7 +201,7 @@ pub static CLASS_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>
 pub static CLASS_STATIC_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>> =
     RwLock::new(None);
 
-guard_cleared_global! {
+per_test_global! {
     pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
         RwLock::new(None);
 
@@ -214,7 +214,7 @@ guard_cleared_global! {
 /// classes without any methods. Refs #618 / #420 followup.
 pub static REGISTERED_CLASS_IDS: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
 
-guard_cleared_global! {
+per_test_global! {
     /// Issue #711 part 2: `function Base() {}; Base.prototype = obj` pattern.
     /// Effect's `internal/effectable.ts` declares classes via prototype
     /// assignment on a plain function, not via `class` syntax. To make
@@ -238,7 +238,7 @@ guard_cleared_global! {
 // pointer is always converted back to `*mut ObjectHeader` at call sites
 // (`class_prototype_object` / the dispatch walk) where single-threaded
 // usage is guaranteed.
-guard_cleared_global! {
+per_test_global! {
     pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 }
 
@@ -293,7 +293,7 @@ pub(crate) fn class_prototype_method_is_enumerable(class_id: u32, name: &str) ->
     true
 }
 
-guard_cleared_global! {
+per_test_global! {
     /// #36 / #321: maps a child class_id to the raw address of a parent CLOSURE
     /// (function value) when `class Child extends <function value> {}`. effect's
     /// `class Svc extends Context.Tag("Svc")<...>() {}` extends the function

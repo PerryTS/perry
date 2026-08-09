@@ -123,7 +123,7 @@ extern "C" fn console_log_callable_thunk(
 }
 
 use std::sync::atomic::{AtomicI64, Ordering};
-guard_cleared_global! {
+per_test_global! {
     /// Singleton closure pointer for `console.log` exposed as a value.
     /// Allocated lazily by `js_console_log_as_closure`. Kept alive across GC
     /// cycles by the `scan_console_log_singleton_roots` scanner registered in

@@ -657,7 +657,21 @@ thread_local! {
         const { Cell::new(BarrierTraceCounters::zero()) };
 }
 
-pub(super) static GENERATED_WRITE_BARRIERS_EMITTED: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    /// #7672, fifth instance. Two test guards own this flag under two DIFFERENT
+    /// locks — `CopyingNurseryTestGuard` sets it to 1 under the copying-nursery
+    /// isolation lock, `GeneratedWriteBarrierTestGuard` swaps it under
+    /// `GENERATED_BARRIER_TEST_LOCK` — and `generated_write_barriers_active()`
+    /// is read by tests holding neither. A `GeneratedWriteBarrierTestGuard::
+    /// inactive()` on one libtest thread therefore silences the runtime barrier
+    /// under another thread's test, whose store then dirties no page.
+    ///
+    /// Observed, not theoretical: `sabotaged_parent_gate_strands_a_young_child_
+    /// the_shipped_gate_keeps` failed 1 run in 22 with
+    /// `missing_edges=1 ... slot_page_ever_dirty=false` — the barrier did not
+    /// fire, which is a wrong VALUE and not a timing symptom.
+    pub(super) static GENERATED_WRITE_BARRIERS_EMITTED: AtomicUsize = AtomicUsize::new(0);
+}
 
 /// Number of threads whose incremental mark barrier is currently active.
 ///

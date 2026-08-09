@@ -5,7 +5,7 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
-guard_cleared_global! {
+per_test_global! {
     static CLOSURE_PROPS: OnceLock<Mutex<HashMap<usize, HashMap<String, f64>>>> = OnceLock::new();
 }
 
@@ -13,7 +13,7 @@ fn get_closure_props() -> &'static Mutex<HashMap<usize, HashMap<String, f64>>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-guard_cleared_global! {
+per_test_global! {
     /// #3655: keys deleted off a closure via `delete fn.name` etc.
     ///
     /// Functions carry built-in own data properties (`name`, `length`, and —
@@ -66,7 +66,7 @@ pub fn closure_has_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
         .unwrap_or(false)
 }
 
-guard_cleared_global! {
+per_test_global! {
     /// #36 / #321: `Object.setPrototypeOf(closure, protoObj)` side-table.
     ///
     /// Maps a closure pointer to the NaN-box bits of the object that was set as

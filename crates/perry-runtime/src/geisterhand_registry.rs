@@ -86,7 +86,7 @@ pub const STYLE_PADDING_UNIFORM: u32 = 7;
 pub const STYLE_HIDDEN: u32 = 8;
 pub const STYLE_ENABLED: u32 = 9;
 
-guard_cleared_global! {
+per_test_global! {
     static REGISTRY: Mutex<Vec<RegisteredWidget>> = Mutex::new(Vec::new());
     static PENDING_ACTIONS: Mutex<Vec<PendingAction>> = Mutex::new(Vec::new());
 }

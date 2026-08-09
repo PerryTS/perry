@@ -339,7 +339,7 @@ jobs:
       # that (#7665 x2, #7671), each exposed by an unrelated PR that changed the
       # parallel schedule, so the author of the exposing PR paid the diagnosis.
       #
-      # The class is fixed by storage, not by a lock: `guard_cleared_global!`
+      # The class is fixed by storage, not by a lock: `per_test_global!`
       # gives each thread its own table in a test build. This gate derives the
       # clear list from the guards' own source and fails on any bare `static`
       # left behind, so a NEW sink cannot be added quietly and a new READER
@@ -348,7 +348,7 @@ jobs:
       #
       # Pure text, ~1s, no compiler — in `lint` because `lint` is a required
       # context (hazard 2), and `!cancelled()` for the reason given above.
-      - name: Guard-cleared global sinks
+      - name: Per-test global sinks
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/global_sink_isolation.py --self-test
