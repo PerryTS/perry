@@ -212,7 +212,7 @@ pub unsafe extern "C" fn js_symbol_key_for(sym_f64: f64) -> f64 {
     let Some(s) = symbol_description_text(sym_ptr) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
+    let header = js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK))
 }
 
@@ -238,7 +238,7 @@ pub unsafe extern "C" fn js_symbol_description(sym_f64: f64) -> f64 {
     let Some(s) = symbol_description_text(sym_ptr) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
+    let header = js_string_from_bytes(s.as_ptr(), s.len() as u32);
     f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK))
 }
 
@@ -257,8 +257,11 @@ pub unsafe extern "C" fn js_symbol_to_string(sym_f64: f64) -> i64 {
         let s = b"Symbol()";
         return js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64;
     }
+    // Lossy only for the rendered `Symbol(...)` form, matching what
+    // `str_from_header(..).unwrap_or_default()` produced before (#7246): a
+    // WTF-8 description could never be formatted into a Rust `String` losslessly.
     let desc_str = symbol_description_text(sym_ptr)
-        .map(|s| s.as_ref().to_string())
+        .map(|s| String::from_utf8_lossy(s.as_ref()).into_owned())
         .unwrap_or_default();
     let rendered = format!("Symbol({})", desc_str);
     js_string_from_bytes(rendered.as_ptr(), rendered.len() as u32) as i64

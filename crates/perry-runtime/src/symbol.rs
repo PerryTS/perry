@@ -172,7 +172,19 @@ thread_local! {
     /// across `perry/thread` agents, so their descriptions must be
     /// process-global. Fresh symbols are per-thread GC objects, so theirs are
     /// thread-local. Ids are globally monotonic, so the two never collide.
-    static FRESH_SYMBOL_DESCRIPTIONS: RefCell<HashMap<u64, std::sync::Arc<str>>> =
+    /// Stored as raw BYTES, not `str`. `str_from_header` UTF-8-validates and
+    /// returns `None` on failure, and a description built from a JS string with
+    /// a lone surrogate is WTF-8, not UTF-8. Interning through `String` would
+    /// therefore have turned a lone-surrogate `sym.description` into
+    /// `undefined` — a behaviour change smuggled in on a GC fix. Raw bytes
+    /// round-trip through `js_string_from_bytes` unchanged.
+    ///
+    /// Residual, stated rather than hidden: the rebuilt `StringHeader` does not
+    /// carry `STRING_FLAG_HAS_LONE_SURROGATES`, because the original flag is
+    /// not recoverable from the payload. That is the pre-existing WTF-8 gap
+    /// CLAUDE.md already lists, not a new one, and it is strictly better than
+    /// dropping the description.
+    static FRESH_SYMBOL_DESCRIPTIONS: RefCell<HashMap<u64, std::sync::Arc<[u8]>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -188,12 +200,12 @@ pub(crate) fn test_clear_fresh_symbol_descriptions() {
 /// that forgot the fallback is exactly how a description goes silently missing.
 pub(crate) unsafe fn symbol_description_text(
     sym_ptr: *const SymbolHeader,
-) -> Option<std::sync::Arc<str>> {
+) -> Option<std::sync::Arc<[u8]>> {
     if sym_ptr.is_null() || (sym_ptr as usize) < 0x1000 {
         return None;
     }
     if let Some(text) = registered_symbol_description(sym_ptr as usize) {
-        return Some(text);
+        return Some(std::sync::Arc::from(text.as_bytes()));
     }
     let id = (*sym_ptr).id;
     if let Some(text) = FRESH_SYMBOL_DESCRIPTIONS.with(|m| m.borrow().get(&id).cloned()) {
@@ -203,10 +215,22 @@ pub(crate) unsafe fn symbol_description_text(
     // (nothing populates this today — `alloc_symbol` nulls it — but the field
     // is still readable and a stale reader would otherwise silently return
     // `None` instead of a description).
-    str_from_header((*sym_ptr).description).map(std::sync::Arc::from)
+    description_bytes_from_header((*sym_ptr).description).map(std::sync::Arc::from)
 }
 
-fn record_fresh_symbol_description(id: u64, description: &str) {
+/// The raw payload bytes of a description `StringHeader`, WITHOUT UTF-8
+/// validation. `str_from_header` validates and would drop a WTF-8 description
+/// on the floor (#7246).
+unsafe fn description_bytes_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    Some(std::slice::from_raw_parts(data, len).to_vec())
+}
+
+fn record_fresh_symbol_description(id: u64, description: &[u8]) {
     FRESH_SYMBOL_DESCRIPTIONS
         .with(|m| m.borrow_mut().insert(id, std::sync::Arc::from(description)));
 }
@@ -507,7 +531,7 @@ pub(crate) unsafe fn alloc_symbol(
     // (#7341's `RuntimeHandleScope` + `across_mut` here is therefore gone too:
     // it made the STORED pointer correct across `gc_malloc`, and there is no
     // longer a stored pointer. Nothing is live across the allocation.)
-    let description_text = str_from_header(description);
+    let description_text = description_bytes_from_header(description);
     let raw = crate::gc::gc_malloc(
         std::mem::size_of::<SymbolHeader>(),
         crate::gc::GC_TYPE_STRING,
