@@ -34,7 +34,7 @@ was reaching for. Call sites are unchanged: `PerThread<T>` derefs to `T`, so
 `SYMBOL_REGISTRY.lock()` and `CLASS_PROTOTYPE_OBJECTS.read()` keep working as
 written, and this is a declaration-site change rather than a 300-site rewrite.
 
-**23 tables converted**, across every family the guards clear: closure dynamic
+**26 tables converted**, across every family the guards clear: closure dynamic
 props (3), symbol side tables (5), the class-registry `RwLock`s (7), the timer
 queues (3), the object-constant caches and `GLOBAL_THIS_PTR` (9), `geisterhand`
 (2), `ui_text_registry` (2), and the `console.log` singleton.
@@ -78,3 +78,45 @@ guards' clear path: `async_hooks`' `HOOKS`/`RESOURCES`/`NEXT_ASYNC_ID` under fou
 disjoint domains (and `gc/tests/alloc.rs:836` under none), `tui::state::SLOTS`
 cleared under three different locks, and `agent_dispatch_tests.rs`'s private
 `TIMER_QUEUE_TESTS` lock over the timer queues the guards also clear.
+
+### Two more found by soaking the fix, and the macro renamed for what it does
+
+A 22-run soak produced **two** reds, both the same class, neither reached by any
+`test_clear_*` helper — so the clear list could not have found them, and neither
+could a gate derived only from it:
+
+* **`gc::barrier::GENERATED_WRITE_BARRIERS_EMITTED`** is owned by TWO guards
+  under TWO DIFFERENT locks — `CopyingNurseryTestGuard` under the
+  copying-nursery isolation lock, `GeneratedWriteBarrierTestGuard` under
+  `GENERATED_BARRIER_TEST_LOCK` — and every runtime write barrier reads it
+  holding neither. `sabotaged_parent_gate_strands_a_young_child_the_shipped_gate_keeps`
+  failed with `missing_edges=1 ... slot_page_ever_dirty=false`: the barrier did
+  not fire, because another thread's guard had zeroed the flag mid-test.
+* **`tui::tree`'s `NEXT_HANDLE` / `REGISTRY`** have no clear and no lock, and
+  `register_increments_handle` asserts `h2 == h1 + 1` plus an exact registry
+  length. Any concurrent `register()` breaks both.
+
+Both were diagnosed from the wrong VALUE, not the timing — a non-sequential
+handle, and a barrier that did not dirty a page.
+
+The macro is therefore named `per_test_global!`, for what it does, rather than
+`guard_cleared_global!`, for the sharpest instance of what it defends against;
+two of its residents are not cleared by anything. The gate now audits the
+guards' own module alongside the clear list, which is what makes the
+write-barrier flag reachable by it at all.
+
+### Two ways this gate could have gone quiet, both closed
+
+Found while extending it, and both now self-tested:
+
+* The `per_test_global!(...)` **paren form** — used in `timer.rs` to stay under
+  the 2000-line cap — was invisible to a `{`-only matcher, which silently took
+  the three timer tables to "(no static storage)". A gate that stops matching
+  reports zero hazards and exits 0, which is indistinguishable from a clean tree.
+* A **classified-statics floor** now fires when the matchers stop matching, so a
+  rotted regex fails loudly rather than passing vacuously. 93 classify today.
+
+A `Mutex<()>` serializer is classified as a lock and is never a hazard: making
+one per-thread would turn it into a no-op, which is the opposite of the fix.
+Reverting the delimiter fix fails the paren-form self-test case; reverting the
+floor fails its own.
