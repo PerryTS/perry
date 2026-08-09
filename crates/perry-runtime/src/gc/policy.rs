@@ -105,12 +105,46 @@ pub(super) fn next_arena_trigger_base() -> usize {
 /// (near-zero infant mortality), a saturated survivor space, and 1427
 /// collections for a run that allocates ~1.4 GB.
 pub(super) fn young_scavenge_cap_due() -> bool {
-    #[cfg(test)]
-    if GC_NURSERY_CAP_TEST_SUPPRESSED.with(Cell::get) {
+    if !nursery_cap_active() {
         return false;
     }
     crate::arena::copying_from_space_in_use_bytes()
         >= super::tenuring::scavenge_nursery_cap_effective_bytes()
+}
+
+/// Is the scavenge nursery cap in force?
+///
+/// **Only when the collection it schedules can EVACUATE**, which for nursery
+/// pressure means only when `gc_moving_loop_polls_enabled()` routes it to a
+/// precise-root safepoint. #7056's own 2x2 says the cap and the evacuating
+/// minor "ship together, because either alone is a bad trade"; this is that
+/// sentence made load-bearing rather than advisory, and #7682 is the bill for
+/// its being advisory.
+///
+/// The cap's basis is `copying_from_space_in_use_bytes()`, and **a non-moving
+/// minor does not reduce it** — it sweeps in place into per-block free lists
+/// and from-space stays occupied. So a capped trigger that fires a non-moving
+/// minor is due again the instant the next block is taken: one whole-arena
+/// collection per 1 MB allocated, O(n^2) in the live set. That is not the
+/// "+23% wall for -33% RSS" the cap-only cell of the 2x2 measured (every
+/// collection there still evacuated) — measured on the quiet host after #7682
+/// forced the alloc-point minor non-moving, `test_gap_gc_index_get_receiver_rooting`
+/// went 0.66 s -> 6.6 s, and with the cap lifted it runs in 0.13 s. It is the
+/// same livelock shape as #7592, whose fix was likewise to key a band on
+/// something a collection actually moves.
+///
+/// So this restores the pre-#7056 gating, deliberately and with a different
+/// argument than #7056 removed it under. #7056 decoupled the cap because both
+/// gates were off in shipped builds and the cap was therefore dead — a fair
+/// reading of a world in which the alloc-point minor evacuated. It no longer
+/// does. When `PERRY_GC_MOVING_LOOP_POLLS` goes default-ON again the cap comes
+/// back with it, automatically and in the configuration it was measured in.
+fn nursery_cap_active() -> bool {
+    #[cfg(test)]
+    if GC_NURSERY_CAP_TEST_SUPPRESSED.with(Cell::get) {
+        return false;
+    }
+    gc_moving_loop_polls_enabled()
 }
 
 pub(super) fn effective_next_arena_trigger() -> usize {
@@ -123,12 +157,11 @@ pub(super) fn effective_next_arena_trigger() -> usize {
     // the cap instead of ballooning to 128–260 MB between the ~8 collections
     // the adaptive trigger otherwise allows.
     //
-    // APPLIED UNCONDITIONALLY (#7056). This used to be gated behind
-    // `PERRY_GC_SCAVENGE` / `PERRY_GC_MOVING_LOOP_POLLS`, both of which default
-    // OFF — so the cap was never active in a shipped build, and shipped Perry
-    // paid the full adaptive-trigger footprint. #7056 measured that the cap is
-    // the entire RSS win and recommended decoupling it from those gates; this
-    // is that decoupling.
+    // APPLIED WHEN THE COLLECTION IT SCHEDULES CAN EVACUATE — see
+    // [`nursery_cap_active`], which is where that condition and its evidence
+    // live. #7056 applied it unconditionally on the reading that the
+    // alloc-point minor evacuated; since #7682 it does not, and a capped
+    // trigger firing a non-moving minor is a livelock rather than a trade.
     //
     // Re-derived on the statepoint-default collector, 8 gc_ratchet probes,
     // as a full 2x2 rather than a single comparison — because the one-armed
@@ -157,8 +190,7 @@ pub(super) fn effective_next_arena_trigger() -> usize {
     //
     // `PERRY_GC_SCAVENGE_NURSERY_MB` still tunes the value; it is a
     // measurement dial, not an on/off mode, so it needs no kill-policy arm.
-    #[cfg(test)]
-    if GC_NURSERY_CAP_TEST_SUPPRESSED.with(Cell::get) {
+    if !nursery_cap_active() {
         return base;
     }
     // The cap the clamp applies is the *effective* one: the configured base
