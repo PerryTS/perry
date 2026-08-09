@@ -115,12 +115,11 @@ impl<T: Send + Sync + 'static> std::ops::Deref for PerThread<T> {
     }
 }
 
-// SAFETY: every thread only ever observes the instance it created, and the
-// instances are leaked, so no `T` is shared or dropped across threads by this
-// type. `T: Send + Sync` is required anyway because the non-test expansion is a
-// plain `static`.
-#[cfg(test)]
-unsafe impl<T: Send + Sync + 'static> Sync for PerThread<T> {}
+// No `unsafe impl Sync` is needed and none is written: `PerThread<T>` holds only
+// a `fn() -> T`, so the auto impl already applies. Every thread observes only
+// the instance it created and the instances are leaked, so no `T` crosses a
+// thread boundary or is dropped through this type. `T: Send + Sync` is required
+// regardless, because the non-test expansion is a plain `static`.
 
 #[cfg(test)]
 thread_local! {
