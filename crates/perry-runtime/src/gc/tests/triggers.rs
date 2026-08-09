@@ -504,14 +504,19 @@ fn test_effective_arena_trigger_respects_armed_values() {
         GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,
     };
     // `effective_next_arena_trigger` additionally clamps to the small nursery cap
-    // whenever moving mode is active (the default-on evacuating scavenge) or the
-    // PERRY_GC_SCAVENGE de-risking flag is set; otherwise it clamps only the
-    // UN-armed cell to the device ceiling and lets an armed trigger exceed it.
-    // Assert the value correct for the mode this process runs in, so the NEW
-    // nursery-cap behavior is exercised under the default and the legacy ceiling
-    // behavior under the PERRY_GC_MOVING_LOOP_POLLS=0 kill switch. This mirrors
-    // the gate in `effective_next_arena_trigger` exactly.
-    let nursery_capped = super::super::gc_scavenge_enabled() || gc_moving_loop_polls_enabled();
+    // whenever the collection that clamp schedules can EVACUATE; otherwise it
+    // clamps only the UN-armed cell to the device ceiling and lets an armed
+    // trigger exceed it. Assert the value correct for the mode this process runs
+    // in, so the nursery-cap behavior is exercised under moving pacing and the
+    // ceiling behavior under the PERRY_GC_MOVING_LOOP_POLLS=0 kill switch. This
+    // mirrors the gate in `policy::nursery_cap_active` exactly.
+    //
+    // `gc_scavenge_enabled()` used to be ORed in here, mirroring the gate as it
+    // stood. It is not part of that gate since #7682: scavenge routes nursery
+    // pressure to the direct alloc-point minor, and that minor is now always
+    // non-moving, so a cap keyed on it schedules a collection that cannot lower
+    // the cap's own basis.
+    let nursery_capped = gc_moving_loop_polls_enabled();
     let ceiling = gc_trigger_absolute_ceiling_bytes();
     let nursery_cap = gc_scavenge_nursery_cap_bytes();
 
