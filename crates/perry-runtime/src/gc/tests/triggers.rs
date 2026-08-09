@@ -667,3 +667,82 @@ fn polls_default_matches_codegen_mirror() {
         );
     }
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Yield-adaptive major-GC pacing (#7726).
+//
+// `arena_growth_full_escalation_due` escalates a minor to a FULL once arena
+// live-bytes pass K× the last full's live set. On a monotonically growing
+// all-live heap that gate fires on the growth itself and reclaims ~nothing:
+// measured on `gc-handoff/bench/retain.ts`, the two escalated fulls cost 644 ms
+// of a 1.31 s run and moved arena in-use by 4 MB total — the second by zero.
+// So price each full by what it reclaimed and push the next escalation out when
+// the answer is "almost nothing".
+//
+// These assert the DECISION FUNCTION over recorded (pre, post) pairs, which is
+// the part a benchmark cannot pin: a green retain time proves the backoff fired
+// on that one shape, not that a productive full still resets it.
+// ───────────────────────────────────────────────────────────────────────────
+#[test]
+fn major_pacing_backoff_defaults_to_zero_and_needs_a_recorded_cycle_start() {
+    use super::super::policy::{
+        major_pacing_backoff_shift, test_note_full_cycle_reclaimed, test_reset_major_pacing_backoff,
+    };
+    test_reset_major_pacing_backoff();
+    assert_eq!(
+        major_pacing_backoff_shift(),
+        0,
+        "default pacing must be exactly today's: escalate at K× the baseline"
+    );
+    // A full with no recorded start (`note_full_cycle_started` never ran — an
+    // explicit `gc()`, not an arena-growth escalation) must not move the shift:
+    // its yield says nothing about the gate this backoff paces.
+    test_note_full_cycle_reclaimed(0, 0);
+    assert_eq!(major_pacing_backoff_shift(), 0);
+    test_reset_major_pacing_backoff();
+}
+
+#[test]
+fn major_pacing_backs_off_on_futile_fulls_and_resets_on_a_productive_one() {
+    use super::super::policy::{
+        major_pacing_backoff_shift, test_note_full_cycle_reclaimed, test_reset_major_pacing_backoff,
+    };
+    const MB: usize = 1024 * 1024;
+    test_reset_major_pacing_backoff();
+
+    // retain.ts's own two fulls: 67 MB → 63 MB (5.9%) and 204 MB → 204 MB (0%).
+    test_note_full_cycle_reclaimed(67 * MB, 63 * MB);
+    assert_eq!(
+        major_pacing_backoff_shift(),
+        1,
+        "a 5.9%-yield full backs off"
+    );
+    test_note_full_cycle_reclaimed(204 * MB, 204 * MB);
+    assert_eq!(
+        major_pacing_backoff_shift(),
+        2,
+        "a 0%-yield full backs off again"
+    );
+
+    // Capped: a long run of futile fulls must not disable pacing outright.
+    test_note_full_cycle_reclaimed(400 * MB, 400 * MB);
+    test_note_full_cycle_reclaimed(800 * MB, 800 * MB);
+    assert_eq!(major_pacing_backoff_shift(), 2, "the shift is capped");
+
+    // A churn-shaped full reclaims most of the heap and restores the original
+    // pacing immediately — the backoff is not a ratchet.
+    test_note_full_cycle_reclaimed(800 * MB, 200 * MB);
+    assert_eq!(
+        major_pacing_backoff_shift(),
+        0,
+        "a productive full resets the backoff in one step"
+    );
+
+    // Exactly at the threshold counts as productive (>=, not >).
+    test_note_full_cycle_reclaimed(100 * MB, 80 * MB);
+    assert_eq!(major_pacing_backoff_shift(), 0);
+    // One percent under it does not.
+    test_note_full_cycle_reclaimed(100 * MB, 81 * MB);
+    assert_eq!(major_pacing_backoff_shift(), 1);
+    test_reset_major_pacing_backoff();
+}

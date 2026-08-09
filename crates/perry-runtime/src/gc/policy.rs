@@ -1504,12 +1504,16 @@ pub(super) fn finish_full_old_reclaim_baseline() {
 /// Percent of the pre-full live set a full must reclaim to count as productive.
 /// Below this the next arena-growth escalation is pushed out (see
 /// `GC_MAJOR_PACING_BACKOFF_SHIFT`).
-const MAJOR_PACING_PRODUCTIVE_YIELD_PCT: usize = 25;
+/// Deliberately low. A full that reclaims 20% of the heap is still doing real
+/// work, and pushing its successor out would carry that garbage twice as long;
+/// the shape this exists for reclaims single-digit percent (5.9% and 0.0% on
+/// `retain.ts`). Raising it trades RSS for pause time.
+const MAJOR_PACING_PRODUCTIVE_YIELD_PCT: usize = 20;
 
 /// Cap on the backoff shift: the escalation multiplier tops out at
-/// `growth_num << 3`, i.e. 16× with the default `growth_num` of 2. Bounded so a
+/// `growth_num << 2`, i.e. 8× with the default `growth_num` of 2. Bounded so a
 /// long run of low-yield fulls cannot disable arena-growth pacing outright.
-const MAJOR_PACING_BACKOFF_SHIFT_MAX: u32 = 3;
+const MAJOR_PACING_BACKOFF_SHIFT_MAX: u32 = 2;
 
 /// Record what the just-finished full reclaimed and adjust the pacing backoff.
 ///
@@ -1528,12 +1532,18 @@ fn update_major_pacing_backoff(post_in_use: usize) {
     }
     GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(0));
     let reclaimed = pre_in_use.saturating_sub(post_in_use);
-    let productive = reclaimed.saturating_mul(100) / pre_in_use >= MAJOR_PACING_PRODUCTIVE_YIELD_PCT;
+    let productive =
+        reclaimed.saturating_mul(100) / pre_in_use >= MAJOR_PACING_PRODUCTIVE_YIELD_PCT;
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| {
         if productive {
             shift.set(0);
         } else {
-            shift.set(shift.get().saturating_add(1).min(MAJOR_PACING_BACKOFF_SHIFT_MAX));
+            shift.set(
+                shift
+                    .get()
+                    .saturating_add(1)
+                    .min(MAJOR_PACING_BACKOFF_SHIFT_MAX),
+            );
         }
     });
 }
