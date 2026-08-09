@@ -361,7 +361,10 @@ python3 scripts/gc_root_dominance_check.py .perry-trace/llvm \
 
 From #7196:
 
-- `PERRY_GC_ZEAL=1` — collect at every safepoint. Slow, thorough.
+- `PERRY_GC_ZEAL=1` — collect at safepoints, allocation-paced (#7728): one forced
+  collection per `PERRY_GC_ZEAL_ALLOC_KB` (default 4) of new nursery material.
+  Slow, thorough. Add `PERRY_GC_ZEAL_ALLOC_KB=0` for the literal every-poll mode
+  when the window you are hunting executes only once — it is far slower.
 - `PERRY_GC_PROTECT_FROMSPACE=1` — `mprotect` from-space after evacuation so a
   stale read faults immediately instead of reading plausible garbage.
 - `PERRY_GC_FROMSPACE_SCAN_ABORT` — now actually runs.
