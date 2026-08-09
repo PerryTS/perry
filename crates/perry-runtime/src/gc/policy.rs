@@ -1558,6 +1558,7 @@ fn note_full_cycle_started() {
 }
 
 /// Current arena-growth escalation backoff shift.
+#[cfg(any(feature = "diagnostics", test))]
 pub(super) fn major_pacing_backoff_shift() -> u32 {
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get())
 }
@@ -1567,6 +1568,7 @@ pub(super) fn major_pacing_backoff_shift() -> u32 {
 /// prove the backoff actually engaged rather than merely that nothing threw.
 /// A zero baseline means no full has run yet, and the threshold is reported as
 /// 0 because the `baseline == 0` clause escalates unconditionally.
+#[cfg(feature = "diagnostics")]
 pub(super) fn major_pacing_snapshot() -> (usize, u32, usize) {
     let (_floor, growth_num) = major_pacing_config();
     let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
