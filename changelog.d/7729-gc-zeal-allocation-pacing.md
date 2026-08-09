@@ -2,7 +2,7 @@
 
 - **`PERRY_GC_ZEAL=1` terminates again — it is now allocation-paced instead of collecting at every back-edge poll (#7728).**
 
-  Zeal is the primary instrument for moving-GC correctness bugs, and half of the pairing that produced the precise fault behind #7682. It had stopped completing on real workloads: `gc-handoff/apps/iso_miss.ts`, a tree-walking interpreter that runs in 19 s, timed out at 240 s with no output under zeal.
+  Zeal is the primary instrument for moving-GC correctness bugs, and half of the pairing that produced the precise fault behind #7682. It had stopped completing on real workloads: `gc-handoff/apps/iso_miss.ts`, a tree-walking interpreter, timed out at 240 s with no output under zeal (it runs in 4.5 s on the quiet bench host without it).
 
   **It was never a livelock, and the last-known-good build was never good.** Scaling the round count on the pinned quiet host gave 70,968 forced collections in 36.3 s for one round and 141,931 in 72.7 s for two — perfectly linear, so the full workload was ~24 minutes rather than a hang. Zeal forced a collection at *every* back-edge poll: ~511 µs of fixed per-collection cost (root scan over the shadow stack plus ~55 side-table scanners) to relocate a mean of **5.9 objects**. Nearly all of the work was the collection's fixed overhead, not the relocation zeal exists to stress.
 
