@@ -3368,6 +3368,26 @@ def _is_statepoint(ins):
     return ins.is_statepoint
 
 
+# `rhs.starts_with("phi ")` is `root_reload.rs`'s own test (it needs the same
+# fact: "nothing may be inserted above a phi"). Same split as `operand_regs`.
+def _is_phi(ins):
+    if ins.callee is not None:
+        return False
+    body = ins.text.split(" = ", 1)[-1] if " = " in ins.text else ins.text
+    return body.strip().startswith("phi ")
+
+
+_PHI_EDGE_RE = re.compile(r"\[\s*([^,\[\]]+?)\s*,\s*%([-\w.$]+)\s*\]")
+
+
+def phi_incoming(ins):
+    """`[(operand_text, predecessor_block), ...]` for a `phi`'s incoming
+    edges, in LLVM's printed order. `operand_text` is `%reg` for a register
+    operand or the constant's own spelling (`0.000000e+00`, `null`, ...) —
+    never itself tainted, which is why callers filter on the leading `%`."""
+    return _PHI_EDGE_RE.findall(ins.text)
+
+
 def transparent_use_graph(f):
     """`reg -> [Insn]` for transparent, result-producing users of `reg`.
 
@@ -3388,12 +3408,39 @@ def transparent_use_graph(f):
     return graph
 
 
-def _cast_closure(graph, seed, tracked, stop_at_tracked):
+def _cast_closure(graph, seed, tracked, stop_at_tracked, phi_all_edges=False):
     """Forward closure of `seed` over bit-level/identity producers.
 
     With `stop_at_tracked`, a register LLVM tracks terminates the walk: it is
     relocated and its uses rewritten, so nothing derived from it below a
     safepoint is stale.
+
+    `phi_all_edges` changes how a `phi` is admitted. Off (the default, used
+    for `reach`'s rooted/stale classification), a phi is transparent like any
+    other bit op: any tainted operand taints the result. On (used for
+    `chain`, the closure a use is searched in), a phi is admitted only once
+    EVERY incoming edge is independently in the closure. A phi with one
+    untainted edge does not carry the tainted value into the join on every
+    path, so blanket admission over-approximates in the loose direction and
+    reports a hazard on an edge the value never crosses — #7664's four
+    `unmasked` false positives, all the same `&&`/`||` short-circuit join
+    with one safe edge (verified by hand: the join's OTHER edge is a
+    safepoint-free straight line from the source to that edge's own
+    predecessor, so nothing is actually at risk on the path that carries it).
+    The worklist retries a partially-satisfied phi from each operand's own
+    arrival — `graph[r]` lists the phi under every one of its operand
+    registers — so admission order does not matter.
+
+    This deliberately does not resolve a loop-carried self-referential phi
+    (an incoming edge that is the phi's own result, directly or through
+    another transparent op): that is a mutual dependency no forward fixpoint
+    from empty can break on its own, and it is why `phi_all_edges` is opt-in
+    rather than the new default. Measured against it: the native corpus's
+    `--statepoints` hit set changes by exactly the four named false
+    positives, nothing else — see `changelog.d/`. A single untainted edge
+    with its OWN intervening safepoint is still caught, just not through this
+    closure — see `_phi_edge_hazard`, which checks each edge's window
+    independently of what the others carry.
     """
     chain = set(seed)
     q = deque(seed)
@@ -3404,6 +3451,12 @@ def _cast_closure(graph, seed, tracked, stop_at_tracked):
                 continue
             if stop_at_tracked and ins.result in tracked:
                 continue
+            if phi_all_edges and _is_phi(ins):
+                edges = phi_incoming(ins)
+                if not edges or not all(
+                        v.strip().startswith("%") and v.strip()[1:] in chain
+                        for v, _p in edges):
+                    continue
             chain.add(ins.result)
             q.append(ins.result)
     return chain
@@ -3474,6 +3527,7 @@ def check_func_statepoints(module, f, want_moving_only=False,
     tracked = tracked_registers(f)
     use_graph = transparent_use_graph(f)
     idom = dominators(f)
+    phis = [ins for blk in f.blocks for ins in f.insns[blk] if _is_phi(ins)]
     out = []
 
     for b in f.blocks:
@@ -3496,22 +3550,26 @@ def check_func_statepoints(module, f, want_moving_only=False,
             # `ptr addrspace(1)`, because from there LLVM relocates it and
             # rewrites its uses. Anything derived from the tracked value BELOW
             # a safepoint is derived from the relocated one and is correct.
+            # `phi_all_edges=True` so a phi only joins it when every incoming
+            # edge is independently tainted — see `_cast_closure`.
             #
             # `reach` crosses that line in both directions and exists only to
             # answer "is the OBJECT in this safepoint's live bundle" — a bundle
             # can only ever name the `ptr addrspace(1)` register, so without
             # crossing, every hit would classify `unrooted` and the split would
-            # be decoration.
+            # be decoration. Left at the old blanket phi admission: a phi
+            # merging a rooted value with an unrooted one is still worth
+            # knowing is reachable from the tracked domain on SOME path.
             chain = _cast_closure(use_graph, {src.result}, tracked,
-                                  stop_at_tracked=True)
+                                  stop_at_tracked=True, phi_all_edges=True)
             reach = _cast_closure(use_graph, _back_closure(def_of, src.result),
                                   tracked, stop_at_tracked=False)
             as1_chain = reach & tracked
 
+            hit = None
             for bb in f.blocks:
                 if not dominates(idom, src.block, bb):
                     continue
-                hit = None
                 for use in f.insns[bb]:
                     if use.result in chain or is_transparent(use):
                         continue
@@ -3532,8 +3590,22 @@ def check_func_statepoints(module, f, want_moving_only=False,
                     hit = v
                     break
                 if hit is not None:
-                    out.append(hit)
                     break
+
+            # `chain`'s phi gate (above) requires EVERY edge to be tainted
+            # before treating a downstream use as reachable from `src` at
+            # all. The single-edge case that excludes on purpose — one
+            # tainted operand, with its own intervening safepoint before ITS
+            # predecessor's terminator — is still a real hazard, just not one
+            # the use-scan above can see once the phi itself is out of
+            # `chain`. Check it directly.
+            if hit is None:
+                hit = _phi_edge_hazard(f, idom, module, f.name, src, kind,
+                                       chain, as1_chain, phis, poll_reaching,
+                                       want_moving_only)
+
+            if hit is not None:
+                out.append(hit)
     return out
 
 
@@ -3556,6 +3628,53 @@ def _protected_by_temp_root(f, A, B, chain):
         return True
     return any(scan(m_blk, 0, len(f.insns[m_blk]))
                for m_blk in between_blocks(f, A.block, B.block))
+
+
+def _phi_edge_hazard(f, idom, module, fname, src, kind, chain, as1_chain,
+                     phis, poll_reaching, want_moving_only):
+    """The single-edge phi hazard `chain`'s `phi_all_edges` gate excludes on
+    purpose (#7664).
+
+    A phi operand is used exactly once, on its own incoming edge — the
+    restated rule is that the window it is live across ends at that edge's
+    predecessor's TERMINATOR, not at the join and not at some downstream real
+    use of the merged result (a later use is reached on every OTHER edge
+    too, most of which never carried the tainted value at all). So each edge
+    is checked on its own, against its own window, independent of what the
+    phi's other incoming edges carry.
+
+    `Insn("", pred_block, len(f.insns[pred_block]))` is a zero-cost sentinel
+    one past the predecessor's last instruction (its terminator, never
+    itself a statepoint) — it lets `window_hits_generic` and
+    `_protected_by_temp_root` do the actual window walk unmodified, the same
+    two functions the use-scan above calls, just aimed at the edge's end
+    instead of a downstream use.
+    """
+    for phi in phis:
+        for val, pred_block in phi_incoming(phi):
+            val = val.strip()
+            if not val.startswith("%") or val[1:] not in chain:
+                continue
+            if not dominates(idom, src.block, pred_block):
+                # Not reachable from `src` on the path this edge represents —
+                # cannot happen for a genuine chain member (SSA use-dominance
+                # puts `val`'s definition, and therefore `src`'s block, above
+                # `pred_block`), but this reads printed IR, not a proof, so
+                # stay defensive rather than assume it.
+                continue
+            end = Insn("", pred_block, len(f.insns[pred_block]))
+            sps = window_hits_generic(f, src, end, pred=_is_statepoint)
+            if not sps:
+                continue
+            if _protected_by_temp_root(f, src, end, chain):
+                continue
+            rooted = any(as1_chain & set(sp.live) for sp in sps)
+            v = StatepointHazard(module, fname, src, kind, phi, sps, rooted,
+                                 poll_reaching)
+            if want_moving_only and not v.moving:
+                continue
+            return v
+    return None
 
 
 def statepoint_corpus_stats(parsed):
@@ -4002,6 +4121,72 @@ __SAFEPOINT__
 }
 """.replace("__SAFEPOINT__", _sp())
 
+# ★★ The phi-edge false-positive, and its sabotage twin (#7664).
+#
+# `readCtx`'s actual shape, minimised: an unmasked receiver feeds a
+# `js_is_truthy` short-circuit test (which the native mode does NOT special-
+# case — see `js_is_truthy` NOT being consulted anywhere in this mode — it
+# is simply a plain `call`, never wrapped in a `gc.statepoint`, so it is not
+# a collection point by construction, same as production output), then joins
+# a value from the OTHER branch at a two-predecessor phi.
+#
+# SAFE: the safepoint sits on the untainted branch (`then.1`), never on the
+# edge that carries `%r2` into the join. Before this fix, blanket phi
+# admission taxed the phi's result into `chain` because ONE edge (`%r2`) was
+# tainted, and then found `ret double %m` as a "use of chain" reachable via
+# `between_blocks(entry.0, join.2)` — which includes `then.1`, the SAFEPOINT
+# lives there, on a path the `%r2` edge never actually takes. Zero hazards is
+# the whole point of this fixture.
+_SELFTEST_SP_PHI_SAFE_EDGE = """\
+define double @perry_fn_selftest__sp_phi_safe_edge(double %a, double %b) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+  %r2 = bitcast i64 %raw to double
+  %c = call i32 @js_is_truthy(double %r2)
+  %cc = icmp ne i32 %c, 0
+  br i1 %cc, label %then.1, label %join.2
+
+then.1:
+__SAFEPOINT__
+  %other = call double @js_object_get_field_by_name_f64(i64 0, i64 0)
+  br label %join.2
+
+join.2:
+  %m = phi double [ %r2, %entry.0 ], [ %other, %then.1 ]
+  ret double %m
+}
+""".replace("__SAFEPOINT__", _sp())
+
+# HAZARD: byte-identical except the safepoint moves onto the TAINTED edge
+# itself, between `%r2`'s definition and `entry.0`'s own terminator -- the
+# window `_phi_edge_hazard` checks. This is the case the restated rule keeps:
+# "operand defined, safepoint runs, then the predecessor's terminator is
+# reached." One `unrooted` hazard, or the false-positive fix went too far
+# and quietly stopped the mode from seeing a phi-mediated hazard at all.
+_SELFTEST_SP_PHI_HAZARD_EDGE = """\
+define double @perry_fn_selftest__sp_phi_hazard_edge(double %a, double %b) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+  %r2 = bitcast i64 %raw to double
+__SAFEPOINT__
+  %c = call i32 @js_is_truthy(double %b)
+  %cc = icmp ne i32 %c, 0
+  br i1 %cc, label %then.1, label %join.2
+
+then.1:
+  %other = call double @js_object_get_field_by_name_f64(i64 0, i64 0)
+  br label %join.2
+
+join.2:
+  %m = phi double [ %r2, %entry.0 ], [ %other, %then.1 ]
+  ret double %m
+}
+""".replace("__SAFEPOINT__", _sp())
+
 # A `define` whose name this parser cannot read must RAISE, not be skipped.
 _SELFTEST_SP_BAD_DEFINE = """\
 define double @<mangled>(double %a) {
@@ -4096,7 +4281,9 @@ def statepoint_self_test():
                            ("reloaded", _SELFTEST_SP_RELOADED),
                            ("invoke", _SELFTEST_SP_INVOKE),
                            ("roundtrip", _SELFTEST_SP_TRACKED_ROUNDTRIP),
-                           ("quoted", _SELFTEST_SP_QUOTED_NAME)):
+                           ("quoted", _SELFTEST_SP_QUOTED_NAME),
+                           ("phi_safe_edge", _SELFTEST_SP_PHI_SAFE_EDGE),
+                           ("phi_hazard_edge", _SELFTEST_SP_PHI_HAZARD_EDGE)):
             p = os.path.join(td, f"sp_{name}.ll")
             with open(p, "w") as fh:
                 fh.write(text)
@@ -4158,6 +4345,39 @@ def statepoint_self_test():
             print("self-test FAIL: the roundtrip fixture's phi, cast-in and "
                   "relocation must all classify as tracked, or the arm above "
                   f"reports 0 for the wrong reason. Tracked: {sorted(rt_tracked)}",
+                  file=sys.stderr)
+            ok = False
+
+        # ★★ The phi-edge false positive (#7664) and its sabotage twin. Same
+        # two-predecessor join, same tainted register, same safepoint -- the
+        # ONLY difference between the fixtures is which edge the safepoint
+        # sits on. If both report 0, `_phi_edge_hazard` is dead code. If both
+        # report 1, the false-positive fix did not actually fix anything.
+        hits = _scan_statepoints([paths["phi_safe_edge"]], moving_only=True)
+        if hits:
+            print(f"self-test FAIL: the phi_safe_edge fixture's tainted "
+                  f"register only reaches the join on an edge with NO "
+                  f"intervening safepoint -- the other predecessor is where "
+                  f"the safepoint lives, and the phi never carries the "
+                  f"tainted value in on that edge. Must report 0, got "
+                  f"{len(hits)}: {[(h.kind_class, h.kind) for h in hits]}. "
+                  "This is #7664's four `unmasked` false positives: blanket "
+                  "phi admission conflated 'tainted on one edge' with "
+                  "'tainted on every path to every downstream use'.",
+                  file=sys.stderr)
+            ok = False
+        hits = _scan_statepoints([paths["phi_hazard_edge"]], moving_only=True)
+        if len(hits) != 1 or hits[0].kind_class != "unrooted":
+            print(f"self-test FAIL: the phi_hazard_edge fixture moves the "
+                  f"SAME safepoint onto the TAINTED edge, between the "
+                  f"operand's definition and its own predecessor's "
+                  f"terminator -- a real phi-mediated hazard the restated "
+                  f"rule ('a phi operand's window ends at the terminator of "
+                  f"its incoming predecessor block') must still catch. Must "
+                  f"report exactly one unrooted hazard, got "
+                  f"{[(h.kind_class, h.kind) for h in hits]}. If this is 0, "
+                  "the false-positive fix above also deleted the mode's "
+                  "ability to see a genuine phi-mediated hazard.",
                   file=sys.stderr)
             ok = False
 
