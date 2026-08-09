@@ -11,6 +11,7 @@ mod json_shape_template;
 mod prototype_addr_cache;
 mod side_table_scanners;
 mod string_slice;
+mod symbol_description;
 mod transient_handles;
 
 fn assert_panics_with(expected: &str, f: impl FnOnce()) {

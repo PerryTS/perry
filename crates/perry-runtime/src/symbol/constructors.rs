@@ -206,15 +206,14 @@ pub unsafe extern "C" fn js_symbol_key_for(sym_f64: f64) -> f64 {
     }
     // Registered symbols carry the description as Arc<str> in the side
     // table; materialize a fresh StringHeader in this thread's arena.
-    if let Some(s) = registered_symbol_description(sym_ptr as usize) {
-        let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
-        return f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK));
-    }
-    let desc = (*sym_ptr).description;
-    if desc.is_null() {
+    // #7246: descriptions live off the GC heap now (registered ones in the
+    // process-global map, fresh ones in the id-keyed thread-local one), so
+    // every reader materializes a fresh StringHeader in the CALLER's arena.
+    let Some(s) = symbol_description_text(sym_ptr) else {
         return f64::from_bits(TAG_UNDEFINED);
-    }
-    f64::from_bits(STRING_TAG | (desc as u64 & POINTER_MASK))
+    };
+    let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
+    f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK))
 }
 
 /// `sym.description` — returns the original description or undefined.
@@ -233,15 +232,14 @@ pub unsafe extern "C" fn js_symbol_description(sym_f64: f64) -> f64 {
     if (*sym_ptr).magic != SYMBOL_MAGIC {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    if let Some(s) = registered_symbol_description(sym_ptr as usize) {
-        let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
-        return f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK));
-    }
-    let desc = (*sym_ptr).description;
-    if desc.is_null() {
+    // #7246: descriptions live off the GC heap now (registered ones in the
+    // process-global map, fresh ones in the id-keyed thread-local one), so
+    // every reader materializes a fresh StringHeader in the CALLER's arena.
+    let Some(s) = symbol_description_text(sym_ptr) else {
         return f64::from_bits(TAG_UNDEFINED);
-    }
-    f64::from_bits(STRING_TAG | (desc as u64 & POINTER_MASK))
+    };
+    let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
+    f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK))
 }
 
 /// `sym.toString()` — returns "Symbol(description)" as a StringHeader pointer.
@@ -259,11 +257,9 @@ pub unsafe extern "C" fn js_symbol_to_string(sym_f64: f64) -> i64 {
         let s = b"Symbol()";
         return js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64;
     }
-    let desc_str = if let Some(s) = registered_symbol_description(sym_ptr as usize) {
-        s.as_ref().to_string()
-    } else {
-        str_from_header((*sym_ptr).description).unwrap_or_default()
-    };
+    let desc_str = symbol_description_text(sym_ptr)
+        .map(|s| s.as_ref().to_string())
+        .unwrap_or_default();
     let rendered = format!("Symbol({})", desc_str);
     js_string_from_bytes(rendered.as_ptr(), rendered.len() as u32) as i64
 }

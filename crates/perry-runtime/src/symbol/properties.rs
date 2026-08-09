@@ -268,9 +268,7 @@ unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
     // empty string `""`; a symbol with a (possibly empty) string description
     // names it `"[" + description + "]"`. Distinguish "no description" (→ `""`)
     // from `Symbol("")` (→ `"[]"`).
-    let desc = registered_symbol_description(sym_ptr as usize)
-        .map(|s| s.as_ref().to_string())
-        .or_else(|| str_from_header((*sym_ptr).description));
+    let desc = symbol_description_text(sym_ptr).map(|s| s.as_ref().to_string());
     let inferred = match desc {
         Some(d) => format!("[{}]", d),
         None => String::new(),

@@ -76,6 +76,7 @@ pub(crate) use gc_roots::{
 };
 
 use crate::string::StringHeader;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
@@ -134,6 +135,85 @@ static REGISTERED_SYMBOL_DESCRIPTIONS: Mutex<Option<HashMap<usize, std::sync::Ar
 pub(crate) fn registered_symbol_description(sym_ptr: usize) -> Option<std::sync::Arc<str>> {
     let guard = REGISTERED_SYMBOL_DESCRIPTIONS.lock().unwrap();
     guard.as_ref().and_then(|m| m.get(&sym_ptr).cloned())
+}
+
+thread_local! {
+    /// ★ #7246: descriptions of FRESH (`Symbol("x")`) symbols, off the GC heap.
+    ///
+    /// A `SymbolHeader` used to store its description as a `*mut StringHeader`
+    /// in the payload — and **the collector never traced or rewrote it**.
+    /// `alloc_symbol` gc_malloc's the header as `GC_TYPE_STRING`, whose type
+    /// info is `pointer_free: true` / `GcRewriteDescriptorKind::Leaf` /
+    /// `GcLayoutSlotKind::None`. That is correct for a *string*, whose payload
+    /// is bytes; it is wrong for a *symbol*, whose payload's third word is a
+    /// heap pointer. Symbols and strings share one GC type, so no descriptor
+    /// could tell them apart. A perfectly rooted symbol could therefore have
+    /// its description reaped or relocated out from under it, and
+    /// `String(sym)` / `sym.description` then read recycled memory.
+    ///
+    /// The pointer is gone rather than traced. Three fixes were on the table
+    /// (#7246): a `GC_TYPE_SYMBOL` with a real descriptor, tracing the
+    /// description from the symbol side table, or interning it off-heap. This
+    /// is the third, and the reason it is cheap is the KEY:
+    ///
+    ///   * keyed on `SymbolHeader::id` — a monotonic `u64` that an evacuation
+    ///     copies verbatim — **not** on the symbol's address. So this table
+    ///     needs no rekey pass, no root scanner, and no budgeted step twin. It
+    ///     holds no GC pointer at all, which is why
+    ///     `scripts/gc_runtime_root_holders.py` will not ask it for a verdict;
+    ///   * `alloc_symbol` copies the text BEFORE it allocates, so there is no
+    ///     window in which a description pointer is live-but-untraced;
+    ///   * it is pruned alongside `SYMBOL_POINTERS` in
+    ///     `prune_dead_symbol_pointers`, so a symbol-churn loop does not retain
+    ///     one `Arc<str>` per symbol forever.
+    ///
+    /// The process-global `REGISTERED_SYMBOL_DESCRIPTIONS` above stays as it
+    /// is: registered and well-known symbols are `Box::leak`'d and shared
+    /// across `perry/thread` agents, so their descriptions must be
+    /// process-global. Fresh symbols are per-thread GC objects, so theirs are
+    /// thread-local. Ids are globally monotonic, so the two never collide.
+    static FRESH_SYMBOL_DESCRIPTIONS: RefCell<HashMap<u64, std::sync::Arc<str>>> =
+        RefCell::new(HashMap::new());
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_fresh_symbol_descriptions() {
+    FRESH_SYMBOL_DESCRIPTIONS.with(|m| m.borrow_mut().clear());
+}
+
+/// The description text of `sym_ptr`, wherever it is kept.
+///
+/// One helper rather than the `registered_symbol_description(..).or_else(..)`
+/// chain each reader used to spell out: there are four readers, and a fifth
+/// that forgot the fallback is exactly how a description goes silently missing.
+pub(crate) unsafe fn symbol_description_text(
+    sym_ptr: *const SymbolHeader,
+) -> Option<std::sync::Arc<str>> {
+    if sym_ptr.is_null() || (sym_ptr as usize) < 0x1000 {
+        return None;
+    }
+    if let Some(text) = registered_symbol_description(sym_ptr as usize) {
+        return Some(text);
+    }
+    let id = (*sym_ptr).id;
+    if let Some(text) = FRESH_SYMBOL_DESCRIPTIONS.with(|m| m.borrow().get(&id).cloned()) {
+        return Some(text);
+    }
+    // Legacy fallback: any symbol whose description still lives in the payload
+    // (nothing populates this today — `alloc_symbol` nulls it — but the field
+    // is still readable and a stale reader would otherwise silently return
+    // `None` instead of a description).
+    str_from_header((*sym_ptr).description).map(std::sync::Arc::from)
+}
+
+fn record_fresh_symbol_description(id: u64, description: &str) {
+    FRESH_SYMBOL_DESCRIPTIONS
+        .with(|m| m.borrow_mut().insert(id, std::sync::Arc::from(description)));
+}
+
+#[cfg(test)]
+pub(crate) fn test_fresh_symbol_description_count() -> usize {
+    FRESH_SYMBOL_DESCRIPTIONS.with(|m| m.borrow().len())
 }
 
 pub(crate) fn record_registered_symbol_description(sym_ptr: usize, description: &str) {
@@ -346,9 +426,33 @@ pub(crate) fn prune_dead_symbol_property_owners(is_dead_owner: &dyn Fn(usize) ->
 /// entry behind permanently (the address no longer attributes) — fixing
 /// that needs a dedicated symbol GC type with a finalize hook.
 pub(crate) fn prune_dead_symbol_pointers(is_dead_symbol: &dyn Fn(usize) -> bool) {
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
-    if let Some(set) = guard.as_mut() {
-        set.retain(|&ptr| !is_dead_symbol(ptr));
+    let mut live_ids: Vec<u64> = Vec::new();
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
+        if let Some(set) = guard.as_mut() {
+            set.retain(|&ptr| !is_dead_symbol(ptr));
+            // #7246: the surviving symbols' ids, read while the lock is held and
+            // every remaining address is known live. Reading `(*ptr).id` of a
+            // symbol the predicate has just rejected would be a read of freed
+            // memory, which is why this is a second pass over the RETAINED set
+            // rather than a filter inside `retain`.
+            live_ids.reserve(set.len());
+            for &ptr in set.iter() {
+                live_ids.push(unsafe { (*(ptr as *const SymbolHeader)).id });
+            }
+        }
+    }
+    // #7246: descriptions are keyed on the id, so they are pruned by the same
+    // liveness verdict. Without this a `Symbol("x")` churn loop would retain one
+    // `Arc<str>` per symbol for the life of the process — the cost the issue
+    // named as this fix's price, paid down here.
+    //
+    // Only prune when we actually observed a live set: an empty `SYMBOL_POINTERS`
+    // (uninitialised registry, or a thread that has allocated no symbols) must
+    // not be read as "every description is dead".
+    if !live_ids.is_empty() {
+        let live: HashSet<u64> = live_ids.into_iter().collect();
+        FRESH_SYMBOL_DESCRIPTIONS.with(|m| m.borrow_mut().retain(|id, _| live.contains(id)));
     }
 }
 
@@ -377,41 +481,46 @@ pub(crate) unsafe fn alloc_symbol(
     description: *mut StringHeader,
     registered: bool,
 ) -> *mut SymbolHeader {
-    // Allocate via gc_malloc as a leaf (GC_TYPE_STRING treats payload as
-    // opaque, which is what we want — the GC won't try to scan internal
-    // pointers). The description pointer is kept alive through the
-    // SYMBOL_REGISTRY (for registered symbols) or not at all (for fresh
-    // symbols — in practice they live for the duration of the program,
-    // which is fine for test workloads).
-    // #7341: `gc_malloc` below is a collection point, and `description` was
-    // computed by the caller before it. An evacuating minor there relocates the
-    // description string, and the pre-collection address is then written into
-    // the header — permanently stale in a live symbol, exactly the shape fixed
-    // for `RegExpHeader::flags_ptr`. `js_symbol_to_string` reads it through
-    // `str_from_header` and faults on retired from-space; that is 3 of the 31
-    // catches in #7341.
+    // Allocated via gc_malloc as a leaf: `GC_TYPE_STRING`'s type info is
+    // `pointer_free: true` / `GcRewriteDescriptorKind::Leaf` /
+    // `GcLayoutSlotKind::None`, so nothing walks into the payload.
     //
-    // Root across the allocation and re-read. NOTE the remaining gap the
-    // comment above describes and this does not close: the payload is opaque to
-    // the collector (`GC_TYPE_STRING`), so a fresh symbol's description is
-    // neither marked nor rewritten afterwards. Rooting here makes the STORED
-    // value correct; keeping it alive for the symbol's lifetime is a separate
-    // fix, tracked in #7341.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let desc_root = scope.root_string_ptr(description);
-    // `gc_malloc` can collect, so the description's address is only valid
-    // after it; `across_mut` binds the two together (#7341).
-    let (raw, description) = desc_root.across_mut::<StringHeader, _>(|| {
-        crate::gc::gc_malloc(
-            std::mem::size_of::<SymbolHeader>(),
-            crate::gc::GC_TYPE_STRING,
-        )
-    });
+    // ★ #7246. That was correct for a *string*, whose payload is bytes, and
+    // WRONG for a *symbol*, whose payload's third word used to be a
+    // `*mut StringHeader`. Symbols and strings share one GC type, so no
+    // descriptor could distinguish them and the description was never traced or
+    // rewritten: a perfectly rooted symbol could have its description reaped or
+    // relocated out from under it, and `String(sym)` / `sym.description` then
+    // read recycled memory. `SYMBOL_POINTERS` did not close it either —
+    // `scan_symbol_pointer_metadata_roots_mut` uses `visit_metadata_usize_slot`,
+    // which rewrites a recorded address WITHOUT marking, and never looks at
+    // `(*ptr).description` at all.
+    //
+    // The pointer is now gone rather than traced. Copy the text off the GC heap
+    // BEFORE allocating — so there is never a window in which a description
+    // pointer is live-but-untraced — and leave the field null.
+    // `FRESH_SYMBOL_DESCRIPTIONS` is keyed on the symbol's `id`, which an
+    // evacuation copies verbatim, so that table needs no rekey, no scanner and
+    // no budgeted step twin. See its declaration for why this beat a
+    // `GC_TYPE_SYMBOL` and beat tracing from the side table.
+    //
+    // (#7341's `RuntimeHandleScope` + `across_mut` here is therefore gone too:
+    // it made the STORED pointer correct across `gc_malloc`, and there is no
+    // longer a stored pointer. Nothing is live across the allocation.)
+    let description_text = str_from_header(description);
+    let raw = crate::gc::gc_malloc(
+        std::mem::size_of::<SymbolHeader>(),
+        crate::gc::GC_TYPE_STRING,
+    );
     let ptr = raw as *mut SymbolHeader;
+    let id = next_id();
     (*ptr).magic = SYMBOL_MAGIC;
     (*ptr).registered = if registered { 1 } else { 0 };
-    (*ptr).description = description;
-    (*ptr).id = next_id();
+    (*ptr).description = std::ptr::null_mut();
+    (*ptr).id = id;
+    if let Some(text) = description_text {
+        record_fresh_symbol_description(id, &text);
+    }
     register_symbol_pointer(ptr as usize);
     ptr
 }
