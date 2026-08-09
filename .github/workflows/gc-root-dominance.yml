@@ -517,49 +517,28 @@ jobs:
           # 21 at #7663. #7664 fixed 14 of them in `root_reload.rs` and
           # `lower_call/new.rs` — the whole `strhandle` population (10), the
           # `js_new_target_get` save/restore (1), and 3 of the 7 unmasked
-          # receivers — so the budget is 7. What remains, and why each is its
-          # own slice rather than a widening of the same fix:
+          # receivers — so the budget is 7. #7616 (widening POLL_CAPABLE_RUNTIME)
+          # and #7690 (rooting the spread argument-bundle accumulator) moved it
+          # 7 -> 11 -> 8, tracked in the two changelog fragments for those PRs.
           #
-          #   4  unmasked, all PHI-MEDIATED. The stale value reaches its use
-          #      through a `phi`, and `root_reload` cannot insert above a phi;
-          #      the reload has to go in the PREDECESSOR, on the edge, which is
-          #      a different insertion model.
-          #   2  global (`@perry_global_*`). NOT reloadable: a module-level
-          #      variable is one the program assigns, so a re-read can observe
-          #      a later assignment instead of the value the call was given
-          #      (`operand_needs_root`). That population needs ROOTING, and
-          #      `a_module_global_is_not_a_reload_source` in root_reload.rs
-          #      pins the distinction so it cannot be widened away by accident.
-          #   1  capture, a `js_closure_get_capture_bits` read held across
-          #      `js_number_coerce`.
+          # ★ RE-VERIFIED AT #7664's SECOND PASS: the 8 above was already stale
+          # by the time this ran. A fresh corpus read 9, not 8 — a static-method
+          # receiver hazard in `test_gap_static_method_value_name_collision`
+          # (added after the "8" snapshot, by the #7689/#7691 fix that armed a
+          # receiver-sensitive static `this`) had joined the population without
+          # anyone lowering — er, RAISING — the budget to match. That in itself
+          # is the thing CLAUDE.md's hazard-4 corollary warns about: a budget
+          # nobody re-measures silently absorbs the next hazard.
           #
-          # 11 at #7616, and the four new ones are the POINT of that change
-          # rather than a regression: widening POLL_CAPABLE_RUNTIME by the 77
-          # symbols `--audit-poll-reach` found makes windows MOVING that the
-          # filter previously dropped. Measured on this corpus, 7 -> 11, with
-          # no hit disappearing:
-          #
-          #   3  test_gap_array_splice_spread::main, `unrooted:alloc`. A fresh
-          #      array held in a raw i64 across `js_array_like_to_array` and
-          #      consumed by `js_array_concat` -- #7453's shape exactly, in the
-          #      spread lowering instead of the URL one.
-          #   1  test_gap_class_expr_dynamic_parent_ctor, `unrooted:capture`.
-          #      The same `js_closure_get_capture_bits` population as the
-          #      residual above, newly visible because `js_new_function_construct`
-          #      is now classified as a mover.
-          #
-          # ── 8 here. `expr/call_spread.rs` roots the argument-bundle
-          # accumulator, which closes all three `unrooted:alloc` hits. Measured
-          # on this corpus, same binary both arms, 11 -> 8 with the other eight
-          # byte-identical and `stale` still 0.
-          #
-          # ★ THE FOUR `unmasked` HITS ARE CHECKER FALSE POSITIVES, and the
-          # description three paragraphs up ("the reload has to go in the
-          # PREDECESSOR, on the edge") is solving a problem that is not there.
-          # `"phi"` is in `TRANSPARENT_OPS`, so taint flows from a phi OPERAND to
-          # the phi RESULT and the use is located at the phi's block — but a phi
-          # operand is used on ITS INCOMING EDGE, not at the join. All four have
-          # the identical shape, e.g. `readCtx`:
+          # Of the 9: 4 were CHECKER FALSE POSITIVES, not real hits. `chain`
+          # (the untracked cast-closure a stale use is searched in) treated
+          # `phi` as unconditionally transparent — one tainted incoming edge
+          # blanket-tainted the phi's RESULT, and a downstream use of that
+          # result was checked against ANY CFG path from source to use
+          # (`between_blocks` is deliberately path-insensitive, which is sound
+          # for an ordinary register but not a phi, whose dynamic value depends
+          # on which edge was actually taken). All four were the identical
+          # shape, e.g. `readCtx`:
           #
           #     entry.0:            %r2 = <unmask of the receiver>
           #                         br i1 %r4, label %then, label %merge
@@ -569,32 +548,76 @@ jobs:
           #
           # The safepoints are all on the `%then` path, where the phi selects
           # `%r86`. On the edge that carries `%r2` nothing collects between its
-          # definition and the join. Verified register-by-register on all four
-          # (`readCtx`, `__closure_5`, `Readable`, `__obj_method_toLocaleString_3`
-          # -- every one a `logical.merge` join of an `&&`).
+          # definition and the join — the checker was reporting the OTHER
+          # edge's safepoint against THIS edge's value. Verified register-by-
+          # register on all four (`readCtx`, `__closure_5`, `Readable`,
+          # `__obj_method_toLocaleString_3` — every one a `logical.merge` join
+          # of an `&&`).
           #
-          # So the residual population is 4, not 8, and it splits:
+          # Fixed: `_cast_closure` gained `phi_all_edges` — a phi joins `chain`
+          # only once EVERY incoming edge is independently in it, closing the
+          # false positive. That deliberately gives up the case of a SINGLE
+          # tainted edge with its own intervening safepoint before its own
+          # predecessor's terminator; `_phi_edge_hazard` covers that separately,
+          # checking each edge's window on its own. Two sabotage-tested
+          # self-test fixtures (`phi_safe_edge` / `phi_hazard_edge`) pin both
+          # directions.
           #
-          #   2  global (`@perry_global_*`), test_gap_arraybuffer_transfer::main.
-          #      Real; needs ROOTING, per the note above.
-          #   2  capture. `test_gap_class_expr_dynamic_parent_ctor::__closure_21`
-          #      is real and checked by hand: `%r7 = bitcast %r61` (capture 0,
-          #      the dynamic parent class) is read at the top of the closure and
-          #      passed to `js_new_function_construct` ~60 lines below, across
-          #      `js_object_alloc_class_inline_keys` AND a user constructor, and
-          #      appears in no `gc-live` bundle anywhere in the function. It is
-          #      NOT reloadable the way a strhandle is: the recipe would have to
-          #      re-derive the closure pointer from `%this_closure`, an i64
-          #      PARAMETER that RS4GC does not relocate, so the re-read would
-          #      address the pre-move closure. That population needs the callee's
-          #      own closure pointer to be a tracked root first.
+          # The remaining 5 were real, and split two ways:
           #
-          # #7664 stays open as this budget's referent: a number with nothing
-          # behind it is the thing CLAUDE.md warns a threshold decays into. It
-          # cannot go below 4 without either the two rooting fixes or the
-          # edge-sensitive phi rule, and the phi rule must arrive with a
-          # sabotage arm proving it still reports a phi operand that IS live
-          # across a safepoint on its own edge.
+          #   3  unrooted:global. `test_gap_arraybuffer_transfer::main` (2,
+          #      `new DataView`/`new Uint8Array` reading a module-global
+          #      receiver, then holding it across a sibling `{ valueOf() {...} }`
+          #      argument's allocation) — fixed upstream by #7719, which covers
+          #      the identical shape across all 30 `lower_call/builtin.rs` ctor
+          #      arms via a shared `RootedGroup`. `test_gap_static_method_value_
+          #      name_collision::main` (1, `(Lexer as any).lex(...)`'s receiver
+          #      held across arg-bundling that always allocates for a rest
+          #      param) — fixed here, in
+          #      `lower_call/property_get/static_dispatch.rs`, the same
+          #      `RootedGroup::adopt`/`reread` shape on the receiver instead of
+          #      a constructor argument.
+          #   2  unrooted:capture. `js_closure_get_capture_bits` returns a raw
+          #      `i64` that may be a NaN-boxed heap value, and unlike
+          #      `%this_closure` itself (which codegen already re-enters into
+          #      the `ptr addrspace(1)` tracked domain), its generic "read a
+          #      captured value" call sites never re-enter it into either that
+          #      domain or a temp root.
+          #      `test_gap_class_expr_dynamic_parent_ctor::__closure_21`: a
+          #      captured dynamic-parent-class reference read at the top of the
+          #      synthesized implicit ctor closure, used ~60 lines later as
+          #      `js_new_function_construct`'s callee, across
+          #      `js_object_alloc_class_inline_keys` AND the class's own user
+          #      constructor.
+          #      `test_gap_computed_key_method_nested_this::__closure_9`: a
+          #      captured numeric local read, then `total + x`-style `fadd`
+          #      after `js_number_coerce` (which can run a user
+          #      `Symbol.toPrimitive`) intervenes. NOT reloadable the way a
+          #      strhandle global is (re-deriving from `%this_closure` reads
+          #      the pre-move closure — RS4GC does not relocate a raw `i64`
+          #      parameter) — but IS reloadable the way OTHER root-derived
+          #      values are: re-calling `js_closure_get_capture_bits` with the
+          #      same closure pointer and index re-reads the same slot, sound
+          #      under the identical store side-condition
+          #      (`js_closure_set_capture_bits` to that index) `root_reload.rs`
+          #      already tracks for shadow slots and handle globals. That needs
+          #      `root_reload.rs`'s `Facts` to model a CALL as a reloadable
+          #      source, not just a load — a real slice of work, tracked in its
+          #      own issue rather than rushed into this one.
+          #
+          # `--max-unrooted` is 2 now, exactly the two `unrooted:capture` hits
+          # above — measured on the native corpus after the checker fix and the
+          # static-dispatch fix, both arms of `--moving-only`, `stale` still 0.
+          # (The corpus build that produced that reading predates rebasing this
+          # branch onto #7719; #7719 fixes the identical `unrooted:global` shape
+          # via the same `RootedGroup` mechanism across a superset of
+          # `lower_call/builtin.rs`'s arms, so the reading is not expected to
+          # change, but the exact post-rebase commit has not itself been run
+          # through the corpus — this job's own execution on the PR is that
+          # confirmation.)
+          #
+          # #7664 stays open as this budget's referent, tracking the
+          # `unrooted:capture` follow-up.
           #
           # `stale` (the object survives and is relocated, but a raw copy of
           # its pre-move address is used below) reads 0 today and is held
@@ -614,7 +637,7 @@ jobs:
             --min-statepoints 15000 \
             --min-live-bundles 8000 \
             --min-relocates 20000 \
-            --max-unrooted 8 \
+            --max-unrooted 2 \
             --max-stale 0 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \
