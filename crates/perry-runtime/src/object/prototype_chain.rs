@@ -340,6 +340,18 @@ pub(crate) fn object_static_prototype_owner_moved(old_owner: usize, new_owner: u
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;
     }
+    // The residual registry is EMPTY until a non-meta-capable owner records a
+    // prototype, and the latch is stored (`Release`) *before* that insert — so
+    // a `false` read here proves there is no entry to migrate. Its two sibling
+    // readers (`object_static_prototype`, `prune_dead_object_prototype_owners`)
+    // already gate on it; this one did not, so every evacuated object took a
+    // process-global `Mutex<HashMap>` and paid a SipHash probe against an empty
+    // map. On a promotion-heavy workload that is one lock + one hash per moved
+    // object (2.5 M of each on `gc-handoff/bench/retain.ts`), and it showed up
+    // as `pthread_mutex_lock` + `RandomState` in a single-threaded profile.
+    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
+        return;
+    }
     if let Ok(mut map) = get_object_prototypes().lock() {
         if let Some(proto_bits) = map.remove(&old_owner) {
             map.insert(new_owner, proto_bits);
