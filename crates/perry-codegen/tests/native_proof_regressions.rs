@@ -19,7 +19,10 @@ use perry_hir::{
 
 #[path = "native_proof_support/mod.rs"]
 mod native_proof_support;
-use native_proof_support::{artifact_env_lock, artifact_for_module, NativeRepsEnv};
+use native_proof_support::{
+    artifact_env_lock, artifact_for_module, assert_native_buffer_element_access, probe_body,
+    NativeRepsEnv,
+};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -680,16 +683,11 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
     for_loop_with_start_and_update(counter_id, int(0), bound, Some(increment(counter_id)), body)
 }
 
-fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
-    assert!(
-        ir.contains("call void @js_buffer_set"),
-        "stale-proof case should keep the checked Buffer store fallback:\n{ir}"
-    );
-    assert!(
-        !ir.contains("getelementptr inbounds i8"),
-        "stale-proof case must not emit an inbounds native buffer GEP:\n{ir}"
-    );
-}
+// `assert_buffer_store_uses_dynamic_fallback` lives in `native_proof_support`
+// since #7505 — it used to prove "no native buffer GEP" with a MODULE-WIDE
+// `!ir.contains("getelementptr inbounds i8")`, which any unrelated `inbounds
+// i8` in the module satisfied.
+use native_proof_support::assert_buffer_store_uses_dynamic_fallback;
 
 #[test]
 fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {

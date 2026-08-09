@@ -22,7 +22,10 @@ use perry_hir::{
 
 #[path = "native_proof_support/mod.rs"]
 mod native_proof_support;
-use native_proof_support::{artifact_env_lock, artifact_for_module, NativeRepsEnv};
+use native_proof_support::{
+    artifact_env_lock, artifact_for_module, assert_no_native_buffer_element_access, probe_body,
+    NativeRepsEnv,
+};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -584,16 +587,9 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
     for_loop_with_start_and_update(counter_id, int(0), bound, Some(increment(counter_id)), body)
 }
 
-fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
-    assert!(
-        ir.contains("call void @js_buffer_set"),
-        "stale-proof case should keep the checked Buffer store fallback:\n{ir}"
-    );
-    assert!(
-        !ir.contains("getelementptr inbounds i8"),
-        "stale-proof case must not emit an inbounds native buffer GEP:\n{ir}"
-    );
-}
+// This file's second copy of `assert_buffer_store_uses_dynamic_fallback` is
+// gone rather than re-fixed: since #7505 it lives in `native_proof_support`,
+// where the one reader both suites share cannot drift between them.
 
 #[test]
 fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
@@ -645,9 +641,21 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
     );
 }
 
+/// `i < buf.length` proves a ONE-byte access; a `readUInt32BE` at the same
+/// index reads four. The four-byte read must therefore stay checked.
+///
+/// LOWERING (#7505): unpinned. This used to prove "no native GEP" with a
+/// module-wide `!ir.contains("getelementptr inbounds i8")`, which the
+/// shadow-stack lowering's own inline slot addressing satisfied for reasons
+/// unrelated to any buffer — so under `PERRY_RS4GC=0` it reported a proof leak
+/// that was not there, and #7493 pinned it to native roots to stop the false
+/// alarm. It now asks the question it means: is there an `inbounds` GEP off
+/// this function's Buffer DATA slot? Asserted under both lowerings, and the
+/// reader's ability to answer "yes" is proved in
+/// `native_proof_regressions::invalidation::the_native_buffer_gep_detector_fires_on_a_proven_store`
+/// plus this file's own `native_proof_support` self-tests.
 #[test]
 fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
-    let _pin = NativeRootsPin::native();
     let body = vec![
         buffer_let(1, "buf", int(8)),
         for_loop(
@@ -665,11 +673,24 @@ fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("loop_bound_multibyte_buffer_read.ts", body.clone());
-    assert!(
-        !ir.contains("getelementptr inbounds i8"),
-        "`i < buf.length` only proves one-byte Buffer access; multi-byte reads must not emit an inbounds GEP:\n{ir}"
-    );
+    for (pin_native, name) in [
+        (true, "loop_bound_multibyte_buffer_read.ts"),
+        (false, "loop_bound_multibyte_buffer_read_shadow.ts"),
+    ] {
+        let ir = {
+            let _pin = if pin_native {
+                NativeRootsPin::native()
+            } else {
+                NativeRootsPin::shadow()
+            };
+            compile_ir(name, body.clone())
+        };
+        assert_no_native_buffer_element_access(
+            probe_body(&ir),
+            "`i < buf.length` only proves a ONE-byte Buffer access; a \
+             four-byte read must not consume it",
+        );
+    }
 
     let artifact = compile_artifact_json("artifact_loop_bound_multibyte_buffer_read.ts", body);
     let records = artifact["records"].as_array().unwrap();
