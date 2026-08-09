@@ -1393,13 +1393,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // conditional branches above it, so it crossed that allocation
                 // with no root able to name it. Re-derive it HERE, below the
                 // key unbox, from the boxed receiver.
-                let (key_handle, obj_handle) = {
+                // Shadowing the entry block's `obj_handle` would be a verifier
+                // error, not a style choice: the NUMERIC sibling block below
+                // uses that one, and a definition in THIS block does not
+                // dominate it.
+                let (key_handle, str_obj_handle) = {
                     let blk = ctx.block();
                     let key_handle = unbox_str_handle(blk, &idx_box);
                     let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                    let obj_handle =
+                    let str_obj_handle =
                         classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
-                    (key_handle, obj_handle)
+                    (key_handle, str_obj_handle)
                 };
                 let site_id = emit_typed_feedback_register_site(
                     ctx,
@@ -1410,7 +1414,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let v_str = ctx.block().call(
                     DOUBLE,
                     "js_typed_feedback_object_get_field_by_name_f64",
-                    &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
+                    &[(I64, &site_id), (I64, &str_obj_handle), (I64, &key_handle)],
                 );
                 let str_end_lbl = ctx.block().label.clone();
                 ctx.block().br(&merge_lbl);

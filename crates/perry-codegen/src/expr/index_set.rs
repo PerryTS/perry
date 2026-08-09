@@ -1785,22 +1785,25 @@ pub(crate) fn lower(
                     // `obj_handle` is a RAW `i64` computed two conditional
                     // branches above it — nothing can name it across that
                     // allocation. Re-derive it here, below the key unbox.
-                    let (key_handle, obj_handle) = {
+                    // A distinct name, not a shadow: the NUMERIC sibling block
+                    // below uses the entry block's `obj_handle`, which a
+                    // definition in THIS block does not dominate.
+                    let (key_handle, str_obj_handle) = {
                         let blk = ctx.block();
                         let key_handle = unbox_str_handle(blk, &idx_box);
-                        let obj_handle = super::index_get::classref_preserving_handle(
+                        let str_obj_handle = super::index_get::classref_preserving_handle(
                             blk,
                             &obj_bits,
                             static_classref,
                         );
-                        (key_handle, obj_handle)
+                        (key_handle, str_obj_handle)
                     };
                     ctx.block().call(
                         I64,
                         "js_typed_feedback_array_set_string_key",
                         &[
                             (I64, &feedback_site_id),
-                            (I64, &obj_handle),
+                            (I64, &str_obj_handle),
                             (I64, &key_handle),
                             (DOUBLE, &val_double),
                         ],
