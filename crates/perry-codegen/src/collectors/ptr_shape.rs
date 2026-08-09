@@ -84,14 +84,11 @@
 //!    conservative first-increment rule from the RFC §5.2 discussion and
 //!    still covers the common barrier-free module. (`eval` needs no kill:
 //!    Perry never executes a runtime code string — see
-//!    `perry-hir/src/eval_classifier.rs`.) This same per-module fact is also
-//!    consulted by Phase 5a's proven-`this` admission
-//!    (`collectors/proven_this.rs`), where it is a cost heuristic ONLY —
-//!    unlike here, where rule 2's containment is the actual correctness
-//!    argument, Phase 5a's receiver is aliased across modules by
-//!    construction, so its call sites carry their own runtime protection
-//!    instead (`collectors/proven_this.rs`'s "`delete` is aliased across
-//!    modules by construction" section, #7143).
+//!    `perry-hir/src/eval_classifier.rs`.) Phase 5a consults this same
+//!    per-module fact as a COST HEURISTIC only: its receiver is aliased across
+//!    modules by construction, so its call sites carry runtime keys-token
+//!    guards instead. Here, rule 2's containment IS the correctness argument
+//!    (#7143, `collectors/proven_this.rs`).
 //!
 //!    **One exemption** (#7139, `collectors/cjs_scaffolding.rs`): the two
 //!    `defineProperty` sites every `cjs_wrap`-compiled CommonJS module
