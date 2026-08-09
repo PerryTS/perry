@@ -22,7 +22,7 @@ use super::new_helpers::{
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::rooting::{open_rooted_group, EmittedValue, Repr, RootedGroup};
+use crate::rooting::{self, open_rooted_group, EmittedValue, Repr, RootedGroup};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Does `new <class_name>(…)` run user code — an own or inherited constructor
@@ -219,6 +219,31 @@ fn lower_new_impl(
     result
 }
 
+/// Lower every constructor argument into `group`, rooting each one **as it is
+/// produced** rather than after the list (#6969: rooting a finished list
+/// publishes an already-dangling argument 0 to the scanner, which turns a
+/// silent wrong answer into a SIGSEGV — strictly worse than not rooting).
+///
+/// Returns the group indices, in argument order, for the caller to re-read at
+/// the point it emits its call. `lower_constructor_arg` rather than
+/// `RootedGroup::lower` because it clears `ctx.discard_expr_value` for the
+/// operand — #7590: that flag means "this STATEMENT's value is discarded" and
+/// is not cleared on recursion, so lowering an operand under it can evaluate a
+/// typed-array store to `0`.
+fn adopt_constructor_args<'a>(
+    ctx: &mut FnCtx<'_>,
+    args: &'a [Expr],
+    group: &mut RootedGroup<'a>,
+) -> Result<Vec<usize>> {
+    let mut slots = Vec::with_capacity(args.len());
+    for (i, a) in args.iter().enumerate() {
+        let value = lower_constructor_arg(ctx, a)?;
+        let collects = rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+        slots.push(group.adopt(ctx, a, &value, collects));
+    }
+    Ok(slots)
+}
+
 fn lower_new_impl_inner<'a>(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
@@ -243,15 +268,30 @@ fn lower_new_impl_inner<'a>(
             ctx.import_function_node_submodule.get(class_name).cloned()
         {
             if submod_key == "readline_promises" && exported_name == "Readline" {
-                let output = if let Some(first) = args.first() {
-                    lower_expr(ctx, first)?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                // #6986: `output` was live in an SSA register across `options`'
+                // lowering AND across every `extra`'s — each an arbitrary
+                // expression — before `js_readline_promises_readline_new` read
+                // it. Same repair as the main class loop below: adopt into the
+                // enclosing group as each operand is lowered (never after the
+                // list — that publishes an already-dangling pointer, #6969),
+                // and re-read at the call.
+                //
+                // The `undefined` fillers are literals, not operands: nothing
+                // to root, and `Arg::Plain` keeps them out of the group so an
+                // absent argument still costs no slot.
+                let output = match args.first() {
+                    Some(first) => {
+                        let collects = rooting::any_operand_may_collect(ctx, args[1..].iter());
+                        Some(group.lower(ctx, first, collects)?)
+                    }
+                    None => None,
                 };
-                let options = if let Some(second) = args.get(1) {
-                    lower_expr(ctx, second)?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                let options = match args.get(1) {
+                    Some(second) => {
+                        let collects = rooting::any_operand_may_collect(ctx, args[2..].iter());
+                        Some(group.lower(ctx, second, collects)?)
+                    }
+                    None => None,
                 };
                 for extra in args.iter().skip(2) {
                     let _ = lower_expr(ctx, extra)?;
@@ -261,6 +301,15 @@ fn lower_new_impl_inner<'a>(
                     DOUBLE,
                     vec![DOUBLE, DOUBLE],
                 ));
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let output = match output {
+                    Some(i) => group.reread(ctx, i)?,
+                    None => undef.clone(),
+                };
+                let options = match options {
+                    Some(i) => group.reread(ctx, i)?,
+                    None => undef,
+                };
                 return Ok(ctx.block().call(
                     DOUBLE,
                     "js_readline_promises_readline_new",
@@ -344,6 +393,13 @@ fn lower_new_impl_inner<'a>(
             if ctx.import_function_prefixes.contains_key(class_name)
                 && !ctx.import_function_v8_specifiers.contains_key(class_name)
             {
+                // #6986: `func_double` was live across every argument's
+                // lowering (arbitrary user code) and each argument across the
+                // ones after it, all of them in bare SSA registers, before
+                // `js_new_function_construct` read them. `lower_js_args_array`
+                // is no rescue — it is a plain `alloca_entry_array` pack with
+                // no `js_shadow_slot_bind`, so it copies whatever bits it is
+                // handed, stale or not.
                 let func_double = lower_expr(
                     ctx,
                     &Expr::ExternFuncRef {
@@ -352,11 +408,15 @@ fn lower_new_impl_inner<'a>(
                         return_type: HirType::Any,
                     },
                 )?;
+                let func_collects = rooting::any_operand_may_collect(ctx, args.iter());
+                let func_root = group.adopt_emitted(ctx, Repr::Boxed, &func_double, func_collects);
+                let arg_slots = adopt_constructor_args(ctx, args, group)?;
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered_args.push(lower_constructor_arg(ctx, a)?);
+                for slot in &arg_slots {
+                    lowered_args.push(group.reread(ctx, *slot)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                let func_double = group.reread_emitted(ctx, func_root);
                 return Ok(ctx.block().call(
                     DOUBLE,
                     "js_new_function_construct",
@@ -373,9 +433,14 @@ fn lower_new_impl_inner<'a>(
             // `send` → Next.js) and returns a working native function; anything
             // else still gets the placeholder. NO general JS interpreter.
             if class_name == "Function" {
+                // #6986: same shape as the imported-constructor branch above —
+                // argument `i` was live in a bare SSA register across every
+                // argument after it. `new Function(fresh(0), "return " + churn(N))`
+                // is the reproducer named in the issue.
+                let arg_slots = adopt_constructor_args(ctx, args, group)?;
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered_args.push(lower_constructor_arg(ctx, a)?);
+                for slot in &arg_slots {
+                    lowered_args.push(group.reread(ctx, *slot)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 return Ok(ctx.block().call(

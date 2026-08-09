@@ -1017,20 +1017,21 @@ mod receiver_order_tests {
         String::from_utf8(bytes).expect("LLVM IR is UTF-8")
     }
 
-    /// Call sites only — the module's `declare` line names the symbol too, and
-    /// counting it would compare 1 against 0 forever.
-    fn temp_root_pushes(ir: &str) -> usize {
-        ir.matches("call i32 @js_gc_temp_root_push").count()
-    }
-
     /// An allocating argument that CANNOT reach the receiver's binding leaves
-    /// the historical argument-then-receiver order in place: no rooting IR, no
-    /// spec-order blocks, and therefore none of the cost #7634 worried about.
+    /// the historical argument-then-receiver order in place: no spec-order
+    /// blocks, and therefore none of the cost #7634 worried about.
     ///
-    /// The assertion is one-sided on purpose. It cannot pass vacuously: the
-    /// same IR is required to still contain the push's own inline tier
-    /// (`apush.nofwd`), so an empty or failed compile fails here rather than
-    /// reporting "no roots found".
+    /// It asserts the ABSENCE of the spec-ordered arm rather than counting
+    /// `js_gc_temp_root_push` call sites, and that is not a stylistic choice:
+    /// `temp_root_push_double` lowers to a plain alloca `store` in alloca mode
+    /// and to a stack-map index under statepoints, so a count reads zero on the
+    /// default build and passes vacuously. The spec-ordered arm is the only
+    /// thing in this lowering that roots the receiver, so its absence is the
+    /// no-cost claim, stated in something the emitted IR always shows.
+    ///
+    /// It cannot pass vacuously in the other direction either: the same IR is
+    /// required to still contain the push's own inline tier (`apush.nofwd`), so
+    /// an empty or failed compile fails here rather than reporting "clean".
     #[test]
     fn an_unreachable_binding_keeps_the_historical_order_and_roots_nothing() {
         let ir = push_ir(Expr::Object(vec![("v".to_string(), Expr::Number(1.0))]));
@@ -1040,12 +1041,9 @@ mod receiver_order_tests {
         );
         assert!(
             !ir.contains("apush.spec."),
-            "a plain local nothing else can reach must NOT take the spec-ordered arm:\n{ir}"
-        );
-        assert_eq!(
-            temp_root_pushes(&ir),
-            0,
-            "the hot push shape must gain no temp root:\n{ir}"
+            "a plain local nothing else can reach must NOT take the spec-ordered arm — and \
+             the spec-ordered arm is the ONLY thing that roots the receiver, so its absence \
+             is the no-cost claim:\n{ir}"
         );
     }
 

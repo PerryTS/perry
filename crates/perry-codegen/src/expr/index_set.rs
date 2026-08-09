@@ -739,8 +739,11 @@ pub(crate) fn lower(
                 let val_double = lower_expr(ctx, value)?;
                 let (obj_handle, key_handle) = {
                     let blk = ctx.block();
-                    let obj_handle = unbox_to_i64(blk, &global_box);
+                    // #7640 section D: key first — `unbox_str_handle` can
+                    // allocate (SSO materialisation), and a raw receiver pointer
+                    // taken above it is unrootable.
                     let key_handle = unbox_str_handle(blk, &key_box);
+                    let obj_handle = unbox_to_i64(blk, &global_box);
                     (obj_handle, key_handle)
                 };
                 let site_id = emit_typed_feedback_register_site(
@@ -997,8 +1000,9 @@ pub(crate) fn lower(
                         let (arr_box, key_box) = (vals[0].clone(), vals[1].clone());
                         let (arr_handle, key_handle) = {
                             let blk = ctx.block();
-                            let arr_handle = unbox_to_i64(blk, &arr_box);
+                            // #7640 section D: key first (see the globalThis arm).
                             let key_handle = unbox_str_handle(blk, &key_box);
+                            let arr_handle = unbox_to_i64(blk, &arr_box);
                             (arr_handle, key_handle)
                         };
                         let site_id = emit_typed_feedback_register_site(
@@ -1642,13 +1646,16 @@ pub(crate) fn lower(
                         );
                         let (obj_handle, key_handle) = {
                             let blk = ctx.block();
+                            // #7640 section D: the SSO-safe key unbox can
+                            // allocate, so it goes FIRST — `obj_bits` is a
+                            // NaN-boxed double the group re-read, but
+                            // `obj_handle` is a raw `i64` no root can name.
+                            let key_handle = unbox_str_handle(blk, &key_box);
                             let obj_handle = super::index_get::classref_preserving_handle(
                                 blk,
                                 &obj_bits,
                                 static_classref,
                             );
-                            // SSO-safe key unbox — see IndexGet branch above for rationale.
-                            let key_handle = unbox_str_handle(blk, &key_box);
                             (obj_handle, key_handle)
                         };
                         let site_id = emit_typed_feedback_register_site(
@@ -1773,9 +1780,20 @@ pub(crate) fn lower(
                     // on captured arrays whose static type was lost across the
                     // closure boundary (forEach callbacks, replace callbacks, etc.).
                     ctx.current_block = str_set;
-                    let key_handle = {
+                    // #7640 section D, the cross-block half. `unbox_str_handle`
+                    // can allocate (SSO materialisation), and the entry block's
+                    // `obj_handle` is a RAW `i64` computed two conditional
+                    // branches above it — nothing can name it across that
+                    // allocation. Re-derive it here, below the key unbox.
+                    let (key_handle, obj_handle) = {
                         let blk = ctx.block();
-                        unbox_str_handle(blk, &idx_box)
+                        let key_handle = unbox_str_handle(blk, &idx_box);
+                        let obj_handle = super::index_get::classref_preserving_handle(
+                            blk,
+                            &obj_bits,
+                            static_classref,
+                        );
+                        (key_handle, obj_handle)
                     };
                     ctx.block().call(
                         I64,
