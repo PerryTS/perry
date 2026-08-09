@@ -311,7 +311,16 @@ pub(crate) fn raw_ptr_from_value(value: f64) -> usize {
 }
 
 pub(crate) unsafe fn gc_type_for_ptr(raw: usize) -> Option<u8> {
-    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // #7531: `raw` comes from `raw_ptr_from_value` above, which extracts an
+    // address from an arbitrary JS value (`this`, a socket-like receiver
+    // reachable via `Socket.prototype.<method>.call(fakeThis)`, ...). It can
+    // be a fetch/zlib/proxy/common-registry handle id, not a heap object.
+    // The old floor (0x1008) sits below every handle band and used the
+    // local name `raw`, which also made it invisible to
+    // `scripts/addr_class_inventory.py`'s `handle-floor` regex (it only
+    // matches `ptr`/`addr`/`bits`-shaped identifiers) -- this site was debt
+    // the ratchet could not even see.
+    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
         return None;
     }
     let header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -725,4 +734,42 @@ pub(crate) fn call_function(callback: f64, this: f64, args: &[f64]) -> f64 {
         unsafe { crate::closure::js_native_call_value(callback, args.as_ptr(), args.len()) };
     crate::object::js_implicit_this_set(prev);
     result
+}
+
+#[cfg(test)]
+mod gc_type_for_ptr_tests {
+    use super::object_ptr_from_value;
+    use crate::value::{addr_class, JSValue};
+
+    /// #7531: `object_ptr_from_value` (via `gc_type_for_ptr`) is reachable
+    /// with any receiver a caller passes -- including a Socket method
+    /// borrowed via `Socket.prototype.<method>.call(fakeThis)`, where
+    /// `fakeThis` can be a fetch/zlib/proxy/common-registry handle id. The
+    /// OLD floor (`GC_HEADER_SIZE + 0x1000` = 0x1008) sits below every
+    /// handle band, so a banded id would have reached the `GcHeader` deref
+    /// in `gc_type_for_ptr` unconditionally -- SIGSEGV on Linux. Every
+    /// probe here is >= that old floor, so the old code would have admitted
+    /// it; the new predicate rejects all of them by band.
+    #[test]
+    fn handle_band_boundaries_are_rejected_without_dereferencing() {
+        const OLD_FLOOR: usize = 0x1008;
+        let probes = [
+            addr_class::COMMON_HANDLE_BAND_END,
+            addr_class::FETCH_HANDLE_BAND_START,
+            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::PROXY_ID_BAND_START,
+            addr_class::HANDLE_BAND_MAX - 1,
+        ];
+        for addr in probes {
+            assert!(
+                addr >= OLD_FLOOR,
+                "{addr:#x} must be at/above the old floor to prove the gap"
+            );
+            let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+            assert!(
+                object_ptr_from_value(boxed).is_none(),
+                "{addr:#x} must not resolve to an ObjectHeader"
+            );
+        }
+    }
 }

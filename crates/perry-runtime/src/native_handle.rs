@@ -146,7 +146,13 @@ unsafe fn handle_from_value(value: f64) -> *mut NativeHandleHeader {
         return ptr::null_mut();
     }
     let handle = js_value.as_pointer::<NativeHandleHeader>() as *mut NativeHandleHeader;
-    if handle.is_null() || (handle as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // #7531: `value` arrives at every native-handle API boundary (finalize,
+    // resource-pointer access, thread-affinity checks, ...) as an arbitrary
+    // POINTER_TAG payload, so it can be a fetch/zlib/proxy/common-registry
+    // handle id rather than a real heap object. The old magnitude floor
+    // (0x1008) sits below every handle band, so a banded id reached the
+    // GcHeader deref below.
+    if handle.is_null() || !crate::value::addr_class::is_plausible_heap_addr(handle as usize) {
         return ptr::null_mut();
     }
     let gc_header =
@@ -417,6 +423,45 @@ mod tests {
                 THREAD_ANY as i32,
             );
         }));
+    }
+
+    /// #7531: the OLD guard was a bare magnitude floor
+    /// (`GC_HEADER_SIZE + 0x1000` = 0x1008). Every one of these handle-band
+    /// boundaries sits above that floor, so the old `handle_from_value`
+    /// would have proceeded past it to `handle.sub(GC_HEADER_SIZE)` —
+    /// unmapped low memory, SIGSEGV on Linux. Reaching the assertion at all
+    /// (no crash) is half the test; the other half is that the value is
+    /// rejected as a native handle rather than misclassified.
+    #[test]
+    fn handle_band_boundaries_fail_unwrap_without_dereferencing() {
+        use crate::value::addr_class;
+        const OLD_FLOOR: usize = 0x1008;
+        let probes = [
+            addr_class::COMMON_HANDLE_BAND_END,
+            addr_class::FETCH_HANDLE_BAND_START,
+            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::PROXY_ID_BAND_START,
+            addr_class::HANDLE_BAND_MAX - 1,
+        ];
+        for addr in probes {
+            assert!(
+                addr >= OLD_FLOOR,
+                "{addr:#x} must be at/above the old floor to prove the gap"
+            );
+            let boxed = crate::value::js_nanbox_pointer(addr as i64);
+            assert!(
+                catch_runtime_throw(|| {
+                    js_native_handle_unwrap(
+                        boxed,
+                        type_id("Thing"),
+                        0,
+                        OWNERSHIP_BORROWED as i32,
+                        THREAD_ANY as i32,
+                    );
+                }),
+                "{addr:#x} must not unwrap as a native handle"
+            );
+        }
     }
 
     #[test]

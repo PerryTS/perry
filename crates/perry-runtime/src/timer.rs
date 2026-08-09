@@ -941,7 +941,8 @@ fn raw_closure_pointer(bits: u64) -> Option<usize> {
         return None;
     }
     let ptr = bits as usize;
-    if ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // #7531: band, not magnitude floor (0x1008 admitted every handle band).
+    if !crate::value::addr_class::is_plausible_heap_addr(ptr) {
         return None;
     }
     let header_addr = ptr - crate::gc::GC_HEADER_SIZE;

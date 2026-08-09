@@ -762,17 +762,22 @@ fn callable_then_field(value: f64) -> Option<f64> {
         return None;
     }
     let addr = (bits & POINTER_MASK) as usize;
-    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // #7531: `value` is whatever `original` (the function passed to
+    // `util.callbackify`) synchronously returned -- user code, so it can be
+    // a Web Fetch / zlib / revocable-Proxy / common-registry handle id
+    // smuggled under the same POINTER_TAG as a real heap object (e.g.
+    // `callbackify(() => new Response())`). The old magnitude floor
+    // (`GC_HEADER_SIZE + 0x1000` = 0x1008) sits below every handle band, so
+    // it let a fetch handle (id 0x40000) straight through to the
+    // `addr - GC_HEADER_SIZE` deref that used to follow -- unmapped low
+    // memory, SIGSEGV on Linux (masked on macOS by its ~2 TB heap floor).
+    // `try_read_gc_header` classifies by band first and only then reads the
+    // header.
+    let Some(gc_header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return None;
-    }
-    // Only read `.then` off genuine object headers; reading arbitrary heap
-    // types as objects would segfault.
-    unsafe {
-        let gc_header =
-            (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return None;
-        }
+    };
+    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
     }
     let obj = addr as *const crate::object::ObjectHeader;
     let key = js_string_from_bytes(b"then".as_ptr(), 4);
@@ -850,4 +855,72 @@ fn make_falsy_rejection_error(reason: f64) -> f64 {
     );
 
     nanbox_pointer(error_handle.get_raw_const_ptr::<crate::error::ErrorHeader>() as *const u8)
+}
+
+#[cfg(test)]
+mod callable_then_field_tests {
+    use super::callable_then_field;
+    use crate::value::{addr_class, POINTER_TAG};
+
+    fn handle_boxed(addr: usize) -> f64 {
+        f64::from_bits(POINTER_TAG | (addr as u64))
+    }
+
+    /// #7531: the OLD guard was a bare magnitude floor
+    /// (`GC_HEADER_SIZE + 0x1000` = 0x1008). Every handle band sits above
+    /// that floor, so the old code would have proceeded to dereference
+    /// `addr - GC_HEADER_SIZE` for each of these -- unmapped low memory,
+    /// SIGSEGV on Linux. The new predicate (`try_read_gc_header`, via
+    /// `is_plausible_heap_addr`) rejects all of them by magnitude alone,
+    /// without touching memory. This is the concrete "old admitted, new
+    /// rejects" gap the conversion closes.
+    #[test]
+    fn old_floor_admitted_every_handle_band_the_new_predicate_rejects() {
+        const OLD_FLOOR: usize = 0x1008;
+        let probes = [
+            (
+                addr_class::COMMON_HANDLE_BAND_END,
+                "common/fetch band boundary",
+            ),
+            (
+                addr_class::FETCH_HANDLE_BAND_START,
+                "fetch band start (new Response())",
+            ),
+            (addr_class::ZLIB_HANDLE_BAND_START, "zlib band start"),
+            (addr_class::PROXY_ID_BAND_START, "proxy id band start"),
+            (addr_class::HANDLE_BAND_MAX - 1, "last handle-band address"),
+        ];
+        for (addr, what) in probes {
+            assert!(
+                addr >= OLD_FLOOR,
+                "{what} ({addr:#x}) is below the old floor -- pick a bigger probe"
+            );
+            assert!(
+                unsafe { crate::value::addr_class::try_read_gc_header(addr) }.is_none(),
+                "{what} ({addr:#x}) must be rejected by the new predicate"
+            );
+        }
+    }
+
+    /// Walks the same boundaries through the real, now-fixed function --
+    /// reaching the assertion at all (no SIGSEGV) is half the test, in the
+    /// style of #7530's `fetch_subclass_probe_rejects_every_handle_band_
+    /// without_dereferencing`.
+    #[test]
+    fn callable_then_field_rejects_every_handle_band_without_dereferencing() {
+        let probes = [
+            addr_class::COMMON_HANDLE_BAND_END,
+            addr_class::FETCH_HANDLE_BAND_START,
+            addr_class::FETCH_HANDLE_BAND_START + 1,
+            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::PROXY_ID_BAND_START,
+            addr_class::HANDLE_BAND_MAX - 1,
+        ];
+        for addr in probes {
+            assert!(
+                callable_then_field(handle_boxed(addr)).is_none(),
+                "{addr:#x} must not probe as a thenable"
+            );
+        }
+    }
 }
