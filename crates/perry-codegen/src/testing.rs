@@ -64,5 +64,15 @@
 //!
 //! The pin is thread-local and restoring, so it is safe under `cargo test`'s
 //! default parallelism: one test's pin cannot retarget another's compile.
+//!
+//! # What else lives here
+//!
+//! [`root_slots`] — the reader that attributes emitted root-slot traffic to the
+//! alloca it names (#7504). It is here rather than in a `tests/` support module
+//! for the same reason `NativeRootsPin` is: both the integration suites and
+//! this crate's own `#[cfg(test)]` modules need it, and a second copy is a
+//! second thing to keep in step.
+
+pub mod root_slots;
 
 pub use crate::codegen::helpers::NativeRootsPin;
