@@ -74,5 +74,12 @@ holds only a mutable one. With scavenge off the trigger goes to the budgeted
 stepper, which is non-moving by construction, and the symptom is a third route
 to the same message. The file records all three.
 
-`gc-ratchet` pins the pre-change evacuation accounting and needs regenerating on
-the pinned host.
+**`gc-ratchet` baseline: deliberately NOT regenerated here.** The pinned
+artifact records the evacuation accounting of the pre-#7682 collector, and this
+change moves those counters — the copying minors are the same ones, but they now
+run at a declared safepoint rather than at an allocation point. Re-pinning is a
+maintainer act on the pinned quiet host
+(`benchmarks/gc_ratchet/run_gc_ratchet_baseline.sh --pin --notes …`), it is
+explicitly out of scope for this PR, and until it happens the `gc-ratchet` job
+is expected to report a breach on the evacuation family. Nothing in this change
+depends on that artifact.

@@ -624,20 +624,29 @@ pub(super) fn force_moving_gc_pacing() -> LegacyGcPacingGuard {
     }
 }
 
-/// Pin the pacing combination a **shipped binary actually runs**: moving-loop
-/// polls OFF (`gc_moving_loop_polls_enabled`, default OFF since #7161) and
-/// scavenge ON (`gc_scavenge_enabled`, default ON since #7056).
+/// Pin the one pacing combination in which nursery pressure reaches the DIRECT
+/// allocation-point minor: moving-loop polls OFF (so nothing defers) and
+/// scavenge ON (so the arm in `gc_check_trigger` is open at all).
 ///
-/// This is a third combination, and its absence is part of why #7682 shipped.
+/// **This is the `PERRY_GC_MOVING_LOOP_POLLS=0` kill-switch configuration, and
+/// it is deliberately NOT called "shipped default" any more.** It *was* the
+/// shipped default — polls OFF since #7161, scavenge ON since #7056 — and it is
+/// the combination #7682 was found in. The follow-up that turned polls back ON
+/// made that name a lie in the same PR that introduced it, which is the kind of
+/// stale claim this whole line of work is about. A test naming this guard is
+/// asserting something about the kill switch; a test that wants the default
+/// must take no pacing guard at all.
+///
+/// The third combination is what needed a guard in the first place.
 /// [`force_legacy_gc_pacing`] pins polls OFF *and* scavenge OFF;
 /// [`force_moving_gc_pacing`] pins both ON. Every test in this crate therefore
-/// declared a pacing mode in which the two flags agreed — and the
+/// declared a pacing mode in which the two flags AGREED — and the
 /// alloc-point/deferral interaction that broke is precisely the one where they
-/// DISAGREE: scavenge routes nursery pressure to the direct alloc-point minor,
+/// disagree: scavenge routes nursery pressure to the direct alloc-point minor,
 /// while the deferral that was supposed to move that collection to a precise
-/// safepoint is gated on the polls flag and never runs.
+/// safepoint is gated on the polls flag.
 #[cfg(test)]
-pub(super) fn force_shipped_default_gc_pacing() -> LegacyGcPacingGuard {
+pub(super) fn force_alloc_point_minor_pacing() -> LegacyGcPacingGuard {
     let previous = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| cell.replace(Some(false)));
     let cap_previous = GC_NURSERY_CAP_TEST_SUPPRESSED.with(|cell| cell.replace(false));
     let scavenge_previous = super::GC_SCAVENGE_TEST_OVERRIDE.with(|cell| cell.replace(Some(true)));

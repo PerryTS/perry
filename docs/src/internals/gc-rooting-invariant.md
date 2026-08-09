@@ -50,8 +50,12 @@ wrong:
   and a zeal run all come back clean. `PERRY_GC_VERIFY_EVACUATION` checks that
   reachable slots were forwarded; it cannot check a register it does not know
   exists;
-- it is **invisible by default**, because the back-edge poll that triggers it is
-  off. A green default test run says nothing about this class.
+- it is **visible by default only where a poll is emitted.** The back-edge poll
+  is on by default again, but `emit_gc_loop_safepoint` emits it only into loops
+  `loop_purity::loop_may_allocate` says can allocate — so a default run covers
+  this class exactly when execution reaches such a loop, and covers nothing in
+  a program whose hot path is a proven alloc-free loop. `PERRY_GC_MOVING_LOOP_POLLS=0`
+  removes the coverage entirely.
 
 Four instances shipped in a single day. The detection lag, not the fix, was the
 cost every time.

@@ -478,16 +478,23 @@ fn plant_on_native_stack_and_check_trigger(triggers: &GcTriggerThresholdTestGuar
 }
 
 #[test]
-fn the_alloc_point_nursery_minor_retains_native_stack_values_under_shipped_pacing() {
-    // The regression test for #7682, and it is pinned to the pacing a shipped
-    // binary actually has: polls OFF (#7161) so the deferral to a precise
-    // safepoint never fires, scavenge ON (#7056) so nursery pressure is routed
-    // to this direct alloc-point minor. In that combination the guard below
-    // was skipped, the copying minor became eligible at a register-imprecise
-    // point, and a tree-walking interpreter silently returned the wrong number
-    // because a relocated heap string was read back out of a stale register.
+fn the_alloc_point_nursery_minor_retains_native_stack_values_under_the_polls_off_kill_switch() {
+    // The regression test for #7682, pinned to the pacing that reaches the
+    // direct alloc-point minor at all: polls OFF so the deferral to a precise
+    // safepoint never fires, scavenge ON so the arm is open. That was the
+    // SHIPPED default when #7682 was found, and it is the `=0` kill switch
+    // now that polls are back ON — the guard's name says so. In this
+    // combination the guard below was skipped, the copying minor became
+    // eligible at a register-imprecise point, and a tree-walking interpreter
+    // silently returned the wrong number because a relocated heap string was
+    // read back out of a stale register.
+    //
+    // It still has to hold under the kill switch. `=0` is a supported
+    // configuration, and "we moved the collection somewhere else by default"
+    // is not a reason for the alloc-point minor to be allowed to relocate when
+    // a user turns that route off.
     let _isolation = GcTestIsolationGuard::new();
-    let _pacing = crate::gc::policy::force_shipped_default_gc_pacing();
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_old_reclaim_state();
     reset_scan_fallback_counters();
@@ -531,7 +538,7 @@ fn the_alloc_point_plant_dies_when_the_scan_is_pinned_off() {
     // "the malloc sweep never ran" rather than "the guard held", and both
     // arms would be green on a tree with the bug back in it.
     let _isolation = GcTestIsolationGuard::new();
-    let _pacing = crate::gc::policy::force_shipped_default_gc_pacing();
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_old_reclaim_state();
     reset_scan_fallback_counters();
