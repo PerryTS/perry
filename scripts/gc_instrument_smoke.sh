@@ -38,6 +38,14 @@ PERRY_BIN="$(cd "$(dirname "$PERRY_BIN")" && pwd)/$(basename "$PERRY_BIN")"
 export PERRY_RUNTIME_DIR="${PERRY_RUNTIME_DIR:-$(dirname "$PERRY_BIN")}"
 export PERRY_NO_AUTO_OPTIMIZE=1
 
+# Arms 1-3 and 5 drive the SMALL fixture below, which is sized so that literal
+# every-poll zeal costs seconds. Pin the strongest semantics for them
+# explicitly (#7728 made the shipped default allocation-paced), so this gate
+# keeps testing "a collection at every single poll" rather than silently
+# following whatever the default becomes. Arm 6 is the one that asserts the
+# DEFAULT is usable, and it deliberately does not set this.
+export PERRY_GC_ZEAL_ALLOC_KB=0
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -280,9 +288,101 @@ if ! grep -q 'stale forwarded pointer' <<<"$repro_out"; then
 fi
 echo "  reproduced as pinned (exit $repro_rc, stale forwarded pointer) -- #7254 still open, tracked not silent"
 
+# ---- arm 6: zeal must TERMINATE at the shipped default (#7728) --------------
+#
+# Every arm above runs the ~1200-poll fixture, which is deliberately tiny
+# ("costs seconds rather than minutes"). That sizing is exactly why this gate
+# could not see #7728: zeal forced a collection at EVERY back-edge poll, and on
+# a small enough fixture that is indistinguishable from a paced instrument. The
+# moment #7721 turned back-edge polls on by default, the same instrument cost
+# ~511 us per loop iteration on real code -- 24 minutes for a 19 s program, i.e.
+# an instrument nobody can switch on, with nothing in CI to say so.
+#
+# So this arm is the one that is allowed to be slow-ish and is BUDGETED. It runs
+# a workload with a realistic poll count at the DEFAULT stride (note the
+# explicit unset -- the export at the top of this file pins every-poll mode for
+# the small fixture, which would defeat the whole point here) and requires
+# correct output inside a wall-clock budget. Unpaced, this fixture takes ~200 s;
+# paced, a few. The budget sits between those, so the arm fails on a regression
+# rather than merely getting slower.
+echo
+echo "== arm 6: zeal terminates at the DEFAULT stride, on a realistic poll count =="
+
+cat > "$WORK/scale.ts" <<'TS'
+function run(n: number): number {
+  let acc = 0;
+  let i = 0;
+  while (i < n) {
+    const rec = { a: i, b: "v", c: i + 1 };
+    acc = acc + (rec.c as number) - (rec.a as number);
+    i = i + 1;
+  }
+  return acc;
+}
+console.log("sum", run(400000));
+TS
+
+"$PERRY_BIN" compile "$WORK/scale.ts" -o "$WORK/scale" >/dev/null
+
+ZEAL_BUDGET_S="${PERRY_ZEAL_SMOKE_BUDGET_S:-60}"
+scale_start=$(date +%s)
+set +e
+# `env -u` so the every-poll pin from the top of the file does NOT apply: this
+# arm's entire subject is the SHIPPED DEFAULT.
+scale_out="$(env -u PERRY_GC_ZEAL_ALLOC_KB PERRY_GC_ZEAL=1 \
+  perl -e 'alarm shift; exec @ARGV' "$ZEAL_BUDGET_S" "$WORK/scale" 2>&1)"
+scale_rc=$?
+set -e
+scale_elapsed=$(( $(date +%s) - scale_start ))
+
+if [[ $scale_rc -ne 0 ]]; then
+  echo "FAIL [arm6]: zeal did not complete in ${ZEAL_BUDGET_S}s (exit $scale_rc," >&2
+  echo "      elapsed ${scale_elapsed}s). PERRY_GC_ZEAL is the primary instrument" >&2
+  echo "      for moving-GC correctness bugs; one that does not terminate is one" >&2
+  echo "      nobody will use. This is #7728's shape: a forced collection at" >&2
+  echo "      EVERY back-edge poll, ~511 us each, once polls became default-ON." >&2
+  echo "$scale_out" | tail -20 >&2
+  exit 1
+fi
+if ! grep -q '^sum 400000$' <<<"$scale_out"; then
+  echo "FAIL [arm6]: wrong answer under zeal at the default stride:" >&2
+  grep '^sum' <<<"$scale_out" >&2 || echo "(no 'sum' line)" >&2
+  exit 1
+fi
+
+# NON-VACUITY. A fast arm proves nothing unless zeal actually collected and
+# actually moved -- "fast because it collects nothing" would be a worse
+# regression than the slow instrument it replaced.
+zeal_line="$(grep -m1 '^\[gc-zeal\] forced_collections=' <<<"$scale_out" || true)"
+if [[ -z "$zeal_line" ]]; then
+  echo "FAIL [arm6]: no [gc-zeal] verdict line -- cannot tell whether zeal ran." >&2
+  exit 1
+fi
+scale_forced="$(grep -oE 'forced_collections=[0-9]+' <<<"$zeal_line" | cut -d= -f2)"
+scale_minors="$(grep -oE 'copying_minors=[0-9]+' <<<"$zeal_line" | cut -d= -f2)"
+scale_moved="$(grep -oE 'moved_objects=[0-9]+' <<<"$zeal_line" | cut -d= -f2)"
+scale_polls="$(grep -oE 'loop_polls=[0-9]+' <<<"$zeal_line" | cut -d= -f2)"
+if [[ "$scale_forced" -eq 0 || "$scale_minors" -eq 0 || "$scale_moved" -eq 0 ]]; then
+  echo "FAIL [arm6]: zeal finished fast because it did NOTHING" >&2
+  echo "      ($zeal_line)." >&2
+  echo "      Pacing must bound the instrument, not disable it." >&2
+  exit 1
+fi
+# ...and the pacing must genuinely be pacing: far fewer collections than polls.
+# Pre-#7728 this ratio was 1:1, which is the regression itself.
+if [[ "$scale_polls" -gt 0 && "$scale_forced" -ge "$scale_polls" ]]; then
+  echo "FAIL [arm6]: zeal forced $scale_forced collections for $scale_polls polls." >&2
+  echo "      That is the unpaced 1:1 behaviour #7728 removed." >&2
+  exit 1
+fi
+echo "  correct output in ${scale_elapsed}s (budget ${ZEAL_BUDGET_S}s), $zeal_line"
+
 echo
 echo "PASS: instruments inert when off (0 retirements), live when on"
 echo "      (no-zeal=$nozeal_retired, zeal=$zeal_retired retirements), program correct in all arms."
 echo "      Quarantine clean over $probe_count real probes (allocation-point route)."
 echo "      ZEAL+VERIFY_EVACUATION pairing live and correct on known-good code,"
 echo "      and still pins #7254's open reproducer rather than staying silent about it."
+echo "      Zeal terminates at the shipped default on a realistic poll count"
+echo "      (${scale_elapsed}s of a ${ZEAL_BUDGET_S}s budget) while still forcing"
+echo "      $scale_forced collections that moved $scale_moved objects."

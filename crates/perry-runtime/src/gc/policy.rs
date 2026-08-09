@@ -587,7 +587,7 @@ impl Drop for LegacyGcPacingGuard {
 /// Pin moving-loop polls ON for the duration of the returned guard, so a test
 /// can drive `js_gc_loop_safepoint` without depending on the process-wide
 /// default (which the `OnceLock` fixes from the environment once per test
-/// binary — exactly the ambient dependency #7726's own regression hid behind).
+/// binary — exactly the ambient dependency #7728's own regression hid behind).
 #[cfg(test)]
 pub(super) struct MovingLoopPollsGuard(Option<bool>);
 
@@ -2412,7 +2412,7 @@ pub extern "C" fn js_gc_loop_safepoint() {
     // above still applies — see `gc/zeal.rs` for why that means "compile AND run
     // with `PERRY_GC_MOVING_LOOP_POLLS=1`".
     //
-    // ★ #7726: "at polls", not "at EVERY poll". Unpaced, this arm cost ~511 µs
+    // ★ #7728: "at polls", not "at EVERY poll". Unpaced, this arm cost ~511 µs
     // per loop iteration to relocate a mean of 5.9 objects, which made zeal
     // unusable on any real workload the moment #7721 turned back-edge polls on
     // by default (24 minutes for a 19 s program). The stride is a bound on

@@ -373,7 +373,7 @@ fn zeal_collects_at_a_safepoint_with_no_pressure_due() {
 }
 
 // ---------------------------------------------------------------------------
-// Zeal pacing (#7726). Zeal used to force a collection at EVERY back-edge poll.
+// Zeal pacing (#7728). Zeal used to force a collection at EVERY back-edge poll.
 // That was affordable only while the polls themselves were a compile-time
 // opt-in nobody took; #7721 made them default-ON and the same instrument became
 // ~511 us of fixed collection cost per loop iteration — 24 minutes for a 19 s
@@ -391,13 +391,13 @@ fn zeal_alloc_stride_knob_parses_both_states() {
     assert_eq!(parse_zeal_alloc_kb(None), 4096);
     assert_eq!(parse_zeal_alloc_kb(Some("banana")), 4096);
     assert_eq!(parse_zeal_alloc_kb(Some("")), 4096);
-    // 0 is MEANINGFUL, not garbage: it restores pre-#7726 every-poll zeal.
+    // 0 is MEANINGFUL, not garbage: it restores pre-#7728 every-poll zeal.
     assert_eq!(parse_zeal_alloc_kb(Some("0")), 0);
     assert_eq!(parse_zeal_alloc_kb(Some("16")), 16 * 1024);
     assert_eq!(parse_zeal_alloc_kb(Some(" 64 ")), 64 * 1024);
 }
 
-/// ★ The regression test for #7726, and the one that would have caught it.
+/// ★ The regression test for #7728, and the one that would have caught it.
 ///
 /// Drives a hot poll loop — the shape of every real workload under zeal — and
 /// asserts the forced collections are BOUNDED well below the poll count. Before
@@ -442,7 +442,7 @@ fn zeal_pacing_bounds_forced_collections_but_still_moves_objects() {
     assert!(
         forced < POLLS / 4,
         "zeal must PACE its forced collections: {forced} forced for {POLLS} polls \
-         (pre-#7726 this was 1:1, which cost 24 minutes on a 19 s program)"
+         (pre-#7728 this was 1:1, which cost 24 minutes on a 19 s program)"
     );
     assert_eq!(
         forced + paced,

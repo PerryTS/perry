@@ -51,9 +51,9 @@
 //! liveness counter this module exposes was unreadable from a compiled program
 //! and the documented check could not be performed.
 //!
-//! # Pacing: why "every poll" is not a usable default (#7254, #7726)
+//! # Pacing: why "every poll" is not a usable default (#7254, #7728)
 //!
-//! Point 1 above says "every loop back-edge poll", and until #7726 it meant
+//! Point 1 above says "every loop back-edge poll", and until #7728 it meant
 //! that literally. That was affordable only for as long as back-edge polls were
 //! a compile-time opt-in nobody took: with `PERRY_GC_MOVING_LOOP_POLLS` default
 //! OFF (#7161), a compute-only program reached **no** loop safepoint, so zeal
@@ -167,7 +167,7 @@ pub(crate) fn note_zeal_forced_collection() {
     ZEAL_FORCED.fetch_add(1, Ordering::Relaxed);
 }
 
-// ------------------------------------------------------------- pacing (#7726)
+// ------------------------------------------------------------- pacing (#7728)
 
 /// Default stride: 4 KB of new nursery material between zeal-forced collections.
 ///
@@ -180,7 +180,7 @@ pub(crate) fn note_zeal_forced_collection() {
 const ZEAL_DEFAULT_STRIDE_BYTES: usize = 4 * 1024;
 
 /// Pure knob parse for `PERRY_GC_ZEAL_ALLOC_KB`, in KB. `Some(0)` is a
-/// deliberate, meaningful value — "collect at every poll", the pre-#7726
+/// deliberate, meaningful value — "collect at every poll", the pre-#7728
 /// semantics — so it must not be filtered out the way a nonsense value is.
 pub(crate) fn parse_zeal_alloc_kb(raw: Option<&str>) -> usize {
     raw.and_then(|s| s.trim().parse::<usize>().ok())
@@ -438,7 +438,8 @@ mod verdict_tests {
     /// different causes and the message has to name the right one.
     #[test]
     fn a_zeal_run_that_exercised_nothing_is_an_error() {
-        let no_safepoint = zeal_verdict(0, 0, 0, 0, false, 0, 4096).expect_err("forced=0 must be an error");
+        let no_safepoint =
+            zeal_verdict(0, 0, 0, 0, false, 0, 4096).expect_err("forced=0 must be an error");
         assert!(no_safepoint.contains("no safepoint ever forced a collection"));
 
         // Zeal DID force collections and every one was escalated to a full
