@@ -44,11 +44,29 @@ extern "C" fn fake_generator_body(_c: *const crate::closure::ClosureHeader, _a: 
 /// the first `generator_prototype_ptr` call and costs dozens of allocations;
 /// paying it here keeps the call under test down to its own two, so the
 /// injected trigger lands where we intend.
+///
+/// **Must call the builder directly.** This used to go through
+/// `js_generator_attach_prototype(TAG_UNDEFINED, 0)`, banking on that helper
+/// reaching `generator_prototype_ptr` and lazily building the tower as a side
+/// effect. It never did: `js_generator_attach_prototype` returns at its very
+/// first line for any non-pointer `obj` (`!jv.is_pointer()`), so the "warm-up"
+/// call was a no-op that touched nothing. That went unnoticed only because
+/// `GENERATOR_FUNCTION_INTRINSIC_PTR` & co. were plain process-global statics
+/// pre-#7723 — some earlier test in the same binary had almost always already
+/// built the tower, so the *real* call under test found it cached regardless
+/// of what this function did. #7723 converted those statics to
+/// `per_test_global!` so each test starts from a guaranteed first-touch state
+/// (its whole point, for `gc::tests::lazy_intrinsic_towers`), which took away
+/// the accidental cross-test priming and exposed this helper as dead code:
+/// with nothing pre-built, the real call now pays the dozens-of-allocations
+/// tower build itself, inside `GcSuppressScope` (#7251's no-move window for
+/// that build), which swallows the injected arena trigger for the rest of the
+/// call and no copying minor ever runs — "subject not live" in the two
+/// alloc-point tests, and the deferral witness never seeing its trigger armed
+/// in the third. Call the builder directly so this function does what its
+/// name and doc always claimed.
 fn warm_generator_intrinsics() {
-    let _ = crate::object::js_generator_attach_prototype(
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-        0,
-    );
+    crate::object::ensure_generator_intrinsics();
 }
 
 /// A shadow-rooted, freshly allocated object standing in for a generator
