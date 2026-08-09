@@ -372,6 +372,162 @@ fn zeal_collects_at_a_safepoint_with_no_pressure_due() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Zeal pacing (#7726). Zeal used to force a collection at EVERY back-edge poll.
+// That was affordable only while the polls themselves were a compile-time
+// opt-in nobody took; #7721 made them default-ON and the same instrument became
+// ~511 us of fixed collection cost per loop iteration — 24 minutes for a 19 s
+// program, which is an instrument nobody switches on.
+//
+// Both directions are asserted, per the kill-policy: the stride must BOUND the
+// forced collections, and `=0` must still give the literal every-poll mode.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn zeal_alloc_stride_knob_parses_both_states() {
+    use super::super::zeal::parse_zeal_alloc_kb;
+    // Default when unset or unparseable — a typo must not silently select the
+    // unusable every-poll mode.
+    assert_eq!(parse_zeal_alloc_kb(None), 4096);
+    assert_eq!(parse_zeal_alloc_kb(Some("banana")), 4096);
+    assert_eq!(parse_zeal_alloc_kb(Some("")), 4096);
+    // 0 is MEANINGFUL, not garbage: it restores pre-#7726 every-poll zeal.
+    assert_eq!(parse_zeal_alloc_kb(Some("0")), 0);
+    assert_eq!(parse_zeal_alloc_kb(Some("16")), 16 * 1024);
+    assert_eq!(parse_zeal_alloc_kb(Some(" 64 ")), 64 * 1024);
+}
+
+/// ★ The regression test for #7726, and the one that would have caught it.
+///
+/// Drives a hot poll loop — the shape of every real workload under zeal — and
+/// asserts the forced collections are BOUNDED well below the poll count. Before
+/// the fix this ratio was exactly 1.0 (70,968 forced collections for 70,963
+/// polls on the measured workload), so this assertion fails on the old code.
+///
+/// It is paired with two liveness assertions, because "fast" is trivially
+/// achievable by collecting nothing and that would be a worse regression than
+/// the one being fixed (CLAUDE.md, four ways a gate cannot fail — #4): the run
+/// must still force collections, and those collections must still MOVE objects.
+#[test]
+fn zeal_pacing_bounds_forced_collections_but_still_moves_objects() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _polls = super::super::policy::MovingLoopPollsGuard::on();
+    let _zeal = super::super::zeal::ZealGuard::set(true);
+    let _stride = super::super::zeal::ZealStrideGuard::set(4096);
+    super::super::zeal::reset_zeal_pacing_for_test();
+
+    const POLLS: u64 = 2_000;
+    let forced_before = zeal_forced_collections();
+    let moved_before = moved_objects_total();
+    let paced_before = zeal_polls_paced();
+
+    for _ in 0..POLLS {
+        // Allocate, root it, then poll — a loop body that produces new nursery
+        // material every iteration, which is what makes the unpaced instrument
+        // collect every time.
+        let leaf = young_leaf();
+        js_shadow_slot_set(0, string_bits(leaf));
+        js_gc_loop_safepoint();
+    }
+
+    let forced = zeal_forced_collections() - forced_before;
+    let moved = moved_objects_total() - moved_before;
+    let paced = zeal_polls_paced() - paced_before;
+
+    // THE BOUND. Each `young_leaf` is a few tens of bytes, so 2000 of them is
+    // well under 200 KB; at a 4 KB stride that is a few dozen collections, not
+    // 2000. A generous ceiling keeps this from being an allocator-size test
+    // while still failing loudly on the pre-fix 1:1 behaviour.
+    assert!(
+        forced < POLLS / 4,
+        "zeal must PACE its forced collections: {forced} forced for {POLLS} polls \
+         (pre-#7726 this was 1:1, which cost 24 minutes on a 19 s program)"
+    );
+    assert_eq!(
+        forced + paced,
+        POLLS,
+        "every poll must be accounted for as either forced or paced \
+         (forced={forced} paced={paced})"
+    );
+
+    // LIVENESS 1: pacing must not have turned zeal off. A run that forces zero
+    // collections is the vacuous-green shape, not a fix.
+    assert!(
+        forced > 0,
+        "zeal must still force collections — a paced instrument that never \
+         collects is a worse regression than the slow one it replaced"
+    );
+    // LIVENESS 2: and those collections must still RELOCATE. Zeal exists to
+    // make an unrooted value move on its first exposure; a paced minor that
+    // leaves survivors in place would surface nothing.
+    assert!(
+        moved > 0,
+        "zeal's paced collections must still MOVE survivors (moved={moved})"
+    );
+}
+
+/// The OFF state of the pacing knob, per the kill-policy: `=0` must restore the
+/// literal every-poll semantics, which is the right setting for a small fixture
+/// (`gc_instrument_smoke.sh` pins it) or a window executed exactly once.
+#[test]
+fn zeal_alloc_stride_zero_restores_every_poll_collection() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _polls = super::super::policy::MovingLoopPollsGuard::on();
+    let _zeal = super::super::zeal::ZealGuard::set(true);
+    let _stride = super::super::zeal::ZealStrideGuard::set(0);
+    super::super::zeal::reset_zeal_pacing_for_test();
+
+    const POLLS: u64 = 32;
+    let forced_before = zeal_forced_collections();
+    for _ in 0..POLLS {
+        let leaf = young_leaf();
+        js_shadow_slot_set(0, string_bits(leaf));
+        js_gc_loop_safepoint();
+    }
+    assert_eq!(
+        zeal_forced_collections() - forced_before,
+        POLLS,
+        "PERRY_GC_ZEAL_ALLOC_KB=0 must collect at EVERY poll — that escape \
+         hatch is what a once-executed bug window needs"
+    );
+}
+
+/// The pacing is a monotone high-water mark, not a "bytes since last time"
+/// delta, and the difference is the whole bound. If a forced collection
+/// reclaims nothing — an escalation to a non-moving full mark-sweep, which
+/// #7592 and #7682 both produced in the field — a delta-based pacer would find
+/// the threshold still met and collect again at the very next poll, restoring
+/// the livelock it was meant to remove. Rearming from the level measured AFTER
+/// the collection makes the next one cost a full stride of genuinely new
+/// allocation no matter what the collector managed to free.
+#[test]
+fn zeal_pacing_rearms_above_survivors_so_a_useless_collection_cannot_loop() {
+    use super::super::zeal::{
+        note_zeal_poll_collection, reset_zeal_pacing_for_test, zeal_poll_collection_due,
+        ZealStrideGuard,
+    };
+    let _stride = ZealStrideGuard::set(4096);
+    reset_zeal_pacing_for_test();
+
+    // A collection that freed NOTHING: from-space still holds 1 MB afterwards.
+    note_zeal_poll_collection(1024 * 1024);
+    assert!(
+        !zeal_poll_collection_due(1024 * 1024),
+        "a collection that reclaimed nothing must NOT be immediately due again \
+         — that is the #7592 livelock shape"
+    );
+    assert!(
+        !zeal_poll_collection_due(1024 * 1024 + 4095),
+        "still short of one full stride of new allocation"
+    );
+    assert!(
+        zeal_poll_collection_due(1024 * 1024 + 4096),
+        "one full stride of NEW material above the survivors makes it due again"
+    );
+}
+
 /// A zealous minor that leaves survivors in place would move nothing, so it
 /// could not surface a stale-pointer bug at all. Zeal therefore implies forced
 /// evacuation, UNCONDITIONALLY.
