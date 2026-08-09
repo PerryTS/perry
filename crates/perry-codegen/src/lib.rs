@@ -51,6 +51,12 @@ pub(crate) mod stmt;
 pub mod strings;
 pub mod stubs;
 pub mod target_layout;
+/// The #6951 temp-root emission contract, asserted in the per-PR `cargo-test`
+/// gate rather than in the nightly-only integration tier (#6988), and against
+/// the pooled lowering #7487 actually emits rather than the FFI spelling it
+/// replaced (#7503).
+#[cfg(test)]
+mod temp_root_coverage;
 /// Test-support surface — compiled only under `cfg(test)` or the `testing`
 /// cargo feature (which nothing but this crate's own `[dev-dependencies]`
 /// enables). See the module docs for why it is a feature and not a
