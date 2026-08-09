@@ -252,9 +252,13 @@ fn object_element_module(elem: Type, classes: Vec<Class>) -> Module {
         None,
     );
     m.classes = classes;
-    if let Some(Stmt::Let { ty, .. }) = m.init.first_mut() {
-        *ty = Type::Array(Box::new(elem));
-    }
+    // A silent skip here would leave the array typed `Node[]` and every
+    // object-literal test below would quietly be re-testing the named-class
+    // path — passing for the wrong reason. Assert the shape instead.
+    let Some(Stmt::Let { ty, .. }) = m.init.first_mut() else {
+        panic!("element_shape_module's first init statement should be the array `Let`");
+    };
+    *ty = Type::Array(Box::new(elem));
     m
 }
 
@@ -818,9 +822,13 @@ fn object_literal_element_resolution_does_not_escape_the_clone() {
     // resolver had been wired into `receiver_class_name` instead, this read
     // would have become a class-field diamond too — a change this PR did not
     // measure.
-    let after = &ir[ir
-        .find("element_shape.loop.merge")
-        .expect("merge block should exist")..];
+    //
+    // Sliced from the merge block's DEFINITION, not from the first mention of
+    // its name: the earliest occurrence is a `br label %element_shape.loop.merge`
+    // inside the fast clone, and slicing from there would let the CLONE's own
+    // instructions satisfy an assertion about what follows it.
+    let after = &ir[block_def_offset(&ir, "element_shape.loop.merge")
+        .expect("the merge block should be DEFINED in the emitted IR")..];
     assert!(
         after.contains("js_object_get_field_by_name_f64")
             || after.contains("js_object_get_field_ic_miss"),

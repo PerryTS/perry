@@ -436,12 +436,28 @@ for (let i = 0; i < 20; i++) {
 console.log("obj-layout-downgrade:", sumRow(rowsDown, rowsDown.length));
 console.log("obj-layout-downgrade-generic:", sumRowInlineBound(rowsDown));
 
+// Deleting a field the loop does NOT read still compacts the packed slots and
+// installs a fresh keys array, so the residual `keys_array` identity check is
+// the only thing between the clone and reading `w`'s old slot as `v`.
 const rowsDeleted: Row[] = [];
 for (let i = 0; i < 20; i++) {
   rowsDeleted.push({ v: i, w: i });
 }
 delete (rowsDeleted[2] as unknown as Record<string, unknown>).w;
 console.log("obj-deleted-field:", sumRow(rowsDeleted, rowsDeleted.length));
+
+// Deleting the field the loop DOES read: the element must read `undefined`,
+// so the sum is NaN rather than a slot load of whatever compacted into
+// index 0.
+const rowsDeletedRead: Row[] = [];
+for (let i = 0; i < 20; i++) {
+  rowsDeletedRead.push({ v: i, w: i });
+}
+delete (rowsDeletedRead[2] as unknown as Record<string, unknown>).v;
+console.log(
+  "obj-deleted-read-field:",
+  sumRow(rowsDeletedRead, rowsDeletedRead.length),
+);
 
 const rowsAccessor: Row[] = [];
 for (let i = 0; i < 20; i++) {

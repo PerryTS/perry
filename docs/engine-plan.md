@@ -99,10 +99,14 @@ dead 4b prototype flag). Next gap:
 homogeneous-element-shape invariant, construction-maintained, self-healing
 like 4a's dense bit), consumed first by the #5093 versioned-loop clone, then
 by element `Ptr<Shape>`. Prerequisite and consumer both landed (#7496, #7612);
-the consumer's growth-forwarding crash is #7660. **The element `Ptr<Shape>`
-half is still open and the kernel re-measures at 34.5× node, not the 6.2×
-#7480 recorded** — see backlog item 6 for the current table and for why the
-named-class arm's node baseline is not the literal arm's.
+the consumer's growth-forwarding crash is #7660, and the consumer now resolves
+**object-literal** element types too (#7669), which took #7480's own kernel
+from 34.5× node to **parity — 12 ms against node's 12 and bun's 12**. What
+remains is element `Ptr<Shape>` *outside* a loop, which needs the type
+visibility `receiver_class_name` deliberately still does not have; see backlog
+item 6 for the closing table, for why the named-class arm's node baseline is
+not the literal arm's, and for why the element-class proof and the
+accumulator's numeric proof are one lever rather than two.
 
 ### Object construction — the dominant cost (#7469 campaign)
 

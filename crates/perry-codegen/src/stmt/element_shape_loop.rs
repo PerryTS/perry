@@ -311,7 +311,7 @@ fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<S
         return None;
     }
 
-    let mut candidates: Vec<&str> = ctx
+    let candidates: Vec<&str> = ctx
         .classes
         .iter()
         .filter(|(name, class)| {
@@ -328,44 +328,49 @@ fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<S
                     .iter()
                     .zip(order)
                     .all(|(f, want)| f.key_expr.is_none() && f.name == *want)
-        })
-        .map(|(name, _)| name.as_str())
-        .collect();
-    if candidates.len() > 1 {
-        candidates.retain(|name| {
-            ctx.classes.get(*name).is_some_and(|class| {
-                class.fields.iter().all(|f| {
+                // Field types are checked for EVERY candidate, not only to
+                // break a tie: "the declared shape and the class agree" should
+                // mean the same thing whether or not a second shape happens to
+                // share the field names, otherwise a one-candidate module and a
+                // two-candidate one apply different rules to the same pair.
+                && class.fields.iter().all(|f| {
                     obj.properties
                         .get(&f.name)
                         .is_some_and(|p| anon_shape_field_type_is_compatible(&p.ty, &f.ty))
                 })
-            })
-        });
-    }
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
     match candidates.as_slice() {
         [only] => Some((*only).to_string()),
         _ => None,
     }
 }
 
-/// Disambiguator for [`anon_shape_class_for_element_type`]: is a synthesized
-/// anon-shape field type (inferred from the literal's VALUES) consistent with
-/// the declared property type (an annotation)?
+/// Candidate filter for [`anon_shape_class_for_element_type`]: is a
+/// synthesized anon-shape field type (inferred from the literal's VALUES)
+/// consistent with the declared property type (an annotation)?
 ///
-/// Only used to break a tie between same-named shapes, so it is deliberately
-/// coarse — `Number`/`Int32` are one bucket (`{v: 1}` infers `Int32` for a
-/// `number`-declared property), as are `String`/`StringLiteral`.
+/// Deliberately coarse, because the two sides are not the same kind of fact.
+/// `Number`/`Int32` are one bucket (`{v: 1}` infers `Int32` for a
+/// `number`-declared property), as are `String`/`StringLiteral`, and an
+/// `any`/`unknown` on EITHER side rules nothing out: a declared `any` names no
+/// layout, and an inferred `Any` just means the lowering could not type that
+/// literal's value expression (`{v: i, w: f()}`), which is not evidence of
+/// disagreement. Making that arm one-sided would have silently declined the
+/// very common `{v: <typed>, w: <untyped call>}` shape.
+///
+/// Being wrong here costs the clone and never correctness — the preheader
+/// still compares the class id the runtime invariant reports.
 fn anon_shape_field_type_is_compatible(
     declared: &perry_hir::types::Type,
     actual: &perry_hir::types::Type,
 ) -> bool {
     use perry_hir::types::Type as T;
     match (declared, actual) {
+        (T::Any | T::Unknown, _) | (_, T::Any | T::Unknown) => true,
         (T::Number | T::Int32, T::Number | T::Int32) => true,
         (T::String | T::StringLiteral(_), T::String | T::StringLiteral(_)) => true,
-        // An `any`/`unknown` annotation names no layout, so it rules nothing
-        // out; every other pair must agree exactly.
-        (T::Any | T::Unknown, _) => true,
         (d, a) => d == a,
     }
 }
