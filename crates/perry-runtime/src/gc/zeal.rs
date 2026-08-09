@@ -10,15 +10,19 @@
 //! why the #7154 hunt needed a `zod` workload and ten rounds.
 //!
 //! Zeal removes the coincidence. Modelled on V8's `--stress-scavenge` and
-//! SpiderMonkey's `gcZeal`, it forces an **evacuating** minor at every GC
-//! safepoint, so an unrooted value moves on its FIRST exposure, deterministically.
+//! SpiderMonkey's `gcZeal`, it forces an **evacuating** minor at GC safepoints,
+//! so an unrooted value moves on its first exposure, deterministically. Since
+//! #7728 that is allocation-PACED rather than literally every safepoint — see
+//! the pacing section below for why, and for the escape hatch that restores it.
 //!
 //! # What the knob actually gates
 //!
 //! `PERRY_GC_ZEAL=1`:
 //!
-//! 1. Every loop back-edge poll (`js_gc_loop_safepoint`) runs a minor, instead
-//!    of only draining an already-deferred one (`GC_SAFEPOINT_PENDING`).
+//! 1. A loop back-edge poll (`js_gc_loop_safepoint`) runs a minor, instead of
+//!    only draining an already-deferred one (`GC_SAFEPOINT_PENDING`) — at the
+//!    first poll past each `PERRY_GC_ZEAL_ALLOC_KB` of new nursery material
+//!    (#7728); at EVERY poll when that is `0`.
 //! 2. Every outermost microtask-pump safepoint runs a minor, instead of only
 //!    when `gc_budgeted_due_trigger()` reports nursery/old pressure.
 //! 3. `gc_force_evacuate_enabled()` becomes true, so the minor **moves** every
@@ -33,11 +37,12 @@
 //! ## Point 1 requires a compile-time opt-in too
 //!
 //! Loop back-edge polls are only *emitted* when the compiler ran with
-//! `PERRY_GC_MOVING_LOOP_POLLS=1` (default off since #7161). Zeal cannot
-//! conjure a poll that codegen never emitted. A binary compiled without polls
-//! still gets (2) and (3) — event-loop-boundary zeal — but a compute-only loop
-//! that never yields will not collect at all. **For the #7154 hunt, compile AND
-//! run with `PERRY_GC_MOVING_LOOP_POLLS=1`.**
+//! `PERRY_GC_MOVING_LOOP_POLLS` on — **default ON since #7721**, off from #7161
+//! until then. Zeal cannot conjure a poll that codegen never emitted. A binary
+//! compiled with `PERRY_GC_MOVING_LOOP_POLLS=0` still gets (2) and (3) —
+//! event-loop-boundary zeal — but a compute-only loop that never yields will not
+//! collect at all. That configuration is exactly what made zeal look free before
+//! #7721: it was collecting nothing. Check `loop_polls=` in the exit verdict.
 //!
 //! Codegen also emits no poll for a provably alloc-free loop body (by design —
 //! `loop_purity::loop_may_allocate`) nor for the specialized `for` / `for-of` /
@@ -62,7 +67,7 @@
 //! zeal from free-and-vacuous into correct-but-unusable in the same commit.
 //!
 //! Measured on the pinned quiet host, a tree-walking-interpreter workload
-//! (`iso_miss.ts`, 19 s without zeal):
+//! (`iso_miss.ts`, 4.5 s without zeal there):
 //!
 //! | rounds | polls | forced collections | wall |
 //! |---|--:|--:|--:|
@@ -85,6 +90,12 @@
 //! ~1/4000th of the 16 MB cap the ordinary scavenge trigger uses). This is V8's
 //! `--gc-interval` model and SpiderMonkey's `gcZeal(mode, frequency)`, both of
 //! which pace for the same reason.
+//!
+//! Measured on the same workload after the change: **98.8 s and the correct
+//! answer**, with 193,087 forced collections out of 2,838,560 polls, all of them
+//! copying minors, relocating 3,115,719 objects. Unpaced the same run is
+//! ~1,426 s. See `ZEAL_DEFAULT_STRIDE_BYTES` for the stride sweep that picked
+//! the default.
 //!
 //! **`PERRY_GC_ZEAL_ALLOC_KB=0` restores the literal every-poll semantics**, and
 //! that is the right setting for a small fixture (`gc_instrument_smoke.sh` pins
@@ -171,12 +182,31 @@ pub(crate) fn note_zeal_forced_collection() {
 
 /// Default stride: 4 KB of new nursery material between zeal-forced collections.
 ///
-/// Chosen against both ends of the range this has to serve, measured rather
-/// than picked: it keeps `gc_instrument_smoke.sh`'s ~80 KB fixture at ~20
-/// forced collections (the gate asserts zeal collects strictly more often than
-/// pressure alone, so a stride that starved it would turn a real gate vacuous),
-/// while bounding a 19 s interpreter workload to a few tens of thousands of
-/// collections instead of 2.84 million.
+/// Measured, not picked. The whole sweep below is ONE binary and ONE env var on
+/// the pinned quiet host — the interpreter workload at a quarter scale, whose
+/// `loop_polls` is **283,852 in every row**, so the only thing the knob changes
+/// is the decision to collect, not the number of safepoints:
+///
+/// | `ALLOC_KB` | forced collections | moved objects | wall |
+/// |---|--:|--:|--:|
+/// | 0 (pre-#7728) | 283,857 | 1,629,647 | 142.6 s |
+/// | 1 | 70,929 | 815,460 | 36.1 s |
+/// | **4 (default)** | **19,314** | **325,830** | **10.2 s** |
+/// | 16 | 5,070 | 129,959 | 3.0 s |
+/// | 64 | 1,291 | 52,357 | 1.1 s |
+///
+/// Row 0 is the pre-fix behaviour reproduced exactly — 283,857 collections for
+/// 283,852 polls, i.e. 1:1 — and it is what made the full-scale workload take
+/// ~24 minutes.
+///
+/// 4 KB rather than the faster 16/64 is deliberate: this is a *correctness*
+/// instrument, so the default errs toward sensitivity. It still collects once
+/// per ~15 loop iterations, which catches a recurring window almost
+/// immediately, while being 14x cheaper than unpaced. An operator who wants
+/// speed raises it; one who wants a once-executed window sets `0`.
+///
+/// Every row keeps `copying_minors == forced_collections` and `moved > 0`, so
+/// no stride silently degrades the instrument into non-moving sweeps.
 const ZEAL_DEFAULT_STRIDE_BYTES: usize = 4 * 1024;
 
 /// Pure knob parse for `PERRY_GC_ZEAL_ALLOC_KB`, in KB. `Some(0)` is a
