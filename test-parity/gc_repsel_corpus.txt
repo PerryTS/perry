@@ -698,3 +698,28 @@ test_gap_gc_global_builtin_lookup_rooting
 # file stops covering the walk.
 test_gap_gc_spread_symbol_iterator_rooting
 test_gap_repsel_element_shape_loop_clone
+
+# --- #7682: an allocation-point collection must not MOVE anything -----------
+#
+# NOT a rooting witness like every entry above it, and the difference is the
+# point. The others plant a value that codegen failed to root and let a moving
+# collection expose it. Here codegen's root discipline is COMPLETE for the
+# program — `scripts/gc_root_dominance_check.py` reports 0 violations over 380
+# root stores — and the collector still relocated a value out from under a
+# register, because it ran an *evacuating* minor at an arbitrary allocation
+# point (`gc_check_trigger`'s nursery-churn arm) rather than at a declared
+# safepoint. `PERRY_GC_SCAVENGE` gated off the `force_full_scan()` that keeps
+# that collection non-moving. See `changelog.d/` for the full route.
+#
+# NOT LATENT: it prints a wrong NUMBER, not a wrong-but-plausible one. A
+# tree-walking interpreter's variable lookup misses bindings that are present,
+# and naive `fib` — a count of leaves returning 1 — comes back short by exactly
+# the miss count. Measured under the gap harness's own PERRY_NO_AUTO_OPTIMIZE=1:
+#
+#   before (a853135aa runtime)   1708662 / 1708662 / 1708662   oracle 1708840
+#   after                        1708840 3/3, and 1708840 with auto-optimize
+#
+# On the `loop_polls` arm this file is a moving-collector witness like the rest
+# — back-edge polls put the copying minor at the safepoints, which is where it
+# is supposed to be.
+test_gap_gc_alloc_point_no_move
