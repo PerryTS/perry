@@ -399,3 +399,71 @@ fn a_module_global_accumulator_keeps_the_back_edge_poll() {
          so it is never inert and the poll must survive:\n{ir}"
     );
 }
+
+// ------------------------------------------------- the poll's own price ----
+
+/// A poll that survives the purity proof must still be GUARDED: an inline load
+/// of the runtime's arming word, and the call only on the arm where it is
+/// non-zero.
+///
+/// This is the other half of "where the poll goes". `loop_may_allocate` decides
+/// WHICH loops carry a poll; this decides what carrying one COSTS. A bare
+/// `call void @js_gc_loop_safepoint()` at every allocating back-edge is not a
+/// small constant — its no-work path went through two `OnceLock` acquire loads,
+/// an unconditional atomic increment and a thread-local read, and on Darwin a
+/// thread-local read is a call to `_tlv_get_addr`. At 20 M back-edges per
+/// `bench/churn_alloc.ts` run that measured 0.36 s -> 0.42 s, `push_cls`
+/// 0.34 -> 0.40 and `push_num` 0.13 -> 0.17 when #7721 turned the polls on.
+///
+/// The guard has to be checked here rather than by reading the emitter, because
+/// nothing else can fail when it goes away: dropping the `cond_br` leaves a
+/// program that is correct, passes every other test in this file, and is 15-30 %
+/// slower on exactly the workloads that carry polls.
+#[test]
+fn a_surviving_poll_is_guarded_by_the_arming_word() {
+    let ir = ir_for(
+        "loop_poll_guarded.ts",
+        counted_loop(
+            coercible(N, "n"),
+            numeric(SUM, "sum", 0.0),
+            accumulate(Expr::Number(1.0)),
+        ),
+    );
+    assert!(
+        ir.contains(POLL),
+        "fixture premise: this loop must still carry a poll:\n{ir}"
+    );
+    assert!(
+        ir.contains("@PERRY_GC_POLL_ARMED = external global i32"),
+        "the arming word must be declared — the runtime defines it in \
+         gc/poll_arm.rs:\n{ir}"
+    );
+    assert!(
+        ir.contains("load volatile i32, ptr @PERRY_GC_POLL_ARMED"),
+        "the guard must be a VOLATILE load: the runtime writes this word from \
+         calls LLVM cannot see through, and a hoisted or CSE'd load reads a \
+         stale zero and silently stops draining deferred collections:\n{ir}"
+    );
+    // One guard per poll, not one guard for the function.
+    assert_eq!(
+        ir.matches("load volatile i32, ptr @PERRY_GC_POLL_ARMED")
+            .count(),
+        ir.matches(POLL).count(),
+        "every emitted poll needs its own guard:\n{ir}"
+    );
+    let guarded = ir
+        .split("load volatile i32, ptr @PERRY_GC_POLL_ARMED")
+        .skip(1)
+        .all(|after| {
+            // The `icmp` + `br` must come before the call: the call is on the
+            // taken arm, not in the same straight line as the load.
+            let call = after.find(POLL);
+            let branch = after.find("br i1 ");
+            matches!((call, branch), (Some(c), Some(b)) if b < c)
+        });
+    assert!(
+        guarded,
+        "the call must sit behind the branch, not after the load in the same \
+         block — otherwise the load is decoration:\n{ir}"
+    );
+}

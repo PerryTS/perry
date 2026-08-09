@@ -37,6 +37,9 @@ mod types;
 pub use types::*;
 mod policy;
 pub(crate) use policy::gc_runtime_safepoint;
+/// The one writer of `GC_SAFEPOINT_PENDING` — it also keeps the poll's global
+/// arming shadow in step. See `gc/poll_arm.rs`.
+pub(crate) use policy::set_safepoint_pending;
 pub use policy::*;
 mod progress;
 pub use progress::*;
@@ -130,9 +133,15 @@ mod verify;
 /// the rewrite pass own root enumeration. Debug-only
 /// (`PERRY_GC_FROMSPACE_SCAN=1`).
 mod fromspace_scan;
+/// The loop back-edge poll's arming word: the one load that decides whether
+/// `js_gc_loop_safepoint` is worth calling at all. Not debug-only — it is on
+/// the hot path of every allocating loop.
+mod poll_arm;
 /// #7154 tooling: force an evacuating minor at every safepoint so an unrooted
 /// value dies/moves on its FIRST exposure. Debug-only (`PERRY_GC_ZEAL=1`).
 mod zeal;
+pub use poll_arm::PERRY_GC_POLL_ARMED;
+pub(crate) use poll_arm::{arm_poll, disarm_poll, poll_armed, resolve_poll_seed};
 pub use verify::*;
 pub use zeal::{
     copying_minor_cycles, loop_polls_reached, moved_objects_total, zeal_forced_collections,

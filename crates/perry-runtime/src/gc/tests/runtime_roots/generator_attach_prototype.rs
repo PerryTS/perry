@@ -274,7 +274,7 @@ fn the_shipped_default_defers_the_trigger_out_of_the_callees_window() {
     let _pacing = crate::gc::policy::force_moving_gc_pacing();
     register_runtime_handle_root_scanner_for_tests();
     warm_generator_intrinsics();
-    GC_SAFEPOINT_PENDING.with(|p| p.set(false));
+    crate::gc::set_safepoint_pending(false);
 
     let (obj_value, before) = rooted_instance();
     let collections_before = gc_collection_count();
@@ -304,5 +304,5 @@ fn the_shipped_default_defers_the_trigger_out_of_the_callees_window() {
         "and the receiver handed back is still the one that went in"
     );
 
-    GC_SAFEPOINT_PENDING.with(|p| p.set(false));
+    crate::gc::set_safepoint_pending(false);
 }

@@ -155,14 +155,26 @@ pub(crate) fn gc_zeal_enabled() -> bool {
     *CACHED.get_or_init(|| parse_zeal(std::env::var("PERRY_GC_ZEAL").ok().as_deref()))
 }
 
-/// RAII test override for zeal.
+/// RAII test override for zeal: the previous override, and whether this guard
+/// took an arm on the back-edge poll's global word that it owes back.
 #[cfg(test)]
-pub(crate) struct ZealGuard(Option<bool>);
+pub(crate) struct ZealGuard(Option<bool>, bool);
 
 #[cfg(test)]
 impl ZealGuard {
     pub(crate) fn set(enabled: bool) -> Self {
-        Self(ZEAL_OVERRIDE.with(|cell| cell.replace(Some(enabled))))
+        // Mirror production: zeal keeps the back-edge poll's global arming word
+        // non-zero (`gc/poll_arm.rs::resolve_poll_seed`), because a poll that
+        // reads zero never calls in and so can force nothing. A test vehicle
+        // that skipped this would let `js_gc_loop_safepoint` no-op under a
+        // `ZealGuard` and report the collection zeal never got to run.
+        if enabled {
+            super::arm_poll();
+        }
+        Self(
+            ZEAL_OVERRIDE.with(|cell| cell.replace(Some(enabled))),
+            enabled,
+        )
     }
 }
 
@@ -170,6 +182,9 @@ impl ZealGuard {
 impl Drop for ZealGuard {
     fn drop(&mut self) {
         ZEAL_OVERRIDE.with(|cell| cell.set(self.0));
+        if self.1 {
+            super::disarm_poll();
+        }
     }
 }
 
@@ -375,6 +390,14 @@ pub(crate) fn note_loop_poll_reached() {
 }
 
 /// How many loop back-edge polls this run reached.
+///
+/// **Exhaustive exactly under zeal**, which is the one place it is read
+/// (`zeal_verdict`). A back-edge whose `PERRY_GC_POLL_ARMED` load reads zero
+/// never calls into the runtime at all — that is the point of `gc/poll_arm.rs`
+/// — so outside zeal this counts polls that had something to consider, not
+/// back-edges executed. Zeal keeps the word armed for the life of the process
+/// (`resolve_poll_seed`), so under zeal the two are the same number and the
+/// "not one back-edge poll was reached" diagnosis stays sound.
 pub fn loop_polls_reached() -> u64 {
     LOOP_POLLS.load(Ordering::Relaxed)
 }

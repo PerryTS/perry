@@ -25,7 +25,7 @@ fn arm_old_reclaim() {
 
 fn clear_old_reclaim_state() {
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
-    GC_SAFEPOINT_PENDING.with(|pending| pending.set(false));
+    crate::gc::set_safepoint_pending(false);
     let old_in_use = crate::arena::old_gen_in_use_bytes();
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
 }
@@ -42,7 +42,7 @@ fn old_reclaim_runs_precisely_at_a_safepoint() {
     // existing full mark-sweep path"), so the ONLY place an old-gen reclaim
     // could happen was the allocation point, behind `force_full_scan()`.
     arm_old_reclaim();
-    GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+    crate::gc::set_safepoint_pending(true);
     js_gc_loop_safepoint();
 
     assert_eq!(

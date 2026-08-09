@@ -922,6 +922,15 @@ thread_local! {
     /// next precise-root safepoint (event-loop boundary or a codegen loop
     /// back-edge poll) so the copying minor can MOVE survivors instead of the
     /// conservative non-moving minor running mid-expression.
+    ///
+    /// **Write it only through [`super::set_safepoint_pending`].** The poll's
+    /// fast path cannot afford to read a thread-local (on Darwin that is a call
+    /// to `_tlv_get_addr`), so this `Cell` has a process-global shadow —
+    /// `gc::poll_arm::PERRY_GC_POLL_ARMED` — that codegen loads inline to decide
+    /// whether the poll is worth calling. A `set` that bypasses the helper
+    /// leaves the shadow reading zero, and a deferred collection whose drain
+    /// point has been optimised away is stranded until the next event-loop
+    /// boundary.
     pub(super) static GC_SAFEPOINT_PENDING: Cell<bool> = const { Cell::new(false) };
     /// `arena_total_bytes()` sampled at the moment `GC_SAFEPOINT_PENDING` was
     /// last set — the baseline the deferral slack is measured from (#7024).
@@ -2056,7 +2065,7 @@ pub fn gc_check_trigger() {
                 ) {
                     if !already_deferred {
                         GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(arena_total));
-                        GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+                        set_safepoint_pending(true);
                     }
                     return;
                 }
@@ -2065,7 +2074,7 @@ pub fn gc_check_trigger() {
                 // pending would pin `GC_SAFEPOINT_DEFER_ARENA_BASE` at a stale,
                 // already-exceeded baseline and disable deferral for the rest of
                 // the process (the same "the branch is dead" shape as #7024).
-                GC_SAFEPOINT_PENDING.with(|p| p.set(false));
+                set_safepoint_pending(false);
             }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();
@@ -2331,7 +2340,7 @@ pub(crate) fn gc_safepoint_moving_minor() {
     }
     // We are handling this safepoint (collect or find nothing due): clear the
     // deferral flag set by the alloc-point arm (Phase 2/3).
-    GC_SAFEPOINT_PENDING.with(|p| p.set(false));
+    set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
     let kind = match gc_budgeted_due_trigger() {
         Some(BudgetedGcTrigger::ArenaBytes) => GcTriggerKind::ArenaBytes,
@@ -2389,22 +2398,76 @@ pub(crate) fn gc_safepoint_moving_minor() {
     super::record_safepoint_drain(super::SafepointDrainKind::NurseryMinor);
 }
 
+/// The ONLY writer of `GC_SAFEPOINT_PENDING`.
+///
+/// The flag has a process-global shadow, `gc::poll_arm::PERRY_GC_POLL_ARMED`,
+/// because the back-edge poll's fast path may not read a thread-local — on
+/// Darwin that is a call to `_tlv_get_addr`, and at 20 M back-edges per
+/// `churn_alloc.ts` run it cost 3 ns each (see `gc/poll_arm.rs`). Keeping the
+/// two in step is this function's whole job: the `Cell` is the truth for THIS
+/// thread, the counter is a conservative superset over all of them, and only
+/// transitions move it, so the count is threads-with-a-deferral rather than
+/// deferral-events.
+pub(crate) fn set_safepoint_pending(pending: bool) {
+    GC_SAFEPOINT_PENDING.with(|flag| {
+        if flag.get() == pending {
+            return;
+        }
+        flag.set(pending);
+        if pending {
+            super::arm_poll();
+        } else {
+            super::disarm_poll();
+        }
+    });
+}
+
 /// Phase 2 of the moving-GC project: codegen emits a call to this at loop
-/// back-edges — but ONLY when the compiler was invoked with the moving-safepoint
-/// opt-in, so default binaries carry zero loop overhead. At a back-edge the
-/// loop-body expression has completed, so no heap value lives in an unspilled
-/// register (every live value is a named local on the shadow stack): a
-/// precise-root safepoint. If moving mode is on and an alloc-point nursery
-/// trigger deferred a collection (`GC_SAFEPOINT_PENDING`), drain it here so the
-/// copying minor MOVES survivors. Cheap no-op otherwise (one cached-bool load +
-/// one thread-local read).
+/// back-edges. At a back-edge the loop-body expression has completed, so no
+/// heap value lives in an unspilled register (every live value is a named local
+/// on the shadow stack): a precise-root safepoint. If moving mode is on and an
+/// alloc-point nursery trigger deferred a collection (`GC_SAFEPOINT_PENDING`),
+/// drain it here so the copying minor MOVES survivors.
+///
+/// **The `armed` load is the entire function on the overwhelmingly common
+/// path**, and that is a deliberate structure rather than a micro-optimisation.
+/// Every allocating loop back-edge in the program lands here — 20 million times
+/// in `bench/churn_alloc.ts` — so this is a per-iteration cost of the language,
+/// paid whether or not any collection is ever due. #7721 turned the polls on by
+/// default (correctly: they are the only precise nursery-collection point a
+/// compute-only program reaches) with the body below still doing two `OnceLock`
+/// acquire loads, an unconditional atomic increment and a thread-local read,
+/// and that cost `churn_alloc` 0.36 s → 0.42, `push_cls` 0.34 → 0.40 and
+/// `push_num` 0.13 → 0.17. `gc/poll_arm.rs` carries the measurement and the
+/// invariant; `PERRY_GC_POLL_ARMED == 0` is a proof there is nothing to do.
+///
+/// Codegen normally makes even this call disappear — it loads the same word
+/// inline and branches around the call — so reaching this body at all means
+/// either the word was armed or the module came from a path that emits the
+/// bare call. Both must still work, which is why the check is repeated here
+/// rather than delegated to the compiler.
 #[no_mangle]
 pub extern "C" fn js_gc_loop_safepoint() {
+    if !super::poll_armed() {
+        return;
+    }
+    js_gc_loop_safepoint_armed();
+}
+
+/// Out of line so the hot entry point above stays a load, a compare and a
+/// return — no frame, no spills.
+#[inline(never)]
+fn js_gc_loop_safepoint_armed() {
+    // Releases the startup seed unless zeal wants every poll. Must run before
+    // the opt-in check below: a build with the polls killed still has to get
+    // the word back to zero, or every back-edge keeps paying for the call.
+    super::resolve_poll_seed();
     if !gc_moving_loop_polls_enabled() {
         return;
     }
     // #7604: the only reliable answer to "did the compile-time half take
-    // effect". Past the opt-in, so a default binary never touches it.
+    // effect". Exhaustive exactly under zeal, which is where `zeal_verdict`
+    // reads it — see `resolve_poll_seed` and `loop_polls_reached`.
     super::note_loop_poll_reached();
     // Zeal (#7154 tooling) collects at polls the deferral flag would skip, not
     // only when the alloc-point arm already deferred one. Zeal cannot conjure a

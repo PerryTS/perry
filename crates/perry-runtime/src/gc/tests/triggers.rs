@@ -777,3 +777,105 @@ fn declining_to_escalate_records_no_pre_full_reading() {
          one would price the NEXT full against the wrong heap"
     );
 }
+
+// ---------------------------------------------- the poll's arming word -----
+
+/// The deferral flag and `PERRY_GC_POLL_ARMED` are one piece of state with two
+/// representations, and only the second one is visible to the code that decides
+/// whether to call the poll at all. This pins the transition in both directions.
+///
+/// The unsound direction is a `set` that bypasses `set_safepoint_pending`: the
+/// word stays zero, codegen's inline guard branches around the call, and the
+/// deferred collection is stranded until the next event-loop boundary — which a
+/// compute-only program never reaches. That is #7690's failure mode (a collector
+/// with no nursery evacuation) arriving through a different door, and it is
+/// invisible to every existing test, because a program with no collections still
+/// produces the right answer.
+#[test]
+fn a_deferral_arms_the_poll_word_and_draining_disarms_it() {
+    let _isolation = GcTestIsolationGuard::new();
+    crate::gc::set_safepoint_pending(false);
+    let base = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+
+    crate::gc::set_safepoint_pending(true);
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base + 1,
+        "arming a deferral must make the poll's global word non-zero — it is \
+         the ONLY thing a codegen-emitted back-edge consults"
+    );
+
+    // Idempotent: the flag is a bool, so a second set is not a second arm.
+    crate::gc::set_safepoint_pending(true);
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base + 1,
+        "only TRANSITIONS may move the counter, or a thread that defers twice \
+         leaks an arm and pins the poll on for the life of the process"
+    );
+
+    crate::gc::set_safepoint_pending(false);
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base,
+        "draining must give the arm back"
+    );
+}
+
+/// A poll whose word reads zero must do NOTHING — not even the bookkeeping.
+///
+/// This is the assertion that makes the optimisation real rather than
+/// decorative. `note_loop_poll_reached` is an unconditional atomic RMW on a
+/// process-shared line; leaving it above the gate would keep the most expensive
+/// single instruction of the old fast path on every back-edge while looking, in
+/// every other test, exactly like this one.
+#[test]
+fn an_unarmed_poll_touches_nothing() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _zeal = super::super::zeal::ZealGuard::set(false);
+    crate::gc::set_safepoint_pending(false);
+    let restore = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+    crate::gc::PERRY_GC_POLL_ARMED.store(0, std::sync::atomic::Ordering::Relaxed);
+
+    let polls_before = crate::gc::loop_polls_reached();
+    let collections_before = gc_collection_count();
+    js_gc_loop_safepoint();
+    js_gc_loop_safepoint();
+    let polls_after = crate::gc::loop_polls_reached();
+    let collections_after = gc_collection_count();
+
+    crate::gc::PERRY_GC_POLL_ARMED.store(restore, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        polls_after, polls_before,
+        "an unarmed poll must not reach the counter — reaching it means the \
+         atomic increment is still on every back-edge"
+    );
+    assert_eq!(
+        collections_after, collections_before,
+        "and it certainly must not collect"
+    );
+}
+
+/// Zeal's contract is a collection at EVERY safepoint, not only at ones an
+/// alloc-point trigger already deferred. That is expressible only if the word
+/// stays armed with nothing pending, so zeal owns a permanent arm.
+///
+/// Without this, `PERRY_GC_ZEAL=1` would silently become a no-op on the poll
+/// path: every back-edge would read zero, skip the call, and force nothing —
+/// and `zeal_liveness_report` would be left to report the vacuity after the
+/// fact instead of the instrument simply working.
+#[test]
+fn zeal_holds_the_poll_word_armed_with_nothing_pending() {
+    let _isolation = GcTestIsolationGuard::new();
+    crate::gc::set_safepoint_pending(false);
+    {
+        let _zeal = super::super::zeal::ZealGuard::set(true);
+        assert!(
+            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "zeal must keep the poll reachable even with no deferral outstanding"
+        );
+    }
+    // And it gives the arm back, so one zeal test does not leave every later
+    // test in this binary paying for the slow path.
+    crate::gc::set_safepoint_pending(false);
+}

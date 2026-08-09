@@ -5404,7 +5404,61 @@ pub(crate) fn emit_gc_loop_safepoint(
     if !needs_poll {
         return;
     }
-    ctx.block().call_void("js_gc_loop_safepoint", &[]);
+    emit_armed_gc_loop_safepoint(ctx);
+}
+
+/// The poll itself: a load of the runtime's arming word, and the call only on
+/// the branch where it is non-zero.
+///
+/// A bare `call void @js_gc_loop_safepoint()` at every allocating back-edge is
+/// what #7721 shipped, and it is the most-executed instruction sequence in an
+/// allocating loop — 20 million times in `bench/churn_alloc.ts`, 200 million in
+/// `churn_alloc_big.ts`. Its no-work path was an out-of-line call into two
+/// `OnceLock` acquire loads, an unconditional atomic increment and a
+/// thread-local read; on Darwin the last of those is itself a call to
+/// `_tlv_get_addr`, Mach-O having no local-exec TLS model. Measured on the
+/// quiet bench host that is ~3 ns of pure overhead per back-edge and it moved
+/// three all-numeric benchmarks 15–30 %: `churn_alloc` 0.36 s -> 0.42,
+/// `push_cls` 0.34 -> 0.40, `push_num` 0.13 -> 0.17.
+///
+/// `@PERRY_GC_POLL_ARMED == 0` is a PROOF from the runtime that the call would
+/// return without doing anything (`perry-runtime/src/gc/poll_arm.rs`), so the
+/// guard is not a heuristic and does not change when a collection happens: the
+/// word is armed by the same transition that sets `GC_SAFEPOINT_PENDING`, and
+/// under `PERRY_GC_ZEAL` it is armed for the life of the process so zeal still
+/// forces a collection at every poll.
+///
+/// The load is **volatile** for one reason: this word is written by the runtime
+/// from calls LLVM cannot see through, and a poll whose load got hoisted out of
+/// its loop or CSE'd across an allocating call would read a stale zero and
+/// silently stop draining — the #7721 failure mode (a collector with no nursery
+/// evacuation) returning as a codegen bug instead of a default. One `ldr` either
+/// way; nothing is bought by leaving it to alias analysis.
+///
+/// The CALL survives in the IR, which is what `gc_call_effects` classifies,
+/// what `scripts/gc_root_dominance_check.py` keys its MOVING classification on,
+/// and what `tests/loop_safepoint_purity.rs` counts. It has moved into its own
+/// block, and that is a real CFG change, not a cosmetic one — the checker's
+/// windows are path-based, so a collection point on one arm of a diamond is
+/// still a collection point on every path through it.
+fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
+    let poll_idx = ctx.new_block("gcpoll");
+    let done_idx = ctx.new_block("gcpoll.done");
+    let poll_label = ctx.block_label(poll_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let armed = blk.load_volatile(I32, "@PERRY_GC_POLL_ARMED");
+        let due = blk.icmp_ne(I32, &armed, "0");
+        blk.cond_br(&due, &poll_label, &done_label);
+    }
+    ctx.current_block = poll_idx;
+    {
+        let blk = ctx.block();
+        blk.call_void("js_gc_loop_safepoint", &[]);
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
 }
 
 pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
