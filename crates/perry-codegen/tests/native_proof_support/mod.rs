@@ -257,8 +257,7 @@ fn store_ptr_operands(line: &str) -> Option<(String, String)> {
     let (value, slot) = rest.split_once(", ptr ")?;
     let value = value.trim();
     let slot = slot.split(',').next()?.trim();
-    (value.starts_with('%') && slot.starts_with('%'))
-        .then(|| (value.to_string(), slot.to_string()))
+    (value.starts_with('%') && slot.starts_with('%')).then(|| (value.to_string(), slot.to_string()))
 }
 
 /// The allocas holding a Buffer view's DATA pointer in `fn_ir`.

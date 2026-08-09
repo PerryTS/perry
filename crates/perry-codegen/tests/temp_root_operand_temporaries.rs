@@ -378,9 +378,8 @@ fn constructor_arguments_are_rooted_across_the_instance_allocation() {
 
     let (arg1_line, _) = &arg_allocs[1];
     let (_, arg0) = &arg_allocs[0];
-    let slot = slot_holding(f, arg0).unwrap_or_else(|| {
-        panic!("constructor argument 0 ({arg0}) is never rooted (#6969):\n{f}")
-    });
+    let slot = slot_holding(f, arg0)
+        .unwrap_or_else(|| panic!("constructor argument 0 ({arg0}) is never rooted (#6969):\n{f}"));
     let arg0_store = traffic[&slot]
         .iter()
         .find_map(|e| match e {

@@ -70,7 +70,10 @@ fn the_native_buffer_gep_detector_fires_on_a_proven_store() {
             Stmt::Return(Some(int(0))),
         ]
     };
-    for (pin_native, name) in [(true, "invalidated_native.ts"), (false, "invalidated_shadow.ts")] {
+    for (pin_native, name) in [
+        (true, "invalidated_native.ts"),
+        (false, "invalidated_shadow.ts"),
+    ] {
         let ir = {
             let _pin = if pin_native {
                 NativeRootsPin::native()

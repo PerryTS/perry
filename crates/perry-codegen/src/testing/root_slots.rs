@@ -180,7 +180,9 @@ pub fn frame_slot_count(fn_ir: &str) -> u32 {
         .unwrap_or_else(|| panic!("expected a shadow frame enter in:\n{fn_ir}"));
     let rest = &fn_ir[start..];
     let end = rest.find(')').expect("malformed frame enter");
-    rest[..end].parse().expect("frame enter count is not a number")
+    rest[..end]
+        .parse()
+        .expect("frame enter count is not a number")
 }
 
 /// The whole `define … { … }` body of `@name`.

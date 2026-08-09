@@ -100,7 +100,9 @@ pub fn slot_traffic(fn_ir: &str) -> BTreeMap<String, Vec<SlotEvent>> {
                         // The entry seed and a release are the same instruction;
                         // only the first one in a slot's life is a seed.
                         if entry_seeds.contains_key(&slot) || out.contains_key(&slot) {
-                            out.entry(slot).or_default().push(SlotEvent::Clear { line: line_no });
+                            out.entry(slot)
+                                .or_default()
+                                .push(SlotEvent::Clear { line: line_no });
                         } else {
                             entry_seeds.insert(slot, line_no);
                         }
@@ -123,7 +125,9 @@ pub fn slot_traffic(fn_ir: &str) -> BTreeMap<String, Vec<SlotEvent>> {
                 let value = value.trim();
                 if value == "null" {
                     if entry_seeds.contains_key(&slot) || out.contains_key(&slot) {
-                        out.entry(slot).or_default().push(SlotEvent::Clear { line: line_no });
+                        out.entry(slot)
+                            .or_default()
+                            .push(SlotEvent::Clear { line: line_no });
                     } else {
                         entry_seeds.insert(slot, line_no);
                     }

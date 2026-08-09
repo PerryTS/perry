@@ -753,4 +753,3 @@ fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
          are claims about a module in which rooting exists (#7504):\n{main}"
     );
 }
-
