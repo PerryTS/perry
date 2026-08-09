@@ -5232,27 +5232,31 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     Ok(())
 }
 
-/// Whether to emit loop back-edge safepoint polls — OPT-IN, default OFF
-/// (`PERRY_GC_MOVING_LOOP_POLLS=1`). The moving GC is the default at the
-/// event-loop safepoint, but the loop poll emits a `js_gc_loop_safepoint()`
+/// Whether to emit loop back-edge safepoint polls — **default ON since #7682**,
+/// kill switch `PERRY_GC_MOVING_LOOP_POLLS=0`/`off`/`false`.
+///
+/// The objection this used to carry — "the poll emits a `js_gc_loop_safepoint()`
 /// CALL at every loop back-edge, which defeats LLVM auto-vectorization and
-/// violates the native-region "no runtime calls in hot loop" proofs. Until the
-/// poll is emitted only in loops that actually ALLOCATE (so numeric/vectorizable
-/// loops stay call-free), it is opt-in and a tight allocating loop defers to the
-/// event-loop safepoint instead.
+/// violates the native-region 'no runtime calls in hot loop' proofs" — was
+/// answered by its own stated condition: *"until the poll is emitted only in
+/// loops that actually ALLOCATE"*. It is. [`emit_gc_loop_safepoint`] consults
+/// `loop_purity::loop_may_allocate` and emits nothing for a body that cannot
+/// allocate, so numeric and vectorizable loops stay call-free. A loop that
+/// cannot allocate also cannot arm a GC trigger, so that is not a coverage hole
+/// — it is the poll being placed where the pressure is.
+///
+/// Must match the runtime `gc_moving_loop_polls_enabled` (same env, same
+/// predicate): a mismatch either defers collections that never drain, or emits
+/// polls that nothing consumes. `policy::moving_loop_polls_enabled_from_env`
+/// carries the full argument for the flip and for why leaving it off was the
+/// more dangerous state after #7682.
 fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    // DEFAULT OFF (stopgap for #7154): the runtime moving-loop minor this poll
-    // drives has a use-after-free that corrupts the heap even in the default
-    // config, so the default reverts to the non-moving minor and the poll is
-    // emitted only under an explicit PERRY_GC_MOVING_LOOP_POLLS=1/on/true opt-in.
-    // Must match the runtime `gc_moving_loop_polls_enabled` (same env) so a
-    // deferred collection always has a drain and vice versa.
     *CACHED.get_or_init(|| {
-        matches!(
+        !matches!(
             std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }

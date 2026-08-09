@@ -103,12 +103,80 @@ fn assert_wiring_followed_the_move(returned: f64, before: usize, label: &str) {
     );
 }
 
+/// Pin the conservative native-stack scan OFF for the duration, restoring the
+/// previous override on drop (including on a panicking assert, so a failure
+/// here cannot leak the mode into the next test on this thread).
+///
+/// **REQUIRED SINCE #7682, together with the legacy-pacing guard beside it.**
+/// Both tests below inject their collection at an ALLOCATION POINT — the
+/// callee's own `js_object_alloc` — and #7682 changed that point twice over.
+/// Each change alone is enough to make the injected collection stop relocating,
+/// and the two need different levers:
+///
+///  1. **It no longer moves.** `gc_check_trigger` now always takes
+///     `ManualGcScanGuard::force_full_scan`, which makes the copying minor
+///     ineligible, because a NaN-boxed operand in an LLVM register at an
+///     allocation point is named by neither root lowering. THIS guard is the
+///     answer: `force_full_scan` is a no-op while an override is already
+///     pinned, so pinning `Disabled` here leaves the minor eligible. It is the
+///     same lever `gc_repsel_matrix.sh`'s `%E%` arms use to force relocation at
+///     an allocation point.
+///  2. **It no longer happens here at all.** With back-edge polls default-ON
+///     the nursery trigger DEFERS to the next precise safepoint and returns
+///     without collecting, so the callee's allocation runs no cycle whatsoever.
+///     `force_shipped_default_gc_pacing()` is the answer to that one — polls
+///     off, no deferral, the direct minor runs at the allocation point as
+///     before.
+///
+///     It must be THAT guard and not `force_legacy_gc_pacing()`, which also
+///     turns scavenge off. Scavenge is the disjunct that routes nursery
+///     pressure to the direct arm in the first place: the neighbouring
+///     `registered_root_scanners_block_budgeted_gc()` reduces to "any COPY-ONLY
+///     scanner" under `gc_incremental_enabled()`, and this test's registry
+///     holds only a mutable one. With scavenge off the trigger goes to the
+///     budgeted stepper, which is non-moving by construction, and the symptom
+///     is once again "subject not live" — a third way to reach the same
+///     message, which is why the assertion names the arming rather than the
+///     cause.
+///
+/// Diagnosing this needs both symptoms told apart, and they present
+/// identically — the receiver simply does not move and the live-subject
+/// assertion fires. That assertion is why these tests reported the change
+/// instead of silently passing.
+///
+/// What the tests assert is unchanged and still worth asserting: a runtime
+/// helper must not bind a receiver's ADDRESS across its own allocation. #7682
+/// removes two routes to that hazard in the shipped default; it does not make
+/// the helper correct, and `PERRY_CONSERVATIVE_STACK_SCAN=off` /
+/// `PERRY_GC_MOVING_LOOP_POLLS=0` are supported configurations in which the
+/// routes are open again.
+struct AllocPointRelocationGuard(Option<crate::gc::roots::ConservativeStackScanMode>);
+
+impl AllocPointRelocationGuard {
+    fn new() -> Self {
+        Self(crate::gc::roots::set_conservative_stack_scan_override(
+            Some(crate::gc::roots::ConservativeStackScanMode::Disabled),
+        ))
+    }
+}
+
+impl Drop for AllocPointRelocationGuard {
+    fn drop(&mut self) {
+        crate::gc::roots::set_conservative_stack_scan_override(self.0);
+    }
+}
+
 /// SABOTAGE CHECK: bind `obj_ptr` at the top of `js_generator_attach_prototype`
 /// again and use it at the tail (the pre-#7577 shape). Both the returned
 /// address and the prototype link go to the dead object and this fails.
 #[test]
 fn attach_prototype_survives_a_copying_minor_inside_the_call() {
     let _guard = CopyingNurseryTestGuard::new(4);
+    // Polls off so the alloc-point trigger COLLECTS here instead of deferring,
+    // scavenge on so it reaches the direct arm at all, scan off so it may MOVE.
+    // See `AllocPointRelocationGuard` for all three.
+    let _pacing = crate::gc::policy::force_shipped_default_gc_pacing();
+    let _relocation = AllocPointRelocationGuard::new();
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     // Without this the `RuntimeHandleScope` inside the function under test is
     // decorative — the guard above took the thread's mutable-root scanners with
@@ -133,6 +201,11 @@ fn attach_prototype_survives_a_copying_minor_inside_the_call() {
 #[test]
 fn attach_closure_prototype_survives_a_copying_minor_inside_the_call() {
     let _guard = CopyingNurseryTestGuard::new(4);
+    // Polls off so the alloc-point trigger COLLECTS here instead of deferring,
+    // scavenge on so it reaches the direct arm at all, scan off so it may MOVE.
+    // See `AllocPointRelocationGuard` for all three.
+    let _pacing = crate::gc::policy::force_shipped_default_gc_pacing();
+    let _relocation = AllocPointRelocationGuard::new();
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
     warm_generator_intrinsics();

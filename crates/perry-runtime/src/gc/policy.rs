@@ -510,12 +510,36 @@ pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
 
 /// Pure env→enable decision for the moving-loop minor, factored out so the
 /// default is unit-testable without touching process env / the cached `OnceLock`.
-/// **Default OFF (#7154 stopgap):** an unset var (or any value other than an
-/// explicit opt-in) selects the non-evacuating minor; only `1`/`on`/`true`
-/// enables the moving-loop path. Codegen's `moving_safepoint_polls_enabled`
-/// mirrors this exactly (same env, same predicate).
+///
+/// **Default ON since #7682.** The kill switch is `0`/`off`/`false`; anything
+/// else, including unset, selects the moving-loop path. Codegen's
+/// `moving_safepoint_polls_enabled` mirrors this exactly (same env, same
+/// predicate) — they MUST agree, or a deferred collection has no drain.
+///
+/// #7161 flipped this OFF as a stopgap, and named both conditions for putting
+/// it back. Both are met:
+///
+///  * **Its correctness reason is closed.** #7161's own title is "pending
+///    #7154"; #7154 closed on 2026-08-01. The class it belongs to now has a
+///    static gate (`gc-root-dominance.yml` over
+///    `scripts/gc_root_dominance_corpus.sh`) whose allowlist is EMPTY, so a new
+///    instance is a red build rather than a field report.
+///  * **Its codegen-quality reason is discharged.** The other half of the
+///    stopgap was that a poll at every back-edge defeats auto-vectorization;
+///    `emit_gc_loop_safepoint` now emits one only where
+///    `loop_purity::loop_may_allocate` says the body can allocate, so
+///    numeric/vectorizable loops stay call-free. A loop that cannot allocate
+///    cannot arm a trigger, so skipping it there is not a coverage hole.
+///
+/// And leaving it off had become the more dangerous state, which is the actual
+/// reason this moves now. Nursery pressure has exactly two precise collection
+/// points — this poll and the outermost microtask-pump boundary — and a
+/// compute-only program reaches neither with polls off. Every nursery
+/// collection therefore happened at the register-imprecise allocation point,
+/// where #7682 showed it must not move. So "polls off" does not mean "collect
+/// later, precisely"; it means "never collect precisely at all".
 pub(crate) fn moving_loop_polls_enabled_from_env(value: Option<&str>) -> bool {
-    matches!(value, Some("1") | Some("on") | Some("true"))
+    !matches!(value, Some("0") | Some("off") | Some("false"))
 }
 
 #[cfg(test)]
