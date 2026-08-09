@@ -568,6 +568,30 @@ pub(super) fn force_moving_gc_pacing() -> LegacyGcPacingGuard {
     }
 }
 
+/// Pin the pacing combination a **shipped binary actually runs**: moving-loop
+/// polls OFF (`gc_moving_loop_polls_enabled`, default OFF since #7161) and
+/// scavenge ON (`gc_scavenge_enabled`, default ON since #7056).
+///
+/// This is a third combination, and its absence is part of why #7682 shipped.
+/// [`force_legacy_gc_pacing`] pins polls OFF *and* scavenge OFF;
+/// [`force_moving_gc_pacing`] pins both ON. Every test in this crate therefore
+/// declared a pacing mode in which the two flags agreed — and the
+/// alloc-point/deferral interaction that broke is precisely the one where they
+/// DISAGREE: scavenge routes nursery pressure to the direct alloc-point minor,
+/// while the deferral that was supposed to move that collection to a precise
+/// safepoint is gated on the polls flag and never runs.
+#[cfg(test)]
+pub(super) fn force_shipped_default_gc_pacing() -> LegacyGcPacingGuard {
+    let previous = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(|cell| cell.replace(Some(false)));
+    let cap_previous = GC_NURSERY_CAP_TEST_SUPPRESSED.with(|cell| cell.replace(false));
+    let scavenge_previous = super::GC_SCAVENGE_TEST_OVERRIDE.with(|cell| cell.replace(Some(true)));
+    LegacyGcPacingGuard {
+        previous,
+        cap_previous,
+        scavenge_previous,
+    }
+}
+
 pub(super) fn gc_trace_enabled() -> bool {
     #[cfg(test)]
     if GC_TRACE_TEST_FORCE.with(Cell::get) {
@@ -1822,14 +1846,23 @@ pub fn gc_check_trigger() {
             }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();
-            // PERRY_GC_SCAVENGE (Phase-1 de-risking, OFF by default): skip the
-            // conservative native-stack scan so this direct minor runs with the
-            // PRECISE shadow-stack roots and the copying fast path becomes
-            // eligible (an evacuating scavenge that resets the whole young arena
-            // in O(live)). The default path keeps `force_full_scan` — at an
-            // arbitrary alloc point a value mid-construction may live only in
-            // registers, which the conservative scan retains (and which makes
-            // copied-minor ineligible, so the non-moving minor runs).
+            // THE ALLOC POINT IS REGISTER-IMPRECISE, SO THIS MINOR MUST NOT
+            // MOVE. Unconditional, and the unconditionality is the fix for
+            // #7682.
+            //
+            // Reaching this line means the collection is happening HERE, at an
+            // arbitrary allocation point inside a half-built expression — not
+            // at a declared safepoint. Neither root lowering describes that
+            // point: the shadow stack only names values codegen has already
+            // stored to a slot, and RS4GC only relocates values it can type as
+            // `ptr addrspace(1)`, which a NaN-boxed `double` operand in an SSA
+            // register is not. A value that exists ONLY in a register here is
+            // therefore invisible to both, so an evacuating minor relocates the
+            // object and leaves the register naming the pre-move address. The
+            // conservative native-stack scan is what covers exactly that gap:
+            // it retains such values AND makes the copying minor ineligible
+            // (`CopiedMinorFallbackReason::ConservativeStack`), so the
+            // non-moving in-place minor runs and nothing relocates.
             //
             // ★ #7148 disposition: **keep as the bounded valve, now counted.**
             // The deferral above is the primary path and is sound by
@@ -1842,16 +1875,31 @@ pub fn gc_check_trigger() {
             // reached" is: this arm runs, and it is the reason RSS stays
             // bounded. Making it *imprecise* instead (collecting without the
             // scan) is the one thing #7148 rules out — it would trade a cost
-            // problem for a soundness problem. Making it **countable** is what
-            // turns "unreachable in practice" into a measurement:
-            // `ConservativeScanSite::NurseryChurnSlackValve` is 0 on all eight
-            // ratchet probes and across the stress matrix, and the drain
-            // counter proves the deferral ran instead.
-            let _scan = (!super::gc_scavenge_enabled()).then(|| {
-                super::roots::ManualGcScanGuard::force_full_scan(
-                    super::ConservativeScanSite::NurseryChurnSlackValve,
-                )
-            });
+            // problem for a soundness problem.
+            //
+            // #7682 is that trade, shipped. `PERRY_GC_SCAVENGE` used to gate
+            // this guard off, on the strength of a doc comment claiming the
+            // flag was "OFF by default … for measurement only" and a body
+            // comment saying it also "defers alloc-point collections to a
+            // precise safepoint". Neither held in the shipped configuration:
+            // the flag has been ON by default since #7056, and the deferral
+            // above is gated on `gc_moving_loop_polls_enabled()`, which is OFF
+            // by default since #7161. So the default build collected — and
+            // EVACUATED — right here, with no scan and no deferral. A
+            // tree-walking interpreter (`test_gap_gc_alloc_point_no_move.ts`)
+            // then read a relocated heap string out of a stale register and
+            // silently returned the wrong number.
+            //
+            // The scan-skip cannot be recovered by asking "is scavenge on?":
+            // that question is about pacing, and the precondition being
+            // asserted here is about the PRECISION OF THIS PROGRAM POINT,
+            // which no pacing knob can change. Scavenge keeps its other job —
+            // routing nursery-churn triggers to this direct minor instead of
+            // the budgeted non-moving stepper — and the moving minor keeps
+            // running at the precise safepoints, where the root set is real.
+            let _scan = super::roots::ManualGcScanGuard::force_full_scan(
+                super::ConservativeScanSite::NurseryChurnSlackValve,
+            );
             let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
             // Re-baseline the arming trigger after the direct minor, mirroring
             // `gc_finish_budgeted_cycle`. This arm is taken whenever

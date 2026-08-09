@@ -326,18 +326,27 @@ fn gc_verify_evacuation_enabled() -> bool {
     )
 }
 
-/// Phase-1 de-risking flag (OFF by default). When set, the alloc-point
-/// nursery-churn arm (`gc_check_trigger`) runs its direct minor with the
-/// PRECISE shadow-stack roots instead of forcing the conservative native
-/// scan. The conservative scan makes the copying fast path ineligible
-/// (`CopiedMinorFallbackReason::ConservativeStack`), pinning the minor to the
-/// non-moving in-place sweep that cannot reclaim array-growth stubs; skipping
-/// it lets the evacuating scavenge run and reset the whole young arena in
-/// O(live). NOT sound as a production default yet — the alloc point can be
-/// register-imprecise — so it stays behind this flag for measurement +
-/// `PERRY_GC_VERIFY_EVACUATION` probing only. Pairs with
-/// `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` so the #6939 pacing doesn't escalate the
-/// minor to a full before the copying path is reached.
+/// `PERRY_GC_SCAVENGE` — **ON by default since #7056**, kill switch
+/// `PERRY_GC_SCAVENGE=0`/`off`/`false`. It is a PACING knob: it routes
+/// nursery-churn triggers to the direct minor in `gc_check_trigger` instead of
+/// the budgeted non-moving stepper, which on a reallocation-heavy loop frees
+/// nothing. Paired with the nursery cap in `policy::effective_next_arena_trigger`
+/// that is the -69% RSS result quoted on the getter below.
+///
+/// It does **not** decide whether the alloc-point minor may move, and #7682 is
+/// what that confusion cost. The flag used to gate the `force_full_scan()` on
+/// that arm off, so the shipped default ran an EVACUATING minor at an arbitrary
+/// allocation point — a program point neither root lowering describes — and
+/// values held only in registers were relocated behind their holders' backs.
+/// The guard is now unconditional; see the comment at its site in
+/// `policy::gc_check_trigger` for why no pacing knob can answer the question it
+/// asks.
+///
+/// This doc comment previously read "Phase-1 de-risking flag (OFF by default)
+/// … NOT sound as a production default yet". Both halves were false for two
+/// hundred releases, eight lines above a body comment saying "ON BY DEFAULT" —
+/// the #6987 shape CLAUDE.md warns about, and this time the stale half was the
+/// one carrying the soundness argument.
 #[cfg(test)]
 thread_local! {
     /// Test-only override, consulted BEFORE the process-wide OnceLock so a
@@ -373,10 +382,14 @@ pub(super) fn gc_scavenge_enabled() -> bool {
         // them evacuating (O(live) copying) rather than O(heap) sweeps — so the
         // frequency is cheap instead of expensive.
         //
-        // Enabling this also defers alloc-point collections to a precise
-        // safepoint rather than collecting behind a forced conservative scan.
-        // That is newly reasonable: native roots became the default in #7370, so
-        // a precise safepoint is what the shipped configuration now has.
+        // What this does NOT do, despite what this comment used to claim: it
+        // does not defer alloc-point collections to a precise safepoint. That
+        // deferral is gated on `gc_moving_loop_polls_enabled()`, which has been
+        // OFF by default since #7161 — so in the shipped configuration the two
+        // flags disagree, the deferral is dead, and the alloc-point minor runs
+        // right there. It is sound because that minor is non-moving
+        // (`force_full_scan`), not because it was moved somewhere precise
+        // (#7682).
         !matches!(
             std::env::var("PERRY_GC_SCAVENGE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
