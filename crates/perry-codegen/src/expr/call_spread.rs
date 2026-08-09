@@ -3,21 +3,118 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # The argument-bundle accumulator (#7664)
+//!
+//! Six arms here bundle every argument — regular and spread, in source order —
+//! into one JS array before dispatching. All six wrote the same loop, and all
+//! six held the half-built array in a bare `i64` SSA register across it:
+//!
+//! ```llvm
+//!   %acc  = call i64 @js_array_alloc(i32 0)
+//!   %box  = call double @perry_fn_…(…)              ; arbitrary user code
+//!   %part = call i64 @js_array_like_to_array(double %box)   ; ALLOCATES
+//!   %acc2 = call i64 @js_array_concat(i64 %acc, i64 %part)  ; %acc is stale
+//! ```
+//!
+//! `--statepoints --moving-only` reports that as `unrooted:alloc` — the fresh
+//! array is in no safepoint's live bundle, so an evacuating minor inside
+//! `js_array_like_to_array` neither marks nor rewrites it and `js_array_concat`
+//! reads from-space. It is #7453's shape (a fresh heap value in a raw register
+//! across an allocating helper) in the spread lowering rather than the URL one,
+//! and it is reachable from `a.splice(1, 0, ...src)`.
+//!
+//! **The window is never empty here**, which is why the six sites share one
+//! helper rather than each answering `operand_protection` separately: an
+//! `Expr::CallSpread` has at least one spread argument by construction, and
+//! `js_array_like_to_array` allocates unconditionally. So the accumulator is at
+//! risk even when every operand is an inert literal — `f(...[1, 2])` is the
+//! smallest reproducer, and an operands-only predicate answers `false` for it.
+//!
+//! [`bundle_args_rooted`] is the whole fix. It is `with_rooted_accumulator`
+//! with the two fold steps this lowering needs (`js_array_push_f64` for a
+//! regular argument, `js_array_concat` for a spread source), so the accumulator
+//! never exists as a register the loop holds across an emission.
 
 use anyhow::Result;
-use perry_hir::Expr;
+use perry_hir::{CallArg, Expr};
 
 use crate::nanbox::double_literal;
 use crate::native_value::MaterializationReason;
+use crate::rooting::{self, Arg, Repr};
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{downgrade_buffer_aliases_in_expr, lower_expr, nanbox_pointer_inline, FnCtx};
 
+/// The expression a call argument carries, whatever its spread-ness.
+fn call_arg_expr(a: &CallArg) -> &Expr {
+    match a {
+        CallArg::Expr(e) | CallArg::Spread(e) => e,
+    }
+}
+
+/// Bundle `args` into one source-ordered JS array with the accumulator rooted
+/// for the whole loop, then hand the finished array to `finish` (#7664).
+///
+/// `select` decides which arguments participate: the multi-spread marshalling
+/// arm folds only the spread sources, every other arm folds all of them.
+///
+/// `finish` runs BELOW the last collection point and ABOVE the release, so the
+/// register it receives is the only one that ever escapes — the same split
+/// [`rooting::with_rooted_accumulator`] imposes everywhere else.
+fn bundle_args_rooted<'f, R>(
+    ctx: &mut FnCtx<'f>,
+    args: &[CallArg],
+    spread_only: bool,
+    finish: impl FnOnce(&mut FnCtx<'f>, &str) -> Result<R>,
+) -> Result<R> {
+    let acc0 = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+    // One-sided, and `true` in practice at every caller — see the module
+    // header. It is still computed rather than hardcoded so that a future arm
+    // with no spread source (and therefore no `js_array_like_to_array`) gets
+    // the un-rooted IR byte for byte instead of paying for a window it does
+    // not have.
+    let protect = args.iter().any(|a| matches!(a, CallArg::Spread(_)))
+        || rooting::any_operand_may_collect(ctx, args.iter().map(call_arg_expr));
+    rooting::with_rooted_accumulator(
+        ctx,
+        Repr::Ptr,
+        &acc0,
+        protect,
+        |ctx, acc| {
+            for a in args {
+                match a {
+                    CallArg::Expr(e) => {
+                        if spread_only {
+                            continue;
+                        }
+                        let v = lower_expr(ctx, e)?;
+                        acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v)]);
+                    }
+                    CallArg::Spread(e) => {
+                        let part_box = lower_expr(ctx, e)?;
+                        // `js_array_like_to_array` allocates, so the re-read
+                        // `advance` fuses to the `concat` has to sit BELOW it.
+                        // That ordering is the fix; a re-read above this call
+                        // would root an already-stale pointer, which is #7192's
+                        // shape.
+                        let part =
+                            ctx.block()
+                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
+                        acc.advance(ctx, "js_array_concat", &[Arg::Plain(I64, &part)]);
+                    }
+                }
+            }
+            Ok(())
+        },
+        finish,
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::CallSpread { callee, args, .. } => {
-            use perry_hir::CallArg;
             let spread_count = args
                 .iter()
                 .filter(|a| matches!(a, CallArg::Spread(_)))
@@ -56,30 +153,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "log" | "info" | "warn" | "error" | "debug"
                     )
                 {
-                    let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-                    for a in args {
-                        match a {
-                            CallArg::Expr(e) => {
-                                let v = lower_expr(ctx, e)?;
-                                acc_handle = ctx.block().call(
-                                    I64,
-                                    "js_array_push_f64",
-                                    &[(I64, &acc_handle), (DOUBLE, &v)],
-                                );
-                            }
-                            CallArg::Spread(e) => {
-                                let part_box = lower_expr(ctx, e)?;
-                                let blk = ctx.block();
-                                let part_handle =
-                                    blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
-                                acc_handle = ctx.block().call(
-                                    I64,
-                                    "js_array_concat",
-                                    &[(I64, &acc_handle), (I64, &part_handle)],
-                                );
-                            }
-                        }
-                    }
                     let runtime_fn = match property.as_str() {
                         "info" => "js_console_info_spread",
                         "debug" => "js_console_debug_spread",
@@ -87,8 +160,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "error" => "js_console_error_spread",
                         _ => "js_console_log_spread",
                     };
-                    ctx.block().call_void(runtime_fn, &[(I64, &acc_handle)]);
-                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    return bundle_args_rooted(ctx, args, false, |ctx, acc| {
+                        ctx.block().call_void(runtime_fn, &[(I64, acc)]);
+                        Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+                    });
                 }
             }
 
@@ -235,41 +310,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if !skip {
                     let recv_box = lower_expr(ctx, object)?;
                     // Build a single JS array containing every arg in order.
-                    let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-                    for a in args {
-                        match a {
-                            CallArg::Expr(e) => {
-                                let v = lower_expr(ctx, e)?;
-                                acc_handle = ctx.block().call(
-                                    I64,
-                                    "js_array_push_f64",
-                                    &[(I64, &acc_handle), (DOUBLE, &v)],
-                                );
-                            }
-                            CallArg::Spread(e) => {
-                                let part_box = lower_expr(ctx, e)?;
-                                let part_handle = ctx.block().call(
-                                    I64,
-                                    "js_array_like_to_array",
-                                    &[(DOUBLE, &part_box)],
-                                );
-                                acc_handle = ctx.block().call(
-                                    I64,
-                                    "js_array_concat",
-                                    &[(I64, &acc_handle), (I64, &part_handle)],
-                                );
-                            }
-                        }
-                    }
-                    let key_idx = ctx.strings.intern(property);
-                    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
-                    let method_id =
-                        crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_native_call_method_apply_by_id",
-                        &[(DOUBLE, &recv_box), (I64, &method_id), (I64, &acc_handle)],
-                    ));
+                    //
+                    // ★ `recv_box` is ALSO held across this loop and is NOT
+                    // rooted here. That is a second, distinct window — an
+                    // operand rather than the accumulator — and it is #7640's
+                    // population, not this one. It is left alone deliberately
+                    // rather than half-fixed: rooting it needs the receiver and
+                    // the array in ONE `RootedGroup` scope so the release
+                    // post-dominates the dispatch, which is a different change
+                    // with a different acceptance test.
+                    return bundle_args_rooted(ctx, args, false, |ctx, acc| {
+                        let key_idx = ctx.strings.intern(property);
+                        let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+                        // Pure: `ptrtoint` + `or`, no collection point between
+                        // the accumulator's final read and the dispatch.
+                        let method_id =
+                            crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_native_call_method_apply_by_id",
+                            &[(DOUBLE, &recv_box), (I64, &method_id), (I64, acc)],
+                        ))
+                    });
                 }
             }
 
@@ -294,37 +356,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if !(crate::type_analysis::is_numeric_expr(ctx, index) && !object_is_class_ref) {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_box = lower_expr(ctx, index)?;
-                    let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-                    for a in args {
-                        match a {
-                            CallArg::Expr(e) => {
-                                let v = lower_expr(ctx, e)?;
-                                acc_handle = ctx.block().call(
-                                    I64,
-                                    "js_array_push_f64",
-                                    &[(I64, &acc_handle), (DOUBLE, &v)],
-                                );
-                            }
-                            CallArg::Spread(e) => {
-                                let part_box = lower_expr(ctx, e)?;
-                                let part_handle = ctx.block().call(
-                                    I64,
-                                    "js_array_like_to_array",
-                                    &[(DOUBLE, &part_box)],
-                                );
-                                acc_handle = ctx.block().call(
-                                    I64,
-                                    "js_array_concat",
-                                    &[(I64, &acc_handle), (I64, &part_handle)],
-                                );
-                            }
-                        }
-                    }
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_native_call_method_value_apply",
-                        &[(DOUBLE, &recv_box), (DOUBLE, &key_box), (I64, &acc_handle)],
-                    ));
+                    // Same second window as the `PropertyGet` arm above:
+                    // `recv_box` and `key_box` are unrooted across the bundle.
+                    // #7640, not this change.
+                    return bundle_args_rooted(ctx, args, false, |ctx, acc| {
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_native_call_method_value_apply",
+                            &[(DOUBLE, &recv_box), (DOUBLE, &key_box), (I64, acc)],
+                        ))
+                    });
                 }
             }
 
@@ -372,36 +413,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             // Bundle every arg (regular + spread) into the single
                             // rest array, in source order.
-                            let mut acc = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-                            for a in args {
-                                match a {
-                                    CallArg::Expr(e) => {
-                                        let v = lower_expr(ctx, e)?;
-                                        acc = ctx.block().call(
-                                            I64,
-                                            "js_array_push_f64",
-                                            &[(I64, &acc), (DOUBLE, &v)],
-                                        );
-                                    }
-                                    CallArg::Spread(e) => {
-                                        let part_box = lower_expr(ctx, e)?;
-                                        let part = ctx.block().call(
-                                            I64,
-                                            "js_array_like_to_array",
-                                            &[(DOUBLE, &part_box)],
-                                        );
-                                        acc = ctx.block().call(
-                                            I64,
-                                            "js_array_concat",
-                                            &[(I64, &acc), (I64, &part)],
-                                        );
-                                    }
-                                }
-                            }
-                            let rest_box = nanbox_pointer_inline(ctx.block(), &acc);
                             ctx.pending_declares
                                 .push((symbol.clone(), DOUBLE, vec![DOUBLE]));
-                            return Ok(ctx.block().call(DOUBLE, &symbol, &[(DOUBLE, &rest_box)]));
+                            return bundle_args_rooted(ctx, args, false, |ctx, acc| {
+                                // `nanbox_pointer_inline` is an `or` with the
+                                // POINTER_TAG constant — pure, so the final read
+                                // above it still dominates the call.
+                                let rest_box = nanbox_pointer_inline(ctx.block(), acc);
+                                Ok(ctx.block().call(DOUBLE, &symbol, &[(DOUBLE, &rest_box)]))
+                            });
                         }
                     }
                 }
@@ -438,32 +458,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let (regs_ptr, regs_len, spread_handle) = if interleaved {
                 // Build one array containing every arg in source order, then
                 // apply it as the entire argument list.
-                let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-                for a in args {
-                    match a {
-                        CallArg::Expr(e) => {
-                            let v = lower_expr(ctx, e)?;
-                            acc_handle = ctx.block().call(
-                                I64,
-                                "js_array_push_f64",
-                                &[(I64, &acc_handle), (DOUBLE, &v)],
-                            );
-                        }
-                        CallArg::Spread(e) => {
-                            let part_box = lower_expr(ctx, e)?;
-                            let part_handle = ctx.block().call(
-                                I64,
-                                "js_array_like_to_array",
-                                &[(DOUBLE, &part_box)],
-                            );
-                            acc_handle = ctx.block().call(
-                                I64,
-                                "js_array_concat",
-                                &[(I64, &acc_handle), (I64, &part_handle)],
-                            );
-                        }
-                    }
-                }
+                //
+                // The escaped register is safe HERE and only here: the accumulator's
+                // final read is the last emission before
+                // `js_closure_call_apply_with_spread`, which is the consuming call
+                // itself, so no collection point separates them. Anything inserted
+                // between this `if` and that call has to root the handle again.
+                let acc_handle =
+                    bundle_args_rooted(ctx, args, false, |_ctx, acc| Ok(acc.to_string()))?;
                 ("null".to_string(), "0".to_string(), acc_handle)
             } else {
                 // Marshal regular args into a stack buffer (or null/0 if none).
@@ -506,23 +508,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let blk = ctx.block();
                     blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)])
                 } else {
-                    // Concat all spread sources into a fresh array.
-                    let acc = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-                    let mut acc_handle = acc;
-                    for a in args {
-                        if let CallArg::Spread(e) = a {
-                            let part_box = lower_expr(ctx, e)?;
-                            let blk = ctx.block();
-                            let part_handle =
-                                blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
-                            acc_handle = ctx.block().call(
-                                I64,
-                                "js_array_concat",
-                                &[(I64, &acc_handle), (I64, &part_handle)],
-                            );
-                        }
-                    }
-                    acc_handle
+                    // Concat all spread sources into a fresh array. Same
+                    // escaped-register argument as the interleaved arm above:
+                    // the consuming call is the next emission.
+                    bundle_args_rooted(ctx, args, true, |_ctx, acc| Ok(acc.to_string()))?
                 };
                 (regs_ptr, regs_len, spread_handle)
             };

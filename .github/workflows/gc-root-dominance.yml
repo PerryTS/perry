@@ -548,8 +548,53 @@ jobs:
           #      residual above, newly visible because `js_new_function_construct`
           #      is now classified as a mover.
           #
+          # ── 8 here. `expr/call_spread.rs` roots the argument-bundle
+          # accumulator, which closes all three `unrooted:alloc` hits. Measured
+          # on this corpus, same binary both arms, 11 -> 8 with the other eight
+          # byte-identical and `stale` still 0.
+          #
+          # ★ THE FOUR `unmasked` HITS ARE CHECKER FALSE POSITIVES, and the
+          # description three paragraphs up ("the reload has to go in the
+          # PREDECESSOR, on the edge") is solving a problem that is not there.
+          # `"phi"` is in `TRANSPARENT_OPS`, so taint flows from a phi OPERAND to
+          # the phi RESULT and the use is located at the phi's block — but a phi
+          # operand is used on ITS INCOMING EDGE, not at the join. All four have
+          # the identical shape, e.g. `readCtx`:
+          #
+          #     entry.0:            %r2 = <unmask of the receiver>
+          #                         br i1 %r4, label %then, label %merge
+          #     merge:              %r87 = phi double [ %r2, %entry.0 ],
+          #                                           [ %r86, %pget.recv_merge ]
+          #                         ret double %r87
+          #
+          # The safepoints are all on the `%then` path, where the phi selects
+          # `%r86`. On the edge that carries `%r2` nothing collects between its
+          # definition and the join. Verified register-by-register on all four
+          # (`readCtx`, `__closure_5`, `Readable`, `__obj_method_toLocaleString_3`
+          # -- every one a `logical.merge` join of an `&&`).
+          #
+          # So the residual population is 4, not 8, and it splits:
+          #
+          #   2  global (`@perry_global_*`), test_gap_arraybuffer_transfer::main.
+          #      Real; needs ROOTING, per the note above.
+          #   2  capture. `test_gap_class_expr_dynamic_parent_ctor::__closure_21`
+          #      is real and checked by hand: `%r7 = bitcast %r61` (capture 0,
+          #      the dynamic parent class) is read at the top of the closure and
+          #      passed to `js_new_function_construct` ~60 lines below, across
+          #      `js_object_alloc_class_inline_keys` AND a user constructor, and
+          #      appears in no `gc-live` bundle anywhere in the function. It is
+          #      NOT reloadable the way a strhandle is: the recipe would have to
+          #      re-derive the closure pointer from `%this_closure`, an i64
+          #      PARAMETER that RS4GC does not relocate, so the re-read would
+          #      address the pre-move closure. That population needs the callee's
+          #      own closure pointer to be a tracked root first.
+          #
           # #7664 stays open as this budget's referent: a number with nothing
-          # behind it is the thing CLAUDE.md warns a threshold decays into.
+          # behind it is the thing CLAUDE.md warns a threshold decays into. It
+          # cannot go below 4 without either the two rooting fixes or the
+          # edge-sensitive phi rule, and the phi rule must arrive with a
+          # sabotage arm proving it still reports a phi operand that IS live
+          # across a safepoint on its own edge.
           #
           # `stale` (the object survives and is relocated, but a raw copy of
           # its pre-move address is used below) reads 0 today and is held
@@ -569,7 +614,7 @@ jobs:
             --min-statepoints 15000 \
             --min-live-bundles 8000 \
             --min-relocates 20000 \
-            --max-unrooted 11 \
+            --max-unrooted 8 \
             --max-stale 0 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \
