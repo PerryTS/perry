@@ -1,0 +1,197 @@
+name: GC Parse-Churn Layout Gate
+
+# Promotes the "tape=0 + from-space-scan parse-then-churn" check to CI (#7647).
+#
+# WHY THIS EXISTS
+#
+# #7643 measured that `PERRY_JSON_TAPE=0` + `PERRY_GC_FROMSPACE_SCAN=1` over a
+# parse-then-churn workload is a known-good end-to-end detector for the whole
+# layout-state family (#7630 / #7633 / #7635 / #7644): with the JSON
+# materialiser's finalize sabotaged to always claim `POINTER_FREE`, it reports
+# `dangling=8000 owners=4000` and the binary SIGBUSes; clean, `dangling=0` and
+# exit 0. #7643/#7644 shipped workload-free unit tests for two invariants that
+# cannot be defeated by GC timing or a lazy path -- the right primary guard --
+# but neither can catch a NEW materialiser path that forgets to finalize at
+# all, since a hand-built unit-test object never exercises a real call site.
+# That is what this job is for. Nothing ran the end-to-end check in CI before
+# this file; #7647 is that promotion.
+#
+# THIS JOB IS DESIGNED TO BE ABLE TO FAIL, checked against CLAUDE.md's "four
+# ways a gate can be unable to fail":
+#
+#   1. no `continue-on-error`, no `|| true`, no pipe between the gate script
+#      and the shell's exit status. `scripts/gc_parse_churn_layout_gate.sh`
+#      itself runs under `set -euo pipefail` and its final line is a bare
+#      `exit "$CHECK_RC"`.
+#   2. NOT wired into branch protection's required contexts by this change,
+#      deliberately: a new gate has never been green, so promoting it
+#      immediately would block every open PR (CLAUDE.md's corollary). That is
+#      a maintainer action, to be taken after this job's first observed green
+#      run on `main` -- and per the corollary, taking it is not optional
+#      follow-through: `gc-root-dominance` sat red on `main` for weeks after
+#      the same deferral because the second step was never done.
+#   3. `concurrency` below cancels `pull_request` runs only; `push` (main)
+#      runs are keyed on the commit SHA so they queue instead of cancelling
+#      each other (the `gc-ratchet` regression this guards against is #7205).
+#   4. the subject must be LIVE, not merely quiet.
+#      `scripts/gc_parse_churn_layout_check.py` -- the actual verdict logic,
+#      not this workflow -- rejects a run whose from-space scan never even
+#      ran, one where zero copying minors relocated anything (the moving
+#      collector is opt-in: `PERRY_GC_MOVING_LOOP_POLLS=1`, both at compile
+#      time and run time, is the ONLY configuration that exercises it end to
+#      end per #7161's stopgap), and one whose from-space census stayed too
+#      small to have eagerly materialised the record cohort (the #7635
+#      vacuity: a lazily-parsed cohort leaves only a handful of live objects,
+#      nowhere near the fixture's record count, so a clean scan over it would
+#      mean nothing). `scripts/gc_parse_churn_layout_check.py --self-test`
+#      proves the checker itself can say no on all of the above, in both
+#      directions, and runs on every PR regardless of relevance (it needs no
+#      compiler). The end-to-end sabotage run -- the JSON materialiser's
+#      finalize forced to always claim `POINTER_FREE`, #7635's exact
+#      mutation -- is documented in this gate's introducing PR rather than
+#      re-run on every CI invocation, matching how `gc-root-dominance` and
+#      `gc-moving-witnesses` treat their own one-time proof.
+#
+# WHAT IT DOES
+#
+# One script, no arms to choose between:
+#
+#   scripts/gc_parse_churn_layout_gate.sh <perry-binary>
+#
+# which compiles `scripts/fixtures/gc_parse_churn_layout_state.ts` with
+# `PERRY_GC_MOVING_LOOP_POLLS=1` (a compile-time gate as well as a runtime
+# one -- see that script's own comments), runs it under
+# `PERRY_JSON_TAPE=0 PERRY_GC_FROMSPACE_SCAN_ABORT=1 PERRY_GC_DIAG=1`, and
+# hands the captured stdout/stderr/exit-code to the Python checker above.
+#
+# WHAT IT DELIBERATELY DOES NOT COVER
+#
+# This is a single, deliberately narrow probe (4,000 JSON records, 2
+# pointer-bearing string fields each, matching #7643's own reproduction
+# shape) -- not a sweep over every layout-state shape the codebase can
+# produce. It is the end-to-end complement to #7643/#7644's unit tests, not a
+# replacement for them, and not a substitute for `gc-moving-witnesses` (the
+# #7154 stale-root reproducer family) or `gc-root-dominance` (the static
+# root-store-dominance check), which cover different hazard classes.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per push COMMIT so `main` runs queue instead of cancelling each
+  # other (a `cancel-in-progress: true` scoped to the whole group would still
+  # cancel a pending `main` run the moment a new one enters the SAME group --
+  # #7205, measured on gc-ratchet with three consecutive `main` runs
+  # cancelled and zero executed). PR runs are cancelled on superseding pushes.
+  group: gc-parse-churn-gate-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  self-test-checker:
+    # Cheap, compiler-free, and runs on every PR regardless of relevance: the
+    # checker logic must always be able to say no. See CLAUDE.md's GC knob
+    # kill-policy and the four-ways-a-gate-cannot-fail rule this whole job
+    # exists to satisfy point 4 of.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Self-test the verdict logic
+        run: python3 scripts/gc_parse_churn_layout_check.py --self-test
+
+  gc-parse-churn-gate:
+    runs-on: ubuntu-latest
+    # Matches gc-moving-witnesses/gc-stress: the witness run itself is
+    # minutes, but a cold cargo cache makes the compiler build the whole cost
+    # of this job.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Decide whether this change can affect the layout-state / parse-churn path
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the gate."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad, same rationale as gc-moving-witnesses.yml:
+          # anything under crates/ can move the collector or change how JSON
+          # parses, and the filter exists only to spare docs-only PRs a
+          # compiler build.
+          if grep -qE '^(crates/|scripts/gc_parse_churn_layout_(gate\.sh|check\.py)$|scripts/fixtures/gc_parse_churn_layout_state\.ts$|Cargo\.(toml|lock)$|\.github/workflows/gc-parse-churn-gate\.yml$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches a collector- or JSON-parse-relevant path; running the gate."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant paths changed."
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
+        if: steps.relevance.outputs.run == 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          # Shared with gc-stress/gc-moving-witnesses (same package set), so
+          # this job usually starts from an already-warm cache.
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clang
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          # Matches cargo-test/gc-stress/gc-moving-witnesses: works around an
+          # lld SIGBUS on this shared runner during large links.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: |
+          set -euo pipefail
+          # perry-runtime/perry-stdlib are rlib-only; libperry_{runtime,stdlib}.a
+          # come from the *-static wrapper crates. Building without them links
+          # a stale archive and makes this whole gate vacuous in a way nothing
+          # downstream can detect (CLAUDE.md's "Verifying a runtime change").
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      # GATING. No pipe, no `|| true`: this step's exit status is the gate.
+      - name: Run the parse-then-churn layout-state gate
+        if: steps.relevance.outputs.run == 'true'
+        run: scripts/gc_parse_churn_layout_gate.sh target/release/perry

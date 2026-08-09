@@ -504,6 +504,7 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     let raw = crate::arena::arena_alloc_gc(payload_size, 8, crate::gc::GC_TYPE_STRING);
     let ptr = raw as *mut StringHeader;
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    zero_alignment_padding_tail(raw, payload_size);
     (ptr, data)
 }
 
@@ -513,7 +514,57 @@ pub(crate) fn string_storage_alloc_longlived(capacity: u32) -> (*mut StringHeade
     let raw = crate::arena::arena_alloc_gc_longlived(payload_size, 8, crate::gc::GC_TYPE_STRING);
     let ptr = raw as *mut StringHeader;
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    zero_alignment_padding_tail(raw, payload_size);
     (ptr, data)
+}
+
+/// #7647: `arena_alloc_gc`/`arena_alloc_gc_longlived`/`arena_alloc_gc_old` all
+/// round a request's total size UP to 8-byte alignment
+/// (`gc_padded_total_size` in `arena/allocators.rs`), so a payload whose own
+/// natural size is not already a multiple of 8 gets up to 7 trailing bytes
+/// that are part of the allocation (`GcHeader.size`, what the collector and
+/// every heap-walking pass treat as this object's true extent) but were
+/// never requested by, or written by, the caller.
+///
+/// For every other `GC_TYPE_*` this trailing pad is a non-issue in practice
+/// because the type's own construction writes every declared field (an
+/// Object/Closure/Array literal has no "unstated" slot) -- and where it
+/// legitimately can, it is already handled: `js_array_grow`'s
+/// `[old_capacity, new_capacity)` slack is explicitly `TAG_HOLE`-filled, with
+/// a comment naming this exact hazard. A string is different: only
+/// `capacity` bytes of text are ever written by `init_string_header` and its
+/// callers' `copy_nonoverlapping`s, so the alignment pad beyond `capacity`
+/// -- unlike the array case, invisible to any `StringHeader` field -- is
+/// genuinely never initialized.
+///
+/// That is harmless to every *string* API: `.length`, indexing, iteration,
+/// and every consumer in this crate are bounded by `byte_len`/`capacity`,
+/// never `GcHeader.size`. It is NOT harmless to `PERRY_GC_FROMSPACE_SCAN`
+/// (`gc/fromspace_scan.rs`), which -- by design, and deliberately consulting
+/// no layout state -- trusts `GcHeader.size` as the payload's true extent
+/// and scans every word up to it looking for stale from-space references.
+/// Leftover bytes from whatever the arena block last held there can, and
+/// measurably do, occasionally decode as a plausible NaN-boxed or bare
+/// pointer: the #7647 parse-then-churn gate fixture hit this on roughly
+/// 1 in 40 parsed-record strings on a clean, correct build, reported as a
+/// false "dangling reference" though nothing ever reads that byte range
+/// through a real string operation.
+///
+/// Zeroing the pad is O(<=7 bytes) per allocation, negligible next to the
+/// content copy it sits beside, and makes a string's declared size fully
+/// reflect written bytes -- closing the blind spot at this crate's one
+/// normal string-storage choke point rather than asking every probe that
+/// reaches for the scan to design around it.
+#[inline]
+fn zero_alignment_padding_tail(raw: *mut u8, requested_payload_size: usize) {
+    unsafe {
+        let header = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let allocated_payload = ((*header).size as usize).saturating_sub(crate::gc::GC_HEADER_SIZE);
+        let padding = allocated_payload.saturating_sub(requested_payload_size);
+        if padding > 0 {
+            std::ptr::write_bytes(raw.add(requested_payload_size), 0, padding);
+        }
+    }
 }
 
 #[inline]

@@ -94,6 +94,15 @@ GATES = [
         "makes one context speak for all three, so adding an arm later never "
         "needs a branch-protection edit",
     ),
+    (
+        ".github/workflows/gc-parse-churn-gate.yml",
+        "gc-parse-churn-gate",
+        "scripts/gc_parse_churn_layout_gate.sh — the tape=0 + from-space-scan "
+        "parse-then-churn end-to-end check for the layout-state family "
+        "(#7630/#7633/#7635/#7643/#7644), the one shape #7643's workload-free "
+        "unit tests structurally cannot cover: a NEW materialiser path that "
+        "forgets to finalize at all",
+    ),
 ]
 
 MAIN_LINE_EVENTS = ("push", "schedule")
