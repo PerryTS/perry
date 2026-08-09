@@ -597,3 +597,73 @@ fn test_memory_pressure_collects_and_clamps_trigger() {
     GC_TRIGGER_ARMED.with(|c| c.set(prev_armed));
     assert_eq!(js_gc_memory_pressure(0), 0);
 }
+
+/// #7690 shipped its entire default-ON argument in doc comments and left the
+/// predicate matching `1|on|true`. Nothing failed, because the function that was
+/// factored out expressly to make the default "unit-testable without touching
+/// process env" had no test. This is that test.
+///
+/// A default of OFF is not a slower configuration, it is a different collector:
+/// with no poll there is no precise safepoint, so after #7687 made the
+/// alloc-point minor non-moving the nursery is never evacuated at all. Measured
+/// on the quiet bench host at `12e48edd6`, `churn_alloc` ran 13 whole-arena full
+/// collections (0.477 s of pause) where the same program at `a853135aa` ran 105
+/// copying minors (0.016 s), and `tree` spent 4.1 s of a 5.1 s wall in GC.
+#[test]
+fn polls_default_is_on() {
+    assert!(
+        moving_loop_polls_enabled_from_env(None),
+        "unset PERRY_GC_MOVING_LOOP_POLLS must select the moving-loop path — \
+         a default of OFF leaves the nursery with no precise safepoint to evacuate at"
+    );
+    for kill in ["0", "off", "false"] {
+        assert!(
+            !moving_loop_polls_enabled_from_env(Some(kill)),
+            "PERRY_GC_MOVING_LOOP_POLLS={kill} must remain the kill switch"
+        );
+    }
+    for on in ["1", "on", "true"] {
+        assert!(
+            moving_loop_polls_enabled_from_env(Some(on)),
+            "PERRY_GC_MOVING_LOOP_POLLS={on} must stay an explicit opt-in"
+        );
+    }
+    // An unrecognised value is ON, like every other non-kill value. Spelled out
+    // because the pre-#7690 predicate answered OFF here, so this is the arm that
+    // silently changes meaning if the `matches!` is ever inverted back.
+    assert!(
+        moving_loop_polls_enabled_from_env(Some("yes")),
+        "only the documented kill-switch spellings may disable polls"
+    );
+}
+
+/// The runtime decides whether to DEFER a nursery collection; codegen decides
+/// whether to emit the poll that DRAINS it. They read the same env var from two
+/// crates that cannot share a symbol, and a disagreement is silent in both
+/// directions — polls nothing consumes, or a deferral nothing drains. #7690 left
+/// them agreeing at OFF while documenting ON; this pins them as a pair against a
+/// copy of codegen's table.
+#[test]
+fn polls_default_matches_codegen_mirror() {
+    // Mirrors `perry_codegen::stmt::loops::moving_safepoint_polls_enabled_from_env`.
+    fn codegen_mirror(value: Option<&str>) -> bool {
+        !matches!(value, Some("0") | Some("off") | Some("false"))
+    }
+    for value in [
+        None,
+        Some("0"),
+        Some("off"),
+        Some("false"),
+        Some("1"),
+        Some("on"),
+        Some("true"),
+        Some(""),
+        Some("yes"),
+    ] {
+        assert_eq!(
+            moving_loop_polls_enabled_from_env(value),
+            codegen_mirror(value),
+            "runtime and codegen must agree on PERRY_GC_MOVING_LOOP_POLLS={value:?}"
+        );
+    }
+}

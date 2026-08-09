@@ -5277,11 +5277,51 @@ fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+        moving_safepoint_polls_enabled_from_env(
+            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").ok().as_deref(),
         )
     })
+}
+
+/// Pure env→emit decision, factored out so the default is testable without
+/// touching process env or the cached `OnceLock`.
+///
+/// **Byte-for-byte the same predicate as the runtime's
+/// `policy::moving_loop_polls_enabled_from_env`.** They are two crates and
+/// cannot share a symbol, so `polls_default_matches_codegen_mirror` in
+/// perry-runtime pins the pair against a copy of this table instead. Keep the
+/// two in step: a codegen default of OFF against a runtime default of ON is not
+/// a lost optimisation, it is a collector that defers nursery pressure to a
+/// safepoint that is never emitted (see #7690's regression).
+pub(crate) fn moving_safepoint_polls_enabled_from_env(value: Option<&str>) -> bool {
+    !matches!(value, Some("0") | Some("off") | Some("false"))
+}
+
+#[cfg(test)]
+mod moving_safepoint_poll_default {
+    use super::moving_safepoint_polls_enabled_from_env as emit;
+
+    /// Pins codegen's half of the pair. The runtime half is
+    /// `gc::tests::triggers::polls_default_is_on`, and
+    /// `polls_default_matches_codegen_mirror` pins that the two tables agree.
+    ///
+    /// Emitting no poll is not "one fewer instruction": it removes the only
+    /// precise safepoint a compute-only loop ever reaches, so a nursery
+    /// collection the runtime deferred has nowhere to drain.
+    #[test]
+    fn unset_emits_the_poll() {
+        assert!(emit(None), "unset must emit the loop safepoint poll");
+        for kill in ["0", "off", "false"] {
+            assert!(!emit(Some(kill)), "{kill} must remain the kill switch");
+        }
+        for on in ["1", "on", "true"] {
+            assert!(emit(Some(on)), "{on} must stay an explicit opt-in");
+        }
+        assert!(
+            emit(Some("yes")),
+            "only the documented kill-switch spellings may suppress the poll"
+        );
+    }
 }
 
 /// Emit a `js_gc_loop_safepoint()` after an allocating loop segment has

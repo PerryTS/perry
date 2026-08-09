@@ -474,22 +474,22 @@ pub(crate) fn gc_incremental_enabled() -> bool {
 /// of collecting non-moving mid-expression, so reallocation-heavy loops evacuate
 /// (bounded RSS) instead of leaking.
 ///
-/// **DEFAULT OFF (stopgap for #7154).** This was flipped default-ON in #7019, but
-/// the evacuating minor it makes primary has a use-after-free: a young closure
-/// referenced from a dynamically-added object field (`field[1]`, holders built in
-/// `proxy::create_or_update_receiver_property`) is reclaimed while still live, so
-/// the field dangles and a later call dies with `TypeError: value is not a
-/// function`. This reproduces in the DEFAULT config (no env) — the shipped binary
-/// corrupts the heap. `PERRY_GC_MOVING_LOOP_POLLS=0` is confirmed to eliminate it,
-/// so until #7154 is root-caused we default OFF (restoring the previously-correct
-/// non-moving minor) and keep the moving-loop path behind an explicit
-/// `PERRY_GC_MOVING_LOOP_POLLS=1`/`on`/`true` opt-in. Reverting the default costs
-/// #7019's minor-GC RSS/throughput win but not correctness.
+/// **DEFAULT ON.** The kill switch is `PERRY_GC_MOVING_LOOP_POLLS=0`/`off`/`false`.
+/// See [`moving_loop_polls_enabled_from_env`] for the decision and its evidence;
+/// #7161's stopgap default-OFF (pending #7154) is discharged there.
 ///
 /// MUST match codegen `moving_safepoint_polls_enabled` (same env) so the deferral
 /// and the polls that drain it stay coherent — a runtime default that disagrees
 /// with the codegen default would defer collections that never drain (or drain
-/// collections that were never deferred).
+/// collections that were never deferred). That disagreement is not hypothetical:
+/// it shipped. #7690 wrote the default-ON argument into the doc below and left
+/// both bodies matching `1|on|true`, so the runtime deferred nursery pressure to
+/// a safepoint codegen never emitted. Combined with #7687 (the alloc-point minor
+/// must not move), the shipped collector had NO nursery evacuation at all —
+/// `churn_alloc` ran 13 whole-arena full collections where it had run 105 copying
+/// minors, and `tree` spent 4.1 s of its 5.1 s wall in GC pause. Both predicates
+/// are now pinned by tests, and `polls_default_matches_codegen_mirror` pins that
+/// they agree.
 pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
     // Test-only mode override (see `force_legacy_gc_pacing`). Consulted BEFORE
     // the process-wide OnceLock so a single test can pin a specific pacing mode
@@ -538,8 +538,14 @@ pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
 /// collection therefore happened at the register-imprecise allocation point,
 /// where #7682 showed it must not move. So "polls off" does not mean "collect
 /// later, precisely"; it means "never collect precisely at all".
+///
+/// #7690 wrote every paragraph above and then did not change this line, and
+/// nothing failed — the function was factored out expressly to make the default
+/// "unit-testable without touching process env", and no test ever pinned it in
+/// either direction. `polls_default_is_on` and its codegen mirror exist so that
+/// the next edit to this predicate has to be deliberate.
 pub(crate) fn moving_loop_polls_enabled_from_env(value: Option<&str>) -> bool {
-    matches!(value, Some("1") | Some("on") | Some("true"))
+    !matches!(value, Some("0") | Some("off") | Some("false"))
 }
 
 #[cfg(test)]
