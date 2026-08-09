@@ -35,6 +35,7 @@ mod scan_fallback;
 mod shadow_stack_ops;
 mod smoke;
 pub(super) mod support;
+mod clone_keys_array_init;
 mod teardown;
 mod telemetry_verifier;
 mod temp_roots;
