@@ -600,28 +600,30 @@ jobs:
           #      same closure pointer and index re-reads the same slot, sound
           #      under the identical store side-condition
           #      (`js_closure_set_capture_bits` to that index) `root_reload.rs`
-          #      already tracks for shadow slots and handle globals. That needs
-          #      `root_reload.rs`'s `Facts` to model a CALL as a reloadable
-          #      source, not just a load — a real slice of work, tracked in its
-          #      own issue rather than rushed into this one.
+          #      already tracks for shadow slots and handle globals.
           #
-          # `--max-unrooted` is 2 now, exactly the two `unrooted:capture` hits
-          # above — measured on the native corpus after the checker fix and the
-          # static-dispatch fix, both arms of `--moving-only`, `stale` still 0.
-          # (The corpus build that produced that reading predates rebasing this
-          # branch onto #7719; #7719 fixes the identical `unrooted:global` shape
-          # via the same `RootedGroup` mechanism across a superset of
-          # `lower_call/builtin.rs`'s arms, so the reading is not expected to
-          # change, but the exact post-rebase commit has not itself been run
-          # through the corpus — this job's own execution on the PR is that
-          # confirmation.)
-          #
-          # #7725 is this budget's referent, tracking the `unrooted:capture`
-          # follow-up (split out of #7664, which #7724 otherwise closed).
-          #
-          # `stale` (the object survives and is relocated, but a raw copy of
-          # its pre-move address is used below) reads 0 today and is held
-          # there.
+          # ★ #7725 CLOSED both `unrooted:capture` hits, and the budget is
+          # deleted rather than set to 0 — `--max-unrooted` already defaults
+          # to 0, and a budget nobody re-measures is exactly the silently-
+          # absorbing-the-next-hazard failure mode CLAUDE.md's hazard-4
+          # corollary warns about (the "8 was already stale, a fresh corpus
+          # read 9" paragraph above is that failure mode, once). The fix:
+          # `root_reload.rs`'s `Facts` gained `capture_get_key`, so a
+          # `js_closure_get_capture_bits` call whose ptr operand already
+          # belongs to a reloadable recipe (the closure-ptr shadow-slot load
+          # chain #7055 already protects) extends that recipe like a
+          # transparent bit op — the whole chain (slot load, mask, a FRESH
+          # call to `js_closure_get_capture_bits` with the same index, and
+          # any further cast) re-materialises at every reload point. The
+          # store side-condition switches from "was the closure-ptr slot
+          # reassigned" (never, in generated code) to "was THIS INDEX set" —
+          # a synthetic per-index key a `js_closure_set_capture_bits` call
+          # populates via the same `stores_to` field a plain store uses,
+          # which needed the `recipe[0]`-only group key widened to
+          # `(recipe[0], root_ptr)` so the two conditions don't get
+          # conflated under one reachability walk. Verified: native corpus
+          # 2 -> 0 (`stale` held at 0), `--lowering shadow` corpus clean,
+          # `--self-test` still proves the checker can fail.
           #
           # --seeded-violations plants 40 safepoints into this very IR, between
           # a `ptrtoint ptr addrspace(1)` and its use, and requires all 40 to be
@@ -637,7 +639,6 @@ jobs:
             --min-statepoints 15000 \
             --min-live-bundles 8000 \
             --min-relocates 20000 \
-            --max-unrooted 2 \
             --max-stale 0 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \

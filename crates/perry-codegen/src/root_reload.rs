@@ -248,6 +248,43 @@ const TRANSPARENT_BIN: &[&str] = &["and", "or", "xor"];
 /// Conversions that are pure re-interpretations of a bit pattern.
 const TRANSPARENT_CAST: &[&str] = &["bitcast", "ptrtoint", "inttoptr", "trunc", "zext", "sext"];
 
+/// The runtime accessor a closure-capture READ lowers to: `js_closure_get_capture_bits(ptr,
+/// idx)`. Every call site (#7725) reads its `ptr` from `try_current_closure_ptr_value` — itself
+/// a load-of-a-shadow-slot recipe when `current_closure_slot` is bound (`codegen/closure.rs`) —
+/// so a call whose `ptr` operand already belongs to a reloadable recipe is itself a reloadable
+/// derivation of that SAME recipe, exactly like the `and`-mask step that already extends it.
+/// Re-CALLING it below a collection point is sound under the same argument #7664's string-handle
+/// reload uses: the closure struct is a first-class root (rooted at `current_closure_slot`,
+/// relocated/rewritten on evacuation), so re-reading its capture array returns the
+/// post-relocation value — UNLESS a `js_closure_set_capture_bits` to the same index ran in the
+/// window, which is the store side-condition below.
+const CAPTURE_GET_CALLEE: &str = "js_closure_get_capture_bits";
+/// The write half. Not itself collecting (`NON_COLLECTING` above), but its side effect on the
+/// closure's capture slot must invalidate a [`CAPTURE_GET_CALLEE`] reload the same way a `store`
+/// invalidates a shadow-slot one — `stores_to` carries a synthetic per-index key for exactly
+/// that (#7725).
+const CAPTURE_SET_CALLEE: &str = "js_closure_set_capture_bits";
+
+/// A synthetic "location" key for capture-slot index `idx` — never a real pointer token (no `%`
+/// / `@` sigil), so it cannot collide with an actual shadow-slot register or handle-global name.
+/// One key per (function, index): every capture read in a given function reads the SAME
+/// closure's SAME index, since `current_closure_ptr_value` always re-derives from this
+/// function's own `%this_closure`.
+fn capture_slot_key(idx: &str) -> String {
+    format!("$closure_capture:{idx}")
+}
+
+/// The literal capture-slot index from `js_closure_{get,set}_capture_bits`'s second argument, if
+/// it is a compile-time constant. Every real emission site (`literals_vars.rs`, `closure.rs`,
+/// `array_push.rs`, `instance_misc1.rs`, `lower_array_method.rs`, `expr/mod.rs`) formats a `u32`
+/// directly, so this always succeeds in practice — but a register operand there would name no
+/// fixed location, so `None` leaves the call opaque exactly like any other call whose result is
+/// not a reloadable derivation, rather than guessing.
+fn literal_capture_idx(args: &[(LlvmType, String)]) -> Option<&str> {
+    let (_, idx) = args.get(1)?;
+    (!idx.is_empty() && !idx.starts_with('%')).then_some(idx.as_str())
+}
+
 fn is_collecting(callee: &str) -> bool {
     if callee.starts_with("llvm.") {
         return false;
@@ -307,6 +344,13 @@ struct Facts {
     stores_to: Option<String>,
     /// A pure bit op a derivation may be extended through (#7664).
     transparent: bool,
+    /// `Some(key)` when this instruction is a [`CAPTURE_GET_CALLEE`] call with a literal index
+    /// — `transparent` is also true, and `key` (from [`capture_slot_key`]) REPLACES the recipe's
+    /// inherited `root_ptr` from this step onward, so the group's invalidation condition becomes
+    /// "was this index SET in the window" rather than "was the closure-ptr slot stored to"
+    /// (#7725). Kept separate from `transparent` because every other transparent op inherits its
+    /// root unchanged; this is the one case that doesn't.
+    capture_get_key: Option<String>,
     collecting: bool,
     /// A `phi` cannot have an instruction inserted before it. Neither can an
     /// inline block label (#7305's `invoke` continuation, emitted as a `Raw`
@@ -446,6 +490,13 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
                     (true, Some(r)) => r.to_string(),
                     _ => continue,
                 };
+                // #7725: a capture-GET call whose ptr operand is already reloadable extends the
+                // SAME recipe, but its own store side-condition is "was THIS INDEX set", not
+                // "was the closure-ptr slot stored to" — the ptr slot never is (it is written
+                // once, at closure entry). Swap the key here so every step from this call
+                // onward — including a further transparent cast like `bitcast i64 to double` —
+                // is invalidated by the right condition.
+                let root = f.capture_get_key.clone().unwrap_or(root);
                 recipe.push((bi, ii));
                 if recipe.len() > MAX_RECIPE {
                     continue;
@@ -518,18 +569,29 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
     // dominance checker, which cannot see a value-correctness bug.
     //
     // Grouping by root load also puts the cost back at O(blocks × loads).
-    let mut groups: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    //
+    // Keyed on `(recipe[0], root_ptr)`, not `recipe[0]` alone — #7725's capture-GET extension is
+    // the one case where a chain's `root_ptr` CHANGES partway through (the closure-ptr slot
+    // becomes a synthetic per-index key once the derivation passes through
+    // `js_closure_get_capture_bits`), so two sub-chains sharing one root LOAD can need two
+    // different invalidation conditions. Before #7725 every member of a `recipe[0]` group had
+    // the identical `root_ptr` by construction (it was always inherited, never overridden), so
+    // this is additive: it can only split a group that would otherwise have mixed two
+    // conditions under one, never change the grouping of any existing (non-capture) chain.
+    let mut groups: HashMap<((usize, usize), String), Vec<usize>> = HashMap::new();
     for (i, v) in values.iter().enumerate() {
-        groups.entry(v.recipe[0]).or_default().push(i);
+        groups
+            .entry((v.recipe[0], v.root_ptr.clone()))
+            .or_default()
+            .push(i);
     }
-    let mut group_keys: Vec<(usize, usize)> = groups.keys().copied().collect();
+    let mut group_keys: Vec<((usize, usize), String)> = groups.keys().cloned().collect();
     group_keys.sort_unstable();
 
     for key in group_keys {
         let members = &groups[&key];
-        let (lb, li) = key;
-        // Every member of a group shares the root load, hence the root pointer.
-        let slot = values[members[0]].root_ptr.clone();
+        let (lb, li) = key.0;
+        let slot = key.1;
         let by_use: HashMap<&str, usize> = members
             .iter()
             .map(|&m| (values[m].reg.as_str(), m))
@@ -746,6 +808,11 @@ fn inst_result(inst: &LlInst) -> Option<String> {
             lhs
         }
         LlInst::Bin { dst, .. } | LlInst::Cast { dst, .. } | LlInst::Load { dst, .. } => dst,
+        // #7725: a capture-GET call can now be a recipe step (see `CAPTURE_GET_CALLEE`), so
+        // `materialize` needs to name and rename its result exactly like a load or a bit op.
+        // `dst` is `None` only for a void call, which is never `transparent` and so never
+        // reaches here.
+        LlInst::Call { dst: Some(dst), .. } => dst,
         _ => return None,
     };
     Some(dst.trim_start_matches('%').to_string())
@@ -763,6 +830,11 @@ fn set_inst_result(inst: &mut LlInst, fresh: &str) {
         LlInst::Bin { dst, .. } | LlInst::Cast { dst, .. } | LlInst::Load { dst, .. } => {
             *dst = fresh.to_string();
         }
+        LlInst::Call {
+            dst: dst @ Some(_), ..
+        } => {
+            *dst = Some(fresh.to_string());
+        }
         _ => {}
     }
 }
@@ -775,6 +847,7 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
     let mut collecting = false;
     let mut is_phi = false;
     let mut transparent = false;
+    let mut capture_get_key = None;
     let mut succs = Vec::new();
 
     let reg = |s: &str| -> Option<String> {
@@ -839,6 +912,20 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
                 use_op(&mut uses, v);
             }
             collecting = is_collecting(callee);
+            // #7725: the two capture-bits halves. GET extends a derivation like a transparent
+            // bit op (see CAPTURE_GET_CALLEE); SET's side effect on the capture slot has to
+            // invalidate that derivation the way a store does, via the shared `stores_to`
+            // machinery.
+            if callee == CAPTURE_GET_CALLEE {
+                if let Some(idx) = literal_capture_idx(args) {
+                    transparent = true;
+                    capture_get_key = Some(capture_slot_key(idx));
+                }
+            } else if callee == CAPTURE_SET_CALLEE {
+                if let Some(idx) = literal_capture_idx(args) {
+                    stores_to = Some(capture_slot_key(idx));
+                }
+            }
         }
         LlInst::CallIndirect {
             dst, fptr, args, ..
@@ -881,6 +968,7 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
         load_of,
         stores_to,
         transparent,
+        capture_get_key,
         collecting,
         is_phi,
         succs,
@@ -944,10 +1032,11 @@ fn raw_facts(text: &str, slots: &HashSet<String>) -> Facts {
     }
     // A pure bit op, in rendered form. Opcode-anchored at the start of the RHS
     // so `and`/`or` inside a callee name or a type cannot be mistaken for one.
-    let transparent = rhs
+    let mut transparent = rhs
         .split_once(' ')
         .map(|(op, _)| TRANSPARENT_BIN.contains(&op) || TRANSPARENT_CAST.contains(&op))
         .unwrap_or(false);
+    let mut capture_get_key = None;
     // ★ `invoke` (#7305) is BOTH a call and a two-successor terminator, and it
     // has to be modelled as both. Missing the call half would classify a
     // throwing runtime helper's window as non-collecting and silently drop the
@@ -985,6 +1074,32 @@ fn raw_facts(text: &str, slots: &HashSet<String>) -> Facts {
                     .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.' || *c == '$')
                     .collect();
+                // #7725: neither capture-bits helper is in the EH nothrow allowlist (nothing
+                // proves it can't reach `js_throw`), so a call inside a `try` lowers to `invoke`
+                // and lands here rather than in `facts_of`'s typed `LlInst::Call` arm.
+                //
+                // The SET side is recorded regardless: it only feeds the invalidation
+                // (`stores_to`) check, which is a fact about a real side effect and is sound
+                // whether or not the call happens to be wrapped in `invoke`.
+                //
+                // The GET side is gated on `!is_invoke`: `materialize` re-emits a recipe step as
+                // a plain mid-block instruction, and an `invoke` is a terminator — cloning one
+                // in would both be invalid IR and re-target the ORIGINAL call's `%cont`/`%lpad`
+                // labels from a second predecessor they don't expect. (In practice this call is
+                // never seen here at all EXCEPT as an invoke, since every real emission site
+                // goes through `LlBlock::call`'s typed `LlInst::Call` arm otherwise — so the
+                // practical effect of this guard is "never", not "sometimes"; it is kept so a
+                // future emit_raw call to this name stays correct rather than relying on that.)
+                if name == CAPTURE_GET_CALLEE && !is_invoke {
+                    if let Some(idx) = raw_call_literal_arg(rhs, &name, 1) {
+                        transparent = true;
+                        capture_get_key = Some(capture_slot_key(&idx));
+                    }
+                } else if name == CAPTURE_SET_CALLEE {
+                    if let Some(idx) = raw_call_literal_arg(rhs, &name, 1) {
+                        stores_to = Some(capture_slot_key(&idx));
+                    }
+                }
                 is_collecting(&name)
             }
             // An indirect call, or inline asm. `asm sideeffect ""` emits
@@ -999,10 +1114,42 @@ fn raw_facts(text: &str, slots: &HashSet<String>) -> Facts {
         load_of,
         stores_to,
         transparent,
+        capture_get_key,
         collecting,
         is_phi,
         succs,
     }
+}
+
+/// [`literal_capture_idx`]'s analogue for a rendered `call`/`invoke` line: the value token of
+/// `@callee(...)`'s argument at `index`, if it is a compile-time literal. `rhs` is the trimmed
+/// instruction text (so `@callee(` always appears at most once — a nested call cannot appear as
+/// a bare operand in this IR). Balanced-paren scanned rather than split on the first `)`, since a
+/// function-pointer type operand elsewhere on the line can itself contain parens; returns `None`
+/// on anything that does not confidently parse rather than guessing.
+fn raw_call_literal_arg(rhs: &str, callee: &str, index: usize) -> Option<String> {
+    let marker = format!("@{callee}(");
+    let start = rhs.find(&marker)? + marker.len();
+    let mut depth = 1usize;
+    let mut end = None;
+    for (i, c) in rhs[start..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let args_text = &rhs[start..end?];
+    let arg = args_text.split(',').nth(index)?;
+    let (_, val) = arg.trim().split_once(' ')?;
+    let val = val.trim();
+    (!val.is_empty() && !val.starts_with('%')).then(|| val.to_string())
 }
 
 /// The `LlvmType` alphabet is `&'static str`, so a `Raw` load can only be
@@ -1145,748 +1292,9 @@ fn rename_in_text(text: &str, from: &str, to: &str) -> String {
     out
 }
 
+/// Coverage for the reload/re-derivation rule (#7280/#7664/#7725). A
+/// sibling file only because of the 2,000-line cap; `use super::*` gives it
+/// the same view of this module as the block above.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::function::LlFunction;
-    use crate::types::{DOUBLE, I64, PTR};
-
-    /// Render a function the way `to_ir` does, minus the header, so a test can
-    /// assert on instruction text.
-    fn body(func: &LlFunction) -> String {
-        let mut out = String::new();
-        func.for_each_final_line::<std::convert::Infallible>(&mut |line| {
-            out.push_str(line);
-            out.push('\n');
-            Ok(())
-        })
-        .unwrap_or_else(|e| match e {});
-        out
-    }
-
-    /// `%slot` is a bound shadow slot holding a parameter; `mid` runs between
-    /// the load and the use.
-    ///
-    /// This is #7280's zod object-spread frame, reduced: load the root, call
-    /// something, hand the LOADED REGISTER to a consumer that dereferences it.
-    fn one_block(mid: &str) -> LlFunction {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let v = b.load(DOUBLE, &slot);
-        b.call(DOUBLE, mid, &[]);
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, &r);
-        f
-    }
-
-    #[test]
-    fn the_planted_hazard_is_rewritten_to_a_reload() {
-        let mut f = one_block("js_object_alloc");
-        assert_eq!(apply_to_function(&mut f), 1, "one stale operand to rewrite");
-        let ir = body(&f);
-        // The consumer must no longer read the pre-call register, and the
-        // register it does read must be defined by a load of the same slot
-        // immediately above it.
-        let lines: Vec<&str> = ir.lines().map(str::trim).collect();
-        let use_idx = lines
-            .iter()
-            .position(|l| l.contains("@js_object_assign_one"))
-            .expect("the consumer survived the pass");
-        let reload = lines[use_idx - 1];
-        assert!(
-            reload.starts_with("%r") && reload.contains("= load double, ptr %r1"),
-            "the instruction above the consumer must re-read the slot, got {reload:?}\n{ir}"
-        );
-        let fresh = reload.split_whitespace().next().unwrap();
-        assert!(
-            lines[use_idx].contains(&format!("double {fresh},")),
-            "the consumer must read the reloaded register, got {:?}",
-            lines[use_idx]
-        );
-        assert!(
-            !lines[use_idx].contains("double %r2,"),
-            "the consumer must NOT still read the pre-call load"
-        );
-    }
-
-    #[test]
-    fn a_non_collecting_window_is_left_byte_for_byte_alone() {
-        // The ONLY difference from the planted case is which helper sits in the
-        // window. `js_write_barrier` cannot allocate, so nothing can move and
-        // the register is still valid — a pass that fires here is firing on the
-        // code shape rather than on the hazard, and would put a reload between
-        // every pair of instructions in the compiler's output.
-        let before = body(&one_block("js_write_barrier"));
-        let mut f = one_block("js_write_barrier");
-        assert_eq!(apply_to_function(&mut f), 0);
-        assert_eq!(body(&f), before);
-    }
-
-    #[test]
-    fn a_slot_the_program_reassigns_in_the_window_is_not_reloaded() {
-        // ★ The soundness half. `f(x, (x = other, 1))` must pass the ORIGINAL
-        // `x`; re-reading the slot below the assignment would hand the consumer
-        // the new value, which is a miscompile and not a rooting fix. See
-        // `rooting::operand_is_reloadable`.
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let v = b.load(DOUBLE, &slot);
-        let other = b.call(DOUBLE, "js_object_alloc", &[]);
-        b.store(DOUBLE, &other, &slot); // the reassignment
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, &r);
-        assert_eq!(
-            apply_to_function(&mut f),
-            0,
-            "a slot the program itself stores to in the window must be left alone"
-        );
-    }
-
-    #[test]
-    fn the_window_is_a_cfg_path_not_a_line_range() {
-        // Load in the entry block, collection point in one arm, use in the
-        // merge. A line-order scan sees the same thing a path-based one does
-        // here; the point of the test is that the merge block IS considered at
-        // all, since the dominant population in both corpora is cross-block.
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let entry = f.create_block("entry").label.clone();
-        let then = f.create_block("then").label.clone();
-        let merge = f.create_block("merge").label.clone();
-        let _ = entry;
-        let slot;
-        let v;
-        {
-            let b = f.block_mut(0).unwrap();
-            slot = b.alloca(DOUBLE);
-            b.store(DOUBLE, "%arg", &slot);
-            b.call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, "0"), (PTR, &slot)],
-            );
-            v = b.load(DOUBLE, &slot);
-            b.cond_br("%c", &then, &merge);
-        }
-        {
-            let b = f.block_mut(1).unwrap();
-            b.call(DOUBLE, "js_object_alloc", &[]);
-            b.br(&merge);
-        }
-        {
-            let b = f.block_mut(2).unwrap();
-            let r = b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "0.0")],
-            );
-            b.ret(DOUBLE, &r);
-        }
-        assert_eq!(apply_to_function(&mut f), 1);
-        let ir = body(&f);
-        assert!(
-            ir.matches("= load double, ptr %r1").count() == 2,
-            "the merge block must re-read the slot:\n{ir}"
-        );
-    }
-
-    #[test]
-    fn a_back_edge_round_trip_is_not_an_intra_iteration_path() {
-        // The load is INSIDE the loop, so every iteration re-executes it and the
-        // register is fresh when the use runs. Counting the back edge would make
-        // the pass reload on every loop body in the program.
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        f.create_block("entry");
-        let looplbl = f.create_block("loop").label.clone();
-        let done = f.create_block("done").label.clone();
-        let slot;
-        {
-            let b = f.block_mut(0).unwrap();
-            slot = b.alloca(DOUBLE);
-            b.store(DOUBLE, "%arg", &slot);
-            b.call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, "0"), (PTR, &slot)],
-            );
-            b.br(&looplbl);
-        }
-        {
-            let b = f.block_mut(1).unwrap();
-            let v = b.load(DOUBLE, &slot);
-            b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "0.0")],
-            );
-            b.call(DOUBLE, "js_object_alloc", &[]); // collects, but AFTER the use
-            b.cond_br("%c", &looplbl, &done);
-        }
-        {
-            let b = f.block_mut(2).unwrap();
-            b.ret(DOUBLE, "0.0");
-        }
-        assert_eq!(apply_to_function(&mut f), 0);
-    }
-
-    /// ★ #7305 turned every throwing call into an `invoke` with TWO successors,
-    /// and perry emits the continuation label INLINE in the same builder block.
-    /// Both halves have to be modelled:
-    ///
-    /// * the call half — an `invoke` of a collecting helper opens a window, so
-    ///   a use below it must reload. Missing this drops every reload inside a
-    ///   `try`, silently.
-    /// * the terminator half — the unwind edge is a real path, so a use in the
-    ///   landing pad is reached from the load and must reload too.
-    ///
-    /// The unwind edge is also why the rule is "reload at the USE" rather than
-    /// "reload after the call": a load from the slot reads whatever the
-    /// collector last wrote and is valid wherever it sits, so it is correct on
-    /// the unwind edge and the normal edge alike. There is no "after the call"
-    /// position that would have to be chosen correctly for two successors.
-    #[test]
-    fn an_invoke_opens_a_window_on_both_of_its_edges() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        f.create_block("entry");
-        let cont = f.create_block("cont").label.clone();
-        let lpad = f.create_block("lpad").label.clone();
-        let slot;
-        let v;
-        {
-            let b = f.block_mut(0).unwrap();
-            slot = b.alloca(DOUBLE);
-            b.store(DOUBLE, "%arg", &slot);
-            b.call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, "0"), (PTR, &slot)],
-            );
-            v = b.load(DOUBLE, &slot);
-            b.emit_raw(format!(
-                "invoke double @js_object_alloc(i32 4) to label %{cont} unwind label %{lpad}"
-            ));
-        }
-        {
-            let b = f.block_mut(1).unwrap();
-            b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "0.0")],
-            );
-            b.ret(DOUBLE, "0.0");
-        }
-        {
-            let b = f.block_mut(2).unwrap();
-            b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "1.0")],
-            );
-            b.ret(DOUBLE, "0.0");
-        }
-        assert_eq!(
-            apply_to_function(&mut f),
-            2,
-            "both the normal and the unwind successor use the stale register"
-        );
-        let ir = body(&f);
-        assert_eq!(
-            ir.matches("= load double, ptr %r1").count(),
-            3,
-            "the original load plus one reload on each edge:\n{ir}"
-        );
-    }
-
-    #[test]
-    fn a_function_with_no_bound_slot_is_untouched() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        let v = b.load(DOUBLE, &slot);
-        b.call(DOUBLE, "js_object_alloc", &[]);
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, &r);
-        assert_eq!(apply_to_function(&mut f), 0);
-    }
-
-    #[test]
-    fn the_bind_is_recorded_through_the_inline_form_too() {
-        // #7088's inline slot store emits the SAME `js_shadow_slot_bind` call on
-        // its slow arm, which is why the recording hook lives in `call_void`
-        // rather than at the thirteen sites that build a bind. If a future bind
-        // form stops going through `call_void`, this is the assertion that has
-        // to be updated with it.
-        let mut f = LlFunction::new("t", DOUBLE, vec![]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "3"), (PTR, &slot)],
-        );
-        b.ret(DOUBLE, "0.0");
-        assert!(f
-            .reg_counter()
-            .shadow_slot_allocas()
-            .contains(slot.as_str()));
-    }
-
-    #[test]
-    fn a_raw_operand_is_renamed_by_token_not_by_substring() {
-        // `%r1` must not rewrite inside `%r10`. This is the reason the Raw arm
-        // does not use `str::replace`.
-        let line = "  %r99 = fadd double %r1, %r10";
-        assert_eq!(
-            rename_in_text(line, "r1", "r42"),
-            "  %r99 = fadd double %r42, %r10"
-        );
-        // And the LHS is never a use.
-        assert_eq!(
-            rename_in_text("  %r1 = fadd double %r2, %r3", "r1", "r42"),
-            "  %r1 = fadd double %r2, %r3"
-        );
-    }
-
-    /// ★ The regression that cost the acceptance arm 30/30 -> 0/30.
-    ///
-    /// `entry_post_init_setup` is spliced into block 0 at `entry_init_boundary`,
-    /// and for a function built by `enable_post_init_shadow_frame` that region
-    /// contains the `js_shadow_frame_enter` call itself. Bumping the boundary by
-    /// EVERY insertion into block 0 — rather than only the ones at or above it —
-    /// pushes the index past the block, `to_ir` clamps it with
-    /// `.min(instruction_count())`, and the frame push lands after every
-    /// `js_shadow_slot_bind` in the body. Nothing is rooted, and the symptom is
-    /// `TypeError: value is not a function` — the bug this pass fixes, wearing
-    /// its own fix as a disguise.
-    #[test]
-    fn an_insertion_below_the_post_init_splice_does_not_move_it() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        {
-            let b = f.create_block("entry");
-            // The "init prelude": everything before mark_entry_init_boundary.
-            b.call_void("js_gc_init", &[]);
-        }
-        f.mark_entry_init_boundary();
-        let boundary_before = f.entry_init_boundary();
-        assert_eq!(boundary_before, Some(1));
-        {
-            let b = f.block_mut(0).unwrap();
-            let slot = b.alloca(DOUBLE);
-            b.store(DOUBLE, "%arg", &slot);
-            b.call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, "0"), (PTR, &slot)],
-            );
-            let v = b.load(DOUBLE, &slot);
-            b.call(DOUBLE, "js_object_alloc", &[]);
-            let r = b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "0.0")],
-            );
-            b.ret(DOUBLE, &r);
-        }
-        let n_insts = f.blocks()[0].instruction_count();
-        assert_eq!(apply_to_function(&mut f), 1);
-        assert_eq!(
-            f.entry_init_boundary(),
-            boundary_before,
-            "the reload went in BELOW the splice, so the splice must not move"
-        );
-        assert!(
-            f.entry_init_boundary().unwrap() <= f.blocks()[0].instruction_count(),
-            "a boundary past the block gets clamped to the END by to_ir, which \
-             relocates the whole post-init region including the frame push"
-        );
-        assert_eq!(f.blocks()[0].instruction_count(), n_insts + 1);
-    }
-
-    #[test]
-    fn an_i64_slot_reloads_at_its_own_width() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(I64);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let v = b.load(I64, &slot);
-        b.call(DOUBLE, "js_object_alloc", &[]);
-        b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(I64, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, "0.0");
-        assert_eq!(apply_to_function(&mut f), 1);
-        assert!(body(&f).contains("= load i64, ptr %r1"), "{}", body(&f));
-    }
-
-    /// A fixture where ONE instruction reads two registers loaded from two
-    /// different shadow slots — `js_object_assign_one(receiver, value)`, which
-    /// `index_set.rs` lowers `object`-before-`value`, so both really can be
-    /// slot loads.
-    fn two_slots_one_consumer() -> LlFunction {
-        let mut f = LlFunction::new(
-            "t",
-            DOUBLE,
-            vec![(DOUBLE, "%obj".into()), (DOUBLE, "%val".into())],
-        );
-        let b = f.create_block("entry");
-        let s0 = b.alloca(DOUBLE);
-        let s1 = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%obj", &s0);
-        b.store(DOUBLE, "%val", &s1);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &s0)],
-        );
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "1"), (PTR, &s1)],
-        );
-        let a = b.load(DOUBLE, &s0);
-        let c = b.load(DOUBLE, &s1);
-        b.call(DOUBLE, "js_object_alloc", &[]);
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &a), (DOUBLE, &c)],
-        );
-        b.ret(DOUBLE, &r);
-        f
-    }
-
-    /// #7311 follow-up: BOTH stale operands of one instruction must be
-    /// reloaded. The original apply loop renamed-then-inserted per rewrite, so
-    /// the first insert shifted the consumer down and the second rename
-    /// addressed the freshly-inserted reload instead — leaving one operand
-    /// stale (the exact defect this pass exists to close) and emitting a load
-    /// nothing consumes.
-    #[test]
-    fn both_stale_operands_of_one_instruction_are_reloaded() {
-        let mut f = two_slots_one_consumer();
-        assert_eq!(
-            apply_to_function(&mut f),
-            2,
-            "two stale operands on one instruction, not one"
-        );
-        let ir = body(&f);
-        let lines: Vec<&str> = ir.lines().map(str::trim).collect();
-        let use_idx = lines
-            .iter()
-            .position(|l| l.contains("@js_object_assign_one"))
-            .expect("the consumer survived");
-        let consumer = lines[use_idx];
-
-        // The two instructions above the consumer must both be slot reloads,
-        // and the consumer must read BOTH of their registers.
-        let r1 = lines[use_idx - 1];
-        let r2 = lines[use_idx - 2];
-        for r in [r1, r2] {
-            assert!(
-                r.contains("= load double, ptr %r"),
-                "expected a slot reload above the consumer, got {r:?}\n{ir}"
-            );
-        }
-        for r in [r1, r2] {
-            let fresh = r.split_whitespace().next().unwrap();
-            assert!(
-                consumer.contains(fresh),
-                "reload {fresh} is dead — the consumer does not read it: {consumer:?}\n{ir}"
-            );
-        }
-        // And neither PRE-call load may survive in the consumer. Derive those
-        // registers rather than hard-coding them: they are the loads that sit
-        // above the collecting call, not the reloads inserted below it.
-        let call_idx = lines
-            .iter()
-            .position(|l| l.contains("@js_object_alloc"))
-            .expect("the collecting call survived");
-        for l in &lines[..call_idx] {
-            if let Some(dst) = l.split_whitespace().next() {
-                if l.contains("= load double, ptr %r") {
-                    assert!(
-                        !consumer.contains(&format!("double {dst},"))
-                            && !consumer.contains(&format!("double {dst})")),
-                        "stale operand {dst} survived in {consumer:?}\n{ir}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// The handle global for a string literal, held across a collecting call.
-    ///
-    /// `%slot` is bound but unused: the point is that the value at risk lives
-    /// in a GLOBAL the collector rewrites, which is the half of #7664 that was
-    /// invisible because the pass keyed only on allocas.
-    fn one_block_global(root: &str, mid: &str) -> LlFunction {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let v = b.load(DOUBLE, root);
-        b.call(DOUBLE, mid, &[]);
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, &r);
-        f
-    }
-
-    #[test]
-    fn a_string_handle_global_held_across_a_call_is_reloaded() {
-        let mut f = one_block_global("@m_.str.5.handle", "js_object_alloc");
-        assert_eq!(apply_to_function(&mut f), 1, "one stale operand to rewrite");
-        let ir = body(&f);
-        let lines: Vec<&str> = ir.lines().map(str::trim).collect();
-        let use_idx = lines
-            .iter()
-            .position(|l| l.contains("@js_object_assign_one"))
-            .expect("the consumer survived the pass");
-        let reload = lines[use_idx - 1];
-        assert!(
-            reload.contains("= load double, ptr @m_.str.5.handle"),
-            "the instruction above the consumer must re-read the handle global, \
-             got {reload:?}\n{ir}"
-        );
-        let fresh = reload.split_whitespace().next().unwrap();
-        assert!(
-            lines[use_idx].contains(&format!("double {fresh},")),
-            "the consumer must read the reloaded register, got {:?}",
-            lines[use_idx]
-        );
-    }
-
-    /// ★ The narrowness is the point, so it is asserted rather than argued.
-    ///
-    /// `@perry_global_*` is a module-level variable the PROGRAM assigns, so a
-    /// re-read can observe a later assignment instead of the value the call was
-    /// given — `operand_needs_root` says so, and re-deriving it would be a
-    /// miscompile, not a rooting fix. Those two hits stay open (#7664) rather
-    /// than being closed by widening `is_string_handle_global`, and this test
-    /// is what makes widening it a test failure instead of a silent decision.
-    #[test]
-    fn a_module_global_is_not_a_reload_source() {
-        let mut f = one_block_global("@perry_global_m__14", "js_object_alloc");
-        let before = body(&f);
-        assert_eq!(
-            apply_to_function(&mut f),
-            0,
-            "a mutable module global must not be re-read"
-        );
-        assert_eq!(body(&f), before);
-        assert!(!is_string_handle_global("perry_global_m__14"));
-        assert!(!is_string_handle_global("m_.str.x.handle"));
-        assert!(is_string_handle_global("m_.str.5.handle"));
-    }
-
-    /// `__perry_init_strings_*` is the one function that writes a handle
-    /// global, and `js_string_from_bytes` above the store allocates. The store
-    /// side-condition — the same one that protects a reassigned slot — is what
-    /// excludes it, so it is checked rather than assumed.
-    #[test]
-    fn a_store_to_the_handle_global_in_the_window_suppresses_the_reload() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let v = b.load(DOUBLE, "@m_.str.5.handle");
-        let fresh = b.call(DOUBLE, "js_object_alloc", &[]);
-        b.store(DOUBLE, &fresh, "@m_.str.5.handle");
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, &r);
-        let before = body(&f);
-        assert_eq!(apply_to_function(&mut f), 0);
-        assert_eq!(body(&f), before);
-    }
-
-    /// #7664 shape 2, and the reason `Counter__increment` took ZERO reloads
-    /// before: the register that crosses the call is the MASK, not the load.
-    ///
-    /// `this.count++` reduced: load the receiver out of its slot, unmask it,
-    /// run the property GET (which can run a user getter), then hand the same
-    /// unmasked register to the SET.
-    fn masked_receiver(mid: &str) -> LlFunction {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let boxed = b.load(DOUBLE, &slot);
-        let bits = b.bitcast_double_to_i64(&boxed);
-        let raw = b.and(I64, &bits, "281474976710655");
-        b.call(DOUBLE, mid, &[]);
-        b.call_void(
-            "js_object_set_field_by_name",
-            &[(I64, &raw), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, "0.0");
-        f
-    }
-
-    #[test]
-    fn the_masked_receiver_is_re_derived_not_just_the_load() {
-        let mut f = masked_receiver("js_object_get_field_by_name_f64");
-        assert_eq!(
-            apply_to_function(&mut f),
-            1,
-            "the mask is one stale operand"
-        );
-        let ir = body(&f);
-        let lines: Vec<&str> = ir.lines().map(str::trim).collect();
-        let use_idx = lines
-            .iter()
-            .position(|l| l.contains("@js_object_set_field_by_name"))
-            .expect("the consumer survived the pass");
-        // The WHOLE derivation is re-emitted, in order, immediately above the
-        // consumer: re-reading the slot alone would hand the sink a double
-        // where it wants the masked i64.
-        let recipe = &lines[use_idx - 3..use_idx];
-        assert!(
-            recipe[0].contains("= load double, ptr %r1")
-                && recipe[1].contains("= bitcast double %r")
-                && recipe[2].contains("= and i64 %r"),
-            "expected load/bitcast/and above the consumer, got {recipe:?}\n{ir}"
-        );
-        let fresh = recipe[2].split_whitespace().next().unwrap();
-        assert!(
-            lines[use_idx].contains(&format!("i64 {fresh},")),
-            "the consumer must read the re-derived mask, got {:?}\n{ir}",
-            lines[use_idx]
-        );
-        assert!(
-            !lines[use_idx].contains("i64 %r4,"),
-            "the consumer must NOT still read the pre-call mask\n{ir}"
-        );
-    }
-
-    /// The same frame with a NON-collecting helper in the window emits exactly
-    /// the IR it emitted before. The derivation closure must not turn every
-    /// mask in the program into three extra instructions.
-    #[test]
-    fn a_masked_receiver_with_no_collection_point_is_left_alone() {
-        let mut f = masked_receiver("js_is_truthy");
-        let before = body(&f);
-        assert_eq!(apply_to_function(&mut f), 0);
-        assert_eq!(body(&f), before);
-    }
-
-    /// A derivation is only extended through PURE ops. A call in the middle of
-    /// the chain ends it — its result is not a function of the root that can be
-    /// re-executed, and re-running it would be a second call.
-    #[test]
-    fn a_derivation_is_not_extended_through_a_call() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let boxed = b.load(DOUBLE, &slot);
-        // NON-collecting, so it opens no window of its own; the question is
-        // purely whether its RESULT joins the derivation.
-        let derived = b.call(DOUBLE, "js_nanbox_get_pointer", &[(DOUBLE, &boxed)]);
-        b.call(DOUBLE, "js_object_alloc", &[]);
-        b.call_void(
-            "js_object_set_field_by_name",
-            &[(DOUBLE, &derived), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, "0.0");
-        let before = body(&f);
-        assert_eq!(
-            apply_to_function(&mut f),
-            0,
-            "a call's result is not a re-materialisable derivation"
-        );
-        assert_eq!(body(&f), before);
-    }
-
-    /// ★ The regression this pass shipped and an A/B caught, not the checker.
-    ///
-    /// A derived value whose DEFINITION sits below a store to the root is still
-    /// governed by the window since the ROOT LOAD, not the window since itself.
-    /// `main`'s class-object read has exactly this shape — the scope-end slot
-    /// clear lands between the load and the mask:
-    ///
-    /// ```llvm
-    ///   %a = load double, ptr %slot
-    ///   %b = or i64 %a, POINTER_TAG
-    ///   store double 0.0, ptr %slot     ; <- the clear
-    ///   %c = and i64 %b, MASK           ; derived, DEFINED BELOW the clear
-    ///   call collect()
-    ///   call sink(%c)
-    /// ```
-    ///
-    /// Anchoring `%c`'s window at `%c` never sees the clear, re-materialises
-    /// `load %slot` at the sink, and reads a slot the program had just nulled —
-    /// which turned `(makeAnon(77) as any).v` into `undefined`.
-    #[test]
-    fn a_derivation_defined_below_a_store_to_its_root_is_not_re_materialised() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let boxed = b.load(DOUBLE, &slot);
-        let bits = b.bitcast_double_to_i64(&boxed);
-        b.store(DOUBLE, "0.0", &slot);
-        let raw = b.and(I64, &bits, "281474976710655");
-        b.call(DOUBLE, "js_object_alloc", &[]);
-        b.call_void(
-            "js_object_set_field_by_name",
-            &[(I64, &raw), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, "0.0");
-        let before = body(&f);
-        assert_eq!(
-            apply_to_function(&mut f),
-            0,
-            "the root was stored to below the load, so nothing may be re-read"
-        );
-        assert_eq!(body(&f), before);
-    }
-}
+#[path = "root_reload_tests.rs"]
+mod tests;
