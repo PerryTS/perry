@@ -821,7 +821,8 @@ pub unsafe extern "C" fn js_native_call_method(
     // and would fall through to "is not a function". Resolve the symbol-keyed
     // disposer here, with the spec async→sync fallback, before that happens.
     if matches!(method_name, "__perry_dispose__" | "__perry_async_dispose__") {
-        if let Some(result) = try_symbol_dispose_dispatch(object(), method_name, args_ptr, args_len) {
+        if let Some(result) = try_symbol_dispose_dispatch(object(), method_name, args_ptr, args_len)
+        {
             return result;
         }
     }
@@ -1123,10 +1124,13 @@ pub unsafe extern "C" fn js_native_call_method(
                     let getter = (acc.get & crate::value::POINTER_MASK)
                         as *const crate::closure::ClosureHeader;
                     if !getter.is_null() {
-                        let prev_getter_this = IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
+                        let prev_getter_this =
+                            IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
                         let method_fn = crate::closure::js_closure_call0(getter);
-                        let bound =
-                            crate::closure::clone_closure_rebind_this(method_fn.to_bits(), object());
+                        let bound = crate::closure::clone_closure_rebind_this(
+                            method_fn.to_bits(),
+                            object(),
+                        );
                         IMPLICIT_THIS.with(|c| c.set(object().to_bits()));
                         let result = crate::closure::js_native_call_value(
                             f64::from_bits(bound),
@@ -1148,7 +1152,13 @@ pub unsafe extern "C" fn js_native_call_method(
         if !func_ptr.is_null() {
             let func: unsafe extern "C" fn(f64, *const i8, usize, *const f64, usize) -> f64 =
                 std::mem::transmute(func_ptr);
-            let result = func(object(), method_name_ptr, method_name_len, args_ptr, args_len);
+            let result = func(
+                object(),
+                method_name_ptr,
+                method_name_len,
+                args_ptr,
+                args_len,
+            );
             return result;
         }
         // No JS-handle dispatcher: return JS `undefined`. The literal must be
