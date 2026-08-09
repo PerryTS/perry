@@ -267,6 +267,11 @@ mod tests {
 
     #[test]
     fn legacy_stream_prototype_is_event_emitter_instanceof_candidate() {
+        // CLOSURE_PROPS is PROCESS-global and the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears it from parallel test
+        // threads, so a static method value read here comes back
+        // TAG_UNDEFINED. Serialize against those guards.
+        let _global = crate::gc::global_side_table_test_lock();
         let stream_ctor = bound_native_callable_export_value("stream", "Stream");
         let stream_ptr = (stream_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
         let stream_proto = crate::closure::closure_get_dynamic_prop(stream_ptr, "prototype");
@@ -285,6 +290,11 @@ mod tests {
 
     #[test]
     fn stream_constructors_expose_static_method_values() {
+        // CLOSURE_PROPS is PROCESS-global and the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears it from parallel test
+        // threads, so a static method value read here comes back
+        // TAG_UNDEFINED. Serialize against those guards.
+        let _global = crate::gc::global_side_table_test_lock();
         let readable = bound_native_callable_export_value("stream", "Readable");
         let writable = bound_native_callable_export_value("stream", "Writable");
         let duplex = bound_native_callable_export_value("stream", "Duplex");
