@@ -201,7 +201,10 @@ pub(crate) fn test_clear_fresh_symbol_descriptions() {
 pub(crate) unsafe fn symbol_description_text(
     sym_ptr: *const SymbolHeader,
 ) -> Option<std::sync::Arc<[u8]>> {
-    if sym_ptr.is_null() || (sym_ptr as usize) < 0x1000 {
+    // #1843/#6271: a bare `< 0x1000` floor does not reject the fetch/zlib/proxy
+    // handle bands, and dereferencing one segfaults on Linux while macOS hides
+    // it. `is_above_handle_band` is the predicate that does.
+    if sym_ptr.is_null() || !crate::value::addr_class::is_above_handle_band(sym_ptr as usize) {
         return None;
     }
     if let Some(text) = registered_symbol_description(sym_ptr as usize) {
@@ -222,7 +225,8 @@ pub(crate) unsafe fn symbol_description_text(
 /// validation. `str_from_header` validates and would drop a WTF-8 description
 /// on the floor (#7246).
 unsafe fn description_bytes_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
+    // As above — this dereferences `ptr`, so the handle bands must be excluded.
+    if ptr.is_null() || !crate::value::addr_class::is_above_handle_band(ptr as usize) {
         return None;
     }
     let len = (*ptr).byte_len as usize;
