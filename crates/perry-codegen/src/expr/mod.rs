@@ -730,7 +730,7 @@ pub(crate) struct FnCtx<'a> {
     pub shadow_slots_bound: std::collections::HashSet<u32>,
 
     /// #7469: pooled frame-rooted allocas for expression temporaries — see
-    /// [`temp_root::TempRootPool`]. Starts empty; grows on the first
+    /// [`crate::rooting::TempRootPool`]. Starts empty; grows on the first
     /// protected temporary this function lowers.
     pub temp_roots: crate::rooting::TempRootPool,
 
