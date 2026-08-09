@@ -121,7 +121,11 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 #            copying minors. Any arm whose subject is the relocating young-gen
 #            minor #7019 shipped must use THIS, not `move`.
 #   move     the arm claims to evacuate -> require moved/copied objects > 0
-#   collect  the arm claims to collect  -> require at least one GC cycle
+#   collect  the arm claims to collect  -> require a PRODUCTIVE cycle: one that
+#            reclaimed something (#7017). `cycles>0` alone counts a cycle that
+#            lands at the event-loop boundary AFTER the program's last output
+#            and frees nothing, which cannot have observed the test's live
+#            locals -- the property the matrix exists to assert.
 #   none     no GC claim of its own (an explicit control)
 #
 # %P% expands to the pressure env (PERRY_GC_HEAP_LIMIT=<MB>) unless
@@ -186,19 +190,19 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 # inert. The liveness gate exists because that one is invisible on screen.
 # ---------------------------------------------------------------------------
 ARMS=(
-"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. ***INERT AT THE MOMENT, AND REGISTERED AS SUCH*** in test-parity/gc_matrix_inert_arms.txt. #7024 made this a relocating arm (the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise rewritable roots); #7161 then flipped PERRY_GC_MOVING_LOOP_POLLS default-OFF pending #7154, and that one env gates BOTH halves of the route -- perry-codegen's moving_safepoint_polls_enabled decides whether the back-edge polls are emitted at all, and perry-runtime's gc_moving_loop_polls_enabled decides whether the trigger defers to them. A default binary has neither, so the minor runs behind ManualGcScanGuard::force_full_scan and the copying minor is ineligible by construction. requires=scavenge STAYS: it is what the shipped default is FOR, the registry entry names what blocks it, and the liveness gate fails the day it scavenges again so the entry cannot outlive its cause. safepoint_minor carries the relocating claim meanwhile."
+"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. ***LIVE AGAIN AS OF 2026-08-09*** -- its known-inert entry was deleted in test-parity/gc_matrix_inert_arms.txt. #7024 made this a relocating arm (the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise rewritable roots); #7161 then flipped PERRY_GC_MOVING_LOOP_POLLS default-OFF pending #7154, and that one env gates BOTH halves of the route -- perry-codegen's moving_safepoint_polls_enabled decides whether the back-edge polls are emitted at all, and perry-runtime's gc_moving_loop_polls_enabled decides whether the trigger defers to them. A default binary has neither, so the minor runs behind ManualGcScanGuard::force_full_scan and the copying minor is ineligible by construction. requires=scavenge STAYS: it is what the shipped default is FOR, the registry entry names what blocks it, and the liveness gate fails the day it scavenges again so the entry cannot outlive its cause. safepoint_minor carries the relocating claim meanwhile."
 "safepoint_minor|PERRY_GC_MOVING_LOOP_POLLS=1|%P% PERRY_GC_MOVING_LOOP_POLLS=1|scavenge|THE SOUND RELOCATING ARM, and what keeps the #6993 defect class reachable per-PR while #7161's stopgap holds. Sets the poll flag at BOTH compile and run time (same env on both sides -- keyed into the object cache as env_gc_moving_loop_polls, so a warm cache cannot serve poll-free objects). The copying minor then runs at js_gc_loop_safepoint -> gc_safepoint_moving_minor, where the loop body has completed and every live heap value is a named local on the shadow stack: precise, rewritable roots. No %E%, no force -- this is exactly what default was between #7024 and #7161, and what default becomes again when the stopgap lifts. NOT a replacement for the %E% arms: a back-edge poll only fires while user JS runs, so it cannot expose an unrooted local inside runtime code that never re-enters user JS (#7249). evac_minor and force_verify remain in the PR subset for that."
 "evac_minor||%P% %E%|move|THE evacuating arm, and the STRONGER acceptance route (#7249): the automatic alloc-point collection as a COPYING minor that relocates survivors at a register-imprecise point, which is where an unrooted runtime-side local is exposed. No stress knob -- this is the collector's own moving path."
 "force_evac||%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|stress-copy every marked non-pinned nursery object"
-"verify_evac||%P% PERRY_GC_VERIFY_EVACUATION=1|scavenge|panic if a live slot still points at a forwarded object. requires=scavenge: a verifier that runs over zero relocations verifies nothing. REGISTERED KNOWN-INERT (#7161) -- same route as default, same blocker, and the same reason the declaration is not being weakened to hide it."
+"verify_evac||%P% PERRY_GC_VERIFY_EVACUATION=1|scavenge|panic if a live slot still points at a forwarded object. requires=scavenge: a verifier that runs over zero relocations verifies nothing. LIVE AGAIN as of 2026-08-09 (41/58 cells in CI run 31240304595); its #7161 known-inert entry is deleted."
 "force_verify||%P% %E% PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|move|force + verify"
 "gen_gc_off||%P% PERRY_GEN_GC=0|collect|full mark-sweep only; no nursery => no evacuation by construction"
 "wb_off|PERRY_WRITE_BARRIERS=0|%P% PERRY_WRITE_BARRIERS=0|collect|no codegen write barriers => copying nursery ineligible by construction"
 "gen_off_verify||%P% PERRY_GEN_GC=0 PERRY_GC_VERIFY_EVACUATION=1|collect|full mark-sweep + evacuation verifier"
 "wb_off_force|PERRY_WRITE_BARRIERS=0|%P% PERRY_WRITE_BARRIERS=0 PERRY_GC_FORCE_EVACUATE=1|collect|force-evacuate is a documented no-op without barriers (barriers_inactive)"
 "all_four|PERRY_WRITE_BARRIERS=0|%P% PERRY_GEN_GC=0 PERRY_WRITE_BARRIERS=0 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|collect|every escape hatch at once"
-"cons_scan_off||%P% PERRY_CONSERVATIVE_STACK_SCAN=off|scavenge|PRECISE ROOTS ONLY -- removes the conservative-stack pinning that the alloc-point fallback otherwise forces (ManualGcScanGuard::force_full_scan). An arm that can observe a missing shadow-slot binding. REGISTERED KNOWN-INERT (#7161): precise roots beat that guard, but with the incremental stepper at its default the nursery trigger never reaches the direct arm in the first place -- registered_root_scanners_block_budgeted_gc() reduces to 'any copy-only scanner' under gc_incremental_enabled(), a compiled program has none, so the trigger goes to the budgeted stepper, which is non-moving by construction. Adding PERRY_GC_INCREMENTAL=0 is what turns it live, and that arm is evac_minor."
-"cons_scan_off_force||%P% PERRY_CONSERVATIVE_STACK_SCAN=off PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|scavenge|precise roots + force/verify evacuation. REGISTERED KNOWN-INERT (#7161), same reason as cons_scan_off: PERRY_GC_FORCE_EVACUATE is read on a minor path this arm never reaches, which is the #6942/#6946 shape exactly."
+"cons_scan_off||%P% PERRY_CONSERVATIVE_STACK_SCAN=off|scavenge|PRECISE ROOTS ONLY -- removes the conservative-stack pinning that the alloc-point fallback otherwise forces (ManualGcScanGuard::force_full_scan). An arm that can observe a missing shadow-slot binding. WAS registered known-inert (#7161), deleted 2026-08-09 after it scavenged on 41/58 cells: the argument was that precise roots beat that guard but the nursery trigger never reaches the direct arm in the first place -- registered_root_scanners_block_budgeted_gc() reduces to 'any copy-only scanner' under gc_incremental_enabled(), a compiled program has none, so the trigger goes to the budgeted stepper, which is non-moving by construction. Adding PERRY_GC_INCREMENTAL=0 is what turns it live, and that arm is evac_minor."
+"cons_scan_off_force||%P% PERRY_CONSERVATIVE_STACK_SCAN=off PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1|scavenge|precise roots + force/verify evacuation. was registered known-inert (#7161) on the same argument as cons_scan_off; deleted 2026-08-09 when it, too, scavenged. The #6942/#6946 shape it was said to have -- PERRY_GC_FORCE_EVACUATE read on a minor path the arm never reaches -- no longer applies, because the arm reaches it."
 "loop_polls|PERRY_GC_MOVING_LOOP_POLLS=1|%P% %E% PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_FORCE_EVACUATE=1|move|defer the alloc-point collection to a loop back-edge precise-root safepoint, where the copying minor may MOVE survivors"
 "rep_i32_off|PERRY_CANONICAL_I32_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 1 OFF x evacuation"
 "rep_str_off|PERRY_CANONICAL_STR_LOCALS=0|%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|repsel Phase 3a OFF x evacuation"
@@ -414,7 +418,7 @@ triage_reason() { # $1 test, $2 arm
             END { exit(found ? 0 : 1) }'
 }
 
-CELLS=(); EVID=(); CYC=(); EVA=(); SCA=()
+CELLS=(); EVID=(); CYC=(); EVA=(); SCA=(); REC=()
 n_pass=0; n_unver=0; n_fail=0; n_xfail=0
 ai=0
 while [ "$ai" -lt "$NARMS" ]; do
@@ -459,9 +463,48 @@ while [ "$ai" -lt "$NARMS" ]; do
                         | grep -oE '[0-9]+$' | awk '{s+=$1} END {print s+0}')
             scavenged=$(grep -oE '\[gc-copy-minor\] ran copied_objects=[0-9]+' "$WORK/out/$b.$id.err" 2>/dev/null \
                         | grep -oE '[0-9]+$' | awk '{s+=$1} END {print s+0}')
-            : "${cycles:=0}"; : "${evacuated:=0}"; : "${scavenged:=0}"
+            # #7017: `cycles>0` cannot tell a mid-program collection from a
+            # teardown one. On a small corpus file the shipped configuration
+            # completes exactly one cycle, at the event-loop boundary AFTER the
+            # program's last output, and it reclaims NOTHING -- everything
+            # allocated after the cycle armed was born black:
+            #
+            #   45:8                                    <- last program output
+            #   [gc-step] pre_in_use=479816 post_in_use=483472 sweep_freed=0 ...
+            #   [gc] cycle
+            #
+            # Both shapes scored PASS. A cycle that traversed only the retained
+            # graph at rest cannot have observed the test's live locals, which
+            # is the property the matrix was built to assert -- the #6942 /
+            # #6946 / #6950 lesson, one level up.
+            #
+            # So `collect` now requires a PRODUCTIVE cycle. Like the gc-ratchet
+            # rule widened in #7657 (`copied + promoted > 0`, because pinning it
+            # to one counter would have pinned it permanently false), this names
+            # a DESTINATION rather than a counter, and sums every reclamation
+            # counter the run emits:
+            #
+            #   sweep_freed / block_reclaim  [gc-step]      (PERRY_GC_DIAG)
+            #   eden_dead_bytes              [gc-tenuring]  (PERRY_GC_DIAG)
+            #   freed_bytes                  [gc] blocks:   (PERRY_GC_DIAG)
+            #   "freed_bytes"/"dead_bytes"   JSON trace     (diagnostics build)
+            #
+            # BOTH spellings are read, `k=N` and `"k": N`. Only the JSON form
+            # carries the malloc sweep's bytes, and reading only `k=N` scored
+            # `test_gap_gc_symbol_local_rooting` -- 86 malloc-count-triggered
+            # cycles that free 31.9 MB of symbols -- as reclaiming zero.
+            #
+            # This is a conservative proxy and says so: a mid-program cycle over
+            # a heap that is entirely live reclaims nothing and reads UNVER. It
+            # can under-claim, never over-claim, which is the safe direction for
+            # a liveness gate. Do not weaken it to `cycles>0` to make a cell
+            # green -- that is the state #7017 was filed about.
+            reclaimed=$(grep -ohE '(sweep_freed|block_reclaim|eden_dead_bytes|freed_bytes|dead_bytes)("?[:=] ?)[0-9]+' \
+                        "$WORK/out/$b.$id.err" 2>/dev/null \
+                        | grep -oE '[0-9]+$' | awk '{s+=$1} END {print s+0}')
+            : "${cycles:=0}"; : "${evacuated:=0}"; : "${scavenged:=0}"; : "${reclaimed:=0}"
             moved=$((evacuated + scavenged))
-            ev="cycles=$cycles evacuated=$evacuated scavenged=$scavenged"
+            ev="cycles=$cycles evacuated=$evacuated scavenged=$scavenged reclaimed=$reclaimed"
             if [ "$rc" -ne 0 ]; then
                 result="FAIL"; ev="exit=$rc $ev"
             elif ! cmp -s "$WORK/out/$b.$id.out" "$WORK/oracle/$b.out"; then
@@ -473,7 +516,11 @@ while [ "$ai" -lt "$NARMS" ]; do
                     # must not go green on a C4b mark-sweep evacuation.
                     scavenge) [ "$scavenged" -gt 0 ] && result="PASS" || result="UNVER" ;;
                     move)    [ "$moved" -gt 0 ] && result="PASS" || result="UNVER" ;;
-                    collect) [ "$cycles" -gt 0 ] && result="PASS" || result="UNVER" ;;
+                    # #7017: a cycle, AND that cycle reclaimed something. See
+                    # the `reclaimed=` derivation above for why the counter is
+                    # not `cycles`.
+                    collect) [ "$cycles" -gt 0 ] && [ "$reclaimed" -gt 0 ] \
+                                 && result="PASS" || result="UNVER" ;;
                     *)       result="PASS" ;;
                 esac
             fi
@@ -487,6 +534,7 @@ while [ "$ai" -lt "$NARMS" ]; do
         # The liveness gate reads these as NUMBERS, not by re-parsing `$ev`:
         # a triage reason is free text and has already contained `=`.
         CYC[$idx]="$cycles"; EVA[$idx]="$evacuated"; SCA[$idx]="$scavenged"
+        REC[$idx]="$reclaimed"
         case "$result" in
             PASS)  n_pass=$((n_pass+1)) ;;
             UNVER) n_unver=$((n_unver+1)) ;;
@@ -528,24 +576,33 @@ echo
 echo "arm liveness across the corpus (cells where the arm actually bit):"
 ai=0
 while [ "$ai" -lt "$NARMS" ]; do
-    tot=0; livec=0; livem=0; lives=0; ti=0
+    tot=0; livec=0; livem=0; lives=0; liver=0; ti=0
     while [ "$ti" -lt "${#CORPUS[@]}" ]; do
-        ev="${EVID[$((ti*NARMS+ai))]:-}"
-        cy="$(printf '%s' "$ev" | sed -nE 's/.*cycles=([0-9]+).*/\1/p')"
-        evac="$(printf '%s' "$ev" | sed -nE 's/.*evacuated=([0-9]+).*/\1/p')"
-        scav="$(printf '%s' "$ev" | sed -nE 's/.*scavenged=([0-9]+).*/\1/p')"
+        idx=$((ti*NARMS+ai))
+        # Read the NUMBERS, not the free-text evidence: a triage reason has
+        # already contained `=` (the reason CYC/EVA/SCA/REC exist).
+        cy="${CYC[$idx]:-0}"; evac="${EVA[$idx]:-0}"; scav="${SCA[$idx]:-0}"
+        recl="${REC[$idx]:-0}"
         tot=$((tot+1))
         [ "${cy:-0}" -gt 0 ] 2>/dev/null && livec=$((livec+1))
         [ $(( ${evac:-0} + ${scav:-0} )) -gt 0 ] 2>/dev/null && livem=$((livem+1))
         [ "${scav:-0}" -gt 0 ] 2>/dev/null && lives=$((lives+1))
+        [ "${recl:-0}" -gt 0 ] 2>/dev/null && liver=$((liver+1))
         ti=$((ti+1))
     done
     # #7025: `copy-minor` is reported separately from `moved-objects` because the
     # latter counts BOTH collectors. An evacuating arm showing a healthy
     # moved-objects count but `copy-minor 0/N` did not run the path it exists to
     # test -- that is the shape #7024 describes, and summing the two hid it.
-    printf '  %-24s requires=%-8s collected %2d/%2d   moved-objects %2d/%2d   copy-minor %2d/%2d\n' \
-        "${ARM_IDS[$ai]}" "${ARM_LIVES[$ai]}" "$livec" "$tot" "$livem" "$tot" "$lives" "$tot"
+    # #7017: `reclaimed` is reported next to `collected` because they differ,
+    # and the difference is the whole finding. A cell can collect and reclaim
+    # nothing -- that is a cycle at the event-loop boundary after the program's
+    # last output, which cannot have observed the test's live locals. `collect`
+    # arms are scored on `reclaimed`; `collected` is kept beside it so the gap
+    # stays visible instead of being folded away.
+    printf '  %-24s requires=%-8s collected %2d/%2d   reclaimed %2d/%2d   moved-objects %2d/%2d   copy-minor %2d/%2d\n' \
+        "${ARM_IDS[$ai]}" "${ARM_LIVES[$ai]}" "$livec" "$tot" "$liver" "$tot" \
+        "$livem" "$tot" "$lives" "$tot"
     ai=$((ai+1))
 done
 
@@ -587,9 +644,9 @@ JSON_REPORT="${JSON_OUT:-$WORK/matrix.json}"
             # characters that would make this invalid JSON, so a malformed
             # report can never be the reason the gate fails.
             ev_json="$(printf '%s' "${EVID[$idx]:-}" | tr '"\\' "''")"
-            printf '{"test":"%s","arm":"%s","result":"%s","cycles":%d,"evacuated":%d,"scavenged":%d,"evidence":"%s"}' \
+            printf '{"test":"%s","arm":"%s","result":"%s","cycles":%d,"evacuated":%d,"scavenged":%d,"reclaimed":%d,"evidence":"%s"}' \
                 "${CORPUS[$ti]}" "${ARM_IDS[$ai]}" "${CELLS[$idx]:-?}" \
-                "${CYC[$idx]:-0}" "${EVA[$idx]:-0}" "${SCA[$idx]:-0}" "$ev_json"
+                "${CYC[$idx]:-0}" "${EVA[$idx]:-0}" "${SCA[$idx]:-0}" "${REC[$idx]:-0}" "$ev_json"
             ai=$((ai+1))
         done
         ti=$((ti+1))
