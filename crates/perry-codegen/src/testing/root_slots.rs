@@ -73,12 +73,22 @@ fn bind_slot(line: &str) -> Option<&str> {
     slot.starts_with('%').then_some(slot)
 }
 
+/// The TYPE of an `alloca` definition, ignoring anything after it.
+///
+/// Matching the whole def text (`Some(&"alloca i64")`) is one `align 8` away
+/// from matching nothing — and in `temp_slots::temp_root_slots`' sibling filter
+/// that would have emptied the result and turned every negative assertion
+/// vacuous again, which is the defect this whole area is being repaired for.
+/// Raised by review on #7675.
+pub fn alloca_type(def: &str) -> Option<&str> {
+    def.strip_prefix("alloca ")
+        .map(|rest| rest.split(',').next().unwrap_or(rest).trim())
+}
+
 fn classify(fn_ir: &str, defs: &BTreeMap<&str, &str>, slot: &str) -> SlotKind {
-    match defs.get(slot) {
-        Some(&"alloca double") => SlotKind::Value,
-        Some(&"alloca i64") if fn_ir.contains(&format!("store i64 0, ptr {slot}\n")) => {
-            SlotKind::TempRoot
-        }
+    match defs.get(slot).copied().and_then(alloca_type) {
+        Some("double") => SlotKind::Value,
+        Some("i64") if fn_ir.contains(&format!("store i64 0, ptr {slot}\n")) => SlotKind::TempRoot,
         other => panic!(
             "root slot {slot} is bound but its alloca ({other:?}) belongs to no \
              known slot family. Adding one is fine — classify it HERE, in \
@@ -166,7 +176,12 @@ pub fn value_slot_barriers(fn_ir: &str) -> usize {
     let defs = defs(fn_ir);
     barriers_by_slot(fn_ir)
         .into_iter()
-        .filter(|(slot, _)| matches!(defs.get(slot.as_str()), Some(&"alloca double")))
+        .filter(|(slot, _)| {
+            matches!(
+                defs.get(slot.as_str()).copied().and_then(alloca_type),
+                Some("double")
+            )
+        })
         .map(|(_, count)| count)
         .sum()
 }
@@ -294,6 +309,20 @@ entry.0:
             "an unclassifiable bound slot must fail loudly — folding it into a \
              total silently is #7504"
         );
+    }
+
+    /// An `align` suffix must not push a known slot into the unclassified
+    /// panic arm. Sabotage: restore the exact `Some(&"alloca double")` compare
+    /// and this test panics instead of counting.
+    #[test]
+    fn an_aligned_alloca_is_still_classified() {
+        let aligned = MIXED
+            .replace("%v = alloca double", "%v = alloca double, align 8")
+            .replace("%t = alloca i64", "%t = alloca i64, align 8");
+        assert_ne!(aligned, MIXED, "the substitution must actually apply");
+        assert_eq!(value_slot_binds(&aligned), 1);
+        assert_eq!(temp_root_slot_binds(&aligned), 2);
+        assert_eq!(value_slot_barriers(&aligned), 1);
     }
 
     /// An `alloca i64` that is NOT null-initialised at entry is not a temp-root
