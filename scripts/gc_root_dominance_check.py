@@ -2119,6 +2119,46 @@ REWRITTEN_LOAD_RE = re.compile(
 )
 
 
+# Uses that PROVE the value is a raw number, not a NaN-boxed reference.
+#
+# Perry represents every JS value as a NaN-boxed double, so "it is a double"
+# says nothing about whether it is a pointer. But float ARITHMETIC does: a
+# NaN-box carries its tag in the exponent/mantissa bits, and `fadd`-ing one
+# destroys it. Codegen therefore emits these only where it has already proven
+# the operand numeric — the instruction is the proof, not a heuristic about it.
+#
+# #7738: without this, every module-level `let n = 0` read inside a loop was
+# reported as an unrooted stale register. `test_gap_repsel_gc_stress`'s
+# `churnAcc` produced eight such hits (`taSum`, `taMix`, `churn`,
+# `shapeAndI32` and their `$spec` clones), all with `fadd` as the "stale use".
+# A stale NUMBER is just a number; there is nothing for the collector to
+# rewrite and nothing to dereference.
+#
+# Deliberately per-USE, not per-source. A register with one arithmetic use and
+# one dereference is still reported for the dereference — which is the case
+# that matters, and which a source-level filter would have silently dropped.
+# `fcmp` needs care and gets exactly the ORDERED predicates. An ordered
+# comparison (`oeq ogt oge olt ole one ord`) is false unless BOTH operands are
+# non-NaN — and every NaN-boxed reference is, by construction, a NaN. So an
+# ordered predicate on a boxed pointer is a constant `false`, which codegen has
+# no reason to emit; seeing one is proof the operand is a real number.
+#
+# The UNORDERED predicates (`une uno ueq ugt uge ult ule`) are excluded on
+# purpose: `fcmp uno` is exactly how a NaN-box tag check is written, so treating
+# it as numeric proof would blind the checker to the pointer case it exists for.
+NUMERIC_PROOF_USE_RE = re.compile(
+    r"=\s*(?:fadd|fsub|fmul|fdiv|frem"
+    r"|fcmp\s+(?:fast\s+|nnan\s+|ninf\s+|nsz\s+|arcp\s+|contract\s+|afn\s+|reassoc\s+)*"
+    r"(?:oeq|ogt|oge|olt|ole|one|ord)\s"
+    r")"
+)
+
+
+def use_proves_numeric(text):
+    """Does this instruction prove its operands are raw numbers?"""
+    return NUMERIC_PROOF_USE_RE.search(text) is not None
+
+
 def rewritten_load_kind(text):
     """Which collector-rewritten global does this load read, if any?
 
@@ -3574,6 +3614,10 @@ def check_func_statepoints(module, f, want_moving_only=False,
                     if use.result in chain or is_transparent(use):
                         continue
                     if not uses(use.text, chain):
+                        continue
+                    # #7738: float arithmetic proves the operand is a raw
+                    # number, so a stale copy of it is harmless.
+                    if use_proves_numeric(use.text):
                         continue
                     if use.block == src.block and use.idx <= src.idx:
                         continue
