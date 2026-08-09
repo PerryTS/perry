@@ -1,0 +1,221 @@
+{
+  "_README": [
+    "Verdicts for every runtime GC-pointer holder that scripts/gc_runtime_root_holders.py",
+    "enumerates and finds NOT reached by a registered root scanner in its own file (#7231).",
+    "",
+    "An entry that matches no such holder FAILS the gate. That is deliberate: it is what",
+    "makes a fix delete its own entry, and it is why 'covered_elsewhere' is a verdict rather",
+    "than a suppression — if the scanner that covers it is ever deleted, the holder stays",
+    "uncovered, the entry stays matched, and nothing tells you. Read the named scanner if you",
+    "touch it.",
+    "",
+    "Verdicts:",
+    "  covered_elsewhere  - a REGISTERED scanner visits it, but from a different file, so the",
+    "                       same-file rule cannot see it. `scanner` names it. These are the",
+    "                       gate's known false positives, recorded rather than silenced.",
+    "  not_a_gc_pointer   - the stored value is an id, a counter, an epoch, a code address, a",
+    "                       .rodata object, or Rust-owned state. Nothing for the collector.",
+    "  test_only          - #[cfg(test)] storage; never live in a shipped binary.",
+    "  open_gap           - a real unrooted GC pointer. `issue` says where it is tracked.",
+    "  unverified         - enumerated, verdict NOT established. A named, dated TODO — not an",
+    "                       exemption. Keep this list short; every entry here is a hole the",
+    "                       gate can see and nobody has looked into."
+  ],
+  "holders": [
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_RESOURCE_HANDLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of async resource IDs (async_hooks' asyncId space), not heap addresses. The resource OBJECTS live in RESOURCES, which scan_async_hooks_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_RESOURCE_HANDLE_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic counter."
+    },
+    {
+      "file": "crates/perry-runtime/src/child_process/reactor.rs",
+      "name": "CP_NEXT_LIVE_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter for CP_LIVE keys. CP_LIVE itself is covered by cp_reactor_scan_roots_mut."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "SHAPE_CACHE",
+      "verdict": "open_gap",
+      "issue": "#7268",
+      "why": "Raw *mut ArrayHeader shape-identity keys, dereferenced by set_to_json_key_for_template_field to read property-name strings. Its own doc comment asserted the invariant that made this safe ('within one top-level stringify call no GC runs over the user object graph'); toJSON falsifies it. Fixed in PR #7694 — DELETE THIS ENTRY when that lands, the gate will tell you."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "PARSE_KEY_RING",
+      "verdict": "open_gap",
+      "issue": "#7231",
+      "why": "A hot-key mirror of PARSE_KEY_CACHE holding the same *const StringHeader values. The CACHE is visited by scan_parse_roots_mut; the RING is not, so a move rewrites one copy and not the other and a ring hit hands out a pre-move address. Narrow: the keys are js_string_from_bytes_longlived, i.e. old-gen, so only old-gen defrag can move them — not the copying minor."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "FILE_BLOB_STREAMS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by stream id; FileBlobStreamState is Rust-owned (byte buffers + offsets), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "NEXT_FILE_BLOB_STREAM_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_CHANNEL_BY_KEY",
+      "verdict": "unverified",
+      "why": "Values are channel handle ids (safe), but DiagChannelKey::Symbol carries a symbol ADDRESS. Whether that address can be a gc_malloc'd fresh symbol (alloc_symbol, GC_TYPE_STRING, movable) rather than one of the Box::leak'd registered/well-known symbols has not been established. Raised 2026-08-09 with #7231's sweep; needs the write sites read."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_CHANNELS",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1505)",
+      "why": "Visited from the sibling module, so the same-file rule misses it."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "ERROR_USER_PROPS",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::diagnostics_gc::scan_error_user_props_roots_mut (diagnostics_gc.rs:46/72/134)",
+      "why": "The whole GC half of diagnostics lives in diagnostics_gc.rs, including the ErrorHeader-address rekey."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_NOOP_CLOSURE",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1499)",
+      "why": "Visited from the sibling module."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_OBJECT_VALUES",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_class_side_table_roots_mut and its budgeted step twin (class_registry/gc_roots.rs:138 and :256)",
+      "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it — #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss.rs",
+      "name": "PERRY_IC_EPOCH",
+      "verdict": "not_a_gc_pointer",
+      "why": "Inline-cache invalidation epoch. Epoch invalidation is the third rooting strategy this tree uses (see object/prop_plan.rs) — the cache is discarded on bump rather than scanned."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "ITERATOR_PROTOTYPE_PTR",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141, the six-slot loop)",
+      "why": "All six %IteratorPrototype%-style singletons are visited by one loop in object/mod.rs."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "ARRAY_ITERATOR_PROTOTYPE_PTR",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
+      "why": "Same six-slot loop."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "MAP_ITERATOR_PROTOTYPE_PTR",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
+      "why": "Same six-slot loop."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "SET_ITERATOR_PROTOTYPE_PTR",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
+      "why": "Same six-slot loop."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "STRING_ITERATOR_PROTOTYPE_PTR",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
+      "why": "Same six-slot loop."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
+      "why": "Same six-slot loop."
+    },
+    {
+      "file": "crates/perry-runtime/src/perf_hooks.rs",
+      "name": "PERF_ENTRY_KEYS_ARRAY",
+      "verdict": "open_gap",
+      "issue": "#7231",
+      "why": "Caches the shared keys_array address of performance entries (js_object_alloc_with_shape, nursery) and compares it by identity at perf_hooks.rs:119. Never rewritten, so after a move it misses (silent slow path) or — the sharper half — matches a newly-allocated array recycled into the address. The neighbouring PERF_ENTRIES table IS covered by scan_perf_entries_roots_mut; this one slot is not."
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "MODULE_LOADER_NEXT_RESOLVE",
+      "verdict": "covered_elsewhere",
+      "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
+      "why": "Declared in process.rs, scanned from the process/node_module.rs submodule."
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "MODULE_LOADER_NEXT_LOAD",
+      "verdict": "covered_elsewhere",
+      "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
+      "why": "Same scanner, same file split."
+    },
+    {
+      "file": "crates/perry-runtime/src/pty/mod.rs",
+      "name": "EXIT_SINK",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] sink for the pty exit callback's two JSValues. Never compiled into a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/format.rs",
+      "name": "POW10",
+      "verdict": "not_a_gc_pointer",
+      "why": "A [u64; 7] constant table of powers of ten."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/mod.rs",
+      "name": "PERRY_EMPTY_STRING",
+      "verdict": "not_a_gc_pointer",
+      "why": "A StringHeader living in .rodata, not in the arena. It has no GcHeader, is never allocated and never moves; the collector's heap-attribution predicates reject its address."
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol/properties.rs",
+      "name": "CACHED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be — see #7246."
+    },
+    {
+      "file": "crates/perry-runtime/src/thread.rs",
+      "name": "ACTIVE_THREAD_JOBS",
+      "verdict": "not_a_gc_pointer",
+      "why": "In-flight job counter for perry/thread."
+    },
+    {
+      "file": "crates/perry-stdlib/src/common/async_bridge.rs",
+      "name": "EXT_BLOCKING_TASKS_INFLIGHT",
+      "verdict": "not_a_gc_pointer",
+      "why": "In-flight blocking-task counter. The JS values are in PENDING_RESOLUTIONS / PENDING_DEFERRED, both covered by scan_pending_native_async_resolution_roots_mut."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams.rs",
+      "name": "N",
+      "verdict": "not_a_gc_pointer",
+      "why": "Five identically-named per-function AtomicUsize call counters inside streams.rs (one entry covers all five: this inventory keys on file+name). Telemetry, no JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_CALLS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Call counter."
+    }
+  ]
+}

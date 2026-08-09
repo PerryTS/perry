@@ -217,6 +217,23 @@ jobs:
           python3 scripts/gc_pin_sites.py --self-test
           python3 scripts/gc_pin_sites.py
 
+      # #7231. A runtime-side table holding a GC pointer IS a root, and nothing
+      # static could see that class before: gc_root_dominance_check.py reads
+      # emitted LLVM IR and a thread_local is not in it. #7226, #7239, #7268 and
+      # #7274 were all found by hand, each one re-deriving the same enumeration.
+      # This is that enumeration with a verdict required per holder — an
+      # unclassified holder fails, and so does an inventory entry that no longer
+      # matches (which is what makes a fix delete its own exemption).
+      #
+      # Cheap and build-free, so it belongs in `lint`, which IS a required
+      # context — hazard 2 of CLAUDE.md's four is the step people forget, so
+      # this gate is placed where that step does not exist.
+      - name: Runtime GC-pointer holder custody audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/gc_runtime_root_holders.py --self-test
+          python3 scripts/gc_runtime_root_holders.py
+
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
       # in the quarantine sweep had rooting ALREADY -- what was missing was
