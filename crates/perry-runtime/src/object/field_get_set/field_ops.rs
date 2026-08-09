@@ -149,6 +149,22 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         };
         let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
         let slot = fields_ptr.add(field_index as usize);
+        // #7164 publication order (same invariant as the two "#7154
+        // publication order" sites in field_set_by_name/tail.rs): widen
+        // `field_count` FIRST, before the store. `object::gc_field_slot_range`
+        // bounds the collector's view of the payload by `field_count`, so a
+        // write at an index the count does not yet cover is invisible to BOTH
+        // tracing and evacuation rewriting -- a pointer stored there is never
+        // marked (swept while live) and never rewritten (stale from-space
+        // pointer left in a live slot) by a copying minor. This is the
+        // BY-INDEX counterpart of that bug: `alloc_limit` above already bounds
+        // `field_index` below the physical capacity, and every physical slot
+        // is undefined-initialized at allocation (`object/alloc.rs`), so
+        // widening here can only ever expose non-pointer sentinels ahead of
+        // the store that is about to fill this one in.
+        if field_index >= (*obj).field_count {
+            (*obj).field_count = field_index + 1;
+        }
         crate::gc::runtime_store_jsvalue_slot(
             obj as usize,
             slot as usize,
