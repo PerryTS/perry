@@ -14,3 +14,9 @@
   Not latent: `test_gap_gc_iterator_drain_rooting` printed `badLen 1` instead of `badLen 0` — one of 50,000 clones losing its `tags` array.
 
   Both are now closures, so every use is a fresh slot read. That is the point: it makes each of the 93 sites correct **by construction** rather than by an audit of which probes allocate — an audit that would have to be redone every time a line is added to a 1,168-line function. The cost is a slot load against a dispatch tower orders of magnitude more expensive, and the function already used this idiom for `refreshed_args`.
+
+  **Verification status, stated plainly: the witness in #7528 no longer reproduces on `main`, so this fix is correct by construction rather than measured.**
+
+  The A/B was run properly and both arms are clean — `checksum: 1249975000 badLen 0 badVal 0`, 5/5 on each. The first attempt at the base arm was *vacuous* and nearly reported as a result: `PERRY_GC_PROTECT_FROMSPACE=1` alone printed **zero** `[gc-fromspace-protect] retired_set=` lines, i.e. no copying minor ran and the quarantine protected nothing, so its clean exit meant nothing at all. With `PERRY_GC_MOVING_LOOP_POLLS=1` at compile time and `PERRY_GC_ZEAL=1` at run time the instrument arms (5 retired sets) and still does not fault.
+
+  So one of #7516 / #7527 / #7529 / #7687 removed the observable, and what remains is the hazard itself: a value read out of a root and held across allocating calls is not rooted, which is an invariant (`docs/src/internals/gc-rooting-invariant.md`), not a judgement call. That class is invisible to every runtime GC probe by construction — at the moment of the collection there is nothing for the collector to find — which is exactly why it is fixed structurally instead of waiting for a witness to come back.
