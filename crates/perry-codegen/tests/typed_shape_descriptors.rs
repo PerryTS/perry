@@ -406,9 +406,21 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
         "number-typed array pushes should validate the runtime value before the numeric path"
     );
     assert!(
-        ir.contains("call void @js_typed_feedback_record_fallback_call")
-            && ir.contains("call i64 @js_array_push_f64"),
+        ir.contains("call i64 @js_array_push_f64"),
         "wrong runtime values must keep a boxed runtime push fallback"
+    );
+    // #7480: the fallback PUSH is the subject; the fallback RECORDING is not.
+    // This test used to require `record_fallback_call` alongside the push, which
+    // conflated the two -- and the recording call is exactly what a default
+    // build no longer emits. Asserting its absence keeps the test honest about
+    // which of the two survives, and turns it into a second witness for the
+    // emission gate on the ordinary `arr.push(x)` shape (`LocalGet` is excluded
+    // from `expr_produces_canonical_raw_f64`, so this path is the common one,
+    // not an edge case).
+    assert!(
+        !ir.contains("call void @js_typed_feedback_record_fallback_call"),
+        "a default build must not emit the fallback RECORDING call; only the \
+         fallback push itself is load-bearing"
     );
 }
 
