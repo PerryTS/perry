@@ -14,10 +14,12 @@
 # Requires target/release/perry plus the runtime archives (see the workflow, or
 # `cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static`).
 #
-# Exit status is non-zero if fewer than MIN_COMPILED sources produced IR. A
-# source that stops compiling is allowed -- test-files/ churns, and this gate is
-# not the gap suite -- but the corpus is NOT allowed to quietly shrink to
-# nothing, because "0 violations over 3 files" and "0 violations over 300 files"
+# Exit status is non-zero if PATTERNS matches fewer than MIN_SOURCES files, or
+# if more than MAX_SKIPPED (= 0) of them fail to produce IR. A source that stops
+# compiling is NOT allowed to pass quietly: it emits no IR, and IR that was
+# never emitted reads to the checker exactly like IR with no violations in it.
+# Nor is the corpus allowed to shrink, because "0 violations over 3 files" and
+# "0 violations over 300 files"
 # print the same verdict and mean opposite things.
 #
 # TWO LOWERINGS, and the corpus is not the same corpus for both (#7663)
@@ -100,7 +102,6 @@ PERRY_BIN="${PERRY_BIN:-target/release/perry}"
 #   spread     - spread/rest, which allocate per element
 #   map/set    - collection literals
 #
-# Keep this list in sync with MIN_COMPILED below when you add a prefix.
 PATTERNS=(
   'test_gap_gc_*.ts'
   'test_gap_repsel*.ts'
@@ -117,9 +118,33 @@ PATTERNS=(
   'test_gap_set*.ts'
 )
 
-# The floor, not a target. Raise it when the corpus grows; never lower it to
-# make a run pass -- a shrinking corpus is the finding, not the obstacle.
-MIN_COMPILED="${MIN_COMPILED:-90}"
+# --- the two ratchets, and why a lone MIN_COMPILED could not fail -----------
+#
+# This used to be `MIN_COMPILED=90`, hand-synced to PATTERNS by a comment. The
+# comment drifted: PATTERNS grew to discover **131** sources while the floor
+# stayed at 90, so the run tolerated **41 sources failing to compile** and still
+# exited 0, printing the failures to a log nobody reads. That is CLAUDE.md's
+# hazard 4 in its purest form -- the gate ran, 41 of its subjects need not have.
+#
+# A floor expressed as an absolute count cannot track a corpus that grows. Both
+# numbers below are therefore ratchets against the corpus as DISCOVERED, and
+# both are checked in BOTH directions, so neither can drift above reality again:
+#
+#   MIN_SOURCES   how many files PATTERNS must still match. Falls only if
+#                 sources were deleted or renamed -- the "corpus shrank"
+#                 finding, which the old floor conflated with "sources failed
+#                 to compile". Two different failures, two different messages.
+#   MAX_SKIPPED   how many discovered sources may fail to compile. It is 0, and
+#                 0 is the measured truth on both lowerings, not an aspiration:
+#                 shadow and native each report 131/131, 0 skipped as of
+#                 v0.5.1402. A skip is a finding, not a tolerance.
+#
+# Raise MIN_SOURCES when you add a prefix; there is nothing else to keep in
+# sync, because the compile floor is now DERIVED (MIN_SOURCES - MAX_SKIPPED)
+# rather than restated. Lowering either to make a run pass is the thing this
+# comment exists to stop.
+MIN_SOURCES="${MIN_SOURCES:-131}"
+MAX_SKIPPED="${MAX_SKIPPED:-0}"
 
 if [ ! -x "$PERRY_BIN" ]; then
   echo "error: $PERRY_BIN not found or not executable." >&2
@@ -316,10 +341,37 @@ if [ "$LOWERING" = "native" ]; then
   fi
 fi
 
-if [ "$compiled" -lt "$MIN_COMPILED" ]; then
-  echo "::error::only $compiled sources compiled, need at least $MIN_COMPILED." >&2
-  echo "The corpus shrank. Either fix the sources that stopped compiling, or -- if" >&2
-  echo "they were removed on purpose -- adjust PATTERNS and MIN_COMPILED together" >&2
-  echo "in this file, in the same PR, so the reduction is reviewable." >&2
+# --- ratchet 1: did PATTERNS still find the corpus? -------------------------
+#
+# Separate from the skip check below on purpose. "13 sources vanished" and "13
+# sources failed to compile" are different findings with different fixes, and
+# the single floor this replaced reported both as the same thing.
+if [ "${#sources[@]}" -lt "$MIN_SOURCES" ]; then
+  echo "::error::PATTERNS matched only ${#sources[@]} sources, expected at least $MIN_SOURCES." >&2
+  echo "The corpus shrank -- sources were deleted or renamed out from under it." >&2
+  echo "If that was deliberate, lower MIN_SOURCES in this file in the SAME PR so" >&2
+  echo "the reduction is reviewable." >&2
+  exit 1
+fi
+
+# --- ratchet 2: every discovered source must compile ------------------------
+#
+# Two-sided. Over budget is a regression; UNDER budget means the budget is
+# stale and would silently absorb the next real failure, so it fails too and
+# names the number to write down. With MAX_SKIPPED=0 the second arm is
+# unreachable today -- it is what keeps the number honest if anyone ever
+# raises it, which is precisely how MIN_COMPILED=90 came to tolerate 41.
+if [ "$skipped" -gt "$MAX_SKIPPED" ]; then
+  echo "::error::$skipped of ${#sources[@]} sources failed to compile (budget: $MAX_SKIPPED)." >&2
+  echo "  ${skipped_names[*]}" >&2
+  echo "Fix them. Raising MAX_SKIPPED hides a compiler regression from every" >&2
+  echo "downstream floor in this script -- IR that was never emitted reads as" >&2
+  echo "clean to the checker." >&2
+  exit 1
+fi
+if [ "$skipped" -lt "$MAX_SKIPPED" ]; then
+  echo "::error::only $skipped sources skipped, but MAX_SKIPPED is $MAX_SKIPPED." >&2
+  echo "The budget is stale and would absorb the next real failure silently." >&2
+  echo "Lower MAX_SKIPPED to $skipped in this file." >&2
   exit 1
 fi
