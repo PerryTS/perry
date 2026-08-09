@@ -215,8 +215,10 @@ pub extern "C" fn js_array_map(
         // scan (copied-minor eligibility requires no conservative stack scan).
         // Closures are non-movable, so an unrooted one is swept in place mid-
         // loop → the next dispatch calls freed memory ("object is not a
-        // function" / wild-pointer crash). Masked by PERRY_GEN_GC_EVACUATE=0,
-        // whose non-moving minor DOES run the conservative scan. See gh #6206.
+        // function" / wild-pointer crash). It used to be masked by
+        // `PERRY_GEN_GC_EVACUATE=0`, whose non-moving minor DOES run the
+        // conservative scan; that knob was deleted in #7611, so there is no
+        // longer a configuration in which this rooting is optional. See gh #6206.
         let cb_handle = scope.root_raw_const_ptr(callback);
         let _tg = DenseThisGuard::bind_undefined();
 

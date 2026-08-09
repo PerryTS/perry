@@ -988,3 +988,59 @@ fn test_evacuated_old_parent_re_remembers_young_child_canary() {
 
     js_shadow_frame_pop(frame);
 }
+
+/// #6946: an explicit `gc()` under forced evacuation must run a MOVING minor.
+///
+/// `PERRY_GC_FORCE_EVACUATE` is read only on the minor path, and
+/// `manual_gc_collect_now` ran a full mark-sweep — which never evacuates. So
+/// every test of the shape `gc(); assertFreed()` under that knob looked like
+/// evacuation stress coverage and exercised none; five suites still drive
+/// collection exactly that way.
+///
+/// This asserts the SUBJECT WAS LIVE rather than that nothing threw: a copying
+/// minor must have completed (`copying_minor_cycles` advanced) **and** the
+/// survivor must be at a different address afterwards. Either alone is weak —
+/// the counter without the address cannot tell a copying minor that moved
+/// nothing from one that moved this object, and the address without the counter
+/// cannot tell a copying minor from any other reason a slot changed.
+///
+/// Zeal is what turns forced evacuation on here because `ZealGuard` is
+/// thread-local; an `EnvVarGuard` would set a process-global every other test
+/// in this crate shares.
+#[test]
+fn explicit_gc_under_forced_evacuation_runs_a_moving_minor() {
+    // NB: deliberately NOT `copying_nursery_isolation_lock()`. That guard is
+    // held across a collection here, and `js_gc_collect` reaches the same
+    // global side table — the double-lock deadlocks the whole test binary
+    // rather than failing. `CopyingNurseryTestGuard` is what the sibling
+    // copying-minor tests use for exactly this shape.
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _zeal = super::super::zeal::ZealGuard::set(true);
+    assert!(
+        gc_force_evacuate_enabled(),
+        "test premise: zeal must imply forced evacuation"
+    );
+
+    let frame = js_shadow_frame_push(1);
+    let child = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(child));
+
+    let cycles_before = crate::gc::copying_minor_cycles();
+    js_gc_collect();
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let cycles_after = crate::gc::copying_minor_cycles();
+    js_shadow_frame_pop(frame);
+
+    assert!(
+        cycles_after > cycles_before,
+        "an explicit gc() under forced evacuation must run a COPYING minor \
+         (before={cycles_before} after={cycles_after}). A full mark-sweep moves \
+         nothing, which is exactly how this knob came to be inert (#6946)"
+    );
+    assert_ne!(
+        after, child,
+        "the forced evacuating minor must MOVE the survivor -- a cycle counter \
+         that advanced while nothing relocated is the same vacuous green"
+    );
+}

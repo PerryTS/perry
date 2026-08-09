@@ -581,9 +581,11 @@ pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
     // TODO: Move this snapshot into `Promise` once generational evacuation
     // becomes the default. Today promise objects are malloc-GC payloads whose
     // Rust fields are not dropped during sweep, so a side table lets us clean
-    // pending snapshots from the sweep path. With `PERRY_GEN_GC_EVACUATE=1`,
-    // however, promise addresses can change and this key will not be rewritten,
-    // so a pre-evacuation `.then()` snapshot can be missed after settlement.
+    // pending snapshots from the sweep path. Once evacuation moves promise
+    // objects their addresses change and this key is not rewritten, so a
+    // pre-evacuation `.then()` snapshot can be missed after settlement.
+    // (The condition used to be spelled `PERRY_GEN_GC_EVACUATE=1`; that knob
+    // was deleted in #7611 — policy evacuation is unconditional now.)
     pub(crate) static PROMISE_CONTEXTS: RefCell<PromiseContextStore> =
         RefCell::new(PromiseContextStore::default());
 

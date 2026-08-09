@@ -1386,6 +1386,13 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // #7592: this is the promotion the survivor-promotion handoff exists to
     // enable, so it releases the latch that suppressed a repeat handoff.
     note_copying_minor_completed();
+    // #7604: the process-wide liveness counters. A copying minor ran, and this
+    // is how much it actually relocated -- the only evidence that distinguishes
+    // "the instrument was armed" from "the instrument fired".
+    super::zeal::note_copying_minor_moved(
+        collector.stats.copied_objects,
+        collector.stats.promoted_objects,
+    );
     // #7592: promoted bytes are live by construction — credit them to the
     // old-reclaim baseline BEFORE the pressure check below, or the check reads
     // the stale baseline and schedules a full that is guaranteed to free

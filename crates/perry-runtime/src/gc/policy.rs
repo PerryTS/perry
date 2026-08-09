@@ -2259,7 +2259,11 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
     let low_pause_non_moving = progress_kind.is_budgeted();
-    let evacuation_policy_allowed = !low_pause_non_moving && gen_gc_evacuate_enabled();
+    // #7611: `low_pause_non_moving` is now the ONLY controller of this flag —
+    // the `PERRY_GEN_GC_EVACUATE` conjunct that used to be here was deleted as
+    // an untested configuration, and this arm is the one with a behavioural
+    // test (`budgeted_low_pause_minor_does_not_evacuate`).
+    let evacuation_policy_allowed = !low_pause_non_moving;
     let force_evacuation = !low_pause_non_moving && gc_force_evacuate_enabled();
     let evacuation_policy_disabled_reason = if low_pause_non_moving {
         EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON
@@ -2774,6 +2778,39 @@ fn manual_gc_collect_now() {
     // never dropped. A full cycle reclaims them, matching V8/Node `--expose-gc`
     // semantics where `gc()` is a full collection. Automatic threshold-driven
     // minors are unaffected.
+    //
+    // ★ #6946: under forced evacuation, run an EVACUATING minor FIRST.
+    //
+    // `PERRY_GC_FORCE_EVACUATE` is read only on the minor path, so every test
+    // of the shape `gc(); assertFreed()` under that knob looked like evacuation
+    // stress coverage and was a full mark-sweep that moved nothing —
+    // CLAUDE.md's hazard 4, and one of the three worked examples in it. Five
+    // suites still drive collection exactly that way
+    // (`gc_property_key_operand_rooting_6935`,
+    // `gc_dynamic_arith_operand_rooting_6655`,
+    // `gc_string_coerce_property_key_rooting_6943`,
+    // `gc_side_table_roots_evacuation`, and `gc/tests/cycle_state.rs`).
+    //
+    // What made this impossible before and does not any more: this site used to
+    // take `ManualGcScanGuard::force_full_scan`, and a forced conservative scan
+    // makes the copying minor ineligible outright
+    // (`CopiedMinorFallbackReason::ConservativeStack`). #7657 removed it — see
+    // the doc comment above — so `gc()` now runs on precise roots and a copying
+    // minor here is exactly as sound as the full mark-sweep below.
+    //
+    // `FullEscalation::Refused`, because the two throughput-pacing predicates
+    // would hand this call a full sweep: a NON-MOVING collection under a knob
+    // whose entire name is about relocation, which is the original bug in a new
+    // place. The full sweep follows immediately anyway, so refusing the
+    // escalation here costs nothing it was protecting.
+    //
+    // Default-off knob, so nothing about an ordinary `gc()` changes.
+    if super::gc_force_evacuate_enabled() {
+        super::gc_collect_forced_evacuating_minor(GcTriggerSnapshot::capture(
+            GcTriggerKind::Manual,
+        ))
+        .emit_after_current();
+    }
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
     crate::weakref::queue_pending_finalization_callbacks_after_gc();

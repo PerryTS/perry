@@ -58,9 +58,11 @@ fn start_minor_fallback_state(trigger: GcTriggerSnapshot) -> GcCycleState {
     clear_mark_seeds();
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
-    let evacuation_policy_allowed = gen_gc_evacuate_enabled();
+    // Mirrors `gc_collect_minor_with_trigger`: this is the non-budgeted path,
+    // so the policy is allowed (#7611 deleted the env veto).
+    let evacuation_policy_allowed = true;
     let force_evacuation = gc_force_evacuate_enabled();
-    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
+    let old_page_selection = if old_to_young_tracking_complete() {
         select_old_page_defrag_pages(force_evacuation)
     } else {
         OldPageDefragSelection::default()

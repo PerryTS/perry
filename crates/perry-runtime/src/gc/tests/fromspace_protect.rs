@@ -374,33 +374,23 @@ fn zeal_collects_at_a_safepoint_with_no_pressure_due() {
 
 /// A zealous minor that leaves survivors in place would move nothing, so it
 /// could not surface a stale-pointer bug at all. Zeal therefore implies forced
-/// evacuation — but must still lose to an explicit `PERRY_GEN_GC_EVACUATE=0`,
-/// so the two knobs can never silently disagree about whether objects move.
+/// evacuation, UNCONDITIONALLY.
+///
+/// ★ #7611 deleted the `PERRY_GEN_GC_EVACUATE=0` veto this test used to have a
+/// second arm for. That veto was the one way an ambient environment variable
+/// could silently turn zeal into a no-op: this very test used to take the
+/// precedence arm and `return` without exercising zeal at all, which is the
+/// vacuous-green shape the kill-policy exists to catch. There is now no
+/// environment in which zeal does not force evacuation, so there is one arm and
+/// it always runs.
 #[test]
 fn zeal_implies_forced_evacuation() {
-    // Split by ambient policy so BOTH branches assert something. The previous
-    // `force_enabled() || !evacuate_enabled()` form was satisfied by its right
-    // operand alone: under an ambient `PERRY_GEN_GC_EVACUATE=0` it passed
-    // without exercising zeal at all, and reported nothing to say so — the
-    // exact vacuous-green shape the kill-policy exists to catch.
-    if !gen_gc_evacuate_enabled() {
-        // Precedence arm: an explicit `PERRY_GEN_GC_EVACUATE=0` must beat zeal,
-        // so the two knobs can never silently disagree about whether objects
-        // move.
-        let _zeal_on = super::super::zeal::ZealGuard::set(true);
-        assert!(
-            !gc_force_evacuate_enabled(),
-            "an explicit PERRY_GEN_GC_EVACUATE=0 must win over zeal"
-        );
-        return;
-    }
-    // Implication arm: evacuation is permitted, so zeal must turn it on.
     let _zeal_off = super::super::zeal::ZealGuard::set(false);
     let off = gc_force_evacuate_enabled();
     let _zeal_on = super::super::zeal::ZealGuard::set(true);
     assert!(
         gc_force_evacuate_enabled(),
-        "evacuation is permitted, so zeal must force it (force_off={off})"
+        "zeal must force evacuation in every environment (force_off={off})"
     );
 }
 

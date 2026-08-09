@@ -113,3 +113,137 @@ pub(crate) fn note_zeal_forced_collection() {
 pub fn zeal_forced_collections() -> u64 {
     ZEAL_FORCED.load(Ordering::Relaxed)
 }
+
+// --------------------------------------------------- instrument liveness (#7604)
+//
+// ★ `zeal_forced_collections()` above was, until #7604, UNREADABLE from a
+// compiled program. CLAUDE.md's instrument table said "Check
+// `crate::gc::zeal_forced_collections()` is nonzero" and there was no JS API,
+// no diagnostic line and no exit report through which to do so. The only
+// alternative — `PERRY_GC_DIAG=1` and grep — wrote **212 MB of stderr in ten
+// minutes** on a 400k-iteration ratchet probe, so it is not a usable check
+// either. A liveness counter nobody can read is the same thing as no liveness
+// counter.
+//
+// Two more counters are needed alongside it, because "zeal forced a collection"
+// and "a collection MOVED something" are different claims and only the second
+// one is what zeal exists to produce. A forced minor can still be escalated to
+// a full mark-sweep by the throughput-pacing predicates, and a full sweep moves
+// nothing — which is #7604's "zero copying minors" in one sentence.
+//
+// Process-global rather than thread-local: the report is about the run.
+
+static COPYING_MINORS: AtomicU64 = AtomicU64::new(0);
+static MOVED_OBJECTS: AtomicU64 = AtomicU64::new(0);
+
+/// Called once per COMPLETED copying minor, with what it relocated.
+///
+/// `copied + promoted`, not `copied` alone: #7657 made the explicit-`gc()` path
+/// precise, which lets `gc/tenuring.rs` seed the adaptive threshold from these
+/// cycles, and on two ratchet probes survivors are now promoted on first copy
+/// rather than copied into survivor space. A `copied_objects > 0` liveness
+/// assertion would have been pinned permanently false on exactly those probes.
+#[inline]
+pub(crate) fn note_copying_minor_moved(copied_objects: usize, promoted_objects: usize) {
+    COPYING_MINORS.fetch_add(1, Ordering::Relaxed);
+    MOVED_OBJECTS.fetch_add(
+        (copied_objects + promoted_objects) as u64,
+        Ordering::Relaxed,
+    );
+}
+
+/// How many COPYING minors have completed in this process.
+pub fn copying_minor_cycles() -> u64 {
+    COPYING_MINORS.load(Ordering::Relaxed)
+}
+
+/// `copied_objects + promoted_objects` summed over every copying minor.
+pub fn moved_objects_total() -> u64 {
+    MOVED_OBJECTS.load(Ordering::Relaxed)
+}
+
+/// The verdict a zeal run gets at exit: what the instrument actually did.
+///
+/// `Ok(summary)` when zeal moved something, `Err(summary)` when the run
+/// exercised nothing and every "clean under zeal" claim from it is vacuous.
+/// Returns `None` when zeal is off, so the report costs a bool read.
+pub fn zeal_liveness_report() -> Option<Result<String, String>> {
+    if !gc_zeal_enabled() {
+        return None;
+    }
+    Some(zeal_verdict(
+        zeal_forced_collections(),
+        copying_minor_cycles(),
+        moved_objects_total(),
+    ))
+}
+
+/// The verdict as a pure function of the three counters, so the decision is
+/// testable without mutating process-global state that every other test in this
+/// crate shares.
+pub(crate) fn zeal_verdict(forced: u64, cycles: u64, moved: u64) -> Result<String, String> {
+    let summary = format!(
+        "[gc-zeal] forced_collections={forced} copying_minors={cycles} moved_objects={moved}"
+    );
+    if forced == 0 || cycles == 0 {
+        return Err(format!(
+            "{summary}\n\
+             [gc-zeal] THIS RUN EXERCISED NOTHING. PERRY_GC_ZEAL=1 was set and \
+             {}. Any \"clean under zeal\" conclusion from this run is vacuous.\n\
+             [gc-zeal] The two usual causes: the binary was compiled WITHOUT \
+             PERRY_GC_MOVING_LOOP_POLLS=1 (so there are no back-edge polls to \
+             force), or its hot loops are ones codegen emits no poll for -- \
+             provably alloc-free bodies by design, and the specialized `for` / \
+             `for-of` / `for-in` lowerings by omission (see \
+             `emit_gc_loop_safepoint`'s COVERAGE note). Check with: \
+             objdump -d BIN | grep -c js_gc_loop_safepoint",
+            if forced == 0 {
+                "no safepoint ever forced a collection"
+            } else {
+                "every forced collection was escalated to a non-moving full \
+                 mark-sweep, so nothing was relocated"
+            }
+        ));
+    }
+    Ok(summary)
+}
+
+#[cfg(test)]
+mod verdict_tests {
+    use super::*;
+
+    /// The verdict must be able to say NO. Every counter combination that means
+    /// "the instrument did not fire" is asserted individually, because they have
+    /// different causes and the message has to name the right one.
+    #[test]
+    fn a_zeal_run_that_exercised_nothing_is_an_error() {
+        let no_safepoint = zeal_verdict(0, 0, 0).expect_err("forced=0 must be an error");
+        assert!(no_safepoint.contains("no safepoint ever forced a collection"));
+
+        // The #7604 shape proper: zeal DID force collections, and every one was
+        // escalated to a full mark-sweep, which moves nothing. `forced > 0`
+        // alone would have called this run live.
+        let all_escalated = zeal_verdict(4096, 0, 0).expect_err("cycles=0 must be an error");
+        assert!(all_escalated.contains("escalated to a non-moving full"));
+        assert!(all_escalated.contains("copying_minors=0"));
+    }
+
+    /// ...and YES, with the numbers, when it did fire.
+    #[test]
+    fn a_zeal_run_that_moved_objects_is_reported_ok() {
+        let ok = zeal_verdict(741_630, 741_630, 8_899_560).expect("a moving run must pass");
+        assert!(ok.contains("forced_collections=741630"));
+        assert!(ok.contains("copying_minors=741630"));
+        assert!(ok.contains("moved_objects=8899560"));
+    }
+
+    /// A copying minor that relocated nothing THIS cycle is still a live
+    /// instrument — `moved=0` with `cycles>0` happens whenever the nursery had
+    /// no survivors, and failing on it would make the verdict flaky rather than
+    /// informative. Pinned so a future "tighten it to moved>0" edit has to
+    /// argue with a test.
+    #[test]
+    fn a_copying_minor_with_no_survivors_is_not_a_failure() {
+        assert!(zeal_verdict(1, 1, 0).is_ok());
+    }
+}
