@@ -137,6 +137,36 @@ jobs:
       - name: POLL_CAPABLE_RUNTIME entries must name real runtime symbols
         run: python3 scripts/gc_root_dominance_check.py --audit-poll-capable
 
+      # ★ The THIRD audit, and the direction the other two structurally cannot
+      # look (#7616). Both of those hunt a NAME WITH NO REFERENT: a dead
+      # ALLOC_RE alternative, a phantom POLL_CAPABLE_RUNTIME entry. Nothing
+      # hunted a REFERENT WITH NO NAME -- a real allocating symbol that is
+      # missing from POLL_CAPABLE_RUNTIME -- and a missing entry suppresses
+      # findings exactly as silently as a phantom one.
+      #
+      # #7453 is the worked example and it cost a shipped use-after-free.
+      # `new URL(input, base)` held a raw `*mut StringHeader` across the
+      # lowering of `base`; the fix added `url_coerce_string` to ALLOC_RE,
+      # said in its own comment "that gap is why the checker did not flag
+      # #7453", and stopped one list short. Re-planting that exact code and
+      # running EVERY mode this workflow has (#7616's measurement):
+      #
+      #   --moving-only (dominance)              0 clean -> 0 sabotaged
+      #   --unrooted-allocas --moving-only       0       -> 0
+      #   --stale-registers --moving-only        2       -> 2
+      #   --statepoints --moving-only            2       -> 2   <- the mode
+      #     that reads the lowering that SHIPS, added in #7663
+      #   --stale-registers (unfiltered)        24       -> 35
+      #   --statepoints     (unfiltered)        15       -> 21
+      #
+      # Every GATED arm blind, both UNFILTERED arms not. The single missing
+      # list entry was all of it: adding `js_url_coerce_string` takes the
+      # sabotaged arms to 13 and 8 and leaves the clean arms at 2 and 2.
+      #
+      # Static and instant, like the two above, so it runs before the build.
+      - name: ALLOC_RE symbols that reach a poll-capable one must be listed
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-reach
+
       # `--unrooted-allocas` exempts two heap-value sources whose objects can
       # neither move nor be reclaimed (#7210): the old-arena class-keys array,
       # and `js_box_alloc*`'s Box, which is not a GC-heap allocation at all.
@@ -331,6 +361,10 @@ jobs:
             --min-files 90 --min-binds 1500 --min-funcs 1200 \
             --max-stale 39
 
+      # 86 -> 104 at #7616: widening POLL_CAPABLE_RUNTIME by 77 symbols makes
+      # windows MOVING that `--moving-only` previously dropped. Still inside
+      # the pinned 118, so the budget is deliberately NOT raised — a ratchet
+      # you loosen every time it gets closer is not a ratchet.
       - name: Stale-register budget (dependency-scale)
         run: |
           set -euo pipefail
@@ -395,16 +429,24 @@ jobs:
       - name: Checker self-test (can this gate still fail?)
         run: python3 scripts/gc_root_dominance_check.py --self-test
 
-      # The three static audits are shared vocabulary, not shadow-mode
+      # The FOUR static audits are shared vocabulary, not shadow-mode
       # details: `--statepoints` classifies its sources with the same ALLOC_RE,
       # decides MOVING with the same POLL_CAPABLE_RUNTIME, and honours the same
       # #7210 exemptions. A phantom entry in any of them is a hole in THIS gate
-      # too, so all three run here as well rather than being inherited by
+      # too, so all four run here as well rather than being inherited by
       # assumption from a job that may not have run.
+      #
+      # `--audit-poll-reach` matters most HERE, because #7616's measurement was
+      # taken in this job's mode: the re-planted #7453 shape reported 2 clean
+      # and 2 sabotaged under `--statepoints --moving-only`, i.e. the newest
+      # mode was as blind as the three it was added to cover for, and for the
+      # same one-line reason. The full census is in the shadow job above.
       - name: ALLOC_RE alternatives must match real runtime symbols
         run: python3 scripts/gc_root_dominance_check.py --audit-alloc-re
       - name: POLL_CAPABLE_RUNTIME entries must name real runtime symbols
         run: python3 scripts/gc_root_dominance_check.py --audit-poll-capable
+      - name: ALLOC_RE symbols that reach a poll-capable one must be listed
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-reach
       - name: Immovable-source exemptions must still hold
         run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
 
@@ -491,6 +533,21 @@ jobs:
           #   1  capture, a `js_closure_get_capture_bits` read held across
           #      `js_number_coerce`.
           #
+          # 11 at #7616, and the four new ones are the POINT of that change
+          # rather than a regression: widening POLL_CAPABLE_RUNTIME by the 77
+          # symbols `--audit-poll-reach` found makes windows MOVING that the
+          # filter previously dropped. Measured on this corpus, 7 -> 11, with
+          # no hit disappearing:
+          #
+          #   3  test_gap_array_splice_spread::main, `unrooted:alloc`. A fresh
+          #      array held in a raw i64 across `js_array_like_to_array` and
+          #      consumed by `js_array_concat` -- #7453's shape exactly, in the
+          #      spread lowering instead of the URL one.
+          #   1  test_gap_class_expr_dynamic_parent_ctor, `unrooted:capture`.
+          #      The same `js_closure_get_capture_bits` population as the
+          #      residual above, newly visible because `js_new_function_construct`
+          #      is now classified as a mover.
+          #
           # #7664 stays open as this budget's referent: a number with nothing
           # behind it is the thing CLAUDE.md warns a threshold decays into.
           #
@@ -512,7 +569,7 @@ jobs:
             --min-statepoints 15000 \
             --min-live-bundles 8000 \
             --min-relocates 20000 \
-            --max-unrooted 7 \
+            --max-unrooted 11 \
             --max-stale 0 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \

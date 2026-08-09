@@ -778,6 +778,231 @@ def audit_poll_capable(roots=SYMBOL_ROOTS):
     print("=== every entry names an exported runtime symbol")
     return 0
 
+
+# ------------------------------------------------------- AUDIT: the third one
+#
+# `--audit-alloc-re` catches an ALLOC_RE alternative that matches nothing.
+# `--audit-poll-capable` catches a POLL_CAPABLE_RUNTIME entry that names
+# nothing. Both look for a name with no referent. NEITHER looks for a referent
+# with no name, and that is the direction #7616 came from.
+#
+# ## The shape, measured
+#
+# #7453: `new URL(input, base)` held a raw `*mut StringHeader` from
+# `js_url_coerce_string` across the lowering of `base` and across a second
+# coercion that allocates. #7453's own fix added `url_coerce_string` to
+# `ALLOC_RE` -- the comment there says in as many words *"That gap is why the
+# checker did not flag #7453"* -- and stopped one list short. Re-planting that
+# exact code and running every mode the gate has (#7616):
+#
+#   mode                                      clean   sabotaged
+#   --moving-only (dominance)                     0           0
+#   --unrooted-allocas --moving-only              0           0
+#   --stale-registers --moving-only               2           2
+#   --statepoints --moving-only  (the NATIVE      2           2
+#     lowering, #7663's mode, the one that ships)
+#   --stale-registers        (no --moving-only)  24          35
+#   --statepoints            (no --moving-only)  15          21
+#
+# Every GATED arm is blind and both UNFILTERED arms see it. `ALLOC_RE` decides
+# whether a register HAS a heap-value source; `POLL_CAPABLE_RUNTIME` decides
+# whether the window around it is MOVING, and `--moving-only` -- which is what
+# all four gated arms run -- drops everything the second list cannot classify.
+# Adding this ONE name takes the sabotaged arm to 13 and 8 respectively, and
+# leaves the clean arm at 2 and 2. The bug was catchable by a one-line list
+# entry for the entire time the gate was believed to cover it.
+#
+# ## Why this is an inconsistency and not a coverage decision
+#
+# The audit below does NOT assert "every poll-capable runtime symbol must be
+# listed". That is a coverage question with its own hit count (297 exported
+# symbols call a POLL_CAPABLE_RUNTIME symbol directly), and deciding it belongs
+# in a change that can measure the new reports -- the same reasoning ALLOC_RE's
+# deleted `bigint_\w+_op` alternative records.
+#
+# It asserts something narrower and purely internal: **the checker's two lists
+# must not disagree about the same symbol.** If ALLOC_RE says a call's result
+# is a heap value the checker must track, and the runtime shows that same call
+# invoking something POLL_CAPABLE_RUNTIME already grants can re-enter JS or run
+# a moving minor, then the checker knows both halves and refuses to put them
+# together. There is no judgement to make: the premise for listing it is the
+# premise it already granted the callee.
+#
+# ## One-sided in the safe direction, twice
+#
+# * The reach relation is DIRECT calls only, not a fixpoint through the
+#   runtime's internal Rust functions. That under-approximates -- a wrapper two
+#   levels deep is missed -- so the audit can fail to report, never falsely
+#   report. Widening it to a fixpoint needs a Rust call graph, which is a
+#   different tool.
+# * Line comments and string literals are stripped before the scan, because a
+#   premise extracted from a comment is a phantom in the same way a
+#   POLL_CAPABLE_RUNTIME entry naming nothing is. Measured: stripping removed
+#   exactly one false hit from the first run of this audit.
+#
+# And the remedy is safe in the checker's own stated direction: "a name that is
+# in fact not an allocation costs a false positive to triage, while a missing
+# one costs a shipped use-after-free".
+
+_RUNTIME_CALL_RE = re.compile(r"\b(js_\w+)\s*\(")
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_STRING_LIT_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _strip_noncode(text):
+    """Line comments and string literals removed, so a name mentioned in prose
+    cannot become a premise. Block comments are left alone deliberately: they
+    nest, a regex cannot match them, and a half-correct stripper that ate the
+    wrong span would drop real code."""
+    return _STRING_LIT_RE.sub('""', _LINE_COMMENT_RE.sub("", text))
+
+
+def _balanced_body(src, start):
+    """The `{...}` block beginning at or after `start`, or None."""
+    open_at = src.find("{", start)
+    if open_at < 0:
+        return None
+    depth = 0
+    i = open_at
+    while i < len(src):
+        c = src[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_at:i + 1]
+        i += 1
+    return None
+
+
+def runtime_symbol_bodies(roots=SYMBOL_ROOTS):
+    """`js_* -> [body]` for every `extern "C" fn js_*` the runtime exports.
+
+    A symbol can appear more than once (per-platform `cfg` variants), so the
+    value is a list and every body is scanned.
+    """
+    bodies = defaultdict(list)
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirs, files in os.walk(root):
+            for name in files:
+                if not name.endswith(".rs"):
+                    continue
+                with open(os.path.join(dirpath, name),
+                          encoding="utf-8", errors="replace") as fh:
+                    src = fh.read()
+                for m in _EXTERN_C_FN_RE.finditer(src):
+                    body = _balanced_body(src, m.end())
+                    if body is not None:
+                        bodies[m.group(1)].append(_strip_noncode(body))
+    return bodies
+
+
+def runtime_direct_callees(bodies):
+    """`js_* -> {js_* it calls directly}`, self-edges dropped."""
+    out = {}
+    for sym, texts in bodies.items():
+        called = set()
+        for text in texts:
+            called.update(_RUNTIME_CALL_RE.findall(text))
+        called.discard(sym)
+        out[sym] = called
+    return out
+
+
+def poll_reaching_runtime_symbols(callees, poll):
+    """Exported symbols that reach a poll-capable one, transitively.
+
+    A FIXPOINT, not one hop, and the difference is not academic: the first run
+    of this audit was one-hop, its 52 names were added, and re-running found 10
+    MORE that reached through one of the 52. An audit that has to be run in a
+    loop until it stops finding things is an audit that reports an arbitrary
+    prefix of its own answer.
+    """
+    reaching = {s for s in callees if callees[s] & poll}
+    changed = True
+    while changed:
+        changed = False
+        for sym, called in callees.items():
+            if sym in reaching or sym in poll:
+                continue
+            if called & (reaching | poll):
+                reaching.add(sym)
+                changed = True
+    return reaching
+
+
+def poll_reach_gaps(bodies, poll_capable=None):
+    """`[(sym, [callees on the path])]` for every ALLOC_RE symbol that reaches
+    a poll-capable one and is not itself listed. Sorted, so the report and the
+    remedy are stable across runs."""
+    poll = POLL_CAPABLE_RUNTIME if poll_capable is None else poll_capable
+    callees = runtime_direct_callees(bodies)
+    reaching = poll_reaching_runtime_symbols(callees, poll)
+    gaps = []
+    for sym in sorted(callees):
+        if sym in poll or not ALLOC_RE.match(sym) or sym not in reaching:
+            continue
+        # Name the direct edge if there is one, otherwise the intermediate the
+        # reach goes through. The remedy is the same either way, but a reader
+        # checking the premise needs somewhere to start.
+        hit = sorted(callees[sym] & poll) or sorted(callees[sym] & reaching)
+        gaps.append((sym, hit))
+    return gaps
+
+
+def audit_poll_reach(roots=SYMBOL_ROOTS, bodies=None):
+    """Exit status for `--audit-poll-reach`. 0 clean, 2 on a disagreement.
+
+    `bodies` is an injection point for `--self-test`, which has to be able to
+    drive both non-vacuity floors without a runtime checkout that satisfies
+    neither.
+    """
+    if bodies is None:
+        bodies = runtime_symbol_bodies(roots)
+    # Non-vacuity, for the same reason the other two audits do it -- and here
+    # it needs TWO floors, because this audit has two ways to measure its own
+    # scan instead of the lists. Too few symbols means the walk missed the
+    # crates; too few call EDGES means the body extractor returned empty or
+    # truncated bodies, which would report a serene zero over nothing.
+    if len(bodies) < 500:
+        print(f"error: found only {len(bodies)} `extern \"C\" fn js_*` bodies "
+              f"under {', '.join(roots)}. The audit is measuring its own scan, "
+              "not the lists. Run it from the repository root.", file=sys.stderr)
+        return 2
+    callees = runtime_direct_callees(bodies)
+    exported = set(bodies)
+    with_edges = sum(1 for s in callees if callees[s] & exported)
+    if with_edges < 100:
+        print(f"error: only {with_edges} exported symbols were seen calling "
+              "another exported one. `_balanced_body` is returning empty or "
+              "truncated bodies, so this audit would report clean having "
+              "inspected nothing.", file=sys.stderr)
+        return 2
+    gaps = poll_reach_gaps(bodies)
+    print(f"=== poll reach: {len(bodies)} exported symbols, {with_edges} with "
+          f"an intra-runtime call edge, "
+          f"{sum(1 for s in bodies if ALLOC_RE.match(s))} matched by ALLOC_RE")
+    if gaps:
+        print("error: ALLOC_RE symbols that CALL a POLL_CAPABLE_RUNTIME symbol "
+              "but are not in POLL_CAPABLE_RUNTIME:", file=sys.stderr)
+        for sym, hit in gaps:
+            print(f"  {sym:<48s} -> {', '.join(hit[:3])}", file=sys.stderr)
+        print("The checker knows this call's result is a heap value it must "
+              "track (ALLOC_RE) and knows the thing it calls can re-enter JS "
+              "or run a moving minor (POLL_CAPABLE_RUNTIME), and refuses to "
+              "put the two together: a window whose only collection point is "
+              "one of these classifies MOVING: no, so every `--moving-only` "
+              "arm -- which is every gated arm, in all four modes -- drops it. "
+              "That is #7616 exactly. Add the symbol to POLL_CAPABLE_RUNTIME.",
+              file=sys.stderr)
+        return 2
+    print("=== no ALLOC_RE symbol reaches a poll-capable one unlisted")
+    return 0
+
+
 # Bit-level / identity producers a heap address flows through unchanged.
 TRANSPARENT_OPS = ("or i64", "and i64", "bitcast", "inttoptr", "ptrtoint",
                    "select", "phi", "add i64", "sub i64")
@@ -983,6 +1208,86 @@ POLL_CAPABLE_RUNTIME = {
     "js_jsvalue_to_string_method", "js_jsvalue_to_string_radix",
     "js_string_coerce", "js_string_coerce_method_this",
     "js_number_coerce", "js_object_coerce",
+    # ---------------------------------------------------------------- #7616
+    #
+    # The 52 symbols `--audit-poll-reach` found, and the reason they are one
+    # block rather than filed among the families above: they were not found by
+    # reading, they were found by asking the checker's own two lists whether
+    # they agreed about the same symbol. Each one is matched by ALLOC_RE — the
+    # checker already treats its result as a heap value it must track — and
+    # each one's runtime body CALLS something already in this set. The premise
+    # for listing it is the premise this set already granted its callee, so
+    # there is no per-name judgement to record beyond the callee named in the
+    # audit's output.
+    #
+    # `js_url_coerce_string` is the one #7616 measured: re-planting #7453's
+    # code made every gated arm report 0 without it and 13 / 8 with it.
+    "js_arguments_object_alloc",
+    "js_array_clone", "js_array_flatMap",
+    "js_array_to_sorted_default", "js_array_to_sorted_with_comparator",
+    "js_bigint_from_f64",
+    "js_boxed_number_new", "js_boxed_string_new",
+    "js_broadcast_channel_new",
+    "js_create_namespace",
+    "js_ethers_wallet_create_random",
+    "js_event_target_new",
+    "js_iterator_to_array",
+    "js_new_function_construct", "js_new_function_construct_with_new_target",
+    "js_node_stream_duplex_new", "js_node_stream_readable_new",
+    "js_node_stream_writable_new",
+    "js_object_assign_one", "js_object_assign_validate_target",
+    "js_object_entries", "js_object_values",
+    "js_object_from_entries", "js_object_group_by",
+    "js_object_get_own_property_descriptor",
+    "js_object_get_own_property_descriptors",
+    "js_promise_new_with_executor",
+    "js_proxy_construct", "js_proxy_revocable",
+    "js_ratelimit_new_from_options",
+    "js_regexp_construct",
+    "js_request_new_from_init",
+    "js_string_concat_chain", "js_string_concat_value",
+    "js_string_normalize", "js_string_pad_fill", "js_string_repeat",
+    # The `_dyn` half of the replace family. The block comment above deferred
+    # these as "a separate coverage decision with their own hit count"; the
+    # audit answers it — each one calls `js_string_coerce`, which is already
+    # here, so the deferral was about a premise this set had already granted.
+    "js_string_replace_regex_dyn", "js_string_replace_string_dyn",
+    "js_string_replace_search_dyn",
+    "js_string_replace_all_regex_dyn", "js_string_replace_all_string_dyn",
+    "js_string_replace_all_search_dyn",
+    "js_suppressed_error_new",
+    "js_symbol_new",
+    "js_text_decoder_new",
+    "js_url_coerce_string",
+    "js_value_to_string_with_encoding",
+    "js_value_to_string_with_encoding_or_radix",
+    "js_writable_stream_new_from_sink_object",
+    "js_writable_stream_new_with_sink_type",
+    "js_ws_server_new",
+    # The second wave, and the reason `poll_reaching_runtime_symbols` is a
+    # fixpoint rather than one hop: every one of these reaches a poll-capable
+    # operation THROUGH one of the names above, or through a shared helper
+    # (`js_array_length` on a Proxy runs the trap; `js_string_index_to_i32`
+    # coerces). A one-hop audit reported the block above, went green, and left
+    # these — an audit that must be re-run in a loop reports an arbitrary
+    # prefix of its own answer.
+    "js_array_from_arraylike_holey_value", "js_array_from_async",
+    "js_array_from_value", "js_array_like_to_array",
+    "js_dom_exception_new",
+    "js_map_from_iterable", "js_set_from_iterable",
+    "js_new_function_construct_apply",
+    "js_node_sqlite_database_sync_new",
+    "js_node_stream_passthrough_new", "js_node_stream_transform_new",
+    "js_object_create_with_props",
+    "js_object_entries_value", "js_object_values_value",
+    "js_object_get_own_property_names", "js_object_keys",
+    "js_object_keys_value",
+    "js_reflect_construct", "js_regexp_construct_call",
+    "js_string_from_char_code_array",
+    "js_string_index_get_boxed", "js_string_substr",
+    "js_super_construct_apply",
+    "js_vm_synthetic_module_new",
+    "js_writable_stream_new",
 }
 
 
@@ -4741,8 +5046,86 @@ def self_test():
     if not statepoint_self_test():
         ok = False
 
+    if not poll_reach_self_test():
+        ok = False
+
     print("self-test OK" if ok else "self-test FAILED")
     return 0 if ok else 1
+
+
+# The `--audit-poll-reach` half of `--self-test`. Planted, not merely
+# exercised: the audit is green on the real runtime today, so a run over the
+# real runtime proves only that nothing is currently wrong — the same vacuous
+# green the whole #7616 family is about. These fixtures make it report.
+_POLL_REACH_FIXTURE = {
+    # direct: an ALLOC_RE symbol calling a poll-capable one.
+    "js_widget_new": ["{ let x = js_object_get_field_by_name(o, k); x }"],
+    # transitive: reaches it only through the direct one above.
+    "js_widget_new_from_value": ["{ js_widget_new(v) }"],
+    # two hops through a NON-ALLOC_RE intermediate, which is the shape a
+    # one-hop audit misses entirely.
+    "js_gadget_create": ["{ js_helper_that_coerces(v) }"],
+    "js_helper_that_coerces": ["{ js_string_coerce(v) }"],
+    # a name that appears ONLY in a comment and a string literal. Reported
+    # would mean `_strip_noncode` has stopped working and the audit is
+    # extracting premises from prose.
+    # Both spellings carry a full CALL, parentheses and all, because
+    # `_RUNTIME_CALL_RE` needs the paren -- a decoy that only names the symbol
+    # is caught by the regex rather than by the stripper, and the arm would
+    # pass with `_strip_noncode` deleted (measured: it did).
+    "js_decoy_new": ['{ // was js_string_coerce(v) before #0000\n'
+                     '  panic!("js_string_coerce(v) is not called here") }'],
+    # not matched by ALLOC_RE, so out of scope however poll-capable it is.
+    "js_something_unrelated": ["{ js_string_coerce(v) }"],
+}
+
+
+def poll_reach_self_test():
+    ok = True
+    poll = {"js_object_get_field_by_name", "js_string_coerce"}
+    # Through the SAME stripper `runtime_symbol_bodies` applies, so the decoy
+    # arm below tests the real pipeline rather than a hand-cleaned copy of it.
+    fixture = {sym: [_strip_noncode(b) for b in bodies]
+               for sym, bodies in _POLL_REACH_FIXTURE.items()}
+    gaps = dict(poll_reach_gaps(fixture, poll))
+    want = {"js_widget_new", "js_widget_new_from_value", "js_gadget_create"}
+    if set(gaps) != want:
+        print("self-test FAIL: --audit-poll-reach over the planted fixture -> "
+              f"{sorted(gaps)}, expected {sorted(want)}", file=sys.stderr)
+        ok = False
+    # The control: listing them clears the report, so the audit is answering
+    # the question it claims and not just enumerating ALLOC_RE.
+    cleared = poll_reach_gaps(fixture, poll | want)
+    if cleared:
+        print("self-test FAIL: adding the planted names to POLL_CAPABLE_RUNTIME "
+              f"must clear the report; still reports {[g[0] for g in cleared]}",
+              file=sys.stderr)
+        ok = False
+    # Non-vacuity: a scan that found nothing must be an ERROR, not a clean
+    # verdict. Both floors, because they fail for different reasons.
+    # stderr is swallowed for the two floor probes: they are SUPPOSED to print
+    # their error, and letting it through would make a passing self-test look
+    # like a failing one.
+    with contextlib.redirect_stderr(io.StringIO()):
+        empty_scan_rc = audit_poll_reach(roots=("no-such-directory",))
+    if empty_scan_rc != 2:
+        print("self-test FAIL: --audit-poll-reach over an empty symbol scan "
+              "must be an error, not a pass", file=sys.stderr)
+        ok = False
+    # `_balanced_body` returning nothing is the OTHER way this audit can
+    # measure itself: plenty of symbols are found, every body is empty, and the
+    # verdict is a serene zero over zero call edges. That is the floor the
+    # second guard exists for, and it needs its own fixture because the first
+    # guard would already be satisfied.
+    empty_bodies = {f"js_symbol_{i}": ["{}"] for i in range(600)}
+    with contextlib.redirect_stderr(io.StringIO()):
+        empty_bodies_rc = audit_poll_reach(bodies=empty_bodies)
+    if empty_bodies_rc != 2:
+        print("self-test FAIL: --audit-poll-reach over 600 symbols with EMPTY "
+              "bodies must be an error -- zero call edges means the body "
+              "extractor is broken, not that the lists agree", file=sys.stderr)
+        ok = False
+    return ok
 
 
 def main():
@@ -4812,6 +5195,14 @@ def main():
                          "so a phantom entry is a hole the gate cannot fail "
                          "through -- ten of twenty-eight were phantoms when "
                          "this was added. Takes no corpus.")
+    ap.add_argument("--audit-poll-reach", action="store_true",
+                    help="the third audit, and the one the other two cannot "
+                         "do: fail on a symbol ALLOC_RE matches whose runtime "
+                         "body CALLS a POLL_CAPABLE_RUNTIME symbol while not "
+                         "being in that set itself. The other two look for a "
+                         "name with no referent; this looks for a referent "
+                         "with no name, which is the direction #7616/#7453 "
+                         "came from. Takes no corpus.")
     ap.add_argument("--audit-immovable-sources", action="store_true",
                     help="re-check the PREMISES of every --unrooted-allocas "
                          "exemption against the runtime source (#7210): the "
@@ -4866,6 +5257,8 @@ def main():
         return audit_alloc_re()
     if ns.audit_poll_capable:
         return audit_poll_capable()
+    if ns.audit_poll_reach:
+        return audit_poll_reach()
     if ns.audit_immovable_sources:
         return audit_immovable_sources()
 

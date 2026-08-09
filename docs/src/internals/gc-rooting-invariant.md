@@ -275,11 +275,48 @@ like coverage while doing it. Two rounds of this have now been measured:
    entry points are `js_closure_callN`, which `RECEIVER_SINKS` in the same file
    already spelled correctly.
 
-`--audit-poll-capable` is the gate for this, and `gc-root-dominance.yml` runs it
-alongside `--audit-alloc-re` before the build. It fails on any entry that names
-no exported `extern "C" fn js_*`. When it goes red, **replace** the phantom with
-the symbol codegen actually emits rather than deleting it — deleting turns the
-audit green and leaves the hole.
+3. **A real symbol that was simply not in the set** (#7616 / #7453). The two
+   rounds above are both a NAME WITH NO REFERENT, and both audits look only in
+   that direction. `new URL(input, base)` held a raw `*mut StringHeader` from
+   `js_url_coerce_string` across the lowering of `base`; #7453's fix added
+   `url_coerce_string` to `ALLOC_RE` — its comment says *"that gap is why the
+   checker did not flag #7453"* — and stopped one list short, so the shape was
+   never catchable under the mode CI runs. Re-planting that exact code and
+   running every mode (#7616):
+
+   | mode | clean | sabotaged |
+   |---|--:|--:|
+   | `--moving-only` (dominance) | 0 | **0** |
+   | `--unrooted-allocas --moving-only` | 0 | **0** |
+   | `--stale-registers --moving-only` | 2 | **2** |
+   | `--statepoints --moving-only` (the lowering that ships) | 2 | **2** |
+   | `--stale-registers` (unfiltered) | 24 | 35 |
+   | `--statepoints` (unfiltered) | 15 | 21 |
+
+   Every gated arm blind, both unfiltered arms not — *including* `--statepoints`,
+   added in #7663 precisely because the other three were blind to the shipping
+   lowering. Adding the one name takes the sabotaged arms to 13 and 8 and leaves
+   the clean arms at 2 and 2.
+
+`--audit-poll-capable` is the gate for rounds 1–2 and `--audit-poll-reach` is
+the gate for round 3; `gc-root-dominance.yml` runs both alongside
+`--audit-alloc-re` before the build. `--audit-poll-capable` fails on any entry
+that names no exported `extern "C" fn js_*`. When it goes red, **replace** the
+phantom with the symbol codegen actually emits rather than deleting it —
+deleting turns the audit green and leaves the hole.
+
+`--audit-poll-reach` fails when a symbol `ALLOC_RE` matches reaches a
+`POLL_CAPABLE_RUNTIME` symbol through the runtime's own call graph without being
+listed itself. It is deliberately NOT "every poll-capable symbol must be
+listed" — 297 exported symbols call one directly, and deciding that is a
+coverage change with its own hit count. It asserts only that **the checker's two
+lists must not disagree about the same symbol**: if ALLOC_RE says a call's
+result is a heap value to track, and the runtime shows that call invoking
+something this set already grants can re-enter JS, the premise for listing it is
+one the set already granted. The reach relation is a fixpoint over exported
+symbols (a one-hop version reported 52 names, and re-running after adding them
+found 10 more), and comments and string literals are stripped first so a name
+mentioned in prose cannot become a premise.
 
 Checking a *plausible* name is not enough. Confirm against emitted IR:
 
