@@ -539,7 +539,7 @@ pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
 /// where #7682 showed it must not move. So "polls off" does not mean "collect
 /// later, precisely"; it means "never collect precisely at all".
 pub(crate) fn moving_loop_polls_enabled_from_env(value: Option<&str>) -> bool {
-    !matches!(value, Some("0") | Some("off") | Some("false"))
+    matches!(value, Some("1") | Some("on") | Some("true"))
 }
 
 #[cfg(test)]

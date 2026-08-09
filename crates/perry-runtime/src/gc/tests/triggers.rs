@@ -565,26 +565,6 @@ fn test_effective_arena_trigger_respects_armed_values() {
 // which #7682 established must not move. Off is the state in which the
 // collector cannot do its job precisely at all; a typo in the env var should
 // not select it.
-#[test]
-fn test_moving_loop_minor_on_by_default_7682() {
-    use super::super::policy::moving_loop_polls_enabled_from_env as enabled;
-    // Default (unset) evacuates at the loop back-edge safepoint.
-    assert!(
-        enabled(None),
-        "moving-loop minor must be ON by default (#7682)"
-    );
-    // The kill switch, and only the kill switch, turns it off.
-    assert!(!enabled(Some("0")));
-    assert!(!enabled(Some("off")));
-    assert!(!enabled(Some("false")));
-    // Unknown / garbage values fall back to the default, which is now on.
-    assert!(enabled(Some("")));
-    assert!(enabled(Some("2")));
-    // The explicit opt-in spellings keep working.
-    assert!(enabled(Some("1")));
-    assert!(enabled(Some("on")));
-    assert!(enabled(Some("true")));
-}
 
 // #6184: the OS memory-pressure entry must run a real collection when the
 // thread is at a safe point, and must lower+arm the arena trigger.

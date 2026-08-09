@@ -83,3 +83,31 @@ maintainer act on the pinned quiet host
 explicitly out of scope for this PR, and until it happens the `gc-ratchet` job
 is expected to report a breach on the evacuation family. Nothing in this change
 depends on that artifact.
+
+**Reduced at merge to the nursery-cap fix alone (part 2 deferred).** The
+back-edge-poll default flip was measured to cost more than it bought and is
+held for a follow-up:
+
+| configuration | `index_get_receiver_rooting` | #7480's kernel |
+|---|--:|--:|
+| `main` (#7687 alone) | 6.94 s | 17 ms |
+| this PR **with** the poll flip | 0.76 s | **126 ms** |
+| this PR **as merged** | **0.11 s** | 17 ms (16–31 vs main's 16–31) |
+
+The flip made its own regression test **2.4x slower** and cost **6.6x** on
+#7480's kernel: a back-edge poll is a call, so `LlBlock::contains_gc_unsafe_call`
+declines the element-shape fast clone (#7669) and the deref block branches
+unconditionally to the slow arm. The nursery-cap fix does all of the recovery.
+
+The precision argument for polls stands and is not withdrawn — 0 declared
+safepoints with them off against 38 with them on, and after #7687 "polls off"
+means "never collect precisely at all". It should land with **per-arm** poll
+emission: `emit_gc_loop_safepoint` already consults
+`loop_purity::loop_may_allocate`, and applying that predicate *after* the
+versioned split gives the fast clone (provably call-free, therefore
+non-allocating) no poll and the slow clone one. Teaching the admission to ignore
+polls instead would be unsound — `element_shape_loop.rs` defines call-freeness as
+"no allocation that can move the array runs while the clone does", and the fast
+clone holds a preheader-derived base (#7660's shape).
+
+`test_moving_loop_minor_on_by_default_7682` is removed with the flip it pinned.

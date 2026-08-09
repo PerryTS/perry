@@ -5254,9 +5254,9 @@ fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        !matches!(
+        matches!(
             std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
+            Ok("1") | Ok("on") | Ok("true")
         )
     })
 }
