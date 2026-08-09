@@ -317,7 +317,7 @@ fn lower_new_impl_inner<'a>(
                 ));
             }
         }
-        if let Some(val) = lower_builtin_new(ctx, class_name, args)? {
+        if let Some(val) = lower_builtin_new(ctx, class_name, args, group)? {
             return Ok(val);
         }
         // Aliased built-in import: a minified bundle renames a node built-in
@@ -333,7 +333,7 @@ fn lower_new_impl_inner<'a>(
         // can't shadow a real local class.
         if let Some(original) = ctx.imported_class_original_names.get(class_name).cloned() {
             if original != class_name {
-                if let Some(val) = lower_builtin_new(ctx, &original, args)? {
+                if let Some(val) = lower_builtin_new(ctx, &original, args, group)? {
                     return Ok(val);
                 }
             }

@@ -43,6 +43,7 @@ use crate::testing::NativeRootsPin;
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
+mod builtin_ctor;
 mod operands;
 
 fn entry_opts() -> CompileOptions {
