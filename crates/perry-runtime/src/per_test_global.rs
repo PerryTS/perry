@@ -119,6 +119,42 @@ impl<T: Send + Sync + 'static> PerThread<T> {
         });
         leaked
     }
+
+    /// This thread's instance of the table, as an opaque key a *different*
+    /// thread can hand to [`Self::adopt`] to observe the SAME instance
+    /// instead of materializing its own.
+    ///
+    /// Per-thread isolation exists to keep a table out of reach of an
+    /// UNRELATED test's noise (#7672's own guards, running on whatever
+    /// libtest thread happens to construct them) — it is not meant to hide a
+    /// test's own deliberately-spawned worker thread from data the spawning
+    /// thread just wrote. A test whose actual subject is cross-thread
+    /// visibility of the SAME table (`agent_dispatch_tests.rs`'s #6185
+    /// coverage: an entry enqueued by one agent, read by a pump acting for
+    /// another) needs this escape hatch — without it, the per-thread split
+    /// makes such a test's assertions pass regardless of whether the
+    /// production filtering logic they exist to exercise is even still
+    /// there. Materializes this thread's instance if it has not touched the
+    /// table yet, so the key handed out is never dangling.
+    pub fn shared_key(&self) -> usize {
+        self.instance() as *const T as usize
+    }
+
+    /// Make this thread's future accesses to this table resolve to `key`
+    /// (obtained from [`Self::shared_key`] on another thread) instead of
+    /// materializing this thread's own instance.
+    ///
+    /// Must run before this thread's first access to the table. `instance()`
+    /// re-reads the mapping on every call, so calling this AFTER the table
+    /// has already materialized on this thread does not merge the two — it
+    /// just switches future lookups to `key`, silently abandoning whatever
+    /// this thread had already written to its own (now orphaned) instance.
+    pub fn adopt(&self, key: usize) {
+        let slot = self as *const Self as usize;
+        let _ = SLOTS.try_with(|slots| {
+            slots.borrow_mut().insert(slot, key);
+        });
+    }
 }
 
 #[cfg(test)]

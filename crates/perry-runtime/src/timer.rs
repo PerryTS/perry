@@ -388,6 +388,8 @@ static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 mod gc_scan;
 mod ownership;
 mod ref_states;
+#[cfg(test)] // #7680: not re-exported; reach via `crate::timer::test_shared_queues::`
+pub(crate) mod test_shared_queues;
 
 pub(crate) use ownership::purge_agent_timers;
 use ownership::{has_refed_callback_timer, has_refed_interval_timer, has_refed_promise_timer};
