@@ -49,6 +49,67 @@
 //! Recovering the numeric claim needs a whole-program no-external-store proof;
 //! that is deferred.
 //!
+//! ## `delete` is aliased across modules by construction (#7143) — closed, not a bug
+//!
+//! [`method_proven_this`] below consults `ModuleDispatchFacts::has_shape_barrier_sites`,
+//! which `collect_module_dispatch_facts`
+//! (`collectors/scalar_method_dispatch.rs`) computes **per module**. A
+//! `delete` / `Reflect.deleteProperty` in a module
+//! that never declares `class_name` sets no flag this admission check can
+//! see. Unlike a Phase 3b `Ptr<Shape>` LOCAL — whose containment (rule 2,
+//! `ptr_shape.rs`) proves no alias to the object can exist ANYWHERE, in this
+//! module or any other — a proven `this` is the caller's object and is
+//! aliased by construction: it can be handed to another module, deleted
+//! from there, and handed back.
+//!
+//! This is sound anyway. Every routing site that can call a `$pshape` clone
+//! re-derives the guarantee itself, at the point it actually matters, rather
+//! than trusting this admission-time fact to have seen the whole program:
+//!
+//! * `method_direct.fast` (`lower_call/method_override.rs`) sits behind
+//!   `js_method_direct_shape_guard` / `js_typed_feedback_method_direct_call_guard`,
+//!   whose contract includes `receiver.keys_array == expected_keys` — a raw
+//!   POINTER compare (`typed_feedback/guards.rs`). The only code path
+//!   `js_object_delete_field` has for a `GC_TYPE_OBJECT` instance with a
+//!   keys array clones a FRESH keys array and repoints `keys_array` at it
+//!   (`perry-runtime/src/object/delete_rest.rs`; `Reflect.deleteProperty`
+//!   shares the same function) — for ANY key, declared or not, from ANY
+//!   module. The pointer compare can therefore never pass on a post-delete
+//!   instance, regardless of what this admission check saw.
+//! * The Phase 3b guard-free `Ptr<Shape>` receiver arm needs no runtime
+//!   check at all, because rule 2's containment already rules out the alias
+//!   existing in the first place: creating one — `let other = o`, passing
+//!   `o` to ANY function, same module or not — is itself a disqualifying
+//!   use the containment walk sees directly. There is no alias left for a
+//!   `delete` anywhere to reach the object through.
+//! * #7142's class-id dispatch-tower case
+//!   (`lower_call/property_get/dynamic_dispatch.rs::emit_tower_pshape_call`)
+//!   carries its own explicit re-check
+//!   (`class_field_inline_guard::emit_proven_shape_recheck`) for exactly
+//!   this reason — that function's doc comment cites this issue by number: a
+//!   static, module-scoped proof would have been "exactly the wrong
+//!   instrument" for a receiver that can be aliased across modules.
+//!
+//! So `has_shape_barrier_sites()` here is a **cost-control heuristic** —
+//! whether emitting a clone is even worth it, given the module's own code
+//! may never take a fast path to it — never the mechanism that makes routing
+//! to one safe. A future 4th routing site must independently re-derive one
+//! of the two guarantees above (a dominating keys-token recheck, or genuine
+//! containment); it must NOT rely on this fact having seen a `delete` that,
+//! by construction, may have happened in a module this one never looked at.
+//!
+//! Confirmed empirically, not just by proof-reading:
+//! `test-files/test_issue_7143_delete_barrier_cross_module.ts` (+
+//! `test-files/fixtures/issue_7143_pkg/shared.ts`) is exactly this shape — a
+//! `delete` in the importing module, then a call back into the declaring
+//! module on the mutated instance — and the emitted `--trace llvm` IR shows
+//! the `$pshape` call dominated by `js_typed_feedback_method_direct_call_guard`
+//! as described above; the compiled binary's output matches
+//! `node --experimental-strip-types` exactly. The
+//! `guarded_pshape_call_site_is_preceded_by_a_keys_token_guard` test in
+//! `proven_this_routing_tests.rs` pins the same invariant at the IR level so
+//! a future change to the routing sites can't silently drop it.
+//!
 //! Gated by `PERRY_PTR_SHAPE_THIS` (default on; `0`/`off`/`false` disables —
 //! keyed into the object cache). Also honours `PERRY_PTR_SHAPE_LOCALS`, since
 //! Phase 5a is an extension of the same `Ptr<Shape>` proof.
