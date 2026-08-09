@@ -762,6 +762,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         // one that did not, and `arena_alloc_gc_old`'s fast path deliberately
         // reuses a swept, NON-zeroed hole (#7437), so the slot holds real
         // leftover heap bytes rather than zeros.
+        // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array edge.
         (*new_ptr).keys_array = ptr::null_mut();
         let fields_ptr = (new_ptr as *mut u8).add(header_size) as *mut u64;
         for i in 0..phys_slots as usize {
@@ -803,6 +804,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     // one that did not, and `arena_alloc_gc_old`'s fast path deliberately
     // reuses a swept, NON-zeroed hole (#7437), so the slot holds real
     // leftover heap bytes rather than zeros.
+    // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array edge.
     (*new_ptr).keys_array = ptr::null_mut();
 
     // Copy source fields (as raw f64/u64 words — preserves NaN-boxing)
