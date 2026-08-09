@@ -78,7 +78,7 @@ const PURE_OPS: &[&str] = &[
 /// red) came back GREEN on all four. "The unbox sits below its own window" is
 /// exactly the shape a one-level check cannot see, which is #7280 taxonomy (c)
 /// stated as a property of the instrument instead of the bug.
-fn producer_line(ir: &str, reg: &str) -> usize {
+pub(super) fn producer_line(ir: &str, reg: &str) -> usize {
     let lines: Vec<&str> = ir.lines().collect();
     let mut current = reg.to_string();
     for _ in 0..32 {
@@ -109,7 +109,7 @@ fn producer_line(ir: &str, reg: &str) -> usize {
 }
 
 /// Line index of a call to `callee` that is not a `declare`.
-fn call_line_of(ir: &str, callee: &str) -> usize {
+pub(super) fn call_line_of(ir: &str, callee: &str) -> usize {
     let needle = format!("@{callee}(");
     ir.lines()
         .position(|l| l.contains(&needle) && !l.trim_start().starts_with("declare"))
@@ -117,7 +117,7 @@ fn call_line_of(ir: &str, callee: &str) -> usize {
 }
 
 /// The `n`-th SSA operand of the call to `callee`.
-fn call_operand_of(ir: &str, callee: &str, n: usize) -> String {
+pub(super) fn call_operand_of(ir: &str, callee: &str, n: usize) -> String {
     let idx = call_line_of(ir, callee);
     let line = ir.lines().nth(idx).expect("index came from this IR");
     let args = line

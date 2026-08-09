@@ -31,25 +31,40 @@
 //! `arr.splice(...)`, `Array.from(it, fn)`, `Object.groupBy` / `Map.groupBy`,
 //! `s.match(re)` / `s.matchAll(re)`, `JSON.parse(t, reviver)` and `a[i]++`.
 //!
-//! ## Deliberately NOT closed here
+//! ## `a[i]++` / `o.f++`: what #7628 asked for, and what it turned out to be
 //!
-//! `Expr::IndexUpdate` (`a[i]++`) still holds its re-read receiver and index
-//! across `js_dyn_index_get`, `js_to_numeric` and `js_numeric_step` — three
-//! calls that can each run user code (a getter, a `valueOf`) — before
-//! `js_dyn_index_set` consumes them. Closing that needs a *per-use* re-read
-//! inside the body, which is a different combinator from the group-wide one
-//! this campaign has (`RootedOperands::reread_one` is the raw-API shape it would
-//! wrap). Per the template's rule, that combinator should arrive with the slice
-//! that needs it rather than ahead of one. Filed separately; the operand-to-
-//! operand half IS closed here.
+//! The read-modify-write arms consume their operands at four calls with
+//! collection points between them, and #7628 filed the single group-wide
+//! re-read as a live #7154. It asked for a per-use-re-read combinator; slice 6
+//! had already built one (`RootedGroup`), so both arms use it and no new
+//! primitive arrived with this caller.
+//!
+//! **But the operand half was not a live bug, and the sabotage arm is how that
+//! was established rather than argued.** Collapsing the per-use re-reads back
+//! to one — and, for `PropertyUpdate`, removing the receiver's root outright —
+//! leaves the emitted IR unchanged in the relevant respect: `root_reload`
+//! (#7280) rematerialises the slot load at every use a collection point can
+//! reach, *including* through the `ptrtoint` + `and POINTER_MASK` handle
+//! derivation that #7280's own taxonomy files as case (a). The per-use re-reads
+//! are kept because they are free (the pass emits them anyway) and they stop
+//! these arms depending on a pass with a documented side condition, but they
+//! are not the repair. `expr/issue7628_rooting_tests.rs` records the measurement
+//! and names those two tests as pipeline assertions, not lowering assertions.
+//!
+//! The repair is the **result**: for a BigInt element, `js_to_numeric` /
+//! `js_numeric_step` hand back a heap `BigIntHeader`, and the one the
+//! expression yields is live across `js_dyn_index_set` — a user setter — as a
+//! bare call result with no slot for `root_reload` to reload from. That is the
+//! taxonomy's case (d), and `RootedGroup::adopt_emitted` closes it, gated on
+//! `is_provably_not_bigint` so a typed-array element pays nothing.
 
 use anyhow::Result;
-use perry_hir::{BinaryOp, Expr, WithSetFallback};
+use perry_hir::{Expr, WithSetFallback};
 
 use crate::nanbox::{double_literal, i64_literal, POINTER_MASK_I64};
 use crate::rooting;
 use crate::type_analysis::is_string_expr;
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
     emit_root_nanbox_store_on_block, emit_shadow_slot_bind_for_local, emit_string_literal_global,
@@ -1516,231 +1531,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             })
         }
 
-        // -------- obj.field++ / obj.field-- (PropertyUpdate) --------
-        // Lowered as: load → fadd/fsub 1.0 → store. Same as the
-        // Update variant but for a property instead of a local.
-        Expr::PropertyUpdate {
-            object,
-            property,
-            op,
-            prefix,
-        } => {
-            // Scalar replacement fast path: load → fadd/fsub 1.0 → store
-            // on the field's alloca, no heap traffic.
-            if let Expr::LocalGet(id) = object.as_ref() {
-                if let Some(slot) = ctx
-                    .scalar_replaced
-                    .get(id)
-                    .and_then(|fs| fs.get(property.as_str()))
-                    .cloned()
-                {
-                    let blk = ctx.block();
-                    let old = blk.load(DOUBLE, &slot);
-                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
-                    let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
-                        _ => blk.fadd(&old_num, "1.0"),
-                    };
-                    blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old_num });
-                }
-            }
-            if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx
-                    .scalar_ctor_target
-                    .last()
-                    .and_then(|tid| ctx.scalar_replaced.get(tid))
-                    .and_then(|fs| fs.get(property.as_str()))
-                    .cloned()
-                {
-                    let blk = ctx.block();
-                    let old = blk.load(DOUBLE, &slot);
-                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
-                    let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
-                        _ => blk.fadd(&old_num, "1.0"),
-                    };
-                    blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old_num });
-                }
-            }
-            // Representation-selection Phase 3b: `o.f++` on a shape-proven
-            // Ptr<Shape> local whose field is numeric-proven — bare
-            // load/fadd/store at the fixed offset, no by-name runtime calls.
-            // The store keeps the raw-slot plain-finite discipline (an
-            // Inf-crossing update side-exits to the by-name setter, which
-            // performs the layout downgrade the GC scan relies on).
-            // (Phase 5a's proven `this` never claims numeric fields, so this
-            // site remains Phase-3b-local-only in practice.)
-            {
-                let fact = ctx.ptr_shape_receiver_fact(object.as_ref()).cloned();
-                {
-                    if let Some(fact) = fact {
-                        if fact.numeric_fields.contains(property.as_str()) {
-                            if let Some(field_index) =
-                                crate::type_analysis::class_field_global_index(
-                                    ctx,
-                                    &fact.class_name,
-                                    property,
-                                )
-                            {
-                                ctx.note_ptr_shape_consumed(object.as_ref(), "ptr_shape_update");
-                                let recv_box = lower_expr(ctx, object)?;
-                                let field_idx_str = field_index.to_string();
-                                let header_skip = crate::target_layout::object_header_size_bytes(
-                                    ctx.target_triple,
-                                )
-                                .to_string();
-                                let (obj_handle, field_ptr, old, new) = {
-                                    let blk = ctx.block();
-                                    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-                                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                                    let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                                    let field_ptr =
-                                        blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
-                                    let old = blk.load(DOUBLE, &field_ptr);
-                                    let new = match op {
-                                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                                        _ => blk.fadd(&old, "1.0"),
-                                    };
-                                    (obj_handle, field_ptr, old, new)
-                                };
-                                let store_idx = ctx.new_block("ptr_shape_update.raw_store");
-                                let cold_idx = ctx.new_block("ptr_shape_update.downgrade");
-                                let merge_idx = ctx.new_block("ptr_shape_update.merge");
-                                let store_label = ctx.block_label(store_idx);
-                                let cold_label = ctx.block_label(cold_idx);
-                                let merge_label = ctx.block_label(merge_idx);
-                                {
-                                    let blk = ctx.block();
-                                    let new_bits = blk.bitcast_double_to_i64(&new);
-                                    let finite = crate::expr::class_field_inline_guard::
-                                        emit_plain_finite_number_check(blk, &new_bits);
-                                    blk.cond_br(&finite, &store_label, &cold_label);
-                                }
-                                ctx.current_block = store_idx;
-                                {
-                                    // Reached only when the finite check above
-                                    // proved `new`'s exponent is NOT all-ones;
-                                    // every NaN-box tag (INT32/STRING/POINTER/
-                                    // BIGINT) has an all-ones exponent.
-                                    let blk = ctx.block();
-                                    // GC_STORE_AUDIT(POINTER_FREE): a genuine
-                                    // unboxed double by the proof above, never
-                                    // a GC pointer — no edge, so no barrier.
-                                    blk.store(DOUBLE, &new, &field_ptr);
-                                    blk.br(&merge_label);
-                                }
-                                ctx.current_block = cold_idx;
-                                {
-                                    let key_idx = ctx.strings.intern(property);
-                                    let key_handle_global =
-                                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                                    let blk = ctx.block();
-                                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                                    blk.call_void(
-                                        "js_object_set_field_by_name",
-                                        &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
-                                    );
-                                    blk.br(&merge_label);
-                                }
-                                ctx.current_block = merge_idx;
-                                return Ok(if *prefix { new } else { old });
-                            }
-                        }
-                    }
-                }
-            }
-            let obj_box = lower_expr(ctx, object)?;
-            let key_idx = ctx.strings.intern(property);
-            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-            let blk = ctx.block();
-            let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-            let key_box = blk.load(DOUBLE, &key_handle_global);
-            let key_bits = blk.bitcast_double_to_i64(&key_box);
-            let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-            let old = blk.call(
-                DOUBLE,
-                "js_object_get_field_by_name_f64",
-                &[(I64, &obj_handle), (I64, &key_handle)],
-            );
-            // ToNumeric + Type(old)::add/sub(old, unit): a BigInt field stays a
-            // BigInt (`var x = {y:0n}; ++x.y === 1n`), not the Number `1`. Mirrors
-            // the identifier `Expr::Update` path. #4918 prefix/postfix bigint.
-            let old_num = blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
-            let step_arg = match op {
-                BinaryOp::Sub => "0",
-                _ => "1",
-            };
-            let new = blk.call(
-                DOUBLE,
-                "js_numeric_step",
-                &[(DOUBLE, &old_num), (I32, step_arg)],
-            );
-            blk.call_void(
-                "js_object_set_field_by_name",
-                &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
-            );
-            Ok(if *prefix { new } else { old_num })
-        }
-
-        // -------- arr[idx]++ / arr[idx]-- / ++arr[idx] / --arr[idx] --------
-        //
-        // Issue #957: lodash's `countBy` uses `++result[key]` which previously
-        // bailed `expression IndexUpdate not yet supported` and stubbed the
-        // entire module, leaving `import _ from "lodash"` resolving to
-        // undefined. Lower as a tag-aware read+modify+write through the
-        // `js_dyn_index_get` / `js_dyn_index_set` runtime helpers — they
-        // dispatch by gc_type at runtime, so the same emission works for
-        // arrays, plain objects, and TypedArrays without static type
-        // knowledge. `object` and `index` lower once into SSA registers so
-        // side effects are not re-evaluated.
-        Expr::IndexUpdate {
-            object,
-            index,
-            op,
-            prefix,
-        } => {
-            // #7615 slice 2 closes the operand-to-operand half only: the
-            // receiver was live across the index's own lowering. The three
-            // helpers below (`js_dyn_index_get`, `js_to_numeric`,
-            // `js_numeric_step`) can each re-enter user code, so `obj_box` and
-            // `idx_box` are still held across collection points before
-            // `js_dyn_index_set` consumes them. Closing that needs a per-use
-            // re-read inside the body rather than one group-wide re-read; see
-            // the module header.
-            rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
-                let (obj_box, idx_box) = (vals[0].clone(), vals[1].clone());
-                let blk = ctx.block();
-                let old = blk.call(
-                    DOUBLE,
-                    "js_dyn_index_get",
-                    &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
-                );
-                // ToNumeric + numeric step so a BigInt element stays BigInt
-                // (`var x = [0n]; ++x[0] === 1n`). Mirrors the identifier Update +
-                // PropertyUpdate paths. #4918 prefix/postfix bigint.
-                let old_num = blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
-                let step_arg = match op {
-                    BinaryOp::Sub => "0",
-                    _ => "1",
-                };
-                let new = blk.call(
-                    DOUBLE,
-                    "js_numeric_step",
-                    &[(DOUBLE, &old_num), (I32, step_arg)],
-                );
-                blk.call(
-                    DOUBLE,
-                    "js_dyn_index_set",
-                    &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new)],
-                );
-                Ok(if *prefix { new } else { old_num })
-            })
+        // -------- obj.field++ / obj.field-- / a[i]++ (member updates) --------
+        // Moved to `expr/member_update.rs` in #7628 to keep this file under
+        // the 2000-line cap; the arms are verbatim.
+        Expr::PropertyUpdate { .. } | Expr::IndexUpdate { .. } => {
+            super::member_update::lower(ctx, expr)
         }
 
         // -------- path.basename --------

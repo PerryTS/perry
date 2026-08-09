@@ -141,6 +141,8 @@ pub(crate) mod shadow_inline;
 // and it now lives outside `crate::expr`.
 #[cfg(test)]
 mod call_spread_rooting_tests;
+#[cfg(test)]
+mod issue7628_rooting_tests;
 pub(crate) mod shadow_slot;
 #[cfg(test)]
 mod slice7_rooting_tests;
@@ -1898,6 +1900,7 @@ mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_typed_array;
 mod instance_misc1;
+mod member_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
