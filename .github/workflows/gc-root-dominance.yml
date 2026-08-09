@@ -464,17 +464,35 @@ jobs:
           #
           # BUDGETS. `unrooted` (the object is in NO live bundle at all, so
           # nothing marks or rewrites it) is the serious class, and it is a
-          # RATCHET at its measured value rather than a calibrated zero: this
-          # is a new instrument pointed at a lowering nothing has ever checked
-          # statically, and 21 is a population under triage, not a number
-          # anyone has adjudicated. It is a budget rather than allowlist
-          # entries for the reason `--stale-registers` records — 21 tombstones
-          # with no issue numbers would be worse documentation than one number
-          # that can only go down. Lower it as sites are fixed.
+          # RATCHET rather than a calibrated zero: this is a young instrument
+          # pointed at a lowering nothing had ever checked statically, and the
+          # remainder is a population under triage rather than a number anyone
+          # has adjudicated. It is a budget rather than allowlist entries for
+          # the reason `--stale-registers` records — tombstones with no issue
+          # numbers would be worse documentation than one number that can only
+          # go down. Lower it as sites are fixed.
           #
-          # The 21 are enumerated by shape in #7664, which is this budget's
-          # referent: a number with nothing behind it is the thing CLAUDE.md
-          # warns a threshold decays into.
+          # 21 at #7663. #7664 fixed 14 of them in `root_reload.rs` and
+          # `lower_call/new.rs` — the whole `strhandle` population (10), the
+          # `js_new_target_get` save/restore (1), and 3 of the 7 unmasked
+          # receivers — so the budget is 7. What remains, and why each is its
+          # own slice rather than a widening of the same fix:
+          #
+          #   4  unmasked, all PHI-MEDIATED. The stale value reaches its use
+          #      through a `phi`, and `root_reload` cannot insert above a phi;
+          #      the reload has to go in the PREDECESSOR, on the edge, which is
+          #      a different insertion model.
+          #   2  global (`@perry_global_*`). NOT reloadable: a module-level
+          #      variable is one the program assigns, so a re-read can observe
+          #      a later assignment instead of the value the call was given
+          #      (`operand_needs_root`). That population needs ROOTING, and
+          #      `a_module_global_is_not_a_reload_source` in root_reload.rs
+          #      pins the distinction so it cannot be widened away by accident.
+          #   1  capture, a `js_closure_get_capture_bits` read held across
+          #      `js_number_coerce`.
+          #
+          # #7664 stays open as this budget's referent: a number with nothing
+          # behind it is the thing CLAUDE.md warns a threshold decays into.
           #
           # `stale` (the object survives and is relocated, but a raw copy of
           # its pre-move address is used below) reads 0 today and is held
@@ -494,7 +512,7 @@ jobs:
             --min-statepoints 15000 \
             --min-live-bundles 8000 \
             --min-relocates 20000 \
-            --max-unrooted 21 \
+            --max-unrooted 7 \
             --max-stale 0 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \

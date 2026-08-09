@@ -1014,15 +1014,15 @@ fn lower_new_impl_inner(
         // ponytail: a throw inside the ctor skips the restore, leaving the cell
         // set — same edge case the runtime construct paths already have; fix
         // holistically if it bites.
+        // #7664: `prev` is saved across the WHOLE constructor body, and the
+        // cell it comes out of is a registered mutable root that evacuation
+        // rewrites — so it goes in a temp root, not a bare register.
         let saved_new_target = if ctor_chain_uses_new_target(ctx, class) {
-            ctx.class_ids.get(class_name).map(|&cid| {
-                let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
+            ctx.class_ids.get(class_name).copied().map(|cid| {
                 let class_ref = double_literal(f64::from_bits(
                     crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF),
                 ));
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &class_ref)]);
-                prev
+                crate::rooting::new_target_save(ctx, &class_ref)
             })
         } else {
             None
@@ -1034,9 +1034,8 @@ fn lower_new_impl_inner(
             &lowered_args,
             caps_absent_from_args,
         ) {
-            if let Some(prev) = &saved_new_target {
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
+            if let Some(save) = &saved_new_target {
+                crate::rooting::new_target_restore(ctx, save);
             }
             // #7154: the constructor body has run, so every register holding
             // the instance is potentially pre-move. Re-read it from its root
@@ -1081,9 +1080,8 @@ fn lower_new_impl_inner(
             );
             return Ok(final_box);
         }
-        if let Some(prev) = &saved_new_target {
-            ctx.block()
-                .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
+        if let Some(save) = &saved_new_target {
+            crate::rooting::new_target_restore(ctx, save);
         }
         // #6921: `call_local_constructor_symbol` returned `None` — this module
         // has no `<Class>_constructor` entry, so no constructor ran and the
@@ -1760,13 +1758,10 @@ fn lower_new_impl_inner(
                 // 'type')`, or silently set `type = undefined` → the auth error
                 // was mis-categorized and the login redirect fell back to
                 // `?error=Configuration`.
-                let nt_prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
                 let nt_ref = double_literal(f64::from_bits(new_target_bits));
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_ref)]);
+                let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_prev)]);
+                crate::rooting::new_target_restore(ctx, &nt_save);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
                 // doesn't read garbage from stale registers, and pack the rest
@@ -1798,13 +1793,10 @@ fn lower_new_impl_inner(
                 // new.target cross-module: bind the runtime cell to the leaf
                 // class ref around the imported ctor call (see the ANCESTOR arm
                 // above for why). This is the direct `new ImportedClass()` case.
-                let nt_prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
                 let nt_ref = double_literal(f64::from_bits(new_target_bits));
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_ref)]);
+                let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_prev)]);
+                crate::rooting::new_target_restore(ctx, &nt_save);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
                 found_inherited_ctor = true;
             }

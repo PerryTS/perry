@@ -1021,6 +1021,57 @@ pub(crate) fn implicit_this_restore(ctx: &mut FnCtx<'_>, save: ImplicitThisSave)
         .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev)]);
 }
 
+/// The `new.target` cell's saved previous value (#7664).
+///
+/// Structurally [`ImplicitThisSave`] for a different cell, and it is a separate
+/// type rather than a parameter so the two cannot be crossed at a restore.
+///
+/// The cell is a registered mutable root — `scan_current_new_target_root_mut`,
+/// `gc/mod.rs` — so an evacuating cycle inside the constructor rewrites it and
+/// a register saved beforehand names from-space. The RUNTIME's own construct
+/// paths have always rooted their `prev_new_target`
+/// (`object/class_registry/construct.rs`, `scope.root_nanbox_f64`); the
+/// generated `new` path saved it into a bare SSA register across the whole
+/// constructor body, which is #7226's `prev_this` bug for `new.target`.
+///
+/// Re-reading the cell instead of rooting it would be the wrong repair, and for
+/// the reason `operand_is_reloadable` states: `js_new_target_set` has already
+/// overwritten it with THIS class's ref, so a re-read returns the new value,
+/// not the saved one. Only a root gives both a rewritten location and the value
+/// the save observed.
+pub(crate) struct NewTargetSave {
+    slot: RootedSlot,
+}
+
+/// Set `new.target` to `new_target` and root the value it displaced.
+pub(crate) fn new_target_save(ctx: &mut FnCtx<'_>, new_target: &str) -> NewTargetSave {
+    let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
+    let idx = crate::expr::temp_root::temp_root_push_double(ctx, &prev);
+    ctx.block()
+        .call(DOUBLE, "js_new_target_set", &[(DOUBLE, new_target)]);
+    NewTargetSave {
+        slot: RootedSlot {
+            idx,
+            repr: Repr::Boxed,
+        },
+    }
+}
+
+/// Restore the saved `new.target`, re-read from its root.
+///
+/// Takes the save by REFERENCE, and does not release — which is the difference
+/// from [`implicit_this_restore`] and is forced by the caller. `new.rs` emits
+/// this restore on several exits from one save, and its slot is cut by the
+/// enclosing expression scope (`temp_root_scope_begin`/`temp_root_scope_end`,
+/// which that module already opens precisely because its ~20 return paths make
+/// per-path releases the thing that gets missed, #6969). A release here would
+/// be a stack cut on one of those paths only.
+pub(crate) fn new_target_restore(ctx: &mut FnCtx<'_>, save: &NewTargetSave) {
+    let prev = read_slot(ctx, &save.slot);
+    ctx.block()
+        .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &prev)]);
+}
+
 /// A GC-managed value that generated code keeps **updating** while it lowers
 /// further expressions: an object literal's half-built handle, `Object.assign`'s
 /// threaded target, `Math.min(...)`'s growing argument array.
