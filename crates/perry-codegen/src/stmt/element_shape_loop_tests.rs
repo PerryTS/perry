@@ -1057,6 +1057,24 @@ fn element_shape_versioned_loop_resolves_an_aliased_object_element_type() {
         deref.contains("AnonShape"),
         "the guard must pin the anon shape the alias expands to; emitted:\n{deref}"
     );
+    // ANTI-VACUITY. `CLONE_LABELS` above is satisfied by a preheader that ends
+    // in an unconditional branch to the SLOW clone -- which is exactly what a
+    // failed call-free proof emits, and exactly the silent-deletion shape the
+    // rest of this file exists to catch. Asserting the labels alone would let
+    // alias resolution "work" while the clone it resolved was dead code.
+    //
+    // The sibling `.length` test carries these two assertions; this one, the
+    // only test covering alias resolution IN ISOLATION, did not. So a
+    // regression confined to the alias-without-a-`.length`-bound path -- the
+    // one shape no other test emits -- would have gone unseen.
+    assert_fast_clone_is_entered(&ir);
+    let fast = fast_clone_slice(&ir);
+    assert!(
+        !fast.contains(" call "),
+        "an alias-resolved fast clone must stay call-free -- a call is a GC \
+         safepoint, and the element-shape guard is established BEFORE it; \
+         emitted:\n{fast}"
+    );
 }
 
 /// SABOTAGE (alias resolution): an alias is not a licence to guess. With no
