@@ -29,6 +29,14 @@
 # the loop and the trap in the PR. Current instances of this shape:
 #   - object/field_get_set/enumeration.rs -- proxy values/entries interleave
 #     (ownKeys, then per-key gOPD + get; #7467).
+#   - json/stringify_shape_template.rs -- the shape-template emit loop's
+#     collection window is `toJSON`, a user-visible trap, and `cur_obj()` /
+#     `cur_keys()` re-derive at every access across it (#7268). `across_*`
+#     pairs one call with one re-read and cannot express a helper called at
+#     many points inside the loop.
+#   - gc/tests/runtime_roots/json_shape_template.rs -- its assertions ARE
+#     pre/post address comparisons, which is what `across_*` exists to make
+#     unnameable; converting them would delete the test's subject.
 #
 # 595 of 705 runtime modules were already clean when this was seeded, so the
 # rule above covers 84% of the crate on day one.
@@ -111,7 +119,6 @@
 3 crates/perry-runtime/src/promise/rejection.rs
 8 crates/perry-runtime/src/promise/then.rs
 8 crates/perry-runtime/src/proxy.rs
-1 crates/perry-runtime/src/proxy/put_value.rs
 8 crates/perry-runtime/src/regex.rs
 16 crates/perry-runtime/src/regex/exec.rs
 30 crates/perry-runtime/src/regex/exec_array.rs
@@ -134,7 +141,7 @@
 7 crates/perry-runtime/src/url/search_params.rs
 12 crates/perry-runtime/src/util_debuglog.rs
 20 crates/perry-runtime/src/util_parse_args.rs
-49 crates/perry-runtime/src/util_promisify.rs
+45 crates/perry-runtime/src/util_promisify.rs
 10 crates/perry-runtime/src/v8.rs
 6 crates/perry-runtime/src/value/dyn_index.rs
 6 crates/perry-runtime/src/value/dynamic_arith.rs
@@ -142,3 +149,5 @@
 19 crates/perry-runtime/src/wasi.rs
 7 crates/perry-runtime/src/weakref.rs
 23 crates/perry-runtime/src/webassembly.rs
+3 crates/perry-runtime/src/gc/tests/runtime_roots/json_shape_template.rs
+2 crates/perry-runtime/src/json/stringify_shape_template.rs

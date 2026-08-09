@@ -338,9 +338,12 @@ extern "C" fn outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64
     let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
 
     // Allocate the inner (err, value) callback that captures the promise.
-    let cb_closure = js_closure_alloc(inner_callback_thunk as *const u8, 1);
+    // #7341: the alloc and the re-read are one step, so the pre-alloc promise
+    // address is never nameable on the early-return path.
+    let (cb_closure, promise_after_alloc) = promise_handle
+        .across_mut::<Promise, _>(|| js_closure_alloc(inner_callback_thunk as *const u8, 1));
     if cb_closure.is_null() {
-        return nanbox_promise(promise_handle.get_raw_mut_ptr());
+        return nanbox_promise(promise_after_alloc);
     }
     let cb_handle = scope.root_raw_mut_ptr(cb_closure);
     js_closure_set_capture_ptr(
@@ -394,9 +397,13 @@ extern "C" fn outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64
             crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
         }
     } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        js_promise_reject(promise_handle.get_raw_mut_ptr(), exc);
+        // #7341: `js_get_exception` can allocate, so pair it with the re-read.
+        let (exc, promise_after_exc) = promise_handle.across_mut::<Promise, _>(|| {
+            let exc = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            exc
+        });
+        js_promise_reject(promise_after_exc, exc);
     }
     crate::exception::js_try_end();
 
@@ -444,9 +451,11 @@ extern "C" fn gkp_outer_thunk(closure: *const ClosureHeader, rest_value: f64) ->
     let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
 
     // Inner `(err, publicKey, privateKey)` callback capturing the promise.
-    let cb_closure = js_closure_alloc(gkp_inner_callback_thunk as *const u8, 1);
+    // #7341: as above — alloc and re-read as one step.
+    let (cb_closure, promise_after_alloc) = promise_handle
+        .across_mut::<Promise, _>(|| js_closure_alloc(gkp_inner_callback_thunk as *const u8, 1));
     if cb_closure.is_null() {
-        return nanbox_promise(promise_handle.get_raw_mut_ptr());
+        return nanbox_promise(promise_after_alloc);
     }
     let cb_handle = scope.root_raw_mut_ptr(cb_closure);
     js_closure_set_capture_ptr(
@@ -494,9 +503,13 @@ extern "C" fn gkp_outer_thunk(closure: *const ClosureHeader, rest_value: f64) ->
             crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
         }
     } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        js_promise_reject(promise_handle.get_raw_mut_ptr(), exc);
+        // #7341: `js_get_exception` can allocate, so pair it with the re-read.
+        let (exc, promise_after_exc) = promise_handle.across_mut::<Promise, _>(|| {
+            let exc = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            exc
+        });
+        js_promise_reject(promise_after_exc, exc);
     }
     crate::exception::js_try_end();
 

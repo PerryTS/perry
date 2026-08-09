@@ -290,13 +290,17 @@ pub extern "C" fn js_put_value_set_ic_miss(
     } else {
         f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits())
     };
-    let result = js_put_value_set(
-        target_handle.get_nanbox_f64(),
-        key_value,
-        value_handle.get_nanbox_f64(),
-        target_handle.get_nanbox_f64(),
-        strict,
-    );
+    // #7341: pair the allocating call with the re-read, so the pre-call `key`
+    // address is never nameable.
+    let (result, key) = key_handle.across_const::<crate::StringHeader, _>(|| {
+        js_put_value_set(
+            target_handle.get_nanbox_f64(),
+            key_value,
+            value_handle.get_nanbox_f64(),
+            target_handle.get_nanbox_f64(),
+            strict,
+        )
+    });
 
     if cache.is_null() {
         return result;
@@ -309,7 +313,6 @@ pub extern "C" fn js_put_value_set_ic_miss(
             return result;
         }
         let obj_addr = (target_bits & POINTER_MASK) as usize;
-        let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
         let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
             return result;
         };
