@@ -10,6 +10,18 @@
 
   Zeal now forces a collection at the first poll at which `PERRY_GC_ZEAL_ALLOC_KB` (default 4) of new nursery material has accumulated — the model V8 (`--gc-interval`) and SpiderMonkey (`gcZeal(mode, frequency)`) both use, and for the same reason. The stride is a **monotone high-water mark**, not a "bytes since" delta: each forced collection rearms to `from_space_after + stride`, so a collection that reclaims nothing (an escalation to a non-moving full mark-sweep, which #7592 and #7682 both produced in the field) still demands another full stride of genuinely new allocation. Total forced collections are bounded by `bytes_allocated / stride` whatever the collector does with them, which makes this a bound rather than a hope.
 
+  **Measured on the pinned quiet host.** The full workload under zeal goes from a 240 s timeout (unpaced cost ~1,426 s) to **98.8 s with the correct answer**, forcing 193,087 collections out of 2,838,560 polls — all of them copying minors, relocating 3,115,719 objects. The stride sweep below is one binary and one env var, at a quarter scale, and `loop_polls` is **283,852 in every row**, so the knob changes only the decision to collect:
+
+  | `ALLOC_KB` | forced collections | moved objects | wall |
+  |---|--:|--:|--:|
+  | 0 (pre-fix) | 283,857 | 1,629,647 | 142.6 s |
+  | 1 | 70,929 | 815,460 | 36.1 s |
+  | **4 (default)** | **19,314** | **325,830** | **10.2 s** |
+  | 16 | 5,070 | 129,959 | 3.0 s |
+  | 64 | 1,291 | 52,357 | 1.1 s |
+
+  Row 0 reproduces the pre-fix 1:1 behaviour exactly on the shipped binary. Every row keeps `copying_minors == forced_collections` and `moved > 0`, so no stride degrades the instrument into non-moving sweeps. 4 KB rather than the faster 16/64 is deliberate — this is a correctness instrument, so the default errs toward sensitivity, still collecting once per ~15 loop iterations while being 14x cheaper than unpaced. The zeal-OFF path is untouched: the same workload without zeal is 4.49 s before and after.
+
   `PERRY_GC_ZEAL_ALLOC_KB=0` restores the literal every-poll semantics — the right setting for a small fixture or a bug window executed exactly once. What pacing gives up, stated rather than buried: a window crossed a single time may now fall between two forced collections; a window that *recurs* (every shape in the #7154 family, which is why the reproducers are loops) is still caught, after N KB of allocation instead of on the first iteration.
 
 ### Changed
