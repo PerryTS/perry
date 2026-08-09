@@ -12,9 +12,11 @@ pub(super) struct SymbolAccessorDescriptor {
     pub(super) set: u64,
 }
 
-static SYMBOL_ACCESSOR_PROPERTIES: Mutex<
-    Option<HashMap<(usize, usize), SymbolAccessorDescriptor>>,
-> = Mutex::new(None);
+guard_cleared_global! {
+    static SYMBOL_ACCESSOR_PROPERTIES: Mutex<
+        Option<HashMap<(usize, usize), SymbolAccessorDescriptor>>,
+    > = Mutex::new(None);
+}
 
 pub(super) fn clear_symbol_accessor_property(obj_key: usize, sym_key: usize) {
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);

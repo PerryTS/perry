@@ -333,6 +333,27 @@ jobs:
           python3 scripts/check_test_registration.py --self-test
           python3 scripts/check_test_registration.py
 
+      # #7672: the GC test guards CLEAR ~20 process-global side tables from
+      # whatever libtest thread constructs a guard, and nothing requires a
+      # READER to take the clearing lock. Three flakes in two days came from
+      # that (#7665 x2, #7671), each exposed by an unrelated PR that changed the
+      # parallel schedule, so the author of the exposing PR paid the diagnosis.
+      #
+      # The class is fixed by storage, not by a lock: `guard_cleared_global!`
+      # gives each thread its own table in a test build. This gate derives the
+      # clear list from the guards' own source and fails on any bare `static`
+      # left behind, so a NEW sink cannot be added quietly and a new READER
+      # never has to remember anything. Its allowlist entries each cite an
+      # issue, and an entry that matches nothing fails too.
+      #
+      # Pure text, ~1s, no compiler — in `lint` because `lint` is a required
+      # context (hazard 2), and `!cancelled()` for the reason given above.
+      - name: Guard-cleared global sinks
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/global_sink_isolation.py --self-test
+          python3 scripts/global_sink_isolation.py
+
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
   # Cargo.toml). `cargo clippy` exits nonzero only on `deny` lints, so

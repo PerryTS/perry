@@ -33,7 +33,7 @@ fn survives_a_foreign_clear(
     install();
     assert!(
         observe(),
-        "{label}: the probe installed nothing, so the surviving/​wiped distinction \
+        "{label}: the probe installed nothing, so the survived-vs-wiped distinction \
          would be vacuous — fix the probe before reading its verdict"
     );
     std::thread::spawn(clear)
@@ -61,10 +61,7 @@ fn canary() -> &'static Mutex<HashMap<usize, u64>> {
 }
 
 fn canary_clear() {
-    canary()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clear();
+    canary().lock().unwrap_or_else(|p| p.into_inner()).clear();
 }
 
 #[test]
@@ -121,8 +118,7 @@ fn closure_side_tables_survive_a_guard_clear_on_another_thread() {
         move || {
             crate::closure::closure_get_own_dynamic_prop(owner, "probe7672") == Some(42.5)
                 && crate::closure::closure_has_own_dynamic_prop(owner, "probe7672")
-                && crate::closure::closure_static_prototype(owner)
-                    == Some(0x7FFD_0000_0000_7672)
+                && crate::closure::closure_static_prototype(owner) == Some(0x7FFD_0000_0000_7672)
                 && crate::closure::closure_is_key_deleted(owner, "goneKey")
         },
         foreign_guard_clear,
@@ -135,13 +131,174 @@ fn closure_side_tables_survive_a_guard_clear_on_another_thread() {
     );
 }
 
+/// `symbol::test_clear_symbol_side_table_roots` — `SYMBOL_PROPERTIES`,
+/// `SYMBOL_PROPERTY_ATTRS`, `CLASS_STATIC_SYMBOLS`, `SYMBOL_ACCESSOR_PROPERTIES`
+/// and the `SYMBOL_POINTERS` rebuild.
+///
+/// The largest reader cluster in the survey behind #7672: 14 tests populate one
+/// of these and assert on it without taking the clearing lock.
+#[test]
+fn symbol_side_tables_survive_a_guard_clear_on_another_thread() {
+    let owner = 0x_5B01_0000_7672_usize;
+    let sym_key = 0x_5B01_0000_7673_usize;
+    let class_id = 0x7672_u32;
+    let survived = survives_a_foreign_clear(
+        "symbol side tables",
+        || {
+            crate::symbol::test_seed_symbol_property_root(owner, sym_key, 0x7FFD_0000_0000_7672);
+            crate::symbol::test_seed_class_static_symbol_root(
+                class_id,
+                sym_key,
+                0x7FFD_0000_0000_7673,
+            );
+            crate::symbol::test_seed_symbol_pointer_root(sym_key);
+        },
+        move || {
+            crate::symbol::test_symbol_property_root_bits(owner, sym_key)
+                == Some(0x7FFD_0000_0000_7672)
+                && crate::symbol::test_class_static_symbol_root_bits(class_id, sym_key)
+                    == Some(0x7FFD_0000_0000_7673)
+                && crate::symbol::test_symbol_pointer_root_contains(sym_key)
+        },
+        foreign_guard_clear,
+    );
+    assert!(
+        survived,
+        "a symbol side-table entry written on this thread was destroyed by the GC \
+         test guards' state reset running on another thread (#7672)"
+    );
+}
+
+/// `timer::test_clear_all_timer_scanner_roots` — `TIMER_QUEUE`,
+/// `CALLBACK_TIMERS`, `INTERVAL_TIMERS`.
+#[test]
+fn timer_queues_survive_a_guard_clear_on_another_thread() {
+    let survived = survives_a_foreign_clear(
+        "timer queues",
+        || crate::timer::test_seed_many_timeout_roots(&[f64::from_bits(0x7FFD_0000_0000_7672)]),
+        || crate::timer::test_timer_scanner_snapshot().timeout_value_bits == 0x7FFD_0000_0000_7672,
+        foreign_guard_clear,
+    );
+    assert!(
+        survived,
+        "a queued timer written on this thread was destroyed by the GC test guards' \
+         state reset running on another thread (#7672)"
+    );
+}
+
+/// `object::test_clear_class_side_table_roots` — the class-registry `RwLock`
+/// tables (`CLASS_PROTOTYPE_OBJECTS`, `CLASS_PARENT_CLOSURES`, …), which the
+/// guard sets to `None` wholesale rather than per class id.
+#[test]
+fn class_registry_tables_survive_a_guard_clear_on_another_thread() {
+    let proto_cid = 0x7672_u32;
+    let closure_cid = 0x7673_u32;
+    let survived = survives_a_foreign_clear(
+        "class registry",
+        || {
+            crate::object::test_seed_class_inheritance_roots(proto_cid, 0x7672_0000);
+            crate::object::test_seed_class_parent_closure_root(closure_cid, 0x7673_0000);
+        },
+        move || {
+            crate::object::test_class_prototype_object_root(proto_cid) == 0x7672_0000
+                && crate::object::test_class_parent_closure_root(closure_cid) == 0x7673_0000
+        },
+        foreign_guard_clear,
+    );
+    assert!(
+        survived,
+        "a class-registry entry written on this thread was destroyed by the GC test \
+         guards' state reset running on another thread (#7672)"
+    );
+}
+
+/// `object::test_clear_object_cache_roots` — the `AtomicU64` module-constant
+/// caches and `GLOBAL_THIS_PTR`. These hold pointers into the *allocating
+/// thread's* arena, so per-thread storage is also the only sound shape for
+/// them; `array/tests.rs` carries 256-iteration retry loops written around
+/// exactly this race.
+#[test]
+fn object_cache_roots_survive_a_guard_clear_on_another_thread() {
+    let bits: [u64; 7] = [
+        0x7FFD_0000_0000_7670,
+        0x7FFD_0000_0000_7671,
+        0x7FFD_0000_0000_7672,
+        0x7FFD_0000_0000_7673,
+        0x7FFD_0000_0000_7674,
+        0x7FFD_0000_0000_7675,
+        0x7FFD_0000_0000_7676,
+    ];
+    let survived = survives_a_foreign_clear(
+        "object caches",
+        || crate::object::test_seed_object_cache_roots(bits, 0x7672_0000),
+        move || crate::object::test_object_cache_roots() == (bits, 0x7672_0000),
+        foreign_guard_clear,
+    );
+    assert!(
+        survived,
+        "an object-cache root written on this thread was destroyed by the GC test \
+         guards' state reset running on another thread (#7672)"
+    );
+}
+
+/// `geisterhand_registry::test_clear_geisterhand_roots` — `REGISTRY` and
+/// `PENDING_ACTIONS`.
+#[test]
+fn geisterhand_registry_survives_a_guard_clear_on_another_thread() {
+    let closure = f64::from_bits(0x7FFD_0000_0000_7672);
+    let survived = survives_a_foreign_clear(
+        "geisterhand registry",
+        || crate::geisterhand_registry::test_seed_geisterhand_roots(closure, 1.0, 2.0),
+        move || {
+            crate::geisterhand_registry::test_geisterhand_roots_snapshot().0
+                == 0x7FFD_0000_0000_7672
+        },
+        foreign_guard_clear,
+    );
+    assert!(
+        survived,
+        "a geisterhand registry entry written on this thread was destroyed by the GC \
+         test guards' state reset running on another thread (#7672)"
+    );
+}
+
+/// `ui_text_registry::test_clear_ui_text_registry_roots` — `STATE_VALUES` and
+/// `FOREACH_REGISTRY`.
+#[test]
+fn ui_text_registry_survives_a_guard_clear_on_another_thread() {
+    let state = f64::from_bits(0x7FFD_0000_0000_7672);
+    let render = f64::from_bits(0x7FFD_0000_0000_7673);
+    let survived = survives_a_foreign_clear(
+        "ui text registry",
+        || crate::ui_text_registry::test_seed_ui_text_registry_roots(state, render),
+        move || {
+            crate::ui_text_registry::test_ui_text_registry_roots_snapshot()
+                == (0x7FFD_0000_0000_7672, 0x7FFD_0000_0000_7673)
+        },
+        foreign_guard_clear,
+    );
+    assert!(
+        survived,
+        "a UI text registry entry written on this thread was destroyed by the GC test \
+         guards' state reset running on another thread (#7672)"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The probe list may not rot: every `clear_helper` named here must still be
 // called by the guards' reset, and the reset's source is the authority.
 // ---------------------------------------------------------------------------
 
 /// Every `test_clear_*` helper this file claims to cover.
-const COVERED_CLEAR_HELPERS: &[&str] = &["test_clear_closure_side_tables"];
+const COVERED_CLEAR_HELPERS: &[&str] = &[
+    "test_clear_closure_side_tables",
+    "test_clear_symbol_side_table_roots",
+    "test_clear_all_timer_scanner_roots",
+    "test_clear_class_side_table_roots",
+    "test_clear_object_cache_roots",
+    "test_clear_geisterhand_roots",
+    "test_clear_ui_text_registry_roots",
+];
 
 #[test]
 fn every_covered_clear_helper_is_still_called_by_the_guards() {

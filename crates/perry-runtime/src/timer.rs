@@ -42,7 +42,7 @@ struct Timer {
 unsafe impl Send for Timer {}
 
 // Global timer queues (Mutex-protected for cross-thread access)
-static TIMER_QUEUE: Mutex<Vec<Timer>> = Mutex::new(Vec::new());
+guard_cleared_global!(static TIMER_QUEUE: Mutex<Vec<Timer>> = Mutex::new(Vec::new()));
 static START_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Initialize the timer system (called once at startup)
@@ -374,7 +374,7 @@ static MOCK_TIMERS: Mutex<MockTimersState> = Mutex::new(MockTimersState {
     intervals: Vec::new(),
 });
 
-static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
+guard_cleared_global!(static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new()));
 // Shared id counter across callback timers AND intervals so a handle id is
 // globally unique. Node treats Timeout/Interval as the same internal Timer
 // type, so `clearTimeout(intervalHandle)` and `clearInterval(timeoutHandle)`
@@ -1402,7 +1402,7 @@ struct IntervalTimer {
 // what makes the cross-thread pointers here sound.
 unsafe impl Send for IntervalTimer {}
 
-static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(Vec::new());
+guard_cleared_global!(static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(Vec::new()));
 
 /// JS-style setInterval that takes a callback function and interval
 /// The callback is a closure pointer that will be called repeatedly

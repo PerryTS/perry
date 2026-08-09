@@ -179,8 +179,10 @@ pub static CLASS_VTABLE_REGISTRY: RwLock<Option<HashMap<u32, ClassVTable>>> = Rw
 pub static CLASS_STATIC_METHODS: RwLock<Option<HashMap<u32, HashMap<String, (usize, u32, bool)>>>> =
     RwLock::new(None);
 
-pub static CLASS_STATIC_ACCESSORS: RwLock<Option<HashMap<u32, HashMap<String, (usize, usize)>>>> =
-    RwLock::new(None);
+guard_cleared_global! {
+    pub static CLASS_STATIC_ACCESSORS: RwLock<Option<HashMap<u32, HashMap<String, (usize, usize)>>>> =
+        RwLock::new(None);
+}
 
 /// Spec `Function.prototype.length` per (class_id, method/accessor name) — the
 /// count of formal parameters before the first one with a default or a rest.
@@ -199,40 +201,46 @@ pub static CLASS_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>
 pub static CLASS_STATIC_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>> =
     RwLock::new(None);
 
-pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
-    RwLock::new(None);
+guard_cleared_global! {
+    pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
+        RwLock::new(None);
 
-pub static CLASS_SYMBOL_ACCESSORS: RwLock<Option<HashMap<(u32, usize, bool), (usize, usize)>>> =
-    RwLock::new(None);
+    pub static CLASS_SYMBOL_ACCESSORS: RwLock<Option<HashMap<(u32, usize, bool), (usize, usize)>>> =
+        RwLock::new(None);
+}
 
 /// Set of all registered class ids. Populated at module init by codegen
 /// emitting `js_register_class_id(cid)` for every user class — even
 /// classes without any methods. Refs #618 / #420 followup.
 pub static REGISTERED_CLASS_IDS: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
 
-/// Issue #711 part 2: `function Base() {}; Base.prototype = obj` pattern.
-/// Effect's `internal/effectable.ts` declares classes via prototype
-/// assignment on a plain function, not via `class` syntax. To make
-/// `class Derived extends Base {}` walk into `obj`'s methods at dispatch
-/// time, we model this as a synthetic class:
-///   - `js_set_function_prototype(func, obj)` allocates a synthetic
-///     class_id (high-bit-set to avoid collision with codegen-assigned
-///     ids), stores `func_bits → synthetic_cid` in `FUNCTION_CLASS_IDS`,
-///     and `synthetic_cid → obj_ptr` in `CLASS_PROTOTYPE_OBJECTS`.
-///   - `js_register_class_parent_dynamic` extends to detect closure
-///     parent values, looks up the synthetic class_id, and registers
-///     the (child, synthetic) edge in CLASS_REGISTRY.
-///   - The method-dispatch chain walk in `js_native_call_method`
-///     consults `CLASS_PROTOTYPE_OBJECTS` when it reaches a synthetic
-///     class_id: it resolves the method as a regular field lookup on
-///     the prototype object and calls it with `this` bound to the
-///     receiver.
-pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(None);
+guard_cleared_global! {
+    /// Issue #711 part 2: `function Base() {}; Base.prototype = obj` pattern.
+    /// Effect's `internal/effectable.ts` declares classes via prototype
+    /// assignment on a plain function, not via `class` syntax. To make
+    /// `class Derived extends Base {}` walk into `obj`'s methods at dispatch
+    /// time, we model this as a synthetic class:
+    ///   - `js_set_function_prototype(func, obj)` allocates a synthetic
+    ///     class_id (high-bit-set to avoid collision with codegen-assigned
+    ///     ids), stores `func_bits → synthetic_cid` in `FUNCTION_CLASS_IDS`,
+    ///     and `synthetic_cid → obj_ptr` in `CLASS_PROTOTYPE_OBJECTS`.
+    ///   - `js_register_class_parent_dynamic` extends to detect closure
+    ///     parent values, looks up the synthetic class_id, and registers
+    ///     the (child, synthetic) edge in CLASS_REGISTRY.
+    ///   - The method-dispatch chain walk in `js_native_call_method`
+    ///     consults `CLASS_PROTOTYPE_OBJECTS` when it reaches a synthetic
+    ///     class_id: it resolves the method as a regular field lookup on
+    ///     the prototype object and calls it with `this` bound to the
+    ///     receiver.
+    pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(None);
+}
 // Stored as `usize` (raw address) so the map is Send + Sync. The
 // pointer is always converted back to `*mut ObjectHeader` at call sites
 // (`class_prototype_object` / the dispatch walk) where single-threaded
 // usage is guaranteed.
-pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+guard_cleared_global! {
+    pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+}
 
 /// Lazily materialized `Class.prototype` objects for declared ES classes.
 /// These are separate from `CLASS_PROTOTYPE_OBJECTS`: that older table is
@@ -285,17 +293,19 @@ pub(crate) fn class_prototype_method_is_enumerable(class_id: u32, name: &str) ->
     true
 }
 
-/// #36 / #321: maps a child class_id to the raw address of a parent CLOSURE
-/// (function value) when `class Child extends <function value> {}`. effect's
-/// `class Svc extends Context.Tag("Svc")<...>() {}` extends the function
-/// `TagClass` returned by `Tag(id)()`. In JS this sets `Svc.__proto__ =
-/// TagClass` so static-property reads on `Svc` (`Svc.key`, `Svc._op`,
-/// `Svc[TagTypeId]`) walk to the parent function's own props + ITS static
-/// prototype. Perry's existing dynamic-parent path only models OBJECT parents
-/// (class-expression values), so this records the closure-parent axis so the
-/// class-ref static getters can reach the closure's props and proto chain.
-/// Stored as `usize` (raw address) for Send + Sync; converted back at use.
-pub static CLASS_PARENT_CLOSURES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+guard_cleared_global! {
+    /// #36 / #321: maps a child class_id to the raw address of a parent CLOSURE
+    /// (function value) when `class Child extends <function value> {}`. effect's
+    /// `class Svc extends Context.Tag("Svc")<...>() {}` extends the function
+    /// `TagClass` returned by `Tag(id)()`. In JS this sets `Svc.__proto__ =
+    /// TagClass` so static-property reads on `Svc` (`Svc.key`, `Svc._op`,
+    /// `Svc[TagTypeId]`) walk to the parent function's own props + ITS static
+    /// prototype. Perry's existing dynamic-parent path only models OBJECT parents
+    /// (class-expression values), so this records the closure-parent axis so the
+    /// class-ref static getters can reach the closure's props and proto chain.
+    /// Stored as `usize` (raw address) for Send + Sync; converted back at use.
+    pub static CLASS_PARENT_CLOSURES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+}
 
 /// Maps a child class_id to the raw NaN-boxed bits of the parent constructor
 /// VALUE that `js_register_class_parent_dynamic` evaluated at class-definition

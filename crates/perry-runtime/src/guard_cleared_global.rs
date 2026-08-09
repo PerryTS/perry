@@ -100,9 +100,7 @@ impl<T: Send + Sync + 'static> PerThread<T> {
         // table touched from a TLS destructor gets a fresh instance rather than
         // a panic; it is being torn down either way.
         let _ = SLOTS.try_with(|slots| {
-            slots
-                .borrow_mut()
-                .insert(key, leaked as *const T as usize);
+            slots.borrow_mut().insert(key, leaked as *const T as usize);
         });
         leaked
     }
@@ -142,11 +140,15 @@ thread_local! {
 ///     static SYMBOL_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 /// }
 /// ```
+/// The trailing `;` is optional so a single-table declaration can be written
+/// `guard_cleared_global!(static X: T = init)` on one line — `timer.rs` sits
+/// three lines under the 2000-line cap (`scripts/check_file_size.sh`) and the
+/// block form would push it over.
 macro_rules! guard_cleared_global {
     ($(
         $(#[$attr:meta])*
-        $vis:vis static $name:ident : $ty:ty = $init:expr;
-    )+) => {$(
+        $vis:vis static $name:ident : $ty:ty = $init:expr
+    );+ $(;)?) => {$(
         #[cfg(not(test))]
         $(#[$attr])*
         $vis static $name: $ty = $init;

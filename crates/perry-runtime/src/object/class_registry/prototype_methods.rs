@@ -25,33 +25,35 @@ pub unsafe extern "C" fn js_class_register_static_field(
     class_dynamic_prop_root_store(class_id, name, value);
 }
 
-/// Issue #838: JS-classic prototype method assignment.
-///
-/// `Class.prototype.method = function() {…}` (and the aliased form
-/// `var p = Class.prototype; p.method = function() {…}`) is a pre-ES6
-/// idiom dayjs, chalk, and a long tail of libraries still ship.
-/// Pre-fix the assignment was lowered to a generic `PropertySet` whose
-/// receiver evaluated to a class-prototype-shaped object that nothing
-/// downstream consulted, so `(new Class()).method` came back as
-/// `undefined`.
-///
-/// The HIR-level fix routes recognised shapes to
-/// `js_register_prototype_method(class_id, name, value)`, which stores
-/// the closure value into a per-class side-table here. The dispatch
-/// hot paths (`js_object_get_field_by_name` for `inst.method` reads
-/// and `js_native_call_method` for `inst.method(...)` calls) consult
-/// this table after the regular vtable / proto-object lookups miss,
-/// invoking the closure with `this` bound to the receiver.
-///
-/// Stored values use their full NaN-boxed bits (f64) — typically a
-/// POINTER_TAG'd closure, but the dispatch path treats whatever is
-/// stored as a callable value and routes it through
-/// `js_native_call_value`, which itself accepts both closures and raw
-/// `*ClosureHeader` shapes.
-pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
-    RwLock::new(None);
-pub(crate) static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+guard_cleared_global! {
+    /// Issue #838: JS-classic prototype method assignment.
+    ///
+    /// `Class.prototype.method = function() {…}` (and the aliased form
+    /// `var p = Class.prototype; p.method = function() {…}`) is a pre-ES6
+    /// idiom dayjs, chalk, and a long tail of libraries still ship.
+    /// Pre-fix the assignment was lowered to a generic `PropertySet` whose
+    /// receiver evaluated to a class-prototype-shaped object that nothing
+    /// downstream consulted, so `(new Class()).method` came back as
+    /// `undefined`.
+    ///
+    /// The HIR-level fix routes recognised shapes to
+    /// `js_register_prototype_method(class_id, name, value)`, which stores
+    /// the closure value into a per-class side-table here. The dispatch
+    /// hot paths (`js_object_get_field_by_name` for `inst.method` reads
+    /// and `js_native_call_method` for `inst.method(...)` calls) consult
+    /// this table after the regular vtable / proto-object lookups miss,
+    /// invoking the closure with `this` bound to the receiver.
+    ///
+    /// Stored values use their full NaN-boxed bits (f64) — typically a
+    /// POINTER_TAG'd closure, but the dispatch path treats whatever is
+    /// stored as a callable value and routes it through
+    /// `js_native_call_value`, which itself accepts both closures and raw
+    /// `*ClosureHeader` shapes.
+    pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
+        RwLock::new(None);
+    pub(crate) static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+}
 
 pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)

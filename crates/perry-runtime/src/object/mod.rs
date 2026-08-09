@@ -207,15 +207,17 @@ pub(crate) use this_binding::{
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 
-static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
-static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_SIGNALS_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
-static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
-static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
+guard_cleared_global! {
+    static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
+    static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_SIGNALS_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
+    static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
+    static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
+}
 // `%TypedArray%` intrinsic constructor/prototype roots used by per-kind typed
 // array constructors and scanned by `scan_object_cache_roots_mut`.
 pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);

@@ -123,11 +123,13 @@ extern "C" fn console_log_callable_thunk(
 }
 
 use std::sync::atomic::{AtomicI64, Ordering};
-/// Singleton closure pointer for `console.log` exposed as a value.
-/// Allocated lazily by `js_console_log_as_closure`. Kept alive across GC
-/// cycles by the `scan_console_log_singleton_roots` scanner registered in
-/// `gc::gc_init`.
-static CONSOLE_LOG_SINGLETON: AtomicI64 = AtomicI64::new(0);
+guard_cleared_global! {
+    /// Singleton closure pointer for `console.log` exposed as a value.
+    /// Allocated lazily by `js_console_log_as_closure`. Kept alive across GC
+    /// cycles by the `scan_console_log_singleton_roots` scanner registered in
+    /// `gc::gc_init`.
+    static CONSOLE_LOG_SINGLETON: AtomicI64 = AtomicI64::new(0);
+}
 
 /// Returns a singleton ClosureHeader pointer that, when invoked through
 /// `js_closure_call1`, calls `console.log` on the argument. Used by codegen

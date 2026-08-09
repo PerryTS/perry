@@ -116,13 +116,15 @@ pub(crate) fn ensure_function_prototype_object(
     proto
 }
 
-/// Synthetic class id allocator for prototype-object classes. High bit
-/// set (0x8000_0000+) to keep them separate from codegen-assigned ids
-/// (which start from 1 and grow by module). u32 wraparound is not a
-/// concern in practice — would require ~2 billion `Function.prototype = X`
-/// statements at module init.
-pub static NEXT_SYNTHETIC_CLASS_ID: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0x8000_0000);
+guard_cleared_global! {
+    /// Synthetic class id allocator for prototype-object classes. High bit
+    /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
+    /// (which start from 1 and grow by module). u32 wraparound is not a
+    /// concern in practice — would require ~2 billion `Function.prototype = X`
+    /// statements at module init.
+    pub static NEXT_SYNTHETIC_CLASS_ID: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0x8000_0000);
+}
 
 /// Register a function's prototype object. Called by codegen-emitted
 /// init code whenever the HIR detects `<expr>.prototype = <expr>` at

@@ -86,8 +86,10 @@ pub const STYLE_PADDING_UNIFORM: u32 = 7;
 pub const STYLE_HIDDEN: u32 = 8;
 pub const STYLE_ENABLED: u32 = 9;
 
-static REGISTRY: Mutex<Vec<RegisteredWidget>> = Mutex::new(Vec::new());
-static PENDING_ACTIONS: Mutex<Vec<PendingAction>> = Mutex::new(Vec::new());
+guard_cleared_global! {
+    static REGISTRY: Mutex<Vec<RegisteredWidget>> = Mutex::new(Vec::new());
+    static PENDING_ACTIONS: Mutex<Vec<PendingAction>> = Mutex::new(Vec::new());
+}
 
 /// Screenshot result buffer: shared between main thread (writer) and HTTP server (reader).
 /// The main thread captures the screenshot and writes PNG bytes here, then signals the condvar.
