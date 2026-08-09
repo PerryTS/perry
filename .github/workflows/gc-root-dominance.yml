@@ -616,8 +616,8 @@ jobs:
           # through the corpus — this job's own execution on the PR is that
           # confirmation.)
           #
-          # #7664 stays open as this budget's referent, tracking the
-          # `unrooted:capture` follow-up.
+          # #7725 is this budget's referent, tracking the `unrooted:capture`
+          # follow-up (split out of #7664, which #7724 otherwise closed).
           #
           # `stale` (the object survives and is relocated, but a raw copy of
           # its pre-move address is used below) reads 0 today and is held
