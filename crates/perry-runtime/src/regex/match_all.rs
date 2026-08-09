@@ -168,8 +168,11 @@ unsafe fn materialize_match_all_results(
             js_nanbox_string(s_handle.get_raw_const_ptr::<StringHeader>() as i64),
             m.match_index,
         );
-        let groups_value = build_match_all_groups_owned(&m.named, &match_scope);
-        set_match_all_groups(inner_handle.get_raw_mut_ptr::<ArrayHeader>(), groups_value);
+        // #7341: `build_match_all_groups_owned` allocates; pair it with the
+        // inner-array re-read rather than reading it separately afterwards.
+        let (groups_value, inner_after) = inner_handle
+            .across_mut::<ArrayHeader, _>(|| build_match_all_groups_owned(&m.named, &match_scope));
+        set_match_all_groups(inner_after, groups_value);
 
         let inner_boxed = js_nanbox_pointer(inner_handle.get_raw_mut_ptr::<ArrayHeader>() as i64);
         let outer = outer_handle.get_raw_mut_ptr::<ArrayHeader>();

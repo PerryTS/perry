@@ -518,8 +518,11 @@ pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, toke
     );
     let record_val = f64::from_bits(JSValue::pointer(record as *const u8).bits());
     let record_handle = scope.root_nanbox_f64(record_val);
-    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    // #7341: `js_string_from_bytes` allocates; pair it with the registry re-read
+    // so the pre-collection `reg_ptr` is never nameable.
+    let (entries_key, reg_nanbox) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(reg_nanbox) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -563,8 +566,11 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     let mut found = false;
     // Rebuild the entries array without matching records.
     let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
-    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    // #7341: `js_string_from_bytes` allocates; pair it with the registry re-read
+    // so the pre-collection `reg_ptr` is never nameable.
+    let (entries_key, reg_nanbox) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(reg_nanbox) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -1131,8 +1137,11 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     }
     let len = js_array_length(entries_ptr) as usize;
     let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
-    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    // #7341: `js_string_from_bytes` allocates; pair it with the registry re-read
+    // so the pre-collection `reg_ptr` is never nameable.
+    let (entries_key, reg_nanbox) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(reg_nanbox) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -1546,9 +1555,10 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
         // re-read its current pointer before boxing `entry_val`, otherwise a
         // stale address would be stored into the array.
         let entry_handle = scope.root_raw_mut_ptr(entry);
+        // #7341: `entries_array` allocates, so pair it with the entry re-read.
         let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
-        let entries_ptr = entries_array(map_ptr);
-        let entry = entry_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let (entries_ptr, entry) =
+            entry_handle.across_mut::<ObjectHeader, _>(|| entries_array(map_ptr));
         let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
         if first_tomb >= 0 {
             js_array_set_f64(entries_ptr, first_tomb as u32, entry_val);
