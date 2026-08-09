@@ -2417,22 +2417,27 @@ pub extern "C" fn js_gc_loop_safepoint() {
     // unusable on any real workload the moment #7721 turned back-edge polls on
     // by default (24 minutes for a 19 s program). The stride is a bound on
     // forced collections, not a heuristic — see `gc/zeal.rs`.
-    let zeal = super::gc_zeal_enabled();
+    //
+    // The zeal work all sits inside the `!pending` branch on purpose: a default
+    // (zeal-off) build reaches exactly the same one cached-bool read and return
+    // it did before, and the deferral-drain path below is untouched.
     if !GC_SAFEPOINT_PENDING.with(Cell::get) {
-        if !zeal {
+        if !super::gc_zeal_enabled() {
             return;
         }
         if !super::zeal::zeal_poll_collection_due(crate::arena::copying_from_space_in_use_bytes()) {
             super::zeal::note_zeal_poll_paced();
             return;
         }
+        gc_safepoint_moving_minor();
+        // Rearm from the level measured AFTER the collection, so the next
+        // forced one costs a full stride of new allocation on top of whatever
+        // survived — see `gc/zeal.rs` for why this is a high-water mark and not
+        // a delta.
+        super::zeal::note_zeal_poll_collection(crate::arena::copying_from_space_in_use_bytes());
+        return;
     }
     gc_safepoint_moving_minor();
-    if zeal {
-        // Rearm from the level AFTER the collection, so the next forced one
-        // needs a full stride of new allocation on top of the survivors.
-        super::zeal::note_zeal_poll_collection(crate::arena::copying_from_space_in_use_bytes());
-    }
 }
 
 struct BudgetedGcStepGuard;
