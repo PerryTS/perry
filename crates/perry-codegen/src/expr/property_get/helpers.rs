@@ -817,7 +817,11 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
 
     ctx.current_block = lookup_idx;
     let blk = ctx.block();
-    blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+    crate::expr::emit_typed_feedback_record_call(
+        blk,
+        "js_typed_feedback_record_fallback_call",
+        &[(I64, &site_id)],
+    );
     let val_fallback_js = blk.call(
         DOUBLE,
         "js_object_get_field_by_name_f64",

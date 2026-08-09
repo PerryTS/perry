@@ -111,8 +111,8 @@ pub(crate) use range_facts::{
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
-    emit_typed_feedback_register_site, native_region_slug, typed_feedback_emission_enabled,
-    TypedFeedbackContract, TypedFeedbackKind,
+    emit_typed_feedback_record_call, emit_typed_feedback_register_site, native_region_slug,
+    typed_feedback_emission_enabled, TypedFeedbackContract, TypedFeedbackKind,
 };
 pub(crate) use url_helpers::lower_url_string_getter;
 pub(crate) use v8_interop::{

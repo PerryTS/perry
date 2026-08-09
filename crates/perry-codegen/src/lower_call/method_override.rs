@@ -815,8 +815,11 @@ pub(super) fn emit_guarded_direct_method_call(
         (ptr_reg, n.to_string())
     };
     if let Some(site_id) = site_id {
-        ctx.block()
-            .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+        crate::expr::emit_typed_feedback_record_call(
+            ctx.block(),
+            "js_typed_feedback_record_fallback_call",
+            &[(I64, &site_id)],
+        );
     }
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
     let fallback_value = ctx.block().call(

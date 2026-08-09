@@ -373,6 +373,88 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
     assert!(ir.contains("call void @js_typed_feedback_record_guard_pass"));
     assert!(ir.contains("call void @js_typed_feedback_record_guard_fail"));
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    assert!(ir.contains("call void @js_typed_feedback_observe_property_get"));
+}
+
+/// The negative twin of the test above, and the whole of #7480 step 4's second
+/// half: a DEFAULT build emits none of the pure-recording helpers.
+///
+/// Every one of them early-returns unless the runtime env is set, so in a
+/// default build each was a cross-crate call that answered "no" — 22.3% of
+/// `churn_read_big.ts` between `observe_property` and `record_guard_pass`. The
+/// registration call has been compile-gated on the same env since #5093's
+/// follow-up; this extends that gate to the recording it registers for.
+///
+/// Asserted as a census over the whole emitted module rather than one site,
+/// because the point is that NO path emits them — the generic-get diamond, the
+/// array-push fallback, the index realloc arm, the method-override fallback and
+/// the closure-call fallback all route through the same helper.
+#[test]
+fn a_default_build_emits_no_typed_feedback_recording_calls() {
+    let _lock = env_lock();
+    let _trace = EnvVarGuard::set("PERRY_TYPED_FEEDBACK_TRACE", None);
+    let _env = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", None);
+    let ir = ir_for(module(
+        "typed_feedback_default_build.ts",
+        vec![param(1, "obj", Type::Any)],
+        Type::Any,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+                value: Box::new(Expr::Number(1.0)),
+            }),
+            Stmt::Expr(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "run".to_string(),
+                }),
+                args: vec![Expr::Number(2.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+            })),
+        ],
+    ));
+
+    // The `declare` lines stay (they are emitted for the whole runtime surface
+    // and LLVM drops the unused ones); what must be gone is every CALL.
+    for helper in [
+        "js_typed_feedback_observe_property_get",
+        "js_typed_feedback_observe_property_set",
+        "js_typed_feedback_record_guard_pass",
+        "js_typed_feedback_record_guard_fail",
+        "js_typed_feedback_record_fallback_call",
+        "js_typed_feedback_register_site",
+    ] {
+        let call = format!("call void @{helper}");
+        assert!(
+            !ir.contains(&call),
+            "a default build must not call `{helper}`; it early-returns at \
+             runtime, so the call is pure overhead"
+        );
+    }
+
+    // ANTI-VACUITY. Every assertion above is a negative, so they all pass on an
+    // empty string. The property boundaries themselves must still be here —
+    // this test proves the RECORDING is gone, not the program.
+    assert!(
+        ir.contains("js_object_get_field_by_name_f64")
+            || ir.contains("js_object_get_field_ic_miss"),
+        "the property reads themselves must still be lowered; emitted:\n{ir}"
+    );
+    // And the helpers that DECIDE something, rather than merely counting, are
+    // not gated: this is the line between the two, asserted rather than
+    // described.
+    assert!(
+        ir.contains("js_typed_feedback_object_set_field_by_name_fast"),
+        "dispatching feedback wrappers must still be emitted in a default build"
+    );
 }
 
 #[test]
@@ -421,10 +503,12 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     // by-name SET it replaced is no longer emitted at the set site.
     assert!(ir.contains("call void @js_class_field_set_fallback"));
     assert!(!ir.contains("call void @js_object_set_field_by_name"));
-    // `record_fallback_call` is still present — but from the class-field-GET
-    // fallback block below, not the SET site (the SET copy is now folded into
-    // js_class_field_set_fallback).
-    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    // #7480 step 4: `record_fallback_call` used to be asserted present here
+    // (from the class-field-GET fallback block, not the SET site — the SET copy
+    // was folded into js_class_field_set_fallback by #5334). It is now emitted
+    // only in a typed-feedback build, like the registration call beside it.
+    // The fallback ARM itself is unchanged and is asserted above/below.
+    assert!(!ir.contains("call void @js_typed_feedback_record_fallback_call"));
     assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
     // #7430 split the GET fallback arm: `class_field_get_number.fallback` now
     // holds only the nullish-receiver check and branches to `.throw_nullish` /
@@ -437,7 +521,9 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     // the coerced register.
     let lookup = block_body(&ir, "class_field_get_number.fallback_lookup")
         .expect("raw numeric class-field consumer should keep the fallback lookup block");
-    assert!(lookup.contains("call void @js_typed_feedback_record_fallback_call"));
+    // (#7480 step 4 removed the `record_fallback_call` that used to anchor this
+    // block; the by-name load below identifies it just as well, and is what the
+    // data-flow assertion actually needs.)
     assert!(lookup.contains("call double @js_object_get_field_by_name_f64"));
     let coerce_line = lookup
         .lines()
@@ -833,7 +919,10 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
     assert!(ir.contains("closure_direct.fallback"));
     assert!(ir.contains("call double @perry_closure_"));
     assert!(ir.contains("call double @js_closure_call1"));
-    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    // #7480 step 4: pure-recording feedback helpers are emitted only in a
+    // typed-feedback build. The fallback arm is asserted by the two lines
+    // above; this asserts the counter that rode along with it is gone.
+    assert!(!ir.contains("call void @js_typed_feedback_record_fallback_call"));
 }
 
 #[test]

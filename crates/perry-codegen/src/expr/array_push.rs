@@ -538,7 +538,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                 ctx.current_block = fallback_idx;
                 {
                     let blk = ctx.block();
-                    blk.call_void(
+                    crate::expr::emit_typed_feedback_record_call(
+                        blk,
                         "js_typed_feedback_record_fallback_call",
                         &[(I64, &feedback_site_id)],
                     );

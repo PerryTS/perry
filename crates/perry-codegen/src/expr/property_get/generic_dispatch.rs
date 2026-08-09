@@ -168,7 +168,8 @@ pub(crate) fn lower_generic_property_get(
     ctx.block().br(&final_merge_label);
 
     ctx.current_block = pic_idx;
-    ctx.block().call_void(
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
         "js_typed_feedback_observe_property_get",
         &[
             (I64, &feedback_site_id),
@@ -425,7 +426,8 @@ pub(crate) fn lower_generic_property_get(
     ctx.block()
         .cond_br(&slot_in_bounds, &bounds_hit_label, &miss_label);
     ctx.current_block = bounds_hit;
-    ctx.block().call_void(
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
         "js_typed_feedback_record_guard_pass",
         &[(I64, &feedback_site_id)],
     );
@@ -446,11 +448,13 @@ pub(crate) fn lower_generic_property_get(
 
     // PIC miss: slow path with cache population.
     ctx.current_block = miss_idx;
-    ctx.block().call_void(
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
         "js_typed_feedback_record_guard_fail",
         &[(I64, &feedback_site_id)],
     );
-    ctx.block().call_void(
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
         "js_typed_feedback_record_fallback_call",
         &[(I64, &feedback_site_id)],
     );

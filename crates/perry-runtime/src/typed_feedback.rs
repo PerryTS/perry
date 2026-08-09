@@ -400,6 +400,20 @@ fn registry() -> crate::gc::GcRootRegistryGuard<'static, TypedFeedbackRegistry> 
     crate::gc::lock_gc_root_registry(&REGISTRY)
 }
 
+/// Has this process observed anything at all?
+///
+/// #7480 step 4: instrumentation is emitted at COMPILE time (see
+/// `perry-codegen`'s `typed_feedback_emission_enabled`), so a binary built
+/// without `PERRY_TYPED_FEEDBACK[_TRACE]` and then *run* with it set has
+/// nothing to report. Before, that produced a trace of unattributed sites —
+/// counters with no module, function or source name, because registration was
+/// already compile-gated. Now it produces nothing, which is the same amount of
+/// information and looks far more like success. The trace dump uses this to say
+/// so out loud rather than writing an empty file.
+pub(crate) fn no_sites_were_instrumented() -> bool {
+    registry().sites.is_empty()
+}
+
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_register_site(
     site_id: u64,

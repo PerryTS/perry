@@ -923,8 +923,11 @@ pub fn try_lower_closure_typed_local_call(
                     }
 
                     ctx.current_block = fallback_idx;
-                    ctx.block()
-                        .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+                    crate::expr::emit_typed_feedback_record_call(
+                        ctx.block(),
+                        "js_typed_feedback_record_fallback_call",
+                        &[(I64, &site_id)],
+                    );
                     // Guard failed: the receiver is some OTHER closure whose
                     // body codegen never saw — reset `this` here (and only
                     // here) when the static gating skipped the outer reset.
