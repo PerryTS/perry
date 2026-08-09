@@ -2180,6 +2180,9 @@ pub extern "C" fn js_gc_loop_safepoint() {
     if !gc_moving_loop_polls_enabled() {
         return;
     }
+    // #7604: the only reliable answer to "did the compile-time half take
+    // effect". Past the opt-in, so a default binary never touches it.
+    super::note_loop_poll_reached();
     // Zeal (#7154 tooling) collects at EVERY poll, not only when the alloc-point
     // arm already deferred one. Zeal cannot conjure a poll codegen never emitted,
     // so the `gc_moving_loop_polls_enabled()` gate above still applies — see

@@ -37,9 +37,19 @@
 //! conjure a poll that codegen never emitted. A binary compiled without polls
 //! still gets (2) and (3) — event-loop-boundary zeal — but a compute-only loop
 //! that never yields will not collect at all. **For the #7154 hunt, compile AND
-//! run with `PERRY_GC_MOVING_LOOP_POLLS=1`.** `zeal_forced_collections()`
-//! reports how many collections zeal actually forced, so "clean under zeal" can
-//! be checked against zeal having done anything.
+//! run with `PERRY_GC_MOVING_LOOP_POLLS=1`.**
+//!
+//! Codegen also emits no poll for a provably alloc-free loop body (by design —
+//! `loop_purity::loop_may_allocate`) nor for the specialized `for` / `for-of` /
+//! `for-in` lowerings (by omission — `emit_gc_loop_safepoint`'s COVERAGE note),
+//! so "I passed the flag" is not the same claim as "my loop has a poll".
+//!
+//! ## You do not have to remember to check any of this (#7604)
+//!
+//! A zeal run prints its own verdict at the process-exit boundary and **exits
+//! 70** when it exercised nothing — see `zeal_verdict`. Before that, the
+//! liveness counter this module exposes was unreadable from a compiled program
+//! and the documented check could not be performed.
 //!
 //! # Why there is no allocation-point level
 //!
@@ -162,6 +172,25 @@ pub fn moved_objects_total() -> u64 {
     MOVED_OBJECTS.load(Ordering::Relaxed)
 }
 
+static LOOP_POLLS: AtomicU64 = AtomicU64::new(0);
+
+/// Every `js_gc_loop_safepoint` that got past the compile-time/runtime opt-in.
+///
+/// This is the counter that answers "was the COMPILE-TIME half live", and it
+/// exists because the obvious external check does not work: `nm`/`objdump
+/// -d BIN | grep -c js_gc_loop_safepoint` reports **0** on a binary whose polls
+/// then fire 20069 times, so an operator following that advice concludes the
+/// polls are absent when they are not. Measured, not assumed.
+#[inline]
+pub(crate) fn note_loop_poll_reached() {
+    LOOP_POLLS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// How many loop back-edge polls this run reached.
+pub fn loop_polls_reached() -> u64 {
+    LOOP_POLLS.load(Ordering::Relaxed)
+}
+
 /// The verdict a zeal run gets at exit: what the instrument actually did.
 ///
 /// `Ok(summary)` when zeal moved something, `Err(summary)` when the run
@@ -175,37 +204,66 @@ pub fn zeal_liveness_report() -> Option<Result<String, String>> {
         zeal_forced_collections(),
         copying_minor_cycles(),
         moved_objects_total(),
+        loop_polls_reached(),
+        super::policy::gc_moving_loop_polls_enabled(),
     ))
 }
 
-/// The verdict as a pure function of the three counters, so the decision is
-/// testable without mutating process-global state that every other test in this
-/// crate shares.
-pub(crate) fn zeal_verdict(forced: u64, cycles: u64, moved: u64) -> Result<String, String> {
+/// The verdict as a pure function of the counters, so the decision is testable
+/// without mutating process-global state that every other test in this crate
+/// shares.
+///
+/// `polls_requested` is the RUNTIME half of `PERRY_GC_MOVING_LOOP_POLLS`. When
+/// it is on and `loop_polls` is still zero, the operator asked for in-loop
+/// coverage and got none — the exact "arms but never fires" shape #7604
+/// reported, and the one a `forced_collections > 0` from event-loop-boundary
+/// zeal would otherwise paper over.
+pub(crate) fn zeal_verdict(
+    forced: u64,
+    cycles: u64,
+    moved: u64,
+    loop_polls: u64,
+    polls_requested: bool,
+) -> Result<String, String> {
     let summary = format!(
-        "[gc-zeal] forced_collections={forced} copying_minors={cycles} moved_objects={moved}"
+        "[gc-zeal] forced_collections={forced} copying_minors={cycles} \
+         moved_objects={moved} loop_polls={loop_polls}"
     );
-    if forced == 0 || cycles == 0 {
-        return Err(format!(
+    let cause = if forced == 0 {
+        Some("no safepoint ever forced a collection")
+    } else if cycles == 0 {
+        Some(
+            "every forced collection was escalated to a non-moving full \
+             mark-sweep, so nothing was relocated",
+        )
+    } else if polls_requested && loop_polls == 0 {
+        Some(
+            "PERRY_GC_MOVING_LOOP_POLLS=1 was set but NOT ONE back-edge poll \
+             was reached, so every collection came from an event-loop \
+             boundary and no loop body was covered",
+        )
+    } else {
+        None
+    };
+    match cause {
+        None => Ok(summary),
+        Some(cause) => Err(format!(
             "{summary}\n\
-             [gc-zeal] THIS RUN EXERCISED NOTHING. PERRY_GC_ZEAL=1 was set and \
-             {}. Any \"clean under zeal\" conclusion from this run is vacuous.\n\
-             [gc-zeal] The two usual causes: the binary was compiled WITHOUT \
-             PERRY_GC_MOVING_LOOP_POLLS=1 (so there are no back-edge polls to \
-             force), or its hot loops are ones codegen emits no poll for -- \
-             provably alloc-free bodies by design, and the specialized `for` / \
+             [gc-zeal] THIS RUN EXERCISED NOTHING WORTH TRUSTING. \
+             PERRY_GC_ZEAL=1 was set and {cause}. Any \"clean under zeal\" \
+             conclusion from this run is vacuous.\n\
+             [gc-zeal] The usual causes: the binary was COMPILED without \
+             PERRY_GC_MOVING_LOOP_POLLS=1 (it is a compile-time opt-in as well \
+             as a runtime one), or its hot loops are ones codegen emits no poll \
+             for -- provably alloc-free bodies by design \
+             (`loop_purity::loop_may_allocate`), and the specialized `for` / \
              `for-of` / `for-in` lowerings by omission (see \
-             `emit_gc_loop_safepoint`'s COVERAGE note). Check with: \
-             objdump -d BIN | grep -c js_gc_loop_safepoint",
-            if forced == 0 {
-                "no safepoint ever forced a collection"
-            } else {
-                "every forced collection was escalated to a non-moving full \
-                 mark-sweep, so nothing was relocated"
-            }
-        ));
+             `emit_gc_loop_safepoint`'s COVERAGE note). `loop_polls` above is \
+             the direct answer; do NOT try to count the call sites with \
+             `nm`/`objdump`, which report 0 on a binary whose polls demonstrably \
+             fire 20069 times."
+        )),
     }
-    Ok(summary)
 }
 
 #[cfg(test)]
@@ -217,24 +275,47 @@ mod verdict_tests {
     /// different causes and the message has to name the right one.
     #[test]
     fn a_zeal_run_that_exercised_nothing_is_an_error() {
-        let no_safepoint = zeal_verdict(0, 0, 0).expect_err("forced=0 must be an error");
+        let no_safepoint = zeal_verdict(0, 0, 0, 0, false).expect_err("forced=0 must be an error");
         assert!(no_safepoint.contains("no safepoint ever forced a collection"));
 
-        // The #7604 shape proper: zeal DID force collections, and every one was
-        // escalated to a full mark-sweep, which moves nothing. `forced > 0`
-        // alone would have called this run live.
-        let all_escalated = zeal_verdict(4096, 0, 0).expect_err("cycles=0 must be an error");
+        // Zeal DID force collections and every one was escalated to a full
+        // mark-sweep, which moves nothing. `forced > 0` alone would have called
+        // this run live.
+        let all_escalated =
+            zeal_verdict(4096, 0, 0, 4096, true).expect_err("cycles=0 must be an error");
         assert!(all_escalated.contains("escalated to a non-moving full"));
         assert!(all_escalated.contains("copying_minors=0"));
+    }
+
+    /// ★ #7604's own shape, and the one a two-counter verdict would have passed.
+    ///
+    /// Measured on the compute-only probe: `PERRY_GC_MOVING_LOOP_POLLS=1` set at
+    /// both compile and run time, zero back-edge polls reached (codegen emits
+    /// none for a provably alloc-free body), and zeal still forced 5 collections
+    /// at event-loop boundaries which moved 4 objects. Every counter except
+    /// `loop_polls` says "live"; no loop body was covered at all.
+    #[test]
+    fn polls_requested_but_never_reached_is_an_error() {
+        let armed_never_fired = zeal_verdict(5, 5, 4, 0, true)
+            .expect_err("polls requested and none reached must be an error");
+        assert!(armed_never_fired.contains("NOT ONE back-edge poll"));
+        assert!(armed_never_fired.contains("loop_polls=0"));
+
+        // ...and the SAME counters without the request are fine: an
+        // event-loop-boundary zeal run is a legitimate, weaker mode, and
+        // failing it would make the verdict wrong rather than strict.
+        assert!(zeal_verdict(5, 5, 4, 0, false).is_ok());
     }
 
     /// ...and YES, with the numbers, when it did fire.
     #[test]
     fn a_zeal_run_that_moved_objects_is_reported_ok() {
-        let ok = zeal_verdict(741_630, 741_630, 8_899_560).expect("a moving run must pass");
+        let ok = zeal_verdict(741_630, 741_630, 8_899_560, 741_630, true)
+            .expect("a moving run must pass");
         assert!(ok.contains("forced_collections=741630"));
         assert!(ok.contains("copying_minors=741630"));
         assert!(ok.contains("moved_objects=8899560"));
+        assert!(ok.contains("loop_polls=741630"));
     }
 
     /// A copying minor that relocated nothing THIS cycle is still a live
@@ -244,6 +325,6 @@ mod verdict_tests {
     /// argue with a test.
     #[test]
     fn a_copying_minor_with_no_survivors_is_not_a_failure() {
-        assert!(zeal_verdict(1, 1, 0).is_ok());
+        assert!(zeal_verdict(1, 1, 0, 1, true).is_ok());
     }
 }

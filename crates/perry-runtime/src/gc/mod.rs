@@ -135,9 +135,10 @@ mod fromspace_scan;
 mod zeal;
 pub use verify::*;
 pub use zeal::{
-    copying_minor_cycles, moved_objects_total, zeal_forced_collections, zeal_liveness_report,
+    copying_minor_cycles, loop_polls_reached, moved_objects_total, zeal_forced_collections,
+    zeal_liveness_report,
 };
-pub(crate) use zeal::{gc_zeal_enabled, note_zeal_forced_collection};
+pub(crate) use zeal::{gc_zeal_enabled, note_loop_poll_reached, note_zeal_forced_collection};
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 #[cfg(feature = "diagnostics")]
