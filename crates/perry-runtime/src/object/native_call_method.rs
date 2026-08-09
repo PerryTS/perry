@@ -728,8 +728,23 @@ pub unsafe extern "C" fn js_native_call_method(
     };
     let arg_handles = root_scope.root_nanbox_f64_slice(&original_args);
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    let object = object_handle.get_nanbox_f64();
-    let jsval = JSValue::from_bits(object.to_bits());
+    // #7528: these are CLOSURES, not values, and that is the entire fix.
+    //
+    // `object_handle` roots the receiver, but a value READ OUT of a root and
+    // held in a local is not rooted -- the collector rewrites the SLOT, not the
+    // copy. This function then runs ~1160 more lines across a dozen probes that
+    // allocate, so a single `let object = object_handle.get_nanbox_f64()` at the
+    // top hands every one of them a receiver address a moving collector may
+    // already have invalidated. The measured deref was the closure-magic probe
+    // (`is_closure_ptr` -> `ldr w8, [x28, #0xc]`), faulting 5/5 under
+    // `PERRY_GC_PROTECT_FROMSPACE`.
+    //
+    // Re-reading per use makes each site correct by construction rather than by
+    // an audit of which probes allocate -- an audit that would have to be redone
+    // every time a line is added to this function. It is a slot load; the
+    // dispatch tower below it is orders of magnitude more expensive.
+    let object = || object_handle.get_nanbox_f64();
+    let jsval = || JSValue::from_bits(object().to_bits());
     // RAII recursion depth guard: prevent stack overflow from circular module deps.
     // The guard auto-decrements on drop, covering all ~20 return points in this function.
     // When max depth is hit, return a pointer to a static empty object instead of undefined.
@@ -739,7 +754,7 @@ pub unsafe extern "C" fn js_native_call_method(
         None => {
             crate::object::class_registry::report_dispatch_miss(
                 "call-method (recursion-depth guard)",
-                object,
+                object(),
                 method_name,
                 "empty object",
             );
@@ -760,7 +775,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // keep using the shared object dispatch below; everything else is a genuine
     // module method whose result (incl. a legitimate `undefined`) is returned
     // directly — returning unconditionally avoids double-invoking a void method.
-    if jsval.is_pointer()
+    if jsval().is_pointer()
         && !method_name.starts_with("__perry_")
         && !matches!(
             method_name,
@@ -773,7 +788,7 @@ pub unsafe extern "C" fn js_native_call_method(
                 | "constructor"
         )
     {
-        let ns_ptr = jsval.as_pointer::<ObjectHeader>();
+        let ns_ptr = jsval().as_pointer::<ObjectHeader>();
         // The POINTER_TAG payload reaching here can be a small registry handle
         // (zlib stream, fetch Request/Response, net.Socket, …) rather than a
         // heap address. `is_valid_obj_ptr` alone does NOT reject the handle
@@ -806,7 +821,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // and would fall through to "is not a function". Resolve the symbol-keyed
     // disposer here, with the spec async→sync fallback, before that happens.
     if matches!(method_name, "__perry_dispose__" | "__perry_async_dispose__") {
-        if let Some(result) = try_symbol_dispose_dispatch(object, method_name, args_ptr, args_len) {
+        if let Some(result) = try_symbol_dispose_dispatch(object(), method_name, args_ptr, args_len) {
             return result;
         }
     }
@@ -817,7 +832,7 @@ pub unsafe extern "C" fn js_native_call_method(
     if method_name == "__perry_using_check__" {
         let want_async =
             args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
-        return js_using_check_disposable(object, want_async);
+        return js_using_check_disposable(object(), want_async);
     }
     // TextDecoder / TextEncoder registry handles on a type-erased receiver —
     // same wall class as the URLSearchParams / AbortSignal blocks below: the
@@ -827,8 +842,8 @@ pub unsafe extern "C" fn js_native_call_method(
     // `get_field_by_name_tail.rs` reifies for `K.decode.bind(K)` — the shape
     // a minified SDK's cached decodeText helper takes) lands here, and the
     // generic field-scan would miss and throw "is not a function".
-    if matches!(method_name, "decode" | "encode" | "encodeInto") && jsval.is_pointer() {
-        let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if matches!(method_name, "decode" | "encode" | "encodeInto") && jsval().is_pointer() {
+        let raw = (object().to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
         if crate::value::addr_class::is_small_handle(raw) {
             let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
             let arg0 = if args_len > 0 && !args_ptr.is_null() {
@@ -837,7 +852,7 @@ pub unsafe extern "C" fn js_native_call_method(
                 undef
             };
             if method_name == "decode" && crate::text::is_known_text_decoder_id(raw as i64) {
-                let sp = crate::text::js_text_decoder_decode_llvm(object, arg0);
+                let sp = crate::text::js_text_decoder_decode_llvm(object(), arg0);
                 return f64::from_bits(
                     JSValue::string_ptr(sp as *mut crate::string::StringHeader).bits(),
                 );
@@ -866,7 +881,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // to the natives (shape-probed for the native form, hidden backing for the
     // subclass) before the generic field-scan misses.
     if let Some(result) = crate::url::search_params::try_url_search_params_dynamic_dispatch(
-        object,
+        object(),
         method_name,
         args_ptr,
         args_len,
@@ -884,9 +899,9 @@ pub unsafe extern "C" fn js_native_call_method(
     if matches!(
         method_name,
         "addEventListener" | "removeEventListener" | "throwIfAborted"
-    ) && jsval.is_pointer()
+    ) && jsval().is_pointer()
     {
-        let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+        let recv_ptr = (object().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
         // Skip native handles (nanbox-pointer-tagged small integer ids in the
         // low handle band) — dereferencing one as an `ObjectHeader` to read
         // `class_id` would fault.
@@ -928,7 +943,7 @@ pub unsafe extern "C" fn js_native_call_method(
         "pop" | "shift" | "push" | "unshift" | "reverse" | "splice" | "sort" | "concat"
     ) {
         if let Some(result) =
-            crate::array::try_object_arraylike_mutator(object, method_name, args_ptr, args_len)
+            crate::array::try_object_arraylike_mutator(object(), method_name, args_ptr, args_len)
         {
             return result;
         }
@@ -961,14 +976,14 @@ pub unsafe extern "C" fn js_native_call_method(
             | "join"
             | "slice"
             | "concat"
-    ) && crate::array::is_array_subclass_instance(object)
+    ) && crate::array::is_array_subclass_instance(object())
         // Defer to a user override (own callable field of this name), matching
         // the own-slot gate in the mutator path.
-        && !crate::array::object_owns_user_method(object, method_name)
+        && !crate::array::object_owns_user_method(object(), method_name)
     {
         let args = refreshed_args();
         if let Some(result) = crate::array::dispatch_arraylike_read_method(
-            object,
+            object(),
             method_name,
             args.as_ptr(),
             args.len(),
@@ -1007,7 +1022,7 @@ pub unsafe extern "C" fn js_native_call_method(
             | "concat"
     ) {
         if let Some(result) =
-            crate::array::try_array_proto_chain_method(object, method_name, args_ptr, args_len)
+            crate::array::try_array_proto_chain_method(object(), method_name, args_ptr, args_len)
         {
             return result;
         }
@@ -1031,17 +1046,17 @@ pub unsafe extern "C" fn js_native_call_method(
             | "@@__perry_wk_asyncDispose"
     ) {
         if let Some(result) =
-            try_disposable_stack_method_dispatch(object, method_name, args_ptr, args_len)
+            try_disposable_stack_method_dispatch(object(), method_name, args_ptr, args_len)
         {
             return result;
         }
     }
 
     {
-        let raw_addr = if jsval.is_pointer() {
-            crate::value::js_nanbox_get_pointer(object) as usize
-        } else if (object.to_bits() >> 48) == 0 {
-            object.to_bits() as usize
+        let raw_addr = if jsval().is_pointer() {
+            crate::value::js_nanbox_get_pointer(object()) as usize
+        } else if (object().to_bits() >> 48) == 0 {
+            object().to_bits() as usize
         } else {
             0
         };
@@ -1067,9 +1082,9 @@ pub unsafe extern "C" fn js_native_call_method(
                 // win over IMPLICIT_THIS and leave `this` as the PROTO.
                 let bound = crate::closure::clone_closure_rebind_this(
                     dyn_val.to_bits(),
-                    f64::from_bits(object.to_bits()),
+                    f64::from_bits(object().to_bits()),
                 );
-                let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
                 let result =
                     crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
@@ -1100,19 +1115,19 @@ pub unsafe extern "C" fn js_native_call_method(
     // yield-star-* with `get next()`). `get_accessor_descriptor` is a cheap
     // keyed HashMap lookup (no deref), gated on the accessor hot-path flag so
     // non-accessor programs skip it entirely.
-    if jsval.is_pointer() && crate::state::state().descriptors.accessors_in_use.get() {
-        let obj_usize = crate::value::js_nanbox_get_pointer(object) as usize;
+    if jsval().is_pointer() && crate::state::state().descriptors.accessors_in_use.get() {
+        let obj_usize = crate::value::js_nanbox_get_pointer(object()) as usize;
         if crate::value::addr_class::is_above_handle_band(obj_usize) {
             if let Some(acc) = crate::object::get_accessor_descriptor(obj_usize, method_name) {
                 if acc.get != 0 {
                     let getter = (acc.get & crate::value::POINTER_MASK)
                         as *const crate::closure::ClosureHeader;
                     if !getter.is_null() {
-                        let prev_getter_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                        let prev_getter_this = IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
                         let method_fn = crate::closure::js_closure_call0(getter);
                         let bound =
-                            crate::closure::clone_closure_rebind_this(method_fn.to_bits(), object);
-                        IMPLICIT_THIS.with(|c| c.set(object.to_bits()));
+                            crate::closure::clone_closure_rebind_this(method_fn.to_bits(), object());
+                        IMPLICIT_THIS.with(|c| c.set(object().to_bits()));
                         let result = crate::closure::js_native_call_value(
                             f64::from_bits(bound),
                             args_ptr,
@@ -1127,13 +1142,13 @@ pub unsafe extern "C" fn js_native_call_method(
     }
 
     // Check if this is a JS handle (V8 object from JS runtime)
-    if crate::value::is_js_handle(object) {
+    if crate::value::is_js_handle(object()) {
         let func_ptr =
             crate::value::JS_HANDLE_CALL_METHOD.load(std::sync::atomic::Ordering::SeqCst);
         if !func_ptr.is_null() {
             let func: unsafe extern "C" fn(f64, *const i8, usize, *const f64, usize) -> f64 =
                 std::mem::transmute(func_ptr);
-            let result = func(object, method_name_ptr, method_name_len, args_ptr, args_len);
+            let result = func(object(), method_name_ptr, method_name_len, args_ptr, args_len);
             return result;
         }
         // No JS-handle dispatcher: return JS `undefined`. The literal must be
@@ -1159,7 +1174,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // Mirror the spec: `Get(proxy, "method")` (honors the get trap / forwards
     // through the target's prototype chain) then `Call(method, proxy, args)`
     // with `this` bound to the proxy itself.
-    if crate::proxy::js_proxy_is_proxy(object) == 1 {
+    if crate::proxy::js_proxy_is_proxy(object()) == 1 {
         // #5196: a generic, non-mutating `Array.prototype` method on a Proxy
         // (`proxyArray.map(fn)`). `Array.prototype.map` etc. iterate `this`
         // through `[[Get]]`/`length`; routing the spec-generic engine over the
@@ -1171,7 +1186,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // plain array-like objects whose prototype chain holds a real array.
         let args = refreshed_args();
         if let Some(result) = crate::array::dispatch_arraylike_read_method(
-            object,
+            object(),
             method_name,
             args.as_ptr(),
             args.len(),
@@ -1207,7 +1222,7 @@ pub unsafe extern "C" fn js_native_call_method(
         &root_scope,
         &object_handle,
         &arg_handles,
-        object,
+        object(),
         method_name,
         method_name_ptr,
         method_name_len,
@@ -1221,7 +1236,7 @@ pub unsafe extern "C" fn js_native_call_method(
         &root_scope,
         &object_handle,
         &arg_handles,
-        object,
+        object(),
         method_name,
         method_name_ptr,
         method_name_len,
@@ -1235,7 +1250,7 @@ pub unsafe extern "C" fn js_native_call_method(
         &root_scope,
         &object_handle,
         &arg_handles,
-        object,
+        object(),
         method_name,
         method_name_ptr,
         method_name_len,
@@ -1249,7 +1264,7 @@ pub unsafe extern "C" fn js_native_call_method(
         &root_scope,
         &object_handle,
         &arg_handles,
-        object,
+        object(),
         method_name,
         method_name_ptr,
         method_name_len,
@@ -1263,7 +1278,7 @@ pub unsafe extern "C" fn js_native_call_method(
         &root_scope,
         &object_handle,
         &arg_handles,
-        object,
+        object(),
         method_name,
         method_name_ptr,
         method_name_len,
@@ -1277,7 +1292,7 @@ pub unsafe extern "C" fn js_native_call_method(
         &root_scope,
         &object_handle,
         &arg_handles,
-        object,
+        object(),
         method_name,
         method_name_ptr,
         method_name_len,
@@ -1289,8 +1304,8 @@ pub unsafe extern "C" fn js_native_call_method(
 
     // If it's an object with a method stored as a closure in a field,
     // try to find and call it
-    if jsval.is_pointer() {
-        let obj = jsval.as_pointer::<ObjectHeader>();
+    if jsval().is_pointer() {
+        let obj = jsval().as_pointer::<ObjectHeader>();
 
         // Validate this is an ObjectHeader, not some other heap type.
         // Check GcHeader first (reliable for heap objects), then fallback to ObjectHeader.object_type
@@ -1333,7 +1348,7 @@ pub unsafe extern "C" fn js_native_call_method(
         if is_closure {
             let dyn_val = crate::closure::closure_get_dynamic_prop(obj as usize, method_name);
             if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
-                let recv_bits = jsval.bits();
+                let recv_bits = jsval().bits();
                 // #6438: `closure_get_dynamic_prop` also walks the closure's
                 // `Object.setPrototypeOf` chain, so `dyn_val` may be a method
                 // read off the PROTO object — and an object-literal method
@@ -1392,7 +1407,7 @@ pub unsafe extern "C" fn js_native_call_method(
             && gc_type == crate::gc::GC_TYPE_OBJECT
             && crate::perf_hooks::is_perf_entry_object(obj)
         {
-            return crate::perf_hooks::perf_entry_to_json(object);
+            return crate::perf_hooks::perf_entry_to_json(object());
         }
 
         // WeakMap/WeakSet dynamic method dispatch (issue #1757/#1758): these
@@ -1402,7 +1417,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // add to the js_weak* helpers instead of throwing "has is not a
         // function". The class_id guard + routing live in weakref.rs.
         if let Some(r) =
-            crate::weakref::try_weak_method_dispatch(obj, object, method_name, args_ptr, args_len)
+            crate::weakref::try_weak_method_dispatch(obj, object(), method_name, args_ptr, args_len)
         {
             return r;
         }
@@ -1488,9 +1503,9 @@ pub unsafe extern "C" fn js_native_call_method(
                     let field_val = js_object_get_field(obj as *mut _, i as u32);
                     let bound = crate::closure::clone_closure_rebind_this(
                         field_val.bits(),
-                        f64::from_bits(jsval.bits()),
+                        f64::from_bits(jsval().bits()),
                     );
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval().bits()));
                     let result = crate::closure::js_native_call_value(
                         f64::from_bits(bound),
                         args_ptr,
@@ -1511,9 +1526,9 @@ pub unsafe extern "C" fn js_native_call_method(
                 if !field_val.is_undefined() && !field_val.is_null() {
                     let bound = crate::closure::clone_closure_rebind_this(
                         field_val.bits(),
-                        f64::from_bits(jsval.bits()),
+                        f64::from_bits(jsval().bits()),
                     );
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval().bits()));
                     let result = crate::closure::js_native_call_value(
                         f64::from_bits(bound),
                         args_ptr,
@@ -1532,7 +1547,7 @@ pub unsafe extern "C" fn js_native_call_method(
                 if let Some(ref reg) = *registry {
                     if let Some(vtable) = reg.get(&class_id) {
                         if let Some(entry) = vtable.methods.get(method_name) {
-                            let this_i64 = jsval.as_pointer::<u8>() as i64;
+                            let this_i64 = jsval().as_pointer::<u8>() as i64;
                             return call_vtable_method(
                                 entry.func_ptr,
                                 this_i64,
@@ -1586,8 +1601,8 @@ pub unsafe extern "C" fn js_native_call_method(
     // Perry code that calls those on `undefined`/`null` keeps working
     // (Perry-ism — Node throws there too, but tightening that breaks
     // unrelated callers; the typo case below is what we want to surface).
-    if jsval.is_undefined() || jsval.is_null() {
-        let is_null_u32 = if jsval.is_null() { 1u32 } else { 0u32 };
+    if jsval().is_undefined() || jsval().is_null() {
+        let is_null_u32 = if jsval().is_null() { 1u32 } else { 0u32 };
         crate::error::js_throw_type_error_property_access(
             is_null_u32,
             method_name.as_ptr(),
@@ -1607,8 +1622,8 @@ pub unsafe extern "C" fn js_native_call_method(
     // threw `(number).<method> is not a function`. Paired with the
     // codegen-side fix in `lower_call.rs` for the simpler
     // `ClassRef.method()` shape.
-    if jsval.is_int32() {
-        let payload = jsval.as_int32() as u32;
+    if jsval().is_int32() {
+        let payload = jsval().as_int32() as u32;
         if payload != 0 {
             let guard = REGISTERED_CLASS_IDS.read().unwrap();
             if let Some(set) = guard.as_ref() {
@@ -1632,7 +1647,7 @@ pub unsafe extern "C" fn js_native_call_method(
                             }
                         }
                     }
-                    return object;
+                    return object();
                 }
             }
         }
@@ -1644,13 +1659,13 @@ pub unsafe extern "C" fn js_native_call_method(
     // rebox as a POINTER_TAG value and dispatch on the object it actually is.
     // Perry already recovers bare pointers on other dispatch paths; this one threw
     // before it ever got the chance.
-    if jsval.is_number() && (jsval.bits() >> 48) == 0 {
-        let raw = jsval.bits() as usize;
+    if jsval().is_number() && (jsval().bits() >> 48) == 0 {
+        let raw = jsval().bits() as usize;
         if crate::value::addr_class::is_above_handle_band(raw)
             && crate::value::addr_class::is_valid_obj_ptr(raw as *const u8)
         {
             let reboxed = crate::value::JSValue::pointer(raw as *const u8);
-            if reboxed.bits() != jsval.bits() {
+            if reboxed.bits() != jsval().bits() {
                 return js_native_call_method(
                     f64::from_bits(reboxed.bits()),
                     method_name_ptr,
@@ -1661,13 +1676,13 @@ pub unsafe extern "C" fn js_native_call_method(
             }
         }
     }
-    let primitive_kind: Option<&'static str> = if jsval.is_any_string() {
+    let primitive_kind: Option<&'static str> = if jsval().is_any_string() {
         Some("string")
-    } else if jsval.is_int32() || jsval.is_number() {
+    } else if jsval().is_int32() || jsval().is_number() {
         Some("number")
-    } else if jsval.is_bool() {
+    } else if jsval().is_bool() {
         Some("boolean")
-    } else if jsval.is_bigint() {
+    } else if jsval().is_bigint() {
         Some("bigint")
     } else {
         None
@@ -1682,7 +1697,7 @@ pub unsafe extern "C" fn js_native_call_method(
         };
         if let Some(name) = builtin_name {
             if let Some(result) = call_primitive_builtin_prototype_method(
-                object,
+                object(),
                 name,
                 method_name,
                 args_ptr,
@@ -1731,9 +1746,9 @@ pub unsafe extern "C" fn js_native_call_method(
     if matches!(
         method_name,
         "text" | "json" | "arrayBuffer" | "blob" | "bytes" | "formData" | "clone"
-    ) && jsval.is_pointer()
+    ) && jsval().is_pointer()
     {
-        let raw = crate::value::js_nanbox_get_pointer(object) as usize;
+        let raw = crate::value::js_nanbox_get_pointer(object()) as usize;
         if let Some(id) = crate::object::fetch_subclass_handle_id(raw) {
             if let Some(dispatch) = handle_method_dispatch() {
                 let args = refreshed_args();
@@ -1755,11 +1770,11 @@ pub unsafe extern "C" fn js_native_call_method(
     // the reified thunk unwraps the backing cell and species-chains via
     // `receiver.constructor`. (Covers the `X.resolve().finally().then()` chains
     // that codegen dispatches straight through `js_native_call_method`.)
-    if jsval.is_pointer() && matches!(method_name, "then" | "catch" | "finally") {
-        if crate::promise::subclass_backing_promise(object).is_some() {
+    if jsval().is_pointer() && matches!(method_name, "then" | "catch" | "finally") {
+        if crate::promise::subclass_backing_promise(object()).is_some() {
             if let Some(m) = crate::promise::promise_proto_method(method_name) {
                 let args = refreshed_args();
-                let prev_this = crate::object::js_implicit_this_set(object);
+                let prev_this = crate::object::js_implicit_this_set(object());
                 let result = crate::closure::js_native_call_value(m, args.as_ptr(), args.len());
                 crate::object::js_implicit_this_set(prev_this);
                 return result;
@@ -1774,8 +1789,8 @@ pub unsafe extern "C" fn js_native_call_method(
     // only genuinely inherited Temporal methods reach this forward. Route them
     // to the stashed cell (`temporal_subclass_cell`). (#5587)
     #[cfg(feature = "temporal")]
-    if jsval.is_pointer() {
-        let raw = crate::value::js_nanbox_get_pointer(object) as usize;
+    if jsval().is_pointer() {
+        let raw = crate::value::js_nanbox_get_pointer(object()) as usize;
         if let Some(cell) = crate::object::temporal_subclass_cell(raw) {
             let args = refreshed_args();
             return crate::temporal::dispatch::call_method(cell, method_name, &args);
@@ -1788,7 +1803,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // `server.listen(...)` / `server.on(...)` on the plain-object `this`
     // behave as calls on the underlying server. See native_this_alias.rs.
     if super::native_this_alias::alias_active() {
-        if let Some(handle_val) = super::native_this_alias::alias_handle_for_object(object) {
+        if let Some(handle_val) = super::native_this_alias::alias_handle_for_object(object()) {
             // Dispatch through the PRIMARY handle dispatcher only: the alias
             // handle is known to be an http(s) server handle, and the
             // composite's extension dispatchers (ext-net) may own an
@@ -1818,12 +1833,12 @@ pub unsafe extern "C" fn js_native_call_method(
     // never sees them. Look the name up there; if it is a callable, invoke it
     // with the receiver bound as `this` (via IMPLICIT_THIS, matching the
     // closure-field dispatch path above).
-    if jsval.is_pointer() {
-        if let Some((addr, kind)) = super::exotic_expando::exotic_expando_kind_of_value(object) {
+    if jsval().is_pointer() {
+        if let Some((addr, kind)) = super::exotic_expando::exotic_expando_kind_of_value(object()) {
             if let Some(bits) = super::exotic_expando::value_lookup(kind, addr, method_name) {
                 let candidate = f64::from_bits(bits);
                 if crate::collection_iter::is_callable(candidate) {
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object().to_bits()));
                     let result =
                         crate::closure::js_native_call_value(candidate, args_ptr, args_len);
                     IMPLICIT_THIS.with(|c| c.set(prev_this));
@@ -1841,7 +1856,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // → #5931). Runs LAST, after every own-field / vtable / prototype-chain
     // lookup above, so a subclass that OVERRIDES one of these names keeps its
     // own method; only a genuine miss on a real event target reaches this.
-    if jsval.is_pointer()
+    if jsval().is_pointer()
         && crate::event_target::is_event_target_method_name(method_name.as_bytes())
     {
         // Re-read the receiver from its root handle instead of reusing the
@@ -1862,7 +1877,7 @@ pub unsafe extern "C" fn js_native_call_method(
 
     crate::object::class_registry::report_dispatch_miss(
         "call-method (no method/field/proto match)",
-        object,
+        object(),
         method_name,
         "throws \"<m> is not a function\"",
     );
