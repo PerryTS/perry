@@ -5,7 +5,7 @@
     "",
     "An entry that matches no such holder FAILS the gate. That is deliberate: it is what",
     "makes a fix delete its own entry, and it is why 'covered_elsewhere' is a verdict rather",
-    "than a suppression — if the scanner that covers it is ever deleted, the holder stays",
+    "than a suppression \u2014 if the scanner that covers it is ever deleted, the holder stays",
     "uncovered, the entry stays matched, and nothing tells you. Read the named scanner if you",
     "touch it.",
     "",
@@ -17,7 +17,7 @@
     "                       .rodata object, or Rust-owned state. Nothing for the collector.",
     "  test_only          - #[cfg(test)] storage; never live in a shipped binary.",
     "  open_gap           - a real unrooted GC pointer. `issue` says where it is tracked.",
-    "  unverified         - enumerated, verdict NOT established. A named, dated TODO — not an",
+    "  unverified         - enumerated, verdict NOT established. A named, dated TODO \u2014 not an",
     "                       exemption. Keep this list short; every entry here is a hole the",
     "                       gate can see and nobody has looked into."
   ],
@@ -42,17 +42,10 @@
     },
     {
       "file": "crates/perry-runtime/src/json/mod.rs",
-      "name": "SHAPE_CACHE",
-      "verdict": "open_gap",
-      "issue": "#7268",
-      "why": "Raw *mut ArrayHeader shape-identity keys, dereferenced by set_to_json_key_for_template_field to read property-name strings. Its own doc comment asserted the invariant that made this safe ('within one top-level stringify call no GC runs over the user object graph'); toJSON falsifies it. Fixed in PR #7694 — DELETE THIS ENTRY when that lands, the gate will tell you."
-    },
-    {
-      "file": "crates/perry-runtime/src/json/mod.rs",
       "name": "PARSE_KEY_RING",
       "verdict": "open_gap",
       "issue": "#7231",
-      "why": "A hot-key mirror of PARSE_KEY_CACHE holding the same *const StringHeader values. The CACHE is visited by scan_parse_roots_mut; the RING is not, so a move rewrites one copy and not the other and a ring hit hands out a pre-move address. Narrow: the keys are js_string_from_bytes_longlived, i.e. old-gen, so only old-gen defrag can move them — not the copying minor."
+      "why": "A hot-key mirror of PARSE_KEY_CACHE holding the same *const StringHeader values. The CACHE is visited by scan_parse_roots_mut; the RING is not, so a move rewrites one copy and not the other and a ring hit hands out a pre-move address. Narrow: the keys are js_string_from_bytes_longlived, i.e. old-gen, so only old-gen defrag can move them \u2014 not the copying minor."
     },
     {
       "file": "crates/perry-runtime/src/node_submodules/blob.rs",
@@ -98,13 +91,13 @@
       "name": "CLASS_OBJECT_VALUES",
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_class_side_table_roots_mut and its budgeted step twin (class_registry/gc_roots.rs:138 and :256)",
-      "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it — #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
+      "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it \u2014 #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
     },
     {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss.rs",
       "name": "PERRY_IC_EPOCH",
       "verdict": "not_a_gc_pointer",
-      "why": "Inline-cache invalidation epoch. Epoch invalidation is the third rooting strategy this tree uses (see object/prop_plan.rs) — the cache is discarded on bump rather than scanned."
+      "why": "Inline-cache invalidation epoch. Epoch invalidation is the third rooting strategy this tree uses (see object/prop_plan.rs) \u2014 the cache is discarded on bump rather than scanned."
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
@@ -153,7 +146,7 @@
       "name": "PERF_ENTRY_KEYS_ARRAY",
       "verdict": "open_gap",
       "issue": "#7231",
-      "why": "Caches the shared keys_array address of performance entries (js_object_alloc_with_shape, nursery) and compares it by identity at perf_hooks.rs:119. Never rewritten, so after a move it misses (silent slow path) or — the sharper half — matches a newly-allocated array recycled into the address. The neighbouring PERF_ENTRIES table IS covered by scan_perf_entries_roots_mut; this one slot is not."
+      "why": "Caches the shared keys_array address of performance entries (js_object_alloc_with_shape, nursery) and compares it by identity at perf_hooks.rs:119. Never rewritten, so after a move it misses (silent slow path) or \u2014 the sharper half \u2014 matches a newly-allocated array recycled into the address. The neighbouring PERF_ENTRIES table IS covered by scan_perf_entries_roots_mut; this one slot is not."
     },
     {
       "file": "crates/perry-runtime/src/process.rs",
@@ -191,7 +184,7 @@
       "file": "crates/perry-runtime/src/symbol/properties.rs",
       "name": "CACHED",
       "verdict": "not_a_gc_pointer",
-      "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be — see #7246."
+      "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be \u2014 see #7246."
     },
     {
       "file": "crates/perry-runtime/src/thread.rs",
