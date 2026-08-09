@@ -60,7 +60,9 @@ declared as a plain `static` runs the identical procedure and **requires** the
 wipe to be observed.
 
 Reverting the macro's `#[cfg(test)]` arm to the pre-fix bare static — one edit,
-all 23 tables — fails **7 of the 9 tests**, each naming its table.
+every table at once — fails **9 of the 11 tests**, each naming its table (0
+`error[` lines and `Running unittests` present on that run, so the sabotage
+compiled and executed rather than failing to build).
 
 ### Validation
 
