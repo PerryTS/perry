@@ -1548,9 +1548,12 @@ fn update_major_pacing_backoff(post_in_use: usize) {
     });
 }
 
-/// Announce the start of a FULL mark-sweep so `update_major_pacing_backoff`
-/// can price what it reclaimed.
-pub(super) fn note_full_cycle_started() {
+/// Announce the start of an ESCALATED full mark-sweep so
+/// `update_major_pacing_backoff` can price what it reclaimed. Called only from
+/// `arena_growth_full_escalation_due`, so an explicit `gc()` — whose yield says
+/// nothing about arena-growth pacing, and whose repeated use would otherwise
+/// drive the shift to its cap — never moves the backoff.
+fn note_full_cycle_started() {
     GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(crate::arena::arena_in_use_bytes()));
 }
 
@@ -1576,6 +1579,24 @@ pub(super) fn major_pacing_snapshot() -> (usize, u32, usize) {
 pub(super) fn test_reset_major_pacing_backoff() {
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.set(0));
     GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(0));
+}
+
+/// The pre-full arena reading `arena_growth_full_escalation_due` recorded, or 0
+/// if it declined to escalate. Non-zero is the proof that the escalation is
+/// PRICED — without it the backoff cannot fire and the pacing silently reverts
+/// to the unconditional K× rule.
+#[cfg(test)]
+pub(super) fn test_major_pacing_pre_in_use_bytes() -> usize {
+    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.get())
+}
+
+#[cfg(test)]
+pub(super) fn test_set_major_pacing_baseline(bytes: usize) -> usize {
+    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|cell| {
+        let previous = cell.get();
+        cell.set(bytes);
+        previous
+    })
 }
 
 #[cfg(test)]
@@ -2536,7 +2557,25 @@ fn major_pacing_config() -> (usize, usize) {
     (floor_bytes, growth_num)
 }
 
+/// Every caller acts on a `true` by running a FULL immediately, so the pre-full
+/// arena reading is recorded HERE rather than at the call sites — that is what
+/// keeps the escalation and the pricing of its result from drifting apart.
+///
+/// The first cut of #7726 wired the two `gc_start_budgeted_cycle_for_pressure`
+/// sites by hand and missed the one in `gc::gc_collect_minor_with_trigger_inner`
+/// — which is the site the shipped safepoint path actually takes. The backoff
+/// then never fired, and the whole change measured as a 30 ms no-op on
+/// `retain.ts` while every test still passed. Recording inside the predicate
+/// makes a future call site correct by construction.
 pub(super) fn arena_growth_full_escalation_due() -> bool {
+    let due = arena_growth_full_escalation_due_inner();
+    if due {
+        note_full_cycle_started();
+    }
+    due
+}
+
+fn arena_growth_full_escalation_due_inner() -> bool {
     let (floor_bytes, growth_num) = major_pacing_config();
     if floor_bytes == 0 {
         return false; // PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing
@@ -2584,7 +2623,6 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
                     progress_kind,
                 )
             } else {
-                note_full_cycle_started();
                 gc_start_budgeted_full_cycle(GcTriggerKind::ArenaBytes, rebaseline, progress_kind)
             }
         }
@@ -2600,7 +2638,6 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
                     progress_kind,
                 )
             } else {
-                note_full_cycle_started();
                 gc_start_budgeted_full_cycle(GcTriggerKind::MallocCount, rebaseline, progress_kind)
             }
         }

@@ -746,3 +746,34 @@ fn major_pacing_backs_off_on_futile_fulls_and_resets_on_a_productive_one() {
     assert_eq!(major_pacing_backoff_shift(), 1);
     test_reset_major_pacing_backoff();
 }
+
+/// The escalation and the pricing of its result must not be separable.
+///
+/// #7726's first cut recorded the pre-full reading at the two
+/// `gc_start_budgeted_cycle_for_pressure` call sites and missed the one in
+/// `gc::gc_collect_minor_with_trigger_inner` — the site the shipped safepoint
+/// path actually takes. Every test still passed, the decision function was
+/// correct in isolation, and the change measured as a 30 ms no-op on a
+/// benchmark it should have taken 480 ms off. The recording now lives INSIDE
+/// `arena_growth_full_escalation_due`; this pins that coupling, in the one
+/// direction a unit test can force without a 32 MB heap.
+#[test]
+fn declining_to_escalate_records_no_pre_full_reading() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+    };
+    test_reset_major_pacing_backoff();
+    // A baseline no live arena can exceed forces the verdict to `false`.
+    let previous = test_set_major_pacing_baseline(usize::MAX / 4);
+    let due = arena_growth_full_escalation_due();
+    let recorded = test_major_pacing_pre_in_use_bytes();
+    test_set_major_pacing_baseline(previous);
+    test_reset_major_pacing_backoff();
+    assert!(!due, "an unreachable baseline must not escalate");
+    assert_eq!(
+        recorded, 0,
+        "a declined escalation must leave no pre-full reading behind — a stale \
+         one would price the NEXT full against the wrong heap"
+    );
+}
