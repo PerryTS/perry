@@ -410,6 +410,18 @@ fn gc_verify_evacuation_enabled() -> bool {
 /// hundred releases, eight lines above a body comment saying "ON BY DEFAULT" —
 /// the #6987 shape CLAUDE.md warns about, and this time the stale half was the
 /// one carrying the soundness argument.
+///
+/// **Kill-policy disposition, stated rather than left implicit.** After #7682
+/// the flag's only production reader is the arm condition in
+/// `gc_check_trigger`, where it sits in a disjunction with
+/// `registered_root_scanners_block_budgeted_gc()` — and that arm's own comment
+/// records that the latter holds for *every compiled program*, since codegen
+/// registers synchronous scanners at startup. So for a compiled binary this
+/// knob is now very close to inert, which by CLAUDE.md's rule means it should
+/// be deleted rather than kept as a configuration nobody exercises. Not done
+/// here: a P0 correctness fix should not also be the change that decides a
+/// knob's fate, and the decision wants a measurement of the arm condition's
+/// three disjuncts on real programs, not an argument.
 #[cfg(test)]
 thread_local! {
     /// Test-only override, consulted BEFORE the process-wide OnceLock so a

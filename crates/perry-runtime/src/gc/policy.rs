@@ -1795,8 +1795,12 @@ pub fn gc_check_trigger() {
     // fall through to the budgeted mutator-assist step below, which is
     // deliberately non-moving (`low_pause_non_moving = is_budgeted()`), so a
     // reallocation-heavy loop's minors free nothing. Route those triggers to the
-    // direct (non-budgeted, atomic) minor here instead so the copying/evacuating
-    // fast path can run (see the `force_full_scan` skip below).
+    // direct (non-budgeted, atomic) minor here instead, so the collection is an
+    // atomic minor that actually reclaims rather than a budgeted step that
+    // does not. It is NOT an evacuating one: since #7682 the guard below is
+    // unconditional, so a collection that happens here is always non-moving.
+    // Scavenge is a PACING knob and nothing more; it used to also skip that
+    // guard, which is the bug.
     // `gc_moving_loop_polls_enabled()`: the SOUND moving-nursery path. When loop
     // polls are on, entering this block routes nursery pressure AWAY from the
     // budgeted non-moving stepper (which would otherwise own it and free nothing
@@ -1804,10 +1808,9 @@ pub fn gc_check_trigger() {
     // GC_SAFEPOINT_PENDING and returns — the collection then runs as an
     // evacuating MOVING minor at the next precise loop back-edge safepoint
     // (`js_gc_loop_safepoint` → `gc_safepoint_moving_minor`), NOT here at the
-    // register-imprecise alloc point. Unlike `gc_scavenge_enabled()` (which skips
-    // the conservative scan HERE — sound only if the alloc point is precise), the
-    // loop-polls path never reaches the skip: it always defers to a real
-    // safepoint.
+    // register-imprecise alloc point. That deferral is the ONLY route by which
+    // nursery pressure becomes a moving collection, and it is why the polls
+    // flag and the scavenge flag are not interchangeable.
     //
     // #7280: that used to read "so it is sound by construction". IT IS NOT, and
     // the overclaim is the kind that stops the next person looking. What
