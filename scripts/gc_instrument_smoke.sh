@@ -298,28 +298,54 @@ echo "  reproduced as pinned (exit $repro_rc, stale forwarded pointer) -- #7254 
 # ~511 us per loop iteration on real code -- 24 minutes for a 19 s program, i.e.
 # an instrument nobody can switch on, with nothing in CI to say so.
 #
-# So this arm is the one that is allowed to be slow-ish and is BUDGETED. It runs
-# a workload with a realistic poll count at the DEFAULT stride (note the
-# explicit unset -- the export at the top of this file pins every-poll mode for
-# the small fixture, which would defeat the whole point here) and requires
-# correct output inside a wall-clock budget. Unpaced, this fixture takes ~200 s;
-# paced, a few. The budget sits between those, so the arm fails on a regression
-# rather than merely getting slower.
+# This arm runs a workload with a realistic poll count at the DEFAULT stride
+# (note the explicit `env -u` -- the export at the top of this file pins
+# every-poll mode for the small fixture, which would defeat the whole point
+# here).
+#
+# THE DISCRIMINATOR IS THE RATIO, NOT THE CLOCK, and that is a deliberate
+# choice rather than an oversight. Measured on the quiet host, this fixture is
+# 0.49 s paced against 11.85 s unpaced -- a real 24x, but both fit inside any
+# budget loose enough not to flake on a shared CI runner, so a wall-clock
+# assertion here would be decoration. `forced_collections` vs `loop_polls` is
+# host-independent and exact: the regression's signature is one forced
+# collection per poll (measured 200,069 for 200,064), and the shipped default
+# is 1-in-40. The 4x threshold below sits between them with room for a future
+# default anywhere up to 1-in-4.
+#
+# The wall-clock budget is kept as the weaker "does it terminate AT ALL" guard,
+# sized generously on purpose.
 echo
 echo "== arm 6: zeal terminates at the DEFAULT stride, on a realistic poll count =="
 
+# The records must ESCAPE. The obvious version of this fixture allocates a
+# record per iteration and drops it, which scalar-replaces into nothing: it
+# measured 6 forced collections and 17 moved objects over 400,000 polls, i.e.
+# an arm that ran the loop but never gave the collector anything to relocate.
+# Pushing into a bounded rolling array keeps a real live set (and the string
+# concat allocates too), which is what turns `moved_objects` from 17 into
+# 640,364.
 cat > "$WORK/scale.ts" <<'TS'
 function run(n: number): number {
+  const keep: any[] = [];
   let acc = 0;
   let i = 0;
   while (i < n) {
-    const rec = { a: i, b: "v", c: i + 1 };
+    const rec = { a: i, b: "v" + (i % 7), c: i + 1 };
+    keep.push(rec);
+    if (keep.length > 64) {
+      keep.shift();
+    }
     acc = acc + (rec.c as number) - (rec.a as number);
     i = i + 1;
   }
-  return acc;
+  let tail = 0;
+  for (let k = 0; k < keep.length; k++) {
+    tail = tail + (keep[k].a as number);
+  }
+  return acc + (tail - tail);
 }
-console.log("sum", run(400000));
+console.log("sum", run(200000));
 TS
 
 "$PERRY_BIN" compile "$WORK/scale.ts" -o "$WORK/scale" >/dev/null
@@ -347,7 +373,7 @@ if [[ $scale_rc -ne 0 ]]; then
   echo "$scale_out" | tail -20 >&2
   exit 1
 fi
-if ! grep -q '^sum 400000$' <<<"$scale_out"; then
+if ! grep -q '^sum 200000$' <<<"$scale_out"; then
   echo "FAIL [arm6]: wrong answer under zeal at the default stride:" >&2
   grep '^sum' <<<"$scale_out" >&2 || echo "(no 'sum' line)" >&2
   exit 1
@@ -371,11 +397,19 @@ if [[ "$scale_forced" -eq 0 || "$scale_minors" -eq 0 || "$scale_moved" -eq 0 ]];
   echo "      Pacing must bound the instrument, not disable it." >&2
   exit 1
 fi
-# ...and the pacing must genuinely be pacing: far fewer collections than polls.
-# Pre-#7728 this ratio was 1:1, which is the regression itself.
-if [[ "$scale_polls" -gt 0 && "$scale_forced" -ge "$scale_polls" ]]; then
-  echo "FAIL [arm6]: zeal forced $scale_forced collections for $scale_polls polls." >&2
-  echo "      That is the unpaced 1:1 behaviour #7728 removed." >&2
+# ...and the pacing must genuinely be pacing. THIS is the assertion that fails
+# on the regression: pre-#7728 the ratio was 1:1 (measured 200,069 forced for
+# 200,064 polls); the shipped default is ~1:40.
+if [[ "$scale_polls" -le 0 ]]; then
+  echo "FAIL [arm6]: zero back-edge polls -- the loop this arm measures did not" >&2
+  echo "      run, so the ratio below would compare nothing against nothing." >&2
+  exit 1
+fi
+if [[ $(( scale_forced * 4 )) -ge "$scale_polls" ]]; then
+  echo "FAIL [arm6]: zeal forced $scale_forced collections for $scale_polls polls" >&2
+  echo "      (threshold: fewer than one per 4 polls). That is the unpaced" >&2
+  echo "      behaviour #7728 removed -- one whole evacuating minor per loop" >&2
+  echo "      iteration, which took a 5 s program to ~24 minutes." >&2
   exit 1
 fi
 echo "  correct output in ${scale_elapsed}s (budget ${ZEAL_BUDGET_S}s), $zeal_line"
