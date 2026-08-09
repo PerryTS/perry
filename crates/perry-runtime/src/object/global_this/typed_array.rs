@@ -425,6 +425,15 @@ pub(crate) fn ensure_typed_array_intrinsic(
             existing_proto as *mut ObjectHeader,
         );
     }
+    // #7251: same invariant and same hazard as `build_generator_tower` — this
+    // threads `ctor`/`proto` as raw pointers across ~a dozen allocating
+    // installs (accessors, to-string-tag, the 44-method proto-methods table,
+    // static `from`/`of`) to build an immortal graph that hangs off
+    // `TYPED_ARRAY_INTRINSIC_PTR`/`_PROTO_PTR` for the life of the thread.
+    // Reachable ahead of `populate_global_this_builtins` from
+    // `typedarray_props.rs:812` on the allocation-point route. See
+    // `gc::tests::lazy_intrinsic_towers` for the gate.
+    let _no_move = crate::gc::GcSuppressScope::new();
     let ctor = crate::closure::js_closure_alloc(typed_array_constructor_call_thunk as *const u8, 0);
     let proto = js_object_alloc(0, 0);
     if ctor.is_null() || proto.is_null() {
