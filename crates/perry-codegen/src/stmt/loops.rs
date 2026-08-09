@@ -4765,18 +4765,41 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // Whether THIS site allocated the counter's i32 slot (vs. the Let site or
     // repsel Phase 1 having done so). Only the inserter removes at loop exit.
     let mut hoist_counter_i32_was_fresh = false;
+    // #7480 step 4: inside a call-free-by-construction fast clone
+    // (`lower_element_shape_versioned_for`, `lower_class_field_versioned_for`)
+    // the caller has ALREADY materialized the trip count and passed it in
+    // `precomputed_i32_bound`, so the cond block never reads this slot. The
+    // hoist would emit a `js_value_length_f64` call whose result nothing
+    // consumes — and a call inside one of those clones does not make it slower,
+    // it DELETES it: the clone's own call-free scan fails and the guard branches
+    // unconditionally to the slow clone, leaving the fast blocks as unreachable
+    // code with every IR-census assertion still passing. That is precisely how
+    // `for (let j = 0; j < keep.length; j++) acc += keep[j].v` — #7480's own
+    // kernel, and the reason the clone exists — got a clone it never entered.
+    //
+    // Only the LOAD is skipped. The bounded-index / buffer-width facts and the
+    // i32 counter slot below are proofs and storage, not emitted work, and the
+    // clone's other lowering may depend on them; suppressing those too would
+    // trade one silent loss for another.
+    let in_call_free_clone =
+        !ctx.element_shape_loop_facts.is_empty() || !ctx.class_field_loop_facts.is_empty();
     let hoisted_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
-        let arr_box_loaded = lower_expr(
-            ctx,
-            &perry_hir::Expr::PropertyGet {
-                byte_offset: 0,
-                object: Box::new(perry_hir::Expr::LocalGet(hoist.arr_id)),
-                property: "length".to_string(),
-            },
-        )?;
-        let slot = ctx.func.alloca_entry(DOUBLE);
-        ctx.block().store(DOUBLE, &arr_box_loaded, &slot);
-        ctx.cached_lengths.insert(hoist.arr_id, slot.clone());
+        let hoisted_slot = if in_call_free_clone {
+            None
+        } else {
+            let arr_box_loaded = lower_expr(
+                ctx,
+                &perry_hir::Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(perry_hir::Expr::LocalGet(hoist.arr_id)),
+                    property: "length".to_string(),
+                },
+            )?;
+            let slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.block().store(DOUBLE, &arr_box_loaded, &slot);
+            ctx.cached_lengths.insert(hoist.arr_id, slot.clone());
+            Some(slot)
+        };
         // Also tell `lower_index_set_fast` (and similar sites) that
         // `arr[counter_id]` is statically inbounds for this body, so
         // it can skip the runtime length-load + bound check.
@@ -4826,7 +4849,7 @@ pub(super) fn lower_for_after_init_with_i32_bound(
             }
         }
 
-        Some(slot)
+        hoisted_slot
     } else {
         None
     };
@@ -5281,6 +5304,47 @@ pub(crate) fn emit_gc_loop_safepoint(
     controls: &[&perry_hir::Expr],
 ) {
     if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
+        return;
+    }
+    // #7480 step 4: never inside a call-free-by-construction fast clone.
+    //
+    // `lower_class_field_versioned_for` and `lower_element_shape_versioned_for`
+    // hoist a guard into a preheader and clone the body against it, and both
+    // rest on the SAME safety argument: the clone makes no call, therefore
+    // allocates nothing, therefore cannot collect, therefore the pointer the
+    // preheader cached cannot move. Each verifies that by scanning its own
+    // emitted blocks afterwards, and a clone whose call-freeness is unproven is
+    // never entered — the deref block branches unconditionally to the slow
+    // clone and the fast blocks are left as unreachable code.
+    //
+    // A back-edge poll is a call. Emitting one into the clone therefore does
+    // not make the clone slower; it deletes the clone, silently, with the fast
+    // blocks still present in the IR for any census to find. #7690 turning
+    // these polls back on by default did exactly that to the ELEMENT-SHAPE
+    // clone: `churn_read.ts` went 0.03 s -> 0.54 s on the same compiler, every
+    // `perry-codegen` test stayed green, and the only symptom was a benchmark
+    // that did not move. That is the failure mode
+    // `stmt/element_shape_loop.rs`'s module docs predicted in as many words,
+    // and `assert_fast_clone_is_entered` is the assertion that now catches it.
+    //
+    // The class-field clone is NOT affected today, and that was checked rather
+    // than assumed: removing this suppression leaves its three IR tests green,
+    // because `loop_may_allocate` already proves an `obj.field`-only body inert
+    // and emits no poll for it. It is covered here anyway — the two clones rest
+    // on the identical argument, and the next body shape admitted to the
+    // class-field matcher that is not provably inert would delete that clone
+    // the same way. Its tests gained the same liveness assertion.
+    //
+    // Skipping the poll here is not a new licence — it is the rule the line
+    // below already applies. A poll exists so that an ALLOCATING loop can defer
+    // a collection to a safe point; a body that cannot allocate does not need
+    // one, which is precisely why `loop_may_allocate` gates the poll at all.
+    // `loop_may_allocate` answers from the HIR body, before specialization, so
+    // it cannot see that the clone's `arr[j].f` lowers to a bare load rather
+    // than to the generic diamond. Inside a fact scope, it can: the clone is
+    // call-free or it is not entered, and the slow clone — lowered after the
+    // scope is popped — keeps its poll either way.
+    if !ctx.element_shape_loop_facts.is_empty() || !ctx.class_field_loop_facts.is_empty() {
         return;
     }
     // Only an ALLOCATING loop body can defer a collection to this poll; skip the

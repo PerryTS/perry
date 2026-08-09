@@ -339,6 +339,32 @@ fn block_def_offset(ir: &str, label: &str) -> Option<usize> {
     None
 }
 
+/// The clone must be **entered**, not merely emitted.
+///
+/// `lower_element_shape_versioned_for` builds the fast clone first and proves
+/// it call-free second. When the proof fails it terminates the deref block with
+/// an *unconditional* branch to the slow clone and leaves the fast blocks as
+/// unreachable code. Every [`CLONE_LABELS`] assertion still passes in that
+/// state — all the labels are present — so the census alone cannot tell
+/// "optimized" from "optimization silently deleted".
+///
+/// That gap is not hypothetical. #7690 restored moving-loop back-edge polls to
+/// ON by default, which put a `js_gc_loop_safepoint()` call in the clone's
+/// element-load block; the whole clone became dead code, the benchmark it was
+/// written for did not move, and not one test failed. The module docs of
+/// `stmt/element_shape_loop.rs` named this failure mode in advance ("a silent
+/// loss of the optimization … with no test failing"). This is the assertion
+/// that makes it loud.
+fn assert_fast_clone_is_entered(ir: &str) {
+    let deref = block_slice(ir, "element_shape.loop.preheader.deref");
+    assert!(
+        deref.contains("label %element_shape.loop.fast.preheader"),
+        "the guard must branch INTO the fast clone. The deref block ends in an \
+         unconditional branch to the slow clone, which means the call-free \
+         proof failed and the clone is dead code:\n{deref}"
+    );
+}
+
 /// The emitted text the fast clone owns: exactly the blocks named
 /// `for.element_shape_fast.*` and the `element_shape.load` blocks its field
 /// reads branch into.
@@ -415,6 +441,7 @@ fn element_shape_versioned_loop_fires_for_the_7480_access_shape() {
     // fallback is worse than no hoist.
     assert!(ir.contains("for.element_shape_slow.cond"));
 
+    assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     // The whole point: the fast clone contains NO call at all. That is the
     // revocation argument (call-free ⇒ no funnel can revoke the invariant and
@@ -704,6 +731,7 @@ fn element_shape_versioned_loop_resolves_an_object_literal_element_type() {
         "the preheader must load the anon shape's keys global; emitted:\n{deref}"
     );
 
+    assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
         !fast.contains(" call "),
@@ -929,6 +957,7 @@ fn element_shape_versioned_loop_admits_an_array_length_bound() {
         );
     }
 
+    assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
         !fast.contains(" call "),
@@ -1082,6 +1111,7 @@ fn element_shape_versioned_loop_fires_for_the_churn_read_shape() {
              is absent"
         );
     }
+    assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
         !fast.contains(" call "),
@@ -1111,6 +1141,7 @@ fn the_repair_does_not_put_a_call_inside_the_fast_clone() {
     // clone would void the revocation argument — and, because the lowering
     // then branches unconditionally to the slow clone, would silently delete
     // the optimization instead of failing.
+    assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
         !fast.contains("call "),

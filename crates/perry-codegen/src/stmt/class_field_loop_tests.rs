@@ -223,6 +223,20 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "{what}: the versioned loop's SLOW clone is missing — a hoisted guard \
          with no fallback arm is worse than no hoist at all"
     );
+    // #7480 step 4: the clone must be ENTERED, not merely emitted. The lowering
+    // builds the fast clone first and proves it call-free second; on a failed
+    // proof it terminates the guard with an UNCONDITIONAL branch to the slow
+    // clone and leaves the fast blocks as unreachable code — a state in which
+    // every label assertion above still passes. The twin assertion on the
+    // element-shape clone caught exactly that: #7690's back-edge polls put a
+    // `js_gc_loop_safepoint()` inside the clone and silently deleted it.
+    assert!(
+        ir.contains("label %for.class_field_fast.cond")
+            || ir.contains("label %class_field.loop.fast.preheader"),
+        "{what}: the guard must branch INTO the fast clone. If it ends in an \
+         unconditional branch to the slow clone, the call-free proof failed and \
+         the clone is dead code that every label assertion above still accepts"
+    );
     // The fast clone must be free of the per-access diamond it exists to
     // replace: no volatile gate load between the fast preheader and the store.
     let fast = fast_clone_slice(ir);
