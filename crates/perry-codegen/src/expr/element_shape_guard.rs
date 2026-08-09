@@ -80,6 +80,29 @@ const ELEM_HEADER_MASK: &str = "402686207"; // 0x1800_80FF
 /// not forwarded, no per-object descriptors, typed layout intact.
 const ELEM_HEADER_EXPECT: &str = "268435458"; // 0x1000_0002
 
+/// Where the fast clone's trip count comes from.
+///
+/// The two arms differ in *which* fact the preheader has to prove. A bound the
+/// caller materialized is an independent number, so the preheader must show the
+/// verified prefix reaches it. `arr.length` is not independent — it is the very
+/// word this guard loads — so the comparison collapses and only the i32-range
+/// obligation is left.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ElementShapeLoopTripCount<'a> {
+    /// An i32 SSA value (or literal) materialized before the guard. Requires
+    /// `length >= bound`.
+    Bound(&'a str),
+    /// `for (j = …; j < arr.length; j++)` over the array the clone reads: the
+    /// length loaded inside the guard becomes the trip count.
+    ///
+    /// Hoisting `arr.length` out of the condition is a semantic change JS does
+    /// not license in general — the property is re-read every iteration. It is
+    /// sound *here* for the same reason the whole clone is: the matcher admits
+    /// no store and no call in the body, and every way to change an array's
+    /// length is one or the other. The slow clone keeps re-reading it.
+    ArrayLength,
+}
+
 /// Emit the once-per-loop element-shape guard into the current block chain.
 ///
 /// Leaves `ctx.current_block` on an UNTERMINATED block holding the accumulated
@@ -104,15 +127,15 @@ const ELEM_HEADER_EXPECT: &str = "268435458"; // 0x1000_0002
 ///    an allocation can move the array, so a base derived before it could be a
 ///    from-space address.
 ///
-/// Returns `(elements_base, expected_keys, shape_ok)`.
+/// Returns `(elements_base, expected_keys, shape_ok, bound_i32)`.
 pub(crate) fn emit_element_shape_loop_preheader_check(
     ctx: &mut FnCtx,
     array_local_id: u32,
     expected_class_id: &str,
     keys_global_name: &str,
-    bound_i32: &str,
+    trip_count: ElementShapeLoopTripCount<'_>,
     slow_label: &str,
-) -> anyhow::Result<(String, String, String)> {
+) -> anyhow::Result<(String, String, String, String)> {
     let brand_idx = ctx.new_block("element_shape.loop.preheader.brand");
     let repair_idx = ctx.new_block("element_shape.loop.preheader.repair");
     let query_idx = ctx.new_block("element_shape.loop.preheader.query");
@@ -255,7 +278,24 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     // loop reads". The matcher already pinned `start >= 0`.
     let len_ptr = blk.inttoptr(I64, &handle1);
     let length = blk.load(I32, &len_ptr);
-    let len_ok = blk.icmp_uge(I32, &length, bound_i32);
+    let (bound_i32, len_ok) = match trip_count {
+        ElementShapeLoopTripCount::Bound(bound) => {
+            (bound.to_string(), blk.icmp_uge(I32, &length, bound))
+        }
+        // #7480 step 4: `for (j = 0; j < arr.length; j++)` — the trip count IS
+        // the length this block just read, so "the verified prefix covers every
+        // index" is true by construction and there is nothing to compare it
+        // against. What still has to be proven is that the u32 fits a
+        // non-negative i32: the clone's counter is an i32 and the emitted trip
+        // test is signed, so a length above `i32::MAX` would read as negative
+        // and run zero iterations while the slow clone ran billions. No such
+        // array is allocatable today (it would need 32 GB of element slots),
+        // which is exactly why the check is one `icmp` rather than a comment.
+        ElementShapeLoopTripCount::ArrayLength => {
+            let fits = blk.icmp_sgt(I32, &length, "-1");
+            (length.clone(), fits)
+        }
+    };
 
     // Elements base: `arr + size_of::<ArrayHeader>()`.
     let base_addr = blk.add(I64, &handle1, "8");
@@ -275,7 +315,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     acc = blk.and(I1, &acc, &gate_ok);
 
     // No terminator: the caller branches after proving the clone call-free.
-    Ok((elements_base, expected_keys, acc))
+    Ok((elements_base, expected_keys, acc, bound_i32))
 }
 
 /// Emit one `arr[i].field` read inside the fast clone: bare element load,

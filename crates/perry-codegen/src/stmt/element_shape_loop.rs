@@ -107,12 +107,20 @@ use super::loops::{
 use crate::expr::{lower_expr, FnCtx};
 use crate::types::{DOUBLE, I1, I32};
 
-/// Loop bound: a literal, or a loop-invariant local / module global that is
-/// materialized to i32 once in the preheader.
+/// Loop bound: a literal, a loop-invariant local / module global that is
+/// materialized to i32 once in the preheader, or the tracked array's own
+/// `length`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ElementShapeLoopBound {
     Constant(i64),
     Local(u32),
+    /// `j < arr.length` where `arr` is the array the body reads. The guard
+    /// already loads that word, so this arm costs nothing to materialize —
+    /// see [`crate::expr::element_shape_guard::ElementShapeLoopTripCount`].
+    ///
+    /// Carries the receiver id because the bound is matched before the body
+    /// names the array; the caller cross-checks the two.
+    ArrayLength(u32),
 }
 
 #[derive(Debug)]
@@ -246,9 +254,40 @@ fn element_class_name(ctx: &FnCtx<'_>, array_id: u32, counter_id: u32) -> Option
             index: Box::new(perry_hir::Expr::LocalGet(counter_id)),
         },
     ) {
-        return Some(named);
+        // Only if it names a REAL class. `type Node = {v: number}` makes the
+        // element type `Named("Node")`, and the receiver resolver reports
+        // "Node" for it — a name no `ctx.classes` entry answers to, because the
+        // literals allocate an `__AnonShape_…`. Returning it unconditionally
+        // shadowed arm 2 for every alias-typed array, which is how the second
+        // half of `churn_read`'s miss survived #7669: the anon-shape resolver
+        // landed and was then never consulted for the shape it was written for.
+        if ctx.classes.contains_key(&named) {
+            return Some(named);
+        }
     }
     anon_shape_class_for_element_type(ctx, array_id)
+}
+
+/// Follow `type A = B; type B = {…}` to the object type an alias spells.
+///
+/// Bounded rather than cycle-detected: `type A = A` is not expressible in a
+/// well-formed program, but codegen must not hang on a malformed one, and no
+/// real alias chain is deep. Running out of budget declines the clone.
+fn resolve_type_alias<'t>(
+    ctx: &'t FnCtx<'_>,
+    ty: &'t perry_hir::types::Type,
+) -> &'t perry_hir::types::Type {
+    let mut current = ty;
+    for _ in 0..8 {
+        let perry_hir::types::Type::Named(name) = current else {
+            return current;
+        };
+        let Some(next) = ctx.type_aliases.get(name) else {
+            return current;
+        };
+        current = next;
+    }
+    current
 }
 
 /// Content-addressed synthetic class every closed-shape object literal lowers
@@ -286,7 +325,8 @@ const ANON_SHAPE_PREFIX: &str = "__AnonShape_";
 fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<String> {
     use perry_hir::types::Type as HirType;
 
-    let elem = match ctx.local_types.get(&array_id)? {
+    let array_ty = resolve_type_alias(ctx, ctx.local_types.get(&array_id)?);
+    let elem = match array_ty {
         HirType::Array(elem) => elem.as_ref(),
         // `new Array<{v: number}>(n)` locals carry the generic spelling.
         HirType::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
@@ -294,7 +334,9 @@ fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<S
         }
         _ => return None,
     };
-    let HirType::Object(obj) = elem else {
+    // `type Node = {v: number; w: number}` — the annotation names the shape one
+    // indirection away. Both levels are resolved (`type Row = Node[]` too).
+    let HirType::Object(obj) = resolve_type_alias(ctx, elem) else {
         return None;
     };
     // Only a CLOSED shape names a layout: an index signature, a method
@@ -429,6 +471,20 @@ fn match_element_shape_versioned_loop(
         Expr::Integer(k) if (0..=i64::from(i32::MAX)).contains(k) => {
             ElementShapeLoopBound::Constant(*k)
         }
+        // `j < arr.length` — the idiom every one of #7480's own kernels is
+        // written in, and the reason the clone had not moved `churn_read` at
+        // all: `keep.length` is a `PropertyGet`, so the bound match declined
+        // before the class resolver was ever reached. The receiver is checked
+        // against the body's array below; an unrelated array's length would
+        // need its own invariance argument and is not admitted.
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length" => match object.as_ref() {
+            Expr::LocalGet(recv_id) if *recv_id != counter_id => {
+                ElementShapeLoopBound::ArrayLength(*recv_id)
+            }
+            _ => return None,
+        },
         Expr::LocalGet(bound_id) if *bound_id != counter_id => {
             if ctx.boxed_vars.contains(bound_id) {
                 return None;
@@ -488,10 +544,22 @@ fn match_element_shape_versioned_loop(
     if props.is_empty() || array_id == *acc_id || array_id == counter_id {
         return None;
     }
-    if let ElementShapeLoopBound::Local(bound_id) = bound {
-        if bound_id == array_id || bound_id == *acc_id {
-            return None;
+    match bound {
+        ElementShapeLoopBound::Local(bound_id) => {
+            if bound_id == array_id || bound_id == *acc_id {
+                return None;
+            }
         }
+        // The guard's `length` load answers for the array the guard branded.
+        // `for (j = 0; j < other.length; j++) acc += keep[j].v` reads a
+        // DIFFERENT array's length, and the preheader proves nothing about how
+        // the two relate — that is an out-of-range read, not a slow clone.
+        ElementShapeLoopBound::ArrayLength(recv_id) => {
+            if recv_id != array_id {
+                return None;
+            }
+        }
+        ElementShapeLoopBound::Constant(_) => {}
     }
 
     // The array must be loop-invariant and directly addressable — no boxing,
@@ -608,10 +676,12 @@ pub(super) fn lower_element_shape_versioned_for(
 
     // One-time i32 materialization of the bound. A non-number / NaN /
     // fractional / out-of-range bound keeps full JS trip-count semantics in
-    // the slow clone.
-    let bound_i32: String = match matched.bound {
-        ElementShapeLoopBound::Constant(k) => k.to_string(),
-        ElementShapeLoopBound::Local(bound_id) => {
+    // the slow clone. `arr.length` materializes inside the guard instead — it
+    // is the word the guard already loads — so it contributes nothing here.
+    let materialized_bound: Option<String> = match matched.bound {
+        ElementShapeLoopBound::ArrayLength(_) => None,
+        ElementShapeLoopBound::Constant(k) => Some(k.to_string()),
+        ElementShapeLoopBound::Local(bound_id) => Some({
             let bound_d = lower_expr(ctx, &perry_hir::Expr::LocalGet(bound_id))?;
             let is_number = emit_js_value_is_number(ctx, &bound_d);
             let range_idx = ctx.new_block("element_shape.loop.bound.range");
@@ -642,17 +712,23 @@ pub(super) fn lower_element_shape_versioned_for(
 
             ctx.current_block = check_idx;
             bound_i32
-        }
+        }),
     };
 
+    let trip_count = match &materialized_bound {
+        Some(bound) => {
+            crate::expr::element_shape_guard::ElementShapeLoopTripCount::Bound(bound.as_str())
+        }
+        None => crate::expr::element_shape_guard::ElementShapeLoopTripCount::ArrayLength,
+    };
     let expected_class_id_str = matched.expected_class_id.to_string();
-    let (elements_base, expected_keys, shape_ok) =
+    let (elements_base, expected_keys, shape_ok, bound_i32) =
         crate::expr::element_shape_guard::emit_element_shape_loop_preheader_check(
             ctx,
             matched.array_id,
             &expected_class_id_str,
             &matched.keys_global_name,
-            &bound_i32,
+            trip_count,
             &slow_pre_label,
         )?;
     // Deliberately unterminated: it branches into the fast clone only after

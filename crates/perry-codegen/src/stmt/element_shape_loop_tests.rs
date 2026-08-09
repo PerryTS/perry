@@ -266,6 +266,43 @@ fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
 
+/// [`emit`] with module-level `type X = …` aliases in scope.
+fn emit_with_aliases(m: &Module, aliases: &[(&str, Type)]) -> String {
+    let mut opts = ir_opts();
+    opts.type_aliases = aliases
+        .iter()
+        .map(|(name, ty)| ((*name).to_string(), ty.clone()))
+        .collect();
+    String::from_utf8(compile_module(m, opts).unwrap()).expect("LLVM IR should be UTF-8")
+}
+
+/// `<receiver>.length`
+fn length_of(receiver_id: u32) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(receiver_id)),
+        property: "length".to_string(),
+        byte_offset: 0,
+    }
+}
+
+/// Replace the module's loop condition with `j < <bound>`.
+///
+/// Mutates in place and panics if the statement is not where
+/// [`element_shape_module`] puts it, for the same reason
+/// [`object_element_module`] asserts its own shape: a silent skip would leave
+/// the constant bound in place and every `.length` assertion below would be
+/// re-testing the constant-bound path.
+fn with_bound(m: &mut Module, bound: Expr) {
+    let Some(Stmt::For { condition, .. }) = m.init.get_mut(2) else {
+        panic!("element_shape_module's third init statement should be the `For`");
+    };
+    *condition = Some(Expr::Compare {
+        op: CompareOp::Lt,
+        left: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(bound),
+    });
+}
+
 /// The blocks that exist only when the clone was really built AND entered.
 const CLONE_LABELS: [&str; 6] = [
     "element_shape.loop.preheader.brand",
@@ -302,9 +339,9 @@ fn block_def_offset(ir: &str, label: &str) -> Option<usize> {
     None
 }
 
-/// The emitted text the fast clone owns: from the DEFINITION of its cond block
-/// to the definition of the slow clone's. Covers `for.element_shape_fast.*`
-/// and the `element_shape.load` block the field read branches into.
+/// The emitted text the fast clone owns: exactly the blocks named
+/// `for.element_shape_fast.*` and the `element_shape.load` blocks its field
+/// reads branch into.
 ///
 /// #7480 step 3 — ANTI-VACUITY. This used to slice from the first *substring*
 /// occurrence of `for.element_shape_fast.cond`, which is the
@@ -316,19 +353,38 @@ fn block_def_offset(ir: &str, label: &str) -> Option<usize> {
 /// to prove the clone is really call-free had never been able to fail. The
 /// liveness assertion below is what makes it a gate — CLAUDE.md's "a gate must
 /// assert its subject was live".
-fn fast_clone_slice(ir: &str) -> &str {
-    let start = block_def_offset(ir, "for.element_shape_fast.cond")
-        .expect("the fast clone's cond block should be DEFINED in the emitted IR");
-    let end = block_def_offset(ir, "for.element_shape_slow.cond").unwrap_or(ir.len());
-    assert!(end > start, "the fast clone must precede the slow clone");
-    let slice = &ir[start..end];
+///
+/// #7480 step 4 — the OPPOSITE error, and the reason this now selects blocks by
+/// name instead of slicing a span. "Everything between the fast cond and the
+/// slow cond" is only the fast clone while nothing else is emitted in between.
+/// An `arr.length` bound makes the slow clone hoist its own length read, and
+/// those `plen.*` blocks land in the gap — so a call belonging to the SLOW
+/// clone was attributed to the fast one and the census failed on a fast clone
+/// that was, and still is, bare. A span that depends on what a neighbour emits
+/// can report either way; ownership is a property of the block, so ask the
+/// block.
+fn fast_clone_slice(ir: &str) -> String {
+    let mut owned = String::new();
+    let mut in_fast_block = false;
+    for line in ir.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        // A block DEFINITION starts at column 0 and ends in `:`; anything else
+        // belongs to whichever block was last opened.
+        if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
+            in_fast_block = trimmed.starts_with("for.element_shape_fast.")
+                || trimmed.starts_with("element_shape.load");
+        }
+        if in_fast_block {
+            owned.push_str(line);
+        }
+    }
     assert!(
-        slice.contains("for.element_shape_fast.body") && slice.contains("element_shape.load"),
+        owned.contains("for.element_shape_fast.body") && owned.contains("element_shape.load"),
         "the fast-clone slice must contain the cloned BODY and its element \
          load, otherwise every negative assertion against it is vacuous; \
-         sliced:\n{slice}"
+         sliced:\n{owned}"
     );
-    slice
+    owned
 }
 
 #[test]
@@ -833,6 +889,211 @@ fn object_literal_element_resolution_does_not_escape_the_clone() {
         after.contains("js_object_get_field_by_name_f64")
             || after.contains("js_object_get_field_ic_miss"),
         "the post-loop read must stay on the by-name path; emitted:\n{after}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #7480 step 4: the two reasons `churn_read.ts` never reached the clone.
+//
+// #7612 landed the clone and #7669 taught it object-literal element types, and
+// the benchmark the whole route was chosen for did not move by one millisecond
+// across both. Not because the lowering was wrong — because the MATCHER never
+// got to it. `for (let j = 0; j < keep.length; j++)` fails the bound match
+// (`keep.length` is a `PropertyGet`), and `type Node = {v: number}` makes
+// `element_class_name` answer "Node", a name no class owns, which returned
+// early and skipped the anon-shape resolver #7669 had just added.
+//
+// Each is independently fatal, which is why they are tested independently and
+// then together in the shape the benchmark actually has.
+// ---------------------------------------------------------------------------
+
+const ANON_SHAPE_ALIASED: &str = "__AnonShape_0000000000000def";
+
+#[test]
+fn element_shape_versioned_loop_admits_an_array_length_bound() {
+    let mut m = object_element_module(
+        object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        vec![anon_shape_class(
+            311,
+            ANON_SHAPE_VW,
+            &[("v", Type::Number), ("w", Type::Number)],
+        )],
+    );
+    with_bound(&mut m, length_of(ARRAY_ID));
+    let ir = emit(&m);
+    for label in CLONE_LABELS {
+        assert!(
+            ir.contains(label),
+            "`for (j = 0; j < arr.length; j++)` is the idiom every #7480 kernel \
+             is written in and must reach the clone, but `{label}` is absent"
+        );
+    }
+
+    let fast = fast_clone_slice(&ir);
+    assert!(
+        !fast.contains(" call "),
+        "the fast clone must stay call-free with a `.length` bound; found a \
+         call in:\n{fast}"
+    );
+    // The trip count is the word the guard already loaded. If the bound were
+    // re-derived per iteration the clone would still be correct and would win
+    // far less, and nothing else here would notice.
+    assert!(
+        !fast.contains("js_array_length"),
+        "the `.length` bound must be materialized once in the preheader, not \
+         re-read inside the clone; emitted:\n{fast}"
+    );
+    assert!(
+        fast.contains("fadd"),
+        "the accumulate must lower to an fadd inside the clone; emitted:\n{fast}"
+    );
+}
+
+/// SABOTAGE (bound provenance): the guard's `length` load answers for the
+/// array the guard branded. Reading `keep[j]` while trip-counting on a
+/// DIFFERENT array's length is an out-of-range read, not a slow clone.
+#[test]
+fn element_shape_versioned_loop_declines_a_foreign_arrays_length_bound() {
+    const OTHER_ARRAY_ID: u32 = 41;
+    let mut m = object_element_module(
+        object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        vec![anon_shape_class(
+            311,
+            ANON_SHAPE_VW,
+            &[("v", Type::Number), ("w", Type::Number)],
+        )],
+    );
+    m.init.insert(
+        0,
+        Stmt::Let {
+            id: OTHER_ARRAY_ID,
+            name: "other".to_string(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: false,
+            init: Some(Expr::Array(Vec::new())),
+        },
+    );
+    // `element_shape_module` puts the `For` at index 2; the insert above
+    // shifted it to 3, so rebuild the condition by hand rather than through
+    // `with_bound`'s fixed index.
+    let Some(Stmt::For { condition, .. }) = m.init.get_mut(3) else {
+        panic!("the `For` should have shifted to index 3");
+    };
+    *condition = Some(Expr::Compare {
+        op: CompareOp::Lt,
+        left: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(length_of(OTHER_ARRAY_ID)),
+    });
+
+    let ir = emit(&m);
+    for label in CLONE_LABELS {
+        assert!(
+            !ir.contains(label),
+            "trip-counting on `other.length` while reading `keep[j]` must not \
+             be cloned, but `{label}` was emitted — the preheader proves \
+             nothing about how the two lengths relate"
+        );
+    }
+}
+
+#[test]
+fn element_shape_versioned_loop_resolves_an_aliased_object_element_type() {
+    let mut m = object_element_module(
+        Type::Named("Node".to_string()),
+        vec![anon_shape_class(
+            312,
+            ANON_SHAPE_ALIASED,
+            &[("v", Type::Number), ("w", Type::Number)],
+        )],
+    );
+    // `type Node = { v: number; w: number }` — the alias is the ONLY thing
+    // standing between this module and the previous test's.
+    with_bound(&mut m, Expr::Integer(1_000_000));
+    let ir = emit_with_aliases(
+        &m,
+        &[(
+            "Node",
+            object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        )],
+    );
+    for label in CLONE_LABELS {
+        assert!(
+            ir.contains(label),
+            "an alias-typed element (`type Node = {{…}}`) must resolve to the \
+             anon shape its literals allocate, but `{label}` is absent"
+        );
+    }
+    let deref = block_slice(&ir, "element_shape.loop.preheader.deref");
+    assert!(
+        deref.contains("AnonShape"),
+        "the guard must pin the anon shape the alias expands to; emitted:\n{deref}"
+    );
+}
+
+/// SABOTAGE (alias resolution): an alias is not a licence to guess. With no
+/// `type Node = …` in scope, `Node[]` names a class that does not exist and
+/// the matcher must decline rather than fall through to whatever single anon
+/// shape happens to be in the module.
+#[test]
+fn element_shape_versioned_loop_declines_an_unresolvable_named_element_type() {
+    let ir = emit(&object_element_module(
+        Type::Named("Node".to_string()),
+        vec![anon_shape_class(
+            312,
+            ANON_SHAPE_ALIASED,
+            &[("v", Type::Number), ("w", Type::Number)],
+        )],
+    ));
+    for label in CLONE_LABELS {
+        assert!(
+            !ir.contains(label),
+            "`Node[]` with no class and no alias names no layout, but \
+             `{label}` was emitted — the resolver guessed"
+        );
+    }
+}
+
+/// `churn_read.ts` itself: an aliased object element type AND an `arr.length`
+/// bound, the combination the benchmark has had since it was written. Both
+/// halves above pass individually; this is the one that was red for two
+/// shipped PRs.
+#[test]
+fn element_shape_versioned_loop_fires_for_the_churn_read_shape() {
+    let mut m = object_element_module(
+        Type::Named("Node".to_string()),
+        vec![anon_shape_class(
+            312,
+            ANON_SHAPE_ALIASED,
+            &[("v", Type::Number), ("w", Type::Number)],
+        )],
+    );
+    with_bound(&mut m, length_of(ARRAY_ID));
+    let ir = emit_with_aliases(
+        &m,
+        &[(
+            "Node",
+            object_element_type(&[("v", Type::Number), ("w", Type::Number)], false),
+        )],
+    );
+    for label in CLONE_LABELS {
+        assert!(
+            ir.contains(label),
+            "`churn_read.ts`'s exact shape must reach the clone, but `{label}` \
+             is absent"
+        );
+    }
+    let fast = fast_clone_slice(&ir);
+    assert!(
+        !fast.contains(" call "),
+        "the fast clone must be call-free; found a call in:\n{fast}"
+    );
+    assert!(
+        !fast.contains("js_dynamic_string_or_number_add"),
+        "the accumulate must regain its numeric proof; emitted:\n{fast}"
+    );
+    assert!(
+        fast.contains("fadd"),
+        "the accumulate must lower to an fadd; emitted:\n{fast}"
     );
 }
 
