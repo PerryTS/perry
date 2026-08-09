@@ -352,7 +352,7 @@ pub(super) struct CopyingNurseryTestGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
-fn reset_copying_nursery_runtime_test_state() {
+pub(super) fn reset_copying_nursery_runtime_test_state() {
     // Age-sensitive tests assume the power-on tenuring threshold (promote at
     // the 4th survival); pin it so a heavy-influx test earlier on the same
     // thread cannot leak a lowered adaptive threshold in.

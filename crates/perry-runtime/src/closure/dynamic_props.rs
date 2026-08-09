@@ -5,7 +5,9 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
-static CLOSURE_PROPS: OnceLock<Mutex<HashMap<usize, HashMap<String, f64>>>> = OnceLock::new();
+guard_cleared_global! {
+    static CLOSURE_PROPS: OnceLock<Mutex<HashMap<usize, HashMap<String, f64>>>> = OnceLock::new();
+}
 
 fn get_closure_props() -> &'static Mutex<HashMap<usize, HashMap<String, f64>>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -22,7 +24,9 @@ fn get_closure_props() -> &'static Mutex<HashMap<usize, HashMap<String, f64>>> {
 /// deletion here and have every property-protocol site consult it. test262's
 /// `verifyProperty` exercises exactly this (delete-then-`hasOwnProperty`)
 /// when checking `configurable`.
-static CLOSURE_DELETED_KEYS: OnceLock<Mutex<HashMap<usize, HashSet<String>>>> = OnceLock::new();
+guard_cleared_global! {
+    static CLOSURE_DELETED_KEYS: OnceLock<Mutex<HashMap<usize, HashSet<String>>>> = OnceLock::new();
+}
 
 fn get_closure_deleted_keys() -> &'static Mutex<HashMap<usize, HashSet<String>>> {
     CLOSURE_DELETED_KEYS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -72,7 +76,9 @@ pub fn closure_has_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
 /// real prototype chain, but recording the (closure → proto) link here lets
 /// string- and symbol-keyed property reads on the closure walk to the proto's
 /// own properties — so `TagClass._op === "Tag"` and `isTag(TagClass)` hold.
-static CLOSURE_STATIC_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+guard_cleared_global! {
+    static CLOSURE_STATIC_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+}
 
 fn get_closure_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
     CLOSURE_STATIC_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))

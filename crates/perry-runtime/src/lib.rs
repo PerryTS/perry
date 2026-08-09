@@ -32,6 +32,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: std::alloc::System = std::alloc::System;
 
+// Declared FIRST and with `#[macro_use]`: `guard_cleared_global!` has to be in
+// scope for every module below it. See its module docs for #7672.
+#[macro_use]
+pub mod guard_cleared_global;
+
 pub mod abi_trampoline;
 pub mod agent;
 #[cfg(test)]

@@ -16,6 +16,7 @@ mod evacuation;
 mod fromspace_protect;
 mod fromspace_scan;
 mod global_bootstrap;
+mod global_sink_isolation;
 mod helper_stores;
 mod host_safepoints;
 mod incremental_sweep_reclaim;
