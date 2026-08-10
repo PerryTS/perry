@@ -160,3 +160,5 @@ on the `origin/main` @ `0a2bf15bd` reference build**, on the same host:
   `test_gap_http_req_async_iterator`,
   `test_gap_http_res_socket_writable_onfinished`, `test_gap_net_connect_bound_value`
   — SIGABRT (exit 134) on both builds.
+* `test_gap_specabi_reassign` — diverges from the node oracle byte-identically on
+  both builds.
