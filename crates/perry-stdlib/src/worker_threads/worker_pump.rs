@@ -121,7 +121,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                     };
                 dispatch_worker_event(worker_id, "exit", Some(code as f64));
                 if let Some(promise) = terminate_promise {
-                    crate::common::async_bridge::queue_promise_resolution(
+                    super::async_shim::queue_promise_resolution(
                         promise,
                         true,
                         (code as f64).to_bits(),

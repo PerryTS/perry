@@ -665,6 +665,15 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     );
     // Module-level `events.*` helpers reached indirectly (captured value,
     // type-erased receiver, spread call) — see `js_events_native_dispatch`.
+    //
+    // #7764: gated to match `pub mod events`, which is `bundled-events`. #7745
+    // added this line ungated, so `--no-default-features` — the configuration
+    // the auto-optimize relink builds with — stopped compiling, and every
+    // `perry` compile that triggers auto-optimize silently fell back to the
+    // prebuilt archives. The neighbouring registrations are gated the same way
+    // (`database-sqlite` on the next line), which is what makes this an
+    // omission rather than a decision.
+    #[cfg(feature = "bundled-events")]
     perry_runtime::js_set_native_events_dispatch(crate::events::js_events_native_dispatch);
     #[cfg(feature = "database-sqlite")]
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);

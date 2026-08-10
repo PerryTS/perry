@@ -66,7 +66,7 @@ pub extern "C" fn js_worker_threads_post_message_to_thread(
         return rejected_worker_messaging_promise(WorkerMessagingError::Failed);
     };
 
-    let promise = unsafe { crate::common::async_bridge::js_promise_new_for_native_resolution() };
+    let promise = unsafe { super::async_shim::js_promise_new_for_native_resolution() };
     let promise_ptr = promise as usize;
     let timeout = timeout_duration(timeout);
     if sender
@@ -157,11 +157,7 @@ fn wait_for_direct_message_ack(
 
     match result {
         Ok(DirectMessageResult::Delivered) => {
-            crate::common::async_bridge::queue_promise_resolution(
-                promise_ptr,
-                true,
-                js_undefined_bits(),
-            );
+            super::async_shim::queue_promise_resolution(promise_ptr, true, js_undefined_bits());
         }
         Ok(DirectMessageResult::Failed) => {
             queue_worker_messaging_rejection(promise_ptr, WorkerMessagingError::Failed);
@@ -171,7 +167,7 @@ fn wait_for_direct_message_ack(
 }
 
 fn queue_worker_messaging_rejection(promise_ptr: usize, error: WorkerMessagingError) {
-    crate::common::async_bridge::queue_deferred_resolution(promise_ptr, false, move || {
+    super::async_shim::queue_deferred_resolution(promise_ptr, false, move || {
         worker_messaging_error_value(error).to_bits()
     });
 }

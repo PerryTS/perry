@@ -134,7 +134,7 @@ extern "C" fn port_on(closure: *const ClosureHeader, event: f64, callback: f64) 
     // the runtime pump would otherwise never be registered and `main` would
     // return before any queued `message` is delivered. Register it here (mirrors
     // readline #347), so the event loop ticks and drains the inboxes.
-    crate::common::async_bridge::ensure_pump_registered();
+    super::async_shim::ensure_pump_registered();
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
@@ -186,7 +186,7 @@ extern "C" fn port_add_event_listener(
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
     };
-    crate::common::async_bridge::ensure_pump_registered();
+    super::async_shim::ensure_pump_registered();
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {

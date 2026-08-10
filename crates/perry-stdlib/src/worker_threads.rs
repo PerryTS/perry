@@ -21,6 +21,8 @@ use perry_runtime::thread::{
 };
 use perry_runtime::value::JSValue;
 
+// #7764: async-bridge entry points that exist in both feature configurations.
+mod async_shim;
 mod broadcast_channel;
 mod channel_pump;
 mod direct_message;
@@ -968,7 +970,8 @@ pub extern "C" fn js_worker_threads_worker_start_heap_profile(receiver: i64) -> 
 }
 
 fn worker_terminate_by_id(worker_id: u64) -> f64 {
-    let promise = unsafe { crate::common::async_bridge::js_promise_new_for_native_resolution() };
+    let promise =
+        unsafe { crate::worker_threads::async_shim::js_promise_new_for_native_resolution() };
     let promise_ptr = promise as usize;
     let resolved_now = {
         let mut workers = WORKERS.lock().unwrap();
@@ -1100,7 +1103,7 @@ fn object_u64_field(value: f64, field_name: &str) -> Option<u64> {
 #[no_mangle]
 pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
     ensure_environment_data_gc_scanner();
-    crate::common::async_bridge::ensure_pump_registered();
+    crate::worker_threads::async_shim::ensure_pump_registered();
     let (id1, id2) = NEXT_PORT_ID.with(|n| {
         let mut n = n.borrow_mut();
         let a = *n;
@@ -1136,7 +1139,7 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> f64 {
     ensure_worker_gc_scanner();
-    crate::common::async_bridge::ensure_pump_registered();
+    crate::worker_threads::async_shim::ensure_pump_registered();
 
     let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
     let options_state = WorkerOptions::from_value(options);
