@@ -4,8 +4,9 @@ When a copying minor's nursery is (near-)entirely live, the collector now
 relabels its blocks as old-gen instead of evacuating them object by object.
 `retain.ts` 0.81 s → **0.53 s**, `retain_wide.ts` 1.33 s → **1.07 s**,
 `retain1` 0.38 → 0.29, `retain_wide1` 0.38 → 0.27, `deeplist` 0.30 → 0.24
-(peak RSS 117 MB → 97 MB). Promotion cost per object **243 ns → 101 ns**,
-derived from the trace's own promoted-object count and pause, not estimated.
+(peak RSS 117 MB → 97 MB). Promotion cost per object **243 ns → 105 ns** on `retain`
+and **264 ns → 116 ns** on `retain_wide`, derived from the trace's own
+promoted-object count and pause summed over the promoting cycles, not estimated.
 All measurements are best-of-5 wall clock on the pinned quiet M1 mini, outputs
 byte-verified against `node --experimental-strip-types` before timing.
 
