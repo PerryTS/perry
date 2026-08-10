@@ -932,3 +932,93 @@ fn assert_specialized_call(expr: &Expr, module: &Module, expected_name: &str) {
         "Type args should be cleared after monomorphization"
     );
 }
+
+/// #7632: a monomorphized class must report the GENERIC's name to user code.
+///
+/// `new Gen<number>()` constructs `Gen$num` (`generate_specialized_name`), and
+/// the instance carries that class's id — so `instance.constructor.name` said
+/// `Gen$num` where node says `Gen`. TypeScript erases type arguments; the
+/// mangling is Perry's business and must not reach a user-visible name.
+///
+/// The fix registers the origin's display name against the specialization's
+/// class id, which `codegen/string_pool.rs` already prefers over the
+/// registration key when emitting named-class constants (the #5592 mechanism).
+///
+/// Unit, not just gap: the gap suite is tag-gated, so a regression there sits
+/// red for days (#5960). This runs on every PR.
+#[test]
+fn a_specialized_class_reports_the_generics_display_name() {
+    fn generic_class(id: u32, name: &str) -> Class {
+        Class {
+            id,
+            name: name.to_string(),
+            type_params: vec![TypeParam {
+                name: "T".to_string(),
+                constraint: None,
+                default: None,
+            }],
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: vec![],
+            constructor: None,
+            methods: vec![],
+            getters: vec![],
+            setters: vec![],
+            static_accessor_names: vec![],
+            static_accessor_fn_ids: vec![],
+            static_fields: vec![],
+            static_methods: vec![],
+            computed_members: vec![],
+            decorators: vec![],
+            is_exported: false,
+            aliases: vec![],
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+        }
+    }
+
+    let mut module = Module::new("test");
+    module.classes.push(generic_class(1, "Gen"));
+    module.init.push(Stmt::Expr(Expr::New {
+        class_name: "Gen".to_string(),
+        args: vec![],
+        type_args: vec![Type::Number],
+        byte_offset: 0,
+        cap_args_appended: 0,
+    }));
+
+    monomorphize_module(&mut module);
+
+    let specialized = module
+        .classes
+        .iter()
+        .find(|c| c.name == "Gen$num")
+        .expect("`new Gen<number>()` must produce a `Gen$num` specialization");
+    assert_eq!(
+        specialized.specialized_from.as_deref(),
+        Some("Gen"),
+        "#7575's origin edge is the precondition for the display name"
+    );
+    assert_eq!(
+        module
+            .class_display_names
+            .get(&specialized.id)
+            .map(String::as_str),
+        Some("Gen"),
+        "the specialization must present the GENERIC's name to user code — \
+         reporting `Gen$num` leaks the mangling into `constructor.name`, \
+         `TypeError` text and stack frames"
+    );
+    // The generic itself is untouched: it never needed a display-name entry,
+    // and adding one for it would change nothing but could mask a regression
+    // in which the specialization's entry is written against the wrong id.
+    assert_eq!(
+        module.class_display_names.get(&1),
+        None,
+        "only the specialization gets an entry"
+    );
+}
