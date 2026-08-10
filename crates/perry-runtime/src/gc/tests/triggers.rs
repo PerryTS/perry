@@ -778,6 +778,156 @@ fn declining_to_escalate_records_no_pre_full_reading() {
     );
 }
 
+/// #7737 item 2: the POSITIVE direction of the same recording.
+///
+/// `declining_to_escalate_records_no_pre_full_reading` proves only that a
+/// declined escalation leaves `pre_in_use == 0`. Nothing asserted that a `true`
+/// verdict from the REAL `arena_growth_full_escalation_due()` — not the
+/// `test_note_full_cycle_reclaimed` bypass, which sets the reading itself —
+/// leaves a non-zero one behind.
+///
+/// That gap is exactly the shape of the first-cut bug #7733's changelog
+/// describes: the recording wired at the wrong call sites,
+/// `update_major_pacing_backoff` silently no-op'ing on `pre_in_use == 0`, and
+/// every test still green. A negative-only test cannot see it, because the
+/// no-op and the correct decline produce the same `0`.
+///
+/// Forcing `due == true` needs the arena reading above the floor
+/// (`PERRY_GC_MAJOR_PACING_FLOOR_MB`, 32 MB by default), and the floor is not
+/// lowerable per-test — `major_pacing_config` is a process-wide `OnceLock`. So
+/// the reading is injected through `pacing_arena_in_use_bytes`, the one
+/// accessor both the predicate and the recording now share.
+#[test]
+fn escalating_records_the_pre_full_arena_reading() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, _growth) = major_pacing_config();
+    if floor_bytes == 0 {
+        // `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` disables pacing outright: no
+        // reading escalates, so there is no positive direction to assert.
+        return;
+    }
+
+    test_reset_major_pacing_backoff();
+    // Baseline 0 ("no full yet") makes the floor itself the boundary, so the
+    // reading below is unambiguously over it.
+    let previous_baseline = test_set_major_pacing_baseline(0);
+    let reading = floor_bytes + 1;
+    let previous_reading = test_set_pacing_arena_in_use(Some(reading));
+
+    let due = arena_growth_full_escalation_due();
+    let recorded = test_major_pacing_pre_in_use_bytes();
+
+    test_set_pacing_arena_in_use(previous_reading);
+    test_set_major_pacing_baseline(previous_baseline);
+    test_reset_major_pacing_backoff();
+
+    assert!(
+        due,
+        "an arena reading one byte over the floor ({floor_bytes}) must escalate \
+         with no prior full — `major_pacing_escalation_threshold_for` returns \
+         the floor verbatim when the baseline is 0"
+    );
+    assert_eq!(
+        recorded, reading,
+        "an ESCALATED full must leave the pre-full reading behind, and it must \
+         be the same reading the predicate decided on. A 0 here is the #7726 \
+         no-op: `update_major_pacing_backoff` returns early on a zero pre \
+         reading, so the backoff never fires and pacing silently reverts to the \
+         unconditional K× rule — with every test still green"
+    );
+}
+
+/// The predicate and the pre-full recording must read the SAME metric.
+///
+/// `update_major_pacing_backoff`'s doc asserts this in prose ("deliberately
+/// measured on the SAME metric the escalation gate reads"). Before #7737 both
+/// sites called `arena_in_use_bytes()` independently, so the guarantee was a
+/// convention two call sites happened to honour. Routing an injected reading
+/// through and requiring it to come back out the other side is what makes it
+/// checkable: if either site is re-pointed at a different metric, the recorded
+/// value stops matching what the decision was taken on.
+#[test]
+fn the_recorded_reading_is_the_one_the_predicate_decided_on() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, _growth) = major_pacing_config();
+    if floor_bytes == 0 {
+        return;
+    }
+
+    for over in [1usize, 7, 4096] {
+        test_reset_major_pacing_backoff();
+        let previous_baseline = test_set_major_pacing_baseline(0);
+        let reading = floor_bytes + over;
+        let previous_reading = test_set_pacing_arena_in_use(Some(reading));
+
+        let due = arena_growth_full_escalation_due();
+        let recorded = test_major_pacing_pre_in_use_bytes();
+
+        test_set_pacing_arena_in_use(previous_reading);
+        test_set_major_pacing_baseline(previous_baseline);
+        test_reset_major_pacing_backoff();
+
+        assert!(due, "reading {reading} is over the floor {floor_bytes}");
+        assert_eq!(
+            recorded, reading,
+            "the recording must observe the same arena reading the predicate did"
+        );
+    }
+}
+
+/// A reading exactly ON the floor escalates (the clause is `>=`), and one below
+/// it does not — the boundary the positive test sits above.
+#[test]
+fn the_floor_is_inclusive_and_below_it_declines() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, _growth) = major_pacing_config();
+    if floor_bytes == 0 {
+        return;
+    }
+
+    let mut verdicts = Vec::new();
+    for reading in [floor_bytes - 1, floor_bytes] {
+        test_reset_major_pacing_backoff();
+        let previous_baseline = test_set_major_pacing_baseline(0);
+        let previous_reading = test_set_pacing_arena_in_use(Some(reading));
+
+        let due = arena_growth_full_escalation_due();
+        let recorded = test_major_pacing_pre_in_use_bytes();
+
+        test_set_pacing_arena_in_use(previous_reading);
+        test_set_major_pacing_baseline(previous_baseline);
+        test_reset_major_pacing_backoff();
+        verdicts.push((due, recorded));
+    }
+    assert_eq!(
+        verdicts[0],
+        (false, 0),
+        "one byte under the floor must decline, and record nothing"
+    );
+    assert_eq!(
+        verdicts[1],
+        (true, floor_bytes),
+        "exactly on the floor must escalate — the clause is `>=`, which is why \
+         `major_pacing_escalation_threshold_for` adds the `+1` to the growth \
+         boundary and not to the floor"
+    );
+}
+
 /// The escalation boundary the GC trace reports must be the boundary the
 /// predicate takes its decision on.
 ///

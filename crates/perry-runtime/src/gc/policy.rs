@@ -1588,7 +1588,43 @@ fn update_major_pacing_backoff(post_in_use: usize) {
 /// nothing about arena-growth pacing, and whose repeated use would otherwise
 /// drive the shift to its cap — never moves the backoff.
 fn note_full_cycle_started() {
-    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(crate::arena::arena_in_use_bytes()));
+    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(pacing_arena_in_use_bytes()));
+}
+
+/// The arena reading BOTH halves of arena-growth pacing must use: the
+/// escalation predicate's comparison against the boundary, and the pre-full
+/// reading `note_full_cycle_started` records for `update_major_pacing_backoff`
+/// to price the result against.
+///
+/// `update_major_pacing_backoff`'s doc already says these are "deliberately
+/// measured on the SAME metric ... so the two cannot disagree about whether a
+/// full helped". Reading `arena_in_use_bytes()` twice made that a convention;
+/// one accessor makes it structural (#7737).
+///
+/// It is also the injection point the positive-direction test needs. Forcing a
+/// `true` verdict from the REAL predicate otherwise requires an arena above
+/// `PERRY_GC_MAJOR_PACING_FLOOR_MB` (32 MB by default), and the floor cannot be
+/// lowered per-test: `major_pacing_config` is a process-wide `OnceLock`, so an
+/// env var only takes effect if this test happens to run first. A 32 MB live
+/// heap in a unit test is what `major_pacing_escalation_threshold_for` was
+/// factored out to avoid, so the seam goes here instead — `#[cfg(test)]`, so it
+/// compiles out of every shipping build and is not a mode anything can be
+/// configured into (CLAUDE.md's GC knob kill-policy is about runtime knobs;
+/// this is not one).
+fn pacing_arena_in_use_bytes() -> usize {
+    #[cfg(test)]
+    if let Some(bytes) = TEST_PACING_ARENA_IN_USE.with(|cell| cell.get()) {
+        return bytes;
+    }
+    crate::arena::arena_in_use_bytes()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override for [`pacing_arena_in_use_bytes`]. Thread-local, so
+    /// concurrently-running tests cannot see each other's value.
+    static TEST_PACING_ARENA_IN_USE: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Current arena-growth escalation backoff shift.
@@ -1636,6 +1672,18 @@ pub(super) fn test_major_pacing_pre_in_use_bytes() -> usize {
 #[cfg(test)]
 pub(super) fn test_set_major_pacing_baseline(bytes: usize) -> usize {
     GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|cell| {
+        let previous = cell.get();
+        cell.set(bytes);
+        previous
+    })
+}
+
+/// Override the arena reading arena-growth pacing sees, for the duration of a
+/// test. `None` restores the real `arena_in_use_bytes()`. Returns the previous
+/// value so a test can restore it rather than assume it was unset.
+#[cfg(test)]
+pub(super) fn test_set_pacing_arena_in_use(bytes: Option<usize>) -> Option<usize> {
+    TEST_PACING_ARENA_IN_USE.with(|cell| {
         let previous = cell.get();
         cell.set(bytes);
         previous
@@ -2706,7 +2754,7 @@ fn arena_growth_full_escalation_due_inner() -> bool {
         // `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` disables the pacing: no reading
         // escalates, so there is no boundary to compare against.
         None => false,
-        Some(threshold) => crate::arena::arena_in_use_bytes() >= threshold,
+        Some(threshold) => pacing_arena_in_use_bytes() >= threshold,
     }
 }
 
