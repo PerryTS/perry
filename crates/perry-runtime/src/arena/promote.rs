@@ -34,7 +34,8 @@
 //! The two halves:
 //!
 //! * [`retag_young_for_in_place_promotion`] runs *before* the trace. It flips
-//!   every in-use Eden and active-survivor block's page range to generation
+//!   every in-use Eden and survivor block's page range — BOTH semispaces, see
+//!   the comment on the loop — to generation
 //!   `Old`, space [`HeapSpace::PromotedYoung`]. From that instant the barrier
 //!   predicates (`barrier_parent_needs_remembering`,
 //!   `remembered_child_needs_tracking`) treat those objects as old — which is

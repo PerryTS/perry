@@ -247,6 +247,15 @@ impl Drop for InPlacePromotionTestGuard {
     }
 }
 
+/// Put the thread back in the state it boots in: no copying minor has run, so
+/// nothing has been measured. Distinct from seeding 0 permille — that is a
+/// MEASUREMENT of "almost nothing survived", and only this exercises the
+/// `None` arm of the decision.
+#[cfg(test)]
+pub(super) fn clear_young_survival_for_tests() {
+    LAST_YOUNG_SURVIVAL_PERMILLE.with(|c| c.set(None));
+}
+
 #[cfg(test)]
 pub(super) fn seed_young_survival_for_tests(permille: u64) {
     LAST_YOUNG_SURVIVAL_PERMILLE.with(|c| c.set(Some(permille)));

@@ -443,7 +443,7 @@ pub(super) struct CopyingNurseryCollector {
     /// surviving cohort's slots (`visit_slot_with_parent`'s re-decode +
     /// remember, `rebuild_evacuated_old_to_young_remembered_set`, and
     /// `restore_surviving_dirty_coverage`) can only insert nothing, and are
-    /// skipped. `debug_assert_no_remembering_needed` re-derives the premise at
+    /// skipped. `debug_assert_no_remembering_possible` re-derives the premise at
     /// runtime in debug builds.
     pub(super) skip_remembering: bool,
     /// Weak target slots (WeakRef referent / WeakMap-WeakSet entry key /

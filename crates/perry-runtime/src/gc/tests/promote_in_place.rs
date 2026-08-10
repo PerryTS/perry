@@ -13,8 +13,9 @@
 //!    swept-live-object crash one cycle later.
 
 use super::super::promote_in_place::{
-    parse_promote_in_place, seed_promoted_dead_bytes_for_tests, InPlacePromotionTestGuard,
-    PROMOTED_DEAD_BUDGET_BYTES, PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
+    clear_young_survival_for_tests, parse_promote_in_place, seed_promoted_dead_bytes_for_tests,
+    seed_young_survival_for_tests, InPlacePromotionTestGuard, PROMOTED_DEAD_BUDGET_BYTES,
+    PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
 };
 use super::super::*;
 use super::support::*;
@@ -82,11 +83,22 @@ fn a_promoting_cycle_still_measures_so_the_predictor_cannot_go_stale() {
 
 #[test]
 fn an_unmeasured_thread_never_promotes() {
-    // 0 permille is what an unmeasured thread decides as (the `None` case takes
-    // the same branch): with no evidence there is no basis for promoting, so
-    // the first copying minor must evacuate and measure.
-    let _guard = InPlacePromotionTestGuard::enabled(0);
-    assert!(!should_promote_young_in_place());
+    // Both no-promote arms, and they are genuinely different states: `None` is
+    // "no copying minor has run on this thread", 0 permille is a MEASUREMENT of
+    // "almost nothing survived". The first copying minor of a process is in the
+    // former, and it must evacuate and measure rather than promote on no
+    // evidence — so the `None` arm needs asserting in its own right.
+    let _guard = InPlacePromotionTestGuard::enabled(1000);
+    clear_young_survival_for_tests();
+    assert!(
+        !should_promote_young_in_place(),
+        "an unmeasured thread has no basis for promoting"
+    );
+    seed_young_survival_for_tests(0);
+    assert!(
+        !should_promote_young_in_place(),
+        "a measured 0 permille must not promote either"
+    );
 }
 
 #[test]
