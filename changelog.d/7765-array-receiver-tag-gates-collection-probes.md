@@ -42,6 +42,30 @@ The same one header read also feeds the descriptor-flag check further down
 second `clean_arr_ptr` and a second header read (3.1% of the profile on its
 own).
 
+**The adjacent cluster falls to the same argument.** `js_array_get_f64` was
+6.3%, and 78% of that came from one caller: the object field-get funnel walking
+an object's `keys_array`. That funnel has *already* proved `keys` is a live
+`GC_TYPE_ARRAY` — it reads the `GcHeader` and returns `undefined` otherwise —
+and capped the index below the array's capacity, which is precisely the pair of
+facts `js_array_get` re-established per key, per property read, through a
+`clean_arr_ptr` forwarding walk, a lazy-header probe, the exotic-receiver
+classifications and a descriptor-flag read. `keys_array_slot` serves the dense,
+descriptor-free, non-forwarded case from the array's own two words and delegates
+everything it cannot serve on those terms — a hole (which reads through the
+prototype chain), an out-of-range index, a forwarded or descriptor-carrying
+array, a null pointer — so no general semantics move.
+`keys_array_len_capped_to_capacity` stops paying the same toll through
+`js_array_length` once per property read.
+
+Measured on the pinned mini, both arms timed back to back, min of 5 (the five
+benchmarks closest to their floor re-measured interleaved at 9):
+**`asyncpipe.ts` 0.9065 s → 0.7143 s, −21.2%** — it stops being the corpus's
+worst gap. `is_registered_map` + `is_registered_set` fall from **13.51% to
+1.2–1.4%** of the `asyncpipe_big.ts` profile (two agreeing runs), and
+`array_object_flags`, `js_array_get_f64` and `js_array_length` all leave the top
+of it. `shapes.ts` (−4.5%) and `interp.ts` improve as a side effect — same
+funnel. No protected benchmark regresses beyond run-to-run noise.
+
 `crates/perry-runtime/src/array/collection_tag_tests.rs` asserts THE SUBJECT,
 not just the answer — the registry is a correct fallback, so a test that only
 compared values would still pass with the gates deleted (CLAUDE.md, "four ways a
@@ -56,6 +80,14 @@ confirmation at the end of `is_registered_map` is removed.
 `every_registered_collection_address_carries_its_own_type_tag` pins the
 invariant the gates rest on, across capacity growth, so a future registration
 path that forgot the tag goes red here rather than silently.
+`keys_array_slot` gets the same treatment from both sides: a per-thread
+fallback counter asserted at zero for the dense arrays the fast path exists for
+and at exactly one per refusal for every shape it must delegate, so "stopped
+applying" and "started swallowing something it should have delegated" are
+equally red. (Per-*thread*, because `cargo test` runs every case on its own
+thread in one process — a process-global counter is moved by whatever else
+happens to be running, which is how the first version of these assertions
+passed for the wrong reason.)
 
 Two comments claiming Map/Set headers are `alloc()`-backed with no `GcHeader`
 — the stated reason the registries are consulted before any header read — are
