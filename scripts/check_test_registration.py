@@ -278,18 +278,6 @@ MECHANISMS: tuple[Mechanism, ...] = (
         registered=lambda t: _read_hash_list(t, "test-parity/gc_repsel_corpus.txt"),
         entry_to_path=lambda e: "test-files/%s.ts" % e,
         min_candidates=45,
-        exclusions={
-            "test_gap_repsel_element_group_numeric": (
-                "parity fixture for #7770's numeric-field proof, not a moving-GC "
-                "witness: its read loop is raw f64 loads with near-zero "
-                "allocation, so the matrix's scavenge arms are INERT on it "
-                "(liveness gate: counter=0, 0/1 cells live) and a registered "
-                "green cell would be green for the wrong reason. GC-under-"
-                "relocation coverage for this feature lives in the reproducer "
-                "run recorded on PR #7774 (1,762 evacuating minors, 400,014 "
-                "objects moved, exit 0) and in the ordinary parity harness."
-            ),
-        },
     ),
     Mechanism(
         id="feature-matrix-probes",

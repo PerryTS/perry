@@ -738,3 +738,16 @@ test_gap_gc_alloc_point_no_move
 test_gap_gc_class_field_receiver_rooting
 test_gap_gc_index_set_bounded_globalthis_ta_rooting
 test_gap_gc_namespace_and_computed_dispatch_rooting
+
+# #7766 (PR #7778): the element-binding clone through a function boundary.
+# Lying callers force the slow path while the honest arm's clone reads raw
+# f64 slots off relocatable objects — live on the evacuating arms (9 copying
+# minors / 15,843 objects moved under zeal at audit time).
+test_gap_repsel_element_shape_param_binding
+
+# #7770 (PR #7774, registered by #7778): the element-group numeric-field
+# proof. Low-allocation read loop — its cell can run zero copying minors on
+# a filtered arm (the arm-level liveness gate is the vacuity guard); its
+# value here is byte-parity under every arm plus raw-f64 loads on proven
+# fields whenever relocation does land.
+test_gap_repsel_element_group_numeric
