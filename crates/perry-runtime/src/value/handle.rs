@@ -72,6 +72,18 @@ pub extern "C" fn js_set_native_querystring_dispatch(func: JsNativeQuerystringDi
     JS_NATIVE_QUERYSTRING_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the node:events MODULE-level helper dispatcher (`events.listenerCount`,
+/// `events.once`, …). Registered by perry-stdlib at startup so a captured,
+/// type-erased or spread-called module helper reaches the same `js_events_*`
+/// FFI the static call already uses, instead of `undefined`. The `events`
+/// helpers live in perry-stdlib, which depends on perry-runtime, so the
+/// dispatch bucket here can only reach them through a registered pointer —
+/// same shape as zlib/querystring/domain above.
+#[no_mangle]
+pub extern "C" fn js_set_native_events_dispatch(func: JsNativeQuerystringDispatchFn) {
+    JS_NATIVE_EVENTS_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the node:sqlite module dispatcher. Registered by perry-stdlib at
 /// startup so captured and dynamic-imported sqlite exports reach stdlib.
 #[no_mangle]

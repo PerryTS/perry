@@ -228,3 +228,101 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
 pub extern "C" fn js_events_init() -> f64 {
     undefined_value()
 }
+
+/// Coerce a NaN-boxed event-name argument to a heap string, the way the static
+/// call's `NA_STR` marshalling does. A non-string goes through `ToString`
+/// (Node keys listeners by the coerced name), and a missing argument becomes
+/// `"undefined"` rather than a null pointer, so the helpers below see exactly
+/// what the static path would hand them.
+unsafe fn event_name_header(value: f64) -> *const StringHeader {
+    let materialized = perry_runtime::string::js_string_materialize_to_heap(value);
+    if !materialized.is_null() {
+        return materialized;
+    }
+    perry_runtime::value::js_jsvalue_to_string(value)
+}
+
+/// Runtime bridge for the module-level `events.*` helpers reached INDIRECTLY —
+/// a captured value (`const c = events.listenerCount; c(e, "x")`), a type-erased
+/// receiver (`(events as any).listenerCount(e, "x")`), or a spread call
+/// (`events.listenerCount(...args)`).
+///
+/// All of these route through `dispatch_native_module_method` →
+/// `nm_dispatch_events` in perry-runtime, which cannot name these functions
+/// (perry-stdlib depends on perry-runtime, not the reverse) and so answered
+/// `undefined` for every one of them while the statically dispatched call went
+/// straight to the same FFI and was correct. Registered in
+/// `common/dispatch/init.rs`; mirrors the zlib / querystring / domain bridges.
+///
+/// The name list must stay in sync with the `has_receiver: false` `events` rows
+/// of perry-codegen's `NativeModSig` table (`lower_call/native_table/net_events.rs`)
+/// and the arm in `nm_dispatch_events` that calls this. `init` and
+/// `EventEmitterAsyncResource` are deliberately absent — perry-runtime answers
+/// those itself without needing stdlib.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_native_dispatch(
+    method: *const u8,
+    method_len: usize,
+    args: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undefined = f64::from_bits(TAG_UNDEFINED_F64_BITS);
+    if method.is_null() || method_len == 0 {
+        return undefined;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(method, method_len)).unwrap_or("");
+    let arg = |i: usize| -> f64 {
+        if i < args_len && !args.is_null() {
+            *args.add(i)
+        } else {
+            undefined
+        }
+    };
+    match name {
+        "listenerCount" => js_events_listener_count(arg(0), event_name_header(arg(1))),
+        "getMaxListeners" => js_events_get_max_listeners(arg(0)),
+        "getEventListeners" => {
+            let arr = js_events_get_event_listeners(arg(0), event_name_header(arg(1)));
+            if arr.is_null() {
+                undefined
+            } else {
+                js_nanbox_pointer(arr as i64)
+            }
+        }
+        "once" => {
+            let promise = crate::events::js_events_once(arg(0), event_name_header(arg(1)), arg(2));
+            if promise.is_null() {
+                undefined
+            } else {
+                js_nanbox_pointer(promise as i64)
+            }
+        }
+        "on" => {
+            let iter = crate::events::js_events_on(arg(0), event_name_header(arg(1)), arg(2));
+            if iter.is_null() {
+                undefined
+            } else {
+                js_nanbox_pointer(iter as i64)
+            }
+        }
+        "addAbortListener" => {
+            let disposable = js_events_add_abort_listener(arg(0), arg(1));
+            if disposable == 0 {
+                undefined
+            } else {
+                js_nanbox_pointer(disposable)
+            }
+        }
+        // `setMaxListeners(n, ...targets)`: the static path hands the trailing
+        // targets over as ONE Perry array (`NA_VARARGS`), so rebuild that array
+        // from the remaining arguments rather than passing them positionally.
+        "setMaxListeners" => {
+            let mut targets = js_array_alloc(args_len.saturating_sub(1) as u32);
+            for i in 1..args_len {
+                targets = perry_runtime::array::js_array_push_f64(targets, arg(i));
+            }
+            js_events_set_max_listeners(arg(0), targets)
+        }
+        _ => undefined,
+    }
+}

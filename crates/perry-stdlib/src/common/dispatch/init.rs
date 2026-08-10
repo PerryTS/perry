@@ -663,6 +663,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,
     );
+    // Module-level `events.*` helpers reached indirectly (captured value,
+    // type-erased receiver, spread call) — see `js_events_native_dispatch`.
+    perry_runtime::js_set_native_events_dispatch(crate::events::js_events_native_dispatch);
     #[cfg(feature = "database-sqlite")]
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
     perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);

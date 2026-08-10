@@ -58,7 +58,8 @@ pub use events_on::js_events_on;
 mod module_helpers;
 pub use module_helpers::{
     js_events_add_abort_listener, js_events_get_event_listeners, js_events_get_max_listeners,
-    js_events_init, js_events_listener_count, js_events_set_max_listeners,
+    js_events_init, js_events_listener_count, js_events_native_dispatch,
+    js_events_set_max_listeners,
 };
 
 const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
