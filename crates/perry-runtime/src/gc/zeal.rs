@@ -210,9 +210,12 @@ pub(crate) fn note_zeal_forced_collection() {
 /// | 16 | 5,070 | 129,959 | 3.0 s |
 /// | 64 | 1,291 | 52,357 | 1.1 s |
 ///
-/// Row 0 is the pre-fix behaviour reproduced exactly — 283,857 collections for
-/// 283,852 polls, i.e. 1:1 — and it is what made the full-scale workload take
-/// ~24 minutes.
+/// Row 0 is the pre-fix behaviour reproduced on the shipped binary: 283,857
+/// collections for 283,852 polls — one per back-edge poll, plus a handful from
+/// the other safepoint zeal forces at (the outermost microtask-pump boundary,
+/// which `note_loop_poll_reached` does not count). Near 1:1, not exactly; the
+/// bound that matters is one per poll, and it is what made the full-scale
+/// workload take ~24 minutes.
 ///
 /// 4 KB rather than the faster 16/64 is deliberate: this is a *correctness*
 /// instrument, so the default errs toward sensitivity. It still collects once

@@ -1118,10 +1118,15 @@ impl GcCycleTrace {
         let steps_value = steps_json(self.steps_before, steps_after);
         let (pacing_baseline, pacing_shift, pacing_threshold) =
             super::policy::major_pacing_snapshot();
+        // `escalate_at_or_above_bytes`, not the old `escalate_above_bytes`: the
+        // predicate this mirrors is `in_use >= threshold` (its floor clause is a
+        // `>=`), and the old name was half of why the reported figure and the
+        // decision could disagree. `null` = arena-growth pacing disabled
+        // (`PERRY_GC_MAJOR_PACING_FLOOR_MB=0`), i.e. no reading escalates.
         let major_pacing_json = serde_json::json!({
             "baseline_bytes": pacing_baseline,
             "backoff_shift": pacing_shift,
-            "escalate_above_bytes": pacing_threshold,
+            "escalate_at_or_above_bytes": pacing_threshold,
         });
         serde_json::json!({
             "event": "gc_cycle",

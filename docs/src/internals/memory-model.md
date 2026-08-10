@@ -150,10 +150,19 @@ investigation:
   publishes it: the default depth of 4 misses it silently, and
   `PERRY_GC_PROTECT_FROMSPACE_DEPTH=800` faults on the first use. Rule of thumb:
   depth ≥ the number of safepoints the suspect value survives.
-- `PERRY_GC_ZEAL` cannot emit loop back-edge polls that codegen never produced.
-  Those require the **compile-time** `PERRY_GC_MOVING_LOOP_POLLS=1` (default off
-  since #7161). Without it, zeal only fires at event-loop boundaries and a
-  compute-only loop never collects at all. Compile *and* run with the poll opt-in.
+- `PERRY_GC_ZEAL` cannot force a collection at a loop back-edge poll codegen
+  never produced. Those come from the **compile-time**
+  `PERRY_GC_MOVING_LOOP_POLLS`, which is **default ON since #7721** (kill switch
+  `=0`); it was default off from #7161 until then, and that is why zeal used to
+  look free — it was collecting nothing. Two gaps survive the new default:
+  codegen emits no poll for a provably alloc-free loop body (by design,
+  `loop_purity::loop_may_allocate`), nor for the specialized `for` / `for-of` /
+  `for-in` lowerings (by omission). On a poll-free binary zeal fires only at
+  event-loop boundaries, so a compute-only loop never collects at all. You no
+  longer have to remember to check: since #7604 a zeal run prints
+  `[gc-zeal] forced_collections=… copying_minors=… moved_objects=… loop_polls=…`
+  at exit and **exits 70** if it forced or moved nothing, so a vacuous run is
+  red rather than green.
 - **Page protection is Unix-only.** `mprotect` / `sigaction` / `sysconf` are not
   exposed by the `libc` crate on `x86_64-pc-windows-msvc`, a target
   `perry-runtime` is genuinely built for. On non-Unix hosts `=1` degrades to

@@ -1593,18 +1593,22 @@ pub(super) fn major_pacing_backoff_shift() -> u32 {
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get())
 }
 
-/// `(post-full baseline bytes, backoff shift, arena in-use bytes needed to
-/// escalate the next minor to a full)` — emitted in the GC trace so a gate can
-/// prove the backoff actually engaged rather than merely that nothing threw.
-/// A zero baseline means no full has run yet, and the threshold is reported as
-/// 0 because the `baseline == 0` clause escalates unconditionally.
+/// `(post-full baseline bytes, backoff shift, arena in-use bytes at or above
+/// which the next minor escalates to a full)` — emitted in the GC trace so a
+/// gate can prove the backoff actually engaged rather than merely that nothing
+/// threw.
+///
+/// The third element is [`major_pacing_escalation_threshold_bytes`] verbatim,
+/// i.e. the boundary `arena_growth_full_escalation_due` actually tests, **floor
+/// included**. `None` means arena-growth pacing is disabled
+/// (`PERRY_GC_MAJOR_PACING_FLOOR_MB=0`) and no reading escalates; a zero
+/// baseline (no full yet) reports the floor, which is the reading that
+/// escalates — not `0`, which is what it used to say.
 #[cfg(feature = "diagnostics")]
-pub(super) fn major_pacing_snapshot() -> (usize, u32, usize) {
-    let (_floor, growth_num) = major_pacing_config();
+pub(super) fn major_pacing_snapshot() -> (usize, u32, Option<usize>) {
     let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
     let shift = major_pacing_backoff_shift();
-    let threshold = baseline.saturating_mul(growth_num.saturating_mul(1usize << shift));
-    (baseline, shift, threshold)
+    (baseline, shift, major_pacing_escalation_threshold_bytes())
 }
 
 #[cfg(test)]
@@ -2645,7 +2649,7 @@ pub(super) fn test_start_budgeted_minor_fallback_state_with_trace(
 /// parse / String alloc. The env vars are for tuning and measurement (read at
 /// process start); defaults chosen so churn oscillates ~baseline..2×baseline
 /// and stays below node's peak.
-fn major_pacing_config() -> (usize, usize) {
+pub(super) fn major_pacing_config() -> (usize, usize) {
     use std::sync::OnceLock;
     static CONFIG: OnceLock<(usize, usize)> = OnceLock::new();
     let &(floor_bytes, growth_num) = CONFIG.get_or_init(|| {
@@ -2685,25 +2689,70 @@ pub(super) fn arena_growth_full_escalation_due() -> bool {
 }
 
 fn arena_growth_full_escalation_due_inner() -> bool {
+    match major_pacing_escalation_threshold_bytes() {
+        // `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` disables the pacing: no reading
+        // escalates, so there is no boundary to compare against.
+        None => false,
+        Some(threshold) => crate::arena::arena_in_use_bytes() >= threshold,
+    }
+}
+
+/// The smallest `arena_in_use_bytes()` reading that escalates the next minor to
+/// a full, or `None` when arena-growth pacing is disabled outright and no
+/// reading escalates.
+///
+/// **This is the only definition of that boundary.**
+/// `arena_growth_full_escalation_due_inner` is now literally
+/// `in_use >= this`, and `major_pacing_snapshot` reports exactly this — so the
+/// decision and the diagnostic cannot drift apart, rather than merely agreeing
+/// today. #7733 added the snapshot so the pacing subject could be asserted live
+/// in the GC trace, and it recomputed the boundary as `baseline × growth` with
+/// the floor dropped on the ground (`let (_floor, growth_num) = …`). Wherever
+/// the floor dominates — the entire pre-first-full phase, where the old
+/// snapshot reported `0`, and any baseline below `floor / growth` — the trace
+/// named a boundary the collector does not use. A probe that misreports the
+/// quantity it exists to prove is this repo's most expensive recurring bug, so
+/// the fix is one source of truth, not two that match.
+fn major_pacing_escalation_threshold_bytes() -> Option<usize> {
     let (floor_bytes, growth_num) = major_pacing_config();
-    if floor_bytes == 0 {
-        return false; // PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing
-    }
-    let in_use = crate::arena::arena_in_use_bytes();
-    if in_use < floor_bytes {
-        return false;
-    }
     let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
-    // No full yet (baseline 0): bound the initial growth once we clear the floor.
-    if baseline == 0 {
-        return true;
-    }
     // Yield-adaptive: a full that reclaimed almost nothing pushes the next
     // escalation out (`GC_MAJOR_PACING_BACKOFF_SHIFT`). Shift the multiplier,
     // not the baseline, so one productive full restores the original pacing.
     let shift = GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get());
+    major_pacing_escalation_threshold_for(floor_bytes, growth_num, baseline, shift)
+}
+
+/// Pure `(config, state) → boundary`, factored out so the floor/growth
+/// interaction is unit-testable without a 32 MB live heap (which is what left
+/// the original divergence untested: every reachable unit test sat below the
+/// floor, where the two formulas' disagreement is invisible to a `bool`).
+///
+/// `None` means "no arena reading escalates" — either pacing is off, or the
+/// growth term overflowed `usize`, which is the same statement about the world.
+pub(super) fn major_pacing_escalation_threshold_for(
+    floor_bytes: usize,
+    growth_num: usize,
+    baseline: usize,
+    shift: u32,
+) -> Option<usize> {
+    if floor_bytes == 0 {
+        return None; // PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing
+    }
+    // No full yet (baseline 0): bound the initial growth once we clear the
+    // floor, so the floor alone is the boundary.
+    if baseline == 0 {
+        return Some(floor_bytes);
+    }
     let growth = growth_num.saturating_mul(1usize << shift);
-    in_use > baseline.saturating_mul(growth)
+    // `+1` because the growth clause is a strict `>` while the floor clause is
+    // a `>=`; taking the max of the two is what the snapshot used to omit.
+    // `checked_*` rather than `saturating_*`: a growth term that does not fit
+    // in a `usize` is a boundary no arena reading can reach, which is exactly
+    // what `None` says — saturating would report `usize::MAX` and then claim an
+    // arena of `usize::MAX` escalates, which the `>` clause never would.
+    let growth_boundary = baseline.checked_mul(growth)?.checked_add(1)?;
+    Some(floor_bytes.max(growth_boundary))
 }
 
 fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option<BudgetedGcCycle> {

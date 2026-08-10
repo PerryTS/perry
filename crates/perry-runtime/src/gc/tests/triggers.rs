@@ -778,6 +778,158 @@ fn declining_to_escalate_records_no_pre_full_reading() {
     );
 }
 
+/// The escalation boundary the GC trace reports must be the boundary the
+/// predicate takes its decision on.
+///
+/// #7733 added `major_pacing_snapshot` for exactly one purpose: so a gate could
+/// assert the pacing subject was LIVE in the trace rather than merely that
+/// nothing threw. It then recomputed the boundary as `baseline × growth` with
+/// the floor dropped on the floor of the function (`let (_floor, growth_num)`),
+/// while `arena_growth_full_escalation_due` rejects everything under that same
+/// floor. Wherever the floor dominates the two disagreed — most starkly before
+/// the first full, where the trace reported `0` ("escalates at any size") for a
+/// collector that escalates at 32 MB. A probe that misreports its own subject
+/// is worse than no probe, because it reads green.
+///
+/// `escalates_reference` below is a deliberate INDEPENDENT transcription of the
+/// four clauses the predicate used to spell out inline — not a call into the
+/// code under test. The point is to pin the boundary against a second statement
+/// of the rule, so collapsing both onto one helper cannot quietly redefine it.
+#[test]
+fn the_reported_escalation_boundary_is_the_one_the_predicate_decides_on() {
+    use super::super::policy::major_pacing_escalation_threshold_for;
+    const MB: usize = 1024 * 1024;
+
+    fn escalates_reference(
+        floor: usize,
+        growth_num: usize,
+        baseline: usize,
+        shift: u32,
+        in_use: usize,
+    ) -> bool {
+        if floor == 0 {
+            return false; // pacing disabled
+        }
+        if in_use < floor {
+            return false; // under the absolute floor: small heaps never pay
+        }
+        if baseline == 0 {
+            return true; // no full yet
+        }
+        in_use > baseline.saturating_mul(growth_num.saturating_mul(1usize << shift))
+    }
+
+    // The named cases first: each is a different bug if it breaks.
+    assert_eq!(
+        major_pacing_escalation_threshold_for(32 * MB, 2, 4 * MB, 0),
+        Some(32 * MB),
+        "FLOOR DOMINATES (4 MB baseline × 2 = 8 MB, under the 32 MB floor): the \
+         boundary is the floor. Reporting 8 MB names a collection the collector \
+         will decline to run."
+    );
+    assert_eq!(
+        major_pacing_escalation_threshold_for(32 * MB, 2, 64 * MB, 0),
+        Some(128 * MB + 1),
+        "GROWTH DOMINATES: strictly ABOVE K× the baseline, per the `>` clause"
+    );
+    assert_eq!(
+        major_pacing_escalation_threshold_for(32 * MB, 2, 0, 0),
+        Some(32 * MB),
+        "no full yet: the floor is the boundary — the old snapshot reported 0 \
+         here, i.e. 'always', for a collector that escalates at 32 MB"
+    );
+    assert_eq!(
+        major_pacing_escalation_threshold_for(32 * MB, 2, 64 * MB, 2),
+        Some(512 * MB + 1),
+        "the backoff shift multiplies the GROWTH term, not the floor"
+    );
+    assert_eq!(
+        major_pacing_escalation_threshold_for(0, 2, 64 * MB, 0),
+        None,
+        "PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing outright: no \
+         arena reading escalates, so there is no boundary to report"
+    );
+
+    // ...then exhaustively against the reference, probing each boundary's own
+    // ±1 neighbourhood so an off-by-one cannot hide between the named cases.
+    for &floor in &[0, 1, 8 * MB, 32 * MB] {
+        for &growth_num in &[1, 2, 3] {
+            for &baseline in &[0, 1, 4 * MB, 32 * MB, usize::MAX / 4, usize::MAX] {
+                for shift in 0..=2u32 {
+                    let threshold =
+                        major_pacing_escalation_threshold_for(floor, growth_num, baseline, shift);
+                    let mut probes =
+                        vec![0usize, 1, 8 * MB, 32 * MB, 64 * MB, 512 * MB, usize::MAX];
+                    if let Some(boundary) = threshold {
+                        probes.extend([
+                            boundary.saturating_sub(1),
+                            boundary,
+                            boundary.saturating_add(1),
+                        ]);
+                    }
+                    for in_use in probes {
+                        assert_eq!(
+                            threshold.is_some_and(|boundary| in_use >= boundary),
+                            escalates_reference(floor, growth_num, baseline, shift, in_use),
+                            "floor={floor} growth={growth_num} baseline={baseline} \
+                             shift={shift} in_use={in_use}: the reported boundary \
+                             disagrees with the escalation rule"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// ...and the SHIPPED pair must agree, not just the pure helper.
+///
+/// The pure test above proves the formula; this proves both production callers
+/// are actually reading it. It drives the real `arena_growth_full_escalation_due`
+/// against the real `major_pacing_snapshot` on this thread's real arena, so a
+/// future re-split (a snapshot that recomputes "the same" boundary inline)
+/// fails here even if the pure helper stays correct.
+///
+/// `baseline = 0` is the discriminating row and it needs no particular heap
+/// size: the pre-#7740 snapshot reported `0` there, i.e. `in_use >= 0`, which
+/// is true of every arena including an empty one, while the predicate declines
+/// under the floor.
+#[test]
+fn the_shipped_predicate_and_the_shipped_snapshot_read_one_boundary() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, major_pacing_snapshot,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+    };
+    let (floor_bytes, _growth_num) = major_pacing_config();
+    test_reset_major_pacing_backoff();
+    let saved = test_set_major_pacing_baseline(0);
+
+    for baseline in [0usize, 1, floor_bytes / 4, usize::MAX / 4] {
+        test_set_major_pacing_baseline(baseline);
+        let (reported_baseline, _shift, threshold) = major_pacing_snapshot();
+        let in_use = crate::arena::arena_in_use_bytes();
+        let due = arena_growth_full_escalation_due();
+        // `due == true` records a pre-full reading; drop it so the next row and
+        // every later test on this thread start from a clean pacing state.
+        test_reset_major_pacing_backoff();
+
+        assert_eq!(
+            reported_baseline, baseline,
+            "the snapshot must report the live baseline"
+        );
+        assert_eq!(
+            due,
+            threshold.is_some_and(|boundary| in_use >= boundary),
+            "baseline={baseline}: the trace's escalate_at_or_above_bytes \
+             ({threshold:?}) disagrees with the verdict the collector actually \
+             took on this arena ({in_use} bytes)"
+        );
+    }
+
+    test_set_major_pacing_baseline(saved);
+    test_reset_major_pacing_backoff();
+}
+
 // ---------------------------------------------- the poll's arming word -----
 
 /// The deferral flag and `PERRY_GC_POLL_ARMED` are one piece of state with two
@@ -864,18 +1016,34 @@ fn an_unarmed_poll_touches_nothing() {
 /// path: every back-edge would read zero, skip the call, and force nothing —
 /// and `zeal_liveness_report` would be left to report the vacuity after the
 /// fact instead of the instrument simply working.
+///
+/// The release half is asserted, not narrated. `ZealGuard::set(true)` arms the
+/// process-global word; if its `Drop` ever stopped giving that arm back, the
+/// word would stay non-zero for the life of the test binary and every later
+/// test would silently take the poll's slow path — with this test still green,
+/// because it only ever looked INSIDE the scope. A test that cannot fail is not
+/// a test.
 #[test]
 fn zeal_holds_the_poll_word_armed_with_nothing_pending() {
     let _isolation = GcTestIsolationGuard::new();
     crate::gc::set_safepoint_pending(false);
+    let base = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
     {
         let _zeal = super::super::zeal::ZealGuard::set(true);
-        assert!(
-            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        assert_eq!(
+            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+            base + 1,
             "zeal must keep the poll reachable even with no deferral outstanding"
         );
     }
     // And it gives the arm back, so one zeal test does not leave every later
     // test in this binary paying for the slow path.
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base,
+        "dropping the ZealGuard must release the arm it took — a leaked arm \
+         pins the poll on for the rest of the process, and nothing else in this \
+         binary would notice"
+    );
     crate::gc::set_safepoint_pending(false);
 }
