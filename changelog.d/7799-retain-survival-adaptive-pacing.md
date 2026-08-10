@@ -141,3 +141,22 @@ under `PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800` and
 0.421, `churn_alloc` 0.374, `push_cls` 0.358, `push_num` 0.137, `churn_read`
 0.022, `cycles` 0.193, `tree` 1.631, `tree_wide` 2.113, `fib40` 0.394, `interp`
 1.889, `asyncpipe` 0.710, `shapes` 0.219, `pipeline` 0.543.
+
+#### Gap suite
+
+Every gap failure outside `test-parity/gap_snapshot.json` reproduces **identically
+on the `origin/main` @ `0a2bf15bd` reference build**, on the same host:
+
+* `test_gap_gc_rest_argument_rooting`, `test_gap_gc_same_module_call_argument_rooting`
+  — byte-identical output from both builds, zeal verdict line included
+  (`forced_collections=379 copying_minors=379 moved_objects=115536` and
+  `749/749/231012`). The mismatch is the `[gc-zeal]` exit verdict against a node
+  oracle that does not print it.
+* `test_gap_gc_alloc_point_no_move` — timed out against the harness's 10 s limit
+  on a dev host at load 65+, where both builds take 9–11 s. On the quiet mini:
+  main 2.35 / 1.88 / 1.89 s, this branch 2.23 / 1.88 / 1.88 s.
+* `test_gap_fetch_request_from_node_incoming_message`,
+  `test_gap_http_client_no_redirect_follow`, `test_gap_http_overloads_3226plus`,
+  `test_gap_http_req_async_iterator`,
+  `test_gap_http_res_socket_writable_onfinished`, `test_gap_net_connect_bound_value`
+  — SIGABRT (exit 134) on both builds.
