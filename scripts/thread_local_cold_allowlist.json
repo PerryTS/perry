@@ -42,7 +42,7 @@
     "crates/perry-runtime/src/gc/mod.rs": 3,
     "crates/perry-runtime/src/gc/old_free.rs": 1,
     "crates/perry-runtime/src/gc/oldgen_defrag.rs": 1,
-    "crates/perry-runtime/src/gc/policy.rs": 9,
+    "crates/perry-runtime/src/gc/policy.rs": 10,
     "crates/perry-runtime/src/gc/promote_in_place.rs": 2,
     "crates/perry-runtime/src/gc/roots/scan_mode.rs": 1,
     "crates/perry-runtime/src/gc/roots/shadow_stack.rs": 2,
