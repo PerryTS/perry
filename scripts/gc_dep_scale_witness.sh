@@ -39,8 +39,9 @@
 #      check — every command's status is the gate's status (`set -euo pipefail`).
 #   2. It asserts its SUBJECT RAN, three independent ways, and any one of them
 #      missing is a hard failure:
-#        * the `[gc-zeal]` exit verdict, which since #7604 makes the binary
-#          itself exit 70 when a zeal run forced no collection or relocated
+#        * the `[gc-schedule]` exit verdict, which since #7604 (ported to the
+#          seeded schedule by #7741) makes the binary itself exit 70 when a
+#          rate-1 run forced no collection or relocated
 #          nothing — so a vacuous run is red without this script's help;
 #        * `copying_minors` and `loop_polls` are re-read here anyway, because
 #          "the binary would have exited 70" is a claim about a version of the
@@ -49,7 +50,7 @@
 #          `PERRY_GC_PROTECT_FROMSPACE=1` on a run with no copying minor
 #          protects NOTHING and still exits clean. #7717 records hitting exactly
 #          that and nearly recording the wrong conclusion.
-#   3. The answer is compared against the same binary run WITHOUT zeal. A stale
+#   3. The answer is compared against the same binary run WITHOUT the schedule. A stale
 #      root corrupts values, so identical output across the two is the property
 #      that matters. (It is not diffed against node: the corpus imports zod by
 #      SOURCE PATH — `node_modules/zod/src/index.js` resolving to `.ts` — which
@@ -115,41 +116,42 @@ echo "==> compiling $ENTRY"
 "$PERRY_BIN" "$ENTRY" -o "$BIN" || fail "the witness workload did not compile"
 [ -x "$BIN" ] || fail "$BIN was not produced"
 
-echo "==> baseline run (no zeal), for the answer to be compared against"
+echo "==> baseline run (no schedule), for the answer to be compared against"
 "$BIN" > "$OUT_DIR/plain.out" 2> "$OUT_DIR/plain.err" \
-  || fail "the workload failed WITHOUT zeal — that is a plain breakage, not a rooting witness. stderr: $(tail -5 "$OUT_DIR/plain.err")"
+  || fail "the workload failed WITHOUT the schedule — that is a plain breakage, not a rooting witness. stderr: $(tail -5 "$OUT_DIR/plain.err")"
 [ -s "$OUT_DIR/plain.out" ] || fail "the workload printed nothing; there is no answer to compare"
 
-echo "==> witness run: zeal + from-space quarantine at depth 800"
+echo "==> witness run: rate-1 schedule + from-space quarantine at depth 800"
 # PERRY_GC_DIAG=1 is what emits `[gc-fromspace-protect]`, which is the only
 # evidence that the quarantine engaged. Both are eprintln-only diagnostics.
 set +e
-PERRY_GC_ZEAL=1 \
+PERRY_GC_SCHEDULE_SEED=1 \
+PERRY_GC_SCHEDULE_RATE=1 \
 PERRY_GC_PROTECT_FROMSPACE=1 \
 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800 \
 PERRY_GC_DIAG=1 \
-  "$BIN" > "$OUT_DIR/zeal.out" 2> "$OUT_DIR/zeal.err"
+  "$BIN" > "$OUT_DIR/sched.out" 2> "$OUT_DIR/sched.err"
 status=$?
 set -e
 
 if [ "$status" -ne 0 ]; then
   echo "--- last 40 lines of witness stderr ---" >&2
-  tail -40 "$OUT_DIR/zeal.err" >&2 || true
+  tail -40 "$OUT_DIR/sched.err" >&2 || true
   case "$status" in
-    70) fail "the zeal run exercised nothing (exit 70). This is NOT a pass: see the [gc-zeal] lines above for which of forced_collections / copying_minors / loop_polls was zero." ;;
+    70) fail "the rate-1 run exercised nothing (exit 70). This is NOT a pass: see the [gc-schedule] lines above for which of forced_collections / copying_minors / loop_polls was zero." ;;
     139|134|11) fail "the witness FAULTED under the from-space quarantine (exit $status). This is the #7154 class doing what it does: a stale from-space pointer was dereferenced. The reporter above names the address, the retiring minor, and the last-known object's type." ;;
-    *) fail "the witness exited $status under zeal" ;;
+    *) fail "the witness exited $status under the schedule" ;;
   esac
 fi
 
-if ! diff -u "$OUT_DIR/plain.out" "$OUT_DIR/zeal.out" > "$OUT_DIR/answer.diff"; then
-  echo "--- answer differs between the plain and zeal runs ---" >&2
+if ! diff -u "$OUT_DIR/plain.out" "$OUT_DIR/sched.out" > "$OUT_DIR/answer.diff"; then
+  echo "--- answer differs between the plain and scheduled runs ---" >&2
   cat "$OUT_DIR/answer.diff" >&2
   fail "the workload computed a DIFFERENT answer under a relocating collector. A stale root corrupts values; this is the symptom without the fault."
 fi
 
-verdict="$(grep -F '[gc-zeal] forced_collections=' "$OUT_DIR/zeal.err" | tail -1 || true)"
-[ -n "$verdict" ] || fail "no [gc-zeal] verdict line was printed, so nothing proves a collection happened. Was PERRY_GC_ZEAL=1 actually set, and is this binary new enough to emit it (#7604)?"
+verdict="$(grep -F '[gc-schedule] forced_collections=' "$OUT_DIR/sched.err" | tail -1 || true)"
+[ -n "$verdict" ] || fail "no [gc-schedule] verdict line was printed, so nothing proves a collection happened. Were PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 actually set, and is this binary new enough to emit the rate-1 verdict (#7604, retired-zeal port #7741)?"
 
 read_field() { echo "$verdict" | grep -oE "$1=[0-9]+" | cut -d= -f2; }
 cycles="$(read_field copying_minors)"
@@ -160,10 +162,10 @@ polls="$(read_field loop_polls)"
 [ "$cycles" -gt 0 ] || fail "copying_minors=0 — nothing was relocated, so a stale-root witness could not have failed no matter how broken the rooting is."
 [ "$moved" -gt 0 ] || fail "moved_objects=0 — the collector ran but relocated nothing, which is the same vacuous result."
 # Back-edge polls are what put a collection INSIDE a loop body. Without them a
-# zeal run only collects at event-loop boundaries and no loop is covered.
+# rate-1 run only collects at event-loop boundaries and no loop is covered.
 [ "$polls" -gt 0 ] || fail "loop_polls=0 — every collection came from an event-loop boundary, so no loop body was covered. Codegen emits no poll for a provably alloc-free body, nor for the specialized for/for-of/for-in lowerings."
 
-retired="$(grep -cF '[gc-fromspace-protect]' "$OUT_DIR/zeal.err" || true)"
+retired="$(grep -cF '[gc-fromspace-protect]' "$OUT_DIR/sched.err" || true)"
 : "${retired:=0}"
 [ "$retired" -gt 0 ] || fail "the from-space quarantine never retired a page-set, so PERRY_GC_PROTECT_FROMSPACE=1 protected NOTHING and this run's cleanliness means nothing (#7717)."
 

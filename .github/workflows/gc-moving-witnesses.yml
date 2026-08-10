@@ -371,7 +371,7 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       # GATING. No pipe, no `|| true`. The script asserts its own subject ran
-      # three independent ways — the `[gc-zeal]` verdict, `copying_minors` /
+      # three independent ways — the `[gc-schedule]` verdict, `copying_minors` /
       # `moved_objects` / `loop_polls` re-read from it, and a non-zero count of
       # retired from-space page-sets — because `PERRY_GC_PROTECT_FROMSPACE=1` on
       # a run with no copying minor protects NOTHING and still exits clean.
