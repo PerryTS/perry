@@ -1604,7 +1604,10 @@ pub(super) fn major_pacing_backoff_shift() -> u32 {
 /// (`PERRY_GC_MAJOR_PACING_FLOOR_MB=0`) and no reading escalates; a zero
 /// baseline (no full yet) reports the floor, which is the reading that
 /// escalates — not `0`, which is what it used to say.
-#[cfg(feature = "diagnostics")]
+// `test` as well as `diagnostics` (matching `major_pacing_backoff_shift`), so
+// the test that pins snapshot-vs-predicate agreement still builds under
+// `--no-default-features`, where the trace itself is compiled out.
+#[cfg(any(feature = "diagnostics", test))]
 pub(super) fn major_pacing_snapshot() -> (usize, u32, Option<usize>) {
     let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
     let shift = major_pacing_backoff_shift();
