@@ -386,12 +386,18 @@ pub fn intl_legacy_constructed_symbol() -> f64 {
 
 /// O(1) check whether a raw pointer (already untagged) is a known Symbol.
 /// Safe to call on any pointer-shaped value — no dereference is performed.
+#[inline]
 pub fn is_registered_symbol(ptr: usize) -> bool {
     // No symbol has ever been allocated ⟹ nothing to find, and in particular no
     // reason to take the process-global registry mutex.
     if SYMBOL_EVER_REGISTERED.is_idle() {
         return false;
     }
+    is_registered_symbol_slow(ptr)
+}
+
+#[inline(never)]
+fn is_registered_symbol_slow(ptr: usize) -> bool {
     if ptr < 0x10000 {
         return false;
     }

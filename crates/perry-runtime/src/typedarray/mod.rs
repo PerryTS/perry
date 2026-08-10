@@ -348,6 +348,7 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
 
 /// Returns Some(kind) if the (already-stripped) address is a registered
 /// typed array, else None.
+#[inline]
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     // Nothing has ever been registered ⟹ nothing to find. Checked ahead of the
     // #5525 cache because it is the only arm that costs neither a cache-slot
@@ -360,6 +361,16 @@ pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     if TYPED_ARRAY_EVER_REGISTERED.is_idle() {
         return None;
     }
+    lookup_registered_typed_array_kind(addr)
+}
+
+/// The real lookup, out of line so the idle check above inlines into its ~200
+/// call sites. Measured: with the check behind a call, the surviving self-time
+/// of this function was the CALL, not the work — 2.3% of an async-pipeline
+/// program and 1.8-2.3% of a tree-walking interpreter, in programs that create
+/// no typed array at all.
+#[inline(never)]
+fn lookup_registered_typed_array_kind(addr: usize) -> Option<u8> {
     // #5525 fast path: the process-global cache resolves the hot,
     // repeated-same-address lookups without touching the thread-local
     // registry. A miss (cold address or direct-mapped eviction) falls back to

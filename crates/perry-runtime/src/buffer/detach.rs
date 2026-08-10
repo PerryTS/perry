@@ -33,6 +33,7 @@ static EVER_DETACHED: crate::registry_latch::RegistryLatch =
     crate::registry_latch::RegistryLatch::new();
 
 /// `ArrayBuffer.prototype.detached` — true after a successful transfer.
+#[inline]
 pub fn is_detached_buffer(addr: usize) -> bool {
     if EVER_DETACHED.is_idle() {
         return false;

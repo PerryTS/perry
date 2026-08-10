@@ -188,6 +188,7 @@ pub fn mark_as_array_buffer(addr: usize) {
     });
 }
 
+#[inline]
 pub fn is_array_buffer(addr: usize) -> bool {
     if ARRAY_BUFFER_EVER_MARKED.is_idle() {
         return false;
@@ -202,6 +203,7 @@ pub fn mark_as_shared_array_buffer(addr: usize) {
     });
 }
 
+#[inline]
 pub fn is_shared_array_buffer(addr: usize) -> bool {
     if SHARED_ARRAY_BUFFER_EVER_MARKED.is_armed()
         && SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
@@ -217,6 +219,7 @@ pub fn is_shared_array_buffer(addr: usize) -> bool {
     crate::shared_sab::is_shared_sab(addr)
 }
 
+#[inline]
 pub fn is_any_array_buffer(addr: usize) -> bool {
     is_array_buffer(addr) || is_shared_array_buffer(addr)
 }
@@ -228,6 +231,7 @@ pub fn mark_as_data_view(addr: usize) {
     });
 }
 
+#[inline]
 pub fn is_data_view(addr: usize) -> bool {
     if DATA_VIEW_EVER_MARKED.is_idle() {
         return false;
@@ -280,6 +284,7 @@ pub(crate) fn is_small_buf_slab_addr(_addr: usize) -> bool {
 }
 
 /// Check if a pointer is a registered buffer (for instanceof Uint8Array)
+#[inline]
 pub fn is_registered_buffer(addr: usize) -> bool {
     // Nothing buffer-shaped has ever been registered anywhere in this process
     // ⟹ nothing to find, in one atomic load. `register_buffer` (which
@@ -288,6 +293,12 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     if BUFFER_LIKE_EVER_REGISTERED.is_idle() {
         return false;
     }
+    is_registered_buffer_slow(addr)
+}
+
+/// Out of line so the idle check inlines into its ~200 call sites.
+#[inline(never)]
+fn is_registered_buffer_slow(addr: usize) -> bool {
     if BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
         return true;
     }
@@ -341,6 +352,7 @@ pub fn mark_as_secret_key(addr: usize) {
     });
 }
 
+#[inline]
 pub fn is_secret_key(addr: usize) -> bool {
     if SECRET_KEY_EVER_MARKED.is_idle() {
         return false;
@@ -460,6 +472,7 @@ pub fn mark_as_asymmetric_key(addr: usize, kind: u8, asym_type: u8) {
     });
 }
 
+#[inline]
 pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
     if ASYMMETRIC_KEY_EVER_MARKED.is_idle() {
         return None;
@@ -467,6 +480,7 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
     ASYMMETRIC_KEY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
 }
 
+#[inline]
 pub fn is_uint8array_buffer(addr: usize) -> bool {
     // Reached from `typedarray_props::typed_array_owner_kind` for every untyped
     // element access, so the idle case must not take the global mutex: before
@@ -476,6 +490,11 @@ pub fn is_uint8array_buffer(addr: usize) -> bool {
     if UINT8ARRAY_EVER_MARKED.is_idle() {
         return false;
     }
+    is_uint8array_buffer_slow(addr)
+}
+
+#[inline(never)]
+fn is_uint8array_buffer_slow(addr: usize) -> bool {
     UINT8ARRAY_FROM_CTOR.with(|r| r.borrow().contains(&addr))
         || external_uint8arrays()
             .lock()
@@ -496,6 +515,7 @@ pub fn set_buffer_ab_alias(buf: usize, alias: usize) {
 /// Look up the ArrayBuffer-identity alias for a Buffer.  Returns `None` for
 /// buffers that haven't been involved in a copy chain (their `.buffer` just
 /// returns themselves, as before).
+#[inline]
 pub fn buffer_ab_alias(buf: usize) -> Option<usize> {
     if BUFFER_AB_ALIAS_EVER_SET.is_idle() {
         return None;

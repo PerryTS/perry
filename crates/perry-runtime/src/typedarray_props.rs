@@ -31,6 +31,7 @@ enum TypedArrayOwnerKind {
     Uint8ArrayBuffer,
 }
 
+#[inline]
 fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
     if lookup_typed_array_kind(owner).is_some() {
         Some(TypedArrayOwnerKind::TypedArray)
