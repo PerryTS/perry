@@ -272,3 +272,19 @@ lone-valid-obj-ptr | crates/perry-runtime/src/util_mime.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_style_text.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/value/dyn_index.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/value/to_string.rs | 1
+
+# #7272: `crates/perry-ext-*` entered this gate's scope. These ten sites are
+# not new code — they were invisible because the scan roots stopped at
+# perry-runtime/perry-stdlib while the sibling gate
+# (gc_store_site_inventory.py) had globbed the ext crates all along.
+#
+# Five of them are the HTTP server's, which #6826 moved out of
+# crates/perry-stdlib/src/http.rs. This file used to carry an entry for that
+# path, and once the file vanished the gate reported "baseline says 11, found
+# 0 -- lower it to 0": an invitation to ratify a coverage loss as a fix. They
+# are baselined here at their real counts instead.
+handle-floor | crates/perry-ext-events/src/lib.rs | 3
+handle-floor | crates/perry-ext-exponential-backoff/src/lib.rs | 1
+handle-floor | crates/perry-ext-fastify/src/server.rs | 1
+handle-floor | crates/perry-ext-http/src/agent.rs | 3
+handle-floor | crates/perry-ext-http/src/lib.rs | 2

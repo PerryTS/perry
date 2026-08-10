@@ -152,3 +152,16 @@ crates/perry-runtime/src/closure/dispatch/ | * | pre-existing GcHeader probe pre
 crates/perry-runtime/src/bun_compat/string_width.rs | 0xE0000..=0xE007F | Unicode "Tags" codepoint block (U+E0000..U+E007F) tested against a char, not a handle-band address
 crates/perry-runtime/src/bun_compat/width_tables.rs | * | pure Unicode East-Asian-width codepoint-range table; every hex literal is a Unicode code point (e.g. U+F0000 / U+100000 SPUA-A/B planes), never a handle-band address
 crates/perry-runtime/src/array/collection_tag_tests.rs | * | unit tests for the #7765 receiver-tag gate: they read AND re-stamp `GcHeader.obj_type` on an address they allocated themselves, which is the whole subject under test. `try_read_gc_header` cannot serve them (it hands out a shared reference, and the recycling test must WRITE the tag to model `arena_alloc_gc` handing the bytes to the next owner).
+
+# #7272: band literals in `crates/perry-ext-*`, which entered this gate's scope
+# with the widened scan roots. Each is a wrapper deciding "is this f64 payload a
+# small registry handle rather than a heap pointer?" before dereferencing --
+# the same question `addr_class::is_handle_band` answers, re-typed. They are
+# recorded rather than rewritten because the ext crates reach perry-runtime
+# through its public surface and `is_handle_band` is not on it; exporting it is
+# the actual fix and belongs with #7448's `ptr_is_tracked_heap_object` export,
+# not buried in a scan-scope change.
+crates/perry-ext-events/src/lib.rs | const EVENT_EMITTER_HANDLE_ID_END | #7272: the crate's own handle-id range end, a registry bound rather than a heap-address band test
+crates/perry-ext-net/src/jsvalue.rs | * | #7272: socket/server handle-vs-pointer discrimination before dereference; re-types the handle band instead of calling addr_class::is_handle_band, which perry-runtime does not export
+crates/perry-ext-ratelimit/src/lib.rs | (obj as usize) >= 0x100000 | #7272: same handle-vs-pointer guard before an ObjectHeader read
+crates/perry-ext-slugify/src/lib.rs | (obj as usize) < 0x100000 | #7272: same handle-vs-pointer guard before an ObjectHeader read
