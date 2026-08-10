@@ -723,3 +723,18 @@ test_gap_repsel_element_shape_loop_clone
 # — back-edge polls put the copying minor at the safepoints, which is where it
 # is supposed to be.
 test_gap_gc_alloc_point_no_move
+
+# #7210 §2/§3 and #7640 section A (PR #7736). Three rooting fixtures whose
+# hazards are all "a value staged in a register or a plain stack buffer while
+# an allocating helper runs" — the shape the matrix's moving arms exist to
+# catch, so they belong here rather than only in the dominance corpus.
+#
+#   class_field_receiver          the typed-`this` field store's receiver
+#   index_set_bounded_globalthis  the bounded-index array store and
+#                                 `globalThis[k] = v`'s key + singleton copy
+#   namespace_and_computed        `emit_namespace_populator`'s `vals_buf`
+#                                 staging, and `obj[strKey](args)` computed
+#                                 dispatch across `unbox_str_handle`
+test_gap_gc_class_field_receiver_rooting
+test_gap_gc_index_set_bounded_globalthis_ta_rooting
+test_gap_gc_namespace_and_computed_dispatch_rooting
