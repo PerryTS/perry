@@ -146,12 +146,13 @@ unsafe fn default_object_prototype_property_value(
     let _guard = object_prototype_lookup_guard()?;
     // #7498: THIS IS THE FRAME `PERRY_GC_PROTECT_FROMSPACE=1` FAULTS IN on the
     // `[...obj.arr]` path — a 56-byte from-space `GC_TYPE_STRING`, i.e. `key`.
-    // Both arguments are GC-managed and both are live across the two calls
-    // below before their first use: `js_get_global_this_builtin_value` interns
-    // its own `"Object"` key (an allocation), and `closure_get_dynamic_prop`
-    // can run an accessor, which is user code. A copying minor at either point
-    // moves the key string and the receiver and rewrites only the slots it can
-    // see; a bare argument is not one.
+    // Both arguments are GC-managed and both are live across the call below
+    // before their first use: the recursive `js_object_get_field_by_name` on
+    // `Object.prototype` can run an accessor, which is user code, and user code
+    // allocates. A copying minor there moves the key string and the receiver and
+    // rewrites only the slots it can see; a bare argument is not one.
+    // (#7795 removed the two resolution calls that used to allocate here as
+    // well — the rooting is still required for the prototype read itself.)
     //
     // Root both before the first of those calls and read each back at its
     // point of use. NaN-boxed handles only, so this module adds no bare
@@ -165,19 +166,21 @@ unsafe fn default_object_prototype_property_value(
     let receiver_addr =
         || crate::value::js_nanbox_get_pointer(receiver_h.get_nanbox_f64()) as usize;
 
-    let object_ctor = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_value = JSValue::from_bits(object_ctor.to_bits());
-    if !ctor_value.is_pointer() {
+    // #7795: resolve `Object.prototype` from the memoized, GC-healed cache
+    // instead of re-running `globalThis.Object` (which interns an `"Object"`
+    // key string) plus a `closure_get_dynamic_prop("prototype")` on EVERY
+    // ordinary-object property MISS. `object_prototype_addr` performs exactly
+    // this resolution, caches only a successful one, heals the address through
+    // the forwarding chain, and is itself a registered GC root
+    // (`scan_prototype_addr_cache_roots_mut`) — the array index-read fast path
+    // already depends on it. `Object.prototype` is non-writable and
+    // non-configurable per spec, so the memo cannot go stale.
+    let proto_addr = crate::array::object_prototype_addr();
+    if proto_addr == 0 {
         return None;
     }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-    let proto_value = JSValue::from_bits(proto.to_bits());
-    if !proto_value.is_pointer() {
-        return None;
-    }
-    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
-    if proto_ptr.is_null() || proto_ptr as usize == receiver_addr() {
+    let proto_ptr = proto_addr as *mut ObjectHeader;
+    if proto_ptr as usize == receiver_addr() {
         return None;
     }
     let receiver = crate::value::js_nanbox_pointer(receiver_addr() as i64);

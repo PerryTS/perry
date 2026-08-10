@@ -92,6 +92,18 @@ pub(crate) static FETCH_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
 /// `None` for any non-object / non-subclass receiver, so callers can fall
 /// through to their normal dispatch unchanged.
 pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
+    // #7795: nothing has ever stashed a fetch handle, so this probe cannot
+    // return `Some` — answer from the monotone flag instead of interning a key
+    // string and running a full recursive `js_object_get_field_by_name`. This
+    // sits on the ORDINARY-OBJECT PROPERTY-MISS path, which every `await` of a
+    // plain object reaches through the spec thenable check (`Get(v, "then")`),
+    // so an un-gated probe is a per-miss allocation in programs that never
+    // subclass `Request`/`Response`. `FETCH_SUBCLASS_EVER` already existed for
+    // the `in`-operator fast path (#6748) and is set at the single stash site
+    // (`attach_fetch_handle_to_this`); this just consults it here too.
+    if !FETCH_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
     // #7526: classify by BAND, not by magnitude. The old floor
     // (`GC_HEADER_SIZE + 0x1000`) plus `is_valid_obj_ptr` is a magnitude test
     // only — `is_valid_obj_ptr`'s `HEAP_MIN` is 0x1000 — so every Web Fetch
@@ -148,6 +160,17 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
 #[cfg(feature = "temporal")]
 pub(crate) const TEMPORAL_SUBCLASS_CELL_FIELD: &[u8] = b"__perry_temporal_cell__";
 
+/// Has any `class X extends Temporal.<Type>` instance EVER stashed a cell in
+/// this process? The sibling of [`FETCH_SUBCLASS_EVER`], for the same reason:
+/// `temporal_subclass_cell` costs a key-string alloc plus a full recursive
+/// property read per call, and it is consulted on the ordinary-object
+/// property-MISS path. Set at the single stash site
+/// (`attach_temporal_cell_to_this`, `global_this/fetch_globals.rs`), which is
+/// the only writer of `TEMPORAL_SUBCLASS_CELL_FIELD`. (#7795)
+#[cfg(feature = "temporal")]
+pub(crate) static TEMPORAL_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// If `obj` (a raw heap object address) is a `class X extends Temporal.<Type>`
 /// instance, return the NaN-boxed value of its stashed Temporal cell. Returns
 /// `None` for any non-object / non-subclass receiver (so callers fall through
@@ -155,6 +178,11 @@ pub(crate) const TEMPORAL_SUBCLASS_CELL_FIELD: &[u8] = b"__perry_temporal_cell__
 /// longer a live Temporal cell.
 #[cfg(feature = "temporal")]
 pub(crate) unsafe fn temporal_subclass_cell(obj: usize) -> Option<f64> {
+    // #7795: see `fetch_subclass_handle_id`. No Temporal subclass instance has
+    // ever stashed a cell, so this probe cannot return `Some`.
+    if !TEMPORAL_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
     // Reject any address that isn't a plausible heap pointer.  Proxy ids live
     // in [0xF0000, 0x100000) — they pass a naïve `>= GC_HEADER_SIZE + 0x1000`
     // check but are NOT heap pointers.  On Linux (HEAP_MIN = 0x1000) the old
