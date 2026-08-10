@@ -18,6 +18,9 @@ use perry_hir::{BinaryOp, ClassField, CompareOp, Function, Module, Param, Update
 /// the tests use, mirroring the module-wide id allocator.
 const CTOR_PX: u32 = 100;
 const CTOR_PY: u32 = 101;
+/// `Base`'s ctor param and `D`'s super-feeding param (the subclass tests).
+const CTOR_PZ: u32 = 102;
+const CTOR_PZ2: u32 = 103;
 /// Method parameter id for `setX(v)`.
 const METH_PV: u32 = 110;
 
@@ -498,6 +501,117 @@ fn method_site_string_arg_drops_the_field() {
     assert_eq!(
         promoted_ok.get(&6).expect("member promotes").numeric_fields,
         names(&["x", "y"])
+    );
+}
+
+/// `class Base { z; constructor(z) { this.z = z } }`.
+fn class_base() -> Class {
+    let mut b = class_p();
+    b.name = "Base".to_string();
+    b.fields = vec![field("z")];
+    b.constructor = Some(Function {
+        id: 902,
+        name: "constructor".to_string(),
+        type_params: Vec::new(),
+        params: vec![num_param(CTOR_PZ, "z")],
+        return_type: Type::Void,
+        body: vec![this_store("z", Expr::LocalGet(CTOR_PZ))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    b
+}
+
+/// `class D extends Base { x; constructor(x, z) { super(z); this.x = x } }`.
+fn class_d_extends_base() -> Class {
+    let mut d = class_p();
+    d.id = 1;
+    d.name = "D".to_string();
+    d.extends_name = Some("Base".to_string());
+    d.fields = vec![field("x")];
+    d.constructor = Some(Function {
+        id: 903,
+        name: "constructor".to_string(),
+        type_params: Vec::new(),
+        params: vec![num_param(CTOR_PX, "x"), num_param(CTOR_PZ2, "z")],
+        return_type: Type::Void,
+        body: vec![
+            Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(CTOR_PZ2)])),
+            this_store("x", Expr::LocalGet(CTOR_PX)),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    d
+}
+
+/// The super()-argument resolution path under the group MEET — the one place
+/// a parent-constructor parameter environment is derived from MULTIPLE
+/// provenance `new`s. A wrong index or an unresolved caller env here would
+/// grant an unsound claim on `z` (a bare raw load), so both directions get a
+/// red test: all-numeric sites prove BOTH the derived and the inherited
+/// field; one string at the super-feeding position drops exactly `z`,
+/// group-wide, while `x` survives.
+#[test]
+fn super_chain_params_resolve_under_the_group_meet() {
+    let cs = [class_base(), class_d_extends_base()];
+    let classes = classes_of(&cs);
+    let read_loop = |idx: u32, r: u32| {
+        counted_loop(
+            idx,
+            arr_len(1),
+            vec![let_elem(r, 1, idx, "D"), read_field(r, "z")],
+        )
+    };
+    let stmts_ok = vec![
+        let_arr(1, "D"),
+        counted_loop(
+            2,
+            Expr::Number(4.0),
+            vec![push(
+                1,
+                new_of("D", vec![Expr::LocalGet(2), counter_plus_one(2)]),
+            )],
+        ),
+        read_loop(5, 6),
+    ];
+    let promoted_ok = promote(&stmts_ok, &classes);
+    assert_eq!(
+        promoted_ok.get(&6).expect("reader promotes").numeric_fields,
+        names(&["x", "z"]),
+        "super(z) must resolve Base's parameter through the caller env"
+    );
+
+    let stmts_poison = vec![
+        let_arr(1, "D"),
+        push(1, new_of("D", vec![Expr::Number(1.0), Expr::Number(2.0)])),
+        push(
+            1,
+            new_of("D", vec![Expr::Number(3.0), Expr::String("s".to_string())]),
+        ),
+        read_loop(5, 6),
+    ];
+    let promoted_poison = promote(&stmts_poison, &classes);
+    assert_eq!(
+        promoted_poison
+            .get(&6)
+            .expect("reader promotes")
+            .numeric_fields,
+        names(&["x"]),
+        "one string at the super-feeding position must drop `z` for the whole \
+         group and leave `x` standing"
     );
 }
 

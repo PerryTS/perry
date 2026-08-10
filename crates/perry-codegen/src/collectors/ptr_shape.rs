@@ -451,10 +451,12 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     // claim is honest even though member verdicts are not in yet: group
     // integrity below drops EVERY member's fact when any member fails, and a
     // dropped fact takes its claim with it.
+    let groups = element_facts.group_members();
     let group_numeric = prove_group_numeric_fields(
         classes,
         module_dispatch,
         element_facts,
+        &groups,
         &roots,
         &field_stores,
         &method_calls,
@@ -499,46 +501,28 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         let chain = chain_classes(classes, class_name);
         let fields = chain_field_names(&chain);
         let methods = chain_method_map(&chain);
+        let called = method_calls.get(id);
         // Constructor chain + field initializers must not leak `this`. All
         // methods called on the local must be `this`-flow safe and the module
-        // must prove the method table stable.
-        let mut analysis = ThisFlowAnalysis {
-            chain: &chain,
-            fields: &fields,
-            methods: &methods,
-            visited: HashSet::new(),
-            store_records: Vec::new(),
-            super_call_args: HashMap::new(),
-            internally_invoked: HashSet::new(),
-            allow_this_in_store_values: false,
+        // must prove the method table stable. ONE implementation, shared with
+        // the group-scope numeric proof (#7770) — this gate licenses a bare
+        // unchecked `load double`, so two drifting copies would be a
+        // miscompile waiting to happen, not a missed optimization.
+        let mut analysis = match chain_this_flow_verdict(
+            classes,
+            module_dispatch,
+            class_name,
+            &chain,
+            &fields,
+            &methods,
+            called,
+        ) {
+            Ok(analysis) => analysis,
+            Err(why) => {
+                deny(id, class_name, why);
+                continue 'cand;
+            }
         };
-        if !analysis.ctor_chain_safe() {
-            deny(id, class_name, report::THIS_ESCAPE);
-            continue;
-        }
-        let called = method_calls.get(id);
-        if let Some(called) = called {
-            if !module_dispatch.prototype_is_stable(classes, class_name) {
-                deny(id, class_name, report::UNSTABLE_PROTOTYPE);
-                continue;
-            }
-            for m in called.keys() {
-                if fields.contains(m.as_str()) {
-                    // A name that is both a field and a method is ambiguous
-                    // under own-property shadowing — bail.
-                    deny(id, class_name, report::FIELD_METHOD_AMBIGUITY);
-                    continue 'cand;
-                }
-                let Some((owner, func)) = methods.get(m.as_str()) else {
-                    deny(id, class_name, report::ESC_UNRESOLVED_METHOD);
-                    continue 'cand;
-                };
-                if !analysis.method_safe(owner, func) {
-                    deny(id, class_name, report::METHOD_THIS_ESCAPE);
-                    continue 'cand;
-                }
-            }
-        }
         let store_records = std::mem::take(&mut analysis.store_records);
         let super_call_args = std::mem::take(&mut analysis.super_call_args);
         let internally_invoked = std::mem::take(&mut analysis.internally_invoked);
@@ -612,7 +596,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     // group is therefore all-or-nothing. Dropping is the conservative
     // direction and needs no fixpoint: removing members never admits one.
     if !element_facts.is_empty() {
-        for (_, members) in element_facts.group_members() {
+        for members in groups.values() {
             if members.iter().any(|m| !out.contains_key(m)) {
                 // The insert loop above gives every ALIAS of a promoted root
                 // the same fact, because an alias holds the same object. The
@@ -1336,6 +1320,61 @@ struct ThisStoreRecord<'a> {
     /// Owning context: `None` for field initializers; `Some((owner_class,
     /// method_name, param_ids))` for constructor ("constructor") and methods.
     context: Option<(String, String, Vec<u32>)>,
+}
+
+/// Pass-3 safety verdict for one class chain plus the methods invoked on the
+/// value: `this`-flow containment of the constructor chain, prototype
+/// stability when any method is called, field/method name-ambiguity, and
+/// per-method `this`-flow safety. Returns the analysis (holding the store
+/// records, `super(...)` argument lists, and internally-invoked set the
+/// numeric proof consumes) or the FIRST failed obligation.
+///
+/// This is the single implementation behind both the per-candidate `'cand`
+/// loop and the group-scope numeric proof (#7770,
+/// `ptr_shape_numeric.rs::prove_group_numeric_fields`). The verdict licenses
+/// a bare unchecked `load double`; keeping the two callers on one function
+/// is what makes "tighten an obligation" a one-place change.
+fn chain_this_flow_verdict<'a, 'b>(
+    classes: &HashMap<String, &'a Class>,
+    module_dispatch: &ModuleDispatchFacts,
+    class_name: &str,
+    chain: &'b [&'a Class],
+    fields: &'b HashSet<String>,
+    methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
+    called: Option<&HashMap<String, Vec<&'a [Expr]>>>,
+) -> Result<ThisFlowAnalysis<'a, 'b>, ShapeDenial> {
+    let mut analysis = ThisFlowAnalysis {
+        chain,
+        fields,
+        methods,
+        visited: HashSet::new(),
+        store_records: Vec::new(),
+        super_call_args: HashMap::new(),
+        internally_invoked: HashSet::new(),
+        allow_this_in_store_values: false,
+    };
+    if !analysis.ctor_chain_safe() {
+        return Err(report::THIS_ESCAPE);
+    }
+    if let Some(called) = called {
+        if !called.is_empty() && !module_dispatch.prototype_is_stable(classes, class_name) {
+            return Err(report::UNSTABLE_PROTOTYPE);
+        }
+        for m in called.keys() {
+            if fields.contains(m.as_str()) {
+                // A name that is both a field and a method is ambiguous
+                // under own-property shadowing — bail.
+                return Err(report::FIELD_METHOD_AMBIGUITY);
+            }
+            let Some((owner, func)) = methods.get(m.as_str()) else {
+                return Err(report::ESC_UNRESOLVED_METHOD);
+            };
+            if !analysis.method_safe(owner, func) {
+                return Err(report::METHOD_THIS_ESCAPE);
+            }
+        }
+    }
+    Ok(analysis)
 }
 
 pub(super) struct ThisFlowAnalysis<'a, 'b> {

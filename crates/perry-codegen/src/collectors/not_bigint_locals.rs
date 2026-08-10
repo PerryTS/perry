@@ -51,7 +51,7 @@ pub fn collect_not_bigint_locals(
     // into closure bodies so a `LocalSet` to an ENCLOSING local inside a
     // closure is captured (LocalIds are unique per function, so the write is
     // recorded against the enclosing id).
-    let mut writes: HashMap<u32, Vec<&Expr>> = HashMap::new();
+    let mut writes: HashMap<u32, Vec<Option<&Expr>>> = HashMap::new();
     let mut candidates: HashSet<u32> = HashSet::new();
     collect_writes(stmts, &mut writes, &mut candidates);
 
@@ -70,8 +70,11 @@ pub fn collect_not_bigint_locals(
                 // A declared-but-never-assigned `let x;` is `undefined` — a
                 // non-BigInt — so no writes means the local stays.
                 .map(|ws| {
-                    ws.iter()
-                        .all(|rhs| expr_not_bigint(rhs, &types, &not_bigint, &numeric_locals))
+                    ws.iter().all(|rhs| match rhs {
+                        // A `let x;` binding is `undefined` — a non-BigInt.
+                        None => true,
+                        Some(rhs) => expr_not_bigint(rhs, &types, &not_bigint, &numeric_locals),
+                    })
                 })
                 .unwrap_or(true);
             if !all_ok {
@@ -217,18 +220,25 @@ fn index_receiver_is_numeric(object: &Expr, types: &HashMap<u32, HirType>) -> bo
 }
 
 /// Record every write (Let init + `LocalSet` rhs) per local, gather the set of
-/// analyzed candidate ids, and descend into closure bodies.
-fn collect_writes<'a>(
+/// `Let`-bound candidate ids, and descend into closure bodies. A `Let` with no
+/// initializer records `None` (the binding is `undefined` until assigned).
+///
+/// Shared with `ptr_shape/ptr_shape_numeric.rs`'s numeric-by-construction
+/// fixpoint (#7770) — the two analyses differ only in how they judge a write
+/// (`undefined` is a fine non-BigInt and a fatal non-number), so ONE walker
+/// keeps them from drifting by a `Stmt` variant, the bug class
+/// `ptr_shape_elements.rs`'s doc warns about.
+pub(super) fn collect_writes<'a>(
     stmts: &'a [Stmt],
-    writes: &mut HashMap<u32, Vec<&'a Expr>>,
+    writes: &mut HashMap<u32, Vec<Option<&'a Expr>>>,
     candidates: &mut HashSet<u32>,
 ) {
     for s in stmts {
         match s {
             Stmt::Let { id, init, .. } => {
                 candidates.insert(*id);
+                writes.entry(*id).or_default().push(init.as_ref());
                 if let Some(e) = init {
-                    writes.entry(*id).or_default().push(e);
                     collect_writes_expr(e, writes, candidates);
                 }
             }
@@ -314,11 +324,11 @@ fn collect_writes<'a>(
 
 fn collect_writes_expr<'a>(
     e: &'a Expr,
-    writes: &mut HashMap<u32, Vec<&'a Expr>>,
+    writes: &mut HashMap<u32, Vec<Option<&'a Expr>>>,
     candidates: &mut HashSet<u32>,
 ) {
     if let Expr::LocalSet(id, rhs) = e {
-        writes.entry(*id).or_default().push(rhs.as_ref());
+        writes.entry(*id).or_default().push(Some(rhs.as_ref()));
     }
     // Closure bodies are statements, not expression children, so descend
     // explicitly. A write to an enclosing local inside the closure body targets

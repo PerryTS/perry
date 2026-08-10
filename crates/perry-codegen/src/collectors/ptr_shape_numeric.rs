@@ -286,6 +286,7 @@ pub(super) fn prove_group_numeric_fields<'a>(
     classes: &HashMap<String, &'a Class>,
     module_dispatch: &ModuleDispatchFacts,
     element_facts: &ElementShapeFacts,
+    groups: &HashMap<u32, Vec<u32>>,
     roots: &HashMap<u32, u32>,
     field_stores: &HashMap<u32, Vec<(String, StoreValue<'a>)>>,
     method_calls: &HashMap<u32, HashMap<String, Vec<&'a [Expr]>>>,
@@ -296,7 +297,7 @@ pub(super) fn prove_group_numeric_fields<'a>(
     numeric_locals: &HashSet<u32>,
 ) -> HashMap<u32, HashSet<String>> {
     let mut out: HashMap<u32, HashSet<String>> = HashMap::new();
-    'group: for (root, members) in element_facts.group_members() {
+    'group: for (&root, members) in groups {
         let Some(class_name) = element_facts.root_class(root) else {
             continue;
         };
@@ -304,12 +305,22 @@ pub(super) fn prove_group_numeric_fields<'a>(
         if chain.is_empty() {
             continue;
         }
+        // Nothing raw-f64-declared anywhere on the chain means there is no
+        // claim to make — skip the whole this-flow walk for such groups
+        // (proven arrays of string/object-only records are common).
+        if !chain.iter().any(|c| {
+            c.fields
+                .iter()
+                .any(|f| crate::typed_shape::type_is_raw_f64_candidate(&f.ty))
+        }) {
+            continue;
+        }
         let fields = chain_field_names(&chain);
         let methods = chain_method_map(&chain);
         // Merge method call sites group-wide: a method's parameter is numeric
         // only when every site on every member passes a numeric argument.
         let mut merged_calls: HashMap<String, Vec<&'a [Expr]>> = HashMap::new();
-        for m in &members {
+        for m in members {
             if let Some(mc) = method_calls.get(m) {
                 for (name, sites) in mc {
                     merged_calls
@@ -320,35 +331,19 @@ pub(super) fn prove_group_numeric_fields<'a>(
             }
         }
         // The same obligations the `'cand` loop imposes before it trusts a
-        // method walk, re-checked here so a claim can never rest on a weaker
-        // basis than the per-candidate proof it extends.
-        if !merged_calls.is_empty() && !module_dispatch.prototype_is_stable(classes, class_name) {
-            continue;
-        }
-        let mut analysis = ThisFlowAnalysis {
-            chain: &chain,
-            fields: &fields,
-            methods: &methods,
-            visited: HashSet::new(),
-            store_records: Vec::new(),
-            super_call_args: HashMap::new(),
-            internally_invoked: HashSet::new(),
-            allow_this_in_store_values: false,
+        // method walk — literally the same function, so the group claim can
+        // never rest on a weaker basis than the per-candidate proof.
+        let Ok(mut analysis) = super::chain_this_flow_verdict(
+            classes,
+            module_dispatch,
+            class_name,
+            &chain,
+            &fields,
+            &methods,
+            Some(&merged_calls),
+        ) else {
+            continue 'group;
         };
-        if !analysis.ctor_chain_safe() {
-            continue;
-        }
-        for name in merged_calls.keys() {
-            if fields.contains(name.as_str()) {
-                continue 'group;
-            }
-            let Some((owner, func)) = methods.get(name.as_str()) else {
-                continue 'group;
-            };
-            if !analysis.method_safe(owner, func) {
-                continue 'group;
-            }
-        }
         // One argument list per push — ALL of them, or no claim. A producer
         // whose `new_args` went unrecorded, or a push shape E2 would never
         // have admitted, forfeits the group's claim rather than narrowing
@@ -380,7 +375,7 @@ pub(super) fn prove_group_numeric_fields<'a>(
             )
             .collect();
         let mut merged_stores: Vec<(String, StoreValue<'a>)> = Vec::new();
-        for m in &members {
+        for m in members {
             if let Some(fs) = field_stores.get(m) {
                 merged_stores.extend(fs.iter().cloned());
             }
@@ -435,12 +430,13 @@ pub(super) fn collect_numeric_by_construction_locals<'a>(
     not_bigint_locals: &HashSet<u32>,
     const_local_inits: &HashMap<u32, Option<&'a Expr>>,
 ) -> HashSet<u32> {
-    let mut scan = WriteScan {
-        writes: HashMap::new(),
-        let_bound: HashSet::new(),
-    };
-    scan.walk_stmts(stmts);
-    let WriteScan { writes, let_bound } = scan;
+    // ONE write walker for both fixpoints (`collect_not_bigint_locals` and
+    // this one) — see its doc for why sharing is load-bearing. `None` = a
+    // no-init `Let`, which THIS consumer treats as fatal (`undefined` is not
+    // a number) where the non-BigInt one treats it as fine.
+    let mut writes: HashMap<u32, Vec<Option<&'a Expr>>> = HashMap::new();
+    let mut let_bound: HashSet<u32> = HashSet::new();
+    super::super::not_bigint_locals::collect_writes(stmts, &mut writes, &mut let_bound);
     let empty_members: HashSet<u32> = HashSet::new();
     let empty_fields: HashSet<String> = HashSet::new();
     let mut numeric: HashSet<u32> = let_bound
@@ -482,120 +478,6 @@ pub(super) fn collect_numeric_by_construction_locals<'a>(
         }
     }
     numeric
-}
-
-/// Write collector for [`collect_numeric_by_construction_locals`]. Descends
-/// into closure bodies — ids are unique per lowering context, so a closure's
-/// write to an enclosing local records against the right id.
-struct WriteScan<'a> {
-    /// id -> every write's RHS; `None` = a `Let` with no initializer.
-    writes: HashMap<u32, Vec<Option<&'a Expr>>>,
-    /// ids bound by at least one `Stmt::Let` in the region.
-    let_bound: HashSet<u32>,
-}
-
-impl<'a> WriteScan<'a> {
-    fn walk_stmts(&mut self, stmts: &'a [Stmt]) {
-        for s in stmts {
-            self.walk_stmt(s);
-        }
-    }
-
-    fn walk_stmt(&mut self, s: &'a Stmt) {
-        match s {
-            Stmt::Let { id, init, .. } => {
-                self.let_bound.insert(*id);
-                self.writes.entry(*id).or_default().push(init.as_ref());
-                if let Some(e) = init {
-                    self.walk_expr(e);
-                }
-            }
-            Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
-            Stmt::Return(opt) => {
-                if let Some(e) = opt {
-                    self.walk_expr(e);
-                }
-            }
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                self.walk_expr(condition);
-                self.walk_stmts(then_branch);
-                if let Some(eb) = else_branch {
-                    self.walk_stmts(eb);
-                }
-            }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                self.walk_expr(condition);
-                self.walk_stmts(body);
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                if let Some(i) = init {
-                    self.walk_stmt(i.as_ref());
-                }
-                if let Some(c) = condition {
-                    self.walk_expr(c);
-                }
-                if let Some(u) = update {
-                    self.walk_expr(u);
-                }
-                self.walk_stmts(body);
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                self.walk_stmts(body);
-                if let Some(c) = catch {
-                    self.walk_stmts(&c.body);
-                }
-                if let Some(f) = finally {
-                    self.walk_stmts(f);
-                }
-            }
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } => {
-                self.walk_expr(discriminant);
-                for case in cases {
-                    if let Some(t) = &case.test {
-                        self.walk_expr(t);
-                    }
-                    self.walk_stmts(&case.body);
-                }
-            }
-            Stmt::Labeled { body, .. } => self.walk_stmt(body.as_ref()),
-            Stmt::Break
-            | Stmt::Continue
-            | Stmt::LabeledBreak(_)
-            | Stmt::LabeledContinue(_)
-            | Stmt::PreallocateBoxes(_)
-            | Stmt::PreallocateTdzBoxes(_) => {}
-        }
-    }
-
-    fn walk_expr(&mut self, e: &'a Expr) {
-        match e {
-            Expr::LocalSet(id, rhs) => {
-                self.writes.entry(*id).or_default().push(Some(rhs));
-                self.walk_expr(rhs);
-            }
-            // Closure bodies are `Vec<Stmt>`, invisible to the child walker.
-            Expr::Closure { body, .. } => self.walk_stmts(body),
-            _ => {
-                perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
-            }
-        }
-    }
 }
 
 // ── The expression-level proof ─────────────────────────────────────────────
