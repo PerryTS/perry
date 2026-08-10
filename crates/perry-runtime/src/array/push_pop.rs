@@ -710,6 +710,26 @@ pub extern "C" fn js_array_push_spread_f64(
     if source.is_null() {
         return target;
     }
+    // #7542: call-spread (`f(...arr)`) is `GetIterator(arr)` + drain, so a
+    // patched `Array.prototype[Symbol.iterator]` decides how many arguments the
+    // callee receives. The element copy below never consults the protocol, so
+    // `f(...[1,2,3])` passed 3 arguments where node passes whatever the patched
+    // iterator yields (1).
+    //
+    // Materialize through the protocol and copy THAT, rather than concatenating:
+    // this helper appends into `target` in place and returns it, and callers
+    // rely on that identity. `js_array_clone_for_spread` is the same entry point
+    // `[...arr]` uses, so the two spread forms cannot disagree.
+    let source = if crate::array::array_proto_iterator_modified() {
+        let boxed = crate::value::js_nanbox_pointer(source as i64);
+        let materialized = crate::array::js_array_clone_for_spread(boxed);
+        if materialized.is_null() {
+            return target;
+        }
+        materialized as *const ArrayHeader
+    } else {
+        source
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let source_handle = scope.root_raw_const_ptr(source);
     unsafe {

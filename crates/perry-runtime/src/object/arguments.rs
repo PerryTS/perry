@@ -528,7 +528,17 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
             return crate::buffer::buffer_to_array(raw as *const crate::buffer::BufferHeader);
         }
         // A real Array → fast path (no protocol overhead).
+        //
+        // #7542: unless `Array.prototype[Symbol.iterator]` was replaced, in
+        // which case call-spread (`f(...arr)`) must drive the patched method —
+        // it decides how many arguments the callee receives, so `f(...[1,2,3])`
+        // passed 3 where node passes 1. `array_proto_iterator_modified()` is a
+        // sticky flag that is false until user code writes the prototype slot,
+        // so the fast path is untouched in every ordinary program.
         if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+            if crate::array::array_proto_iterator_modified() {
+                return crate::array::js_array_clone_for_spread(value);
+            }
             return crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader;
         }
         // Generic iterable with a user `[Symbol.iterator]` (Map/Set, generator

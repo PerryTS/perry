@@ -707,6 +707,18 @@ fn object_like_iterator_result(value: f64) -> bool {
     raw >= 0x10000
 }
 
+/// #7542: does this value carry its OWN `[Symbol.iterator]`? An own method
+/// shadows the prototype, so the patched-prototype shortcut must stand aside
+/// for it and let the ordinary `@@iterator` walk resolve it.
+fn array_has_own_iterator(value: f64) -> bool {
+    let iter_sym = crate::symbol::well_known_symbol("iterator");
+    if iter_sym.is_null() {
+        return false;
+    }
+    let sym_value = f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
+    unsafe { crate::symbol::has_own_symbol_property(value, sym_value) }
+}
+
 pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, POINTER_MASK};
 
@@ -778,6 +790,38 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // small-buffer slab without touching memory.
     if crate::array::dense_spread_source(value()).is_some() {
         return crate::array::dense_spread_copy(value());
+    }
+
+    // #7542: `Array.prototype[Symbol.iterator] = fn` must drive the spread, as
+    // it already drives `for…of` over a literal and destructuring.
+    //
+    // This has to run BEFORE the generic `[Symbol.iterator]` walk below, not
+    // after it. The walk does NOT miss for a plain array — contrary to how this
+    // looked from the outside, `js_object_get_symbol_property` synthesizes the
+    // BUILT-IN `Symbol.iterator` for an array receiver (a `js_class_method_bind`
+    // by name) rather than reading the prototype slot, so the walk resolves the
+    // builtin, calls it, and returns the element copy. A guard placed after the
+    // walk is dead code: measured, it is never reached.
+    //
+    // `js_get_iterator` is the one implementation that consults the patched
+    // prototype under this flag (per GetIterator: read the method off
+    // `Array.prototype`, call it with `this === val`, TypeError when deleted or
+    // non-callable). Delegate rather than restate it — two copies of a spec
+    // sequence that must agree is how this diverged in the first place.
+    //
+    // Placed after the dense fast path, which already declines when the flag is
+    // set (`flat_clone.rs`), and after the string/class-ref arms above, which
+    // are not arrays. The unpatched path is untouched: the flag is sticky-false
+    // until user code writes the prototype slot.
+    // An OWN `arr[Symbol.iterator]` still wins over the prototype, so this must
+    // not preempt the walk below for that case: `js_get_iterator`'s patched
+    // branch reads the PROTOTYPE only, and would throw "not iterable" for an
+    // array carrying its own method once the prototype slot has been deleted.
+    if crate::array::array_proto_iterator_modified()
+        && crate::array::js_array_is_array(value()).to_bits() == crate::value::TAG_TRUE
+        && !array_has_own_iterator(value())
+    {
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
 
     if let Some(entries) = entries_array_for_small_handle_id(raw_ptr() as i64) {

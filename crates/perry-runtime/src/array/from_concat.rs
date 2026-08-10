@@ -87,6 +87,19 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     // segfaulted. Materialize to a heap StringHeader so every pointer
     // extraction downstream is valid; the per-codepoint path in
     // `js_array_clone` then behaves exactly as it does for a literal.
+    // #7542: `Array.from(arr)` is `GetIterator(arr)` + drain, so a patched
+    // `Array.prototype[Symbol.iterator]` drives it exactly as it drives spread.
+    // This function's array arm ends in a raw `js_array_clone` — a shallow
+    // element copy that never consults the protocol — so the guard has to be
+    // here rather than downstream. `array_from_spread_value` already routes the
+    // patched case through `js_get_iterator`; reuse it so the two entry points
+    // cannot answer differently for the same receiver.
+    if crate::array::array_proto_iterator_modified()
+        && crate::array::js_array_is_array(boxed).to_bits() == crate::value::TAG_TRUE
+    {
+        return crate::array::js_array_clone_for_spread(boxed);
+    }
+
     let jsval = crate::value::JSValue::from_bits(bits);
     if jsval.is_short_string() {
         let hdr = crate::string::js_string_materialize_to_heap(boxed);
