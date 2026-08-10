@@ -222,33 +222,50 @@ fn element_shape_loop_pure_expr_collect(
         // object-literal element). Keeping it would have declined #7480's own
         // kernel before the class resolver was ever consulted.
         Expr::Binary { left, right, .. } => {
-            element_shape_loop_pure_expr_collect(ctx, left, counter_id, element_binding, array, props)
-                && element_shape_loop_pure_expr_collect(
-                    ctx,
-                    right,
-                    counter_id,
-                    element_binding,
-                    array,
-                    props,
-                )
+            element_shape_loop_pure_expr_collect(
+                ctx,
+                left,
+                counter_id,
+                element_binding,
+                array,
+                props,
+            ) && element_shape_loop_pure_expr_collect(
+                ctx,
+                right,
+                counter_id,
+                element_binding,
+                array,
+                props,
+            )
         }
-        Expr::NumberCoerce(operand) => {
-            element_shape_loop_pure_expr_collect(ctx, operand, counter_id, element_binding, array, props)
-        }
+        Expr::NumberCoerce(operand) => element_shape_loop_pure_expr_collect(
+            ctx,
+            operand,
+            counter_id,
+            element_binding,
+            array,
+            props,
+        ),
         Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
-            element_shape_loop_pure_expr_collect(ctx, left, counter_id, element_binding, array, props)
-                && element_shape_loop_pure_expr_collect(
-                    ctx,
-                    right,
-                    counter_id,
-                    element_binding,
-                    array,
-                    props,
-                )
+            element_shape_loop_pure_expr_collect(
+                ctx,
+                left,
+                counter_id,
+                element_binding,
+                array,
+                props,
+            ) && element_shape_loop_pure_expr_collect(
+                ctx,
+                right,
+                counter_id,
+                element_binding,
+                array,
+                props,
+            )
         }
-        Expr::MathMin(values) | Expr::MathMax(values) => values
-            .iter()
-            .all(|e| element_shape_loop_pure_expr_collect(ctx, e, counter_id, element_binding, array, props)),
+        Expr::MathMin(values) | Expr::MathMax(values) => values.iter().all(|e| {
+            element_shape_loop_pure_expr_collect(ctx, e, counter_id, element_binding, array, props)
+        }),
         Expr::MathAbs(value)
         | Expr::MathSqrt(value)
         | Expr::MathFloor(value)
@@ -256,9 +273,14 @@ fn element_shape_loop_pure_expr_collect(
         | Expr::MathRound(value)
         | Expr::MathTrunc(value)
         | Expr::MathSign(value)
-        | Expr::MathF16round(value) => {
-            element_shape_loop_pure_expr_collect(ctx, value, counter_id, element_binding, array, props)
-        }
+        | Expr::MathF16round(value) => element_shape_loop_pure_expr_collect(
+            ctx,
+            value,
+            counter_id,
+            element_binding,
+            array,
+            props,
+        ),
         _ => false,
     }
 }

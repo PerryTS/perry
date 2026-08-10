@@ -1671,8 +1671,7 @@ pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
                 return None;
             }
             ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
-                if fact.array_local_id != *array_local_id
-                    || fact.index_local_id != *index_local_id
+                if fact.array_local_id != *array_local_id || fact.index_local_id != *index_local_id
                 {
                     return None;
                 }
