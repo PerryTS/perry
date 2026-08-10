@@ -218,11 +218,22 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
         }
     }
     let mut slot_addr = 0usize;
-    // Latch BEFORE the insert: a concurrent `object_static_prototype` that
-    // observed the latch after the insert-but-before-the-store window would
-    // skip the mutex and miss an already-recorded prototype.
-    OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
     if let Ok(mut map) = get_object_prototypes().lock() {
+        // Latch BEFORE the insert, and UNDER THE LOCK (#7737).
+        //
+        // Before the insert, because a concurrent `object_static_prototype`
+        // that observed the latch in the insert-but-before-the-store window
+        // would skip the mutex and miss an already-recorded prototype.
+        //
+        // Under the lock, because the latch is now CLEARED when a prune
+        // empties the map. With the store outside, this interleaving loses an
+        // entry: writer stores `true`; pruner takes the lock, retains to
+        // empty, clears the latch; writer then takes the lock and inserts —
+        // leaving a non-empty map with the latch false, which every reader
+        // skips. Serialising both under the same mutex makes that impossible.
+        // The publish property is unchanged: a reader that sees `true` takes
+        // the lock and therefore sees whatever the writer committed.
+        OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
         let slot = map.entry(obj_ptr).or_insert(0);
         *slot = proto_bits;
         slot_addr = slot as *mut u64 as usize;
@@ -331,6 +342,20 @@ pub(crate) fn prune_dead_object_prototype_owners(is_dead_owner: &dyn Fn(usize) -
     }
     if let Ok(mut map) = get_object_prototypes().lock() {
         map.retain(|owner, _| !is_dead_owner(*owner));
+        // #7737: release the latch when the registry drains.
+        //
+        // It used to be one-way. Since #7733 the evacuation move hook reads it
+        // once per moved object, so a SINGLE `Object.setPrototypeOf` against a
+        // non-meta-capable owner — anywhere in a process's lifetime, even one
+        // that later dies and is pruned right here — permanently disabled that
+        // fast path for the rest of the run. That is #7510's "one immortal
+        // side-table entry nullified every is_empty() fast path" recurring.
+        //
+        // Safe to clear here because the set is now under this same lock: no
+        // insert can be in flight past its latch store while we hold it.
+        if map.is_empty() {
+            OBJECT_PROTOTYPES_NONEMPTY.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -498,6 +523,11 @@ pub(crate) fn resolve_inherited_field_from_prototype(
 }
 
 #[cfg(test)]
+pub(crate) fn test_prototype_registry_latch_armed() -> bool {
+    OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -534,5 +564,57 @@ mod tests {
         crate::exception::js_try_end();
 
         assert_eq!(resolution_stack_savepoint(), base_depth);
+    }
+}
+
+#[cfg(test)]
+mod latch_drain_tests_7737 {
+    use super::*;
+
+    /// #7737: the registry's "non-empty" latch must be RELEASED when a prune
+    /// drains the map, not held for the life of the process.
+    ///
+    /// Since #7733 the evacuation move hook (`object_static_prototype_owner_moved`)
+    /// reads this latch once per moved object to skip a process-global mutex
+    /// and a SipHash lookup. While it was one-way, a single
+    /// `Object.setPrototypeOf` against a non-meta-capable owner — anywhere in
+    /// a process's lifetime, including one that dies and is pruned moments
+    /// later — permanently disabled that fast path for the rest of the run.
+    ///
+    /// That is #7510's finding recurring: "one immortal side-table entry
+    /// nullified every `is_empty()` fast path". The assertion that matters is
+    /// the LAST one — that the latch comes back down — because everything
+    /// before it passes with the bug present.
+    #[test]
+    fn a_drained_prototype_registry_releases_the_fast_path_latch() {
+        let _lock = crate::gc::global_side_table_test_lock();
+
+        // Start from a known state: drain whatever earlier tests recorded.
+        prune_dead_object_prototype_owners(&|_| true);
+
+        let owner: usize = 0x5000_0000;
+        let proto_bits: u64 = 0x7FFC_0000_0000_0001;
+        if let Ok(mut map) = get_object_prototypes().lock() {
+            OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
+            map.insert(owner, proto_bits);
+        }
+        assert!(
+            test_prototype_registry_latch_armed(),
+            "setup: recording an owner must arm the latch"
+        );
+
+        // The owner dies and is pruned — the registry is empty again.
+        prune_dead_object_prototype_owners(&|o| o == owner);
+        assert!(
+            get_object_prototypes().lock().map(|m| m.is_empty()).unwrap_or(false),
+            "setup: the prune must actually have emptied the map"
+        );
+
+        assert!(
+            !test_prototype_registry_latch_armed(),
+            "#7737: the registry is empty but the latch is still armed, so \
+             every evacuated object keeps paying the mutex + SipHash lookup \
+             for the rest of the process"
+        );
     }
 }
