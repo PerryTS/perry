@@ -21,16 +21,26 @@ const CACHE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The shape of `~/.perry/update-check.json` this build writes and reads.
+///
+/// Bump it whenever the meaning of a field changes. There is deliberately no
+/// migration path: this file is a CACHE, rebuilt by the next check, so reading
+/// an older shape buys nothing and costs a growing set of optional fields that
+/// exist only to describe versions nobody runs. A mismatch is discarded.
+const CACHE_SCHEMA: u32 = 1;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct UpdateCache {
+    /// See [`CACHE_SCHEMA`]. Absent or different means "throw this away".
+    #[serde(default)]
+    pub schema: u32,
     pub last_check: String,
     pub latest_version: String,
     pub release_url: String,
     /// When the user was last told about this update, if ever.
     ///
-    /// `default` + `skip_serializing_if` so a cache written by an older Perry
-    /// still loads, and a cache that has never notified stays the shape it
-    /// always was.
+    /// Optional because "never notified" is a real state, not because an older
+    /// shape has to load — see [`CACHE_SCHEMA`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_notification: Option<String>,
     /// Which version that notice was about.
@@ -41,12 +51,29 @@ pub struct UpdateCache {
     /// the one that fixed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_notified_version: Option<String>,
+    /// When the offered release was published, when the check source says.
+    ///
+    /// `None` for a source that does not report one — the abbreviated npm
+    /// packument does not — and the release cooldown treats unknown as too
+    /// fresh rather than as old enough.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    /// A one-line release title, when the source has one, shown under the
+    /// notice so "something is available" also says what.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headline: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ReleaseInfo {
     pub tag_name: String,
     pub html_url: String,
+    /// GitHub sends both; Perry ignored them until the cooldown and the
+    /// headline needed them.
+    #[serde(default)]
+    pub published_at: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub assets: Vec<Asset>,
 }
@@ -78,7 +105,10 @@ fn cache_path() -> PathBuf {
 pub fn load_cache() -> Option<UpdateCache> {
     let path = cache_path();
     let content = fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&content).ok()
+    let cache: UpdateCache = serde_json::from_str(&content).ok()?;
+    // A different shape is thrown away, not migrated. The next check rewrites
+    // it, so the only cost is one extra request.
+    (cache.schema == CACHE_SCHEMA).then_some(cache)
 }
 
 fn save_cache(cache: &UpdateCache) {
@@ -194,8 +224,7 @@ pub fn is_cache_stale_with(max_age: Duration) -> bool {
     };
 
     // An invalid cached release must be refreshed rather than suppressing a
-    // check for up to 24 hours. `parse_version` also accepts the abbreviated
-    // versions written by older Perry releases.
+    // check for up to 24 hours.
     if parse_version(&cache.latest_version).is_err() {
         return true;
     }
@@ -365,23 +394,21 @@ fn fetch_latest_version() -> Result<UpdateCache> {
                 probe.latest_version
             )
         })?;
-        // Same discipline as the fallback ladder below: take the lock, then
-        // re-read the notice state. Reading it before the request would let a
-        // notice recorded while the request was in flight be overwritten with a
-        // minutes-old value, and telling the user twice about one release is the
-        // exact thing the throttle exists to prevent. Both notice fields carry
-        // forward — dropping `last_notified_version` reset the version-keyed
-        // throttle on every refresh.
+        // Re-read the notice state inside the lock, immediately before the
+        // replace, rather than using a value read before the request went out:
+        // a notice recorded while it was in flight would otherwise be
+        // overwritten and the user told about the same release twice.
         let _guard = lock_cache();
         let prior = load_cache();
         let cache = UpdateCache {
+            schema: CACHE_SCHEMA,
             last_check: now_rfc3339(),
             latest_version: probe.latest_version,
             release_url: probe.release_url,
             last_notification: prior.as_ref().and_then(|c| c.last_notification.clone()),
-            last_notified_version: prior
-                .as_ref()
-                .and_then(|c| c.last_notified_version.clone()),
+            last_notified_version: prior.as_ref().and_then(|c| c.last_notified_version.clone()),
+            published_at: probe.published_at,
+            headline: probe.headline,
         };
         save_cache(&cache);
         return Ok(cache);
@@ -413,6 +440,7 @@ fn fetch_latest_version() -> Result<UpdateCache> {
                     let _guard = lock_cache();
                     let prior = load_cache();
                     let cache = UpdateCache {
+                        schema: CACHE_SCHEMA,
                         last_check: now_rfc3339(),
                         latest_version: version,
                         release_url: info.html_url,
@@ -420,6 +448,8 @@ fn fetch_latest_version() -> Result<UpdateCache> {
                         last_notified_version: prior
                             .as_ref()
                             .and_then(|c| c.last_notified_version.clone()),
+                        published_at: info.published_at.clone(),
+                        headline: info.name.clone().filter(|n| !n.trim().is_empty()),
                     };
                     save_cache(&cache);
                     return Ok(cache);
@@ -1625,11 +1655,14 @@ mod tests {
     #[test]
     fn test_cache_roundtrip() {
         let cache = UpdateCache {
+            schema: CACHE_SCHEMA,
             last_check: "2025-01-15T10:30:00Z".to_string(),
             latest_version: "0.2.171".to_string(),
             release_url: "https://github.com/PerryTS/perry/releases/tag/v0.2.171".to_string(),
             last_notification: Some("2025-01-15T11:00:00Z".to_string()),
             last_notified_version: Some("0.2.171".to_string()),
+            published_at: Some("2025-01-15T09:00:00Z".to_string()),
+            headline: Some("Faster builds".to_string()),
         };
 
         let json = serde_json::to_string(&cache).unwrap();
@@ -1637,28 +1670,59 @@ mod tests {
         assert_eq!(cache, parsed);
     }
 
-    /// A cache file written by a Perry that predates the notify throttle must
-    /// still load. Without `serde(default)` it would fail to parse, `load_cache`
-    /// would return `None`, and every user's first run on the new build would
-    /// re-check the network for no reason.
+    /// A cache whose shape this build does not recognize is DISCARDED, not
+    /// migrated. The file is a cache — the next check rewrites it — so reading
+    /// an older shape would buy one saved request in exchange for a growing set
+    /// of optional fields describing versions nobody runs.
     #[test]
-    fn a_cache_without_the_notification_field_still_loads() {
-        let legacy = r#"{
+    fn a_cache_of_another_schema_is_discarded() {
+        let foreign = r#"{
+            "schema": 999,
             "last_check": "2025-01-15T10:30:00Z",
             "latest_version": "0.2.171",
             "release_url": "https://example.test/v0.2.171"
         }"#;
-        let parsed: UpdateCache =
-            serde_json::from_str(legacy).expect("a pre-throttle cache must still parse");
-        assert_eq!(parsed.last_notification, None);
-        assert_eq!(parsed.latest_version, "0.2.171");
+        let parsed: UpdateCache = serde_json::from_str(foreign).expect("it still parses");
+        assert_ne!(
+            parsed.schema, CACHE_SCHEMA,
+            "test premise: this fixture is a foreign shape"
+        );
 
-        // ...and a cache that has never notified round-trips to the same shape
-        // it always had, rather than growing a null field.
-        let written = serde_json::to_string(&parsed).unwrap();
+        // A file with no schema at all reads as 0, which is equally foreign —
+        // that is what makes every pre-versioning cache fall out on its own
+        // without a compatibility branch.
+        let unversioned = r#"{
+            "last_check": "2025-01-15T10:30:00Z",
+            "latest_version": "0.2.171",
+            "release_url": "https://example.test/v0.2.171"
+        }"#;
+        let parsed: UpdateCache = serde_json::from_str(unversioned).expect("parses");
+        assert_eq!(parsed.schema, 0);
+        assert_ne!(parsed.schema, CACHE_SCHEMA);
+    }
+
+    /// A cache that has never notified is written without the field, because
+    /// absence is the state — not because anything else has to read it.
+    #[test]
+    fn an_unset_optional_field_is_not_written() {
+        let cache = UpdateCache {
+            schema: CACHE_SCHEMA,
+            last_check: "2025-01-15T10:30:00Z".to_string(),
+            latest_version: "0.2.171".to_string(),
+            release_url: "https://example.test/v0.2.171".to_string(),
+            last_notification: None,
+            last_notified_version: None,
+            published_at: None,
+            headline: None,
+        };
+        let written = serde_json::to_string(&cache).unwrap();
         assert!(
             !written.contains("last_notification"),
             "an unset field must not be written: {written}"
+        );
+        assert!(
+            written.contains("\"schema\":1"),
+            "the shape is stamped: {written}"
         );
     }
 

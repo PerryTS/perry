@@ -73,9 +73,20 @@ pub(crate) enum CheckSource {
 
 /// Parse a configured `source` name into a source, given the other keys.
 ///
+<<<<<<< HEAD
 /// Returns `None` for a name this build does not know, so the caller can fall
 /// back rather than fail — a config written by a newer Perry must not break an
 /// older one's update check.
+=======
+/// One spelling per source, deliberately: a set of accepted aliases is a
+/// surface to keep documented and tested forever in exchange for saving one
+/// lookup in the docs.
+///
+/// Returns `None` for a name this build does not know, so the caller falls back
+/// to the default rather than refusing to check at all. That is not a
+/// compatibility affordance — it is that an update check is the wrong place to
+/// turn a config typo into a hard failure.
+>>>>>>> 373f3fdd1 (feat(cli): hold back brand-new releases, remember a skipped version, and document the whole surface)
 pub(crate) fn from_config(
     source: Option<&str>,
     package: Option<&str>,
@@ -84,16 +95,28 @@ pub(crate) fn from_config(
 ) -> Option<CheckSource> {
     let package = || package.unwrap_or(PERRY_NPM_PACKAGE).to_string();
     match source?.trim().to_ascii_lowercase().as_str() {
+<<<<<<< HEAD
         "gh-releases" | "github" => Some(CheckSource::GhReleases {
+=======
+        "gh-releases" => Some(CheckSource::GhReleases {
+>>>>>>> 373f3fdd1 (feat(cli): hold back brand-new releases, remember a skipped version, and document the whole surface)
             url: server
                 .unwrap_or(super::update_checker::GITHUB_URL)
                 .to_string(),
         }),
+<<<<<<< HEAD
         "npm" | "npm-registry" => Some(CheckSource::Npm {
             package: package(),
             registry: registry.unwrap_or(NPM_REGISTRY).to_string(),
         }),
         "gh-registry" | "github-packages" => Some(CheckSource::GhRegistry {
+=======
+        "npm" => Some(CheckSource::Npm {
+            package: package(),
+            registry: registry.unwrap_or(NPM_REGISTRY).to_string(),
+        }),
+        "gh-registry" => Some(CheckSource::GhRegistry {
+>>>>>>> 373f3fdd1 (feat(cli): hold back brand-new releases, remember a skipped version, and document the whole surface)
             package: package(),
             registry: registry.unwrap_or(GH_REGISTRY).to_string(),
         }),

@@ -129,7 +129,21 @@ Once installed, Perry can update itself:
 perry update
 ```
 
-This downloads the latest release and atomically replaces the binary.
+This downloads the latest release, verifies its signature, and atomically
+replaces the binary.
+
+If you installed Perry through a package manager, use that instead — Perry will
+tell you which command, and will not overwrite a binary the manager is tracking:
+
+| installed with | upgrade with |
+|---|---|
+| Homebrew | `brew upgrade perryts/perry/perry` |
+| npm | `npm install -g @perryts/perry@latest` |
+| apt | `sudo apt update && sudo apt install --only-upgrade perry` |
+| winget | `winget upgrade PerryTS.Perry` |
+
+Perry can also mention new versions, ask before installing, or install
+unattended. See [Updates](../cli/updates.md).
 
 ## Verify Installation
 

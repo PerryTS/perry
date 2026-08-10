@@ -115,6 +115,23 @@ pub(crate) struct UpdateConfig {
     /// Registry base URL for the npm-shaped sources.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) registry: Option<String>,
+    /// How long a release must have existed before `auto` will install it.
+    ///
+    /// Defaults to 24 hours for `auto` and 0 for every other mode, so a notice
+    /// still tells you about a release immediately while an unattended install
+    /// waits for it to have been seen by someone. A version published and then
+    /// pulled — or published by someone who should not have been able to — is
+    /// most dangerous in its first hours, and this is the cheapest place to
+    /// not be the first machine to run it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) min_age_hours: Option<u64>,
+    /// A version the user asked not to be told about again.
+    ///
+    /// Written by answering `s` at the prompt. Only this exact version is
+    /// suppressed — the next one notifies normally, which is what makes it
+    /// different from switching the mode off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) skip_version: Option<String>,
     /// Keys this build does not know about.
     ///
     /// Without this, a `[update]` key written by a NEWER Perry — or by hand,
@@ -134,10 +151,19 @@ impl UpdateConfig {
     fn notify_interval(&self) -> Duration {
         Duration::from_secs(self.notify_interval_hours.unwrap_or(0).saturating_mul(3600))
     }
+
+    /// The cooldown, defaulted per mode: a day for `auto`, nothing otherwise.
+    fn min_age(&self, mode: UpdateMode) -> Duration {
+        let hours = self.min_age_hours.unwrap_or(match mode {
+            UpdateMode::Auto => 24,
+            _ => 0,
+        });
+        Duration::from_secs(hours.saturating_mul(3600))
+    }
 }
 
 /// Everything the update surface needs to know about this run, resolved once.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct UpdatePolicy {
     /// Already accounts for the environment, CI, and whether stderr is a
     /// terminal — so a caller never has to re-derive "should I be quiet".
@@ -164,6 +190,9 @@ pub(crate) struct UpdatePolicy {
     /// asked to be interrupted. The whole point of those rules is that this run
     /// stays silent.
     pub(crate) config_warning: Option<&'static str>,
+    /// Only consulted by `auto`; see the config field.
+    pub(crate) min_age: Duration,
+    pub(crate) skip_version: Option<String>,
 }
 
 /// The environment inputs, gathered in one place so the decision itself is a
@@ -268,8 +297,9 @@ impl UpdatePolicy {
              \"notify\". Valid values: off, notify, prompt, auto.",
         );
 
+        let mode = resolve_mode(env, config.mode);
         Self {
-            mode: resolve_mode(env, config.mode),
+            mode,
             // `Unknown` is PRESERVED here rather than collapsed to `Notify`.
             // Its label is "notify (unrecognized value in config)", which is
             // exactly what `doctor` should say when the config has a typo in it;
@@ -279,6 +309,8 @@ impl UpdatePolicy {
             notify_interval: config.notify_interval(),
             prompt_default: config.prompt_default.unwrap_or(false),
             config_warning,
+            min_age: config.min_age(mode),
+            skip_version: config.skip_version.clone(),
         }
     }
 
@@ -362,6 +394,8 @@ pub(crate) enum TeardownAction {
     DeferToChannel(crate::install_channel::InstallChannel),
     /// Print the notice, then say the install directory is not writable.
     NeedsElevation,
+    /// Print the notice and say the release is still inside its cooldown.
+    TooFresh,
 }
 
 /// Inputs to [`decide_teardown`] that come from the machine rather than from
@@ -373,9 +407,19 @@ pub(crate) struct TeardownEnv {
     pub(crate) stdin_is_terminal: bool,
     pub(crate) channel: crate::install_channel::InstallChannel,
     pub(crate) install_dir_writable: bool,
+    /// How long the offered release has existed, when the source said. `None`
+    /// means the source does not report a publish time — the abbreviated npm
+    /// packument does not — and an unknown age must NOT be treated as old
+    /// enough, or the cooldown silently stops applying for exactly the users
+    /// whose source is cheapest to query.
+    pub(crate) release_age: Option<Duration>,
 }
 
-pub(crate) fn decide_teardown(mode: UpdateMode, env: TeardownEnv) -> TeardownAction {
+pub(crate) fn decide_teardown(
+    mode: UpdateMode,
+    min_age: Duration,
+    env: TeardownEnv,
+) -> TeardownAction {
     use crate::install_channel::InstallChannel;
 
     match mode {
@@ -402,6 +446,16 @@ pub(crate) fn decide_teardown(mode: UpdateMode, env: TeardownEnv) -> TeardownAct
     // rather than a half-finished install.
     if !env.install_dir_writable {
         return TeardownAction::NeedsElevation;
+    }
+
+    // The cooldown. Only `auto` waits: a notice should tell you about a release
+    // the moment it exists, but being the first machine to unattended-install
+    // one is the risk worth declining. An unknown age counts as too fresh.
+    if mode == UpdateMode::Auto && !min_age.is_zero() {
+        match env.release_age {
+            Some(age) if age >= min_age => {}
+            _ => return TeardownAction::TooFresh,
+        }
     }
 
     match mode {
@@ -447,8 +501,15 @@ pub(crate) fn run_teardown_action(
         return;
     };
 
+    if is_suppressed_by_skip(policy, latest) {
+        return;
+    }
+
     let notice = || {
         crate::update_checker::print_update_notice(current, latest, release_url, use_color);
+        if let Some(headline) = crate::update_checker::load_cache().and_then(|c| c.headline) {
+            eprintln!("  {headline}");
+        }
         // Only record when we actually said something, or the throttle would
         // suppress the next notice on the strength of one nobody saw.
         if !crate::install_channel::running_via_sudo() {
@@ -458,13 +519,27 @@ pub(crate) fn run_teardown_action(
         }
     };
 
+    // The offered release's age, when the check source reported a publish time.
+    let release_age = crate::update_checker::load_cache()
+        .and_then(|c| c.published_at)
+        .and_then(|stamp| crate::update_checker::parse_rfc3339(stamp.as_str()))
+        .and_then(|published| {
+            let now =
+                crate::update_checker::parse_rfc3339(&crate::update_checker::now_rfc3339_public())?;
+            Some(Duration::from_secs(
+                now.saturating_sub(published).max(0) as u64
+            ))
+        });
+
     let action = decide_teardown(
         policy.mode,
+        policy.min_age,
         TeardownEnv {
             command_succeeded,
             stdin_is_terminal: std::io::stdin().is_terminal(),
             channel: crate::install_channel::detect(),
             install_dir_writable: crate::install_channel::install_dir_is_writable(),
+            release_age,
         },
     );
 
@@ -494,6 +569,14 @@ pub(crate) fn run_teardown_action(
                 }
             }
         }
+        TeardownAction::TooFresh => {
+            notice();
+            eprintln!(
+                "  Holding off: this release is newer than the {} hour cooldown \
+                 for unattended installs. Run `perry update` to take it now.",
+                policy.min_age.as_secs() / 3600
+            );
+        }
         TeardownAction::NeedsElevation => {
             notice();
             eprintln!(
@@ -503,24 +586,58 @@ pub(crate) fn run_teardown_action(
         }
         TeardownAction::Ask => {
             notice();
-            let accepted = dialoguer::Confirm::new()
-                .with_prompt(format!("Update perry to {latest} now?"))
-                .default(policy.prompt_default)
-                .interact()
-                .unwrap_or(false);
-            if accepted {
-                install_now(use_color, verbose);
-            } else {
-                eprintln!(
-                    "  Skipped. Set `[update] mode = \"notify\"` in \
-                     ~/.perry/config.toml to stop being asked."
-                );
+            // Three answers, not two. "No" and "never tell me about THIS one"
+            // are different intentions, and without the third a user who does
+            // not want one specific release has to switch the whole mode off
+            // to stop being asked — which then hides the release that fixes it.
+            let choice = dialoguer::Select::new()
+                .with_prompt(format!("Update perry to {latest}?"))
+                .items(&[
+                    "Yes, update now",
+                    "Not now",
+                    "Skip this version and stop asking about it",
+                ])
+                .default(if policy.prompt_default { 0 } else { 1 })
+                .interact_opt()
+                .unwrap_or(None);
+            match choice {
+                Some(0) => install_now(use_color, verbose),
+                Some(2) => remember_skipped_version(latest),
+                // "Not now", or the prompt was cancelled.
+                _ => eprintln!("  Not updating. `perry update --mode notify` stops the question."),
             }
         }
         TeardownAction::Install => {
             eprintln!("  Installing perry {latest}...");
             install_now(use_color, verbose);
         }
+    }
+}
+
+/// Has the user asked not to hear about this exact version again?
+///
+/// Only this one: the next release notifies normally, which is what separates
+/// "not this one" from switching the mode off.
+pub(crate) fn is_suppressed_by_skip(policy: &UpdatePolicy, latest: &str) -> bool {
+    policy.skip_version.as_deref() == Some(latest)
+}
+
+/// Persist "do not mention this version again".
+///
+/// Only this exact version: the next release notifies normally, which is what
+/// makes the answer different from switching the mode off.
+fn remember_skipped_version(version: &str) {
+    // Refuses to write when the config could not be read: `load_config` returns
+    // defaults for a damaged file as well as an absent one, and writing those
+    // back would destroy the user's license key and tokens.
+    match crate::commands::publish::update_config_file(|config| {
+        config
+            .update
+            .get_or_insert_with(Default::default)
+            .skip_version = Some(version.to_string());
+    }) {
+        Ok(()) => eprintln!("  Skipping {version}. Later releases will still be mentioned."),
+        Err(error) => eprintln!("warning: could not save the skip: {error}"),
     }
 }
 
@@ -575,17 +692,25 @@ mod teardown_tests {
             stdin_is_terminal: true,
             channel: InstallChannel::SelfManaged,
             install_dir_writable: true,
+            // Old enough for any cooldown, so these cases keep testing what
+            // they were written to test.
+            release_age: Some(Duration::from_secs(365 * 24 * 3600)),
         }
+    }
+
+    /// No cooldown, which is every mode's default except `auto`.
+    fn no_cooldown() -> Duration {
+        Duration::ZERO
     }
 
     #[test]
     fn off_says_nothing_and_notify_only_notifies() {
         assert_eq!(
-            decide_teardown(UpdateMode::Off, ideal()),
+            decide_teardown(UpdateMode::Off, no_cooldown(), ideal()),
             TeardownAction::Silent
         );
         assert_eq!(
-            decide_teardown(UpdateMode::Notify, ideal()),
+            decide_teardown(UpdateMode::Notify, no_cooldown(), ideal()),
             TeardownAction::Notify
         );
     }
@@ -593,11 +718,11 @@ mod teardown_tests {
     #[test]
     fn prompt_asks_and_auto_installs_when_everything_allows_it() {
         assert_eq!(
-            decide_teardown(UpdateMode::Prompt, ideal()),
+            decide_teardown(UpdateMode::Prompt, no_cooldown(), ideal()),
             TeardownAction::Ask
         );
         assert_eq!(
-            decide_teardown(UpdateMode::Auto, ideal()),
+            decide_teardown(UpdateMode::Auto, no_cooldown(), ideal()),
             TeardownAction::Install
         );
     }
@@ -612,11 +737,11 @@ mod teardown_tests {
             ..ideal()
         };
         assert_eq!(
-            decide_teardown(UpdateMode::Prompt, failed),
+            decide_teardown(UpdateMode::Prompt, no_cooldown(), failed),
             TeardownAction::Notify
         );
         assert_eq!(
-            decide_teardown(UpdateMode::Auto, failed),
+            decide_teardown(UpdateMode::Auto, no_cooldown(), failed),
             TeardownAction::Notify
         );
     }
@@ -635,7 +760,7 @@ mod teardown_tests {
             let env = TeardownEnv { channel, ..ideal() };
             for mode in [UpdateMode::Prompt, UpdateMode::Auto] {
                 assert_eq!(
-                    decide_teardown(mode, env),
+                    decide_teardown(mode, no_cooldown(), env),
                     TeardownAction::DeferToChannel(channel),
                     "{:?} on {} must defer, not install",
                     mode,
@@ -655,13 +780,127 @@ mod teardown_tests {
             ..ideal()
         };
         assert_eq!(
-            decide_teardown(UpdateMode::Auto, env),
+            decide_teardown(UpdateMode::Auto, no_cooldown(), env),
             TeardownAction::NeedsElevation
         );
         assert_eq!(
-            decide_teardown(UpdateMode::Prompt, env),
+            decide_teardown(UpdateMode::Prompt, no_cooldown(), env),
             TeardownAction::NeedsElevation
         );
+    }
+
+    /// ★ Skipping one version is not the same as switching notices off. The
+    /// suppressed version goes quiet; the next one does not.
+    #[test]
+    fn a_skipped_version_suppresses_only_itself() {
+        let policy = UpdatePolicy {
+            mode: UpdateMode::Notify,
+            configured_mode: UpdateMode::Notify,
+            check_interval: Duration::from_secs(24 * 3600),
+            notify_interval: Duration::ZERO,
+            prompt_default: false,
+            min_age: Duration::ZERO,
+            skip_version: Some("0.5.1447".to_string()),
+            config_warning: None,
+        };
+        assert!(
+            is_suppressed_by_skip(&policy, "0.5.1447"),
+            "the skipped version must go quiet"
+        );
+        assert!(
+            !is_suppressed_by_skip(&policy, "0.5.1448"),
+            "the NEXT version must still be mentioned — otherwise `skip` is \
+             just `off` with extra steps, and the release that fixes the \
+             skipped one stays hidden"
+        );
+        assert!(
+            !is_suppressed_by_skip(&policy, "0.5.1446"),
+            "and an unrelated version is not affected"
+        );
+    }
+
+    /// ★ The release cooldown. Only `auto` waits: a notice should mention a
+    /// release the moment it exists, but being the first machine in the world
+    /// to unattended-install one is the risk worth declining. A version
+    /// published and then pulled — or published by someone who should not have
+    /// been able to — is most dangerous in its first hours.
+    #[test]
+    fn auto_waits_out_the_cooldown_and_the_other_modes_do_not() {
+        let day = Duration::from_secs(24 * 3600);
+        let fresh = TeardownEnv {
+            release_age: Some(Duration::from_secs(3600)),
+            ..ideal()
+        };
+        assert_eq!(
+            decide_teardown(UpdateMode::Auto, day, fresh),
+            TeardownAction::TooFresh,
+            "an hour-old release is inside a one-day cooldown"
+        );
+
+        let aged = TeardownEnv {
+            release_age: Some(Duration::from_secs(25 * 3600)),
+            ..ideal()
+        };
+        assert_eq!(
+            decide_teardown(UpdateMode::Auto, day, aged),
+            TeardownAction::Install,
+            "past the cooldown it installs"
+        );
+
+        // Notify and prompt are about telling a human, who can decide for
+        // themselves, so they are never held back.
+        assert_eq!(
+            decide_teardown(UpdateMode::Notify, day, fresh),
+            TeardownAction::Notify
+        );
+        assert_eq!(
+            decide_teardown(UpdateMode::Prompt, day, fresh),
+            TeardownAction::Ask
+        );
+    }
+
+    /// ★ An UNKNOWN age counts as too fresh, not as old enough.
+    ///
+    /// The abbreviated npm packument carries no publish time, so treating
+    /// unknown as "old enough" would silently switch the cooldown off for
+    /// exactly the users whose source is cheapest to query — a protection that
+    /// is present in the config and absent in effect.
+    #[test]
+    fn an_unknown_release_age_is_treated_as_too_fresh() {
+        let day = Duration::from_secs(24 * 3600);
+        let unknown = TeardownEnv {
+            release_age: None,
+            ..ideal()
+        };
+        assert_eq!(
+            decide_teardown(UpdateMode::Auto, day, unknown),
+            TeardownAction::TooFresh
+        );
+        // ...and with the cooldown explicitly disabled, an unknown age is no
+        // longer an obstacle, so someone who does not want it is not stuck.
+        assert_eq!(
+            decide_teardown(UpdateMode::Auto, Duration::ZERO, unknown),
+            TeardownAction::Install
+        );
+    }
+
+    /// The cooldown defaults per mode: a day for `auto`, nothing for the rest.
+    #[test]
+    fn the_cooldown_defaults_to_a_day_for_auto_only() {
+        let config = UpdateConfig::default();
+        assert_eq!(
+            config.min_age(UpdateMode::Auto),
+            Duration::from_secs(24 * 3600)
+        );
+        for mode in [UpdateMode::Notify, UpdateMode::Prompt, UpdateMode::Off] {
+            assert_eq!(config.min_age(mode), Duration::ZERO, "{mode:?}");
+        }
+        // An explicit value wins for every mode, including 0 to switch it off.
+        let explicit = UpdateConfig {
+            min_age_hours: Some(0),
+            ..UpdateConfig::default()
+        };
+        assert_eq!(explicit.min_age(UpdateMode::Auto), Duration::ZERO);
     }
 
     /// stderr being a terminal is not enough to ask a question: stdin can be a
@@ -674,11 +913,11 @@ mod teardown_tests {
             ..ideal()
         };
         assert_eq!(
-            decide_teardown(UpdateMode::Prompt, env),
+            decide_teardown(UpdateMode::Prompt, no_cooldown(), env),
             TeardownAction::Notify
         );
         assert_eq!(
-            decide_teardown(UpdateMode::Auto, env),
+            decide_teardown(UpdateMode::Auto, no_cooldown(), env),
             TeardownAction::Install,
             "auto asks nothing, so it does not need stdin"
         );
