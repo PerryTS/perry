@@ -1252,7 +1252,9 @@ impl<'a> UseWalk<'a> {
                 if let Some(root) = self.element_facts.proven_array_root(*array_id) {
                     let push = match value.as_ref() {
                         Expr::New { args, .. } => ElementPush::Inline(args.as_slice()),
-                        Expr::LocalGet(v) if self.element_facts.push_is_contained(*v, *array_id) => {
+                        Expr::LocalGet(v)
+                            if self.element_facts.push_is_contained(*v, *array_id) =>
+                        {
                             ElementPush::Producer(*v)
                         }
                         _ => ElementPush::Opaque,
@@ -1823,7 +1825,6 @@ fn expr_mentions_this(e: &Expr) -> bool {
     visit(e, &mut found);
     found
 }
-
 
 /// Pass 4 — the numeric-field machinery: the number-by-construction expression
 /// proof, the per-candidate and per-element-group (#7770) reachable-store

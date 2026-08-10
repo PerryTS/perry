@@ -285,7 +285,11 @@ fn inline_push_loop_counter_args_prove_numeric_fields() {
                 new_of("P", vec![Expr::LocalGet(2), counter_plus_one(2)]),
             )],
         ),
-        counted_loop(5, arr_len(1), vec![let_elem(6, 1, 5, "P"), read_field(6, "x")]),
+        counted_loop(
+            5,
+            arr_len(1),
+            vec![let_elem(6, 1, 5, "P"), read_field(6, "x")],
+        ),
     ];
     let promoted = promote(&stmts, &classes);
     let fact = promoted.get(&6).expect("the element read must promote");
@@ -313,7 +317,11 @@ fn producer_local_new_args_prove_numeric_fields() {
         },
         push(1, Expr::LocalGet(2)),
         store_field(2, "y", Expr::Number(3.5)),
-        counted_loop(5, arr_len(1), vec![let_elem(6, 1, 5, "P"), read_field(6, "y")]),
+        counted_loop(
+            5,
+            arr_len(1),
+            vec![let_elem(6, 1, 5, "P"), read_field(6, "y")],
+        ),
     ];
     let promoted = promote(&stmts, &classes);
     assert_eq!(
@@ -358,12 +366,19 @@ fn sibling_string_store_drops_the_field_group_wide() {
             ],
         ),
         // Loop B: a different member that only reads.
-        counted_loop(8, arr_len(1), vec![let_elem(9, 1, 8, "P"), read_field(9, "x")]),
+        counted_loop(
+            8,
+            arr_len(1),
+            vec![let_elem(9, 1, 8, "P"), read_field(9, "x")],
+        ),
     ];
     let promoted = promote(&stmts, &classes);
     for id in [6u32, 9u32] {
         assert_eq!(
-            promoted.get(&id).expect("members still promote").numeric_fields,
+            promoted
+                .get(&id)
+                .expect("members still promote")
+                .numeric_fields,
             names(&["y"]),
             "the poisoned field must drop for member {id}, the healthy one must stay"
         );
@@ -383,7 +398,11 @@ fn mixed_push_site_meet_drops_the_field() {
             1,
             new_of("P", vec![Expr::String("s".to_string()), Expr::Number(3.0)]),
         ),
-        counted_loop(5, arr_len(1), vec![let_elem(6, 1, 5, "P"), read_field(6, "x")]),
+        counted_loop(
+            5,
+            arr_len(1),
+            vec![let_elem(6, 1, 5, "P"), read_field(6, "x")],
+        ),
     ];
     let promoted = promote(&stmts, &classes);
     assert_eq!(
@@ -411,7 +430,11 @@ fn producer_new_args_join_the_meet() {
             )),
         },
         push(1, Expr::LocalGet(2)),
-        counted_loop(5, arr_len(1), vec![let_elem(6, 1, 5, "P"), read_field(6, "x")]),
+        counted_loop(
+            5,
+            arr_len(1),
+            vec![let_elem(6, 1, 5, "P"), read_field(6, "x")],
+        ),
     ];
     let promoted = promote(&stmts, &classes);
     assert_eq!(
@@ -449,7 +472,11 @@ fn method_site_string_arg_drops_the_field() {
                 call_set_x(6, Expr::String("s".to_string())),
             ],
         ),
-        counted_loop(8, arr_len(1), vec![let_elem(9, 1, 8, "Q"), read_field(9, "x")]),
+        counted_loop(
+            8,
+            arr_len(1),
+            vec![let_elem(9, 1, 8, "Q"), read_field(9, "x")],
+        ),
     ];
     let promoted = promote(&stmts, &classes);
     assert_eq!(
@@ -491,7 +518,11 @@ fn group_claim_dies_with_the_group() {
                 store_field(6, "extra", Expr::Number(1.0)),
             ],
         ),
-        counted_loop(8, arr_len(1), vec![let_elem(9, 1, 8, "P"), read_field(9, "x")]),
+        counted_loop(
+            8,
+            arr_len(1),
+            vec![let_elem(9, 1, 8, "P"), read_field(9, "x")],
+        ),
     ];
     let promoted = promote(&stmts, &classes);
     assert!(
@@ -637,19 +668,17 @@ fn non_numeric_writes_and_bindings_are_excluded() {
 #[test]
 fn update_value_resolves_via_not_bigint() {
     let store_update_arg = |target: u32| {
-        vec![
-            Stmt::Let {
-                id: target,
-                name: "j".to_string(),
-                ty: Type::Number,
-                mutable: true,
-                init: Some(Expr::Update {
-                    id: 20,
-                    op: UpdateOp::Increment,
-                    prefix: false,
-                }),
-            },
-        ]
+        vec![Stmt::Let {
+            id: target,
+            name: "j".to_string(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(Expr::Update {
+                id: 20,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
+        }]
     };
     let not_bigint: HashSet<u32> = [20u32].into_iter().collect();
     let with_fact = numeric::collect_numeric_by_construction_locals(

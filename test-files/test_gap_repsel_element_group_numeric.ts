@@ -53,8 +53,8 @@ function siblingString(): string {
     const r = a[i];
     // No `+` on the poisoned field: `o.x + 1` on a string-holding
     // declared-number field is a PRE-EXISTING divergence (numeric-classified
-    // Add; reproduces with PERRY_PTR_SHAPE_LOCALS=0 and no arrays — filed
-    // separately). Value-context reads pin what #7770 must not break.
+    // Add; reproduces with PERRY_PTR_SHAPE_LOCALS=0 and no arrays — #7773).
+    // Value-context reads pin what #7770 must not break.
     out += `${r.x}|${typeof r.x}|${r.y + 1};`;
   }
   return out;
