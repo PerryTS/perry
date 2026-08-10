@@ -38,6 +38,21 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
             }
             visit(GcMutableSlotDescriptor::PointerFreeRange);
         }
+        HeapPayloadSlotScan::AllPointers {
+            raw_numeric_object_slots,
+        } => {
+            if raw_numeric_object_slots != 0 {
+                record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
+            }
+            // Same slot set the `Masked` arm below would emit one-at-a-time
+            // (`AllPointers` yields every index in `0..slot_count`), handed over
+            // as a contiguous range so `scan_dirty_object_slots` can intersect
+            // it with the dirty-page set instead of probing that set per slot.
+            visit(GcMutableSlotDescriptor::Range {
+                range: child_slots.payload,
+                layout_kind: Some(HeapChildSlotReadKind::Masked),
+            });
+        }
         HeapPayloadSlotScan::Masked => {
             for child_slot in child_slots {
                 if let HeapChildSlot::Child(slot, layout_kind) = child_slot {

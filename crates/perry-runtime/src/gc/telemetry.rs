@@ -1154,6 +1154,10 @@ impl GcCycleTrace {
             "baseline_bytes": pacing_baseline,
             "backoff_shift": pacing_shift,
             "escalate_at_or_above_bytes": pacing_threshold,
+            // Which arm paced this cycle. Without it a run that never armed the
+            // survival-adaptive band is indistinguishable from one that did and
+            // simply had nothing to skip.
+            "retaining": super::policy::major_pacing_retaining(),
         });
         serde_json::json!({
             "event": "gc_cycle",

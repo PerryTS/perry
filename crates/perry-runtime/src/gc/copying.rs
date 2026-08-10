@@ -121,15 +121,21 @@ impl CopyingPointerSet {
         if unsafe { !plausible_gc_header(header, true) } {
             return None;
         }
-        let active_survivor = crate::arena::active_survivor_space();
-        let inactive_survivor = crate::arena::inactive_survivor_space();
+        // The two survivor-space readings are TLS loads, and Darwin has no
+        // local-exec TLS — each is a real `_tlv_get_addr` call. Reading them
+        // eagerly cost two per classified pointer on workloads that never touch
+        // a survivor at all (`retain.ts` classifies Eden / PromotedYoung / Old
+        // and nothing else). They can only ever answer `Survivor0`, `Survivor1`
+        // or `Unknown`, and `space` is already narrowed to the six accepted
+        // spaces, so hoisting the non-survivor arms above them changes no
+        // verdict — it just stops paying for an answer the arm does not use.
         let kind = match space {
             crate::arena::HeapSpace::NurseryEden => CopyingPointerKind::Eden,
             crate::arena::HeapSpace::PromotedYoung => CopyingPointerKind::PromotedYoung,
-            s if s == active_survivor => CopyingPointerKind::FromSurvivor,
-            s if s == inactive_survivor => CopyingPointerKind::ToSurvivor,
             crate::arena::HeapSpace::Longlived => CopyingPointerKind::Longlived,
             crate::arena::HeapSpace::Old => CopyingPointerKind::Old,
+            s if s == crate::arena::active_survivor_space() => CopyingPointerKind::FromSurvivor,
+            s if s == crate::arena::inactive_survivor_space() => CopyingPointerKind::ToSurvivor,
             _ => return None,
         };
         Some(CopyingPointer { header, kind })
@@ -1578,6 +1584,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // the stale baseline and schedules a full that is guaranteed to free
     // nothing (see `credit_promoted_bytes_to_old_baseline`).
     credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
+    // The same argument one trigger over: a young generation that did not die
+    // is a heap growing by LIVE data, so arena-growth pacing must not read that
+    // growth as garbage accumulating. Fed here, after the reset, so the
+    // re-baseline sees post-collection occupancy.
+    note_copying_minor_young_survival(collector.stats.young_survival_permille);
     maybe_schedule_old_reclaim_after_copied_minor();
     retune_after_scavenge(
         collector.stats.eden_live_bytes,

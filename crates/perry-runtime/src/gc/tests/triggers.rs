@@ -1223,3 +1223,119 @@ fn the_schedule_holds_the_poll_word_armed_like_zeal() {
         "dropping the ScheduleGuard must release the arm it took"
     );
 }
+
+/// The survival-adaptive arm must CHANGE a verdict, in both directions, from
+/// the same arena reading.
+///
+/// A test that only armed the retaining flag and checked the boundary grew
+/// would pass on a build where the flag never reaches the predicate — the
+/// #7024/#6942 shape this repo keeps paying for. So the assertion is on
+/// `arena_growth_full_escalation_due()` itself, at a reading chosen to sit
+/// strictly between the un-retained boundary and the retained one: today's
+/// policy escalates there, and the retaining arm is the only thing that can
+/// make it decline.
+#[test]
+fn retaining_survival_widens_the_escalation_band_and_low_survival_restores_it() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, major_pacing_retaining,
+        note_copying_minor_young_survival, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, growth_num) = major_pacing_config();
+    if floor_bytes == 0 {
+        return; // pacing disabled outright: no boundary to widen
+    }
+
+    test_reset_major_pacing_backoff();
+    // Baseline high enough that the growth clause, not the floor, is the
+    // boundary — the floor would mask the multiplier entirely.
+    let baseline = floor_bytes;
+    let previous_baseline = test_set_major_pacing_baseline(baseline);
+    // Above `growth_num × baseline` (today's boundary), below `4 ×` that.
+    let reading = baseline * growth_num + 1;
+    let previous_reading = test_set_pacing_arena_in_use(Some(reading));
+
+    // 1. Not retaining (the OFF state): this reading escalates, as before.
+    note_copying_minor_young_survival(0);
+    let off_retaining = major_pacing_retaining();
+    let off_due = arena_growth_full_escalation_due();
+    test_reset_major_pacing_backoff();
+    test_set_major_pacing_baseline(baseline);
+
+    // 2. Retaining: the same reading no longer escalates. Re-arm the reading
+    //    first — the retaining path re-baselines from it, and `max` keeps the
+    //    baseline where it is here (reading > baseline would raise it, which is
+    //    itself part of the effect being asserted).
+    note_copying_minor_young_survival(1000);
+    let on_retaining = major_pacing_retaining();
+    let on_due = arena_growth_full_escalation_due();
+    let on_recorded = test_major_pacing_pre_in_use_bytes();
+
+    // 3. A single low-survival minor disarms it again, same reading.
+    note_copying_minor_young_survival(0);
+    let back_retaining = major_pacing_retaining();
+
+    test_set_pacing_arena_in_use(previous_reading);
+    test_set_major_pacing_baseline(previous_baseline);
+    test_reset_major_pacing_backoff();
+
+    assert!(!off_retaining, "survival 0 must not arm the retaining arm");
+    assert!(
+        off_due,
+        "the reading must escalate WITHOUT the retaining arm, or this test \
+         proves nothing about the arm"
+    );
+    assert!(on_retaining, "survival 1000 must arm the retaining arm");
+    assert!(
+        !on_due,
+        "a retaining heap must not escalate at a reading only the un-widened \
+         growth band rejects"
+    );
+    assert_eq!(
+        on_recorded, 0,
+        "a declined escalation must leave no pre-full reading behind"
+    );
+    assert!(
+        !back_retaining,
+        "one non-retaining minor must disarm the band immediately — a decayed \
+         window would keep pacing a churning heap as if it were retaining"
+    );
+}
+
+/// The retaining re-baseline is a ratchet, never a decrease: a minor must not
+/// be able to pull the boundary in below what the last full established.
+#[test]
+fn retaining_rebaseline_never_lowers_the_pacing_baseline() {
+    use super::super::policy::{
+        major_pacing_snapshot, note_copying_minor_young_survival, test_reset_major_pacing_backoff,
+        test_set_major_pacing_baseline, test_set_pacing_arena_in_use,
+    };
+
+    test_reset_major_pacing_backoff();
+    let high = 512 * 1024 * 1024;
+    let previous_baseline = test_set_major_pacing_baseline(high);
+    let previous_reading = test_set_pacing_arena_in_use(Some(1024));
+
+    note_copying_minor_young_survival(1000);
+    let (after_low, _, _) = major_pacing_snapshot();
+
+    test_set_pacing_arena_in_use(Some(high * 2));
+    note_copying_minor_young_survival(1000);
+    let (after_high, _, _) = major_pacing_snapshot();
+
+    test_set_pacing_arena_in_use(previous_reading);
+    test_set_major_pacing_baseline(previous_baseline);
+    test_reset_major_pacing_backoff();
+
+    assert_eq!(
+        after_low, high,
+        "a small post-minor occupancy must not lower the baseline"
+    );
+    assert_eq!(
+        after_high,
+        high * 2,
+        "a larger post-minor occupancy must raise it"
+    );
+}

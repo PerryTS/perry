@@ -1570,6 +1570,22 @@ pub(super) enum HeapPayloadSlotScan {
         raw_numeric_array: bool,
         raw_numeric_object_slots: usize,
     },
+    /// [`LayoutSlotMask::AllPointers`]: the mask selects EVERY live payload
+    /// slot, so the slot set is a contiguous range and the descriptor visitor
+    /// emits one `Range` rather than `slot_count` individual `Slot`s.
+    ///
+    /// This is not a micro-optimisation. `scan_dirty_object_slots`'s `Slot` arm
+    /// answers "is this slot on a dirty page?" with a hash-set probe **per
+    /// slot**, so a 3M-element array of pointers cost 3M probes on every minor
+    /// — O(live array) rather than O(dirty pages) — even though the remembered
+    /// set knew only a few hundred of its pages were dirty. Its `Range` arm
+    /// intersects the range with the dirty-page set directly
+    /// (`dirty_slot_ranges_for`), which is what `dirty_slot_ranges_scanned == 0`
+    /// in every `retain.ts` GC trace was recording: the cheap arm was never
+    /// reached, because an all-pointer array is `Masked`, not `All` (#7787).
+    AllPointers {
+        raw_numeric_object_slots: usize,
+    },
     Masked,
     All(HeapSlotRange),
 }
@@ -1649,6 +1665,22 @@ impl HeapChildSlotIterator {
             } => HeapPayloadSlotScan::PointerFree {
                 raw_numeric_array,
                 raw_numeric_object_slots,
+            },
+            HeapPayloadSlotSelection::Masked {
+                mask: LayoutSlotMask::AllPointers,
+                raw_numeric_object_slots,
+                raw_numeric_recorded,
+                ..
+            } => HeapPayloadSlotScan::AllPointers {
+                // Mirror the iterator's one-shot accounting: `next` records the
+                // raw-numeric skip on its first call and never again, so a
+                // descriptor visit that replaces the whole iteration records it
+                // exactly once too.
+                raw_numeric_object_slots: if raw_numeric_recorded {
+                    0
+                } else {
+                    raw_numeric_object_slots
+                },
             },
             HeapPayloadSlotSelection::Masked { .. } => HeapPayloadSlotScan::Masked,
             HeapPayloadSlotSelection::All { .. } => HeapPayloadSlotScan::All(self.payload),

@@ -690,7 +690,13 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
 /// a range base); the base is precisely the guard that keeps a *garbage*
 /// candidate address at the very start of a range from turning into a read of
 /// the unmapped page below it (#7742).
-#[inline]
+/// Split hit/miss exactly like [`classify_heap_generation`] above, and for the
+/// same reason (#7469): with the map-lookup arm inlined alongside it, the whole
+/// function stayed out of line and every call paid its own `_tlv_get_addr` for
+/// the cache base. This one is the copying minor's inner loop —
+/// `CopyingPointerSet::classify_arena` calls it once per visited slot — so on a
+/// promotion-heavy cycle it runs millions of times per collection.
+#[inline(always)]
 pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, usize)> {
     if addr == 0 {
         return None;
@@ -700,18 +706,20 @@ pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, us
     if let Some(range) = unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
         return Some((range.space, range.base));
     }
+    classify_heap_space_in_range_uncached(addr, key)
+}
 
+/// Cache-miss arm of [`classify_heap_space_in_range`].
+#[inline(never)]
+fn classify_heap_space_in_range_uncached(addr: usize, key: usize) -> Option<(HeapSpace, usize)> {
     let found = {
         let pages = hot_page_generations().borrow();
         pages.get(&key).and_then(|slot| slot.find(addr))
     };
-    if let Some(range) = found {
-        // SAFETY: as above.
-        unsafe { (*hot_page_generation_cache()).insert(key, range) };
-        Some((range.space, range.base))
-    } else {
-        None
-    }
+    let range = found?;
+    // SAFETY: thread-local, single-threaded, and the borrow ends here.
+    unsafe { (*hot_page_generation_cache()).insert(key, range) };
+    Some((range.space, range.base))
 }
 
 pub(crate) fn old_object_page_overlaps(

@@ -241,20 +241,42 @@ fn dirty_slot_ranges_for(
         return Vec::new();
     };
 
+    // Walk whichever side is smaller. Iterating the dirty-page set is O(dirty
+    // pages) regardless of the range's size, which is the right shape for the
+    // one huge array this exists for — but it is quadratic when a heap holds
+    // MANY small pointer ranges (each would rescan the whole set). Enumerating
+    // the range's own pages instead is O(range pages) with one set probe each.
+    // Both arms produce the same ranges; only the traversal order differs, and
+    // the merge below sorts.
+    let range_pages = (slots_end - 1).saturating_sub(slots) / PAGE_SIZE + 1;
     let mut ranges = Vec::new();
-    for &page in dirty_pages {
+    let push_page = |page: usize, ranges: &mut Vec<(usize, usize)>, stats: &mut _| {
         let page_start = page << PAGE_SHIFT;
         let page_end = page_start + PAGE_SIZE;
         let start = slots.max(page_start);
         let end = slots_end.min(page_end);
         if start >= end {
-            continue;
+            return;
         }
+        let stats: &mut RememberedSetTraceStats = stats;
         stats.dirty_slot_pages_considered += 1;
         let first = (start - slots) / std::mem::size_of::<u64>();
         let last = (end - slots).div_ceil(std::mem::size_of::<u64>());
         if first < last {
             ranges.push((first.min(slot_count), last.min(slot_count)));
+        }
+    };
+    if range_pages <= dirty_pages.len() {
+        let first_page = slots >> PAGE_SHIFT;
+        let last_page = (slots_end - 1) >> PAGE_SHIFT;
+        for page in first_page..=last_page {
+            if dirty_pages.contains(&page) {
+                push_page(page, &mut ranges, stats);
+            }
+        }
+    } else {
+        for &page in dirty_pages {
+            push_page(page, &mut ranges, stats);
         }
     }
 

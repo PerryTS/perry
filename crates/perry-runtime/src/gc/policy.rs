@@ -906,6 +906,15 @@ thread_local! {
     /// `OldReclaim` escalation — old-gen garbage still forces a full through
     /// `old_reclaim_pressure_due` regardless of this backoff.
     pub(super) static GC_MAJOR_PACING_BACKOFF_SHIFT: Cell<u32> = const { Cell::new(0) };
+    /// Survival-adaptive arm of major-GC pacing: `true` once a copying minor
+    /// has measured a young-survival ratio at or above
+    /// `MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE`, cleared by any minor that
+    /// measures less. See `MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER`.
+    ///
+    /// Deliberately the LAST minor's verdict rather than a running maximum: a
+    /// heap that stops retaining must pace tightly again on its very next
+    /// collection, not after a decay window.
+    pub(super) static GC_MAJOR_PACING_RETAINING: Cell<bool> = const { Cell::new(false) };
     /// Re-entrancy guard for the #5476 direct old-gen reclaim driven from
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
@@ -1342,7 +1351,23 @@ const OLD_RECLAIM_GROWTH_DIVISOR: usize = 2;
 /// the "is it due" predicate and the debt arithmetic cannot diverge (#7024's
 /// two-predicates-collapse family).
 pub(super) fn gc_old_reclaim_growth_band_bytes(baseline: usize) -> usize {
-    gc_old_gen_reclaim_growth_dyn_bytes().max(baseline / OLD_RECLAIM_GROWTH_DIVISOR)
+    let band = gc_old_gen_reclaim_growth_dyn_bytes().max(baseline / OLD_RECLAIM_GROWTH_DIVISOR);
+    // Survival-adaptive, the same signal and the same multiplier the
+    // arena-growth escalation uses (`MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER`).
+    //
+    // `credit_promoted_bytes_to_old_baseline` already exempts old-gen growth
+    // that a minor PROVED live, but a large object is allocated straight into
+    // old-gen and never passes through promotion, so its bytes are uncredited
+    // growth even when they are the program's live data. On `retain.ts` that is
+    // the element array itself: with the arena-growth escalation correctly
+    // declining, this band became the binding constraint and fired a 452 ms
+    // full that reclaimed 7.6% — the same futile-full shape one trigger over,
+    // reached by the same route. While the young generation is not dying, old
+    // growth is priced as live here too.
+    if GC_MAJOR_PACING_RETAINING.with(|c| c.get()) {
+        return band.saturating_mul(MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER);
+    }
+    band
 }
 
 #[inline]
@@ -1503,6 +1528,46 @@ pub(super) fn credit_promoted_bytes_to_old_baseline(promoted_bytes: usize) {
         .with(|bytes| bytes.set(bytes.get().saturating_add(promoted_bytes)));
 }
 
+/// Feed a copying minor's measured young-survival ratio to arena-growth pacing.
+///
+/// Two effects, both gated on the same measurement:
+///
+/// * It arms/disarms `GC_MAJOR_PACING_RETAINING`, which widens the escalation
+///   growth band (see `MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER`).
+/// * While retaining, it re-baselines arena-growth pacing on the occupancy that
+///   *survived this collection*. Without that the band has nothing to scale:
+///   before the first full the baseline is 0, so the boundary degenerates to
+///   the absolute `PERRY_GC_MAJOR_PACING_FLOOR_MB` and **any** program that
+///   retains more than 32 MB pays a whole-heap mark-sweep for doing so.
+///
+/// The re-baseline is a ratchet (`max`), never a decrease, so a minor cannot
+/// pull the boundary in below what the last full established — and it is
+/// skipped entirely when the heap is not retaining, which is what keeps
+/// `churn`/`cycles`/`push_cls` (0–4 permille survival) bit-identical to the
+/// previous policy: their baseline stays 0 and their boundary stays the floor.
+///
+/// Note the direction of the whole change: because the baseline only ever
+/// ratchets UP and the multiplier is ≥ 1, the escalation boundary is never
+/// *lower* than it was before. This can only make fulls rarer, never more
+/// frequent — the exposure is deferred reclamation (RSS), not extra pauses.
+pub(super) fn note_copying_minor_young_survival(survival_permille: u64) {
+    let retaining = survival_permille >= MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE;
+    GC_MAJOR_PACING_RETAINING.with(|c| c.set(retaining));
+    if !retaining {
+        return;
+    }
+    let survived = pacing_arena_in_use_bytes();
+    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(bytes.get().max(survived)));
+}
+
+/// Whether the last copying minor measured a retaining heap. Trace/test
+/// observability — a gate that cannot see this cannot prove which arm paced a
+/// given run.
+#[cfg(any(feature = "diagnostics", test))]
+pub(super) fn major_pacing_retaining() -> bool {
+    GC_MAJOR_PACING_RETAINING.with(|c| c.get())
+}
+
 pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
     // #6010: external Map/Set side buffers count toward old-gen pressure —
     // a tenured-then-dead Map holds its multi-MB buffer until a full
@@ -1548,6 +1613,40 @@ const MAJOR_PACING_PRODUCTIVE_YIELD_PCT: usize = 20;
 /// `growth_num << 2`, i.e. 8× with the default `growth_num` of 2. Bounded so a
 /// long run of low-yield fulls cannot disable arena-growth pacing outright.
 const MAJOR_PACING_BACKOFF_SHIFT_MAX: u32 = 2;
+
+/// Young-survival ratio (permille) at or above which the heap is treated as
+/// RETAINING, i.e. growing by data that is alive rather than by garbage.
+///
+/// Measured on the GC-benchmark corpus, this separates by two orders of
+/// magnitude rather than marginally — the two populations do not overlap:
+///
+/// | workload | young survival (permille) |
+/// |---|---|
+/// | `churn`, `churn_alloc`, `push_cls` | 0 – 4 |
+/// | `cycles` | 0 |
+/// | `shapes` | 713 – 920 |
+/// | `retain`, `retain_wide`, `deeplist` | 999 – 1000 |
+const MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE: u64 = 900;
+
+/// Extra growth allowed before escalating while the heap is RETAINING, on top
+/// of `PERRY_GC_MAJOR_PACING_GROWTH` (so 8× with the default 2).
+///
+/// This is the survival-adaptive growing factor every generational collector
+/// needs and this one lacked. `growth_num = 2` means "escalate when the arena
+/// doubles". On a heap where **everything allocated stays alive**, doubling is
+/// not evidence of garbage — it is the program working — so the fixed 2×
+/// scheduled a full mark-sweep per doubling, each of which marked a bigger
+/// all-live heap and freed almost nothing (`retain.ts` 11.9%, `retain_wide.ts`
+/// 6.8% then 9.6%, `deeplist.ts` **0.0%**; against `tree.ts` 87.8% and
+/// `tree_wide.ts` 92.3%, which run no minors at all and are therefore
+/// untouched by this).
+///
+/// It is the prospective twin of `MAJOR_PACING_PRODUCTIVE_YIELD_PCT`'s
+/// retrospective backoff, and it exists because retrospection cannot help a
+/// monotonically growing live heap: every full costs O(live) and delaying one
+/// only makes the next bigger, so the useless full has to be *predicted*, not
+/// priced after the fact.
+const MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER: usize = 4;
 
 /// Record what the just-finished full reclaimed and adjust the pacing backoff.
 ///
@@ -1658,6 +1757,7 @@ pub(super) fn major_pacing_snapshot() -> (usize, u32, Option<usize>) {
 pub(super) fn test_reset_major_pacing_backoff() {
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.set(0));
     GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(0));
+    GC_MAJOR_PACING_RETAINING.with(|c| c.set(false));
 }
 
 /// The pre-full arena reading `arena_growth_full_escalation_due` recorded, or 0
@@ -2813,6 +2913,15 @@ fn major_pacing_escalation_threshold_bytes() -> Option<usize> {
     // escalation out (`GC_MAJOR_PACING_BACKOFF_SHIFT`). Shift the multiplier,
     // not the baseline, so one productive full restores the original pacing.
     let shift = GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get());
+    // Survival-adaptive: fold the retaining multiplier into `growth_num` rather
+    // than adding a parameter, so `major_pacing_escalation_threshold_for` stays
+    // the single pure `(config, state) → boundary` the snapshot and the
+    // predicate both read (#7733's divergence).
+    let growth_num = if GC_MAJOR_PACING_RETAINING.with(|c| c.get()) {
+        growth_num.saturating_mul(MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER)
+    } else {
+        growth_num
+    };
     major_pacing_escalation_threshold_for(floor_bytes, growth_num, baseline, shift)
 }
 
