@@ -300,39 +300,43 @@ pub fn gc_schedule_safepoints() -> u64 {
 /// RAII test override. `threshold` is taken directly so tests can pin the
 /// always/never arms without going through float parsing.
 #[cfg(test)]
-pub(crate) struct ScheduleGuard(Option<(u64, u64)>);
+pub(crate) struct ScheduleGuard {
+    prev: Option<(u64, u64)>,
+    armed: bool,
+}
 
 #[cfg(test)]
 impl ScheduleGuard {
     pub(crate) fn set(seed: u64, threshold: u64) -> Self {
         // #7781: mirror `ZealGuard` — a schedule that cannot reach the poll
         // decides at six event-loop boundaries instead of thousands of
-        // back-edges. Arm on set, release on drop, exactly the zeal pair.
+        // back-edges. Arm on set, release on drop.
+        //
+        // The bookkeeping is deliberately ASYMMETRIC: only `set` arms, and only
+        // its own `Drop` releases. `off()` must NOT disarm-then-let-Drop-rearm:
+        // `disarm_poll` saturates at zero, so a disarm that lands on 0 is lost
+        // while the paired re-arm is not — a permanent +1 leak that pins the
+        // poll armed for the rest of the process. Over-arming for a guard's
+        // lifetime costs a wasted call; a leaked arm is forever.
         let prev = SCHEDULE_OVERRIDE.with(|cell| cell.replace(Some((seed, threshold))));
-        if prev.is_none() {
+        let armed = prev.is_none();
+        if armed {
             super::arm_poll();
         }
-        Self(prev)
+        Self { prev, armed }
     }
     pub(crate) fn off() -> Self {
         let prev = SCHEDULE_OVERRIDE.with(|cell| cell.replace(None));
-        if prev.is_some() {
-            super::disarm_poll();
-        }
-        Self(prev)
+        Self { prev, armed: false }
     }
 }
 
 #[cfg(test)]
 impl Drop for ScheduleGuard {
     fn drop(&mut self) {
-        let restored = self.0;
-        let current = SCHEDULE_OVERRIDE.with(|cell| cell.replace(restored));
-        // Re-balance the arm to match the transition this drop performs.
-        match (current.is_some(), restored.is_some()) {
-            (true, false) => super::disarm_poll(),
-            (false, true) => super::arm_poll(),
-            _ => {}
+        SCHEDULE_OVERRIDE.with(|cell| cell.set(self.prev));
+        if self.armed {
+            super::disarm_poll();
         }
     }
 }
