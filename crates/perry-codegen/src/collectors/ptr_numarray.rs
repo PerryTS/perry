@@ -174,6 +174,67 @@ pub(crate) fn expr_is_numarray_prototype_index_barrier(expr: &Expr) -> bool {
 /// incremented, and "`Ptr<NumArray>`: 0 promoted" was indistinguishable from
 /// "the instrument is dead". That is CLAUDE.md's failure mode (4): the gate
 /// runs but its subject never did.
+/// #7112: record that the WHOLE `Ptr<NumArray>` analysis was switched off for
+/// this module, and by what.
+///
+/// Without this the report is silent, and silence at candidate-generation time
+/// is indistinguishable from "considered and rejected" — the same ambiguity the
+/// census was built to remove, one stage upstream.
+///
+/// Deliberately `Position::Local` with a module-scoped pseudo-name rather than
+/// a real local: there is no value to attribute a module-wide kill to, and
+/// inventing one would put a denial on an array that was never examined.
+/// #7112: record an array local rejected by the ELEMENT-TYPE pre-filter, before
+/// it ever became a candidate.
+///
+/// The pre-filter sits above `provenance()`, so nothing downstream sees the
+/// local and no per-value `deny()` runs — the array vanishes from the report.
+/// `Fixable` rather than `CompilerLimitation`: the declared element type is the
+/// trust boundary every numeric fast path uses, so the program can move to
+/// `number[]` (or the analysis can grow a boolean slot representation). That is
+/// a different kind of answer from "the compiler cannot express this".
+fn note_non_numeric_element_type(id: u32, ty: &HirType) {
+    if !opt_report::enabled() {
+        return;
+    }
+    opt_report::deny(opt_report::Denial {
+        position: opt_report::Position::Local,
+        name: "<array local>",
+        local_id: Some(id),
+        analysis: opt_report::Analysis::PtrNumArray,
+        rule: "rule 0 (element type)",
+        reason: "the declared element type is not `number` / `int32`, and the \
+                 Ptr<NumArray> slot representation admits only numeric \
+                 elements — so the local never reached provenance analysis.",
+        tier: opt_report::Tier::Fixable,
+        issue: Some("#7112"),
+        loop_depth: 0,
+        detail: Some(format!("declared type: {ty:?}")),
+        byte_offset: None,
+    });
+}
+
+fn note_analysis_disabled(cause: &str) {
+    if !opt_report::enabled() {
+        return;
+    }
+    opt_report::deny(opt_report::Denial {
+        position: opt_report::Position::Local,
+        name: "<module>",
+        local_id: None,
+        analysis: opt_report::Analysis::PtrNumArray,
+        rule: "rule 0 (analysis disabled)",
+        reason: "the Ptr<NumArray> analysis was switched off for this whole \
+                 module before any array local became a candidate, so no \
+                 per-value decision was made for any of them.",
+        tier: opt_report::Tier::CompilerLimitation,
+        issue: Some("#7112"),
+        loop_depth: 0,
+        detail: Some(format!("cause: {cause}")),
+        byte_offset: None,
+    });
+}
+
 fn note_num_array_local(
     id: u32,
     fact: &NumArrayLocal,
@@ -217,21 +278,41 @@ pub(crate) fn collect_num_array_locals(
     compile_time_constants: &HashMap<u32, f64>,
     integer_locals: &HashSet<u32>,
 ) -> HashMap<u32, NumArrayLocal> {
-    if !ptr_numarray_locals_enabled()
-        || module_dispatch.has_shape_barrier_sites()
-        || module_dispatch.has_numarray_prototype_index_barriers()
-        // An UNATTRIBUTABLE prototype reference anywhere in the module
-        // (`const p = Array.prototype; p[5] = …`, `x.constructor.prototype`,
-        // …). The direct-form kill above only sees a write whose receiver is
-        // syntactically `<expr>.prototype`; once the prototype object is
-        // aliased into a local, the write is an ordinary `IndexSet` on that
-        // local and is invisible to it. `note_prototype_holder` already flags
-        // every such NAMING site as opaque, so consuming that fact closes the
-        // alias hole — without it a polluted `Array.prototype[i]` could make a
-        // HOLE read observable while a guard-free `HolesOK` load (which cannot
-        // consult the runtime pollution byte) still returned the quiet NaN.
-        || module_dispatch.has_opaque_prototype_mutation()
-    {
+    // #7112: a module-wide barrier kills EVERY array local at once, before any
+    // of them becomes a candidate — so nothing reaches a per-value `deny()` and
+    // the report shows the module as having no array candidates at all. That
+    // reads identically to "the analysis never looked", which is the ambiguity
+    // this report exists to remove, and it is why 8 of the census's 18 real
+    // workloads report zero candidates.
+    //
+    // Record the kill itself, once, naming which barrier fired. It is a
+    // MODULE-level fact rather than a value-level one, so there is no local to
+    // attribute it to — that is the point: the reader learns the analysis
+    // stopped upstream rather than that every array was individually rejected.
+    if !ptr_numarray_locals_enabled() {
+        note_analysis_disabled("PERRY_PTR_NUMARRAY_LOCALS=0");
+        return HashMap::new();
+    }
+    if module_dispatch.has_shape_barrier_sites() {
+        note_analysis_disabled("a shape-barrier site in this module");
+        return HashMap::new();
+    }
+    if module_dispatch.has_numarray_prototype_index_barriers() {
+        note_analysis_disabled("a numarray prototype-index barrier in this module");
+        return HashMap::new();
+    }
+    // An UNATTRIBUTABLE prototype reference anywhere in the module
+    // (`const p = Array.prototype; p[5] = …`, `x.constructor.prototype`, …).
+    // The direct-form kill above only sees a write whose receiver is
+    // syntactically `<expr>.prototype`; once the prototype object is aliased
+    // into a local, the write is an ordinary `IndexSet` on that local and is
+    // invisible to it. `note_prototype_holder` already flags every such NAMING
+    // site as opaque, so consuming that fact closes the alias hole — without it
+    // a polluted `Array.prototype[i]` could make a HOLE read observable while a
+    // guard-free `HolesOK` load (which cannot consult the runtime pollution
+    // byte) still returned the quiet NaN.
+    if module_dispatch.has_opaque_prototype_mutation() {
+        note_analysis_disabled("an opaque (aliased) prototype mutation in this module");
         return HashMap::new();
     }
     // Pass 1: single-`Let` provenance candidates.
@@ -361,6 +442,25 @@ impl<'a> UseWalk<'a> {
                     _ => false,
                 };
                 if !numeric_array_ty {
+                    // #7112: this verdict is CORRECT but the report used to
+                    // throw it away. `benchmarks/suite/11_prime_sieve.ts`
+                    // declares `const sieve: boolean[]` and reports 0
+                    // `ptr-numarray` candidates — which reads as "this program
+                    // has no array worth promoting", for a program whose
+                    // 1,000,000-element array is in the hot loop indexed by a
+                    // proven integer. The real answer, "declared `boolean[]`
+                    // and this analysis admits only numeric element types", is
+                    // a good answer that nothing in the tooling would tell you.
+                    //
+                    // Only ARRAY types are recorded: a non-array `Let` is not a
+                    // rejected array candidate, it simply is not an array, and
+                    // filing a denial for every `let x = 1` would drown the
+                    // report in rows answering a question nobody asked.
+                    let is_array_ty = matches!(ty, HirType::Array(_))
+                        || matches!(ty, HirType::Generic { base, .. } if base == "Array");
+                    if is_array_ty {
+                        note_non_numeric_element_type(*id, ty);
+                    }
                     return;
                 }
                 if let Some(init) = init {
