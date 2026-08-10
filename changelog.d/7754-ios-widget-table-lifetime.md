@@ -27,6 +27,14 @@
 
 - **`benchmarks/ios-ui/`** — a frame-time benchmark app cycling through idle, property-updates, add/remove, animation and text-heavy phases, printing a marker before each so `[frame-stats]` lines are attributable to a workload. Plus two isolation probes (`isolate_churn.ts`, `isolate_frame.ts`) that split structural churn from the frame driver; they are what localized the crash described below.
 
+### Unresolved
+
+- **One device crash remains unreproduced**: `NSInvalidArgumentException: -[__NSArrayM insertObject:atIndex:]: object cannot be nil`, seen once, during the benchmark's property-updates phase (no structural mutation — just `setText:` traffic on 50 labels per frame, after that phase's `enter()` released the previous phase's labels).
+
+  Retiring a released view is now deferred to a `PENDING_RELEASE` queue drained from the main-thread timer pump instead of dropping the last strong reference inline. The motivation is sound on its own — `onFrame` runs from a `CADisplayLink`, i.e. inside CoreAnimation's pre-commit phase, and deallocating a view UIKit still holds pending there nils an entry it is about to read — **but it is not established that this is what caused the observed crash.** Isolation probes did not reproduce it: churn from `onFrame` ran 690 rounds clean, with and without a `UIScrollView` parent, and full-benchmark runs are clean both before and after the change.
+
+  The one run that crashed had a human touching the screen. The display link is registered in `NSRunLoopCommonModes` specifically so it keeps firing during `UITrackingRunLoopMode`, so touch interaction changes both the run-loop mode and the layout traffic, and no probe here injects touches. Reproducing this needs an interactive device session.
+
 ### Note for platform UI crates
 
 A platform UI crate must reach `perry-runtime` through the **C ABI**, never as a Rust path. `perry-ui-ios` depends on `perry-runtime` as an rlib while the final binary also links `libperry_runtime.a`; calling a runtime function as `perry_runtime::foo()` instantiates a *second copy* of that code inside the UI crate, with its own thread-local arena, GC state and statics. Frame callbacks then register in one copy's queue while the driver drains the other's, and memory allocated by one allocator is freed by the other — which aborts on device with `malloc: pointer being freed was not allocated`.
