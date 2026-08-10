@@ -495,65 +495,6 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::js_object_coerce(value);
             }
-            // `new $Map()` / `new $Set()` / `new $WeakMap()` / … where the
-            // constructor was obtained as a value (alias variable, intrinsic
-            // lookup, cross-module re-export). Mirror the static codegen
-            // construction in lower_call/builtin.rs: allocate, NaN-box, then
-            // initialize from the optional iterable argument.
-            "Map" => {
-                let map = crate::map::js_map_alloc(4);
-                let boxed = crate::value::js_nanbox_pointer(map as i64);
-                if let Some(&iterable) = args.first() {
-                    let ij = crate::value::JSValue::from_bits(iterable.to_bits());
-                    if !ij.is_undefined() && !ij.is_null() {
-                        let from = crate::map::js_map_from_iterable(iterable);
-                        return crate::value::js_nanbox_pointer(from as i64);
-                    }
-                }
-                return boxed;
-            }
-            "Set" => {
-                let set = crate::set::js_set_alloc(4);
-                let boxed = crate::value::js_nanbox_pointer(set as i64);
-                if let Some(&iterable) = args.first() {
-                    let ij = crate::value::JSValue::from_bits(iterable.to_bits());
-                    if !ij.is_undefined() && !ij.is_null() {
-                        let from = crate::set::js_set_from_iterable(iterable);
-                        return crate::value::js_nanbox_pointer(from as i64);
-                    }
-                }
-                return boxed;
-            }
-            "WeakMap" => {
-                let map = crate::weakref::js_weakmap_new();
-                let boxed = crate::value::js_nanbox_pointer(map as i64);
-                if let Some(&iterable) = args.first() {
-                    let ij = crate::value::JSValue::from_bits(iterable.to_bits());
-                    if !ij.is_undefined() && !ij.is_null() {
-                        return crate::weakref::js_weakmap_init_iterable(boxed, iterable);
-                    }
-                }
-                return boxed;
-            }
-            "WeakSet" => {
-                let set = crate::weakref::js_weakset_new();
-                let boxed = crate::value::js_nanbox_pointer(set as i64);
-                if let Some(&iterable) = args.first() {
-                    let ij = crate::value::JSValue::from_bits(iterable.to_bits());
-                    if !ij.is_undefined() && !ij.is_null() {
-                        return crate::weakref::js_weakset_init_iterable(boxed, iterable);
-                    }
-                }
-                return boxed;
-            }
-            "WeakRef" => {
-                let target = args
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                let wr = crate::weakref::js_weakref_new(target);
-                return crate::value::js_nanbox_pointer(wr as i64);
-            }
             #[cfg(feature = "global-webfetch")]
             "Blob" => {
                 let parts = args
@@ -588,6 +529,11 @@ pub unsafe extern "C" fn js_new_function_construct(
                 );
             }
             #[cfg(feature = "global-webfetch")]
+            // Global builtins reached through a VALUE (alias variable,
+            // intrinsic lookup, cross-module re-export) rather than by name.
+            n if builtin_alias_construct::handles(n) => {
+                return builtin_alias_construct::construct(n, args);
+            }
             "Headers" => {
                 let init = args
                     .first()
