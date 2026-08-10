@@ -94,16 +94,15 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
 /// stopped being true when they moved into the managed arena.
 #[inline]
 pub(crate) fn array_receiver_gc_tag(arr: *const ArrayHeader) -> (u8, u16) {
-    if (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return (0, 0);
-    }
-    // SAFETY: the same `arr - GC_HEADER_SIZE` read `clean_arr_ptr` performs on
-    // this pointer (forwarding chain, lazy/object rejection), under the same
-    // magnitude guard.
-    unsafe {
-        let gc_header =
-            (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        ((*gc_header).obj_type, (*gc_header)._reserved)
+    // `try_read_gc_header` rather than this file's usual
+    // `>= GC_HEADER_SIZE + 0x1000` floor: that floor sits BELOW the handle
+    // band, and `js_array_length` reaches here before its proxy/handle
+    // receivers have been routed. The canonical predicate rejects the bands
+    // without touching memory, and rejecting an address the old floor would
+    // have read costs nothing — a handle is not a Map either way.
+    match unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) } {
+        Some(header) => (header.obj_type, header._reserved),
+        None => (0, 0),
     }
 }
 

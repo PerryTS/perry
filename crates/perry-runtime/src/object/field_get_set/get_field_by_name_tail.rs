@@ -1601,7 +1601,7 @@ pub(crate) fn get_field_by_name_object_tail(
         if let Some(field_idx) = cached {
             let idx = field_idx as usize;
             let cache_hit_valid = if idx < key_count {
-                let key_val = crate::array::js_array_get(keys, field_idx);
+                let key_val = crate::array::keys_array_slot(keys, field_idx);
                 // #1781: SSO-aware match — pre-fix the `is_string()` here
                 // false-invalidated cache hits for ≤5-byte keys stored
                 // as SHORT_STRING_TAG values.
@@ -1676,7 +1676,7 @@ pub(crate) fn get_field_by_name_object_tail(
         }
 
         for i in 0..key_count {
-            let key_val = crate::array::js_array_get(keys, i as u32);
+            let key_val = crate::array::keys_array_slot(keys, i as u32);
             // #1781: accept inline SSO short keys here too — the
             // slow-path lookup is what backs `obj[k]` for ≤5-byte
             // keys after a field-cache miss.

@@ -545,12 +545,86 @@ fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringH
 /// FOR DENSE KEYS/PROPERTY ARRAYS ONLY — general JS arrays may have
 /// `length > capacity` (sparse), where this cap would be incorrect.
 pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) -> usize {
+    // #7768: a well-formed dense keys array answers from its own two words.
+    // `js_array_length` re-derives the same number through a proxy probe, a
+    // second header read for its lazy/object arms, and a `clean_arr_ptr`
+    // forwarding walk — once per property read on the field-get funnel.
+    // `length <= capacity` is exactly the well-formed case; the sparse and
+    // corrupted shapes this cap exists for fall through unchanged.
+    if let Some(header) = crate::value::addr_class::try_read_gc_header(arr as usize) {
+        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && (*arr).length <= (*arr).capacity
+        {
+            return (*arr).length as usize;
+        }
+    }
     let raw = js_array_length(arr) as usize;
     if arr.is_null() {
         raw
     } else {
         raw.min((*arr).capacity as usize)
     }
+}
+
+/// Read slot `index` of a dense internal keys/property array.
+///
+/// The object field-get funnel has already proved `keys` is a live
+/// `GC_TYPE_ARRAY` — it reads the `GcHeader` and returns `undefined` otherwise
+/// — and has capped `index` below the array's own capacity (see
+/// [`keys_array_len_capped_to_capacity`]). Those are precisely the two facts
+/// [`js_array_get_f64`] re-establishes from scratch on every call: a
+/// `clean_arr_ptr` forwarding walk, a lazy-header probe, the exotic-receiver
+/// classifications and a descriptor-flag read — per key examined, per property
+/// read. On `gc-handoff/apps/asyncpipe_big.ts` that one funnel was 78% of all
+/// `js_array_get_f64` samples.
+///
+/// Falls back to the general getter for anything it cannot serve on those
+/// terms — a forwarded array (which `clean_arr_ptr` would relocate), one
+/// carrying index descriptors, an out-of-range index, or a hole (which reads
+/// through the prototype chain) — so no general semantics move. Keys arrays
+/// are dense and descriptor-free, so the fallback is the cold arm.
+#[inline]
+pub(crate) unsafe fn keys_array_slot(
+    keys: *const ArrayHeader,
+    index: u32,
+) -> crate::value::JSValue {
+    if let Some(header) = crate::value::addr_class::try_read_gc_header(keys as usize) {
+        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+            && index < (*keys).length
+            && index < (*keys).capacity
+        {
+            let elements =
+                (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let raw = std::ptr::read(elements.add(index as usize));
+            if raw.to_bits() != crate::value::TAG_HOLE {
+                return crate::value::JSValue::from_bits(raw.to_bits());
+            }
+        }
+    }
+    #[cfg(test)]
+    KEYS_ARRAY_SLOT_FALLBACKS.with(|c| c.set(c.get().wrapping_add(1)));
+    crate::array::js_array_get(keys, index)
+}
+
+/// Times [`keys_array_slot`] could NOT serve a slot from the dense words and
+/// had to delegate. Asserted in both directions by
+/// `array::collection_tag_tests` — zero for the dense keys arrays the fast path
+/// exists for, non-zero for every shape it must refuse — so a fast path that
+/// silently stopped applying, or one that started swallowing a shape it should
+/// have delegated, both go red.
+/// Per THREAD — `cargo test` runs every case on its own thread in one process,
+/// so a process-global counter would be moved by whatever else is running.
+#[cfg(test)]
+thread_local! {
+    static KEYS_ARRAY_SLOT_FALLBACKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_keys_array_slot_fallbacks() -> u64 {
+    KEYS_ARRAY_SLOT_FALLBACKS.with(|c| c.get())
 }
 
 /// Auto-opt dead-strip anchor: codegen emits a bare `js_array_length` symbol in

@@ -216,6 +216,65 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
     assert_eq!(js_map_size(map), 3);
 }
 
+/// `keys_array_slot` must be the general getter, minus the work the field-get
+/// funnel already did — and must refuse every shape it cannot serve on those
+/// terms rather than guess. Both directions are asserted against the fallback
+/// counter, so "stopped applying" and "started swallowing" are equally red.
+#[test]
+fn keys_array_slot_matches_the_general_getter_and_delegates_what_it_cannot_serve() {
+    let dense_keys = dense(&[10.0, 20.0, 30.0]);
+
+    let before = crate::array::test_keys_array_slot_fallbacks();
+    for i in 0..3u32 {
+        let fast = unsafe { crate::array::keys_array_slot(dense_keys, i) };
+        let general = crate::array::js_array_get(dense_keys, i);
+        assert_eq!(
+            fast.bits(),
+            general.bits(),
+            "slot {i} must read identically through both paths"
+        );
+    }
+    assert_eq!(
+        crate::array::test_keys_array_slot_fallbacks(),
+        before,
+        "a dense, descriptor-free keys array is exactly what the fast path \
+         exists for — it must not delegate"
+    );
+
+    // Out of range, and a hole, both delegate: the general getter walks the
+    // prototype chain for those and the dense words cannot answer.
+    let before = crate::array::test_keys_array_slot_fallbacks();
+    let oob = unsafe { crate::array::keys_array_slot(dense_keys, 7) };
+    assert_eq!(oob.bits(), crate::array::js_array_get(dense_keys, 7).bits());
+    assert_eq!(
+        crate::array::test_keys_array_slot_fallbacks(),
+        before + 1,
+        "an out-of-range index must reach the general getter"
+    );
+
+    let holey = js_array_alloc_with_length(3);
+    js_array_set_f64(holey, 1, 42.0);
+    let before = crate::array::test_keys_array_slot_fallbacks();
+    let hole = unsafe { crate::array::keys_array_slot(holey, 0) };
+    assert_eq!(hole.bits(), crate::array::js_array_get(holey, 0).bits());
+    assert_eq!(
+        crate::array::test_keys_array_slot_fallbacks(),
+        before + 1,
+        "a HOLE reads through the prototype chain, so it must delegate"
+    );
+    let filled = unsafe { crate::array::keys_array_slot(holey, 1) };
+    assert_eq!(filled.bits(), crate::array::js_array_get(holey, 1).bits());
+
+    // A null / low pointer must delegate rather than dereference.
+    let before = crate::array::test_keys_array_slot_fallbacks();
+    let _ = unsafe { crate::array::keys_array_slot(std::ptr::null(), 0) };
+    assert_eq!(
+        crate::array::test_keys_array_slot_fallbacks(),
+        before + 1,
+        "a null keys pointer must delegate, never be dereferenced"
+    );
+}
+
 /// The invariant the whole gate rests on: a registered collection's address IS
 /// its `arena_alloc_gc` header, so its `obj_type` is a complete answer.
 ///

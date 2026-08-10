@@ -196,18 +196,23 @@ fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
 /// receiver-tag gates (#7768) are asserted against this: a plain-array element
 /// read must not move it. Remove those gates and the assertion fails, which is
 /// the point — a fast path nobody can prove ran is not a fast path.
+///
+/// Per THREAD, not per process: the registries themselves are thread-local, and
+/// `cargo test` runs every case on its own thread in one process, so a global
+/// counter would be moved by whatever else happens to be running.
 #[cfg(test)]
-pub(crate) static TEST_MAP_REGISTRY_PROBES: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    static TEST_MAP_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 pub(crate) fn test_map_registry_probe_count() -> u64 {
-    TEST_MAP_REGISTRY_PROBES.load(std::sync::atomic::Ordering::Relaxed)
+    TEST_MAP_REGISTRY_PROBES.with(|c| c.get())
 }
 
 pub fn is_registered_map(addr: usize) -> bool {
     #[cfg(test)]
-    TEST_MAP_REGISTRY_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    TEST_MAP_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     // #7469: nothing has ever been registered ⟹ nothing can be found. Checked
     // first because it is the only arm that costs neither a thread-local
     // resolution nor a hash.
