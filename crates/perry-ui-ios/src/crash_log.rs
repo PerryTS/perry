@@ -85,6 +85,70 @@ pub fn install_crash_hooks() {
         libc::signal(libc::SIGSEGV, signal_handler as libc::sighandler_t);
         libc::signal(libc::SIGBUS, signal_handler as libc::sighandler_t);
         libc::signal(libc::SIGABRT, signal_handler as libc::sighandler_t);
+        NSSetUncaughtExceptionHandler(Some(uncaught_objc_exception));
+    }
+}
+
+type UncaughtExceptionHandler = extern "C" fn(*mut objc2::runtime::AnyObject);
+
+extern "C" {
+    fn NSSetUncaughtExceptionHandler(handler: Option<UncaughtExceptionHandler>);
+}
+
+/// Report an uncaught Objective-C exception with its **throw-time** backtrace.
+///
+/// Without this the process aborts through `SIGABRT` and all that survives is
+/// `libc++abi: terminating due to uncaught exception`, plus a list of raw
+/// return addresses with no load address to symbolicate against. `NSException`
+/// captures `callStackSymbols` at the moment it is *raised*, so reading it here
+/// recovers the frames that actually threw — already symbolicated by the
+/// Objective-C runtime, with no need for a matching dSYM or an offline pass
+/// over an `.ips`.
+///
+/// Written to stderr because `perry run` streams the device's stderr back over
+/// `devicectl --console`, which is the only channel available during an
+/// interactive device session.
+extern "C" fn uncaught_objc_exception(exc: *mut objc2::runtime::AnyObject) {
+    use objc2::runtime::AnyObject;
+    if exc.is_null() {
+        eprintln!("[perry-crash] uncaught Objective-C exception (null)");
+        return;
+    }
+
+    // Everything below is best-effort: this runs while the process is already
+    // terminating, so a failure to read one field must not prevent the rest
+    // from being reported.
+    unsafe {
+        let ns_string_utf8 = |s: *mut AnyObject| -> String {
+            if s.is_null() {
+                return String::from("<null>");
+            }
+            let c: *const std::ffi::c_char = objc2::msg_send![s, UTF8String];
+            if c.is_null() {
+                return String::from("<null>");
+            }
+            std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned()
+        };
+
+        let name: *mut AnyObject = objc2::msg_send![exc, name];
+        let reason: *mut AnyObject = objc2::msg_send![exc, reason];
+        eprintln!(
+            "[perry-crash] uncaught {}: {}",
+            ns_string_utf8(name),
+            ns_string_utf8(reason)
+        );
+
+        let symbols: *mut AnyObject = objc2::msg_send![exc, callStackSymbols];
+        if symbols.is_null() {
+            eprintln!("[perry-crash] no callStackSymbols available");
+            return;
+        }
+        let count: usize = objc2::msg_send![symbols, count];
+        eprintln!("[perry-crash] throw-time backtrace ({count} frames):");
+        for i in 0..count {
+            let frame: *mut AnyObject = objc2::msg_send![symbols, objectAtIndex: i];
+            eprintln!("[perry-crash]   {}", ns_string_utf8(frame));
+        }
     }
 }
 
