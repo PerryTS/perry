@@ -341,6 +341,46 @@ jobs:
                 "PERRY_GC_MOVING_LOOP_POLLS=1." % len(cells))
           PY
 
+      # ★★ The DEPENDENCY-SCALE RUNTIME witness (#7717, the one unmet ask of
+      # #7280).
+      #
+      # Everything above this line is a curated reproducer. #7280 measured why
+      # that is not enough: the curated corpus passed 25/25 while twenty lines
+      # of stock `zod` failed 5/40. It is a distribution problem rather than a
+      # size one — dependency-shaped code is dominated by `js_object_assign_one`
+      # (object spread) and `js_new_function_construct`, populations the curated
+      # files barely produce.
+      #
+      # `gc-root-dominance` already compiles this same corpus, but it is a
+      # STATIC pass over emitted IR and never runs a program, so it cannot see a
+      # runtime-side cache holding a raw heap pointer. This step runs it.
+      #
+      # The env knobs and every assertion live in the script, not here, so that
+      # reproducing a CI failure is one command rather than a re-read of this
+      # YAML. In particular the script pins `PERRY_NO_AUTO_OPTIMIZE=1`, which is
+      # a deliberate departure from the matrix above: the auto-optimizer relinks
+      # the runtime WITHOUT the `diagnostics` feature, and `diagnostics` is what
+      # emits the `[gc-fromspace-protect]` line this gate reads as its proof
+      # that the quarantine engaged.
+      - name: Install the npm dependency the dependency-scale witness runs
+        if: steps.relevance.outputs.run == 'true'
+        # `zod` is this repo's own package.json devDependency, pinned by
+        # package-lock.json and governed by the same soak window as everything
+        # else in that file — not a fixture invented for this job. Same
+        # invocation `gc-root-dominance` uses for the same corpus.
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # GATING. No pipe, no `|| true`. The script asserts its own subject ran
+      # three independent ways — the `[gc-zeal]` verdict, `copying_minors` /
+      # `moved_objects` / `loop_polls` re-read from it, and a non-zero count of
+      # retired from-space page-sets — because `PERRY_GC_PROTECT_FROMSPACE=1` on
+      # a run with no copying minor protects NOTHING and still exits clean.
+      # #7717 records hitting exactly that and nearly recording the wrong
+      # conclusion.
+      - name: Run the dependency-scale runtime witness
+        if: steps.relevance.outputs.run == 'true'
+        run: ./scripts/gc_dep_scale_witness.sh
+
       - name: Upload the witness report
         if: always() && steps.relevance.outputs.run == 'true'
         uses: actions/upload-artifact@v7
