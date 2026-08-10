@@ -57,9 +57,11 @@ pub(crate) use state::{
     class_object_value_root_store, class_own_enumerable_field_names, class_own_static_field_value,
     class_parent_closure, class_parent_closure_root_store, class_prototype_method_is_enumerable,
     class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
-    class_prototype_object_root_store, global_object_prototype_bits,
-    is_bound_native_method_closure_value, is_non_constructable_builtin_function_value,
-    parent_closure_in_chain, throw_non_constructable_builtin_function,
+    class_prototype_object_root_store, class_static_defined_attrs,
+    class_static_key_is_non_enumerable, class_static_set_defined_attrs,
+    global_object_prototype_bits, is_bound_native_method_closure_value,
+    is_non_constructable_builtin_function_value, parent_closure_in_chain,
+    throw_non_constructable_builtin_function,
 };
 pub use state::{
     ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_DYNAMIC_PARENT_VALUE,

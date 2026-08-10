@@ -97,11 +97,45 @@ pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
                 props
                     .keys()
                     .filter(|k| !k.starts_with('#'))
+                    // #7190: a key installed by `Object.defineProperty` without
+                    // `enumerable: true` shares this table with static fields
+                    // but is NOT enumerable.
+                    .filter(|k| !class_static_key_is_non_enumerable(class_id, k))
                     .cloned()
                     .collect()
             })
             .unwrap_or_default()
     })
+}
+
+/// #7190: record a `defineProperty`-installed static key's attributes. Called
+/// only from the define path; `static x = …` never touches it, so a declared
+/// field keeps its CreateDataPropertyOrThrow `(writable, enumerable) = (true,
+/// true)` reporting.
+pub(crate) fn class_static_set_defined_attrs(
+    class_id: u32,
+    name: &str,
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
+) {
+    crate::object::CLASS_STATIC_DEFINED_ATTRS.with(|m| {
+        m.borrow_mut()
+            .entry(class_id)
+            .or_default()
+            .insert(name.to_string(), (writable, enumerable, configurable));
+    });
+}
+
+/// `(writable, enumerable)` if this static key was installed by
+/// `Object.defineProperty`; `None` for a declared `static x = …` field.
+pub(crate) fn class_static_defined_attrs(class_id: u32, name: &str) -> Option<(bool, bool, bool)> {
+    crate::object::CLASS_STATIC_DEFINED_ATTRS
+        .with(|m| m.borrow().get(&class_id).and_then(|k| k.get(name)).copied())
+}
+
+pub(crate) fn class_static_key_is_non_enumerable(class_id: u32, name: &str) -> bool {
+    class_static_defined_attrs(class_id, name).is_some_and(|(_, enumerable, _)| !enumerable)
 }
 
 /// True when `name` is an own static data property (a static field, or a

@@ -1,0 +1,16 @@
+**`Object.defineProperty(SomeClass, key, descriptor)` now installs a static own property** (#7190). It was silently dropped — not misfiled, dropped: `C.zzz` came back `undefined` and so did `new C().zzz`, so the value went nowhere at all.
+
+The cause is that `C` and `C.prototype` answer `class_ref_id` with the **same class id** — Perry maps a prototype ref back to its class — so the define path could not tell the two receivers apart and treated every one as a prototype install. That is correct for `Object.defineProperty(C.prototype, …)`, the drizzle `applyMixins` case the arm was written for, and wrong for the class itself. `class_prototype_ref_id` is the discriminator, and `descriptors.rs` was already using it to tell the two apart when reporting descriptors; the define path now does the same and routes a bare class ref into `CLASS_DYNAMIC_PROPS`, the table `static x = …` already writes to, so the existing static read path finds it with no new lookup.
+
+The user-visible form was zod: it renames constructors with `Object.defineProperty(Cls, "name", { value })`, and Perry kept resolving `.name` through the class registry, so class errors reported `constructor.name === "Definition"`.
+
+Two things that had to come with it, both found by the oracle rather than by reasoning:
+
+* **Attributes.** A declared `static x = …` is writable and enumerable (CreateDataPropertyOrThrow); a `defineProperty` data descriptor is neither. Both now live in one table, so the descriptor-installed ones carry their `(writable, enumerable, configurable)` bits and an *absent* entry keeps the previous `(true, true, true)` reporting for declared fields. Without this, `Object.keys(C)` gained a key Node does not report — the first cut of this fix did exactly that, leaking a non-enumerable `hidden` into both `Object.keys` and `for…in`.
+* **`configurable` is retain-or-default, not default.** ECMA-262 `[[DefineOwnProperty]]` defaults an omitted field to `false` on a NEW property but RETAINS it on an existing one. The built-in `name`/`length` slots are `configurable: true`, so redefining `name` without saying `configurable` must stay configurable while a brand-new key must not. Hardcoding either answer fails one of the two, and both appear in the same test.
+
+`getOwnPropertyDescriptor(C, "name")` now agrees with `C.name` too — previously the value read reported the redefined string while the descriptor still reported the declared one, which is the state that makes a define look like it never happened.
+
+Verified against Node v26.5.1: the new gap test `test_gap_class_static_define_property_7190.ts` passes byte-for-byte, covering all three receivers (function, class, class prototype), an arbitrary key as well as `name`, subclasses, class expressions, and the enumerability/descriptor bits. `test_gap_class` (25) and `test_gap_static` (3) stay green.
+
+Two pre-existing failures were checked rather than assumed: `test_gap_2159_defineproperty_class_prototype` fails on clean `main` in the release sweep and its diff is an unsettled top-level await, not a descriptor; and the runtime lib suite's intermittent failure is #7365 — `obj_dispatch_ic_tests::a_hit_requires_matching_name_bytes_not_a_matching_address` fails **10 of 12** isolated runs on clean `main` against 7 of 12 with this change, so it is order-dependent flake and not fallout here.
