@@ -62,6 +62,16 @@ pub(crate) enum UpdateMode {
 }
 
 impl UpdateMode {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Notify => "notify",
+            Self::Prompt => "prompt",
+            Self::Auto => "auto",
+            Self::Unknown => "notify (unrecognized value in config)",
+        }
+    }
+
     pub(crate) fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "off" => Some(Self::Off),
@@ -120,10 +130,29 @@ impl UpdateConfig {
 pub(crate) struct UpdatePolicy {
     /// Already accounts for the environment, CI, and whether stderr is a
     /// terminal — so a caller never has to re-derive "should I be quiet".
+    /// Use [`Self::configured_mode`] when REPORTING the setting rather than
+    /// acting on it: this is the decision for one run, and a suppressed run does
+    /// not mean the user configured `off`.
     pub(crate) mode: UpdateMode,
+    /// What the config (or `PERRY_UPDATE_MODE`) says, before this run's
+    /// suppression rules.
+    ///
+    /// `perry doctor` exists to answer "what is my setting?", and answering with
+    /// the effective mode made `doctor --format json`, `doctor | less` and every
+    /// CI run report `off` regardless of the file — the exact question asked.
+    pub(crate) configured_mode: UpdateMode,
     pub(crate) check_interval: Duration,
     pub(crate) notify_interval: Duration,
     pub(crate) prompt_default: bool,
+    /// A complaint about the config, to print only if this run is going to
+    /// speak at all.
+    ///
+    /// Emitting it from `resolve` would write to stderr before the precedence
+    /// rules below have been applied — so `--format json`, `CI`, a piped stderr
+    /// or `--quiet` would each get a stray line in the middle of output nobody
+    /// asked to be interrupted. The whole point of those rules is that this run
+    /// stays silent.
+    pub(crate) config_warning: Option<&'static str>,
 }
 
 /// The environment inputs, gathered in one place so the decision itself is a
@@ -219,20 +248,26 @@ impl UpdatePolicy {
         let config = crate::commands::publish::load_config()
             .update
             .unwrap_or_default();
-        if matches!(config.mode, Some(UpdateMode::Unknown)) {
-            // One line, once, on the way past. Loud enough to fix, quiet
-            // enough not to be the thing the user remembers about the run.
-            eprintln!(
-                "warning: unrecognized `[update] mode` in ~/.perry/config.toml; \
-                 using \"notify\". Valid values: off, notify, prompt, auto."
-            );
-        }
+        // Held, not printed. Emitting here would write to stderr before the
+        // precedence rules above have been applied, so a `--format json` run,
+        // a CI job, a piped stderr or `--quiet` would each get a stray line in
+        // the middle of output nobody asked to have interrupted.
+        let config_warning = matches!(config.mode, Some(UpdateMode::Unknown)).then_some(
+            "warning: unrecognized `[update] mode` in ~/.perry/config.toml; using \
+             \"notify\". Valid values: off, notify, prompt, auto.",
+        );
 
         Self {
             mode: resolve_mode(env, config.mode),
+            // `Unknown` is PRESERVED here rather than collapsed to `Notify`.
+            // Its label is "notify (unrecognized value in config)", which is
+            // exactly what `doctor` should say when the config has a typo in it;
+            // collapsing it reported a clean "notify" and hid the typo.
+            configured_mode: config.mode.unwrap_or(UpdateMode::Notify),
             check_interval: config.check_interval(),
             notify_interval: config.notify_interval(),
             prompt_default: config.prompt_default.unwrap_or(false),
+            config_warning,
         }
     }
 
@@ -269,9 +304,19 @@ fn structured_output_selected() -> bool {
 pub(crate) fn should_notify(
     notify_interval: Duration,
     last_notification: Option<&str>,
+    last_notified_version: Option<&str>,
+    latest: &str,
     now_rfc3339: &str,
 ) -> bool {
     if notify_interval.is_zero() {
+        return true;
+    }
+    // The interval throttles repeats of the SAME update, which is what it has
+    // always said it does. Keying it on time alone silently swallowed the next
+    // release whenever it arrived inside the window — so a user who set a
+    // week-long interval to stop being nagged about one version would also miss
+    // the one that fixed it.
+    if last_notified_version != Some(latest) {
         return true;
     }
     let (Some(last), Some(now)) = (
@@ -283,7 +328,350 @@ pub(crate) fn should_notify(
         // cache would hide updates indefinitely.
         return true;
     };
-    now.saturating_sub(last) >= notify_interval.as_secs() as i64
+    now.saturating_sub(last).max(0) as u64 >= notify_interval.as_secs()
+}
+
+/// What the update surface should do at the end of a run, given the mode and
+/// what the machine will allow.
+///
+/// Pure, and separated from doing it, because the interesting decisions here
+/// are all refusals — and a refusal that only exists inside an `if` in the
+/// middle of a teardown path is a refusal nobody can test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TeardownAction {
+    /// Say nothing at all.
+    Silent,
+    /// Print the notice and stop.
+    Notify,
+    /// Print the notice, then ask.
+    Ask,
+    /// Print a line and install without asking.
+    Install,
+    /// Print the notice, then name the command this channel understands.
+    DeferToChannel(crate::install_channel::InstallChannel),
+    /// Print the notice, then say the install directory is not writable.
+    NeedsElevation,
+}
+
+/// Inputs to [`decide_teardown`] that come from the machine rather than from
+/// the user's configuration.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TeardownEnv {
+    /// Did the command the user actually asked for succeed?
+    pub(crate) command_succeeded: bool,
+    pub(crate) stdin_is_terminal: bool,
+    pub(crate) channel: crate::install_channel::InstallChannel,
+    pub(crate) install_dir_writable: bool,
+}
+
+pub(crate) fn decide_teardown(mode: UpdateMode, env: TeardownEnv) -> TeardownAction {
+    use crate::install_channel::InstallChannel;
+
+    match mode {
+        UpdateMode::Off | UpdateMode::Unknown => return TeardownAction::Silent,
+        UpdateMode::Notify => return TeardownAction::Notify,
+        UpdateMode::Prompt | UpdateMode::Auto => {}
+    }
+
+    // Never offer to install after the command failed. The user is looking at
+    // an error; a question about upgrading is noise at the worst possible
+    // moment, and an unattended install would bury the error entirely.
+    if !env.command_succeeded {
+        return TeardownAction::Notify;
+    }
+
+    // A managed install is not ours to replace, whichever mode asked. Say what
+    // the owner understands instead — a refusal with no alternative is a dead
+    // end.
+    if env.channel != InstallChannel::SelfManaged {
+        return TeardownAction::DeferToChannel(env.channel);
+    }
+
+    // Discovered before anything is downloaded, so the failure is a sentence
+    // rather than a half-finished install.
+    if !env.install_dir_writable {
+        return TeardownAction::NeedsElevation;
+    }
+
+    match mode {
+        // A prompt needs somewhere to read the answer from. stderr already
+        // being a terminal is not enough — stdin can be a pipe while stderr is
+        // a tty, and reading from it would either block or take whatever the
+        // pipe held as consent.
+        UpdateMode::Prompt if env.stdin_is_terminal => TeardownAction::Ask,
+        UpdateMode::Prompt => TeardownAction::Notify,
+        UpdateMode::Auto => TeardownAction::Install,
+        _ => TeardownAction::Notify,
+    }
+}
+
+/// Carry out [`decide_teardown`]'s answer.
+///
+/// Never changes the command's exit status: an update is something that
+/// happens *after* the work the user asked for, so a failure here is a warning
+/// on stderr and nothing more.
+/// Does the notice throttle apply to this action?
+///
+/// Only to the ones that say something. An install is not a notice: the user
+/// asked for `auto`, and having been told about the release earlier is no reason
+/// to keep running the old binary.
+pub(crate) fn throttle_applies(action: &TeardownAction) -> bool {
+    !matches!(action, TeardownAction::Install)
+}
+
+pub(crate) fn run_teardown_action(
+    policy: &UpdatePolicy,
+    status: &crate::update_checker::UpdateStatus,
+    command_succeeded: bool,
+    use_color: bool,
+    verbose: bool,
+    notice_throttled: bool,
+) {
+    let crate::update_checker::UpdateStatus::UpdateAvailable {
+        current,
+        latest,
+        release_url,
+    } = status
+    else {
+        return;
+    };
+
+    let notice = || {
+        crate::update_checker::print_update_notice(current, latest, release_url, use_color);
+        // Only record when we actually said something, or the throttle would
+        // suppress the next notice on the strength of one nobody saw.
+        if !crate::install_channel::running_via_sudo() {
+            // The version, so the interval throttles repeats of THIS release
+            // rather than of "some release" — see `should_notify`.
+            crate::update_checker::record_notification(latest);
+        }
+    };
+
+    let action = decide_teardown(
+        policy.mode,
+        TeardownEnv {
+            command_succeeded,
+            stdin_is_terminal: std::io::stdin().is_terminal(),
+            channel: crate::install_channel::detect(),
+            install_dir_writable: crate::install_channel::install_dir_is_writable(),
+        },
+    );
+
+    // The throttle is applied HERE, to the resolved action, rather than around
+    // the whole call. `notify_interval_hours` silences repeats of a notice, and
+    // gating the call gated the install with it: in `auto` mode a notice printed
+    // an hour ago stopped the new version from ever landing, which is the one
+    // thing `auto` promises to do.
+    if notice_throttled && throttle_applies(&action) {
+        return;
+    }
+
+    match action {
+        TeardownAction::Silent => {}
+        TeardownAction::Notify => notice(),
+        TeardownAction::DeferToChannel(channel) => {
+            notice();
+            if let Some(command) = channel.upgrade_command() {
+                eprintln!(
+                    "  This perry was installed by {}, so `perry update` would \
+                     overwrite it behind that tool's back. Run `{}` instead.",
+                    channel.label(),
+                    command
+                );
+                if let Some(detail) = channel.refusal_detail() {
+                    eprintln!("  ({detail})");
+                }
+            }
+        }
+        TeardownAction::NeedsElevation => {
+            notice();
+            eprintln!(
+                "  The install directory is not writable by this user, so the \
+                 update was not attempted. Run `sudo perry update`."
+            );
+        }
+        TeardownAction::Ask => {
+            notice();
+            let accepted = dialoguer::Confirm::new()
+                .with_prompt(format!("Update perry to {latest} now?"))
+                .default(policy.prompt_default)
+                .interact()
+                .unwrap_or(false);
+            if accepted {
+                install_now(use_color, verbose);
+            } else {
+                eprintln!(
+                    "  Skipped. Set `[update] mode = \"notify\"` in \
+                     ~/.perry/config.toml to stop being asked."
+                );
+            }
+        }
+        TeardownAction::Install => {
+            eprintln!("  Installing perry {latest}...");
+            install_now(use_color, verbose);
+        }
+    }
+}
+
+fn install_now(use_color: bool, verbose: bool) {
+    if let Err(error) =
+        crate::update_checker::perform_self_update(crate::update_checker::UpdateOutput {
+            verbose,
+            quiet: false,
+            color: use_color,
+        })
+    {
+        // A warning, never an exit status: the command the user asked for has
+        // already finished, and its result is the one that matters.
+        eprintln!("warning: update failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod teardown_tests {
+    use super::*;
+    use crate::install_channel::InstallChannel;
+
+    /// ★ The notice throttle silences notices, not installs.
+    ///
+    /// `notify_interval_hours` used to gate the whole teardown call, so in
+    /// `auto` mode a notice printed an hour earlier stopped the update from
+    /// landing at all — the one thing `auto` exists to do.
+    #[test]
+    fn the_notice_throttle_never_holds_back_an_install() {
+        assert!(
+            !throttle_applies(&TeardownAction::Install),
+            "an install is not a notice and must not be throttled"
+        );
+        for action in [
+            TeardownAction::Notify,
+            TeardownAction::Ask,
+            TeardownAction::DeferToChannel(crate::install_channel::InstallChannel::Homebrew),
+        ] {
+            assert!(
+                throttle_applies(&action),
+                "{action:?} speaks, so the throttle applies to it"
+            );
+        }
+    }
+
+
+    /// An interactive terminal, a successful command, an unmanaged install
+    /// with a writable directory — the only shape in which anything installs.
+    fn ideal() -> TeardownEnv {
+        TeardownEnv {
+            command_succeeded: true,
+            stdin_is_terminal: true,
+            channel: InstallChannel::SelfManaged,
+            install_dir_writable: true,
+        }
+    }
+
+    #[test]
+    fn off_says_nothing_and_notify_only_notifies() {
+        assert_eq!(
+            decide_teardown(UpdateMode::Off, ideal()),
+            TeardownAction::Silent
+        );
+        assert_eq!(
+            decide_teardown(UpdateMode::Notify, ideal()),
+            TeardownAction::Notify
+        );
+    }
+
+    #[test]
+    fn prompt_asks_and_auto_installs_when_everything_allows_it() {
+        assert_eq!(
+            decide_teardown(UpdateMode::Prompt, ideal()),
+            TeardownAction::Ask
+        );
+        assert_eq!(
+            decide_teardown(UpdateMode::Auto, ideal()),
+            TeardownAction::Install
+        );
+    }
+
+    /// ★ After a failed command, neither mode may do anything but notify. The
+    /// user is reading an error; a question about upgrading is noise, and an
+    /// unattended install would bury the error under progress output.
+    #[test]
+    fn a_failed_command_downgrades_both_active_modes_to_a_notice() {
+        let failed = TeardownEnv {
+            command_succeeded: false,
+            ..ideal()
+        };
+        assert_eq!(
+            decide_teardown(UpdateMode::Prompt, failed),
+            TeardownAction::Notify
+        );
+        assert_eq!(
+            decide_teardown(UpdateMode::Auto, failed),
+            TeardownAction::Notify
+        );
+    }
+
+    /// ★ The refusal that matters most. A package manager owns its record of
+    /// what is installed; overwriting the binary underneath leaves that record
+    /// lying.
+    #[test]
+    fn a_managed_install_is_never_replaced_in_place() {
+        for channel in [
+            InstallChannel::Homebrew,
+            InstallChannel::Npm,
+            InstallChannel::Apt,
+            InstallChannel::Winget,
+        ] {
+            let env = TeardownEnv { channel, ..ideal() };
+            for mode in [UpdateMode::Prompt, UpdateMode::Auto] {
+                assert_eq!(
+                    decide_teardown(mode, env),
+                    TeardownAction::DeferToChannel(channel),
+                    "{:?} on {} must defer, not install",
+                    mode,
+                    channel.label()
+                );
+            }
+        }
+    }
+
+    /// Checked before anything is downloaded, so a root-owned
+    /// `/usr/local/bin` produces one sentence rather than a half-finished
+    /// install. Perry never escalates on its own.
+    #[test]
+    fn an_unwritable_install_directory_asks_for_elevation_instead_of_trying() {
+        let env = TeardownEnv {
+            install_dir_writable: false,
+            ..ideal()
+        };
+        assert_eq!(
+            decide_teardown(UpdateMode::Auto, env),
+            TeardownAction::NeedsElevation
+        );
+        assert_eq!(
+            decide_teardown(UpdateMode::Prompt, env),
+            TeardownAction::NeedsElevation
+        );
+    }
+
+    /// stderr being a terminal is not enough to ask a question: stdin can be a
+    /// pipe at the same time, and reading from it would either block or treat
+    /// whatever the pipe held as consent.
+    #[test]
+    fn prompt_degrades_to_notify_when_stdin_is_not_a_terminal() {
+        let env = TeardownEnv {
+            stdin_is_terminal: false,
+            ..ideal()
+        };
+        assert_eq!(
+            decide_teardown(UpdateMode::Prompt, env),
+            TeardownAction::Notify
+        );
+        assert_eq!(
+            decide_teardown(UpdateMode::Auto, env),
+            TeardownAction::Install,
+            "auto asks nothing, so it does not need stdin"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -454,10 +842,20 @@ mod tests {
         );
     }
 
+    /// The interval alone, with the announced version held constant — which is
+    /// what these cases were written to exercise.
+    fn notified_before(interval: Duration, last_notification: Option<&str>, now: &str) -> bool {
+        should_notify(interval, last_notification, Some("1.0.0"), "1.0.0", now)
+    }
+
     #[test]
     fn the_notify_throttle_defaults_to_every_run() {
-        assert!(should_notify(Duration::ZERO, None, "2026-08-10T00:00:00Z"));
-        assert!(should_notify(
+        assert!(notified_before(
+            Duration::ZERO,
+            None,
+            "2026-08-10T00:00:00Z"
+        ));
+        assert!(notified_before(
             Duration::ZERO,
             Some("2026-08-10T00:00:00Z"),
             "2026-08-10T00:00:01Z"
@@ -468,12 +866,64 @@ mod tests {
     fn the_notify_throttle_honours_its_interval() {
         let day = Duration::from_secs(24 * 3600);
         assert!(
-            !should_notify(day, Some("2026-08-10T00:00:00Z"), "2026-08-10T01:00:00Z"),
+            !notified_before(day, Some("2026-08-10T00:00:00Z"), "2026-08-10T01:00:00Z"),
             "an hour into a one-day throttle must stay quiet"
         );
         assert!(
-            should_notify(day, Some("2026-08-09T00:00:00Z"), "2026-08-10T01:00:00Z"),
+            notified_before(day, Some("2026-08-09T00:00:00Z"), "2026-08-10T01:00:00Z"),
             "past the interval it must speak up"
+        );
+    }
+
+    /// ★ The interval throttles repeats of the SAME update, which is what it
+    /// always claimed. Keyed on time alone it swallowed the NEXT release
+    /// whenever that landed inside the window — so a week-long interval set to
+    /// stop nagging about one version would also hide the version that fixed
+    /// it.
+    #[test]
+    fn a_different_version_is_announced_regardless_of_the_interval() {
+        let week = Duration::from_secs(7 * 24 * 3600);
+        // One minute into a week-long throttle: the same version stays quiet...
+        assert!(!should_notify(
+            week,
+            Some("2026-08-10T00:00:00Z"),
+            Some("1.0.0"),
+            "1.0.0",
+            "2026-08-10T00:01:00Z"
+        ));
+        // ...and a different one is announced anyway.
+        assert!(should_notify(
+            week,
+            Some("2026-08-10T00:00:00Z"),
+            Some("1.0.0"),
+            "1.0.1",
+            "2026-08-10T00:01:00Z"
+        ));
+        // Never having announced anything is also "not this version".
+        assert!(should_notify(
+            week,
+            Some("2026-08-10T00:00:00Z"),
+            None,
+            "1.0.0",
+            "2026-08-10T00:01:00Z"
+        ));
+    }
+
+    /// An enormous configured interval must still suppress, not wrap around
+    /// into announcing every run. `as i64` on a `Duration`'s seconds can go
+    /// negative, and a negative interval compares as "already elapsed".
+    #[test]
+    fn an_enormous_interval_still_suppresses() {
+        let absurd = Duration::from_secs(u64::MAX);
+        assert!(
+            !should_notify(
+                absurd,
+                Some("2026-08-10T00:00:00Z"),
+                Some("1.0.0"),
+                "1.0.0",
+                "2026-08-10T00:01:00Z"
+            ),
+            "a signed conversion here would read as already-elapsed and notify"
         );
     }
 
@@ -482,13 +932,13 @@ mod tests {
     #[test]
     fn an_unreadable_timestamp_notifies_rather_than_staying_silent() {
         let day = Duration::from_secs(24 * 3600);
-        assert!(should_notify(day, None, "2026-08-10T00:00:00Z"));
-        assert!(should_notify(
+        assert!(notified_before(day, None, "2026-08-10T00:00:00Z"));
+        assert!(notified_before(
             day,
             Some("not-a-date"),
             "2026-08-10T00:00:00Z"
         ));
-        assert!(should_notify(
+        assert!(notified_before(
             day,
             Some("2026-08-10T00:00:00Z"),
             "also-not-a-date"

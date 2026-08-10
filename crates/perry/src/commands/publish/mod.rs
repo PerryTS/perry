@@ -35,7 +35,8 @@ pub use args::PublishArgs;
 #[cfg(test)]
 pub(crate) use saved_config::IosSavedConfig; // consumed only by tests
 pub(crate) use saved_config::{
-    check_beta_consent, config_path, is_interactive, load_config, prompt_input, report_beta_error,
+    check_beta_consent, config_path, is_interactive, load_config, load_config_checked,
+    prompt_input, report_beta_error, update_config_file,
     save_config, AndroidSavedConfig, AppleSavedConfig, HarmonyosSavedConfig, PerryConfig,
 };
 pub(crate) use tarball::create_project_tarball_with_filters;

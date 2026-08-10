@@ -119,12 +119,47 @@ pub(crate) fn config_path() -> PathBuf {
 }
 
 pub(crate) fn load_config() -> PerryConfig {
+    load_config_checked().unwrap_or_default()
+}
+
+/// `load_config`, but able to say WHY it produced nothing.
+///
+/// `Err` means the file exists and does not parse — the case a plain
+/// `unwrap_or_default()` cannot tell apart from "no file yet". The difference
+/// matters at save time, because writing a default struct over a damaged but
+/// hand-recoverable config destroys the user's license key and tokens along with
+/// the syntax error they were about to fix.
+pub(crate) fn load_config_checked() -> std::result::Result<PerryConfig, String> {
     let path = config_path();
-    if let Ok(content) = fs::read_to_string(&path) {
-        toml::from_str(&content).unwrap_or_default()
-    } else {
-        PerryConfig::default()
-    }
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        // A missing file is the ONLY read failure that means "no config yet".
+        // A permission change or a transient I/O error must not be answered with
+        // defaults, because `update_config_file` would accept those defaults and
+        // write them over a file that still holds the license key and tokens —
+        // the very loss this function exists to prevent.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PerryConfig::default());
+        }
+        Err(error) => return Err(format!("{} could not be read: {error}", path.display())),
+    };
+    toml::from_str(&content).map_err(|error| error.to_string())
+}
+
+/// Read, modify, write — refusing to write when the read failed.
+///
+/// Every setting-writer goes through this. Handing `load_config`'s default
+/// struct to `save_config` is how a damaged file becomes an erased one, and a
+/// caller cannot tell the two apart on its own.
+pub(crate) fn update_config_file(edit: impl FnOnce(&mut PerryConfig)) -> Result<()> {
+    let mut config = load_config_checked().map_err(|error| {
+        anyhow::anyhow!(
+            "~/.perry/config.toml could not be loaded, so it was left untouched: \
+             {error}. Fix the file (or delete it) and try again."
+        )
+    })?;
+    edit(&mut config);
+    save_config(&config)
 }
 
 pub(crate) fn save_config(config: &PerryConfig) -> Result<()> {
@@ -324,5 +359,102 @@ check_interval_hours = 6
         );
         // ...and nothing else was lost on the way past.
         assert!(written.contains("keep-me") && written.contains("[telemetry]"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config that does not parse must be left alone, not replaced by defaults.
+    ///
+    /// This is the data-loss case. `load_config` cannot tell "no file yet" from
+    /// "damaged file", so a writer built on it turns one stray character into an
+    /// erased license key — the user's own tokens, gone while they were fixing a
+    /// typo.
+    #[test]
+    fn a_damaged_config_is_never_overwritten_with_defaults() {
+        let _lock = crate::test_env_lock::env_lock();
+        let home = tempfile::tempdir().expect("tempdir");
+        let saved = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+
+        let path = config_path();
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        let damaged = "license_key = \"keep-me\"\nthis is not toml\n";
+        std::fs::write(&path, damaged).expect("write");
+
+        let error = update_config_file(|config| {
+            config.update.get_or_insert_with(Default::default).mode =
+                Some(crate::update_policy::UpdateMode::Notify);
+        })
+        .expect_err("a damaged config must refuse the write");
+        assert!(
+            format!("{error:#}").contains("left untouched"),
+            "the message must say the file was not written: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            damaged,
+            "the file was rewritten despite the refusal"
+        );
+
+        // A file that exists but cannot be read is the same danger wearing a
+        // different hat: treating a permission error as "no config yet" would
+        // serialize defaults over a file whose contents we never saw.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let kept = "license_key = \"keep-me\"\n";
+            std::fs::write(&path, kept).expect("write");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+                .expect("chmod");
+            // Root ignores the mode bits, so there is nothing to prove when the
+            // suite runs as root. Skip in that case rather than fail.
+            let still_readable = std::fs::read_to_string(&path).is_ok();
+            let outcome = update_config_file(|config| {
+                config.update.get_or_insert_with(Default::default).mode =
+                    Some(crate::update_policy::UpdateMode::Notify);
+            });
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("restore");
+            if !still_readable {
+                let error = outcome.expect_err("an unreadable config must refuse the write");
+                let text = format!("{error:#}");
+                // The REASON matters, not just the failure. A write that fails on
+                // the same permissions would also produce an error, and a test
+                // that accepts any error passes whether or not the read is
+                // checked at all.
+                assert!(
+                    text.contains("could not be read"),
+                    "the refusal must name the read failure, not a later write \
+                     failure: {text}"
+                );
+                assert!(text.contains("left untouched"), "{text}");
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("read"),
+                    kept,
+                    "the file was rewritten despite being unreadable"
+                );
+            }
+        }
+
+        // A missing file is still the "use defaults" case, so a first-time write
+        // has to succeed.
+        std::fs::remove_file(&path).expect("remove");
+        update_config_file(|config| {
+            config.update.get_or_insert_with(Default::default).mode =
+                Some(crate::update_policy::UpdateMode::Notify);
+        })
+        .expect("a fresh config must be writable");
+        assert!(
+            std::fs::read_to_string(&path).expect("read").contains("mode"),
+            "the setting was not persisted"
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }
