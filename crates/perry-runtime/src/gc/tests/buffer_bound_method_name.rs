@@ -51,6 +51,13 @@ fn a_bound_buffer_method_never_captures_the_key_strings_interior() {
         let bound = crate::object::js_object_get_field_by_name(buf as *const crate::ObjectHeader, key);
         let (name_ptr, name_len) = captured_name(bound);
 
+        let static_name = crate::object::buffer_method_name_static("readUInt8")
+            .expect("readUInt8 is a Buffer method");
+        assert_eq!(
+            name_ptr,
+            static_name.as_ptr(),
+            "the closure must capture the 'static literal"
+        );
         assert_ne!(
             name_ptr, key_interior,
             "the closure captured the KEY STRING's interior — that allocation \
@@ -84,9 +91,23 @@ fn a_computed_key_buffer_method_never_captures_a_temporary() {
         );
         let (name_ptr, name_len) = captured_name(bound);
 
+        // Pointer IDENTITY with the static literal, not merely "not the key
+        // string". The broken version of this path captured a local `String`'s
+        // bytes, which are neither the key's interior nor the literal — so an
+        // inequality against the key would pass with the bug fully present, and
+        // comparing the BYTES only fails on a host where the freed memory has
+        // already been reused. Identity is the assertion that cannot be lucky.
+        let static_name = crate::object::buffer_method_name_static("readUInt8")
+            .expect("readUInt8 is a Buffer method");
+        assert_eq!(
+            name_ptr,
+            static_name.as_ptr(),
+            "the computed-key arm must capture the 'static literal — anything \
+             else is storage the caller owns and the closure outlives"
+        );
         assert_ne!(
             name_ptr, key_interior,
-            "the computed-key arm captured the key string's interior"
+            "and in particular not the key string's interior"
         );
         assert_eq!(
             std::slice::from_raw_parts(name_ptr, name_len),
