@@ -35,7 +35,11 @@ const LIVE_LABELS = 50
 // Rows built once for the text-heavy phase.
 const TEXT_ROWS = 300
 
-const PHASE_SECONDS = 8
+// 20s rather than 8s: the phases have to be long enough for a human to react
+// to a phase marker and scroll inside the window, and long enough to yield
+// several reports of steady state after the transition's own cost has washed
+// out of the first one.
+const PHASE_SECONDS = 20
 
 type Phase = {
     name: string
@@ -73,7 +77,10 @@ const phases: Phase[] = [
         name: "idle",
         enter: (): void => {
             clearContent()
-            buildLabels(20, "idle row")
+            // 60, not 20: every phase must overflow the screen or it cannot be
+            // dragged, and a phase that cannot be dragged silently measures the
+            // static path while looking like a scroll result.
+            buildLabels(60, "idle row")
         },
         tick: (): void => {},
     },

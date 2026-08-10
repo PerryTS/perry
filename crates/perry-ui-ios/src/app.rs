@@ -680,12 +680,6 @@ define_class!(
                 // link's paused state: a paused link receives no ticks, so it
                 // cannot notice a newly-registered callback and wake itself.
                 crate::frame_driver::poll_pause_state();
-                // Deallocate views retired by clear_children/remove_child.
-                // Deferred to here because `onFrame` runs from a CADisplayLink,
-                // inside CoreAnimation's pre-commit phase, where freeing a view
-                // UIKit still has pending would nil an entry it is about to
-                // read. See `widgets::PENDING_RELEASE`.
-                crate::widgets::drain_pending_releases();
                 // Issue #5203 — root-window health check. Replays root
                 // rebuilds deferred while a system modal was presented and
                 // re-asserts the window if a dismissed modal left it detached

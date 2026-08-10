@@ -27,13 +27,24 @@
 
 - **`benchmarks/ios-ui/`** — a frame-time benchmark app cycling through idle, property-updates, add/remove, animation and text-heavy phases, printing a marker before each so `[frame-stats]` lines are attributable to a workload. Plus two isolation probes (`isolate_churn.ts`, `isolate_frame.ts`) that split structural churn from the frame driver; they are what localized the crash described below.
 
-### Unresolved
+### Known pre-existing bug, NOT introduced here
 
-- **One device crash remains unreproduced**: `NSInvalidArgumentException: -[__NSArrayM insertObject:atIndex:]: object cannot be nil`, seen once, during the benchmark's property-updates phase (no structural mutation — just `setText:` traffic on 50 labels per frame, after that phase's `enter()` released the previous phase's labels).
+- **Scrolling a `UIScrollView`-hosted `UIStackView` while JS mutates its labels aborts the app**: `NSInvalidArgumentException: -[__NSArrayM insertObject:atIndex:]: object cannot be nil`. The backtrace is `UIApplicationMain → CFRunLoop → CA transaction commit → UIView layout → UIStackView`, i.e. the throw lands in the layout pass at the end of a run-loop iteration, not inside any Perry callback — something earlier leaves a nil in a UIKit array and it detonates at commit.
 
-  Retiring a released view is now deferred to a `PENDING_RELEASE` queue drained from the main-thread timer pump instead of dropping the last strong reference inline. The motivation is sound on its own — `onFrame` runs from a `CADisplayLink`, i.e. inside CoreAnimation's pre-commit phase, and deallocating a view UIKit still holds pending there nils an entry it is about to read — **but it is not established that this is what caused the observed crash.** Isolation probes did not reproduce it: churn from `onFrame` ran 690 rounds clean, with and without a `UIScrollView` parent, and full-benchmark runs are clean both before and after the change.
+  **It requires human touch input**, which is why no automated probe here reproduces it and why it went unseen until a device session with a person scrolling.
 
-  The one run that crashed had a human touching the screen. The display link is registered in `NSRunLoopCommonModes` specifically so it keeps firing during `UITrackingRunLoopMode`, so touch interaction changes both the run-loop mode and the layout traffic, and no probe here injects touches. Reproducing this needs an interactive device session.
+  Established as pre-existing by four single-variable device bisects, each with a human scrolling:
+
+  | arm | result |
+  |---|---|
+  | deferred view release | crashes |
+  | widget release disabled entirely | crashes |
+  | display link in `NSDefaultRunLoopMode` | crashes |
+  | **display-link driver disabled, original NSTimer pump** | **crashes** |
+
+  The last arm is the decisive one: with this PR's frame driver removed and `onFrame` back on the pre-PR `js_frame_pump_default()` path, the abort still occurs. The benchmark added here is simply the first workload that drives enough label mutation against a scrolled stack to expose it.
+
+  Three hypotheses were tested and falsified along the way — that deallocating views inside CoreAnimation's pre-commit phase caused it, that releasing table entries at all caused it, and that running JS during `UITrackingRunLoopMode` caused it. A `PENDING_RELEASE` deferral queue built for the first of those was removed again rather than shipped, since its premise was disproved and immediate release is fine empirically (an isolation probe released ~323k widgets with no fault).
 
 ### Note for platform UI crates
 

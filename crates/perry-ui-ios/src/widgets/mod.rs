@@ -73,21 +73,6 @@ thread_local! {
     static HANDLE_BY_PTR: RefCell<std::collections::HashMap<usize, i64>> = RefCell::new(std::collections::HashMap::new());
     /// Stored height constraints per widget handle, so set_height can update instead of duplicate.
     static HEIGHT_CONSTRAINTS: RefCell<std::collections::HashMap<i64, Retained<AnyObject>>> = RefCell::new(std::collections::HashMap::new());
-
-    /// Views whose table entry has been released, held until a safe point.
-    ///
-    /// Releasing the table's strong reference *synchronously* can deallocate
-    /// the `UIView` immediately, and `onFrame` callbacks run from a
-    /// `CADisplayLink` — i.e. inside CoreAnimation's pre-commit phase, while
-    /// UIKit still holds the view in pending-layout bookkeeping. Dropping it
-    /// there nils an entry UIKit is about to read, which surfaces as
-    /// `-[__NSArrayM insertObject:atIndex:]: object cannot be nil`.
-    ///
-    /// The same churn driven from an `NSTimer` never hit this, because a timer
-    /// fires at a quiescent point — which is precisely why the deferral is
-    /// about *when* the deallocation lands, not about how many references
-    /// exist.
-    static PENDING_RELEASE: RefCell<Vec<Retained<UIView>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Store a UIView and return its handle (1-based i64).
@@ -246,10 +231,6 @@ pub fn release_widget(handle: i64) {
 
     if let Some(view) = released {
         HANDLE_BY_PTR.with(|m| m.borrow_mut().remove(&(Retained::as_ptr(&view) as usize)));
-        // Hand the last strong reference to the pending queue rather than
-        // dropping it here — see `PENDING_RELEASE`. The handle is already dead
-        // to `get_widget`, so this defers deallocation only, not visibility.
-        PENDING_RELEASE.with(|p| p.borrow_mut().push(view));
     }
 
     HEIGHT_CONSTRAINTS.with(|hc| {
@@ -259,23 +240,6 @@ pub fn release_widget(handle: i64) {
             }
         }
     });
-}
-
-/// Drop views retired since the last call.
-///
-/// Driven from the main-thread timer pump, which runs with the JS stack
-/// unwound and outside CoreAnimation's commit — the safe point that
-/// [`PENDING_RELEASE`] exists to wait for. Returns how many views were
-/// released, so a caller can tell an idle drain from a busy one.
-pub fn drain_pending_releases() -> usize {
-    // Swap the queue out before dropping: a `dealloc` can run arbitrary
-    // UIKit teardown, which may itself remove children and re-enter
-    // `release_widget`. Draining in place would still be holding the
-    // `RefCell` borrow when that happens and would panic.
-    let retired = PENDING_RELEASE.with(|p| std::mem::take(&mut *p.borrow_mut()));
-    let count = retired.len();
-    drop(retired);
-    count
 }
 
 /// Release `view` and every registered widget beneath it, depth-first.
