@@ -81,7 +81,7 @@ That is why they can be gated on a shared CI runner and memory and time cannot.
 
 ## A probe may declare the collector it is a probe *of* (the large-Eden arm)
 
-Twelve of the thirteen probes run the shipped configuration, so every copying
+Twelve of the fourteen probes run the shipped configuration, so every copying
 minor this matrix had ever exercised was small (~16 MB of Eden) and frequent.
 Two faults arrived from the other end of that axis and neither was reachable
 from here: #7472, and #7481, which is deterministic at
@@ -96,9 +96,12 @@ the run it is a probe of, in its own source:
 // gc-ratchet-env: PERRY_GC_SCAVENGE_NURSERY_MB=64
 ```
 
-`13_large_eden_survivors.ts` carries exactly that one directive. It lives in the
-probe source rather than in `tolerances.json` because it is not possible to read
-the workload without reading the arm.
+`13_large_eden_survivors.ts` carries exactly that one directive.
+`14_grow_then_churn.ts` carries two (`PERRY_GC_SCAVENGE_NURSERY_MB=1`,
+`PERRY_GC_MAJOR_PACING_FLOOR_MB=1`), which is what sets the ABSOLUTE scale of a
+mechanism that is otherwise a ratio — see its header. They live in the probe
+source rather than in `tolerances.json` because it is not possible to read the
+workload without reading the arm.
 
 Deliberate properties:
 

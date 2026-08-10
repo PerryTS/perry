@@ -304,7 +304,7 @@ class GateFailTests(unittest.TestCase):
     def test_a_probe_that_stopped_collecting_fails(self):
         """The bands alone could not catch this, which is why it is asserted.
 
-        Six of the thirteen shipped probes pin ``minor_cycles`` at 1 and the
+        Six of the fourteen shipped probes pin ``minor_cycles`` at 1 and the
         allowance floor is also 1, so a collapse from 1 to 0 lands exactly on
         ``delta == -allowance`` and scored "ok". A collector that stopped
         running copying minors — the largest regression this ratchet exists to
@@ -1178,6 +1178,28 @@ class ProbeRunEnvParsingTests(unittest.TestCase):
             / "13_large_eden_survivors.ts"
         )
         self.assertEqual(probe_run_env(source), {"PERRY_GC_SCAVENGE_NURSERY_MB": "64"})
+
+    def test_the_shipped_grow_then_churn_probe_still_declares_its_arm(self):
+        # `14_grow_then_churn` is a probe of the major-pacing backoff's
+        # TRANSITION, and the mechanism is a ratio: the shift climbs per
+        # unproductive full and the boundary is `baseline << (1 + shift)`. Its
+        # two directives are what set the ABSOLUTE scale — the nursery cap
+        # decides how early the first collection lands and therefore how small
+        # the first post-full baseline is, and the pacing floor sets where the
+        # first escalation can happen at all. At the shipped 16 MB / 32 MB the
+        # same three escalations need a live set in the hundreds of MB. So
+        # losing either line leaves a probe that still passes, still collects,
+        # and no longer reaches the cap it exists to hold.
+        source = (
+            REPO_ROOT / "benchmarks" / "gc_ratchet" / "probes" / "14_grow_then_churn.ts"
+        )
+        self.assertEqual(
+            probe_run_env(source),
+            {
+                "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+                "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1",
+            },
+        )
 
 
 class ProbeRunEnvDeliveryTests(unittest.TestCase):
