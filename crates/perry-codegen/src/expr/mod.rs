@@ -1914,7 +1914,7 @@ mod misc_methods;
 mod new_dynamic;
 mod objects_arrays_lit;
 mod os_uri_dates;
-mod property_get;
+pub(crate) mod property_get;
 mod property_set;
 pub(crate) mod proxy_reflect;
 mod static_field_meta;

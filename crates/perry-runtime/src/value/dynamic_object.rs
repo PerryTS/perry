@@ -745,7 +745,7 @@ mod length_handle_band_tests {
         };
         let console_ptr = crate::value::js_nanbox_get_pointer(console_ctor) as usize;
         let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-        let mut cache = [0_i64; 3];
+        let mut cache = [0_i64; crate::object::PIC_CACHE_WORDS];
 
         assert_eq!(js_value_length_f64(console_ctor), 1.0);
         assert_eq!(

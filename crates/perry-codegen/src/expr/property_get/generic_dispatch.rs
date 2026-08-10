@@ -13,6 +13,22 @@ use perry_hir::Expr;
 use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
+/// Words in a per-site `@perry_ic_N` property-read cache global.
+///
+/// **Must equal `perry_runtime::object::field_get_set::PIC_CACHE_WORDS`** —
+/// the runtime writes this memory through a `*mut [i64; PIC_CACHE_WORDS]`, so a
+/// smaller global here is an out-of-bounds store. perry-codegen does not depend
+/// on perry-runtime (the same reason `INLINE_SLOT_FLOOR` is spelled `4` inline
+/// below), so the pairing is held by `pic_cache_layout_matches_runtime` here and
+/// `pic_cache_words_match_codegen` in the runtime: change one and both fail.
+pub(crate) const PIC_CACHE_WORDS: usize = 12;
+/// First word of the polymorphic way array (words 0..2 are the MRU entry).
+/// Mirrors the runtime's `PIC_WAY_BASE`.
+pub(crate) const PIC_WAY_BASE: usize = 3;
+/// `(token, slot)` ways beyond the MRU entry; a site resolves `PIC_WAYS + 1`
+/// shapes inline. Mirrors the runtime's `PIC_WAYS`.
+pub(crate) const PIC_WAYS: usize = 4;
+
 /// The generic per-site monomorphic inline-cache dispatch for `obj.property`.
 /// This is the fall-through tail of the general catch-all arm: all earlier
 /// specializations have been ruled out.
@@ -446,7 +462,25 @@ pub(crate) fn lower_generic_property_get(
     let hit_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
-    // PIC miss: slow path with cache population.
+    // PIC miss on the MRU entry — before paying for the call, try the
+    // polymorphic ways (#7753).
+    //
+    // `js_object_get_field_ic_miss` is not a cheap fallback: it re-derives the
+    // receiver kind from scratch (proxy band, closure magic, registered-buffer
+    // and typed-array registries, small-handle dispatch), reads the
+    // accessors-in-use thread-local, then linear-scans the keys array with a
+    // `js_string_equals` per key. On a site whose receiver alternates between a
+    // handful of shapes — the shape of every discriminated-union dispatch —
+    // a single-entry cache misses on essentially every read and that whole
+    // ladder runs per field access. Measured on a tree-walking interpreter it
+    // was ~34% of run time.
+    //
+    // The ways are consulted only here, so a genuinely monomorphic site keeps
+    // the exact instruction sequence it had before this block existed. The
+    // typed-feedback counters are also recorded before the way compares, so a
+    // way hit still reports guard-fail + fallback-call exactly as it did when
+    // it was a real miss — the feedback heuristics see an unchanged signal
+    // (the site IS polymorphic; only the cost of that changed).
     ctx.current_block = miss_idx;
     crate::expr::emit_typed_feedback_record_call(
         ctx.block(),
@@ -458,6 +492,72 @@ pub(crate) fn lower_generic_property_get(
         "js_typed_feedback_record_fallback_call",
         &[(I64, &feedback_site_id)],
     );
+
+    // A way can hold EITHER token kind, so it carries the pointer-token
+    // guarantees: `cache[2] == @PERRY_IC_EPOCH` (`epoch_eq`, already computed
+    // for the MRU predicate) plus a non-zero receiver token so an empty way
+    // (0) can never match a keyless receiver whose `keys_array` is also 0
+    // (#809's shape, applied to the ways). `pic_prime_get` wipes every way
+    // whenever it writes a new epoch into word 2, so one shared epoch word
+    // covers all of them: a readable way was necessarily primed in the epoch
+    // that word still holds.
+    //
+    // Restricting the ways to shape-ID tokens instead — which needs no epoch
+    // guard at all, ids being unreusable — looks safer and is useless: a plain
+    // object literal is built by a generated `__AnonShape_*` constructor and
+    // therefore has a real `class_id`, which primes the keys-POINTER token. An
+    // ID-only way set never fills for the discriminated-union programs this
+    // whole block exists to speed up; measured, it cost 6%.
+    let mut way_hit = ctx.block().and(I1, &is_object, &epoch_eq);
+    way_hit = ctx.block().and(I1, &way_hit, &token_nonnull);
+    let mut way_any = String::from("false");
+    let mut way_slot = String::from("0");
+    for w in 0..PIC_WAYS {
+        let tok_ptr = ctx.block().gep(
+            I64,
+            &cache_ref,
+            &[(I64, &(PIC_WAY_BASE + w * 2).to_string())],
+        );
+        let way_tok = ctx.block().load(I64, &tok_ptr);
+        let eq = ctx.block().icmp_eq(I64, &way_tok, &token);
+        let slot_ptr = ctx.block().gep(
+            I64,
+            &cache_ref,
+            &[(I64, &(PIC_WAY_BASE + w * 2 + 1).to_string())],
+        );
+        let way_slot_val = ctx.block().load(I64, &slot_ptr);
+        way_slot = ctx.block().select(I1, &eq, I64, &way_slot_val, &way_slot);
+        way_any = ctx.block().or(I1, &way_any, &eq);
+    }
+    way_hit = ctx.block().and(I1, &way_hit, &way_any);
+    // Same per-receiver inline-capacity bound the MRU hit path applies: a slot
+    // primed from a larger-capacity sibling of the same shape must not drive a
+    // raw load past this receiver's field region (#6804).
+    let way_fc_addr = ctx.block().add(I64, &safe_obj_handle, "12");
+    let way_fc_ptr = ctx.block().inttoptr(I64, &way_fc_addr);
+    let way_fc = ctx.block().load(I32, &way_fc_ptr);
+    let way_fc64 = ctx.block().zext(I32, &way_fc, I64);
+    let way_fc_floor = ctx.block().icmp_ult(I64, &way_fc64, "4"); // INLINE_SLOT_FLOOR
+    let way_limit = ctx.block().select(I1, &way_fc_floor, I64, "4", &way_fc64);
+    let way_in_bounds = ctx.block().icmp_ult(I64, &way_slot, &way_limit);
+    let way_ok = ctx.block().and(I1, &way_hit, &way_in_bounds);
+    let way_load_idx = ctx.new_block("pic.way.load");
+    let call_idx = ctx.new_block("pic.miss.call");
+    let way_load_label = ctx.block_label(way_load_idx);
+    let call_label = ctx.block_label(call_idx);
+    ctx.block().cond_br(&way_ok, &way_load_label, &call_label);
+
+    ctx.current_block = way_load_idx;
+    let way_offset = ctx.block().shl(I64, &way_slot, "3");
+    let way_base = ctx.block().add(I64, &obj_handle, &obj_header_size);
+    let way_field_addr = ctx.block().add(I64, &way_base, &way_offset);
+    let way_field_ptr = ctx.block().inttoptr(I64, &way_field_addr);
+    let val_way = ctx.block().load(DOUBLE, &way_field_ptr);
+    let way_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    // PIC miss: slow path with cache population.
+    ctx.current_block = call_idx;
     let val_miss = ctx.block().call(
         DOUBLE,
         "js_object_get_field_ic_miss",
@@ -466,11 +566,15 @@ pub(crate) fn lower_generic_property_get(
     let miss_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
-    // Merge PIC hit + miss, then jump to the outer recv-valid merge.
+    // Merge PIC hit + way hit + miss, then jump to the outer recv-valid merge.
     ctx.current_block = merge_idx;
     let pic_val = ctx.block().phi(
         DOUBLE,
-        &[(&val_hit, &hit_end_label), (&val_miss, &miss_end_label)],
+        &[
+            (&val_hit, &hit_end_label),
+            (&val_way, &way_end_label),
+            (&val_miss, &miss_end_label),
+        ],
     );
     let pic_end_label = ctx.block().label.clone();
     ctx.block().br(&final_merge_label);

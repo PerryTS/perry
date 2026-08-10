@@ -286,7 +286,7 @@ pub(crate) use ic_miss::{
 pub use ic_miss::{
     js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_get_field_ic_miss, js_object_set_field_by_property_id, js_private_brand_check,
-    js_private_guard, PERRY_IC_EPOCH,
+    js_private_guard, PicCache, PERRY_IC_EPOCH, PIC_CACHE_WORDS,
 };
 
 #[cfg(test)]
@@ -318,7 +318,7 @@ mod buffer_ic_miss_tests {
         unsafe {
             for len in [16usize, 24, 32] {
                 let buf = secret_buffer(len);
-                let mut cache = [0i64; 3];
+                let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
 
                 let ty = js_object_get_field_ic_miss(
                     buf as *const ObjectHeader,

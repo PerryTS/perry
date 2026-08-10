@@ -1175,8 +1175,9 @@ pub(super) fn compile_module_entry(
         }
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(
-                "@{} = private global [8 x i64] zeroinitializer",
-                ic_name
+                "@{} = private global [{} x i64] zeroinitializer",
+                ic_name,
+                crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
             ));
         }
         for raw in &typed_parse_rodata {
@@ -1637,8 +1638,9 @@ pub(super) fn compile_module_entry(
         // three symbols must be defined exactly once per shared library.
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(
-                "@{} = private global [8 x i64] zeroinitializer",
-                ic_name
+                "@{} = private global [{} x i64] zeroinitializer",
+                ic_name,
+                crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
             ));
         }
         for raw in &typed_parse_rodata {

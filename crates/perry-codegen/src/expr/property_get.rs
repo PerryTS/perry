@@ -43,7 +43,7 @@ use super::property_get_names::{
     is_net_native_method_value, is_url_pattern_data_property,
 };
 
-mod generic_dispatch;
+pub(crate) mod generic_dispatch;
 mod globalget;
 mod helpers;
 #[cfg(test)]

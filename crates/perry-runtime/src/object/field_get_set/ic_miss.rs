@@ -231,6 +231,148 @@ pub(crate) fn pic_epoch_bump() {
     PERRY_IC_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
+/// emits `[PIC_CACHE_WORDS x i64] zeroinitializer`; this type is the runtime's
+/// view of the same memory.
+pub const PIC_CACHE_WORDS: usize = 12;
+
+/// The runtime view of a `@perry_ic_N` property-read cache.
+///
+/// Layout (#7753 — the ways are new; words 0..2 are unchanged from #51/#6080a
+/// so the monomorphic path is bit-for-bit what it always was):
+///
+/// | word | meaning |
+/// |---|---|
+/// | 0 | `tok0` — most-recently-used shape token (ID token **or** keys pointer) |
+/// | 1 | `slot0` — its resolved field slot |
+/// | 2 | `epoch` — [`PERRY_IC_EPOCH`] snapshot; gates word 0's pointer tokens **and every way** |
+/// | 3,4 / 5,6 / 7,8 / 9,10 | `(tok, slot)` ways |
+/// | 11 | round-robin victim index for the ways |
+pub type PicCache = [i64; PIC_CACHE_WORDS];
+
+/// First word of the polymorphic way array.
+pub(crate) const PIC_WAY_BASE: usize = 3;
+/// Number of `(token, slot)` ways beyond the MRU entry. Total shapes a site
+/// can resolve inline is `PIC_WAYS + 1`.
+pub(crate) const PIC_WAYS: usize = 4;
+/// Word holding the round-robin victim index.
+pub(crate) const PIC_VICTIM: usize = PIC_WAY_BASE + PIC_WAYS * 2;
+
+/// Prime the MRU entry, cascading the shape it evicts into the ways.
+///
+/// Word 0 keeps exactly its pre-#7753 meaning — last shape seen, always
+/// overwritten — so a genuinely monomorphic site behaves identically. What
+/// changes is that the *evicted* shape is no longer thrown away: it moves into
+/// a way, and the emitted poly block (reached only after word 0 misses)
+/// resolves it inline instead of calling back into this handler. A site that
+/// alternates between k ≤ `PIC_WAYS + 1` shapes therefore stops thrashing.
+///
+/// Both token kinds are cascaded, because the population that matters is the
+/// pointer-token one: a plain object literal is allocated through a generated
+/// `__AnonShape_*` constructor and so carries a real `class_id`, which routes it
+/// to the shape-shared keys-POINTER prime, not the `#6804` shape-ID prime. Ways
+/// restricted to ID tokens are dead code for exactly the programs this exists
+/// for — measured as a 6% *regression* on a tree-walking interpreter, all of it
+/// the compare sequence running and never hitting.
+///
+/// A keys-POINTER token is address-derived and can be recycled after a
+/// collection (#6080a), so every way is gated on the SAME `cache[2]` epoch word
+/// the MRU entry uses, and this function **wipes the ways whenever the epoch
+/// moves**. That keeps the shared word honest: a way is only ever readable while
+/// `cache[2]` still holds the epoch that way was primed in. The ways go cold
+/// once per collection and re-prime — 38 minor collections across a 4 s run, so
+/// the re-priming is not measurable.
+///
+/// `(shape, key)` → slot is immutable within an epoch: a site always looks up
+/// one key, and a keys-array change gives the object a different keys array (or
+/// a fresh shape id). So a way that stops matching simply goes cold; it can
+/// never resolve to a wrong slot.
+///
+/// # Safety
+/// `cache` must point at a live `[i64; PIC_CACHE_WORDS]` (the codegen-emitted
+/// per-site global, or a stack array of that type).
+pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64, epoch: i64) {
+    let c = &mut *cache;
+    let prev_tok = c[0];
+    let prev_slot = c[1];
+    // A collection happened since this site was last primed. Every token here —
+    // word 0's and every way's — was resolved against addresses that may since
+    // have been freed, moved and recycled, so the whole cache goes cold. That
+    // includes `prev_tok`: cascading it would smuggle a stale pointer token past
+    // the very guard the wipe exists to enforce.
+    let epoch_held = c[2] == epoch;
+    if !epoch_held {
+        for w in 0..PIC_WAYS {
+            c[PIC_WAY_BASE + w * 2] = 0;
+            c[PIC_WAY_BASE + w * 2 + 1] = 0;
+        }
+    }
+    c[0] = token;
+    c[1] = slot;
+    c[2] = epoch;
+    let cascade = epoch_held && prev_tok != 0 && prev_tok != token;
+    // One pass over the ways does three things:
+    //   * evicts `token` from a way if it has one — it now lives in the MRU
+    //     entry, and leaving the stale copy behind would permanently cost a way
+    //     (a k-shape rotation would then only ever cache k-1 of them);
+    //   * refreshes `prev_tok`'s way if it already has one;
+    //   * remembers the first empty way for the cascade.
+    let mut free: Option<usize> = None;
+    let mut prev_present = false;
+    for w in 0..PIC_WAYS {
+        let ti = PIC_WAY_BASE + w * 2;
+        if c[ti] == token {
+            c[ti] = 0;
+            c[ti + 1] = 0;
+        } else if cascade && c[ti] == prev_tok {
+            c[ti + 1] = prev_slot;
+            prev_present = true;
+            continue;
+        }
+        if c[ti] == 0 && free.is_none() {
+            free = Some(ti);
+        }
+    }
+    if !cascade || prev_present {
+        return;
+    }
+    let ti = free.unwrap_or_else(|| {
+        let v = (c[PIC_VICTIM] as usize).wrapping_add(1) % PIC_WAYS;
+        c[PIC_VICTIM] = v as i64;
+        PIC_WAY_BASE + v * 2
+    });
+    c[ti] = prev_tok;
+    c[ti + 1] = prev_slot;
+}
+
+/// The receiver's GC object type, or `None` when the address does not carry a
+/// readable `GcHeader`.
+///
+/// # Safety
+/// `obj` is only *inspected*; `try_read_gc_header` validates the address first.
+#[inline]
+unsafe fn gc_type_of(obj: *const ObjectHeader) -> Option<u8> {
+    crate::value::addr_class::try_read_gc_header(obj as usize).map(|h| h.obj_type)
+}
+
+/// Does this heap property key have exactly these bytes?
+///
+/// Length first, so a mismatched key costs one `u32` load and a compare — the
+/// point is to keep the fast-path probe cheaper than the ladder it skips.
+///
+/// # Safety
+/// `key` must be null or a live heap `StringHeader` (the same contract every
+/// other key read in this file relies on — property-name literals are interned
+/// as heap strings, never SSO immediates).
+#[inline]
+unsafe fn key_bytes_are(key: *const crate::StringHeader, want: &[u8]) -> bool {
+    if key.is_null() || (*key).byte_len as usize != want.len() {
+        return false;
+    }
+    let p = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    std::slice::from_raw_parts(p, want.len()) == want
+}
+
 /// Monomorphic inline cache miss handler (issue #51).
 ///
 /// Called when the codegen-emitted shape check (`obj->keys_array == cache[0]`)
@@ -238,10 +380,11 @@ pub(crate) fn pic_epoch_bump() {
 /// then populates the per-site cache so subsequent calls with the same shape
 /// hit the inline fast path (no function call, direct field load).
 ///
-/// `cache` layout: `[shape_token: i64, field_slot_index: i64, primed_epoch: i64]`
-/// (`shape_token` is a shape-ID token or a raw keys-array pointer — see #6804;
-/// `primed_epoch` is the [`PERRY_IC_EPOCH`] snapshot taken at prime time,
-/// #6080a). The emitted global is `[8 x i64]`; slots 3..8 are unused here.
+/// `cache` layout: see [`PicCache`]. Words 0..2 are the MRU entry
+/// `[shape_token, field_slot_index, primed_epoch]` (`shape_token` is a shape-ID
+/// token or a raw keys-array pointer — see #6804; `primed_epoch` is the
+/// [`PERRY_IC_EPOCH`] snapshot taken at prime time, #6080a); words 3.. are the
+/// polymorphic ways filled by [`pic_prime_get`] (#7753).
 ///
 /// Only caches when:
 /// - obj is a valid ObjectHeader (not null, not handle, not string/array/etc.)
@@ -254,7 +397,7 @@ pub(crate) fn pic_epoch_bump() {
 pub extern "C" fn js_object_get_field_ic_miss(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
-    cache: *mut [i64; 3],
+    cache: *mut PicCache,
 ) -> f64 {
     // SSO receiver — never cacheable. Route through the SSO-aware
     // `js_object_get_field_by_name` which handles `.length` inline
@@ -301,6 +444,34 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // the ordering in `js_object_get_field_by_name`. The macOS heap floor
     // (0x200_0000_0000 in is_valid_obj_ptr) masked this; Linux's is 0x1000.
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
+        // #7753: `arr.length` on a receiver codegen could not prove is an array.
+        //
+        // The inline cache can never serve this read — it requires a
+        // GC_TYPE_OBJECT receiver by construction (#72, so an Array's
+        // `element[1]` is never mistaken for `keys_array`) — so EVERY dynamic
+        // `.length` lands here, and then walks a ladder built for objects: a
+        // closure-magic deref, two side-table registry probes behind
+        // thread-locals, then `js_object_get_field_by_name`'s own dispatch,
+        // which repeats the registry probes before finally reaching the array
+        // arm. On a tree-walking interpreter whose variable lookup is
+        // `for (i = 0; i < names.length; i++)`, that one read was 22% of total
+        // run time — more than the entire polymorphic-dispatch fix above saved.
+        //
+        // `GC_TYPE_ARRAY` is a genuine dense array: buffers, typed arrays, lazy
+        // arrays, Sets and Maps all carry their own distinct `obj_type`, and an
+        // `class X extends Array` instance is an `ObjectHeader`
+        // (`GC_TYPE_OBJECT`). `js_array_length` still resolves growth-forwarding
+        // stubs, proxies and subclass receivers, so this only skips probes that
+        // cannot match — the expression returned is exactly the one
+        // `get_field_by_name_object_tail`'s array arm computes for this key,
+        // which is what makes it a pure short-circuit rather than a second
+        // implementation.
+        if unsafe { gc_type_of(obj) } == Some(crate::gc::GC_TYPE_ARRAY)
+            && unsafe { key_bytes_are(key, b"length") }
+        {
+            let arr = obj as *const crate::array::ArrayHeader;
+            return crate::array::js_array_length(arr) as f64;
+        }
         unsafe {
             if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
                 return val;
@@ -507,14 +678,10 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     // one token kind to the other.
                     let epoch = PERRY_IC_EPOCH.load(std::sync::atomic::Ordering::Relaxed) as i64;
                     if (*obj).class_id == 0 && crate::object::shapes::is_shape_id(stamp) {
-                        (*cache)[0] =
-                            (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
-                        (*cache)[1] = i as i64;
-                        (*cache)[2] = epoch;
+                        let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
+                        pic_prime_get(cache, token, i as i64, epoch);
                     } else if keys_cacheable_for_pic(keys) {
-                        (*cache)[0] = keys as i64;
-                        (*cache)[1] = i as i64;
-                        (*cache)[2] = epoch;
+                        pic_prime_get(cache, keys as i64, i as i64, epoch);
                     }
                     let field_ptr = (obj as *const u8)
                         .add(std::mem::size_of::<ObjectHeader>() + i * 8)
@@ -553,7 +720,7 @@ pub extern "C" fn js_object_get_field_ic(
     obj_bits: i64,
     key: *const crate::StringHeader,
     site_id: u64,
-    cache: *mut [i64; 3],
+    cache: *mut PicCache,
 ) -> f64 {
     // POINTER_MASK: lower 48 bits — strips the NaN-box tag to a raw heap pointer.
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -823,6 +990,183 @@ pub extern "C" fn js_private_guard(
 }
 
 #[cfg(test)]
+mod poly_pic_tests {
+    use super::{pic_prime_get, PicCache, PIC_CACHE_WORDS, PIC_VICTIM, PIC_WAYS, PIC_WAY_BASE};
+    use crate::object::shapes::PIC_ID_TOKEN_BIT;
+
+    fn id_tok(n: u64) -> i64 {
+        (n | PIC_ID_TOKEN_BIT) as i64
+    }
+
+    /// Paired with `pic_cache_layout_matches_runtime` in
+    /// `perry-codegen/src/expr/property_get/generic_dispatch.rs`: codegen emits
+    /// `[PIC_CACHE_WORDS x i64]` for each `@perry_ic_N` and the runtime writes
+    /// that memory as `[i64; PIC_CACHE_WORDS]`. Widening one side alone is an
+    /// out-of-bounds store into another global, so both tests pin the number.
+    #[test]
+    fn pic_cache_words_match_codegen() {
+        assert_eq!(
+            PIC_CACHE_WORDS, 12,
+            "codegen emits `[12 x i64]`; update both sides together"
+        );
+        assert!(
+            PIC_VICTIM < PIC_CACHE_WORDS,
+            "the victim counter must fit inside the emitted global"
+        );
+        assert_eq!(PIC_VICTIM, PIC_WAY_BASE + PIC_WAYS * 2);
+    }
+
+    /// The MRU entry keeps its pre-#7753 meaning exactly: always overwritten,
+    /// carrying its epoch. A monomorphic site must therefore look identical to
+    /// what it looked like before the ways existed — no way is ever filled.
+    #[test]
+    fn monomorphic_site_never_fills_a_way() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            for _ in 0..8 {
+                pic_prime_get(&mut c, id_tok(7), 2, 99);
+            }
+        }
+        assert_eq!(c[0], id_tok(7));
+        assert_eq!(c[1], 2);
+        assert_eq!(c[2], 99);
+        for w in 0..PIC_WAYS {
+            assert_eq!(
+                c[PIC_WAY_BASE + w * 2],
+                0,
+                "a site that only ever sees one shape must not fill a way"
+            );
+        }
+    }
+
+    /// The property the whole change rests on: a site alternating between
+    /// `PIC_WAYS + 1` shapes ends up with EVERY shape resolvable inline —
+    /// the one in the MRU entry plus the rest spread across the ways, each
+    /// still paired with its own slot. Before #7753 the 2nd..nth shape had
+    /// nowhere to live and every read called the miss handler.
+    #[test]
+    fn alternating_shapes_all_become_inline_resolvable() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        let shapes: Vec<(i64, i64)> = (0..(PIC_WAYS + 1))
+            .map(|i| (id_tok(100 + i as u64), i as i64))
+            .collect();
+        unsafe {
+            // Two full rotations: the first fills, the second must not disturb.
+            for _ in 0..2 {
+                for (tok, slot) in &shapes {
+                    pic_prime_get(&mut c, *tok, *slot, 1);
+                }
+            }
+        }
+        for (tok, slot) in &shapes {
+            let in_mru = c[0] == *tok && c[1] == *slot;
+            let in_way = (0..PIC_WAYS)
+                .any(|w| c[PIC_WAY_BASE + w * 2] == *tok && c[PIC_WAY_BASE + w * 2 + 1] == *slot);
+            assert!(
+                in_mru || in_way,
+                "shape {tok:#x} (slot {slot}) must be resolvable inline; cache = {c:?}"
+            );
+        }
+        // …and no shape is duplicated across two ways (the dedupe arm works),
+        // otherwise capacity silently halves.
+        for w in 0..PIC_WAYS {
+            for v in (w + 1)..PIC_WAYS {
+                let a = c[PIC_WAY_BASE + w * 2];
+                let b = c[PIC_WAY_BASE + v * 2];
+                assert!(a == 0 || a != b, "ways {w} and {v} hold the same token");
+            }
+        }
+    }
+
+    /// The population that matters is the keys-POINTER one: a plain object
+    /// literal goes through a generated `__AnonShape_*` constructor, so it has
+    /// a real `class_id` and primes a keys pointer, never a shape id. Ways that
+    /// only accept ID tokens are dead code for exactly the programs the ways
+    /// exist for (measured: a 6% regression, the compares running and never
+    /// hitting). This is the test that would have caught shipping that.
+    #[test]
+    fn pointer_tokens_do_reach_a_way() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        let ptr_a = 0x2000_1234_5678_i64;
+        let ptr_b = 0x2000_1234_9999_i64;
+        assert_eq!((ptr_a as u64) & PIC_ID_TOKEN_BIT, 0, "test premise");
+        unsafe {
+            pic_prime_get(&mut c, ptr_a, 1, 5);
+            pic_prime_get(&mut c, ptr_b, 2, 5);
+        }
+        assert_eq!(c[0], ptr_b);
+        assert!(
+            (0..PIC_WAYS)
+                .any(|w| c[PIC_WAY_BASE + w * 2] == ptr_a && c[PIC_WAY_BASE + w * 2 + 1] == 1),
+            "the evicted keys-pointer token must land in a way: {c:?}"
+        );
+    }
+
+    /// #6080a, extended to the ways. A keys-POINTER token is an ADDRESS: after a
+    /// collection frees or moves that keys array, a different-shape array can be
+    /// recycled into the same address and a stale way would pointer-match and
+    /// load the wrong slot — silently, which is the worst failure this code can
+    /// have. The ways share word 2's epoch snapshot with the MRU entry, so the
+    /// discipline that makes that sound is: a new epoch WIPES every way, and the
+    /// token being evicted from word 0 is dropped rather than cascaded (it too
+    /// was resolved in the old epoch). This asserts both halves.
+    #[test]
+    fn an_epoch_change_wipes_every_way() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            for i in 0..(PIC_WAYS as i64 + 1) {
+                pic_prime_get(&mut c, 0x3000_0000_0000 + i, i, 7);
+            }
+        }
+        assert!(
+            (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] != 0),
+            "test premise: the ways are populated before the epoch moves"
+        );
+        let stale = c[0];
+        unsafe {
+            pic_prime_get(&mut c, 0x4000_0000_0000, 3, 8);
+        }
+        for w in 0..PIC_WAYS {
+            assert_eq!(
+                c[PIC_WAY_BASE + w * 2],
+                0,
+                "way {w} survived an epoch change: {c:?}"
+            );
+        }
+        assert_ne!(
+            c[0], stale,
+            "the MRU entry must hold the freshly primed token"
+        );
+        assert_eq!(c[2], 8, "word 2 must carry the new epoch");
+    }
+
+    /// More distinct shapes than the site can hold must degrade to "some miss",
+    /// never to a wrong answer: every occupied way still carries the slot it was
+    /// primed with, so the emitted compare can only hit on a token it stored.
+    #[test]
+    fn overflow_rotates_without_corrupting_pairs() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            for i in 0..(PIC_WAYS as u64 * 4) {
+                pic_prime_get(&mut c, id_tok(200 + i), i as i64, 1);
+            }
+        }
+        for w in 0..PIC_WAYS {
+            let tok = c[PIC_WAY_BASE + w * 2];
+            if tok == 0 {
+                continue;
+            }
+            let slot = c[PIC_WAY_BASE + w * 2 + 1];
+            let expected = (tok as u64 & !PIC_ID_TOKEN_BIT) - 200;
+            assert_eq!(
+                slot, expected as i64,
+                "way {w} pairs token {tok:#x} with the wrong slot"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod c3c_pic_tests {
     /// #6759 C3c: the PIC only caches SHAPE-SHARED (process-rooted,
     /// address-stable) keys arrays; an owned array's address can be
@@ -867,7 +1211,7 @@ mod c3c_pic_tests {
             let gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             (*gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
 
-            let mut cache = [0i64; 3];
+            let mut cache = [0i64; super::PIC_CACHE_WORDS];
             let v = super::js_object_get_field_ic_miss(obj, key, &mut cache);
             assert_eq!(v, 7.0);
             assert_eq!(
@@ -897,6 +1241,56 @@ mod c3c_pic_tests {
                 cache[2],
                 super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
                 "re-prime must heal the epoch snapshot"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod array_length_fast_path_tests {
+    /// #7753: the `arr.length` short-circuit must answer EXACTLY what the full
+    /// ladder answers, for a fresh array, a grown one, and an empty one — and
+    /// must not fire for any other key on an array receiver, nor for `length`
+    /// on a non-array. Comparing against `js_object_get_field_by_name_f64` (the
+    /// path the read took before the short-circuit) is what makes this a
+    /// behaviour-equivalence test rather than a restatement of the fast path.
+    #[test]
+    fn array_length_short_circuit_agrees_with_the_full_ladder() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+            let other_key = crate::string::js_string_from_bytes(b"lengtx".as_ptr(), 6);
+            for n in [0u32, 1, 5, 40] {
+                let mut arr = crate::array::js_array_alloc(n.max(1));
+                for i in 0..n {
+                    arr = crate::array::js_array_push(arr, crate::value::JSValue::number(i as f64));
+                }
+                let obj = arr as *const super::ObjectHeader;
+                let mut cache = [0i64; super::PIC_CACHE_WORDS];
+                let via_ic = super::js_object_get_field_ic_miss(obj, len_key, &mut cache);
+                let via_ladder = super::js_object_get_field_by_name_f64(obj, len_key);
+                assert_eq!(
+                    via_ic.to_bits(),
+                    via_ladder.to_bits(),
+                    "length disagreed for a {n}-element array"
+                );
+                assert_eq!(via_ic, n as f64, "length wrong for a {n}-element array");
+                // A same-length key that is not `length` must not be captured
+                // by the fast path.
+                assert_eq!(
+                    super::js_object_get_field_ic_miss(obj, other_key, &mut cache).to_bits(),
+                    super::js_object_get_field_by_name_f64(obj, other_key).to_bits(),
+                    "a non-`length` key on an array must take the normal path"
+                );
+            }
+            // `length` on a plain OBJECT must not be answered by the array
+            // short-circuit — it is an ordinary (absent) property there.
+            let plain = crate::object::js_object_alloc(0, 0);
+            let mut cache = [0i64; super::PIC_CACHE_WORDS];
+            assert_eq!(
+                super::js_object_get_field_ic_miss(plain, len_key, &mut cache).to_bits(),
+                super::js_object_get_field_by_name_f64(plain, len_key).to_bits(),
+                "`length` on a plain object must keep its normal answer"
             );
         }
     }
