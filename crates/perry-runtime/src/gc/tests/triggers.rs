@@ -1198,7 +1198,7 @@ fn zeal_holds_the_poll_word_armed_with_nothing_pending() {
     crate::gc::set_safepoint_pending(false);
 }
 
-/// #7778: the schedule's mirror of the zeal test above, and the regression
+/// #7781: the schedule's mirror of the zeal test above, and the regression
 /// test for the gap that made `PERRY_GC_SCHEDULE_RATE=1` an event-loop-only
 /// instrument: on #7606's reproduction it saw SIX safepoints against zeal's
 /// 9,648 loop polls, because nothing armed the poll word for the mode whose

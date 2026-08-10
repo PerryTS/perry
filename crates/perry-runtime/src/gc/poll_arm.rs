@@ -117,7 +117,7 @@ pub(crate) fn disarm_poll() {
 pub(crate) fn resolve_poll_seed() {
     static SEED: std::sync::Once = std::sync::Once::new();
     SEED.call_once(|| {
-        // #7778: the seeded schedule keeps the word armed for exactly zeal's
+        // #7781: the seeded schedule keeps the word armed for exactly zeal's
         // reason — its collection decision lives inside the safepoint, so a
         // disarmed poll never presents the safepoint to decide at. Measured
         // before this line existed: `PERRY_GC_SCHEDULE_RATE=1` on #7606's

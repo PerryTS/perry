@@ -305,7 +305,7 @@ pub(crate) struct ScheduleGuard(Option<(u64, u64)>);
 #[cfg(test)]
 impl ScheduleGuard {
     pub(crate) fn set(seed: u64, threshold: u64) -> Self {
-        // #7778: mirror `ZealGuard` — a schedule that cannot reach the poll
+        // #7781: mirror `ZealGuard` — a schedule that cannot reach the poll
         // decides at six event-loop boundaries instead of thousands of
         // back-edges. Arm on set, release on drop, exactly the zeal pair.
         let prev = SCHEDULE_OVERRIDE.with(|cell| cell.replace(Some((seed, threshold))));
