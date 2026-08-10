@@ -461,8 +461,25 @@ pub extern "C" fn js_suppressed_error_new(error: f64, suppressed: f64, message: 
     // properties { writable:true, enumerable:false, configurable:true }. The
     // `name` default ("SuppressedError") lives on `SuppressedError.prototype`,
     // so it is *not* set as an own property here.
+    // #6949(b): `obj` is a raw Rust local — neither a GC root nor a shadow slot
+    // — and everything below it allocates: `js_string_from_bytes` per key,
+    // `js_object_set_field_by_name` when the object grows, and
+    // `js_string_coerce` on the message. Any of those can collect and EVACUATE.
+    //
+    // A single rebind after the coercion would not be enough here for two
+    // reasons: the closure captures `obj` BY VALUE, so every `set_nonenum` call
+    // would keep using the address captured at definition time; and
+    // `object_set_static_prototype` at the end keys a SIDE TABLE on
+    // `obj as usize`, so a stale address does not fault — it files the
+    // prototype under an address nothing will look up, and `instanceof
+    // SuppressedError` quietly stops resolving.
+    //
+    // So root once and re-read at every use, which is what the handle gives.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
     let set_nonenum = |key: &str, value: f64| {
         let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
         js_object_set_field_by_name(obj, key_ptr, value);
         crate::object::set_property_attrs(
             obj as usize,
@@ -484,11 +501,13 @@ pub extern "C" fn js_suppressed_error_new(error: f64, suppressed: f64, message: 
         };
         set_nonenum("message", message_val);
     }
+    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
     let result = js_nanbox_pointer(obj as i64);
     // Link the instance to `SuppressedError.prototype` so `name`/`message`
     // defaults and `instanceof SuppressedError` resolve through the chain.
     let proto = crate::object::builtin_prototype_value("SuppressedError");
     if proto.to_bits() != TAG_UNDEFINED && js_nanbox_get_pointer(proto) != 0 {
+        let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
         crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
     }
     result
