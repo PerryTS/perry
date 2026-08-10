@@ -837,7 +837,8 @@ jobs:
   #   changed `crates/<pkg>/tests/<suite>.rs`  ->  cargo test -p <pkg> --test <suite>
   #
   # (plus suite module dirs and `common/` helper dirs — see
-  # scripts/ci_e2e_scope.py, capped at 12 suites).
+  # scripts/ci_e2e_scope.py — diff-named suites capped at 12; the perry-codegen
+  # source map added in #7708 is uncapped and in-process).
   #
   # Cost: PRs that touch no integration suite — the large majority — finish in
   # ~20-30s of checkout + scope computation and never install a toolchain or
@@ -860,13 +861,18 @@ jobs:
     # clock kills legitimately-running suites and we get an uninformative
     # "cancelled" instead of the per-suite `::error::` — reintroducing, one
     # level up, exactly what `timeout 1500` below exists to prevent.
-    #   DEFAULT_CAP (ci_e2e_scope.py) = 12 suites
-    #   per-suite bound below         = timeout 1500s = 25 min
-    #   12 x 25 = 300, + 30 min for toolchain/cache/staticlib build = 330
-    # Keep these three in sync. This is a backstop, not a budget: each suite is
+    #   DEFAULT_CAP (ci_e2e_scope.py) = 12 diff-named suites
+    #   NAMED_SUITE_TIMEOUT_S         = 1500s = 25 min  -> 12 x 25 = 300
+    #   #7708 mapped perry-codegen    = 22 suites, uncapped, but in-process:
+    #   MAPPED_SUITE_TIMEOUT_S        = 300s = 5 min    -> 22 x 5  = 110
+    #   + 2 known-failure checks at 5 min                          = 10
+    #   + 30 min for toolchain/cache/staticlib build
+    #                                                     total    = 450
+    # Keep these in sync with ci_e2e_scope.py. This is a backstop, not a budget:
+    # every mapped suite measured 2.2-10.4 s wall clock, each suite is
     # independently bounded, and the common case selects zero suites and exits
     # in ~20-30s.
-    timeout-minutes: 330
+    timeout-minutes: 450
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
@@ -891,6 +897,13 @@ jobs:
           changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
             --json files --jq '.files[].path')"
           suites="$(printf '%s\n' "$changed_files" | python3 scripts/ci_e2e_scope.py)"
+          # #7708: the held-out tests, so the run step can skip them AND assert
+          # each one still fails.
+          {
+            echo 'exclusions<<PERRY_EOF'
+            python3 scripts/ci_e2e_scope.py --exclusions
+            echo 'PERRY_EOF'
+          } >> "$GITHUB_OUTPUT"
           if [ -z "$suites" ]; then
             echo "No integration suite named by this diff — nothing to run."
             echo "suites=" >> "$GITHUB_OUTPUT"
@@ -945,6 +958,7 @@ jobs:
           # Bound the heavy per-binary runtime link so the runner doesn't OOM.
           CARGO_BUILD_JOBS: "1"
           SUITES: ${{ steps.scope.outputs.suites }}
+          EXCLUSIONS: ${{ steps.scope.outputs.exclusions }}
         run: |
           # `cargo test` never builds the `staticlib` crate-type, so
           # libperry_{runtime,stdlib}.a don't exist unless built explicitly —
@@ -956,17 +970,49 @@ jobs:
           fi
 
           status=0
-          while read -r package suite; do
+          # #7708: every suite runs with its known-failing tests skipped, in
+          # whichever tier selected it. Holding out a TEST instead of a SUITE is
+          # what lets `native_proof_regressions` contribute its other 261.
+          while read -r package suite bound; do
             [ -n "$package" ] || continue
+            skips=""
+            while read -r xpkg xsuite xtest; do
+              [ -n "$xpkg" ] || continue
+              if [ "$xpkg" = "$package" ] && [ "$xsuite" = "$suite" ]; then
+                skips="$skips --skip $xtest"
+                echo "::notice::skipping known failure $package::$suite::$xtest"
+              fi
+            done <<< "$EXCLUSIONS"
             echo "::group::cargo test -p $package --test $suite"
             # Per-suite wall-clock bound: a hung compile must not eat the whole
-            # job budget and hide the other suites' results.
-            if ! timeout 1500 cargo test -p "$package" --test "$suite"; then
+            # job budget and hide the other suites' results. Mapped in-process
+            # suites carry a much tighter bound than a diff-named one that
+            # shells out to `perry compile` — see ci_e2e_scope.py.
+            # shellcheck disable=SC2086
+            if ! timeout "${bound:-1500}" cargo test -p "$package" --test "$suite" -- $skips; then
               echo "::error::integration suite failed: $package --test $suite"
               status=1
             fi
             echo "::endgroup::"
           done <<< "$SUITES"
+
+          # #7708: the exclusions are self-invalidating. A held-out test that
+          # now PASSES (or that no longer exists under that name) fails the job,
+          # so a fix cannot land while leaving its entry behind — the failure
+          # mode #797 recorded for the parity skip-list.
+          if printf '%s\n' "$SUITES" | grep -q '^perry-codegen '; then
+            while read -r xpkg xsuite xtest; do
+              [ -n "$xpkg" ] || continue
+              echo "::group::known-failure check $xpkg::$xsuite::$xtest"
+              out="$(timeout 300 cargo test -p "$xpkg" --test "$xsuite" -- --exact "$xtest" 2>&1 || true)"
+              printf '%s\n' "$out"
+              if ! printf '%s\n' "$out" | grep -q '1 failed'; then
+                echo "::error::$xpkg::$xsuite::$xtest is listed in SUITE_EXCLUSIONS but did not fail (it passed, or no test matched that name). Delete its entry from SUITE_EXCLUSIONS in scripts/ci_e2e_scope.py and let the suite run it."
+                status=1
+              fi
+              echo "::endgroup::"
+            done <<< "$EXCLUSIONS"
+          fi
           exit "$status"
 
   # ---------------------------------------------------------------------------
