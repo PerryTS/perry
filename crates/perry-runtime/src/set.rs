@@ -221,7 +221,20 @@ fn register_set(ptr: *mut SetHeader, elements: *mut f64, capacity: usize) {
     });
 }
 
+/// Every entry into [`is_registered_set`]. Twin of
+/// `map::TEST_MAP_REGISTRY_PROBES` — see that counter for what it pins down.
+#[cfg(test)]
+pub(crate) static TEST_SET_REGISTRY_PROBES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+pub(crate) fn test_set_registry_probe_count() -> u64 {
+    TEST_SET_REGISTRY_PROBES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn is_registered_set(addr: usize) -> bool {
+    #[cfg(test)]
+    TEST_SET_REGISTRY_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // #7469: nothing registered ⟹ nothing to find, without a thread-local
     // resolution or a hash. See `map::is_registered_map` for the pairing.
     if set_registry_never_used() {

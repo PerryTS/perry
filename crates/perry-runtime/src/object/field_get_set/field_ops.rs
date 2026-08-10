@@ -183,11 +183,10 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
 /// this function to compare the receiver's class id against every user
 /// class implementing the same method name. Without the GC-type guard we
 /// blindly read 4 bytes at offset 4 of the receiver — which for a
-/// `SetHeader` (allocated via std::alloc, no GcHeader, layout
-/// `{ size: u32, capacity: u32, elements: *mut f64 }`) is its `capacity`
-/// field. `js_set_alloc(0)` defaults capacity to 4, which collides with
-/// whichever user class lands at id 4, routing the call into the wrong
-/// method body and crashing on the bogus `this` pointer.
+/// `SetHeader` (layout `{ size: u32, capacity: u32, elements: *mut f64 }`) is
+/// its `capacity` field. `js_set_alloc(0)` defaults capacity to 4, which
+/// collides with whichever user class lands at id 4, routing the call into the
+/// wrong method body and crashing on the bogus `this` pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
     if crate::value::addr_class::is_handle_band(obj as usize) {
@@ -195,9 +194,15 @@ pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
     }
     let addr = obj as usize;
     // Built-in headers (Set / Map / Regex) live in their own per-type
-    // registries — they're never user class instances. Reject them first
-    // so we never try to read a GcHeader at obj-8, which doesn't exist
-    // for these std::alloc'd headers.
+    // registries — they're never user class instances. Reject them first.
+    //
+    // The reason given here used to be that Set/Map headers are `std::alloc`'d
+    // with no `GcHeader` at `obj - 8`. That stopped being true when
+    // `js_set_alloc` / `js_map_alloc` moved to
+    // `arena_alloc_gc(_, _, GC_TYPE_SET|GC_TYPE_MAP)` — both DO carry a header,
+    // and the `GC_TYPE_OBJECT` test below already rejects them on it. Regex
+    // pointers are the remaining header-less case, which is why the registry
+    // order is kept.
     if crate::set::is_registered_set(addr)
         || crate::map::is_registered_map(addr)
         || crate::regex::is_regex_pointer(obj as *const u8)

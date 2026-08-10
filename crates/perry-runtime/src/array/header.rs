@@ -68,6 +68,56 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
     }
 }
 
+/// The `obj_type` and flag word of the `GcHeader` that precedes `arr`, read
+/// once, for a receiver [`clean_arr_ptr`] has already resolved. `(0, 0)` when
+/// `arr` is too low to carry a header — `0` is not a legal `obj_type`, so it
+/// reads as "unknown" at every call site.
+///
+/// A non-zero tag is NOT proof that a real header exists. `Buffer` and
+/// `TypedArray` payloads are `std::alloc`-backed, so the eight bytes below them
+/// are allocator bookkeeping and can read as any value. Use the answer only
+/// where a wrong tag is harmless:
+///
+/// * to *skip* a registry probe whose answer for that receiver would have been
+///   `false` anyway — the caller must already have routed real buffers and
+///   typed arrays elsewhere; or
+/// * as the `GC_TYPE_ARRAY` test [`array_object_flags`] already performs on
+///   this very byte, where those bookkeeping bytes are allowed to be wrong
+///   today.
+///
+/// What makes the tag *authoritative* for the collection receivers is that
+/// every GC allocation carries a header, `Map` and `Set` included:
+/// `js_map_alloc` / `js_set_alloc` stamp `GC_TYPE_MAP` / `GC_TYPE_SET` through
+/// `arena_alloc_gc`, and that is the single registration site for each. Several
+/// comments in the tree still say Map/Set headers come from a bare `alloc()`
+/// with no `GcHeader` and that only the registry can classify them; that
+/// stopped being true when they moved into the managed arena.
+#[inline]
+pub(crate) fn array_receiver_gc_tag(arr: *const ArrayHeader) -> (u8, u16) {
+    if (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return (0, 0);
+    }
+    // SAFETY: the same `arr - GC_HEADER_SIZE` read `clean_arr_ptr` performs on
+    // this pointer (forwarding chain, lazy/object rejection), under the same
+    // magnitude guard.
+    unsafe {
+        let gc_header =
+            (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        ((*gc_header).obj_type, (*gc_header)._reserved)
+    }
+}
+
+/// [`array_object_flags`] answered from a tag [`array_receiver_gc_tag`]
+/// already read, for a receiver `clean_arr_ptr` already resolved.
+#[inline]
+pub(crate) fn array_object_flags_from_tag(tag: (u8, u16)) -> u16 {
+    if tag.0 == crate::gc::GC_TYPE_ARRAY {
+        tag.1
+    } else {
+        0
+    }
+}
+
 #[inline]
 pub(crate) fn array_is_frozen(arr: *const ArrayHeader) -> bool {
     array_object_flags(arr) & crate::gc::OBJ_FLAG_FROZEN != 0
