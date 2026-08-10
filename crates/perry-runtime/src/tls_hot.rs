@@ -29,20 +29,37 @@
 //! (for `HOT` itself, which LLVM then CSEs across the whole inlined region)
 //! plus N loads from one cache line.
 //!
-//! # Contract for adding a field
+//! # Do not add a field — declare with [`crate::perry_thread_local`]
 //!
-//! 1. Add the `*mut u8` slot below.
-//! 2. Add a `pub(crate) fn …_hot_addr() -> *mut u8` next to the `thread_local!`
-//!    that owns the storage, returning `KEY.with(|k| k as *const _ as *mut u8)`.
-//! 3. Wire it in [`fill`].
-//! 4. Add the pair to `tls_hot::tests::cached_addresses_match_thread_locals`.
+//! The sixteen named fields below are a **closed set**. They are the
+//! allocation path, they have fixed offsets, and they are kept because a fixed
+//! offset is one load cheaper than a claimed slot on the hottest path in the
+//! runtime. Nothing else belongs there.
 //!
-//! Step 4 is the load-bearing one: the slots are untyped (`*mut u8`) so the
-//! owning module can keep its storage type private, which means a mis-wired
+//! Adding one used to take four manual steps — slot, `…_hot_addr()` provider,
+//! a line in [`fill`], and a line in
+//! `tests::cached_addresses_match_thread_locals` — and step four was
+//! load-bearing, because the slots are untyped (`*mut u8`) so a mis-wired
 //! `fill` would hand out a correctly-typed reference to the *wrong* object.
-//! The test compares each cached address against the `.with()` address it is
-//! supposed to mirror, so a mis-wire is a red build rather than a silent
-//! cross-cast.
+//!
+//! That contract cannot scale to ~520 declarations, and it gets the default
+//! backwards: forgetting it produces a **working slow path**, not a build
+//! error. Which is why this cost was fixed three times and came back three
+//! times — measured 0% of `churn_alloc` after #7565 (`churn` is covered by
+//! construction), 8-9% later, 11% on `interp`/`retain`, and 20.5% of
+//! `asyncpipe`, whose Map/Set registries, buffer brands and descriptor state
+//! were on nobody's list.
+//!
+//! [`crate::perry_thread_local`] is the default now: same syntax as
+//! `thread_local!`, same `with`/`try_with` at every call site, and the address
+//! lands in a generic slot of this same cache with **nothing to wire**. The
+//! declaration generates its own storage, its own resolver and its own typed
+//! key, so the cross-cast hazard above cannot be expressed — and it installs a
+//! teardown guard exactly when the value has a destructor, which the named
+//! fields do not have at all. `scripts/check_thread_locals.py` makes a new raw
+//! `thread_local!` a build error unless it is recorded as deliberately cold,
+//! and `scripts/tls_budget_gate.sh` measures the outcome on two programs whose
+//! paths are deliberately *not* among these sixteen.
 //!
 //! # Lifetime
 //!
@@ -89,12 +106,14 @@ use std::cell::{Cell, UnsafeCell};
 ///
 /// One `*mut u8` each, in `__thread_bss`, so the cost is address space rather
 /// than image size. `perry-runtime` declares ~520 `thread_local!`s in total, so
-/// this leaves headroom for every one of them plus `perry-stdlib`'s, and the
-/// `tls_hot_capacity_covers_every_declaration` gate in
-/// `scripts/check_thread_locals.py` fails the build before a claim can be
-/// refused. Overflow is *correct* — the declaration simply falls back to the
-/// plain `thread_local!` path forever — but it is silent, which is exactly the
-/// failure mode this file exists to abolish, hence the gate.
+/// this leaves headroom for every one of them plus `perry-stdlib`'s.
+///
+/// Overflow is *correct* — a declaration that cannot get a slot simply falls
+/// back to the plain `thread_local!` path forever — but it is **silent**, which
+/// is precisely the failure mode this file exists to abolish. So two things
+/// watch it: `scripts/check_thread_locals.py` fails the build when the
+/// declaration count approaches this ceiling, and `claimed_slots` lets the
+/// runtime budget gate reject a run that reached it.
 pub const HOT_SLOT_CAPACITY: usize = 768;
 
 /// A [`SlotId`] that has never been claimed.
@@ -457,6 +476,7 @@ impl SlotId {
     #[inline(never)]
     fn claim(&self) -> u32 {
         use std::sync::atomic::Ordering;
+        maybe_install_stats_hook();
         let mut next = match CLAIM_LOCK.lock() {
             Ok(next) => next,
             Err(poisoned) => poisoned.into_inner(),
@@ -498,6 +518,64 @@ pub fn claimed_slots() -> u32 {
         Ok(next) => *next,
         Err(poisoned) => *poisoned.into_inner(),
     }
+}
+
+/// How many slots *this thread* has populated.
+pub fn published_slots() -> usize {
+    hot().slots.iter().filter(|s| !s.get().is_null()).count()
+}
+
+/// `PERRY_TLS_HOT_STATS=1` — print, at process exit, what this mechanism
+/// actually did.
+///
+/// This exists so a budget gate can assert its subject was LIVE rather than
+/// merely quiet. `_tlv_get_addr` reading 0% is the *same observation* whether
+/// the cache carried the program's thread-locals or the program simply never
+/// resolved one, and #7469's history is that the second case shipped as a pass
+/// three times. The line reports:
+///
+/// * `claimed` — declarations that took a slot process-wide. A program that
+///   exercises paths outside the sixteen named fields drives this well past
+///   zero; a program that does not, does not.
+/// * `published` — slots this thread actually filled.
+/// * `direct_tsd` — whether `hot()` is the `mrs`-plus-two-loads path. `0`
+///   means the self-check rejected direct addressing and every access is
+///   paying `_tlv_get_addr` again, i.e. the whole mechanism is inert.
+fn maybe_install_stats_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        if !matches!(
+            std::env::var("PERRY_TLS_HOT_STATS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        ) {
+            return;
+        }
+        extern "C" fn report() {
+            #[cfg(all(
+                target_vendor = "apple",
+                target_arch = "aarch64",
+                target_pointer_width = "64"
+            ))]
+            let direct = u8::from(darwin_tsd::active());
+            #[cfg(not(all(
+                target_vendor = "apple",
+                target_arch = "aarch64",
+                target_pointer_width = "64"
+            )))]
+            let direct = 0u8;
+            eprintln!(
+                "[tls-hot] claimed={} published={} capacity={} direct_tsd={}",
+                claimed_slots(),
+                published_slots(),
+                HOT_SLOT_CAPACITY,
+                direct,
+            );
+        }
+        // SAFETY: `report` is `extern "C"`, takes nothing and returns nothing.
+        unsafe {
+            libc::atexit(report);
+        }
+    });
 }
 
 /// The storage a [`crate::perry_thread_local`] declaration actually owns.
@@ -1183,6 +1261,58 @@ mod tests {
              (0 = the probe never ran, 2 = it read the dropped value)",
         );
         assert_ne!(OBSERVED.load(Ordering::SeqCst), UNSEEN);
+    }
+
+    /// Real converted declarations, across many short-lived threads.
+    ///
+    /// `perry/thread`'s `spawn` and `parallelMap` run JS on OS threads with
+    /// their own arenas, so every converted declaration is resolved, published
+    /// and destroyed once per worker. This drives that cycle 64 times over the
+    /// registry probes the profiles named — the ones `asyncpipe` and `interp`
+    /// spend their `_tlv_get_addr` on — and asserts both that nothing faults
+    /// and that repeated thread turnover cannot drain slots: an index is
+    /// claimed per *declaration*, not per thread.
+    #[test]
+    fn converted_declarations_survive_thread_turnover() {
+        fn touch_the_converted_registries() -> usize {
+            let mut seen = 0;
+            for probe in [0usize, 1, 0x1000, usize::MAX / 2] {
+                seen += usize::from(crate::map::is_registered_map(probe));
+                seen += usize::from(crate::set::is_registered_set(probe));
+                seen += usize::from(crate::buffer::is_registered_buffer(probe));
+                seen += usize::from(crate::symbol::is_registered_symbol(probe));
+                seen += usize::from(crate::regex::is_regex_pointer(probe as *const u8));
+            }
+            seen
+        }
+
+        touch_the_converted_registries();
+        let after_main = super::claimed_slots();
+
+        for _ in 0..8 {
+            let batch: Vec<_> = (0..8)
+                .map(|_| std::thread::spawn(touch_the_converted_registries))
+                .collect();
+            for worker in batch {
+                worker.join().expect("worker thread panicked");
+            }
+        }
+
+        let after_workers = super::claimed_slots();
+        assert_eq!(
+            after_main,
+            after_workers,
+            "64 worker threads claimed {} extra slots; indices must be per \
+             declaration, not per thread",
+            after_workers - after_main,
+        );
+        assert!(
+            (after_workers as usize) < super::HOT_SLOT_CAPACITY,
+            "capacity {} exhausted at {after_workers}",
+            super::HOT_SLOT_CAPACITY,
+        );
+        // And the parent thread's own cache is still serving after all that.
+        assert_eq!(touch_the_converted_registries(), 0);
     }
 
     /// The guard exists exactly when the value has something to destroy — that
