@@ -2,6 +2,25 @@
 
 use super::*;
 
+/// `PERRY_*` variables from the current environment, to forward into an app
+/// launched on a simulator or device.
+///
+/// A bundled app is launched by the system, not inherited from this shell, so
+/// without an explicit hand-off none of Perry's runtime knobs reach it —
+/// `PERRY_FRAME_STATS=1 perry run --device …` silently collected nothing.
+///
+/// Scoped to the `PERRY_` prefix deliberately: forwarding the whole environment
+/// would drop the developer's `PATH`, `HOME`, credentials and locale into a
+/// sandboxed process that has its own.
+fn perry_env_passthrough() -> Vec<(String, String)> {
+    let mut vars: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| k.starts_with("PERRY_"))
+        .collect();
+    // Deterministic order so a launch command is reproducible and diffable.
+    vars.sort();
+    vars
+}
+
 /// Launch the compiled output based on target
 pub fn launch(
     result: &CompileResult,
@@ -137,8 +156,15 @@ pub fn launch_ios_simulator(
         println!();
     }
 
-    let launch = Command::new("xcrun")
-        .args(["simctl", "launch", "--console-pty", udid, bundle_id])
+    // `simctl` forwards a variable to the launched app when it is prefixed with
+    // `SIMCTL_CHILD_` in simctl's own environment.
+    let mut launch_cmd = Command::new("xcrun");
+    launch_cmd.args(["simctl", "launch", "--console-pty", udid, bundle_id]);
+    for (key, value) in perry_env_passthrough() {
+        launch_cmd.env(format!("SIMCTL_CHILD_{key}"), value);
+    }
+
+    let launch = launch_cmd
         .status()
         .map_err(|e| anyhow!("Failed to run xcrun simctl launch: {}", e))?;
 
@@ -175,17 +201,33 @@ pub fn launch_ios_device(
         println!();
     }
 
-    let launch = Command::new("xcrun")
-        .args([
-            "devicectl",
-            "device",
-            "process",
-            "launch",
-            "--console",
-            "--device",
-            udid,
-            bundle_id,
-        ])
+    let mut launch_cmd = Command::new("xcrun");
+    launch_cmd.args([
+        "devicectl",
+        "device",
+        "process",
+        "launch",
+        "--console",
+        "--device",
+        udid,
+    ]);
+
+    // `devicectl` takes the app environment as a single JSON object. Built with
+    // serde_json rather than string concatenation so a value containing a quote
+    // or backslash cannot produce a malformed argument.
+    let env_vars = perry_env_passthrough();
+    if !env_vars.is_empty() {
+        let map: serde_json::Map<String, serde_json::Value> = env_vars
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .collect();
+        launch_cmd.arg("--environment-variables");
+        launch_cmd.arg(serde_json::Value::Object(map).to_string());
+    }
+
+    launch_cmd.arg(bundle_id);
+
+    let launch = launch_cmd
         .status()
         .map_err(|e| anyhow!("Failed to run xcrun devicectl launch: {}", e))?;
 

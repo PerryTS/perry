@@ -47,19 +47,43 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 
 thread_local! {
-    /// Map from widget handle (1-based) to UIView
-    static WIDGETS: RefCell<Vec<Retained<UIView>>> = RefCell::new(Vec::new());
+    /// Map from widget handle (1-based) to UIView.
+    ///
+    /// A slot holds `None` once its widget has been released by
+    /// [`release_widget`]. **Indices are never reused.** Two reasons, and the
+    /// second is the load-bearing one:
+    ///
+    /// - Handles are handed to TypeScript as plain NaN-boxed numbers and must
+    ///   stay inside the `< 0x100000` handle band (`HANDLE_BAND_MAX`), which
+    ///   leaves no spare bits for the generation counter that safe slot reuse
+    ///   would require.
+    /// - Without a generation counter, a recycled index lets a stale handle
+    ///   address a *different* widget — silently driving the wrong view.
+    ///
+    /// A tombstoned slot costs one `Option` niche and turns a stale handle into
+    /// a safe `None`, which is the honest failure for a handle whose widget is
+    /// gone.
+    static WIDGETS: RefCell<Vec<Option<Retained<UIView>>>> = const { RefCell::new(Vec::new()) };
+    /// Reverse index: `UIView` pointer → handle.
+    ///
+    /// `clear_children` used to recover handles by scanning the whole of
+    /// `WIDGETS` once per removed subview — O(children × every widget ever
+    /// created), against a vector that only grew. Repeated list rebuilds were
+    /// therefore quadratic and got worse the longer the app ran.
+    static HANDLE_BY_PTR: RefCell<std::collections::HashMap<usize, i64>> = RefCell::new(std::collections::HashMap::new());
     /// Stored height constraints per widget handle, so set_height can update instead of duplicate.
     static HEIGHT_CONSTRAINTS: RefCell<std::collections::HashMap<i64, Retained<AnyObject>>> = RefCell::new(std::collections::HashMap::new());
 }
 
 /// Store a UIView and return its handle (1-based i64).
 pub fn register_widget(view: Retained<UIView>) -> i64 {
+    let ptr = Retained::as_ptr(&view) as usize;
     let handle = WIDGETS.with(|w| {
         let mut widgets = w.borrow_mut();
-        widgets.push(view.clone());
+        widgets.push(Some(view.clone()));
         widgets.len() as i64
     });
+    HANDLE_BY_PTR.with(|m| m.borrow_mut().insert(ptr, handle));
     #[cfg(feature = "geisterhand")]
     {
         use objc2_foundation::NSString;
@@ -134,9 +158,15 @@ pub extern "C" fn perry_ui_query_widget_tree(out_len: *mut usize) -> *mut u8 {
     let json = WIDGETS.with(|w| {
         let widgets = w.borrow();
         let mut s = String::from("[");
-        for (i, view) in widgets.iter().enumerate() {
+        let mut emitted = 0usize;
+        for (i, slot) in widgets.iter().enumerate() {
+            // Released widgets leave a tombstone; skip it. The separator keys
+            // off how many entries were actually emitted, not the slot index,
+            // or a leading tombstone would produce `[,{...}]`.
+            let Some(view) = slot.as_ref() else { continue };
             let handle = (i + 1) as i64;
-            if i > 0 { s.push(','); }
+            if emitted > 0 { s.push(','); }
+            emitted += 1;
             unsafe {
                 let hidden: bool = objc2::msg_send![&**view, isHidden];
                 let visible = !hidden;
@@ -167,12 +197,68 @@ pub extern "C" fn perry_ui_query_widget_tree(out_len: *mut usize) -> *mut u8 {
 }
 
 /// Retrieve the UIView for a given handle.
+///
+/// Returns `None` for an unknown handle and for a handle whose widget has been
+/// released — a stale handle no-ops rather than driving some other view.
 pub fn get_widget(handle: i64) -> Option<Retained<UIView>> {
     WIDGETS.with(|w| {
         let widgets = w.borrow();
+        // `handle` is 1-based; 0 and negatives wrap to a huge index and miss,
+        // which is the intended "unknown handle" answer.
         let idx = (handle - 1) as usize;
-        widgets.get(idx).cloned()
+        widgets.get(idx).and_then(|slot| slot.clone())
     })
+}
+
+/// Recover the handle for a live `UIView`, in O(1).
+fn handle_for_view(view: *const UIView) -> Option<i64> {
+    HANDLE_BY_PTR.with(|m| m.borrow().get(&(view as usize)).copied())
+}
+
+/// Drop the widget table's strong reference to `handle`'s view and forget its
+/// bookkeeping.
+///
+/// The table is what keeps a `UIView` alive after it leaves the hierarchy: it
+/// holds a `Retained<UIView>`, so a removed widget stayed allocated for the
+/// lifetime of the process. Releasing here hands ownership back to UIKit, where
+/// a view with no superview and no other reference deallocates normally.
+pub fn release_widget(handle: i64) {
+    let idx = (handle - 1) as usize;
+    let released = WIDGETS.with(|w| {
+        let mut widgets = w.borrow_mut();
+        widgets.get_mut(idx).and_then(|slot| slot.take())
+    });
+
+    if let Some(view) = released {
+        HANDLE_BY_PTR.with(|m| m.borrow_mut().remove(&(Retained::as_ptr(&view) as usize)));
+    }
+
+    HEIGHT_CONSTRAINTS.with(|hc| {
+        if let Some(old) = hc.borrow_mut().remove(&handle) {
+            unsafe {
+                let _: () = objc2::msg_send![&*old, setActive: false];
+            }
+        }
+    });
+}
+
+/// Release `view` and every registered widget beneath it, depth-first.
+///
+/// Releasing only the directly-removed child would strand its descendants: each
+/// still holds a table entry, and that entry is a strong reference, so an
+/// entire subtree stays alive behind a parent nobody can reach. A list row is
+/// normally a container with children, which is exactly this shape.
+fn release_view_tree(view: &UIView) {
+    let subviews = view.subviews();
+    for i in 0..subviews.len() {
+        let sv: *const UIView = unsafe { objc2::msg_send![&subviews, objectAtIndex: i] };
+        if !sv.is_null() {
+            release_view_tree(unsafe { &*sv });
+        }
+    }
+    if let Some(handle) = handle_for_view(view as *const UIView) {
+        release_widget(handle);
+    }
 }
 
 /// Set the hidden state of a widget.
@@ -211,23 +297,7 @@ pub fn clear_children(handle: i64) {
                 }
             }
 
-            // Phase 2: Collect handles for cleanup
-            let handles: Vec<i64> = views
-                .iter()
-                .filter_map(|sv| {
-                    WIDGETS.with(|w| {
-                        let widgets = w.borrow();
-                        for (idx, widget) in widgets.iter().enumerate() {
-                            if std::ptr::eq(Retained::as_ptr(widget), &**sv as *const UIView) {
-                                return Some((idx + 1) as i64);
-                            }
-                        }
-                        None
-                    })
-                })
-                .collect();
-
-            // Phase 3: Remove views in reverse order
+            // Phase 2: Remove views in reverse order
             for sv in views.iter().rev() {
                 unsafe {
                     let _: () = objc2::msg_send![stack, removeArrangedSubview: &**sv];
@@ -235,15 +305,15 @@ pub fn clear_children(handle: i64) {
                 }
             }
 
-            // Phase 4: Clean up HEIGHT_CONSTRAINTS for removed widgets
-            for h in &handles {
-                HEIGHT_CONSTRAINTS.with(|hc| {
-                    if let Some(old) = hc.borrow_mut().remove(h) {
-                        unsafe {
-                            let _: () = objc2::msg_send![&*old, setActive: false];
-                        }
-                    }
-                });
+            // Phase 3: Release each removed subtree. This both frees the views
+            // (the table's strong reference was the only thing keeping them
+            // alive after removal) and retires their `HEIGHT_CONSTRAINTS`.
+            //
+            // Done after removal, not before: `release_view_tree` walks
+            // `subviews` to reach descendants, and a released view must still
+            // be reachable through the `views` snapshot we hold here.
+            for sv in views.iter() {
+                release_view_tree(sv);
             }
         }
     }
@@ -616,6 +686,10 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
             }
         }
         child.removeFromSuperview();
+        // `widgetRemoveChild` is removal, not re-parenting — the layout API has
+        // a separate `widgetReorderChild` for moves — so the child and its
+        // subtree are done. Without this the table keeps them alive forever.
+        release_view_tree(&child);
     }
 }
 

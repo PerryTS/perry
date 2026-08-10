@@ -33,7 +33,7 @@
 //! [`js_frame_metrics_mark_discontinuity`] around any deliberate pause so the
 //! next vsync starts a fresh interval.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// Retained frame-interval samples. 8192 covers ~68 s at 120 Hz / ~136 s at
@@ -59,6 +59,8 @@ struct FrameMetrics {
     longest_ms: f64,
     /// Most recent nominal frame duration reported by the driver.
     expected_ms: f64,
+    /// Frames recorded since the last automatic report.
+    frames_since_report: u64,
 }
 
 impl FrameMetrics {
@@ -72,18 +74,31 @@ impl FrameMetrics {
             dropped_frames: 0,
             longest_ms: 0.0,
             expected_ms: 0.0,
+            frames_since_report: 0,
         }
     }
 
     fn reset(&mut self) {
+        self.reset_window();
+        self.last_ts_ms = None;
+        self.expected_ms = 0.0;
+    }
+
+    /// Clear the sample window and counters but keep the interval baseline and
+    /// the known frame budget.
+    ///
+    /// Used between automatic reports so each printed line describes a distinct
+    /// interval. Preserving `last_ts_ms` matters: clearing it would drop the
+    /// frame straddling the boundary, so a run reporting every N frames would
+    /// silently lose one interval per report.
+    fn reset_window(&mut self) {
         self.samples.clear();
         self.next = 0;
         self.filled = false;
-        self.last_ts_ms = None;
         self.total_frames = 0;
         self.dropped_frames = 0;
         self.longest_ms = 0.0;
-        self.expected_ms = 0.0;
+        self.frames_since_report = 0;
     }
 
     fn push_sample(&mut self, interval_ms: f64) {
@@ -122,6 +137,7 @@ impl FrameMetrics {
         }
 
         self.total_frames += 1;
+        self.frames_since_report += 1;
         self.push_sample(interval_ms);
         if interval_ms > self.longest_ms {
             self.longest_ms = interval_ms;
@@ -140,6 +156,24 @@ impl FrameMetrics {
         let mut out = self.samples.clone();
         out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         out
+    }
+
+    /// One-line summary of the current window, or `None` if it holds no frames.
+    fn summary_line(&self) -> Option<String> {
+        let sorted = self.sorted_samples();
+        if sorted.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "[frame-stats] frames={} budget={:.2}ms p50={:.2}ms p95={:.2}ms p99={:.2}ms max={:.2}ms dropped={}",
+            self.total_frames,
+            self.expected_ms,
+            percentile_of(&sorted, 50.0),
+            percentile_of(&sorted, 95.0),
+            percentile_of(&sorted, 99.0),
+            self.longest_ms,
+            self.dropped_frames,
+        ))
     }
 }
 
@@ -201,8 +235,65 @@ pub extern "C" fn js_frame_metrics_record(timestamp_ms: f64, expected_frame_ms: 
     if !frame_metrics_enabled() {
         return;
     }
-    let mut m = METRICS.lock().unwrap_or_else(|p| p.into_inner());
-    m.record(timestamp_ms, expected_frame_ms);
+
+    let due = {
+        let mut m = METRICS.lock().unwrap_or_else(|p| p.into_inner());
+        m.record(timestamp_ms, expected_frame_ms);
+
+        let interval = auto_report_interval();
+        if interval > 0 && m.frames_since_report >= interval {
+            let line = m.summary_line();
+            m.reset_window();
+            line
+        } else {
+            None
+        }
+    };
+
+    // Printed after the lock is released. A device launch streams stderr over
+    // USB, so this write can block; holding the metrics lock across it would
+    // stall the display-link callback that is supposed to be measuring frames.
+    if let Some(line) = due {
+        eprintln!("{line}");
+    }
+}
+
+/// Frames between automatic reports (`PERRY_FRAME_STATS_INTERVAL`, default
+/// 300 — about 2.5 s at 120 Hz). `0` disables automatic reporting.
+///
+/// An iOS app has no exit at which to print a summary, and `onFrame` metrics
+/// are not reachable from TypeScript, so without this a device run collects
+/// numbers nobody can see. Each line covers the frames since the previous one,
+/// which is what makes "p99 while I was scrolling" a meaningful reading.
+fn auto_report_interval() -> u64 {
+    report_interval_flag().load(Ordering::Relaxed)
+}
+
+fn report_interval_flag() -> &'static AtomicU64 {
+    static FLAG: OnceLock<AtomicU64> = OnceLock::new();
+    FLAG.get_or_init(|| {
+        AtomicU64::new(
+            std::env::var("PERRY_FRAME_STATS_INTERVAL")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(300),
+        )
+    })
+}
+
+/// Set the automatic-report cadence in frames. `0` disables it.
+///
+/// Runtime-settable rather than env-only so a benchmark can widen the window
+/// for a long workload, and so a caller driving the metrics directly can turn
+/// the periodic output off without controlling the process environment.
+#[no_mangle]
+pub extern "C" fn js_frame_metrics_set_report_interval(frames: f64) {
+    let frames = if frames.is_finite() && frames > 0.0 {
+        frames as u64
+    } else {
+        0
+    };
+    report_interval_flag().store(frames, Ordering::Relaxed);
 }
 
 /// Drop the running interval baseline without discarding collected samples.
@@ -267,24 +358,20 @@ pub extern "C" fn js_frame_metrics_percentile(p: f64) -> f64 {
 /// without its subject ever having run.
 #[no_mangle]
 pub extern "C" fn js_frame_metrics_report() -> f64 {
-    let m = METRICS.lock().unwrap_or_else(|p| p.into_inner());
-    let sorted = m.sorted_samples();
-    let n = sorted.len();
-    if n == 0 {
-        eprintln!("[frame-stats] no frames recorded (display-link driver never ticked)");
-        return 0.0;
+    let (line, n) = {
+        let m = METRICS.lock().unwrap_or_else(|p| p.into_inner());
+        (m.summary_line(), m.samples.len())
+    };
+    match line {
+        Some(line) => {
+            eprintln!("{line}");
+            n as f64
+        }
+        None => {
+            eprintln!("[frame-stats] no frames recorded (display-link driver never ticked)");
+            0.0
+        }
     }
-    eprintln!(
-        "[frame-stats] frames={} budget={:.2}ms p50={:.2}ms p95={:.2}ms p99={:.2}ms max={:.2}ms dropped={}",
-        m.total_frames,
-        m.expected_ms,
-        percentile_of(&sorted, 50.0),
-        percentile_of(&sorted, 95.0),
-        percentile_of(&sorted, 99.0),
-        m.longest_ms,
-        m.dropped_frames,
-    );
-    n as f64
 }
 
 #[cfg(test)]
@@ -297,6 +384,9 @@ mod tests {
     fn fresh() -> std::sync::MutexGuard<'static, ()> {
         let guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         js_frame_metrics_set_enabled(1);
+        // Automatic reporting resets the window, which would silently truncate
+        // any test feeding more frames than the cadence.
+        js_frame_metrics_set_report_interval(0.0);
         js_frame_metrics_reset();
         guard
     }
@@ -437,6 +527,31 @@ mod tests {
         assert_eq!(js_frame_metrics_count(), 0.0);
         // Re-enable so the flag does not leak into another test's run.
         js_frame_metrics_set_enabled(1);
+    }
+
+    #[test]
+    fn automatic_reporting_resets_the_window_but_not_the_baseline() {
+        let _g = fresh();
+        js_frame_metrics_set_report_interval(10.0);
+
+        // 25 frames at a 10-frame cadence: two reports fire, leaving 5.
+        feed(0.0, 8.333, 25, 8.333);
+        assert_eq!(js_frame_metrics_count(), 5.0);
+
+        // The window still describes real frames — the baseline survived each
+        // report, so the straddling interval was not dropped.
+        assert!((js_frame_metrics_percentile(50.0) - 8.333).abs() < 1e-6);
+
+        js_frame_metrics_set_report_interval(0.0);
+    }
+
+    #[test]
+    fn a_zero_or_negative_report_interval_disables_automatic_reporting() {
+        let _g = fresh();
+        js_frame_metrics_set_report_interval(-5.0);
+        feed(0.0, 8.333, 50, 8.333);
+        // Nothing reset the window, so every frame is still counted.
+        assert_eq!(js_frame_metrics_count(), 50.0);
     }
 
     #[test]

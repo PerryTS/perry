@@ -143,6 +143,14 @@ pub(super) fn build_ios_app_bundle(
         })
         .unwrap_or_default();
 
+    // ProMotion opt-in. See `read_high_refresh_rate` — without this key an
+    // iPhone is capped at 60 Hz regardless of what CADisplayLink requests.
+    let promotion_block = if super::bundle_apple::read_high_refresh_rate(input, "ios") {
+        "<key>CADisableMinimumFrameDurationOnPhone</key>\n<true/>\n"
+    } else {
+        ""
+    };
+
     let encryption_exempt_plist = (|| -> Option<String> {
         let mut dir = input.canonicalize().ok()?;
         for _ in 0..5 {
@@ -252,7 +260,7 @@ pub(super) fn build_ios_app_bundle(
 <string>17.0</string>
 <key>CFBundleSupportedPlatforms</key>
 <array><string>{plist_supported_platform}</string></array>
-{dt_block}<key>UIRequiredDeviceCapabilities</key>
+{dt_block}{promotion_block}<key>UIRequiredDeviceCapabilities</key>
 <array><string>arm64</string></array>
 <key>CFBundleIcons</key>
 <dict>

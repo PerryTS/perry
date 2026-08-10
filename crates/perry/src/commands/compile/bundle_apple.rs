@@ -111,6 +111,52 @@ pub(super) fn read_app_display_name(input: &Path, platform: &str) -> Option<Stri
     None
 }
 
+/// Read the `high_refresh_rate` opt-in from `perry.toml` (`[ios]`, falling back
+/// to `[project]`).
+///
+/// Gates `CADisableMinimumFrameDurationOnPhone` in the generated Info.plist.
+/// **Without that key iOS caps an iPhone app at 60 Hz** no matter what the
+/// display link asks for, so ProMotion hardware silently reports 60 — which
+/// reads as "the framework cannot sustain 120" rather than "the bundle never
+/// opted in". iPad ProMotion has no such gate.
+///
+/// Opt-in rather than always-on: uncapped frame rates cost battery, and that is
+/// the app author's call, not the compiler's. Benchmarking is the main reason
+/// to want it.
+pub(super) fn read_high_refresh_rate(input: &Path, platform: &str) -> bool {
+    let Ok(mut dir) = input.canonicalize() else {
+        return false;
+    };
+    for _ in 0..5 {
+        let Some(parent) = dir.parent() else {
+            return false;
+        };
+        dir = parent.to_path_buf();
+        let toml_path = dir.join("perry.toml");
+        if !toml_path.exists() {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&toml_path) else {
+            return false;
+        };
+        let Ok(doc) = text.parse::<toml::Table>() else {
+            return false;
+        };
+        let from_table = |name: &str| {
+            doc.get(name)
+                .and_then(|v| v.as_table())
+                .and_then(|t| t.get("high_refresh_rate"))
+                .and_then(|v| v.as_bool())
+        };
+        // First perry.toml on the walk is the project manifest; stop there
+        // whether or not it carries the key (mirrors read_app_display_name).
+        return from_table(platform)
+            .or_else(|| from_table("project"))
+            .unwrap_or(false);
+    }
+    false
+}
+
 /// Minimal XML escape for text interpolated into an Info.plist `<string>`.
 /// Display names are user-controlled (perry.toml), so an `&` or `<` would
 /// otherwise produce a malformed plist that the bundle tooling rejects.
@@ -821,6 +867,59 @@ mod tests {
         assert_eq!(version, "3.2.1");
         // build_number may be a TOML integer — must serialize to the string.
         assert_eq!(build, "47");
+    }
+
+    /// Write a `perry.toml` with `body` and return a source path beneath it.
+    fn project_with_toml(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        std::fs::write(dir.join("perry.toml"), body).unwrap();
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let input = src.join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+        input
+    }
+
+    #[test]
+    fn high_refresh_rate_defaults_off_without_a_manifest() {
+        // The default must stay off: the key it gates uncaps the frame rate,
+        // which costs battery in every shipped app that never asked for it.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+        assert!(!read_high_refresh_rate(&input, "ios"));
+    }
+
+    #[test]
+    fn high_refresh_rate_defaults_off_when_manifest_omits_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = project_with_toml(dir.path(), "[project]\nversion = \"1.0.0\"\n");
+        assert!(!read_high_refresh_rate(&input, "ios"));
+    }
+
+    #[test]
+    fn high_refresh_rate_reads_platform_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = project_with_toml(dir.path(), "[ios]\nhigh_refresh_rate = true\n");
+        assert!(read_high_refresh_rate(&input, "ios"));
+        // The platform table must not leak across platforms.
+        assert!(!read_high_refresh_rate(&input, "tvos"));
+    }
+
+    #[test]
+    fn high_refresh_rate_falls_back_to_project_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = project_with_toml(dir.path(), "[project]\nhigh_refresh_rate = true\n");
+        assert!(read_high_refresh_rate(&input, "ios"));
+    }
+
+    #[test]
+    fn platform_table_overrides_project_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = project_with_toml(
+            dir.path(),
+            "[project]\nhigh_refresh_rate = true\n\n[ios]\nhigh_refresh_rate = false\n",
+        );
+        assert!(!read_high_refresh_rate(&input, "ios"));
     }
 
     #[test]
