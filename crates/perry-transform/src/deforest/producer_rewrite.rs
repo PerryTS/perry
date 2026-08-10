@@ -6,9 +6,10 @@ use super::*;
 /// Phase 2 — rewrite a producer's body to use the new out-param.
 /// Removes the `let out = []` line, replaces every `LocalGet(out)`
 /// that survives the analyzer (push targets, array reads on the
-/// accumulator) with `LocalGet(out_param)`, drops the trailing
-/// `return out`, and rewrites recursive calls within the consume
-/// pattern to pass the param through.
+/// accumulator) with `LocalGet(out_param)`, KEEPS the trailing
+/// `return out` (which step 4 turns into `return out_param`), and
+/// rewrites recursive calls within the consume pattern to pass the
+/// param through.
 pub fn rewrite_producer_body(
     func: &mut Function,
     info: &ProducerInfo,
@@ -27,10 +28,30 @@ pub fn rewrite_producer_body(
         arguments_object: None,
     });
 
-    // 2. Drop the trailing `return out`.
-    if matches!(func.body.last(), Some(Stmt::Return(_))) {
-        func.body.pop();
-    }
+    // 2. KEEP the trailing `return out` (#7661).
+    //
+    // It used to be dropped, so the producer fell through to an implicit
+    // `return undefined` and the caller kept the head it allocated before the
+    // call. `js_array_grow` does not grow in place: it allocates elsewhere,
+    // copies, and leaves a FORWARDING STUB at the old address. The producer's
+    // push write-back re-points its OWN slot — `out_param` — but nothing
+    // re-points the caller's binding, so `const keep = build(1000)` left `keep`
+    // holding a stub the moment the array outgrew `MIN_ARRAY_CAPACITY`.
+    //
+    // That is invisible through the runtime (every entry point resolves the
+    // chain via `clean_arr_ptr`) and fatal to any consumer that dereferences
+    // the head itself — #7612's element-shape clone read the pre-growth buffer
+    // and SIGBUS'd, and #7660 had to fix that consumer one at a time. Fixing
+    // the producer makes `js_array_refresh_local_head` an optimization for
+    // those consumers instead of a correctness obligation.
+    //
+    // Step 4 substitutes `out_local_id` -> `out_param`, so this becomes
+    // `return out_param` — the live head, after every write-back. The call-site
+    // rewrites in `call_sites.rs` assign it back over the caller's binding.
+    //
+    // `detect.rs` guarantees the shape: exactly one top-level
+    // `Stmt::Return(Some(Expr::LocalGet(out_id)))`, and it is the last
+    // top-level statement. So there is nothing else this could be keeping.
 
     // 3. Drop the leading `let out = []` (or any position where the
     //    out-local is bound).

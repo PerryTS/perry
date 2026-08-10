@@ -377,8 +377,15 @@ fn deforests_producer_called_from_class_method() {
 
     // Every call to the producer (id=1) in the method body must now match
     // the rewritten arity (1). The rewrite turns `let v = helper()` into
-    // `let v = []; helper(v);`, so the surviving call is a `Stmt::Expr`
-    // passing the accumulator. A stale `[0]` here is exactly the miscompile.
+    // `let v = []; v = helper(v);`, so the surviving call is a `Stmt::Expr`
+    // wrapping a `LocalSet` whose rhs passes the accumulator. A stale `[0]`
+    // here is exactly the miscompile.
+    //
+    // #7661 moved the call one level deeper (inside the `LocalSet`). Unwrapping
+    // it is not cosmetic: before, this walk found the call directly under
+    // `Stmt::Expr`, and a walk that did NOT unwrap would silently collect
+    // nothing and compare `[] == [1]` — a failure, which is the safe
+    // direction, but only because the expectation is non-empty.
     let method_after = &module.classes[0].methods[0];
     let mut arities = Vec::new();
     for stmt in &method_after.body {
@@ -387,6 +394,10 @@ fn deforests_producer_called_from_class_method() {
             Stmt::Expr(e) | Stmt::Throw(e) => Some(e),
             Stmt::Return(Some(e)) => Some(e),
             _ => None,
+        };
+        let init = match init {
+            Some(Expr::LocalSet(_, rhs)) => Some(rhs.as_ref()),
+            other => other,
         };
         if let Some(Expr::Call { callee, args, .. }) = init {
             if matches!(callee.as_ref(), Expr::FuncRef(1)) {
@@ -399,6 +410,130 @@ fn deforests_producer_called_from_class_method() {
         vec![1],
         "the method's producer call site must be rewritten to pass the out-param"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #7661: the producer must hand its (possibly relocated) head back, and every
+// call site must store it over the caller's binding.
+//
+// `js_array_grow` does not grow in place — it allocates elsewhere, copies, and
+// leaves a FORWARDING STUB at the old address. The producer's push write-back
+// re-points its own out-param slot; nothing re-points the caller's binding. So
+// before this fix `const keep = build(1000)` left `keep` holding a stub as soon
+// as the array outgrew `MIN_ARRAY_CAPACITY` (16) — invisible through the
+// runtime, which resolves the chain at every entry point, and fatal to emitted
+// code that dereferences the head (the #7612 / #7660 SIGBUS, at N = 17).
+//
+// These assert the HIR shape rather than behaviour on purpose: behaviour cannot
+// see it. Every runtime path resolves the chain and prints the right answer
+// either way, which is exactly why it went unnoticed.
+// ---------------------------------------------------------------------------
+
+/// A module with `function f() { const out = []; out.push(1); return out; }`
+/// and a caller `function g() { const v = f(); return v; }`.
+fn producer_and_plain_caller() -> Module {
+    let caller = Function {
+        id: 2,
+        name: "g".to_string(),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Array(Box::new(Type::Number)),
+        body: vec![
+            Stmt::Let {
+                id: 30,
+                name: "v".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Return(Some(Expr::LocalGet(30))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+    let mut module = Module::new("m");
+    module.functions = vec![make_simple_producer(), caller];
+    module
+}
+
+#[test]
+fn producer_returns_the_out_param_not_undefined() {
+    let mut module = producer_and_plain_caller();
+    run(&mut module);
+
+    let producer = module.functions.iter().find(|f| f.id == 1).unwrap();
+    let out_param = producer.params.last().expect("synthetic param").id;
+    match producer.body.last() {
+        Some(Stmt::Return(Some(Expr::LocalGet(id)))) => assert_eq!(
+            *id, out_param,
+            "the producer must return its out-param — the head AFTER every \
+             realloc write-back — not the caller's pre-growth pointer"
+        ),
+        other => panic!(
+            "producer must end in `return <out_param>`, got {other:?}. Dropping \
+             the return (the pre-#7661 behaviour) leaves the caller holding a \
+             growth-forwarding stub."
+        ),
+    }
+}
+
+#[test]
+fn plain_call_site_stores_the_returned_head_back_over_the_binding() {
+    let mut module = producer_and_plain_caller();
+    run(&mut module);
+
+    let caller = module.functions.iter().find(|f| f.id == 2).unwrap();
+    // `let v = []` then `v = f(v)`.
+    match &caller.body[0] {
+        Stmt::Let {
+            id,
+            init: Some(Expr::Array(elems)),
+            mutable,
+            ..
+        } => {
+            assert_eq!(*id, 30);
+            assert!(elems.is_empty(), "binding is seeded with an empty literal");
+            assert!(
+                *mutable,
+                "the binding is written twice now (literal, then the returned \
+                 live head), so it must be mutable even though the source said \
+                 `const`"
+            );
+        }
+        other => panic!("expected the seeding `let`, got {other:?}"),
+    }
+    match &caller.body[1] {
+        Stmt::Expr(Expr::LocalSet(id, rhs)) => {
+            assert_eq!(
+                *id, 30,
+                "the returned head must be stored back over the SAME binding"
+            );
+            match rhs.as_ref() {
+                Expr::Call { callee, args, .. } => {
+                    assert!(matches!(callee.as_ref(), Expr::FuncRef(1)));
+                    assert_eq!(args.len(), 1, "the binding is passed as the out-param");
+                    assert!(matches!(args[0], Expr::LocalGet(30)));
+                }
+                other => panic!("expected the producer call, got {other:?}"),
+            }
+        }
+        other => panic!(
+            "expected `v = f(v)`, got {other:?}. A bare `Stmt::Expr(Call)` here \
+             is the #7661 bug: the call grows the array, growth relocates, and \
+             the binding keeps the stub."
+        ),
+    }
 }
 
 #[test]

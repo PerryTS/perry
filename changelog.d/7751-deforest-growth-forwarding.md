@@ -1,0 +1,13 @@
+### Fixed
+
+- **deforestation: the caller's binding kept a growth-forwarding stub after a deforested call (#7661).** `const keep = build(1000)` left `keep` pointing at the array's *pre-growth* address. `js_array_grow` does not grow in place — it allocates elsewhere, copies, and leaves a forwarding stub behind — so the binding was stale the moment the array outgrew `MIN_ARRAY_CAPACITY` (16).
+
+  The producer half of the hazard #7660 fixed on the consumer side. Deforestation rewrites `const keep = f(n)` into `let keep = []; f(n, keep)`, handing the callee the array the caller allocated. The callee's `out.push` write-back re-points its **own** out-param slot; nothing re-pointed the caller's. The producer's `return out` was *dropped* by the rewrite, so it fell through to an implicit `return undefined` and there was no value to store back — visible in the emitted IR as `for.exit: ret double 0x7FFC000000000001` with the call's result discarded.
+
+  This is invisible to behaviour. Every runtime entry point resolves the chain through `clean_arr_ptr`, so the program prints the right answer either way, and only emitted code that dereferences the head directly can see it — which is why it surfaced as #7612's element-shape clone reading a pre-growth buffer and `SIGBUS`ing at exactly N = 17, and why #7660 had to repair that consumer individually.
+
+  **Fix:** the producer now KEEPS its `return out` — step 4's substitution turns it into `return <out_param>`, the live head after every realloc write-back — and all three call-site rewrites store the result back over the caller's binding: the non-consumer site (`keep = f(n, keep)`), the consumer-fuse site (`outer = f(args, outer)`), and pass-through recursion inside the producer. `detect.rs` already guarantees exactly one top-level `return LocalGet(out_id)` as the last statement, so there is nothing else the kept return could be. The seeded binding is emitted `mutable` because it is now written twice; leaving it `const` while storing through it would make every analysis that trusts `mutable: false` wrong.
+
+  That turns `js_array_refresh_local_head` from a correctness obligation every future consumer of a raw array head has to remember into an optimization.
+
+  **Coverage is structural, because behaviour cannot see this.** Two new `deforest/tests.rs` cases assert the producer returns its out-param and that the call site stores the result back over the same binding; both were verified to FAIL against the pre-fix transform and pass after, so they have a subject. `test-files/test_deforest_growth_forwarding.ts` exercises all three call-site shapes end-to-end (including N = 17) and says in its header that it is a smoke test, not a detector.
