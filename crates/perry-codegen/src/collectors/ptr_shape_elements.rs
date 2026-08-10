@@ -86,18 +86,25 @@
 //! when any member fails, rather than dropping the member. See
 //! [`ElementShapeFacts::group_members`].
 //!
-//! ## `numeric_fields` is deliberately not claimed
+//! ## `numeric_fields` is claimed at GROUP scope (#7770)
 //!
-//! Phase 3b's numeric-field proof is an *exhaustive reachable store* proof,
-//! which containment makes possible because no alias exists. An element group
-//! has aliases by construction: a store through one member
-//! (`r.score = "s"` — a declared field, so rule 2 permits it) takes the
-//! store-side boxed-setter exit and downgrades that slot's raw-f64 layout,
-//! and another member's `load double` claiming `JsNumber` would then read
-//! NaN-boxed string bits as a number. Group members therefore claim no
-//! numeric fields at all — the same stand-down `proven_this.rs` and
-//! `ptr_shape_returns.rs` make, for the same reason. The shape proof by
-//! itself still retires the whole guard diamond.
+//! Phase 3b's numeric-field proof is an *exhaustive reachable store* proof.
+//! A single member cannot discharge it — a sibling's `r.score = "s"` (a
+//! declared field, so rule 2 permits it) takes the store-side boxed-setter
+//! exit and downgrades that slot's raw-f64 layout, and this member's
+//! `load double` claiming `JsNumber` would then read NaN-boxed string bits
+//! as a number. But the GROUP can: E1–E5 containment bounds every reference
+//! to the group's objects to the group's own members and the provenance
+//! `new`s at the push sites, so the union of the members' stores plus every
+//! push's constructor arguments IS the reachable-store set.
+//! `ptr_shape.rs` therefore computes one numeric-field set per array root
+//! (`ptr_shape_numeric.rs::prove_group_numeric_fields`) — the constructor
+//! parameter environment resolved as the meet over ALL provenance `new`
+//! argument lists — and every member carries that same set. Group integrity
+//! keeps the claim honest: a claim only survives if every member survives,
+//! because dropping any member drops them all. (`proven_this.rs` and
+//! `ptr_shape_returns.rs` still stand down entirely: their receivers are
+//! caller-aliased, so no bounded store universe exists to union over.)
 //!
 //! ## GC contract
 //!
@@ -191,10 +198,31 @@ impl ElementShapeFacts {
         out
     }
 
-    /// Locals whose object is reachable from an array, and which therefore
-    /// must not claim numeric fields (module doc).
+    /// Locals whose object is reachable from an array (either group half).
     pub(crate) fn is_group_member(&self, local: u32) -> bool {
-        self.pushed.contains_key(&local) || self.element_reads.contains_key(&local)
+        self.member_group_root(local).is_some()
+    }
+
+    /// The array root whose group `local` belongs to, if any. A member's
+    /// object is reachable through the array, so its numeric-field claim is
+    /// the GROUP's claim (module doc, #7770), never its own.
+    pub(crate) fn member_group_root(&self, local: u32) -> Option<u32> {
+        self.pushed
+            .get(&local)
+            .or_else(|| self.element_reads.get(&local))
+            .map(|(root, _)| *root)
+    }
+
+    /// The proven element class of array root `root`.
+    pub(crate) fn root_class(&self, root: u32) -> Option<&str> {
+        self.arrays.get(&root).map(String::as_str)
+    }
+
+    /// The proven root for an ARRAY local or alias id — `Some` only when the
+    /// array it references actually carries element-shape facts.
+    pub(crate) fn proven_array_root(&self, id: u32) -> Option<u32> {
+        let root = self.array_roots.get(&id)?;
+        self.arrays.contains_key(root).then_some(*root)
     }
 }
 

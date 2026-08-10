@@ -1,14 +1,608 @@
-//! Number-by-construction proof for `collectors/ptr_shape.rs`'s numeric-field
-//! rule: does this expression evaluate to a JS Number for every input, per
-//! spec, never a string / BigInt / bool / undefined / pointer?
+//! Pass 4 of `collectors/ptr_shape.rs`: the numeric-field machinery.
+//!
+//! Four pieces, one contract. A field in `numeric_fields` licenses a bare
+//! `load double` that claims `JsNumber`/`F64` with **no coercion and no
+//! value check**, so everything here answers the same question — "is every
+//! reachable store into this slot number-producing by construction, per
+//! spec?" — never "does the declared type say number" (Perry does not
+//! enforce annotations).
+//!
+//! * [`expr_numeric_by_construction`] — the expression-level proof.
+//! * [`prove_numeric_fields`] — the per-receiver reachable-store fixpoint
+//!   (constructor chain, field initializers, method stores, in-function
+//!   stores), with constructor/method parameters resolved through the actual
+//!   argument expressions at the provenance `new`(s) / recorded call sites.
+//! * [`prove_group_numeric_fields`] (#7770) — the same proof discharged once
+//!   per element-shape-proven ARRAY: E1–E5 containment
+//!   (`collectors/ptr_shape_elements.rs`) bounds every reference to the
+//!   group's objects to the group's members and the provenance `new`s at the
+//!   push sites, so the union of their stores is exhaustive and the meet
+//!   over every push's constructor arguments resolves the parameter
+//!   environment.
+//! * [`collect_numeric_by_construction_locals`] (#7770) — locals whose every
+//!   write is number-producing (loop counters above all: `let i = 0` + `i++`),
+//!   so a provenance `new C(i, i + 1)` resolves. Same optimistic-fixpoint
+//!   shape as `collect_not_bigint_locals`, WITHOUT its declared-type leaf:
+//!   declared types stay untrusted here.
 //!
 //! Split out of `ptr_shape.rs` to stay under the 2000-line CI gate; declared
 //! there with `#[path]` so it remains a child module and can reach the
 //! collector's private items through `use super::*`.
 
 use super::*;
+
+// ── Parameter environments ─────────────────────────────────────────────────
+
+/// Parameter environment for [`expr_numeric_by_construction`].
+pub(super) enum ParamEnv<'x> {
+    /// Function scope: no parameters; const-local chasing applies.
+    None,
+    /// Method scope: params resolve through recorded call-site argument
+    /// lists (each argument evaluated in function scope).
+    Sites {
+        param_ids: &'x [u32],
+        sites: Vec<&'x [Expr]>,
+    },
+    /// Constructor scope: params pre-resolved to a numeric verdict through
+    /// the provenance `new` / `super(...)` argument chain.
+    Resolved(&'x HashMap<u32, bool>),
+}
+
+// ── The per-receiver reachable-store fixpoint ──────────────────────────────
+
+/// Greatest-fixpoint proof that every reachable store into a raw-f64-declared
+/// chain field is number-producing. Parameter-mediated stores resolve through
+/// the actual argument expressions at the provenance `new`(s) (constructor)
+/// or at every recorded call site (methods).
+///
+/// `new_arg_lists` carries ONE argument list per provenance `new`. A single
+/// rule-1 candidate has exactly one; an element group (#7770) has one per
+/// push site, and a constructor parameter is numeric only when EVERY list
+/// proves it — the meet. An empty slice means the provenance is unresolved
+/// and every parameter stays unproven.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prove_numeric_fields(
+    chain: &[&Class],
+    members: &HashSet<u32>,
+    this_stores: &[ThisStoreRecord<'_>],
+    local_stores: &[(String, StoreValue<'_>)],
+    new_arg_lists: &[&[Expr]],
+    method_calls: Option<&HashMap<String, Vec<&[Expr]>>>,
+    super_call_args: &HashMap<String, Vec<&[Expr]>>,
+    internally_invoked: &HashSet<String>,
+    not_bigint_locals: &HashSet<u32>,
+    const_local_inits: &HashMap<u32, Option<&Expr>>,
+    numeric_locals: &HashSet<u32>,
+) -> HashSet<String> {
+    let mut numeric: HashSet<String> = HashSet::new();
+    for class in chain {
+        for field in &class.fields {
+            if crate::typed_shape::type_is_raw_f64_candidate(&field.ty) {
+                numeric.insert(field.name.clone());
+            }
+        }
+    }
+    if numeric.is_empty() {
+        return numeric;
+    }
+    // Resolve the argument expressions that can flow into a given
+    // (context, param position): the provenance `new` args feed the root
+    // constructor; each parent constructor's params resolve through the
+    // recorded `super(...)` argument lists, evaluated under the CALLING
+    // constructor's (already-resolved) parameter environment. Derived-first
+    // chain order makes this a single top-down pass. The environment is
+    // computed against an EMPTY numeric-field set (strictly conservative —
+    // `super(this.x)` cannot occur, `this` is banned in super args).
+    let mut ctor_param_env: HashMap<String, HashMap<u32, bool>> = HashMap::new();
+    {
+        let empty_numeric: HashSet<String> = HashSet::new();
+        for (pos, class) in chain.iter().enumerate() {
+            let Some(ctor) = class.constructor.as_ref() else {
+                continue;
+            };
+            let mut env: HashMap<u32, bool> = HashMap::new();
+            if pos == 0 {
+                for (i, param) in ctor.params.iter().enumerate() {
+                    // Meet over every provenance `new`: a missing argument is
+                    // `undefined`, so it fails; no lists at all proves
+                    // nothing.
+                    let ok = !new_arg_lists.is_empty()
+                        && new_arg_lists.iter().all(|new_args| {
+                            new_args
+                                .get(i)
+                                .map(|a| {
+                                    expr_numeric_by_construction(
+                                        a,
+                                        &ParamEnv::None,
+                                        members,
+                                        &empty_numeric,
+                                        not_bigint_locals,
+                                        const_local_inits,
+                                        numeric_locals,
+                                        0,
+                                    )
+                                })
+                                .unwrap_or(false)
+                        });
+                    env.insert(param.id, ok);
+                }
+            } else {
+                let caller_env = chain
+                    .get(pos - 1)
+                    .and_then(|caller| ctor_param_env.get(caller.name.as_str()));
+                let lists = super_call_args.get(class.name.as_str());
+                for (i, param) in ctor.params.iter().enumerate() {
+                    let ok = match (lists, caller_env) {
+                        (Some(lists), Some(caller_env)) if !lists.is_empty() => {
+                            lists.iter().all(|args| {
+                                args.get(i)
+                                    .map(|a| {
+                                        expr_numeric_by_construction(
+                                            a,
+                                            &ParamEnv::Resolved(caller_env),
+                                            members,
+                                            &empty_numeric,
+                                            not_bigint_locals,
+                                            const_local_inits,
+                                            numeric_locals,
+                                            0,
+                                        )
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        }
+                        _ => false,
+                    };
+                    env.insert(param.id, ok);
+                }
+            }
+            ctor_param_env.insert(class.name.clone(), env);
+        }
+    }
+
+    loop {
+        let before = numeric.len();
+        let is_store_numeric = |field: &str,
+                                value: Option<&Expr>,
+                                context: Option<&(String, String, Vec<u32>)>,
+                                numeric: &HashSet<String>|
+         -> bool {
+            let _ = field;
+            let Some(value) = value else {
+                // `++`/`--` — ToNumeric of a proven-number field stays a
+                // number; if the field is currently claimed numeric the
+                // update preserves it.
+                return true;
+            };
+            let param_env: ParamEnv<'_> = match context {
+                None => ParamEnv::None,
+                Some((owner, name, param_ids)) => {
+                    if name == "constructor" {
+                        match ctor_param_env.get(owner.as_str()) {
+                            Some(env) => ParamEnv::Resolved(env),
+                            None => ParamEnv::Sites {
+                                param_ids: param_ids.as_slice(),
+                                sites: Vec::new(),
+                            },
+                        }
+                    } else {
+                        // A method that is ALSO invoked internally
+                        // (`this.m(...)` / `super.m(...)`) receives argument
+                        // expressions from method scope that the
+                        // function-scope site resolution below cannot see —
+                        // its parameters stay unproven even when every
+                        // external site is numeric (an internal
+                        // `this.m("s")` would otherwise poison a
+                        // "proven" field). Purely-external methods resolve
+                        // through their recorded call sites; purely-internal
+                        // ones have no sites and stay unproven either way.
+                        let sites: Vec<&[Expr]> = if internally_invoked.contains(name.as_str()) {
+                            Vec::new()
+                        } else {
+                            method_calls
+                                .and_then(|mc| mc.get(name))
+                                .map(|v| v.clone())
+                                .unwrap_or_default()
+                        };
+                        ParamEnv::Sites {
+                            param_ids: param_ids.as_slice(),
+                            sites,
+                        }
+                    }
+                }
+            };
+            expr_numeric_by_construction(
+                value,
+                &param_env,
+                members,
+                numeric,
+                not_bigint_locals,
+                const_local_inits,
+                numeric_locals,
+                0,
+            )
+        };
+        // Field initializers + ctor/method stores.
+        let mut retained: HashSet<String> = numeric.clone();
+        for rec in this_stores {
+            if retained.contains(&rec.field)
+                && !is_store_numeric(&rec.field, rec.value, rec.context.as_ref(), &numeric)
+            {
+                retained.remove(&rec.field);
+            }
+        }
+        for (field, sv) in local_stores {
+            if retained.contains(field) {
+                let ok = match sv {
+                    StoreValue::Update => true,
+                    StoreValue::Direct(v) => expr_numeric_by_construction(
+                        v,
+                        &ParamEnv::None,
+                        members,
+                        &numeric,
+                        not_bigint_locals,
+                        const_local_inits,
+                        numeric_locals,
+                        0,
+                    ),
+                };
+                if !ok {
+                    retained.remove(field);
+                }
+            }
+        }
+        numeric = retained;
+        if numeric.len() == before || numeric.is_empty() {
+            break;
+        }
+    }
+    numeric
+}
+
+// ── #7770: the per-element-group proof ─────────────────────────────────────
+
+/// Discharge the reachable-store proof once per element-shape-proven array.
+///
+/// Soundness rests on the same containment that makes the SHAPE proof valid
+/// (`collectors/ptr_shape_elements.rs`, E1–E5): while the facts hold, every
+/// reference to a group's objects is a vetted producer local, a licensed
+/// element-read local, or the inline `new C(...)` at a push site — an
+/// unlicensed element read disqualifies the array, and `A[i].f = v` goes
+/// through an unlicensed `IndexGet`, so neither can coexist with the facts.
+/// The reachable-store set is therefore exactly:
+///
+/// * the constructor chain + field initializers, with the parameter
+///   environment resolved as the MEET over every push's `new` argument list;
+/// * every member's in-function field stores;
+/// * every method invoked on any member, with call sites merged group-wide.
+///
+/// The result is keyed by array root; every member of a surviving group
+/// carries the same set. Claims stay honest through group integrity: any
+/// member failing rule 2 drops every member's fact, claim included. Returns
+/// no entry (never a partial one) whenever any obligation fails — the
+/// members then simply claim nothing, exactly the pre-#7770 stand-down.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prove_group_numeric_fields<'a>(
+    classes: &HashMap<String, &'a Class>,
+    module_dispatch: &ModuleDispatchFacts,
+    element_facts: &ElementShapeFacts,
+    roots: &HashMap<u32, u32>,
+    field_stores: &HashMap<u32, Vec<(String, StoreValue<'a>)>>,
+    method_calls: &HashMap<u32, HashMap<String, Vec<&'a [Expr]>>>,
+    new_args: &HashMap<u32, &'a [Expr]>,
+    element_pushes: &HashMap<u32, Vec<ElementPush<'a>>>,
+    not_bigint_locals: &HashSet<u32>,
+    const_local_inits: &HashMap<u32, Option<&'a Expr>>,
+    numeric_locals: &HashSet<u32>,
+) -> HashMap<u32, HashSet<String>> {
+    let mut out: HashMap<u32, HashSet<String>> = HashMap::new();
+    'group: for (root, members) in element_facts.group_members() {
+        let Some(class_name) = element_facts.root_class(root) else {
+            continue;
+        };
+        let chain = chain_classes(classes, class_name);
+        if chain.is_empty() {
+            continue;
+        }
+        let fields = chain_field_names(&chain);
+        let methods = chain_method_map(&chain);
+        // Merge method call sites group-wide: a method's parameter is numeric
+        // only when every site on every member passes a numeric argument.
+        let mut merged_calls: HashMap<String, Vec<&'a [Expr]>> = HashMap::new();
+        for m in &members {
+            if let Some(mc) = method_calls.get(m) {
+                for (name, sites) in mc {
+                    merged_calls
+                        .entry(name.clone())
+                        .or_default()
+                        .extend_from_slice(sites);
+                }
+            }
+        }
+        // The same obligations the `'cand` loop imposes before it trusts a
+        // method walk, re-checked here so a claim can never rest on a weaker
+        // basis than the per-candidate proof it extends.
+        if !merged_calls.is_empty() && !module_dispatch.prototype_is_stable(classes, class_name) {
+            continue;
+        }
+        let mut analysis = ThisFlowAnalysis {
+            chain: &chain,
+            fields: &fields,
+            methods: &methods,
+            visited: HashSet::new(),
+            store_records: Vec::new(),
+            super_call_args: HashMap::new(),
+            internally_invoked: HashSet::new(),
+            allow_this_in_store_values: false,
+        };
+        if !analysis.ctor_chain_safe() {
+            continue;
+        }
+        for name in merged_calls.keys() {
+            if fields.contains(name.as_str()) {
+                continue 'group;
+            }
+            let Some((owner, func)) = methods.get(name.as_str()) else {
+                continue 'group;
+            };
+            if !analysis.method_safe(owner, func) {
+                continue 'group;
+            }
+        }
+        // One argument list per push — ALL of them, or no claim. A producer
+        // whose `new_args` went unrecorded, or a push shape E2 would never
+        // have admitted, forfeits the group's claim rather than narrowing
+        // the meet.
+        let mut new_lists: Vec<&'a [Expr]> = Vec::new();
+        for push in element_pushes.get(&root).map(Vec::as_slice).unwrap_or(&[]) {
+            match push {
+                ElementPush::Inline(args) => new_lists.push(args),
+                ElementPush::Producer(v) => match new_args.get(v) {
+                    Some(args) => new_lists.push(args),
+                    None => continue 'group,
+                },
+                ElementPush::Opaque => continue 'group,
+            }
+        }
+        if new_lists.is_empty() {
+            continue;
+        }
+        // The fixpoint's member set: every group member plus every alias of
+        // one — `r2.x` read as a store value proves through the same set.
+        let member_set: HashSet<u32> = members
+            .iter()
+            .copied()
+            .chain(
+                roots
+                    .iter()
+                    .filter(|(_, r)| members.contains(r))
+                    .map(|(m, _)| *m),
+            )
+            .collect();
+        let mut merged_stores: Vec<(String, StoreValue<'a>)> = Vec::new();
+        for m in &members {
+            if let Some(fs) = field_stores.get(m) {
+                merged_stores.extend(fs.iter().cloned());
+            }
+        }
+        let store_records = std::mem::take(&mut analysis.store_records);
+        let super_call_args = std::mem::take(&mut analysis.super_call_args);
+        let internally_invoked = std::mem::take(&mut analysis.internally_invoked);
+        let numeric = prove_numeric_fields(
+            &chain,
+            &member_set,
+            &store_records,
+            &merged_stores,
+            &new_lists,
+            Some(&merged_calls),
+            &super_call_args,
+            &internally_invoked,
+            not_bigint_locals,
+            const_local_inits,
+            numeric_locals,
+        );
+        if !numeric.is_empty() {
+            out.insert(root, numeric);
+        }
+    }
+    out
+}
+
+// ── #7770: numeric-by-construction locals ──────────────────────────────────
+
+/// Locals whose every write is number-producing by construction — above all
+/// the loop counter (`let i = 0` + `i++`) that feeds a provenance
+/// `new C(i, i + 1)`.
+///
+/// Candidates are ids bound by at least one `Stmt::Let` in the region —
+/// params and `catch` bindings have no `Let`, which is what keeps
+/// caller-controlled values out. Boxed and module-global ids are excluded:
+/// their write sets are not this region's to enumerate. A `Let` with no
+/// initializer poisons (the binding is `undefined` until assigned — the same
+/// verdict `Expr::Undefined` gets as a store value). `Update` (`++`/`--`)
+/// needs no record: ToNumeric of a value every checked write proved to be a
+/// Number is that number.
+///
+/// Optimistic greatest fixpoint, converging downward exactly like
+/// `collect_not_bigint_locals`: a self-referencing write (`s = s + x`)
+/// short-circuits on the running assumption, and a TDZ self-reference
+/// (`let x = x`) is vacuously sound — the read throws, so no value is ever
+/// stored or observed.
+pub(super) fn collect_numeric_by_construction_locals<'a>(
+    stmts: &'a [Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    not_bigint_locals: &HashSet<u32>,
+    const_local_inits: &HashMap<u32, Option<&'a Expr>>,
+) -> HashSet<u32> {
+    let mut scan = WriteScan {
+        writes: HashMap::new(),
+        let_bound: HashSet::new(),
+    };
+    scan.walk_stmts(stmts);
+    let WriteScan { writes, let_bound } = scan;
+    let empty_members: HashSet<u32> = HashSet::new();
+    let empty_fields: HashSet<String> = HashSet::new();
+    let mut numeric: HashSet<u32> = let_bound
+        .into_iter()
+        .filter(|id| !boxed_vars.contains(id) && !module_globals.contains_key(id))
+        .collect();
+    loop {
+        let mut drop: Vec<u32> = Vec::new();
+        for &id in &numeric {
+            let ok = writes
+                .get(&id)
+                .map(|ws| {
+                    ws.iter().all(|w| match w {
+                        None => false,
+                        Some(e) => expr_numeric_by_construction(
+                            e,
+                            &ParamEnv::None,
+                            &empty_members,
+                            &empty_fields,
+                            not_bigint_locals,
+                            const_local_inits,
+                            &numeric,
+                            0,
+                        ),
+                    })
+                })
+                // A `let_bound` id always has its `Let` recorded; treat a
+                // missing entry as unproven rather than as vacuously true.
+                .unwrap_or(false);
+            if !ok {
+                drop.push(id);
+            }
+        }
+        if drop.is_empty() {
+            break;
+        }
+        for id in drop {
+            numeric.remove(&id);
+        }
+    }
+    numeric
+}
+
+/// Write collector for [`collect_numeric_by_construction_locals`]. Descends
+/// into closure bodies — ids are unique per lowering context, so a closure's
+/// write to an enclosing local records against the right id.
+struct WriteScan<'a> {
+    /// id -> every write's RHS; `None` = a `Let` with no initializer.
+    writes: HashMap<u32, Vec<Option<&'a Expr>>>,
+    /// ids bound by at least one `Stmt::Let` in the region.
+    let_bound: HashSet<u32>,
+}
+
+impl<'a> WriteScan<'a> {
+    fn walk_stmts(&mut self, stmts: &'a [Stmt]) {
+        for s in stmts {
+            self.walk_stmt(s);
+        }
+    }
+
+    fn walk_stmt(&mut self, s: &'a Stmt) {
+        match s {
+            Stmt::Let { id, init, .. } => {
+                self.let_bound.insert(*id);
+                self.writes.entry(*id).or_default().push(init.as_ref());
+                if let Some(e) = init {
+                    self.walk_expr(e);
+                }
+            }
+            Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
+            Stmt::Return(opt) => {
+                if let Some(e) = opt {
+                    self.walk_expr(e);
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.walk_expr(condition);
+                self.walk_stmts(then_branch);
+                if let Some(eb) = else_branch {
+                    self.walk_stmts(eb);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                self.walk_expr(condition);
+                self.walk_stmts(body);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(i) = init {
+                    self.walk_stmt(i.as_ref());
+                }
+                if let Some(c) = condition {
+                    self.walk_expr(c);
+                }
+                if let Some(u) = update {
+                    self.walk_expr(u);
+                }
+                self.walk_stmts(body);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                self.walk_stmts(body);
+                if let Some(c) = catch {
+                    self.walk_stmts(&c.body);
+                }
+                if let Some(f) = finally {
+                    self.walk_stmts(f);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                self.walk_expr(discriminant);
+                for case in cases {
+                    if let Some(t) = &case.test {
+                        self.walk_expr(t);
+                    }
+                    self.walk_stmts(&case.body);
+                }
+            }
+            Stmt::Labeled { body, .. } => self.walk_stmt(body.as_ref()),
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_) => {}
+        }
+    }
+
+    fn walk_expr(&mut self, e: &'a Expr) {
+        match e {
+            Expr::LocalSet(id, rhs) => {
+                self.writes.entry(*id).or_default().push(Some(rhs));
+                self.walk_expr(rhs);
+            }
+            // Closure bodies are `Vec<Stmt>`, invisible to the child walker.
+            Expr::Closure { body, .. } => self.walk_stmts(body),
+            _ => {
+                perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
+            }
+        }
+    }
+}
+
+// ── The expression-level proof ─────────────────────────────────────────────
+
 /// Number-by-construction: the expression's runtime value is a JS Number for
 /// every input, per spec — never a string/BigInt/bool/undefined/pointer.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn expr_numeric_by_construction(
     e: &Expr,
     param_env: &ParamEnv<'_>,
@@ -16,6 +610,7 @@ pub(super) fn expr_numeric_by_construction(
     numeric_fields: &HashSet<String>,
     not_bigint_locals: &HashSet<u32>,
     const_local_inits: &HashMap<u32, Option<&Expr>>,
+    numeric_locals: &HashSet<u32>,
     depth: usize,
 ) -> bool {
     if depth > 16 {
@@ -30,6 +625,7 @@ pub(super) fn expr_numeric_by_construction(
             numeric_fields,
             not_bigint_locals,
             const_local_inits,
+            numeric_locals,
             depth + 1,
         )
     };
@@ -44,8 +640,6 @@ pub(super) fn expr_numeric_by_construction(
         Expr::Binary { op, left, right } => match op {
             // `+` concatenates strings; both sides must be numbers.
             BinaryOp::Add => rec(left) && rec(right),
-            // `- * / %` produce BigInt only for BigInt⊗BigInt; a provably
-            // non-BigInt operand forces the Number path.
             // `- * / %` produce a BigInt only for BigInt⊗BigInt; mixing a
             // BigInt with anything else THROWS (no value is stored). ONE
             // provably-non-BigInt operand therefore forces the completed
@@ -107,6 +701,11 @@ pub(super) fn expr_numeric_by_construction(
             ..
         } => rec(then_expr) && rec(else_expr),
         Expr::Sequence(es) => es.last().map(|x| rec(x)).unwrap_or(false),
+        // `i++` / `--i` as a VALUE: `ToNumeric(old)` (± the adjustment),
+        // which is a Number unless `old` is a BigInt — exactly the
+        // not-BigInt fact. (The WRITE side is judged by
+        // `collect_numeric_by_construction_locals`, not here.)
+        Expr::Update { id, .. } => not_bigint_locals.contains(id),
         // A parameter: numeric iff every recorded call site passes a numeric
         // argument at that position (missing argument = `undefined`, not
         // numeric). No recorded sites = unproven.
@@ -124,6 +723,7 @@ pub(super) fn expr_numeric_by_construction(
                                         numeric_fields,
                                         not_bigint_locals,
                                         const_local_inits,
+                                        numeric_locals,
                                         depth + 1,
                                     )
                                 }) == Some(true)
@@ -146,9 +746,14 @@ pub(super) fn expr_numeric_by_construction(
                             numeric_fields,
                             not_bigint_locals,
                             const_local_inits,
+                            numeric_locals,
                             depth + 1,
                         );
                     }
+                    // #7770: a local every one of whose writes is
+                    // number-producing by construction — loop counters
+                    // above all.
+                    return numeric_locals.contains(id);
                 }
             }
             false

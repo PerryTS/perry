@@ -256,10 +256,15 @@ fn pushed_local_is_promoted() {
         .get(&2)
         .expect("a local whose only escape is a push into a proven array must promote");
     assert_eq!(fact.class_name, "C");
-    assert!(
-        fact.numeric_fields.is_empty(),
-        "an element-group member must never claim numeric fields: a sibling's \
-         store through the array is a reachable store this proof cannot see"
+    // #7770: the numeric claim is discharged at GROUP scope. This group's
+    // reachable stores are the (arg-less) provenance `new` and `o.x = 1`,
+    // both numeric, so the claim matches what the same class gets as a plain
+    // rule-1 candidate. The sibling-store direction has its own red tests in
+    // `ptr_shape_group_numeric` below.
+    assert_eq!(
+        fact.numeric_fields,
+        ["x", "y"].iter().map(|s| s.to_string()).collect(),
+        "a surviving group's members carry the group-wide numeric verdict"
     );
 }
 
@@ -497,9 +502,14 @@ fn bounded_element_read_is_provenance() {
         .get(&6)
         .expect("an in-bounds `a[i]` binding must be a Ptr<Shape> candidate");
     assert_eq!(fact.class_name, "C");
-    assert!(
-        fact.numeric_fields.is_empty(),
-        "an element read is aliased through the array by construction"
+    // #7770: the element read carries the GROUP's numeric verdict — here the
+    // only reachable stores are the arg-less provenance `new`'s (none), so
+    // both raw-f64-declared fields survive, exactly as they would on a plain
+    // rule-1 candidate of the same class.
+    assert_eq!(
+        fact.numeric_fields,
+        ["x", "y"].iter().map(|s| s.to_string()).collect(),
+        "a licensed `a[i]` binding carries the group-wide numeric verdict"
     );
 }
 
