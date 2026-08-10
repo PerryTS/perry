@@ -11687,6 +11687,7 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     let public = "perry_method_typed_f64_receiver_method_ts__Point__score";
     let generic_body = "perry_method_typed_f64_receiver_method_ts__Point__score$generic";
     let typed = "perry_method_typed_f64_receiver_method_ts__Point__score$typed_f64_recv";
+    let pshape_body = "perry_method_typed_f64_receiver_method_ts__Point__score$pshape";
     let caller = "perry_fn_typed_f64_receiver_method_ts__probe";
     let typed_ir = defined_function_ir_section(&ir, typed);
     let caller_ir = defined_function_ir_section(&ir, caller);
@@ -11724,10 +11725,51 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
         method_guard < field_guard && field_guard < typed_call,
         "receiver clone must run only after method-direct and raw-f64 field guards:\n{caller_ir}"
     );
+    // #7506: this used to assert the guard-failure edge calls `$generic` BY
+    // NAME, and it drifted — the edge now calls `$pshape`, a Ptr<Shape> clone.
+    // That is a refinement, not a miscompile, but only for a reason a
+    // symbol-presence check cannot express, so the assertion is re-pointed at
+    // the PROPERTY the composition has to preserve (the #7492 shape).
+    //
+    // The three outcomes must stay three:
+    //
+    //   1. method-direct guard fails  -> fully dynamic `js_native_call_method_by_id`
+    //   2. raw-f64 field guard passes -> `$typed_f64_recv`, which raw-loads the
+    //      receiver's slots with NO coercion
+    //   3. raw-f64 field guard FAILS  -> a clone that may use the shape's slot
+    //      offsets but must NOT assume the slots hold canonical raw f64
+    //
+    // What makes (3) sound is not which symbol it is, it is that the callee
+    // coerces what it loads. `$pshape` does: it emits `inttoptr` +
+    // `getelementptr` + `load double` — the shape guarantees the OFFSETS — and
+    // then routes every loaded slot through `js_number_coerce`, which is
+    // exactly the right handling for a slot that may hold a NaN-boxed value.
+    // `$generic` is also acceptable here; what must never appear on this edge
+    // is `$typed_f64_recv`, whose whole premise is the guard that just failed.
+    let failure_edge_callee = [generic_body, pshape_body]
+        .into_iter()
+        .find(|sym| caller_ir.contains(&format!("call double @{sym}(")))
+        .unwrap_or_else(|| {
+            panic!(
+                "raw-f64 field guard failure must reach a clone that does not \
+                 assume raw-f64 slots (`$generic` or `$pshape`):\n{caller_ir}"
+            )
+        });
     assert!(
-        caller_ir.contains(&format!("call double @{generic_body}(")),
-        "receiver field or numeric arg guard failure should call the generic method body:\n{caller_ir}"
+        !caller_ir.contains(&format!("call double @{typed}(double ")),
+        "the guard-failure edge must not reach the raw-f64 receiver clone \
+         (that clone is only valid when the guard PASSED):\n{caller_ir}"
     );
+    if failure_edge_callee == pshape_body {
+        let pshape_ir = defined_function_ir_section(&ir, pshape_body);
+        assert!(
+            pshape_ir.contains("call double @js_number_coerce("),
+            "the Ptr<Shape> clone reached on raw-f64 guard FAILURE must coerce \
+             every slot it loads — without that it is the typed clone under \
+             another name, and a receiver whose fields are not raw f64 would \
+             take raw loads anyway:\n{pshape_ir}"
+        );
+    }
     assert!(
         caller_ir.contains("call double @js_native_call_method_by_id"),
         "method-direct guard failure should retain dynamic method fallback:\n{caller_ir}"

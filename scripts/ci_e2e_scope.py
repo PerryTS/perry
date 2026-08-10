@@ -125,6 +125,13 @@ _CODEGEN_SUITES = [
     "macos_bundle_chdir_gate",
     "manifest_consistency",
     "native_proof_buffer_views",
+    # #7506/#7245: held out until its one failing test was triaged. The
+    # composition it guards had drifted from three named callees to three
+    # PROPERTIES (the guard-failure edge now reaches `$pshape`, which coerces
+    # what it loads, rather than `$generic`), so the test asserted a symbol that
+    # no longer had to be there. Re-pointed at the property; 262/262 green, and
+    # the suite belongs in the per-PR map rather than in the exclusions.
+    "native_proof_regressions",
     "node_test_mock_property_presence",
     "perry_builtin_name_collision",
     "private_guard_declaring_class",
@@ -167,13 +174,6 @@ SUITE_EXCLUSIONS = [
         "large_object_barriers",
         "large_local_array_push_inbounds_store_emits_precise_slot_barrier",
         "#7708 — red on main; the other 2 tests in this suite pass.",
-    ),
-    (
-        "perry-codegen",
-        "native_proof_regressions",
-        "typed_f64_receiver_method_clone_raw_loads_after_composed_guards",
-        "#7506 — the guard-failure edge no longer calls $generic; miscompile or "
-        "intentional collapse is an open question. The other 261 tests pass.",
     ),
 ]
 
