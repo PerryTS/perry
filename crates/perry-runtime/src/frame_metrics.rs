@@ -216,6 +216,20 @@ pub fn frame_metrics_enabled() -> bool {
     enabled_flag().load(Ordering::Relaxed)
 }
 
+/// C-ABI view of [`frame_metrics_enabled`].
+///
+/// Platform UI crates must reach the runtime through the C ABI rather than as
+/// a Rust path — see the note in `perry-ui-ios/src/frame_driver.rs` — so the
+/// predicate needs an `extern "C"` form.
+#[no_mangle]
+pub extern "C" fn js_frame_metrics_enabled() -> i32 {
+    if frame_metrics_enabled() {
+        1
+    } else {
+        0
+    }
+}
+
 /// Enable (`1`) or disable (`0`) collection. Disabling does not clear samples
 /// already collected; pair with [`js_frame_metrics_reset`] to start clean.
 #[no_mangle]

@@ -43,11 +43,27 @@ use objc2_foundation::{NSObject, NSRunLoop, NSRunLoopCommonModes};
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 use std::cell::{Cell, RefCell};
 
-use perry_runtime::frame::{js_frame_has_pending, js_frame_tick};
-use perry_runtime::frame_metrics::{
-    frame_metrics_enabled, js_frame_metrics_mark_discontinuity, js_frame_metrics_record,
-};
-use perry_runtime::timer::js_timer_now;
+// Declared through the C ABI, NOT as `use perry_runtime::…` Rust calls, and
+// this is load-bearing rather than stylistic — it is the same convention every
+// runtime entry point in `crate::app` follows.
+//
+// `perry-ui-ios` depends on `perry-runtime` as an rlib, while the final binary
+// also links `libperry_runtime.a`. Calling a runtime function as a Rust path
+// instantiates a SECOND copy of that code inside this crate, with its own
+// thread-local arena, its own GC state and its own statics. Frame callbacks
+// then register in one copy's queue while the driver drains the other's, and a
+// pointer allocated by one allocator is freed by the other — which on device
+// aborts with `malloc: pointer being freed was not allocated`.
+//
+// Going through `extern "C"` binds to the one runtime in the linked image.
+extern "C" {
+    fn js_frame_tick(timestamp_ms: f64) -> i32;
+    fn js_frame_has_pending() -> i32;
+    fn js_frame_metrics_record(timestamp_ms: f64, expected_frame_ms: f64);
+    fn js_frame_metrics_mark_discontinuity();
+    fn js_frame_metrics_enabled() -> i32;
+    fn js_timer_now() -> f64;
+}
 
 thread_local! {
     /// The installed link, retained so pause state can be updated from the
@@ -79,7 +95,7 @@ fn to_app_timeline_ms(media_time_ms: f64) -> f64 {
         if let Some(pair) = b.get() {
             pair
         } else {
-            let pair = (media_time_ms, js_timer_now());
+            let pair = (media_time_ms, unsafe { js_timer_now() });
             b.set(Some(pair));
             pair
         }
@@ -111,8 +127,10 @@ define_class!(
                 let expected_ms = link.duration() * 1000.0;
 
                 let now_ms = to_app_timeline_ms(timestamp_ms);
-                js_frame_metrics_record(now_ms, expected_ms);
-                js_frame_tick(now_ms);
+                unsafe {
+                    js_frame_metrics_record(now_ms, expected_ms);
+                    js_frame_tick(now_ms);
+                }
             }));
         }
     }
@@ -131,7 +149,7 @@ impl PerryFrameLinkTarget {
 /// a scrolling benchmark has zero frame callbacks and is exactly the workload
 /// worth measuring — so enabled metrics keep the link awake on their own.
 fn should_run() -> bool {
-    js_frame_has_pending() != 0 || frame_metrics_enabled()
+    unsafe { js_frame_has_pending() != 0 || js_frame_metrics_enabled() != 0 }
 }
 
 /// Install the display link on the main run loop. Call once, from app startup,
@@ -154,7 +172,7 @@ pub fn install() {
 
         // Under measurement, ask for the display's maximum cadence rather than
         // ProMotion's adaptive default.
-        if frame_metrics_enabled() {
+        if unsafe { js_frame_metrics_enabled() != 0 } {
             // Ask for the top of the ProMotion range and let the system clamp
             // to what the display can actually do — a 60 Hz device clamps this
             // to 60. Expressed as a range rather than read off `UIScreen`
@@ -196,7 +214,7 @@ pub fn poll_pause_state() {
             // The idle gap across a pause is not a frame. Without this the
             // first tick after resuming reports the whole idle period as one
             // enormous interval and poisons the p99.
-            js_frame_metrics_mark_discontinuity();
+            unsafe { js_frame_metrics_mark_discontinuity() };
         }
     });
 }

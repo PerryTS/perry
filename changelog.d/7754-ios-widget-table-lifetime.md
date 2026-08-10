@@ -25,4 +25,10 @@
 
 - **Frame stats report periodically** (`PERRY_FRAME_STATS_INTERVAL`, default 300 frames; `0` disables). An iOS app has no exit at which to print a summary and the metrics are not reachable from TypeScript, so a device run would otherwise collect numbers nobody could see. Each line covers the frames since the previous one, which is what makes "p99 while I was scrolling" a meaningful reading. The interval is also runtime-settable via `js_frame_metrics_set_report_interval`.
 
-- **`benchmarks/ios-ui/`** — a frame-time benchmark app cycling through idle, property-updates, add/remove, animation and text-heavy phases, printing a marker before each so `[frame-stats]` lines are attributable to a workload.
+- **`benchmarks/ios-ui/`** — a frame-time benchmark app cycling through idle, property-updates, add/remove, animation and text-heavy phases, printing a marker before each so `[frame-stats]` lines are attributable to a workload. Plus two isolation probes (`isolate_churn.ts`, `isolate_frame.ts`) that split structural churn from the frame driver; they are what localized the crash described below.
+
+### Note for platform UI crates
+
+A platform UI crate must reach `perry-runtime` through the **C ABI**, never as a Rust path. `perry-ui-ios` depends on `perry-runtime` as an rlib while the final binary also links `libperry_runtime.a`; calling a runtime function as `perry_runtime::foo()` instantiates a *second copy* of that code inside the UI crate, with its own thread-local arena, GC state and statics. Frame callbacks then register in one copy's queue while the driver drains the other's, and memory allocated by one allocator is freed by the other — which aborts on device with `malloc: pointer being freed was not allocated`.
+
+This was hit while developing the display-link driver above (it used `use perry_runtime::frame::…`) and cost a device-crash hunt to localize, because the failure is timing-dependent: an early build ran two full benchmark cycles cleanly before later builds aborted seconds after launch. Every runtime entry point in `perry-ui-ios/src/app.rs` was already declared `extern "C"` for exactly this reason; the convention is load-bearing, not stylistic. Type-only uses (`perry_runtime::string::StringHeader` for a pointer cast) are fine — they instantiate no code.
