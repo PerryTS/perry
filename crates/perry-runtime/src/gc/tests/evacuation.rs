@@ -1004,9 +1004,9 @@ fn test_evacuated_old_parent_re_remembers_young_child_canary() {
 /// nothing from one that moved this object, and the address without the counter
 /// cannot tell a copying minor from any other reason a slot changed.
 ///
-/// Zeal is what turns forced evacuation on here because `ZealGuard` is
-/// thread-local; an `EnvVarGuard` would set a process-global every other test
-/// in this crate shares.
+/// A resolved seed is what turns forced evacuation on here because
+/// `ScheduleGuard` is thread-local; an `EnvVarGuard` would set a process-global
+/// every other test in this crate shares.
 #[test]
 fn explicit_gc_under_forced_evacuation_runs_a_moving_minor() {
     // NB: deliberately NOT `copying_nursery_isolation_lock()`. That guard is
@@ -1016,10 +1016,13 @@ fn explicit_gc_under_forced_evacuation_runs_a_moving_minor() {
     // copying-minor tests use for exactly this shape.
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _zeal = super::super::zeal::ZealGuard::set(true);
+    let _schedule = super::super::schedule::ScheduleGuard::set(
+        7,
+        super::super::schedule::rate_threshold(1.0),
+    );
     assert!(
         gc_force_evacuate_enabled(),
-        "test premise: zeal must imply forced evacuation"
+        "test premise: a resolved seed must imply forced evacuation"
     );
 
     let frame = js_shadow_frame_push(1);

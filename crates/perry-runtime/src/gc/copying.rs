@@ -1569,7 +1569,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // #7604: the process-wide liveness counters. A copying minor ran, and this
     // is how much it actually relocated -- the only evidence that distinguishes
     // "the instrument was armed" from "the instrument fired".
-    super::zeal::note_copying_minor_moved(
+    super::instruments::note_copying_minor_moved(
         collector.stats.copied_objects,
         collector.stats.promoted_objects,
     );

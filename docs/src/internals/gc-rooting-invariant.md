@@ -47,7 +47,7 @@ wrong:
   dereferenced;
 - **no runtime GC probe can see it.** At the moment of the collection there is
   nothing for the collector to find, so a from-space scan, a verify-roots pass
-  and a zeal run all come back clean. `PERRY_GC_VERIFY_EVACUATION` checks that
+  and a rate-1 seeded run all come back clean. `PERRY_GC_VERIFY_EVACUATION` checks that
   reachable slots were forwarded; it cannot check a register it does not know
   exists;
 - it is **visible by default only where a poll is emitted.** The back-edge poll
@@ -124,7 +124,7 @@ not intermittently, suggests this class rather than a stale register.
 
 **`scripts/gc_root_dominance_check.py` is structurally blind to this class** — it
 reads emitted LLVM IR and cannot see a runtime table. The instruments that catch it
-are `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
+are `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
 on a real workload. When adding a cache of a heap pointer, register it in
 `gc_register_mutable_root_scanner` in `gc/mod.rs` in the same commit.
 
@@ -151,7 +151,7 @@ evidence for any of them:**
   and 31 stale uses were dropped by `--moving-only`. **Audit these sets against
   what codegen actually emits, the way #7227 audits `ALLOC_RE`.**
 
-For the classes above, the instruments that catch them are the zeal/quarantine
+For the classes above, the instruments that catch them are the schedule/quarantine
 arms below and a *dependency-scale* workload — #7280 records 25 curated corpus
 files passing while 20 lines of stock zod fail.
 
@@ -361,21 +361,23 @@ python3 scripts/gc_root_dominance_check.py .perry-trace/llvm \
 
 From #7196:
 
-- `PERRY_GC_ZEAL=1` — collect at safepoints, allocation-paced (#7728): one forced
-  collection per `PERRY_GC_ZEAL_ALLOC_KB` (default 4) of new nursery material.
-  Slow, thorough. Add `PERRY_GC_ZEAL_ALLOC_KB=0` for the literal every-poll mode
+- `PERRY_GC_SCHEDULE_RATE=1` (with a seed) — collect at every candidate
+  safepoint, allocation-paced (#7728): one candidate per
+  `PERRY_GC_SCHEDULE_ALLOC_KB` (default 4) of new nursery material. Slow,
+  thorough. Add `PERRY_GC_SCHEDULE_ALLOC_KB=0` for the literal every-poll mode
   when the window you are hunting executes only once — it is far slower.
 - `PERRY_GC_PROTECT_FROMSPACE=1` — `mprotect` from-space after evacuation so a
   stale read faults immediately instead of reading plausible garbage.
 - `PERRY_GC_FROMSPACE_SCAN_ABORT` — now actually runs.
 - `PERRY_GC_SCHEDULE_SEED=<u64>` (+ `PERRY_GC_SCHEDULE_RATE`, default `0.05`) —
-  collect on a deterministic pseudo-random schedule instead of at every
-  safepoint. Reach for this when zeal is *too* blunt: on a workload whose timing
-  zeal distorts enough to kill it somewhere uninteresting, and — more often —
-  when you need the failure to come back. The schedule is a pure function of
-  `(seed, per-thread safepoint ordinal)`, so a seed that fails is a reproducer,
-  which is what turns "1 run in 60" into something you can bisect against.
-  `scripts/gc_schedule_fuzz.sh <binary> [seeds]` sweeps seeds and prints a
+  collect on a deterministic pseudo-random schedule. At `RATE=1` it collects at
+  every safepoint: slow, thorough, maximum pressure. Drop the rate when that is
+  *too* blunt — on a workload whose timing it distorts enough to kill somewhere
+  uninteresting — and the schedule thins out without losing the property that
+  matters. The schedule is a pure function of `(seed, per-thread safepoint
+  ordinal)`, so a seed that fails is a reproducer, which is what turns "1 run in
+  60" into something you can bisect against.
+  `scripts/gc_schedule_fuzz.sh <binary> [seed-count]` sweeps seeds and prints a
   reproduce command per failure.
 
 > **A rate is not a substitute for a schedule.** Re-running one binary 60 times

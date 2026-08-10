@@ -29,13 +29,13 @@ pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 /// catch a misdeclaration, but only if the workload actually holds a misdeclared
 /// object across a collection, and it is easy to build one that never does:
 /// #7635 forced every JSON-parsed record to `POINTER_FREE` while it held heap
-/// strings and got byte-identical correct output under `PERRY_GC_ZEAL=1
+/// strings and got byte-identical correct output under `PERRY_GC_SCHEDULE_RATE=1
 /// PERRY_GC_PROTECT_FROMSPACE=1` and `PERRY_GC_FORCE_EVACUATE=1`, because
 /// `js_json_parse` is LAZY for 1 KB–16 MB top-level arrays (`json_tape`) and the
 /// probe read its records only after the last GC. Under `PERRY_JSON_TAPE=0` the
 /// same sabotage SIGSEGVs. So:
 ///
-/// - "clean under zeal + from-space protect" is evidence only once you have
+/// - "clean at rate 1 + from-space protect" is evidence only once you have
 ///   shown the misdeclared object EXISTED during a collection;
 /// - `PERRY_GC_FROMSPACE_SCAN=1` is the instrument to prefer — its
 ///   whole-payload word scan consults no layout state, and it reported the

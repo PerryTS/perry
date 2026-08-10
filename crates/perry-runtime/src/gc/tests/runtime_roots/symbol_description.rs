@@ -76,7 +76,7 @@ fn a_symbols_description_survives_reclamation_of_the_string_it_came_from() {
     // whose collection point this assertion describes, exactly as the
     // `debt_pacer` tests do. The moving default's rooting coverage for these
     // helpers is the gap suite's `test_gap_gc_*_rooting.ts` cases plus the
-    // zeal + from-space-protect runs, not this vehicle.
+    // rate-1 schedule + from-space-protect runs, not this vehicle.
     let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

@@ -12,9 +12,10 @@
 //!    `gc()`-driven test for months because only its ON arm was ever asserted,
 //!    and the ON arm did nothing.
 //!
-//! A third claim — that the density is actually tunable — is what separates this
-//! from zeal, so the realised rate is measured against the requested one instead
-//! of being taken on trust from the arithmetic.
+//! A third claim — that the density is actually tunable — is what lets one knob
+//! span everything from normal pacing to a collection at every safepoint, so the
+//! realised rate is measured against the requested one instead of being taken on
+//! trust from the arithmetic.
 
 use super::super::schedule::*;
 use super::super::*;
@@ -89,7 +90,7 @@ fn rate_zero_never_collects_and_rate_one_always_does() {
         );
         assert!(
             schedule_hit(12345, counter, always),
-            "rate 1 must select every safepoint — zeal density, exactly \
+            "rate 1 must select EVERY safepoint — 100% density, exactly \
              (counter={counter})"
         );
     }
@@ -150,9 +151,10 @@ fn adjacent_seeds_explore_different_schedules() {
     }
 }
 
-/// The tunable density is what makes this a middle setting rather than a second
-/// zeal. Measured, because a threshold computed with the wrong exponent still
-/// produces a perfectly deterministic schedule and would pass every test above.
+/// The tunable density is what lets one knob reach every setting between normal
+/// pacing and a collection at every safepoint. Measured, because a threshold
+/// computed with the wrong exponent still produces a perfectly deterministic
+/// schedule and would pass every test above.
 #[test]
 fn realised_density_tracks_the_requested_rate() {
     const N: u64 = 200_000;
@@ -228,6 +230,7 @@ fn the_schedule_collects_at_a_safepoint_with_no_pressure_due() {
     );
 }
 
+
 /// The complement: mode ON but the schedule declining. This is the arm that
 /// distinguishes "seeded schedule" from "collect at every safepoint with extra
 /// steps" — if a declined safepoint collected anyway, every seed would behave
@@ -296,12 +299,11 @@ fn a_blocked_safepoint_consumes_no_schedule_slot() {
 
 /// A scheduled minor that leaves survivors in place would move nothing, so it
 /// could not surface a stale-pointer bug at all — the mode would be a knob whose
-/// name promises relocation stress and whose effect is sweep pressure.
-///
-/// (This test originally also asserted the schedule loses to an explicit
-/// `PERRY_GEN_GC_EVACUATE=0`. That knob was DELETED in #7611 — its one unique
-/// effect was vetoing forced evacuation, i.e. silently disarming exactly the
-/// instruments this mode joins — so the veto branch is gone with it.)
+/// name promises relocation stress and whose effect is sweep pressure. A
+/// resolved seed therefore implies forced evacuation, UNCONDITIONALLY:
+/// `PERRY_GEN_GC_EVACUATE`, whose `=0` an earlier draft granted precedence over
+/// the seed, was deleted by #7611 as the one way an ambient environment
+/// variable could silently turn a #7154 instrument into a no-op.
 #[test]
 fn the_schedule_implies_forced_evacuation() {
     let _off = ScheduleGuard::off();
@@ -309,7 +311,7 @@ fn the_schedule_implies_forced_evacuation() {
     let _on = ScheduleGuard::set(7, rate_threshold(1.0));
     assert!(
         gc_force_evacuate_enabled(),
-        "a resolved seed must force evacuation (force_off={off})"
+        "a resolved seed must force evacuation in every environment (force_off={off})"
     );
 }
 
@@ -322,7 +324,7 @@ fn unset_is_inert_for_evacuation_policy() {
     let baseline = matches!(
         std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
         Ok("1") | Ok("on") | Ok("true")
-    ) || super::super::gc_zeal_enabled();
+    );
     assert_eq!(
         gc_force_evacuate_enabled(),
         baseline,

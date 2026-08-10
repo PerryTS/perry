@@ -32,7 +32,8 @@
 //!
 //! `setTimeout(() => …, churn())` is legal JS — the delay is an arbitrary
 //! expression — so `%r8` crosses a real user call with back-edge polls while
-//! nothing roots it. Under `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1` the
+//! nothing roots it. Under `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1
+//! PERRY_GC_PROTECT_FROMSPACE=1` the
 //! baseline throws #7210's own symptom text, `The "callback" argument must be of
 //! type function. Received an instance of Object`, where node prints the
 //! scheduled timer.

@@ -1134,7 +1134,7 @@ fn a_deferral_arms_the_poll_word_and_draining_disarms_it() {
 #[test]
 fn an_unarmed_poll_touches_nothing() {
     let _isolation = GcTestIsolationGuard::new();
-    let _zeal = super::super::zeal::ZealGuard::set(false);
+    let _schedule = super::super::schedule::ScheduleGuard::off();
     crate::gc::set_safepoint_pending(false);
     let restore = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
     crate::gc::PERRY_GC_POLL_ARMED.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -1158,53 +1158,77 @@ fn an_unarmed_poll_touches_nothing() {
     );
 }
 
-/// Zeal's contract is a collection at EVERY safepoint, not only at ones an
-/// alloc-point trigger already deferred. That is expressible only if the word
-/// stays armed with nothing pending, so zeal owns a permanent arm.
+/// The seeded schedule selects among safepoints an alloc-point trigger did NOT
+/// already defer. That is expressible only if the poll word stays armed with
+/// nothing pending, so a resolved seed owns a permanent arm — and a run
+/// WITHOUT a seed must give that arm back, or every program pays for the slow
+/// path forever.
 ///
-/// Without this, `PERRY_GC_ZEAL=1` would silently become a no-op on the poll
-/// path: every back-edge would read zero, skip the call, and force nothing —
-/// and `zeal_liveness_report` would be left to report the vacuity after the
+/// Without the first half, `PERRY_GC_SCHEDULE_SEED` silently becomes a no-op on
+/// the poll path: every back-edge reads zero, skips the call and forces
+/// nothing, leaving `schedule_liveness_report` to report the vacuity after the
 /// fact instead of the instrument simply working.
 ///
-/// The release half is asserted, not narrated. `ZealGuard::set(true)` arms the
-/// process-global word; if its `Drop` ever stopped giving that arm back, the
-/// word would stay non-zero for the life of the test binary and every later
-/// test would silently take the poll's slow path — with this test still green,
-/// because it only ever looked INSIDE the scope. A test that cannot fail is not
-/// a test.
+/// Both directions run the REAL resolution (`resolve_poll_seed`) rather than
+/// reading the startup value, because the startup value is 1 whatever the mode
+/// is — an assertion against it passes without the guard having done anything,
+/// and fails outright if some earlier test in this binary already resolved the
+/// seed. That is why the resolution is a resettable flag rather than a
+/// `std::sync::Once`.
 #[test]
-fn zeal_holds_the_poll_word_armed_with_nothing_pending() {
+fn the_startup_seed_is_kept_only_for_a_resolved_seed() {
     let _isolation = GcTestIsolationGuard::new();
     crate::gc::set_safepoint_pending(false);
-    let base = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+
+    // The word is process-global; put it back whatever this test proves.
+    let restore = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+    let seed_armed = |armed: u32| {
+        crate::gc::PERRY_GC_POLL_ARMED.store(armed, std::sync::atomic::Ordering::Relaxed);
+        super::super::poll_arm::reset_poll_seed_for_test();
+    };
+
+    // WITH a seed: resolution must KEEP the startup arm.
+    seed_armed(1);
     {
-        let _zeal = super::super::zeal::ZealGuard::set(true);
-        assert_eq!(
-            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
-            base + 1,
-            "zeal must keep the poll reachable even with no deferral outstanding"
+        let _schedule = super::super::schedule::ScheduleGuard::set(
+            7,
+            super::super::schedule::rate_threshold(1.0),
+        );
+        super::super::poll_arm::resolve_poll_seed();
+        assert!(
+            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "a resolved seed must keep the poll reachable with no deferral \
+             outstanding — released, every back-edge reads zero and the mode \
+             selects nothing at all"
         );
     }
-    // And it gives the arm back, so one zeal test does not leave every later
-    // test in this binary paying for the slow path.
-    assert_eq!(
-        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
-        base,
-        "dropping the ZealGuard must release the arm it took — a leaked arm \
-         pins the poll on for the rest of the process, and nothing else in this \
-         binary would notice"
-    );
+
+    // WITHOUT one: resolution must RELEASE it, or the poll's fast path stays
+    // needlessly live for the rest of the process.
+    seed_armed(1);
+    {
+        let _schedule = super::super::schedule::ScheduleGuard::off();
+        super::super::poll_arm::resolve_poll_seed();
+        assert_eq!(
+            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "with no seed resolved the startup arm must be given back"
+        );
+    }
+
+    crate::gc::PERRY_GC_POLL_ARMED.store(restore, std::sync::atomic::Ordering::Relaxed);
+    super::super::poll_arm::reset_poll_seed_for_test();
     crate::gc::set_safepoint_pending(false);
 }
 
-/// #7781: the schedule's mirror of the zeal test above, and the regression
+/// #7781: the regression
 /// test for the gap that made `PERRY_GC_SCHEDULE_RATE=1` an event-loop-only
-/// instrument: on #7606's reproduction it saw SIX safepoints against zeal's
-/// 9,648 loop polls, because nothing armed the poll word for the mode whose
-/// decision lives inside the safepoint the word gates.
+/// instrument: on #7606's reproduction it saw SIX safepoints against the
+/// 9,648 loop polls the retired every-safepoint instrument reached, because
+/// nothing armed the poll word for the mode whose decision lives inside the
+/// safepoint the word gates.
 #[test]
-fn the_schedule_holds_the_poll_word_armed_like_zeal() {
+fn the_schedule_holds_the_poll_word_armed() {
     let _isolation = GcTestIsolationGuard::new();
     crate::gc::set_safepoint_pending(false);
     let base = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);

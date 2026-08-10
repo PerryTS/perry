@@ -84,7 +84,7 @@ fn shape_template_element_survives_the_date_field_allocation() {
     // correctly refuses to certify an empty run. `force_alloc_point_minor_pacing`
     // is the combination this test was written against and the only one in which
     // both halves hold. The moving default's rooting coverage for these helpers
-    // is the gap suite's `test_gap_gc_*_rooting.ts` cases plus the zeal +
+    // is the gap suite's `test_gap_gc_*_rooting.ts` cases plus the rate-1 schedule +
     // from-space-protect runs, not this vehicle.
     let _alloc_point_pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);

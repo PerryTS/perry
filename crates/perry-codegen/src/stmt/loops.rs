@@ -5425,8 +5425,8 @@ pub(crate) fn emit_gc_loop_safepoint(
 /// return without doing anything (`perry-runtime/src/gc/poll_arm.rs`), so the
 /// guard is not a heuristic and does not change when a collection happens: the
 /// word is armed by the same transition that sets `GC_SAFEPOINT_PENDING`, and
-/// under `PERRY_GC_ZEAL` it is armed for the life of the process so zeal still
-/// forces a collection at every poll.
+/// under `PERRY_GC_SCHEDULE_SEED` it is armed for the life of the process so the
+/// seeded schedule still sees every poll it is entitled to select.
 ///
 /// The load is **volatile** for one reason: this word is written by the runtime
 /// from calls LLVM cannot see through, and a poll whose load got hoisted out of

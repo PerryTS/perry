@@ -1089,7 +1089,7 @@ pub unsafe extern "C" fn js_new_function_construct(
         // moves the instance and this arm returns the pre-move address;
         // reproduced by `new inst.ctor(x)` where `inst.ctor` is a plain
         // function, 200/200 iterations wrong under
-        // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1`.
+        // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`.
         let scope = crate::gc::RuntimeHandleScope::new();
         let inst_handle = scope.root_nanbox_f64(nan_boxed);
         let prev_this = crate::object::js_implicit_this_get();
@@ -1440,7 +1440,8 @@ unsafe fn construct_registered_class_ref(
     // function returns the PRE-MOVE address. Every field the constructor wrote
     // then reads back as garbage through the stale handle — measured on
     // `new inst.ctor(x)` under
-    // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1`, 200/200 iterations wrong,
+    // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`,
+    // 200/200 iterations wrong,
     // and as a `signal 10` on retired from-space under
     // `PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`.
     //
@@ -1701,7 +1702,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     // `nan_boxed` and the three displaced cell values cross a user
     // constructor body. Reproduced by
     // `Reflect.construct(plainFn, [x], otherFn)`, 200/200 iterations wrong
-    // under `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1`.
+    // under `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`.
     let scope = crate::gc::RuntimeHandleScope::new();
     let inst_handle = scope.root_nanbox_f64(nan_boxed);
     let prev_this = crate::object::js_implicit_this_get();

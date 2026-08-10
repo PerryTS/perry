@@ -2389,7 +2389,13 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
 /// arm; this is purely additive (the alloc-point fallback is untouched) and
 /// gated by `gc_moving_safepoint_enabled` (**default ON**; the kill switch is
 /// `PERRY_GC_MOVING_SAFEPOINT=0`).
-pub(crate) fn gc_safepoint_moving_minor() {
+///
+/// Returns whether the safepoint was HANDLED — false when an entry guard
+/// blocked it (mid-allocation, suppressed, unsafe FFI zone, non-zero root-lock
+/// depth, active budgeted cycle), true otherwise, including when it was handled
+/// and nothing was due. A blocked safepoint consumes no schedule slot, so the
+/// caller must not charge it a pacing stride either.
+pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // Same start guards the budgeted collector uses, minus the (here
     // irrelevant) scanner block: never collect mid-allocation, inside a
     // runtime handle scope, in an unsafe FFI zone, or during a budgeted cycle.
@@ -2401,7 +2407,7 @@ pub(crate) fn gc_safepoint_moving_minor() {
     if in_alloc || unsafe_zone || root_lock || budgeted {
         // Blocked right now — leave GC_SAFEPOINT_PENDING set so the next poll
         // retries; do not clear it here.
-        return;
+        return false;
     }
     // We are handling this safepoint (collect or find nothing due): clear the
     // deferral flag set by the alloc-point arm (Phase 2/3).
@@ -2429,7 +2435,7 @@ pub(crate) fn gc_safepoint_moving_minor() {
         // the bounded slack valve.
         Some(BudgetedGcTrigger::OldReclaim) => {
             if GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get) {
-                return;
+                return true;
             }
             let _reentry = OldReclaimReentryGuard::enter();
             GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
@@ -2439,28 +2445,21 @@ pub(crate) fn gc_safepoint_moving_minor() {
             ))
             .emit_after_current();
             super::record_safepoint_drain(super::SafepointDrainKind::OldReclaim);
-            return;
+            return true;
         }
         _ => {
-            // No nursery-pressure trigger is due — nothing to collect here...
-            // unless zeal is on (#7154 tooling), in which case the point of the
-            // mode is to collect anyway so an unrooted value moves on its first
-            // exposure. `gc_force_evacuate_enabled()` is true under zeal, so
-            // this minor MOVES survivors rather than sweeping in place.
-            //
-            // ...or unless the seeded schedule selected this safepoint, which is
-            // the same bargain at a tunable density instead of all-or-nothing.
-            // `gc_force_evacuate_enabled()` is true in that mode too, for the
-            // same reason. Zeal wins when both are set: it is the strictly
-            // denser schedule, and attributing the collection to the mode that
-            // actually determined it keeps both live-subject counters honest.
-            if super::gc_zeal_enabled() {
-                super::note_zeal_forced_collection();
-            } else if scheduled {
-                super::schedule::note_schedule_forced_collection();
-            } else {
-                return;
+            // No nursery-pressure trigger is due — nothing to collect here,
+            // unless the seeded schedule (#7154 tooling) selected this
+            // safepoint, in which case the point of the mode is to collect
+            // anyway so an unrooted value moves on its first exposure (at the
+            // default `PERRY_GC_SCHEDULE_RATE` of 5% that is one handled
+            // safepoint in twenty, at rate 1 every one of them).
+            // `gc_force_evacuate_enabled()` is true whenever a seed resolved,
+            // so this minor MOVES survivors rather than sweeping in place.
+            if !scheduled {
+                return true;
             }
+            super::schedule::note_schedule_forced_collection();
             GcTriggerKind::ArenaBytes
         }
     };
@@ -2481,6 +2480,7 @@ pub(crate) fn gc_safepoint_moving_minor() {
     // the precise collection that replaced it actually ran (CLAUDE.md, four
     // ways a gate cannot fail — #4, the gate runs but its subject never did).
     super::record_safepoint_drain(super::SafepointDrainKind::NurseryMinor);
+    true
 }
 
 /// The ONLY writer of `GC_SAFEPOINT_PENDING`.
@@ -2543,58 +2543,61 @@ pub extern "C" fn js_gc_loop_safepoint() {
 /// return — no frame, no spills.
 #[inline(never)]
 fn js_gc_loop_safepoint_armed() {
-    // Releases the startup seed unless zeal wants every poll. Must run before
-    // the opt-in check below: a build with the polls killed still has to get
-    // the word back to zero, or every back-edge keeps paying for the call.
+    // Releases the startup seed unless a resolved seed wants the poll kept
+    // reachable. Must run before the opt-in check below: a build with the polls
+    // killed still has to get the word back to zero, or every back-edge keeps
+    // paying for the call.
     super::resolve_poll_seed();
     if !gc_moving_loop_polls_enabled() {
         return;
     }
     // #7604: the only reliable answer to "did the compile-time half take
-    // effect". Exhaustive exactly under zeal, which is where `zeal_verdict`
-    // reads it — see `resolve_poll_seed` and `loop_polls_reached`.
+    // effect". Exhaustive exactly under a resolved seed, which is where
+    // `schedule_verdict` reads it — see `resolve_poll_seed` and
+    // `loop_polls_reached`.
     super::note_loop_poll_reached();
-    // Zeal (#7154 tooling) collects at polls the deferral flag would skip, not
-    // only when the alloc-point arm already deferred one. Zeal cannot conjure a
-    // poll codegen never emitted, so the `gc_moving_loop_polls_enabled()` gate
-    // above still applies — see `gc/zeal.rs` for why that means "compile AND run
-    // with `PERRY_GC_MOVING_LOOP_POLLS=1`".
-    //
-    // ★ #7728: "at polls", not "at EVERY poll". Unpaced, this arm cost ~511 µs
-    // per loop iteration to relocate a mean of 5.9 objects, which made zeal
-    // unusable on any real workload the moment #7721 turned back-edge polls on
-    // by default (24 minutes for a 19 s program). The stride is a bound on
-    // forced collections, not a heuristic — see `gc/zeal.rs`.
-    //
-    // The zeal work all sits inside the `!pending` branch on purpose: a default
-    // (zeal-off) build reaches exactly the same one cached-bool read and return
-    // it did before, and the deferral-drain path below is untouched.
+    // The schedule work all sits inside the `!pending` branch on purpose: a
+    // default (mode-off) build reaches exactly the same one cached-bool read
+    // and return it did before, and the deferral-drain path below is untouched.
     if !GC_SAFEPOINT_PENDING.with(Cell::get) {
-        if !super::gc_zeal_enabled() {
-            // The seeded schedule (`PERRY_GC_SCHEDULE_SEED`) needs the same
-            // bypass as zeal, and needs it here rather than at the decision
-            // point: a schedule cannot select a safepoint this gate already
-            // returned from. The decision itself — and the counter tick it is
-            // a function of — happens inside `gc_safepoint_moving_minor`, past
-            // the entry guards. Same compile-time caveat as zeal. When both
-            // modes are set, zeal's paced path below runs instead and the
-            // schedule ticks on each collection it forces (zeal wins — it is
-            // the strictly denser schedule).
-            if super::schedule::gc_schedule_enabled() {
-                gc_safepoint_moving_minor();
-            }
+        // The seeded schedule (#7154 tooling) considers polls the deferral flag
+        // would skip, so it needs this gate bypassed — and needs it here rather
+        // than at the decision point: a schedule cannot select a safepoint this
+        // gate already returned from. The decision itself, and the ordinal tick
+        // it is a function of, happen inside `gc_safepoint_moving_minor`, past
+        // the entry guards. A resolved seed cannot conjure a poll codegen never
+        // emitted, so the `gc_moving_loop_polls_enabled()` gate above still
+        // applies — see `gc/schedule.rs`.
+        if !super::schedule::gc_schedule_enabled() {
             return;
         }
-        if !super::zeal::zeal_poll_collection_due(crate::arena::copying_from_space_in_use_bytes()) {
-            super::zeal::note_zeal_poll_paced();
+        // ★ #7728, ported: "polls", not "EVERY poll". A poll only becomes a
+        // candidate the seed can select once `PERRY_GC_SCHEDULE_ALLOC_KB` of
+        // new nursery material has accumulated; unpaced, the rate-1 endpoint
+        // cost ~511 µs per loop iteration and turned a 19 s program into a
+        // 24-minute one. The stride is a bound on candidates, not a heuristic.
+        if !super::schedule::schedule_poll_collection_due(
+            crate::arena::copying_from_space_in_use_bytes(),
+        ) {
+            super::schedule::note_schedule_poll_paced();
             return;
         }
-        gc_safepoint_moving_minor();
-        // Rearm from the level measured AFTER the collection, so the next
-        // forced one costs a full stride of new allocation on top of whatever
-        // survived — see `gc/zeal.rs` for why this is a high-water mark and not
-        // a delta.
-        super::zeal::note_zeal_poll_collection(crate::arena::copying_from_space_in_use_bytes());
+        // Rearm ONLY when the safepoint was handled. A blocked safepoint
+        // consumes no schedule slot (see `schedule_tick`'s placement past the
+        // entry guards), so charging it a full stride would silently drop the
+        // realised density below the requested rate — and a loop that polls
+        // while a guard is held would lose candidate after candidate with
+        // nothing in the exit summary to say so.
+        //
+        // Rearm from the level measured AFTER the safepoint, so the next
+        // candidate costs a full stride of new allocation on top of whatever
+        // survived — see `gc/schedule.rs` for why this is a high-water mark and
+        // not a delta.
+        if gc_safepoint_moving_minor() {
+            super::schedule::note_schedule_poll_collection(
+                crate::arena::copying_from_space_in_use_bytes(),
+            );
+        }
         return;
     }
     gc_safepoint_moving_minor();

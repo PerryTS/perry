@@ -37,7 +37,8 @@
 //! proves nothing. `quarantine_stats()` reports `sets_retired` precisely so a
 //! green result can be checked against its subject having been live (CLAUDE.md,
 //! "four ways a gate can be unable to fail", #4). Pair it with
-//! `PERRY_GC_ZEAL=1` to guarantee evacuating minors actually run.
+//! `PERRY_GC_SCHEDULE_SEED=<u64> PERRY_GC_SCHEDULE_RATE=1` to guarantee
+//! evacuating minors actually run at every handled safepoint.
 //!
 //! # Modes
 //!
@@ -77,7 +78,7 @@
 //!
 //! **Depth is the knob to raise when a suspected bug does not fault.** A stale
 //! pointer is only caught while the page-set it names is still quarantined, and
-//! under `PERRY_GC_ZEAL=1` a value can cross *hundreds* of collections between
+//! at `PERRY_GC_SCHEDULE_RATE=1` a value can cross *hundreds* of collections between
 //! its last valid observation and its stale use — one per loop back-edge poll.
 //! Measured on #7154's `new C(…)` reproducer: the constructor body runs 600
 //! polls, so the caller's stale register is 600 retirements old by the time
@@ -91,7 +92,7 @@
 //! - Quarantined bytes are subtracted from `ARENA_TOTAL_BYTES` when the block
 //!   leaves the arena, so `arena_total_bytes()` — and therefore the arena-bytes
 //!   GC trigger — under-reports real RSS by up to `depth × from-space bytes`.
-//!   Fewer automatic triggers, not more. Pair with `PERRY_GC_ZEAL=1` if the
+//!   Fewer automatic triggers, not more. Pair with a seeded schedule if the
 //!   point of the run is collection frequency.
 //! - RSS is genuinely higher than an unprotected run for the same reason. This
 //!   is a debug instrument; do not benchmark under it.

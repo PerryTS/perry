@@ -18,7 +18,7 @@
 //!   3. `GC_SAFEPOINT_PENDING.with(Cell::get)` — a thread-local read, and on
 //!      Darwin **a call to `_tlv_get_addr`**, Mach-O having no local-exec TLS
 //!      model,
-//!   4. `gc_zeal_enabled()` — a second `OnceLock` acquire load,
+//!   4. `schedule::gc_schedule_enabled()` — a second `OnceLock` acquire load,
 //!
 //! all of it behind an out-of-line `extern "C"` call the user module cannot
 //! inline. Measured on the quiet bench host at ~3 ns per back-edge, which is
@@ -55,7 +55,7 @@
 //! the `Cell` and this counter are one piece of state with two representations,
 //! and `pending_transitions_arm_and_disarm` pins them together.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Process-global count of reasons `js_gc_loop_safepoint` must do more than
 /// return; see the module docs for the invariant.
@@ -68,10 +68,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// pins the pair.
 ///
 /// **It starts at 1** — the seed. Resolving "should this word be permanently
-/// armed?" means asking `gc_zeal_enabled()`, and asking costs exactly what the
-/// word exists to avoid, so the process starts armed and the FIRST poll to get
-/// through resolves the seed once (see [`resolve_poll_seed`]). Zeal keeps it;
-/// every other configuration releases it and the poll goes quiet.
+/// armed?" means asking whether a #7154 stress mode is on, and asking costs
+/// exactly what the word exists to avoid, so the process starts armed and the
+/// FIRST poll to get through resolves the seed once (see
+/// [`resolve_poll_seed`]). A resolved `PERRY_GC_SCHEDULE_SEED` keeps it; every
+/// other configuration releases it and the poll goes quiet.
 #[no_mangle]
 pub static PERRY_GC_POLL_ARMED: AtomicU32 = AtomicU32::new(1);
 
@@ -104,31 +105,38 @@ pub(crate) fn disarm_poll() {
 
 /// Release the startup seed, once, on the first poll that gets through.
 ///
-/// Under `PERRY_GC_ZEAL` the seed is KEPT, and keeping it is load-bearing twice
-/// over. Zeal's contract is that it collects at *every* safepoint, not only at
-/// ones an alloc-point trigger already deferred — with the seed released, a
-/// zeal run would poll, read zero, skip the call and force nothing, and
-/// `zeal_liveness_report` would correctly declare the whole run vacuous. And
-/// `note_loop_poll_reached` lives past this gate, so the `loop_polls` figure in
-/// `zeal_verdict` is exhaustive exactly when it is read: under zeal.
+/// Under `PERRY_GC_SCHEDULE_SEED` the seed is KEPT, and keeping it is
+/// load-bearing twice over. The schedule's contract is that it selects among
+/// safepoints the deferral flag would skip, not only ones an alloc-point
+/// trigger already deferred — with the word released, a seeded run would poll,
+/// read zero, skip the call and force nothing, and `schedule_liveness_report`
+/// would correctly declare the whole run vacuous. And `note_loop_poll_reached`
+/// lives past this gate, so the `loop_polls` figure in `schedule_verdict` is
+/// exhaustive exactly when it is read: under a resolved seed.
 ///
-/// Outside zeal the counter is no longer a count of back-edges executed, and
-/// [`super::loop_polls_reached`] says so.
+/// Outside the seeded mode the counter is no longer a count of back-edges
+/// executed, and [`super::loop_polls_reached`] says so.
 pub(crate) fn resolve_poll_seed() {
-    static SEED: std::sync::Once = std::sync::Once::new();
-    SEED.call_once(|| {
-        // #7781: the seeded schedule keeps the word armed for exactly zeal's
-        // reason — its collection decision lives inside the safepoint, so a
-        // disarmed poll never presents the safepoint to decide at. Measured
-        // before this line existed: `PERRY_GC_SCHEDULE_RATE=1` on #7606's
-        // reproduction saw SIX safepoints against zeal's 9,648 loop polls —
-        // the "collect at every opportunity" end of the dial was an
-        // event-loop-boundary instrument only, and the loop-safepoint bypass
-        // #7317 added was downstream of a gate that never opened.
-        if !super::gc_zeal_enabled() && !super::schedule::gc_schedule_enabled() {
-            disarm_poll();
-        }
-    });
+    // A plain once-flag rather than `std::sync::Once`, for two reasons. It is
+    // resettable, so `the_startup_seed_is_kept_only_for_a_resolved_seed` can
+    // exercise BOTH directions instead of reading whatever the first poll in
+    // the test binary happened to leave behind. And the body only ever
+    // releases the seed, so a second thread that races past while the winner
+    // is still inside costs one poll taking the slow path and returning —
+    // there is nothing here for it to observe half-done.
+    if SEED_RESOLVED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    if !super::schedule::gc_schedule_enabled() {
+        disarm_poll();
+    }
+}
+
+static SEED_RESOLVED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn reset_poll_seed_for_test() {
+    SEED_RESOLVED.store(false, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -182,7 +190,7 @@ mod tests {
 
     /// The default is ARMED, and it has to be: the seed is what guarantees the
     /// first poll reaches [`resolve_poll_seed`] at all. A word that started at
-    /// zero would never let a zeal run take its own opt-in.
+    /// zero would never let a seeded run take its own opt-in.
     #[test]
     fn the_process_starts_armed_so_the_first_poll_gets_through() {
         // Not `poll_armed()` — by the time this test runs another test may have

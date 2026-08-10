@@ -16,7 +16,7 @@
 //! finalize. Auditing it, #7635 sabotaged that finalize to
 //! `(ptr, /* saw_pointer */ false)` — every parsed record claiming
 //! `POINTER_FREE` while holding heap strings — and got **byte-identical correct
-//! output** from a 4,000-record Perry-compiled workload under `PERRY_GC_ZEAL=1
+//! output** from a 4,000-record Perry-compiled workload under `PERRY_GC_SCHEDULE_RATE=1
 //! PERRY_GC_PROTECT_FROMSPACE=1` and under `PERRY_GC_FORCE_EVACUATE=1`, with
 //! copying minors and retired quarantine sets observed live.
 //!

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end exercised arm for the #7154 rooting-bug instruments
-# (`PERRY_GC_PROTECT_FROMSPACE`, `PERRY_GC_ZEAL`).
+# (`PERRY_GC_PROTECT_FROMSPACE`, `PERRY_GC_SCHEDULE_SEED`).
 #
 # WHY THIS EXISTS
 #
@@ -13,16 +13,17 @@
 # asserted as a unit test in the required `cargo-test` gate
 # (`gc/tests/fromspace_protect.rs::quarantine_catches_a_planted_stale_from_space_deref`).
 # What a unit test cannot cover is the INTEGRATED path: codegen actually
-# emitting back-edge polls, zeal actually firing on them, the copying minor
-# actually running, and the quarantine actually retiring its from-space in a
-# real compiled program. That is this script.
+# emitting back-edge polls, the schedule actually firing on them, the copying
+# minor actually running, and the quarantine actually retiring its from-space in
+# a real compiled program. That is this script.
 #
 # NON-VACUITY IS THE POINT. Per CLAUDE.md's "four ways a gate can be unable to
 # fail" #4, a gate must assert its subject was live. A protected run with zero
 # copying minors protects nothing and would pass silently. So this script does
-# not merely check the program's output: it requires the zeal arm to produce
-# strictly MORE quarantine retirements than the no-zeal arm, which can only
-# happen if zeal genuinely forced collections that pressure would not have.
+# not merely check the program's output: it requires the rate-1 arm to produce
+# strictly MORE quarantine retirements than the pressure-only arm, which can
+# only happen if the schedule genuinely forced collections that pressure would
+# not have.
 #
 # Usage: scripts/gc_instrument_smoke.sh [path-to-perry]
 #   Expects target/release/perry and PERRY_RUNTIME_DIR-resolvable staticlibs.
@@ -39,12 +40,13 @@ export PERRY_RUNTIME_DIR="${PERRY_RUNTIME_DIR:-$(dirname "$PERRY_BIN")}"
 export PERRY_NO_AUTO_OPTIMIZE=1
 
 # Arms 1-3 and 5 drive the SMALL fixture below, which is sized so that literal
-# every-poll zeal costs seconds. Pin the strongest semantics for them
-# explicitly (#7728 made the shipped default allocation-paced), so this gate
-# keeps testing "a collection at every single poll" rather than silently
-# following whatever the default becomes. Arm 6 is the one that asserts the
-# DEFAULT is usable, and it deliberately does not set this.
-export PERRY_GC_ZEAL_ALLOC_KB=0
+# every-poll collection costs seconds. Pin the strongest semantics for them
+# explicitly (#7728's allocation pacing makes the shipped default paced), so
+# this gate keeps testing "a collection at every single poll" rather than
+# silently following whatever the default becomes.
+# Arm 6 is the one that asserts the DEFAULT is usable, and it deliberately does
+# not set this.
+export PERRY_GC_SCHEDULE_ALLOC_KB=0
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -54,7 +56,7 @@ trap 'rm -rf "$WORK"' EXIT
 # and the instance survives a collection inside the callee — the #7192 shape),
 # called in an outer loop, with the caller reading a field back afterwards so a
 # stale read cannot go unnoticed. Sized for ~1200 polls, not #7154's 240k, so
-# the zeal arm costs seconds rather than minutes.
+# the rate-1 arm costs seconds rather than minutes.
 cat > "$WORK/fixture.ts" <<'TS'
 class Holder {
   payload: any;
@@ -84,7 +86,7 @@ function run(): number {
 console.log("bad", run());
 TS
 
-echo "== compiling fixture with PERRY_GC_MOVING_LOOP_POLLS=1 (zeal needs the polls) =="
+echo "== compiling fixture with PERRY_GC_MOVING_LOOP_POLLS=1 (the schedule needs the polls) =="
 PERRY_GC_MOVING_LOOP_POLLS=1 "$PERRY_BIN" compile "$WORK/fixture.ts" -o "$WORK/fixture" >/dev/null
 
 # $1 = label, rest = env assignments. Echoes the retirement count.
@@ -106,56 +108,102 @@ run_arm() {
     grep '^bad' <<<"$out" >&2 || echo "(no 'bad' line)" >&2
     exit 1
   fi
-  echo "  [$label] correct output, exit 0, quarantine retirements=$retired"
+  # Human line to stderr so stdout is purely the retirement count; a caller can
+  # then `x="$(run_arm ...)" || exit 1` and see the count while a crashed arm's
+  # non-zero exit still propagates. Piping run_arm through `tail` would swallow
+  # that exit (the pipeline reports tail's status, and the `exit 1` above only
+  # leaves the command-substitution subshell).
+  echo "  [$label] correct output, exit 0, quarantine retirements=$retired" >&2
   echo "$retired"
 }
 
 echo "== arm 1: instruments OFF (baseline correctness) =="
-off_retired="$(run_arm off | tail -1)"
+off_retired="$(run_arm off)" || exit 1
 if [[ "$off_retired" -ne 0 ]]; then
   echo "FAIL: the instrument retired $off_retired page-sets with the knob OFF." >&2
   echo "      Default-off must mean inert." >&2
   exit 1
 fi
 
-echo "== arm 2: PROTECT_FROMSPACE=1 without zeal (pressure-only) =="
-nozeal_retired="$(run_arm protect PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
+echo "== arm 2: PROTECT_FROMSPACE=1, no schedule (pressure-only) =="
+pressure_retired="$(run_arm protect PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64)" || exit 1
 
-echo "== arm 3: PROTECT_FROMSPACE=1 + ZEAL=1 (the investigation pairing) =="
-zeal_retired="$(run_arm protect+zeal PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
+# The maximum-density endpoint of the same knob the middle arms use. At rate 1
+# every handled safepoint is selected whatever it hashes to, so the seed is
+# immaterial here and fixed only so the arm reads as a reproducible recipe.
+echo "== arm 3: PROTECT_FROMSPACE=1 + SCHEDULE_RATE=1 (the investigation pairing) =="
+rate1_retired="$(run_arm protect+rate1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 \
+  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64)" || exit 1
 
 echo "== arm 4: PROTECT_FROMSPACE=1 + SCHEDULE_SEED (the tunable middle) =="
 sched_retired="$(run_arm protect+schedule PERRY_GC_SCHEDULE_SEED=20260803 PERRY_GC_SCHEDULE_RATE=0.25 \
-  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
+  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64)" || exit 1
 
 echo "== arm 5: the same seed again (the reproducer property) =="
 sched_repeat="$(run_arm protect+schedule-repeat PERRY_GC_SCHEDULE_SEED=20260803 PERRY_GC_SCHEDULE_RATE=0.25 \
-  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
+  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64)" || exit 1
 
 echo "== arm 6: a different seed (the sweep must explore something) =="
 sched_other="$(run_arm protect+schedule-other PERRY_GC_SCHEDULE_SEED=20260804 PERRY_GC_SCHEDULE_RATE=0.25 \
-  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 | tail -1)"
+  PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64)" || exit 1
 
 # ---- non-vacuity gate -------------------------------------------------------
 # The subject must have been LIVE. Without this, every arm above could pass
 # having run zero copying minors — the exact failure mode #6942/#7024/#7025
 # were filed for.
-if [[ "$zeal_retired" -eq 0 ]]; then
-  echo "FAIL: zeal + protection retired ZERO from-space page-sets." >&2
+if [[ "$rate1_retired" -eq 0 ]]; then
+  echo "FAIL: rate 1 + protection retired ZERO from-space page-sets." >&2
   echo "      The instruments did not run, so a clean result proves nothing." >&2
   echo "      Most likely: codegen emitted no back-edge polls, or the copying" >&2
   echo "      minor was ineligible (conservative stack scan / pinned young)." >&2
   exit 1
 fi
-if [[ "$zeal_retired" -le "$nozeal_retired" ]]; then
-  echo "FAIL: zeal did not force any additional collection" >&2
-  echo "      (no-zeal=$nozeal_retired, zeal=$zeal_retired)." >&2
-  echo "      PERRY_GC_ZEAL is inert on this build — it must collect at" >&2
-  echo "      safepoints where no trigger is due." >&2
+if [[ "$rate1_retired" -le "$pressure_retired" ]]; then
+  echo "FAIL: the schedule forced no additional collection at rate 1" >&2
+  echo "      (pressure-only=$pressure_retired, rate-1=$rate1_retired)." >&2
+  echo "      PERRY_GC_SCHEDULE_SEED is inert on this build — at rate 1 it must" >&2
+  echo "      collect at every safepoint where no trigger is due." >&2
   exit 1
 fi
 
-# ---- arm 4: the quarantine, aimed at real programs --------------------------
+# ---- the seeded schedule's three claims -------------------------------------
+# The rate knob spans a RANGE: a mid rate must land strictly between pressure
+# alone and the rate-1 endpoint. A mid rate that collapsed onto either endpoint
+# would mean the knob is decoration.
+if [[ "$sched_retired" -le "$pressure_retired" ]]; then
+  echo "FAIL: PERRY_GC_SCHEDULE_SEED forced no additional collection" >&2
+  echo "      (pressure-only=$pressure_retired, seeded=$sched_retired)." >&2
+  exit 1
+fi
+if [[ "$sched_retired" -ge "$rate1_retired" ]]; then
+  echo "FAIL: the seeded schedule at rate 0.25 collected at least as often as" >&2
+  echo "      rate 1 (seeded=$sched_retired, rate-1=$rate1_retired). The rate" >&2
+  echo "      knob is not gating anything." >&2
+  exit 1
+fi
+# It is a REPRODUCER: the same seed must select the same safepoints, so the
+# realised collection count is identical. This is the property the whole mode
+# exists for; if it can drift, a "failing seed" is a rumour.
+if [[ "$sched_retired" -ne "$sched_repeat" ]]; then
+  echo "FAIL: the same seed produced two different schedules" >&2
+  echo "      ($sched_retired vs $sched_repeat retirements). A failing seed" >&2
+  echo "      would not reproduce, which is the entire point of the mode." >&2
+  exit 1
+fi
+# It EXPLORES: a sweep over adjacent seeds must not be one experiment repeated.
+# Equal counts are not proof of an identical schedule, but differing counts ARE
+# proof of a differing one, and that is the direction that can fail usefully.
+if [[ "$sched_other" -eq "$sched_retired" ]]; then
+  echo "WARNING: seeds 20260803 and 20260804 retired the same number of" >&2
+  echo "         page-sets ($sched_retired). Not necessarily the same schedule," >&2
+  echo "         but check gc/tests/schedule.rs if a sweep stops finding things." >&2
+fi
+
+echo
+echo "  [seeded schedule] pressure-only=$pressure_retired < seeded(0.25)=$sched_retired < rate-1=$rate1_retired"
+echo "  [seeded schedule] same seed twice: $sched_retired == $sched_repeat (reproducible)"
+
+# ---- arm 7: the quarantine, aimed at real programs --------------------------
 #
 # #7341. Everything above drives the instrument with PERRY_GC_MOVING_LOOP_POLLS
 # over ONE synthetic fixture. Back-edge polls fire only while user JS runs, so
@@ -172,7 +220,7 @@ fi
 PROBES="$(dirname "$0")/../benchmarks/gc_ratchet/probes"
 if [[ -d "$PROBES" ]]; then
   echo
-  echo "== arm 4: quarantine over the gc_ratchet probes (allocation-point route) =="
+  echo "== arm 7: quarantine over the gc_ratchet probes (allocation-point route) =="
   probe_count=0
   probe_failed=0
   for probe in "$PROBES"/*.ts; do
@@ -208,22 +256,22 @@ if [[ -d "$PROBES" ]]; then
   echo "  $probe_count/$probe_count probes clean over from-space quarantine"
 fi
 
-# ---- arm 5: PERRY_GC_ZEAL + PERRY_GC_VERIFY_EVACUATION, #7254's pairing ----
+# ---- arm 5: PERRY_GC_SCHEDULE_RATE=1 + PERRY_GC_VERIFY_EVACUATION, #7254's pairing ----
 #
-# Both knobs are individually exercised above (ZEAL by arms 2/3,
+# Both knobs are individually exercised above (the rate-1 schedule by arms 2/3,
 # PERRY_GC_VERIFY_EVACUATION nowhere in this script) and in
 # gc_repsel_matrix.sh (VERIFY_EVACUATION by `verify_evac`/`force_verify`,
-# ZEAL nowhere in that script either) -- but no CI arm anywhere sets them
+# the schedule nowhere in that script either) -- but no CI arm anywhere sets them
 # TOGETHER, which is exactly the CLAUDE.md knob-kill-policy hole #7254 found:
 # the pair panics 10/10 on `test_gap_repsel_p4a3_ptr_numarray`
 # (`gc evacuation verification failed: stale forwarded pointer in ...`) and
 # nothing in CI would have said a word.
 #
-# Deliberately NOT routed through gc_repsel_matrix.sh: a `zeal_verify` arm
+# Deliberately NOT routed through gc_repsel_matrix.sh: a `rate1_verify` arm
 # registered there joins EVERY corpus file via `--arms all`, and #7254's own
 # sizing sweep (59 files) found a striking concentration of multi-minute-plus
 # runs under this exact pairing on the test_gap_gc_* reproducer corpus --
-# ZEAL forces a full evacuating minor at EVERY back-edge poll, which no other
+# RATE=1 forces a full evacuating minor at EVERY back-edge poll, which no other
 # matrix arm does, so a corpus built for arms that collect only when a real
 # trigger fires is not this pairing's natural home. That population is not
 # yet triaged (host contention during the investigation made timeout vs.
@@ -233,14 +281,15 @@ fi
 # and produces no false positive on known-good code), plus ONE pinned
 # regression witness against the exact file and exact panic #7254 reports.
 echo
-echo "== arm 5: PERRY_GC_ZEAL + PERRY_GC_VERIFY_EVACUATION (#7254's pairing) =="
+echo "== arm 5: PERRY_GC_SCHEDULE_RATE=1 + PERRY_GC_VERIFY_EVACUATION (#7254's pairing) =="
 
-zeal_verify_env=(PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off
-  PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1 PERRY_GC_VERIFY_EVACUATION=1 PERRY_GC_DIAG=1)
+rate1_verify_env=(PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off
+  PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=7 PERRY_GC_SCHEDULE_RATE=1
+  PERRY_GC_VERIFY_EVACUATION=1 PERRY_GC_DIAG=1)
 
 echo "-- 5a: the pairing on known-good code must stay clean, and must be LIVE --"
 set +e
-fixture_out="$(env "${zeal_verify_env[@]}" "$WORK/fixture" 2>&1)"
+fixture_out="$(env "${rate1_verify_env[@]}" "$WORK/fixture" 2>&1)"
 fixture_rc=$?
 set -e
 if [[ $fixture_rc -ne 0 ]]; then
@@ -270,7 +319,7 @@ if [[ ! -f "$REPRO" ]]; then
 fi
 PERRY_GC_MOVING_LOOP_POLLS=1 "$PERRY_BIN" compile "$REPRO" -o "$WORK/repro7254" >/dev/null
 set +e
-repro_out="$(env "${zeal_verify_env[@]}" "$WORK/repro7254" 2>&1)"
+repro_out="$(env "${rate1_verify_env[@]}" "$WORK/repro7254" 2>&1)"
 repro_rc=$?
 set -e
 # PINNED REGRESSION, not a correctness assertion: #7254 is a real, open,
@@ -300,11 +349,11 @@ if ! grep -q 'stale forwarded pointer' <<<"$repro_out"; then
 fi
 echo "  reproduced as pinned (exit $repro_rc, stale forwarded pointer) -- #7254 still open, tracked not silent"
 
-# ---- arm 6: zeal must TERMINATE at the shipped default (#7728) --------------
+# ---- arm 6: the schedule must TERMINATE at the shipped default (#7728) ------
 #
 # Every arm above runs the ~1200-poll fixture, which is deliberately tiny
 # ("costs seconds rather than minutes"). That sizing is exactly why this gate
-# could not see #7728: zeal forced a collection at EVERY back-edge poll, and on
+# could not see #7728: the instrument forced a collection at EVERY back-edge poll, and on
 # a small enough fixture that is indistinguishable from a paced instrument. The
 # moment #7721 turned back-edge polls on by default, the same instrument cost
 # ~511 us per loop iteration on real code -- 24 minutes for a 19 s program, i.e.
@@ -328,7 +377,7 @@ echo "  reproduced as pinned (exit $repro_rc, stale forwarded pointer) -- #7254 
 # The wall-clock budget is kept as the weaker "does it terminate AT ALL" guard,
 # sized generously on purpose.
 echo
-echo "== arm 6: zeal terminates at the DEFAULT stride, on a realistic poll count =="
+echo "== arm 6: the schedule terminates at the DEFAULT stride, on a realistic poll count =="
 
 # The records must ESCAPE. The obvious version of this fixture allocates a
 # record per iteration and drops it, which scalar-replaces into nothing: it
@@ -365,20 +414,21 @@ TS
 # 90s, against a paced cost of a few seconds and an unpaced ~200s on the quiet
 # host. Wide enough that a slow shared runner does not flake it, narrow enough
 # that the unpaced 1:1 behaviour cannot fit inside it.
-ZEAL_BUDGET_S="${PERRY_ZEAL_SMOKE_BUDGET_S:-90}"
+SCHED_BUDGET_S="${PERRY_SCHEDULE_SMOKE_BUDGET_S:-90}"
 scale_start=$(date +%s)
 set +e
 # `env -u` so the every-poll pin from the top of the file does NOT apply: this
 # arm's entire subject is the SHIPPED DEFAULT.
-scale_out="$(env -u PERRY_GC_ZEAL_ALLOC_KB PERRY_GC_ZEAL=1 \
-  perl -e 'alarm shift; exec @ARGV' "$ZEAL_BUDGET_S" "$WORK/scale" 2>&1)"
+scale_out="$(env -u PERRY_GC_SCHEDULE_ALLOC_KB PERRY_GC_SCHEDULE_SEED=7 PERRY_GC_SCHEDULE_RATE=1 \
+  perl -e 'alarm shift; exec @ARGV' "$SCHED_BUDGET_S" "$WORK/scale" 2>&1)"
 scale_rc=$?
 set -e
 scale_elapsed=$(( $(date +%s) - scale_start ))
 
 if [[ $scale_rc -ne 0 ]]; then
-  echo "FAIL [arm6]: zeal did not complete in ${ZEAL_BUDGET_S}s (exit $scale_rc," >&2
-  echo "      elapsed ${scale_elapsed}s). PERRY_GC_ZEAL is the primary instrument" >&2
+  echo "FAIL [arm6]: the schedule did not complete in ${SCHED_BUDGET_S}s (exit $scale_rc," >&2
+  echo "      elapsed ${scale_elapsed}s). PERRY_GC_SCHEDULE_SEED is the primary" >&2
+  echo "      instrument" >&2
   echo "      for moving-GC correctness bugs; one that does not terminate is one" >&2
   echo "      nobody will use. This is #7728's shape: a forced collection at" >&2
   echo "      EVERY back-edge poll, ~511 us each, once polls became default-ON." >&2
@@ -386,26 +436,27 @@ if [[ $scale_rc -ne 0 ]]; then
   exit 1
 fi
 if ! grep -q '^sum 200000$' <<<"$scale_out"; then
-  echo "FAIL [arm6]: wrong answer under zeal at the default stride:" >&2
+  echo "FAIL [arm6]: wrong answer under the schedule at the default stride:" >&2
   grep '^sum' <<<"$scale_out" >&2 || echo "(no 'sum' line)" >&2
   exit 1
 fi
 
-# NON-VACUITY. A fast arm proves nothing unless zeal actually collected and
-# actually moved -- "fast because it collects nothing" would be a worse
+# NON-VACUITY. A fast arm proves nothing unless the schedule actually collected
+# and actually moved -- "fast because it collects nothing" would be a worse
 # regression than the slow instrument it replaced.
-zeal_line="$(grep -m1 '^\[gc-zeal\] forced_collections=' <<<"$scale_out" || true)"
-if [[ -z "$zeal_line" ]]; then
-  echo "FAIL [arm6]: no [gc-zeal] verdict line -- cannot tell whether zeal ran." >&2
+sched_line="$(grep -m1 '^\[gc-schedule\] forced_collections=' <<<"$scale_out" || true)"
+if [[ -z "$sched_line" ]]; then
+  echo "FAIL [arm6]: no [gc-schedule] verdict line -- cannot tell whether the" >&2
+  echo "      instrument ran." >&2
   exit 1
 fi
-scale_forced="$(grep -oE 'forced_collections=[0-9]+' <<<"$zeal_line" | cut -d= -f2)"
-scale_minors="$(grep -oE 'copying_minors=[0-9]+' <<<"$zeal_line" | cut -d= -f2)"
-scale_moved="$(grep -oE 'moved_objects=[0-9]+' <<<"$zeal_line" | cut -d= -f2)"
-scale_polls="$(grep -oE 'loop_polls=[0-9]+' <<<"$zeal_line" | cut -d= -f2)"
+scale_forced="$(grep -oE 'forced_collections=[0-9]+' <<<"$sched_line" | cut -d= -f2)"
+scale_minors="$(grep -oE 'copying_minors=[0-9]+' <<<"$sched_line" | cut -d= -f2)"
+scale_moved="$(grep -oE 'moved_objects=[0-9]+' <<<"$sched_line" | cut -d= -f2)"
+scale_polls="$(grep -oE 'loop_polls=[0-9]+' <<<"$sched_line" | cut -d= -f2)"
 if [[ "$scale_forced" -eq 0 || "$scale_minors" -eq 0 || "$scale_moved" -eq 0 ]]; then
-  echo "FAIL [arm6]: zeal finished fast because it did NOTHING" >&2
-  echo "      ($zeal_line)." >&2
+  echo "FAIL [arm6]: the schedule finished fast because it did NOTHING" >&2
+  echo "      ($sched_line)." >&2
   echo "      Pacing must bound the instrument, not disable it." >&2
   exit 1
 fi
@@ -418,55 +469,20 @@ if [[ "$scale_polls" -le 0 ]]; then
   exit 1
 fi
 if [[ $(( scale_forced * 4 )) -ge "$scale_polls" ]]; then
-  echo "FAIL [arm6]: zeal forced $scale_forced collections for $scale_polls polls" >&2
+  echo "FAIL [arm6]: the schedule forced $scale_forced collections for $scale_polls polls" >&2
   echo "      (threshold: fewer than one per 4 polls). That is the unpaced" >&2
   echo "      behaviour #7728 removed -- one whole evacuating minor per loop" >&2
   echo "      iteration, which took a 5 s program to ~24 minutes." >&2
   exit 1
 fi
-echo "  correct output in ${scale_elapsed}s (budget ${ZEAL_BUDGET_S}s), $zeal_line"
-# ---- the seeded schedule's three claims -------------------------------------
-# It is a MIDDLE setting: denser than pressure alone, sparser than zeal. A
-# schedule that landed on either endpoint would be a second name for something
-# that already exists.
-if [[ "$sched_retired" -le "$nozeal_retired" ]]; then
-  echo "FAIL: PERRY_GC_SCHEDULE_SEED forced no additional collection" >&2
-  echo "      (pressure-only=$nozeal_retired, seeded=$sched_retired)." >&2
-  exit 1
-fi
-if [[ "$sched_retired" -ge "$zeal_retired" ]]; then
-  echo "FAIL: the seeded schedule at rate 0.25 collected at least as often as" >&2
-  echo "      zeal (seeded=$sched_retired, zeal=$zeal_retired). The rate knob is" >&2
-  echo "      not gating anything, so the mode is zeal with extra steps." >&2
-  exit 1
-fi
-# It is a REPRODUCER: the same seed must select the same safepoints, so the
-# realised collection count is identical. This is the property the whole mode
-# exists for; if it can drift, a "failing seed" is a rumour.
-if [[ "$sched_retired" -ne "$sched_repeat" ]]; then
-  echo "FAIL: the same seed produced two different schedules" >&2
-  echo "      ($sched_retired vs $sched_repeat retirements). A failing seed" >&2
-  echo "      would not reproduce, which is the entire point of the mode." >&2
-  exit 1
-fi
-# It EXPLORES: a sweep over adjacent seeds must not be one experiment repeated.
-# Equal counts are not proof of an identical schedule, but differing counts ARE
-# proof of a differing one, and that is the direction that can fail usefully.
-if [[ "$sched_other" -eq "$sched_retired" ]]; then
-  echo "WARNING: seeds 20260803 and 20260804 retired the same number of" >&2
-  echo "         page-sets ($sched_retired). Not necessarily the same schedule," >&2
-  echo "         but check gc/tests/schedule.rs if a sweep stops finding things." >&2
-fi
+echo "  correct output in ${scale_elapsed}s (budget ${SCHED_BUDGET_S}s), $sched_line"
 
 echo
-echo "  [seeded schedule] pressure-only=$nozeal_retired < seeded(0.25)=$sched_retired < zeal=$zeal_retired"
-echo "  [seeded schedule] same seed twice: $sched_retired == $sched_repeat (reproducible)"
-echo
 echo "PASS: instruments inert when off (0 retirements), live when on"
-echo "      (no-zeal=$nozeal_retired, zeal=$zeal_retired retirements), program correct in all arms."
+echo "      (pressure-only=$pressure_retired, rate-1=$rate1_retired retirements), program correct in all arms."
 echo "      Quarantine clean over $probe_count real probes (allocation-point route)."
-echo "      ZEAL+VERIFY_EVACUATION pairing live and correct on known-good code,"
+echo "      RATE=1+VERIFY_EVACUATION pairing live and correct on known-good code,"
 echo "      and still pins #7254's open reproducer rather than staying silent about it."
-echo "      Zeal terminates at the shipped default on a realistic poll count"
-echo "      (${scale_elapsed}s of a ${ZEAL_BUDGET_S}s budget) while still forcing"
+echo "      The schedule terminates at the shipped default on a realistic poll count"
+echo "      (${scale_elapsed}s of a ${SCHED_BUDGET_S}s budget) while still forcing"
 echo "      $scale_forced collections that moved $scale_moved objects."

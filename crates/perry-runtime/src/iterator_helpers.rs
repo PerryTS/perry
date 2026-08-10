@@ -29,7 +29,8 @@
 use crate::closure::{is_closure_ptr, js_closure_call1, js_closure_call2, ClosureHeader};
 // #7564: `make_iter_result` used to be a local five-allocation copy whose
 // intermediates were all bare Rust locals. It was the copy that faulted under
-// `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1` — `make_iter_result + 188`, a
+// `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_PROTECT_FROMSPACE=1`
+// — `make_iter_result + 188`, a
 // retired from-space object — and it now comes from the one rooted,
 // shared-shape constructor in `crate::iter_result`.
 use crate::iter_result::make_iter_result;

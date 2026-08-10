@@ -27,7 +27,7 @@
 //! Both tests here force the collection into that window deterministically —
 //! `force_next_general_arena_alloc_slow` + `make_arena_trigger_due` make the
 //! next arena block allocation collect, and the next one is the callee's own —
-//! so neither depends on `PERRY_GC_ZEAL` or on the timing luck the #7577
+//! so neither depends on `PERRY_GC_SCHEDULE_SEED` or on the timing luck the #7577
 //! reproducer needs. Each asserts its subject was live (the receiver actually
 //! moved), per CLAUDE.md's "a gate must assert its subject was live": a run in
 //! which nothing moved proves nothing, and says so rather than passing.

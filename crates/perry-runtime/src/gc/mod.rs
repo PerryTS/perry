@@ -121,11 +121,6 @@ use old_free::*;
 pub(crate) use old_free::{old_free_bytes, old_free_filter_range, old_free_take_exact};
 mod tenuring;
 use tenuring::*;
-/// #7742: the measured policy behind whole-block in-place promotion. The
-/// mechanism is `arena/promote.rs`; this decides when to use it.
-mod promote_in_place;
-use promote_in_place::*;
-pub use promote_in_place::{in_place_promoted_objects, in_place_promotion_cycles};
 mod oldgen;
 use oldgen::*;
 mod oldgen_defrag;
@@ -138,26 +133,33 @@ mod verify;
 /// the rewrite pass own root enumeration. Debug-only
 /// (`PERRY_GC_FROMSPACE_SCAN=1`).
 mod fromspace_scan;
+/// #7742: the measured policy behind whole-block in-place promotion. The
+/// mechanism is `arena/promote.rs`; this decides when to use it.
+mod promote_in_place;
+use promote_in_place::*;
+pub use promote_in_place::{in_place_promoted_objects, in_place_promotion_cycles};
+/// Instrument-liveness counters (#7604): copying minors completed, objects
+/// relocated, loop back-edge polls reached. Mode-independent — they count what
+/// the COLLECTOR did, not what forced it, so they outlive any one stress knob.
+pub(crate) mod instruments;
 /// The loop back-edge poll's arming word: the one load that decides whether
 /// `js_gc_loop_safepoint` is worth calling at all. Not debug-only — it is on
 /// the hot path of every allocating loop.
-mod poll_arm;
-/// #7154 tooling: force an evacuating minor at every safepoint so an unrooted
-/// value dies/moves on its FIRST exposure. Debug-only (`PERRY_GC_ZEAL=1`).
-mod zeal;
+pub(crate) mod poll_arm;
+/// #7154 tooling: collect on a deterministic pseudo-random schedule derived from
+/// a seed, at a density `PERRY_GC_SCHEDULE_RATE` tunes from "never" up to every
+/// handled safepoint, so a failing seed is a reproducer. Debug-only
+/// (`PERRY_GC_SCHEDULE_SEED=<u64>`).
+pub(crate) mod schedule;
+pub use instruments::{copying_minor_cycles, loop_polls_reached, moved_objects_total};
 pub use poll_arm::PERRY_GC_POLL_ARMED;
 pub(crate) use poll_arm::{arm_poll, disarm_poll, poll_armed, resolve_poll_seed};
-/// #7154 tooling: the middle setting between normal pacing and zeal — collect on
-/// a deterministic pseudo-random schedule derived from a seed, so a failing seed
-/// is a reproducer. Debug-only (`PERRY_GC_SCHEDULE_SEED=<u64>`).
-pub(crate) mod schedule;
-pub use schedule::{gc_schedule_forced_collections, gc_schedule_safepoints};
-pub use verify::*;
-pub use zeal::{
-    copying_minor_cycles, loop_polls_reached, moved_objects_total, zeal_forced_collections,
-    zeal_liveness_report, zeal_polls_paced,
+pub use schedule::{
+    gc_schedule_forced_collections, gc_schedule_safepoints, schedule_liveness_report,
+    schedule_polls_paced,
 };
-pub(crate) use zeal::{gc_zeal_enabled, note_loop_poll_reached, note_zeal_forced_collection};
+pub use verify::*;
+pub(crate) use instruments::note_loop_poll_reached;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 #[cfg(feature = "diagnostics")]
@@ -372,8 +374,8 @@ pub fn gen_gc_enabled() -> bool {
 //
 // **Its one unique live effect was a footgun.** Vetoing
 // `gc_force_evacuate_enabled()` meant an ambient `PERRY_GEN_GC_EVACUATE=0`
-// silently disarmed `PERRY_GC_ZEAL` — the #7154 instrument — so a zeal run
-// could report "clean" having moved nothing. CLAUDE.md documented that as a
+// silently disarmed the #7154 stress instrument (`PERRY_GC_SCHEDULE_SEED`),
+// so a stress run could report "clean" having moved nothing. CLAUDE.md documented that as a
 // caveat rather than treating it as the defect it is. Deleting the knob deletes
 // the way to disarm the instrument by accident.
 //
@@ -391,11 +393,13 @@ pub fn gen_gc_enabled() -> bool {
 // decision that hasn't been made".
 
 fn gc_force_evacuate_enabled() -> bool {
-    // `PERRY_GC_ZEAL=1` implies forced evacuation (#7154 tooling): a zealous
-    // minor that leaves survivors in place would move nothing, and "an unrooted
-    // value moves on its first exposure" is the entire contract of zeal mode.
-    gc_zeal_enabled()
-        || schedule::gc_schedule_enabled()
+    // `PERRY_GC_SCHEDULE_SEED` implies forced evacuation (#7154 tooling): a
+    // scheduled minor that leaves survivors in place would move nothing, and
+    // "an unrooted value moves on its first exposure" is the entire contract of
+    // the mode — without this it would be a knob whose name promises relocation
+    // stress and whose effect is sweep pressure. Unconditional, per #7611's
+    // deletion note above.
+    schedule::gc_schedule_enabled()
         || matches!(
             std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
             Ok("1") | Ok("on") | Ok("true")
@@ -984,17 +988,16 @@ pub extern "C" fn js_gc_init() {
 /// the separately allocated buffers. The operation is idempotent and is called
 /// only once no more JavaScript work can run on this thread.
 ///
-/// ★ It is also where the **zeal liveness verdict** is emitted (#7604). Codegen
-/// calls this exactly once, at the real process-exit boundary after every exit
-/// callback (`codegen/entry.rs`), which is the one point in a compiled program
-/// where "what did this run actually exercise" is answerable. See
-/// `emit_zeal_liveness_verdict`.
+/// ★ It is also where the **schedule liveness verdict** is emitted (#7604).
+/// Codegen calls this exactly once, at the real process-exit boundary after
+/// every exit callback (`codegen/entry.rs`), which is the one point in a
+/// compiled program where "what did this run actually exercise" is answerable.
+/// See `emit_schedule_liveness_verdict`.
 #[no_mangle]
 pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     crate::map::release_current_thread_map_side_allocations();
     crate::json_tape_store::release_current_thread_lazy_tapes();
     crate::set::release_current_thread_set_side_allocations();
-    emit_zeal_liveness_verdict();
     // Every process-exit path funnels through here — the generated exit
     // epilogue, `js_process_exit`, and the fatal-path teardown — and perry's own
     // exits call `_exit`, so `atexit` alone would not see them. Print the seeded
@@ -1002,29 +1005,33 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // safepoints the schedule actually saw. Inert (one cached-`Option` load) and
     // once-only when the mode is off.
     schedule::report_exit_summary();
+    emit_schedule_liveness_verdict();
 }
 
-/// Print what `PERRY_GC_ZEAL=1` actually did, and **fail the process** when the
-/// answer is "nothing" (#7604).
+/// Print what the rate-1 schedule endpoint actually did, and **fail the
+/// process** when the answer is "nothing" (#7604).
 ///
 /// This is the "assert the subject was live" rule turned on the instrument
-/// itself. A zeal run that forced zero collections, or whose every forced
+/// itself. A rate-1 run that forced zero collections, or whose every forced
 /// collection was escalated to a non-moving full mark-sweep, has exercised
-/// nothing — and until now it exited 0 and looked exactly like a run that had.
-/// That is the fourth way a gate cannot fail, applied to a debug knob whose
-/// entire purpose is to make a class of bug reproducible.
+/// nothing — and before #7604 it exited 0 and looked exactly like a run that
+/// had. That is the fourth way a gate cannot fail, applied to a debug knob
+/// whose entire purpose is to make a class of bug reproducible.
 ///
-/// Exiting non-zero rather than warning is deliberate. Zeal is never on in
-/// production — the whole knob is debug-only, off by default, and set by hand
-/// or by a CI stress arm. In both of those contexts a vacuous run is a result
-/// the operator must not be allowed to read as a pass.
+/// Exiting non-zero rather than warning is deliberate. The schedule is never on
+/// in production — the whole knob is debug-only, off by default, and set by
+/// hand or by a CI stress arm. In both of those contexts a vacuous run is a
+/// result the operator must not be allowed to read as a pass. Sub-endpoint
+/// rates get no verdict (a sparse sample legitimately forcing nothing is not a
+/// broken instrument); their liveness counters are in the exit-summary line
+/// above.
 ///
 /// Known limitation, stated rather than hidden: `process.exit()` terminates via
-/// `libc::_exit` and never reaches this boundary, so a zeal run that ends that
-/// way gets no verdict. An uncaught throw is the same. Both already bypass
-/// every other exit callback.
-fn emit_zeal_liveness_verdict() {
-    match zeal_liveness_report() {
+/// `libc::_exit` and never reaches this boundary, so a run that ends that way
+/// gets no verdict. An uncaught throw is the same. Both already bypass every
+/// other exit callback.
+fn emit_schedule_liveness_verdict() {
+    match schedule_liveness_report() {
         None => {}
         Some(Ok(summary)) => eprintln!("{summary}"),
         Some(Err(complaint)) => {

@@ -26,7 +26,8 @@
 // `Iterator.from(...).map(...)` helper chain — while allocating hard enough
 // that a copying minor lands inside the constructor.
 //
-// Run under `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1`, compiled with
+// Run under `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1
+// PERRY_GC_PROTECT_FROMSPACE=1`, compiled with
 // `PERRY_GC_MOVING_LOOP_POLLS=1`, and confirm `PERRY_GC_DIAG=1` prints a
 // `[gc-fromspace-protect] mode=... retired_set=#N` line — a run with zero
 // copying minors protects nothing and proves nothing.

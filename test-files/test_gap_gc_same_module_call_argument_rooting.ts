@@ -1,4 +1,4 @@
-// parity-env: PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1
+// parity-env: PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1
 //
 // #7154: a call to a top-level function in the SAME module must root its
 // arguments, exactly as the cross-module call #7240 fixed does.

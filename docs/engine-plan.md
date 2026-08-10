@@ -76,7 +76,7 @@ condition in slice 8, so the remaining rooting work is runtime-side).
 **Gate debt still open:** #7554 (gc-ratchet CI has measured nothing since
 2026-08-05 — REPAIR THIS BEFORE the next GC-pacing change, which needs it),
 #7502–#7507 (root-lowering suites partly vacuous), #7300 (flaky codegen tests),
-#7604 (zeal can arm without firing on compute-only benches), #7606 (two macOS
+#7604 (the stress schedule can arm without firing on compute-only benches), #7606 (two macOS
 gc-rooting gap crashes, untriaged), #6847 reopened (zlib link on macOS).
 
 ### GC correctness — the four layers

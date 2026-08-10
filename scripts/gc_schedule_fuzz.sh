@@ -20,7 +20,7 @@
 #
 # The seeded schedule can only select safepoints that exist. Loop back-edge
 # polls are emitted only when the COMPILER ran with
-# `PERRY_GC_MOVING_LOOP_POLLS=1` (default off since #7161); without them a
+# `PERRY_GC_MOVING_LOOP_POLLS` enabled (default ON since #7721; `=0` kills them); without them a
 # compute-only program has no safepoints between event-loop turns and every seed
 # behaves identically. This script warns when a run reports zero safepoints,
 # because that is the shape of a sweep that cannot fail.
@@ -63,6 +63,14 @@ if [[ "${1:-}" == "--" ]]; then
   TARGET_ARGS=("$@")
 fi
 
+# A non-integer or zero seed count would run the sweep loop zero times and then
+# report "PASS: no seed failed" having proven nothing — the vacuous green this
+# whole harness exists to avoid. Reject it at parse time.
+if [[ ! "$SEED_COUNT" =~ ^[0-9]+$ || "$SEED_COUNT" -eq 0 ]]; then
+  echo "gc_schedule_fuzz: seed-count must be a positive integer, got '$SEED_COUNT'" >&2
+  exit 2
+fi
+
 if [[ ! -x "$BIN" ]]; then
   echo "gc_schedule_fuzz: no executable at '$BIN'" >&2
   exit 2
@@ -70,6 +78,23 @@ fi
 BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 
 RATE="${RATE:-0.05}"
+# The runtime CLAMPS an out-of-range rate, so `RATE=2` would run at 1 while every
+# line this script prints -- including the reproduce command -- claimed 2. A
+# reproduce command that does not describe the run it reproduces is worse than
+# none, so reject rather than clamp.
+if ! awk -v r="$RATE" 'BEGIN { exit !(r == r + 0 && r >= 0 && r <= 1) }' </dev/null 2>/dev/null; then
+  echo "gc_schedule_fuzz: RATE must be a number in [0,1] (got '$RATE')." >&2
+  echo "  The runtime clamps out-of-range values, so a sweep at RATE='$RATE'" >&2
+  echo "  would report a density it did not run at." >&2
+  exit 2
+fi
+
+# Allocation pacing is inherited from the environment and changes which polls
+# the seed can select, so it belongs in every command this script prints. Pin it
+# explicitly to the shipped default when the caller has not chosen one, so a
+# reproduce command is complete rather than dependent on the reader's shell.
+ALLOC_KB="${PERRY_GC_SCHEDULE_ALLOC_KB:-4}"
+export PERRY_GC_SCHEDULE_ALLOC_KB="$ALLOC_KB"
 FIRST_SEED="${FIRST_SEED:-1}"
 TIMEOUT="${TIMEOUT:-300}"
 BASELINE="${BASELINE:-0}"
@@ -153,6 +178,7 @@ for ((n = 0; n < SEED_COUNT; n++)); do
   log="$OUTDIR/seed-$seed.log"
   rc=0
   PERRY_GC_SCHEDULE_SEED="$seed" PERRY_GC_SCHEDULE_RATE="$RATE" \
+    PERRY_GC_SCHEDULE_ALLOC_KB="$ALLOC_KB" \
     run_once "$log" || rc=$?
 
   # Liveness, per CLAUDE.md's "a gate must assert its subject was live": a
@@ -191,16 +217,20 @@ echo "   wall clock    : ${elapsed}s ($(awk -v e="$elapsed" -v n="$SEED_COUNT" \
   'BEGIN { printf "%.1f", e / (n > 0 ? n : 1) }')s/run)"
 
 if [[ "$saw_safepoints" -eq 0 ]]; then
+  # A clean sweep that selected nothing proves nothing — refuse to call it a
+  # PASS. Reporting success here is exactly the vacuous green this harness
+  # exists to catch.
   echo
-  echo "   WARNING: no run reported a nonzero safepoint count."
+  echo "INCONCLUSIVE: no run reported a nonzero safepoint count."
   echo "   The seeded schedule had nothing to select, so a clean sweep here"
-  echo "   means nothing. Compile the target with PERRY_GC_MOVING_LOOP_POLLS=1"
-  echo "   so codegen emits loop back-edge polls (default off since #7161)."
+  echo "   means nothing. Check the target was not compiled with"
+  echo "   PERRY_GC_MOVING_LOOP_POLLS=0 (polls are default ON since #7721)."
+  exit 2
 fi
 
 if [[ ${#FAILED_SEEDS[@]} -eq 0 ]]; then
   echo
-  echo "PASS: no seed failed."
+  echo "PASS: no seed failed ($SEED_COUNT seeds, safepoints exercised)."
   exit 0
 fi
 
@@ -209,7 +239,8 @@ echo "== reproduce =="
 for i in "${!FAILED_SEEDS[@]}"; do
   seed="${FAILED_SEEDS[$i]}"
   echo "  # ${FAILED_CAUSES[$i]}"
-  echo "  PERRY_GC_SCHEDULE_SEED=$seed PERRY_GC_SCHEDULE_RATE=$RATE $BIN ${TARGET_ARGS[*]:-}"
+  echo "  PERRY_GC_SCHEDULE_SEED=$seed PERRY_GC_SCHEDULE_RATE=$RATE \\"
+  echo "  PERRY_GC_SCHEDULE_ALLOC_KB=$ALLOC_KB $BIN ${TARGET_ARGS[*]:-}"
   echo "  #   log: $OUTDIR/seed-$seed.log"
   echo "  #   for a precise fault site, add:"
   echo "  #     PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800"

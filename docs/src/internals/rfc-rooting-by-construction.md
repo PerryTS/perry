@@ -25,7 +25,7 @@ the mistake:
 |---|---|---|
 | code review | what a reviewer happens to notice | minutes, unreliable |
 | `gc_root_dominance_check.py` | dominance violations in emitted IR | one CI run |
-| `PERRY_GC_ZEAL` / from-space protect | the *consequence*, if timing cooperates | a test run, flaky |
+| `PERRY_GC_SCHEDULE_SEED` / from-space protect | the *consequence*, if timing cooperates | a test run, flaky |
 | a user's crash | everything, eventually | days |
 
 The static checker is a genuine improvement and should stay. But it is still a

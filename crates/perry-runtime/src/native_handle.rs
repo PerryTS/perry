@@ -51,11 +51,23 @@ fn current_thread_id() -> u64 {
     hasher.finish()
 }
 
-fn runtime_main_thread_id() -> u64 {
+pub(crate) fn runtime_main_thread_id() -> u64 {
     let current = current_thread_id();
     match MAIN_THREAD_ID.compare_exchange(0, current, Ordering::AcqRel, Ordering::Acquire) {
         Ok(_) => current,
         Err(existing) => existing,
+    }
+}
+
+/// True on the runtime's main thread, or when the main thread has not been
+/// recorded yet. The unrecorded case returns `true` on purpose: callers use
+/// this to gate a once-only diagnostic, and never emitting is worse than
+/// emitting from a not-yet-identified thread. Pure read — unlike
+/// [`runtime_main_thread_id`] it does not capture the caller as main.
+pub(crate) fn is_main_thread_or_unrecorded() -> bool {
+    match MAIN_THREAD_ID.load(Ordering::Acquire) {
+        0 => true,
+        main => current_thread_id() == main,
     }
 }
 

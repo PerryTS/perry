@@ -1,5 +1,9 @@
 //! Teeth for the #7154 detection-latency instruments: from-space quarantine
-//! (`PERRY_GC_PROTECT_FROMSPACE`) and GC zeal (`PERRY_GC_ZEAL`).
+//! (`PERRY_GC_PROTECT_FROMSPACE`) and the seeded GC schedule
+//! (`PERRY_GC_SCHEDULE_SEED`), which this file exercises at its
+//! maximum-density endpoint (`PERRY_GC_SCHEDULE_RATE=1`) because that is the
+//! setting the quarantine is paired with. The schedule's own knob parsing,
+//! determinism and density claims live in `gc/tests/schedule.rs`.
 //!
 //! Every test asserts BOTH directions of its knob. The GC knob kill-policy in
 //! CLAUDE.md requires an exercised OFF state for every knob, and the reason is
@@ -12,6 +16,7 @@
 //! than no instrument, and one that changes the collector when it is switched
 //! off is a landmine in every future bisect.
 
+use super::super::schedule::*;
 use super::super::*;
 use super::support::*;
 use crate::arena::FromSpaceProtection;
@@ -65,17 +70,6 @@ fn quarantine_depth_rejects_zero_and_garbage() {
     assert_eq!(parse_quarantine_depth(Some("16")), 16);
     assert_eq!(parse_quarantine_depth(Some("banana")), 4);
     assert_eq!(parse_quarantine_depth(None), 4);
-}
-
-#[test]
-fn zeal_knob_parses_both_states() {
-    use super::super::zeal::parse_zeal;
-    for raw in [None, Some("0"), Some("off"), Some("false"), Some("2")] {
-        assert!(!parse_zeal(raw), "{raw:?} must leave zeal OFF");
-    }
-    for raw in ["1", "on", "true"] {
-        assert!(parse_zeal(Some(raw)), "{raw} must enable zeal");
-    }
 }
 
 /// The gap this closes: `PERRY_GC_FROMSPACE_SCAN_ABORT=1` used to be completely
@@ -331,75 +325,59 @@ fn quarantine_catches_a_planted_stale_from_space_deref() {
 }
 
 // ---------------------------------------------------------------------------
-// Zeal
+// The seeded schedule at its maximum-density endpoint, paired with the
+// quarantine. Any seed selects every ordinal at rate 1, so this one is
+// arbitrary and fixed only so the test reads as a reproducible recipe.
 // ---------------------------------------------------------------------------
 
-/// Zeal's whole contract: collect at a safepoint where nothing is due. Both
-/// arms, because the OFF arm is what proves the safepoint was genuinely idle —
-/// without it, a passing ON arm could just be ordinary heap pressure.
-#[test]
-fn zeal_collects_at_a_safepoint_with_no_pressure_due() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    reset_scan_fallback_counters();
-
-    // OFF: an idle safepoint must collect nothing.
-    {
-        let _zeal = super::super::zeal::ZealGuard::set(false);
-        gc_safepoint_moving_minor();
-    }
-    assert_eq!(
-        safepoint_drain_count(SafepointDrainKind::NurseryMinor),
-        0,
-        "test premise: with no trigger due and zeal off, the safepoint must be idle"
-    );
-
-    // ON: the same idle safepoint must now run a minor.
-    let forced_before = zeal_forced_collections();
-    {
-        let _zeal = super::super::zeal::ZealGuard::set(true);
-        gc_safepoint_moving_minor();
-    }
-    assert_eq!(
-        safepoint_drain_count(SafepointDrainKind::NurseryMinor),
-        1,
-        "PERRY_GC_ZEAL=1 must force a minor at every safepoint"
-    );
-    assert!(
-        zeal_forced_collections() > forced_before,
-        "the forced collection must be COUNTED — a zeal run reporting 0 forced \
-         collections exercised nothing, and a clean verdict from it is vacuous"
-    );
-}
+const ENDPOINT_SEED: u64 = 7;
 
 // ---------------------------------------------------------------------------
-// Zeal pacing (#7728). Zeal used to force a collection at EVERY back-edge poll.
-// That was affordable only while the polls themselves were a compile-time
-// opt-in nobody took; #7721 made them default-ON and the same instrument became
-// ~511 us of fixed collection cost per loop iteration — 24 minutes for a 19 s
-// program, which is an instrument nobody switches on.
+// Allocation pacing (#7728).
+// The poll arm used to offer EVERY back-edge to the seed. That was affordable
+// only while the polls themselves were a compile-time opt-in nobody took; #7721
+// made them default-ON and the same instrument became ~511 us of fixed
+// collection cost per loop iteration — 24 minutes for a 19 s program, which is
+// an instrument nobody switches on.
 //
 // Both directions are asserted, per the kill-policy: the stride must BOUND the
 // forced collections, and `=0` must still give the literal every-poll mode.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn zeal_alloc_stride_knob_parses_both_states() {
-    use super::super::zeal::parse_zeal_alloc_kb;
+fn schedule_alloc_stride_knob_parses_both_states() {
+    use parse_schedule_alloc_kb;
     // Default when unset or unparseable — a typo must not silently select the
     // unusable every-poll mode.
-    assert_eq!(parse_zeal_alloc_kb(None), 4096);
-    assert_eq!(parse_zeal_alloc_kb(Some("banana")), 4096);
-    assert_eq!(parse_zeal_alloc_kb(Some("")), 4096);
-    // 0 is MEANINGFUL, not garbage: it restores pre-#7728 every-poll zeal.
-    assert_eq!(parse_zeal_alloc_kb(Some("0")), 0);
-    assert_eq!(parse_zeal_alloc_kb(Some("16")), 16 * 1024);
-    assert_eq!(parse_zeal_alloc_kb(Some(" 64 ")), 64 * 1024);
+    assert_eq!(parse_schedule_alloc_kb(None), 4096);
+    assert_eq!(parse_schedule_alloc_kb(Some("banana")), 4096);
+    assert_eq!(parse_schedule_alloc_kb(Some("")), 4096);
+    // 0 is MEANINGFUL, not garbage: it restores pre-#7728 every-poll candidacy.
+    assert_eq!(parse_schedule_alloc_kb(Some("0")), 0);
+    assert_eq!(parse_schedule_alloc_kb(Some("16")), 16 * 1024);
+    assert_eq!(parse_schedule_alloc_kb(Some(" 64 ")), 64 * 1024);
+
+    // A stride nothing can ever reach is an OFF switch wearing an ON label:
+    // the first poll rearms above every level the program will hit, so the
+    // seed selects nothing on the poll path and the run reports a clean sweep
+    // having tested nothing. Huge values clamp rather than saturate.
+    let cap = 1024 * 1024 * 1024;
+    assert_eq!(parse_schedule_alloc_kb(Some("18446744073709551615")), cap);
+    assert_eq!(parse_schedule_alloc_kb(Some("1073741824")), cap);
+    assert_eq!(
+        parse_schedule_alloc_kb(Some("1048576")),
+        cap,
+        "exactly the cap, expressed in KB, must stay the cap"
+    );
+    assert!(
+        parse_schedule_alloc_kb(Some("1048575")) < cap,
+        "and just under it must not be clamped"
+    );
 }
 
 /// ★ The regression test for #7728, and the one that would have caught it.
 ///
-/// Drives a hot poll loop — the shape of every real workload under zeal — and
+/// Drives a hot poll loop — the shape of every real workload under the schedule — and
 /// asserts the forced collections are BOUNDED well below the poll count. Before
 /// the fix this ratio was exactly 1.0 (70,968 forced collections for 70,963
 /// polls on the measured workload), so this assertion fails on the old code.
@@ -409,18 +387,18 @@ fn zeal_alloc_stride_knob_parses_both_states() {
 /// the one being fixed (CLAUDE.md, four ways a gate cannot fail — #4): the run
 /// must still force collections, and those collections must still MOVE objects.
 #[test]
-fn zeal_pacing_bounds_forced_collections_but_still_moves_objects() {
+fn pacing_bounds_forced_collections_but_still_moves_objects() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _polls = super::super::policy::MovingLoopPollsGuard::on();
-    let _zeal = super::super::zeal::ZealGuard::set(true);
-    let _stride = super::super::zeal::ZealStrideGuard::set(4096);
-    super::super::zeal::reset_zeal_pacing_for_test();
+    let _schedule = ScheduleGuard::set(ENDPOINT_SEED, rate_threshold(1.0));
+    let _stride = ScheduleStrideGuard::set(4096);
+    reset_schedule_pacing_for_test();
 
     const POLLS: u64 = 2_000;
-    let forced_before = zeal_forced_collections();
+    let forced_before = gc_schedule_forced_collections();
     let moved_before = moved_objects_total();
-    let paced_before = zeal_polls_paced();
+    let paced_before = schedule_polls_paced();
 
     for _ in 0..POLLS {
         // Allocate, root it, then poll — a loop body that produces new nursery
@@ -431,9 +409,9 @@ fn zeal_pacing_bounds_forced_collections_but_still_moves_objects() {
         js_gc_loop_safepoint();
     }
 
-    let forced = zeal_forced_collections() - forced_before;
+    let forced = gc_schedule_forced_collections() - forced_before;
     let moved = moved_objects_total() - moved_before;
-    let paced = zeal_polls_paced() - paced_before;
+    let paced = schedule_polls_paced() - paced_before;
 
     // THE BOUND. Each `young_leaf` is a few tens of bytes, so 2000 of them is
     // well under 200 KB; at a 4 KB stride that is a few dozen collections, not
@@ -441,7 +419,7 @@ fn zeal_pacing_bounds_forced_collections_but_still_moves_objects() {
     // while still failing loudly on the pre-fix 1:1 behaviour.
     assert!(
         forced < POLLS / 4,
-        "zeal must PACE its forced collections: {forced} forced for {POLLS} polls \
+        "the schedule must PACE its forced collections: {forced} forced for {POLLS} polls \
          (pre-#7728 this was 1:1, which cost 24 minutes on a 19 s program)"
     );
     assert_eq!(
@@ -451,19 +429,19 @@ fn zeal_pacing_bounds_forced_collections_but_still_moves_objects() {
          (forced={forced} paced={paced})"
     );
 
-    // LIVENESS 1: pacing must not have turned zeal off. A run that forces zero
+    // LIVENESS 1: pacing must not have turned the schedule off. A run that forces zero
     // collections is the vacuous-green shape, not a fix.
     assert!(
         forced > 0,
-        "zeal must still force collections — a paced instrument that never \
+        "the schedule must still force collections — a paced instrument that never \
          collects is a worse regression than the slow one it replaced"
     );
-    // LIVENESS 2: and those collections must still RELOCATE. Zeal exists to
+    // LIVENESS 2: and those collections must still RELOCATE. The mode exists to
     // make an unrooted value move on its first exposure; a paced minor that
     // leaves survivors in place would surface nothing.
     assert!(
         moved > 0,
-        "zeal's paced collections must still MOVE survivors (moved={moved})"
+        "the schedule's paced collections must still MOVE survivors (moved={moved})"
     );
 }
 
@@ -471,25 +449,25 @@ fn zeal_pacing_bounds_forced_collections_but_still_moves_objects() {
 /// literal every-poll semantics, which is the right setting for a small fixture
 /// (`gc_instrument_smoke.sh` pins it) or a window executed exactly once.
 #[test]
-fn zeal_alloc_stride_zero_restores_every_poll_collection() {
+fn schedule_alloc_stride_zero_restores_every_poll_collection() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _polls = super::super::policy::MovingLoopPollsGuard::on();
-    let _zeal = super::super::zeal::ZealGuard::set(true);
-    let _stride = super::super::zeal::ZealStrideGuard::set(0);
-    super::super::zeal::reset_zeal_pacing_for_test();
+    let _schedule = ScheduleGuard::set(ENDPOINT_SEED, rate_threshold(1.0));
+    let _stride = ScheduleStrideGuard::set(0);
+    reset_schedule_pacing_for_test();
 
     const POLLS: u64 = 32;
-    let forced_before = zeal_forced_collections();
+    let forced_before = gc_schedule_forced_collections();
     for _ in 0..POLLS {
         let leaf = young_leaf();
         js_shadow_slot_set(0, string_bits(leaf));
         js_gc_loop_safepoint();
     }
     assert_eq!(
-        zeal_forced_collections() - forced_before,
+        gc_schedule_forced_collections() - forced_before,
         POLLS,
-        "PERRY_GC_ZEAL_ALLOC_KB=0 must collect at EVERY poll — that escape \
+        "PERRY_GC_SCHEDULE_ALLOC_KB=0 must collect at EVERY poll — that escape \
          hatch is what a once-executed bug window needs"
     );
 }
@@ -503,62 +481,42 @@ fn zeal_alloc_stride_zero_restores_every_poll_collection() {
 /// the collection makes the next one cost a full stride of genuinely new
 /// allocation no matter what the collector managed to free.
 #[test]
-fn zeal_pacing_rearms_above_survivors_so_a_useless_collection_cannot_loop() {
-    use super::super::zeal::{
-        note_zeal_poll_collection, reset_zeal_pacing_for_test, zeal_poll_collection_due,
-        ZealStrideGuard,
+fn pacing_rearms_above_survivors_so_a_useless_collection_cannot_loop() {
+    use super::super::schedule::{
+        note_schedule_poll_collection, reset_schedule_pacing_for_test,
+        schedule_poll_collection_due, ScheduleStrideGuard,
     };
-    let _stride = ZealStrideGuard::set(4096);
-    reset_zeal_pacing_for_test();
+    let _stride = ScheduleStrideGuard::set(4096);
+    reset_schedule_pacing_for_test();
 
     // A collection that freed NOTHING: from-space still holds 1 MB afterwards.
-    note_zeal_poll_collection(1024 * 1024);
+    note_schedule_poll_collection(1024 * 1024);
     assert!(
-        !zeal_poll_collection_due(1024 * 1024),
+        !schedule_poll_collection_due(1024 * 1024),
         "a collection that reclaimed nothing must NOT be immediately due again \
          — that is the #7592 livelock shape"
     );
     assert!(
-        !zeal_poll_collection_due(1024 * 1024 + 4095),
+        !schedule_poll_collection_due(1024 * 1024 + 4095),
         "still short of one full stride of new allocation"
     );
     assert!(
-        zeal_poll_collection_due(1024 * 1024 + 4096),
+        schedule_poll_collection_due(1024 * 1024 + 4096),
         "one full stride of NEW material above the survivors makes it due again"
     );
 }
 
-/// A zealous minor that leaves survivors in place would move nothing, so it
-/// could not surface a stale-pointer bug at all. Zeal therefore implies forced
-/// evacuation, UNCONDITIONALLY.
-///
-/// ★ #7611 deleted the `PERRY_GEN_GC_EVACUATE=0` veto this test used to have a
-/// second arm for. That veto was the one way an ambient environment variable
-/// could silently turn zeal into a no-op: this very test used to take the
-/// precedence arm and `return` without exercising zeal at all, which is the
-/// vacuous-green shape the kill-policy exists to catch. There is now no
-/// environment in which zeal does not force evacuation, so there is one arm and
-/// it always runs.
+/// The schedule and the quarantine are designed to compose — that pairing is
+/// what turns a #7154 bug into an immediate fault instead of a cycle-late
+/// `TypeError`. This asserts they actually run together rather than one
+/// disabling the other.
 #[test]
-fn zeal_implies_forced_evacuation() {
-    let _zeal_off = super::super::zeal::ZealGuard::set(false);
-    let off = gc_force_evacuate_enabled();
-    let _zeal_on = super::super::zeal::ZealGuard::set(true);
-    assert!(
-        gc_force_evacuate_enabled(),
-        "zeal must force evacuation in every environment (force_off={off})"
-    );
-}
-
-/// Zeal and protection are designed to compose — that pairing is what turns a
-/// #7154 bug into an immediate fault instead of a cycle-late `TypeError`. This
-/// asserts they actually run together rather than one disabling the other.
-#[test]
-fn zeal_and_protection_compose() {
+fn the_schedule_and_protection_compose() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _mode = crate::arena::ProtectionModeGuard::set(FromSpaceProtection::PoisonOnly);
-    let _zeal = super::super::zeal::ZealGuard::set(true);
+    let _schedule = ScheduleGuard::set(ENDPOINT_SEED, rate_threshold(1.0));
+    reset_thread_counter_for_test();
     reset_scan_fallback_counters();
     let before = crate::arena::quarantine_stats();
 
@@ -569,18 +527,18 @@ fn zeal_and_protection_compose() {
     assert_eq!(
         safepoint_drain_count(SafepointDrainKind::NurseryMinor),
         1,
-        "zeal must have forced the minor"
+        "the schedule at rate 1 must have forced the minor"
     );
     let after = crate::arena::quarantine_stats();
     assert_eq!(
         after.sets_retired,
         before.sets_retired + 1,
-        "the zeal-forced minor's from-space must have been quarantined"
+        "the schedule-forced minor's from-space must have been quarantined"
     );
     assert_eq!(
         unsafe { *(from_space_addr as *const u64) },
         crate::arena::QUARANTINE_POISON_WORD,
-        "zeal + protection: the address the value moved out of must be poison \
-         immediately, not on some later cycle"
+        "schedule + protection: the address the value moved out of must be \
+         poison immediately, not on some later cycle"
     );
 }

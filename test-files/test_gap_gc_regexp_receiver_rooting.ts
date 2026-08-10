@@ -34,10 +34,10 @@
 // read is observable rather than latent. Clean under `PERRY_GEN_GC=0`, so the
 // evacuating arms are the ones that bite.
 
-// The loop is what matters, not its trip count: under `PERRY_GC_ZEAL=1` the
+// The loop is what matters, not its trip count: under `PERRY_GC_SCHEDULE_RATE=1` the
 // FIRST back-edge poll inside it already runs an evacuating minor, which is
 // the collection the receiver has to survive. The count is kept modest on
-// purpose — zeal collects at every safepoint, so a 4000-trip churn (what the
+// purpose — rate 1 collects at every safepoint, so a 4000-trip churn (what the
 // sibling #7154 tests use, where the collection has to arrive on its own
 // budget) turns this file into a multi-hour run for no extra coverage.
 function churn(tag: string): string {

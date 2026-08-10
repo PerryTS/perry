@@ -1,28 +1,25 @@
 //! Seeded GC-schedule fuzzing (#7154 tooling) — `PERRY_GC_SCHEDULE_SEED`.
 //!
-//! # Why a third setting between "normal" and "zeal"
+//! # Why the collection schedule is a knob at all
 //!
 //! A #7154-class bug is a value that is live but not rooted across a collection
 //! point. Whether it is *caught* depends entirely on whether a collection lands
 //! inside that window, so the observed failure rate is a property of the
-//! *schedule*, not of the bug. Two settings existed:
+//! *schedule*, not of the bug. Normal pacing puts collections tens of megabytes
+//! apart: Socket Firewall's `sfw-registry --help` fails about 1 run in 60 there.
+//! Confirming a fix by repetition at that rate needs ~1000 runs; with zero
+//! failures in `N` runs the 95% upper bound on the true rate is only ~`3/N`, so
+//! 120 clean runs bound a 1.7% bug at 2.5% — no evidence at all.
 //!
-//! - **Normal.** Collections are tens of megabytes apart. Socket Firewall's
-//!   `sfw-registry --help` fails about 1 run in 60 here. Confirming a fix by
-//!   repetition at that rate needs ~1000 runs; with zero failures in `N` runs
-//!   the 95% upper bound on the true rate is only ~`3/N`, so 120 clean runs
-//!   bound a 1.7% bug at 2.5% — no evidence at all.
-//! - **`PERRY_GC_ZEAL=1`.** Collect at *every* safepoint. Maximum pressure, but
-//!   all-or-nothing: it is one fixed schedule, it is slow, and it changes the
-//!   program's timing enough that some workloads never reach the interesting
-//!   code (on Socket Firewall's registry it dies in `node-machine-id` first, so
-//!   zeal cannot be used there at all).
-//!
-//! This mode is the middle. `PERRY_GC_SCHEDULE_SEED=<u64>` makes the decision
-//! *"should this safepoint collect?"* a deterministic pseudo-random function of
-//! the seed and a monotonically increasing per-thread safepoint counter, at a
-//! tunable density (`PERRY_GC_SCHEDULE_RATE`, default 5%). Two properties
-//! follow, and they are the whole point:
+//! `PERRY_GC_SCHEDULE_SEED=<u64>` makes the decision *"should this safepoint
+//! collect?"* a deterministic pseudo-random function of the seed and a
+//! monotonically increasing per-thread safepoint counter, at a density
+//! `PERRY_GC_SCHEDULE_RATE` tunes (default 5%). The whole range is one knob:
+//! rate 1 collects at *every* handled safepoint — maximum pressure, one fixed
+//! schedule, slow, and distorting enough that some workloads never reach the
+//! interesting code (on Socket Firewall's registry a rate-1 run dies in
+//! `node-machine-id` first, so the useful rates there are the low ones). Two
+//! properties follow from the seed, and they are the whole point:
 //!
 //! 1. **Amplification.** Varying *when* collections fire explores the actual bug
 //!    space. Re-running one fixed schedule explores almost nothing — which is
@@ -40,9 +37,8 @@
 //! `PERRY_GC_SCHEDULE_SEED=<u64>` (unset ⇒ mode OFF, and OFF is inert):
 //!
 //! 1. `js_gc_loop_safepoint` stops requiring `GC_SAFEPOINT_PENDING` before it
-//!    descends into `gc_safepoint_moving_minor` — exactly the bypass zeal
-//!    performs, and for the same reason: the schedule cannot select a safepoint
-//!    that the gate returned from.
+//!    descends into `gc_safepoint_moving_minor`. The schedule cannot select a
+//!    safepoint that the gate returned from.
 //! 2. In `gc_safepoint_moving_minor`, the per-thread safepoint counter is
 //!    advanced once per *handled* safepoint (i.e. after the entry guards, at the
 //!    point `GC_SAFEPOINT_PENDING` is cleared), and when
@@ -62,12 +58,16 @@
 //!   a budgeted cycle still returns without collecting **and without ticking the
 //!   counter**, so the schedule stays aligned with safepoints that could have
 //!   collected;
-//! - override an explicit `PERRY_GEN_GC_EVACUATE=0` — that wins, and with it set
-//!   this mode moves nothing and surfaces nothing, exactly as with zeal;
-//! - emit loop back-edge polls. Those need the **compile-time**
-//!   `PERRY_GC_MOVING_LOOP_POLLS=1` (default off since #7161). Without them the
-//!   mode only sees event-loop-boundary safepoints and a compute-only loop never
-//!   collects. Compile *and* run with the poll opt-in;
+//! - leave survivors in place: a resolved seed implies forced evacuation
+//!   UNCONDITIONALLY. `PERRY_GEN_GC_EVACUATE`, whose `=0` used to veto that,
+//!   was deleted by #7611 precisely because an ambient veto silently turned
+//!   the #7154 instrument into a no-op — the vacuous-green shape the knob
+//!   kill-policy exists to catch;
+//! - emit loop back-edge polls. Those are a **compile-time** property
+//!   (`PERRY_GC_MOVING_LOOP_POLLS`, default ON since #7721; a binary compiled
+//!   with `=0` has none). Without them the mode only sees event-loop-boundary
+//!   safepoints and a compute-only loop never collects — check the exit
+//!   summary's `loop_polls=` before trusting a clean sweep;
 //! - suppress or replace pressure-driven collections. The rate is *additional*
 //!   density on top of what the budgeted collector already does, never less.
 //!
@@ -77,8 +77,8 @@
 //! `PERRY_GC_SCHEDULE_SEED` is set. `0` means never (a deliberately inert-but-on
 //! configuration, useful as a control: the banner and reporter still install, so
 //! an A/B against `rate>0` isolates the schedule from the reporting). `1` means
-//! every handled safepoint, which is zeal's density — reachable, but if that is
-//! what you want, `PERRY_GC_ZEAL=1` says so more plainly.
+//! every handled safepoint — the maximum-pressure endpoint, where the seed stops
+//! mattering because every ordinal is selected whatever it hashes to.
 //!
 //! # Determinism: the guarantee, and its limit
 //!
@@ -106,8 +106,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Default expected fraction of handled safepoints that collect. Chosen as a
 /// middle: ~20x normal density on a poll-heavy workload, but two orders of
-/// magnitude cheaper than zeal, and low enough that the program's own timing is
-/// not so distorted that it fails somewhere uninteresting first.
+/// magnitude cheaper than the rate-1 endpoint, and low enough that the program's
+/// own timing is not so distorted that it fails somewhere uninteresting first.
 pub(crate) const DEFAULT_SCHEDULE_RATE: f64 = 0.05;
 
 /// Collections this mode has forced that would not otherwise have run. The
@@ -118,6 +118,15 @@ static SCHEDULE_FORCED: AtomicU64 = AtomicU64::new(0);
 /// Handled safepoints seen by the schedule, summed across threads. Diagnostic
 /// only — the per-thread counter that actually drives the schedule is the
 /// thread-local below.
+///
+/// **Both counters are process-global, so a test asserting an exact delta on
+/// them must hold `COPYING_NURSERY_TEST_LOCK`** (via `CopyingNurseryTestGuard`)
+/// for the whole before/act/after window. Only a safepoint reached with the
+/// mode ON ticks them, and the mode is a thread-local override in tests, so
+/// today every ticking test already holds that lock and the deltas cannot
+/// race. That is an invariant, not an accident: a new test that drives a
+/// safepoint under `ScheduleGuard` without the nursery guard would make every
+/// other test's `before + 1` flaky.
 static SCHEDULE_SAFEPOINTS: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
@@ -173,9 +182,9 @@ const fn splitmix64(x: u64) -> u64 {
 
 /// Sentinel threshold meaning "every handled safepoint". `u64::MAX` is also a
 /// legitimate hash value, so `hit` cannot be expressed as a plain `<` at rate 1
-/// without losing one safepoint in 2^64 — irrelevant in practice, but a mode
-/// whose rate-1 arm is not *exactly* zeal density is the sort of off-by-epsilon
-/// that costs an investigation round when someone diffs the two.
+/// without losing one safepoint in 2^64 — irrelevant in practice, but a rate-1
+/// arm that is not *exactly* 100% density is the sort of off-by-epsilon that
+/// costs an investigation round when someone checks the endpoint.
 const THRESHOLD_ALWAYS: u64 = u64::MAX;
 
 /// Map a rate in `[0, 1]` onto the threshold the schedule hash is compared
@@ -251,8 +260,8 @@ fn resolved() -> Option<(u64, u64)> {
     })
 }
 
-/// Is seeded GC-schedule fuzzing on? One cached-`Option` load — the same cost
-/// class as the zeal check beside it.
+/// Is seeded GC-schedule fuzzing on? One cached-`Option` load, so the default
+/// path pays a predictable-branch check and nothing else.
 pub(crate) fn gc_schedule_enabled() -> bool {
     resolved().is_some()
 }
@@ -297,6 +306,89 @@ pub fn gc_schedule_safepoints() -> u64 {
     SCHEDULE_SAFEPOINTS.load(Ordering::Relaxed)
 }
 
+/// The verdict a rate-1 run gets at exit: what the instrument actually did
+/// (#7604).
+///
+/// `Some(Ok(summary))` when the maximum-density schedule moved something,
+/// `Some(Err(complaint))` when it exercised nothing and every "clean at rate 1"
+/// claim from the run is vacuous. `None` when the mode is off **or the rate is
+/// below the every-safepoint endpoint**: at a sampling rate, a short run that
+/// forces nothing is a legitimate outcome (`PERRY_GC_SCHEDULE_RATE=0` is the
+/// documented on-but-selects-nothing control arm, and a sparse sweep seed that
+/// fires late is not a broken instrument), so only the arm that PROMISED
+/// maximum pressure is held to having produced it. Sub-endpoint runs still get
+/// their liveness counters printed by `report_exit_summary`.
+pub fn schedule_liveness_report() -> Option<Result<String, String>> {
+    let (_, threshold) = resolved()?;
+    if threshold < rate_threshold(1.0) {
+        return None;
+    }
+    Some(schedule_verdict(
+        gc_schedule_forced_collections(),
+        super::instruments::copying_minor_cycles(),
+        super::instruments::moved_objects_total(),
+        super::instruments::loop_polls_reached(),
+        super::policy::gc_moving_loop_polls_enabled(),
+    ))
+}
+
+/// The verdict as a pure function of the counters, so the decision is testable
+/// without mutating process-global state that every other test in this crate
+/// shares.
+///
+/// `polls_requested` is the RUNTIME half of `PERRY_GC_MOVING_LOOP_POLLS`. When
+/// it is on and `loop_polls` is still zero, the operator asked for in-loop
+/// coverage and got none — the exact "arms but never fires" shape #7604
+/// reported, and the one a `forced_collections > 0` from event-loop-boundary
+/// collections would otherwise paper over.
+pub(crate) fn schedule_verdict(
+    forced: u64,
+    cycles: u64,
+    moved: u64,
+    loop_polls: u64,
+    polls_requested: bool,
+) -> Result<String, String> {
+    let summary = format!(
+        "[gc-schedule] forced_collections={forced} copying_minors={cycles} \
+         moved_objects={moved} loop_polls={loop_polls}"
+    );
+    let cause = if forced == 0 {
+        Some("no safepoint ever forced a collection")
+    } else if cycles == 0 {
+        Some(
+            "every forced collection was escalated to a non-moving full \
+             mark-sweep, so nothing was relocated",
+        )
+    } else if polls_requested && loop_polls == 0 {
+        Some(
+            "PERRY_GC_MOVING_LOOP_POLLS=1 was set but NOT ONE back-edge poll \
+             was reached, so every collection came from an event-loop \
+             boundary and no loop body was covered",
+        )
+    } else {
+        None
+    };
+    match cause {
+        None => Ok(summary),
+        Some(cause) => Err(format!(
+            "{summary}\n\
+             [gc-schedule] THIS RUN EXERCISED NOTHING WORTH TRUSTING. \
+             PERRY_GC_SCHEDULE_RATE=1 was set and {cause}. Any \"clean at \
+             rate 1\" conclusion from this run is vacuous.\n\
+             [gc-schedule] The usual causes: the binary was COMPILED without \
+             PERRY_GC_MOVING_LOOP_POLLS=1 (it is a compile-time opt-in as well \
+             as a runtime one), or its hot loops are ones codegen emits no poll \
+             for -- provably alloc-free bodies by design \
+             (`loop_purity::loop_may_allocate`), and the specialized `for` / \
+             `for-of` / `for-in` lowerings by omission (see \
+             `emit_gc_loop_safepoint`'s COVERAGE note). `loop_polls` above is \
+             the direct answer; do NOT try to count the call sites with \
+             `nm`/`objdump`, which report 0 on a binary whose polls demonstrably \
+             fire 20069 times."
+        )),
+    }
+}
+
 /// RAII test override. `threshold` is taken directly so tests can pin the
 /// always/never arms without going through float parsing.
 #[cfg(test)]
@@ -308,9 +400,9 @@ pub(crate) struct ScheduleGuard {
 #[cfg(test)]
 impl ScheduleGuard {
     pub(crate) fn set(seed: u64, threshold: u64) -> Self {
-        // #7781: mirror `ZealGuard` — a schedule that cannot reach the poll
-        // decides at six event-loop boundaries instead of thousands of
-        // back-edges. Arm on set, release on drop.
+        // #7781: a schedule that cannot reach the poll decides at six
+        // event-loop boundaries instead of thousands of back-edges. Arm on
+        // set, release on drop.
         //
         // The bookkeeping is deliberately ASYMMETRIC: only `set` arms, and only
         // its own `Drop` releases. `off()` must NOT disarm-then-let-Drop-rearm:
@@ -321,7 +413,7 @@ impl ScheduleGuard {
         let prev = SCHEDULE_OVERRIDE.with(|cell| cell.replace(Some((seed, threshold))));
         let armed = prev.is_none();
         if armed {
-            super::arm_poll();
+            super::poll_arm::arm_poll();
         }
         Self { prev, armed }
     }
@@ -336,7 +428,7 @@ impl Drop for ScheduleGuard {
     fn drop(&mut self) {
         SCHEDULE_OVERRIDE.with(|cell| cell.set(self.prev));
         if self.armed {
-            super::disarm_poll();
+            super::poll_arm::disarm_poll();
         }
     }
 }
@@ -344,6 +436,130 @@ impl Drop for ScheduleGuard {
 #[cfg(test)]
 pub(crate) fn reset_thread_counter_for_test() {
     SAFEPOINT_COUNTER.with(|cell| cell.set(0));
+}
+
+// --------------------------------------------------- allocation pacing (#7728)
+//
+// `PERRY_GC_SCHEDULE_ALLOC_KB`: the poll arm only offers a safepoint to the
+// seed once a stride of NEW nursery material has accumulated; `=0` restores the
+// literal every-poll candidate set. Unpaced, the every-poll arm costs ~511 µs
+// per loop iteration to relocate a mean of 5.9 objects — 24 minutes for a 19 s
+// program (#7728) — which is an instrument nobody switches on. Pacing by allocation keeps the schedule deterministic:
+// a deterministic program allocates deterministically, so `(seed, counter)`
+// replay is unaffected; the stride only bounds which polls become candidates.
+
+const SCHEDULE_DEFAULT_STRIDE_BYTES: usize = 4 * 1024;
+
+/// Largest accepted stride: 1 GiB of new nursery material between candidates.
+///
+/// The cap exists because an UNBOUNDED stride is a silent off switch. A value
+/// big enough to saturate — or merely bigger than the program ever allocates —
+/// leaves `schedule_poll_collection_due` false after the first poll forever, so
+/// the seed selects nothing on the poll path and the run reports a clean sweep
+/// having tested nothing. That is the failure this project keeps paying for
+/// (#6942 / #7024), and a debug instrument must not have a spelling that
+/// disables it while still looking on.
+const SCHEDULE_MAX_STRIDE_BYTES: usize = 1024 * 1024 * 1024;
+
+/// Pure knob parse for `PERRY_GC_SCHEDULE_ALLOC_KB`, in KB.
+///
+/// `Some(0)` is a deliberate, meaningful value — "every poll is a candidate" —
+/// so it must not be filtered out the way a nonsense value is. Anything above
+/// [`SCHEDULE_MAX_STRIDE_BYTES`] CLAMPS to it rather than saturating, for the
+/// reason given on that constant.
+pub(crate) fn parse_schedule_alloc_kb(raw: Option<&str>) -> usize {
+    raw.and_then(|s| s.trim().parse::<usize>().ok())
+        .map(|kb| kb.saturating_mul(1024).min(SCHEDULE_MAX_STRIDE_BYTES))
+        .unwrap_or(SCHEDULE_DEFAULT_STRIDE_BYTES)
+}
+
+/// Bytes of new nursery material required between poll-arm candidates.
+pub(crate) fn schedule_poll_stride_bytes() -> usize {
+    #[cfg(test)]
+    if let Some(stride) = SCHEDULE_STRIDE_OVERRIDE.with(std::cell::Cell::get) {
+        return stride;
+    }
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<usize> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        parse_schedule_alloc_kb(std::env::var("PERRY_GC_SCHEDULE_ALLOC_KB").ok().as_deref())
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only stride override, thread-local for the same reason
+    /// `SCHEDULE_OVERRIDE` is.
+    static SCHEDULE_STRIDE_OVERRIDE: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// RAII test override for the pacing stride.
+#[cfg(test)]
+pub(crate) struct ScheduleStrideGuard(Option<usize>);
+
+#[cfg(test)]
+impl ScheduleStrideGuard {
+    pub(crate) fn set(stride_bytes: usize) -> Self {
+        Self(SCHEDULE_STRIDE_OVERRIDE.with(|cell| cell.replace(Some(stride_bytes))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScheduleStrideGuard {
+    fn drop(&mut self) {
+        SCHEDULE_STRIDE_OVERRIDE.with(|cell| cell.set(self.0));
+    }
+}
+
+thread_local! {
+    /// From-space high-water mark at or above which the next poll-arm candidate
+    /// is due. Per-thread because the arena it measures is.
+    ///
+    /// Starts at 0 so the FIRST poll is always a candidate: a program that
+    /// allocates less than one stride in total must still exercise the
+    /// instrument rather than silently becoming a run in which the schedule
+    /// selected nothing.
+    static SCHEDULE_NEXT_CANDIDATE_BYTES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Is this poll a pacing candidate, given current from-space bytes?
+#[inline]
+pub(crate) fn schedule_poll_collection_due(from_space_bytes: usize) -> bool {
+    from_space_bytes >= SCHEDULE_NEXT_CANDIDATE_BYTES.with(std::cell::Cell::get)
+}
+
+/// Rearm the pacing high-water mark after a candidate poll ran the safepoint.
+///
+/// Takes the from-space level measured *after* the safepoint, so the next
+/// candidate needs a full stride of genuinely new allocation on top of whatever
+/// survived — a high-water mark rather than a delta, for the same reason as
+/// #7728's original.
+#[inline]
+pub(crate) fn note_schedule_poll_collection(from_space_bytes_after: usize) {
+    let next = from_space_bytes_after.saturating_add(schedule_poll_stride_bytes());
+    SCHEDULE_NEXT_CANDIDATE_BYTES.with(|cell| cell.set(next));
+}
+
+/// Polls the pacing skipped before the seed ever saw them.
+static SCHEDULE_POLLS_PACED: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub(crate) fn note_schedule_poll_paced() {
+    SCHEDULE_POLLS_PACED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// How many back-edge polls the pacing skipped. Reported in the exit summary so
+/// a run states its own pacing rather than leaving the operator to infer it
+/// from a safepoint count that looks lower than it "should" be.
+pub fn schedule_polls_paced() -> u64 {
+    SCHEDULE_POLLS_PACED.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_schedule_pacing_for_test() {
+    SCHEDULE_NEXT_CANDIDATE_BYTES.with(|cell| cell.set(0));
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +593,13 @@ fn install_failure_reporter() {
     if REPORTER_INSTALLED.swap(true, Ordering::SeqCst) {
         return;
     }
+    // Capture the installing thread as the runtime main thread. The exit
+    // summary is once-only and gated on `is_main_thread_or_unrecorded`, whose
+    // unrecorded arm passes EVERY thread while no main thread is registered —
+    // so a worker tearing down first could win the swap with non-final
+    // counts. The schedule activates on the thread that owns its lifecycle,
+    // which makes this the right owner for its summary.
+    crate::native_handle::runtime_main_thread_id();
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         report_to_stderr("panic");
@@ -426,13 +649,29 @@ pub(crate) fn report_exit_summary() {
     let Some((seed, _)) = resolved() else {
         return;
     };
+    // Emit only from the main thread. Every thread routes through the
+    // collection-side-allocation release on teardown, and the counters are
+    // process-global atomics; a worker tearing down first would win the
+    // once-only `swap` and print counts that are not yet final — and
+    // `gc_schedule_fuzz.sh` reads `safepoints=0` as the vacuous case. The
+    // main thread tears down at process exit, so it sees the true totals.
+    // Falls back to emitting when the main thread was never recorded, so the
+    // summary is never silently dropped.
+    if !crate::native_handle::is_main_thread_or_unrecorded() {
+        return;
+    }
     if SUMMARY_EMITTED.swap(true, Ordering::SeqCst) {
         return;
     }
     eprintln!(
-        "[gc-schedule] done: seed={seed} safepoints={} scheduled_collections={}",
+        "[gc-schedule] done: seed={seed} safepoints={} scheduled_collections={} \
+         polls_paced={} copying_minors={} moved_objects={} loop_polls={}",
         gc_schedule_safepoints(),
         gc_schedule_forced_collections(),
+        schedule_polls_paced(),
+        super::instruments::copying_minor_cycles(),
+        super::instruments::moved_objects_total(),
+        super::instruments::loop_polls_reached(),
     );
 }
 
@@ -521,7 +760,18 @@ fn install_signal_reporter_inner() {
             if libc::sigaction(signum, &action, &mut old) != 0 {
                 continue;
             }
-            let previous = old.sa_sigaction as u64;
+            // Only a handler installed with `SA_SIGINFO` has a valid
+            // `sa_sigaction` (3-argument) member; a 1-argument `sa_handler`
+            // installer leaves `sa_sigaction` meaningless to read, and the
+            // chain site transmutes the stored value to a 3-argument fn. Store
+            // 0 (treated as "nothing to chain to") unless the previous handler
+            // was itself `SA_SIGINFO`, so we never call a 1-arg handler through
+            // the wrong signature. SIG_DFL/SIG_IGN already read as 0/1.
+            let previous = if old.sa_flags & libc::SA_SIGINFO != 0 {
+                old.sa_sigaction as u64
+            } else {
+                0
+            };
             // Never chain to ourselves: `reinstall_signal_reporter_after` can be
             // reached twice, and a self-chain is an infinite recursion inside a
             // signal handler.
@@ -611,27 +861,32 @@ extern "C" fn schedule_fault_handler(
 
     let slot = FATAL_SIGNALS.iter().position(|&s| s == signum);
     let previous = slot.map_or(0, |slot| PREVIOUS_HANDLERS[slot].load(Ordering::Relaxed));
-    // 0 = SIG_DFL, 1 = SIG_IGN: nothing to chain to. Restore the default
-    // disposition and return, so the instruction re-faults and the process dies
-    // exactly where it should — core file, debugger and crash reporter all see
-    // the real site.
-    if previous > 1 {
-        // SAFETY: the only handler this can chain to is one installed with
-        // `SA_SIGINFO` by this process (today: the from-space quarantine's
-        // reporter), so the three-argument form is its true signature.
-        unsafe {
-            let chained: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) =
-                std::mem::transmute(previous as usize as *const ());
-            chained(signum, info, ctx);
-        }
-        return;
-    }
+    // Restore the default disposition for THIS signal *before* anything else.
+    // Returning from a synchronous fault handler (SIGSEGV/SIGBUS/SIGILL) re-runs
+    // the faulting instruction; if the chained handler below also returns
+    // without resolving the fault, a disposition still pointing here would
+    // re-enter this handler forever. With SIG_DFL restored first, the re-fault
+    // dies at the real site — core file, debugger and crash reporter all see
+    // it — no matter what the chained handler does.
     // SAFETY: standard handler teardown.
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = libc::SIG_DFL;
         libc::sigemptyset(&mut action.sa_mask);
         libc::sigaction(signum, &action, std::ptr::null_mut());
+    }
+    // 0 = SIG_DFL, 1 = SIG_IGN: nothing to chain to — fall through to the
+    // now-restored default and re-fault.
+    if previous > 1 {
+        // SAFETY: `install_signal_reporter_inner` only stores a `previous`
+        // value here when the predecessor was installed with `SA_SIGINFO`
+        // (today: the from-space quarantine's reporter), so the three-argument
+        // form is its true signature.
+        unsafe {
+            let chained: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) =
+                std::mem::transmute(previous as usize as *const ());
+            chained(signum, info, ctx);
+        }
     }
 }
 
@@ -643,3 +898,81 @@ fn publish_seed(seed: u64) {
 
 #[cfg(not(unix))]
 fn publish_seed(_seed: u64) {}
+
+#[cfg(test)]
+mod verdict_tests {
+    use super::*;
+
+    /// The verdict must be able to say NO. Every counter combination that means
+    /// "the instrument did not fire" is asserted individually, because they have
+    /// different causes and the message has to name the right one.
+    #[test]
+    fn a_rate_one_run_that_exercised_nothing_is_an_error() {
+        let no_safepoint =
+            schedule_verdict(0, 0, 0, 0, false).expect_err("forced=0 must be an error");
+        assert!(no_safepoint.contains("no safepoint ever forced a collection"));
+
+        // The schedule DID force collections and every one was escalated to a
+        // full mark-sweep, which moves nothing. `forced > 0` alone would have
+        // called this run live.
+        let all_escalated =
+            schedule_verdict(4096, 0, 0, 4096, true).expect_err("cycles=0 must be an error");
+        assert!(all_escalated.contains("escalated to a non-moving full"));
+        assert!(all_escalated.contains("copying_minors=0"));
+    }
+
+    /// ★ #7604's own shape, and the one a two-counter verdict would have passed.
+    ///
+    /// Measured on the compute-only probe: `PERRY_GC_MOVING_LOOP_POLLS=1` set at
+    /// both compile and run time, zero back-edge polls reached (codegen emits
+    /// none for a provably alloc-free body), and the every-safepoint arm still
+    /// forced 5 collections at event-loop boundaries which moved 4 objects.
+    /// Every counter except `loop_polls` says "live"; no loop body was covered
+    /// at all.
+    #[test]
+    fn polls_requested_but_never_reached_is_an_error() {
+        let armed_never_fired = schedule_verdict(5, 5, 4, 0, true)
+            .expect_err("polls requested and none reached must be an error");
+        assert!(armed_never_fired.contains("NOT ONE back-edge poll"));
+        assert!(armed_never_fired.contains("loop_polls=0"));
+
+        // ...and the SAME counters without the request are fine: an
+        // event-loop-boundary-only run is a legitimate, weaker mode, and
+        // failing it would make the verdict wrong rather than strict.
+        assert!(schedule_verdict(5, 5, 4, 0, false).is_ok());
+    }
+
+    /// ...and YES, with the numbers, when it did fire.
+    #[test]
+    fn a_rate_one_run_that_moved_objects_is_reported_ok() {
+        let ok = schedule_verdict(741_630, 741_630, 8_899_560, 741_630, true)
+            .expect("a moving run must pass");
+        assert!(ok.contains("forced_collections=741630"));
+        assert!(ok.contains("copying_minors=741630"));
+        assert!(ok.contains("moved_objects=8899560"));
+        assert!(ok.contains("loop_polls=741630"));
+    }
+
+    /// A copying minor that relocated nothing THIS cycle is still a live
+    /// instrument — `moved=0` with `cycles>0` happens whenever the nursery had
+    /// no survivors, and failing on it would make the verdict flaky rather than
+    /// informative. Pinned so a future "tighten it to moved>0" edit has to
+    /// argue with a test.
+    #[test]
+    fn a_copying_minor_with_no_survivors_is_not_a_failure() {
+        assert!(schedule_verdict(1, 1, 0, 1, true).is_ok());
+    }
+
+    /// The verdict is an endpoint-only contract: below rate 1 a run that forces
+    /// nothing is a legitimate sampling outcome (rate 0 is the documented
+    /// control arm), so `schedule_liveness_report` must return `None` rather
+    /// than an `Err` that would turn every sparse sweep seed into a false
+    /// failure.
+    #[test]
+    fn sub_endpoint_rates_get_no_verdict() {
+        let _g = ScheduleGuard::set(7, rate_threshold(0.05));
+        assert!(schedule_liveness_report().is_none());
+        let _g = ScheduleGuard::set(7, rate_threshold(1.0));
+        assert!(schedule_liveness_report().is_some());
+    }
+}

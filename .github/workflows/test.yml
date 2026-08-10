@@ -1244,16 +1244,20 @@ jobs:
 
       # GATING, and deliberately so. CLAUDE.md's GC knob kill-policy requires
       # every GC knob to have an arm that exercises it; the #7154 instruments
-      # (PERRY_GC_PROTECT_FROMSPACE, PERRY_GC_ZEAL) would otherwise be dark
-      # knobs on the subsystem with this repo's worst history of configuration
-      # rot. This asserts BOTH defaults — inert with the knobs unset, live with
-      # them set — and refuses to pass unless the zeal arm forced strictly more
-      # collections than the pressure-only arm, so it cannot go green having
-      # run zero copying minors (the #6942 / #7024 / #7025 failure mode).
+      # (PERRY_GC_PROTECT_FROMSPACE, PERRY_GC_SCHEDULE_SEED)
+      # would otherwise be dark knobs on the subsystem with this repo's worst
+      # history of configuration rot. This asserts BOTH defaults — inert with
+      # the knobs unset, live with them set — and refuses to pass unless the
+      # stress arms (the rate-1 seeded schedule, and the #7254 RATE=1 +
+      # VERIFY_EVACUATION pairing)
+      # forced strictly more collections than the pressure-only arm, so it
+      # cannot go green having run zero copying minors (the #6942 / #7024 /
+      # #7025 failure mode).
       # The detection property itself is a required-gate unit test:
       # gc/tests/fromspace_protect.rs::quarantine_catches_a_planted_stale_from_space_deref.
       # Arms 1-3/5 use a fixture sized for ~1200 back-edge polls (not #7154's
-      # 240k), pinned to every-poll zeal. Arm 6 (#7728) is the budgeted one:
+      # 240k), pinned to every-poll candidacy
+      # (PERRY_GC_SCHEDULE_ALLOC_KB=0). Arm 6 (#7728) is the budgeted one:
       # a realistic poll count at the SHIPPED default, which is the axis that
       # a ~1200-poll fixture structurally cannot see.
       - name: GC rooting-bug instruments (inert-when-off, live-when-on)

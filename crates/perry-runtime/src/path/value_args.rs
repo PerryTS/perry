@@ -90,7 +90,7 @@ pub(crate) fn path_arg_header(value: f64) -> *const StringHeader {
 /// allocation point and the pre-bound address stays valid. Reverting this to
 /// `let a_ptr = a_ptr0;` was measured against 400k SSO-pair joins under
 /// `PERRY_GC_FORCE_EVACUATE=1` + from-space protection and against the #7621 gap
-/// test under `PERRY_GC_ZEAL=1` (402k copying minors): zero faults, byte-
+/// test under the rate-1 seeded schedule (402k copying minors): zero faults, byte-
 /// identical output. It is written this way because it is the shape the
 /// invariant asks for and it costs nothing, not because an instrument caught it.
 fn with_two_headers<R>(
