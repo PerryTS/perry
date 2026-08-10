@@ -1042,6 +1042,27 @@ pub(crate) fn build_and_run_link(
                 cmd.arg(format!("/WHOLEARCHIVE:{}", ui_lib.display()));
             } else {
                 cmd.arg(&ui_lib);
+                // ld64 also scans archives left-to-right once, and the UI lib
+                // is added *after* the runtime and stdlib. Anything the UI lib
+                // references but does not define — `std` internals it shares
+                // with the stdlib, for instance — is undefined for the first
+                // time only now, by which point those archives have already
+                // been scanned and will not be revisited.
+                //
+                // On iOS this made `--target ios` unlinkable outright:
+                // `PerryTestExitTarget::test_exit` calls `Stdout::flush`, whose
+                // only remaining definition after strip-dedup lives in
+                // libperry_stdlib.a, and the link died on that one symbol.
+                //
+                // Repeating the archives is the standard remedy and is cheap:
+                // the linker extracts only members that resolve a still-pending
+                // undefined, so a second mention of an already-satisfied
+                // archive contributes nothing. The Windows branch above solves
+                // the same problem with /WHOLEARCHIVE.
+                cmd.arg(runtime_lib);
+                if let Some(ref stdlib) = stdlib_lib {
+                    cmd.arg(stdlib);
+                }
             }
 
             if is_watchos {
