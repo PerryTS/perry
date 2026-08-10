@@ -10,6 +10,7 @@ pub mod crash_log;
 pub mod deeplinks;
 pub mod drag_drop;
 pub mod file_dialog;
+pub mod frame_driver;
 pub mod geolocation;
 pub mod image_picker;
 pub mod keyboard;

@@ -34,6 +34,14 @@ objc2-foundation = { version = "0.3", features = [
 objc2-core-foundation = { version = "0.3", features = [
     "CFCGTypes",
 ] }
+# `default-features = false` deliberately: the default feature set is the whole
+# QuartzCore surface and drags in objc2-metal / -core-video / -core-graphics.
+# The display link needs two types.
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "std",
+    "CADisplayLink",
+    "CAFrameRateRange",
+] }
 objc2-ui-kit = { version = "0.3", features = [
     "UIApplication",
     "UIWindow",

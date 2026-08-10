@@ -6409,6 +6409,7 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-quartz-core",
  "objc2-ui-kit",
  "perry-runtime",
  "perry-ui",

@@ -315,6 +315,11 @@ unsafe extern "C" fn scene_will_connect(
     ];
     std::mem::forget(pump_target);
 
+    // Vsync-aligned `onFrame` + frame-time metrics. Installed after the timer
+    // pump because `poll_pause_state` (driven from that pump) is what wakes
+    // the link when a callback is registered while it is idle.
+    crate::frame_driver::install();
+
     install_test_mode_exit_timer();
 }
 
@@ -620,7 +625,6 @@ extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
-    fn js_frame_pump_default() -> i32;
     // perry-runtime's embedder GC stepper: spends up to `budget_us`
     // advancing an ACTIVE budgeted collection in bounded work units; a
     // cheap status probe when no cycle is active (out=null is allowed).
@@ -651,8 +655,6 @@ define_class!(
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();
-                    // Issue #1865: perry/ui `onFrame` display-link callbacks.
-                    js_frame_pump_default();
                     js_promise_run_microtasks();
                     // Drain deferred promise resolutions from perry-stdlib
                     // tokio workers (async fetch/network completions). Without
@@ -673,6 +675,11 @@ define_class!(
                         perry_geisterhand_pump();
                     }
                 }
+                // `onFrame` itself is driven by the CADisplayLink installed in
+                // `frame_driver`, not from here. The pump only reconciles the
+                // link's paused state: a paused link receives no ticks, so it
+                // cannot notice a newly-registered callback and wake itself.
+                crate::frame_driver::poll_pause_state();
                 // Issue #5203 — root-window health check. Replays root
                 // rebuilds deferred while a system modal was presented and
                 // re-asserts the window if a dismissed modal left it detached
