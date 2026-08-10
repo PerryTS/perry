@@ -615,6 +615,7 @@ pub(crate) unsafe fn keys_array_slot(
 /// exists for, non-zero for every shape it must refuse — so a fast path that
 /// silently stopped applying, or one that started swallowing a shape it should
 /// have delegated, both go red.
+///
 /// Per THREAD — `cargo test` runs every case on its own thread in one process,
 /// so a process-global counter would be moved by whatever else is running.
 #[cfg(test)]
