@@ -815,6 +815,61 @@ mod tests {
         }
     }
 
+    /// #7792 — deeply nested input must throw, not take the process out.
+    ///
+    /// Both parsers that read the document recurse once per nesting level, so
+    /// a deep enough document exhausted the stack: SIGSEGV, exit 139, no
+    /// output at all. The input shape here is a well-known one for untrusted
+    /// data, which is why a crash is the wrong answer even though a very deep
+    /// document is unusual.
+    mod nesting_depth {
+        use super::*;
+        use crate::json::parser::{nesting_depth_exceeds, MAX_NESTING_DEPTH};
+
+        #[test]
+        fn the_scan_counts_only_structural_brackets() {
+            assert!(!nesting_depth_exceeds(b"[[[]]]", 8));
+            assert!(nesting_depth_exceeds(b"[[[[[[[[[[]]]]]]]]]]", 4));
+            assert!(!nesting_depth_exceeds(br#"{"a":{"b":1}}"#, 4));
+            assert!(nesting_depth_exceeds(br#"{"a":{"b":1}}"#, 1));
+
+            // Brackets inside a string are text, not structure. Without this a
+            // single long string value would be rejected as deep nesting.
+            assert!(!nesting_depth_exceeds(br#"{"a":"[[[[[[[[[["}"#, 3));
+            // ...including one that ends in an escaped quote, so the scanner
+            // does not lose track of where the string closes.
+            assert!(!nesting_depth_exceeds(br#"{"a":"[[[\"[[["}"#, 3));
+
+            // The scan runs BEFORE syntax validation, so it sees malformed
+            // input. An unbalanced closer must clamp, not underflow.
+            assert!(!nesting_depth_exceeds(b"]]]]]]", 2));
+            assert!(!nesting_depth_exceeds(b"", 0));
+        }
+
+        /// The limit is the point of the change, so pin the boundary itself:
+        /// one level under passes, one level over is refused.
+        #[test]
+        fn parse_refuses_input_past_the_limit_and_accepts_input_under_it() {
+            let ok_depth = MAX_NESTING_DEPTH - 1;
+            let mut ok = vec![b'['; ok_depth];
+            ok.extend(std::iter::repeat(b']').take(ok_depth));
+            let text = js_string_from_bytes(ok.as_ptr(), ok.len() as u32);
+            assert!(
+                unsafe { js_json_parse_result(text) }.is_ok(),
+                "input inside the limit must still parse"
+            );
+
+            let deep_depth = MAX_NESTING_DEPTH + 1;
+            let mut deep = vec![b'['; deep_depth];
+            deep.extend(std::iter::repeat(b']').take(deep_depth));
+            let text = js_string_from_bytes(deep.as_ptr(), deep.len() as u32);
+            assert!(
+                unsafe { js_json_parse_result(text) }.is_err(),
+                "input past the limit must be refused rather than descended into"
+            );
+        }
+    }
+
     #[test]
     fn parse_result_streaming_validation_rejects_malformed_and_trailing_input() {
         for input in [

@@ -56,6 +56,71 @@ pub(crate) struct ObjectShapeHint {
     pub(crate) field_count: u32,
 }
 
+/// The deepest `[`/`{` nesting `JSON.parse` will accept.
+///
+/// Both parsers that see the input recurse once per level — the `serde_json`
+/// validation pass and Perry's own value parser — so a deep enough document
+/// exhausts the stack and takes the whole process out with SIGSEGV, no
+/// diagnostic and no output, on input that is very often attacker-supplied
+/// (#7792). Measured on a default 8 MB main-thread stack the crash lands
+/// between 20,000 and 40,000 levels — but that is the most generous stack in
+/// the process, and it is the wrong one to size against. Perry parses JSON on
+/// `perry/thread` workers and tokio workers too, and a 2 MiB thread stack
+/// overflows well before 10,000 levels: a first attempt at this limit picked
+/// 10,000 off the main-thread measurement, and the unit test below promptly
+/// crashed the test harness at 9,999.
+///
+/// So the limit is sized for the SMALLEST stack in the process, not the
+/// largest, and 1,000 is the same depth Python's parser has settled on. Real
+/// documents do not come close: JSON nested past a hundred levels is already
+/// unusual, and past a thousand is a machine talking to itself.
+///
+/// This is a deliberate parity gap. Node parses far deeper than this because
+/// V8's parser is iterative and does not consume stack per level; matching it
+/// means making this parser iterative too, which is the follow-up. Until then
+/// a catchable error beats a SIGSEGV on untrusted input.
+pub(crate) const MAX_NESTING_DEPTH: usize = 1_000;
+
+/// Does `bytes` nest deeper than `limit`?
+///
+/// Iterative on purpose. A recursive depth check would be the very thing it
+/// exists to prevent, and it would crash on exactly the documents it is
+/// supposed to reject.
+///
+/// Bracket bytes inside strings do not count, so a document that is one long
+/// `"[[[[[[…"` string is not mistaken for deep nesting. This runs before any
+/// syntax validation, so it must not assume the input is well-formed — an
+/// unbalanced `]` clamps at zero rather than underflowing.
+pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for &byte in bytes {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'[' | b'{' => {
+                depth += 1;
+                if depth > limit {
+                    return true;
+                }
+            }
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
+}
+
 pub(crate) struct DirectParser<'a> {
     input: &'a [u8],
     pos: usize,
