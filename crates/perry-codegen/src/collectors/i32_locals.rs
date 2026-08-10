@@ -48,6 +48,9 @@ pub fn is_strictly_i32_bounded_expr(
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
     int_ta_views: &HashMap<u32, i64>,
+    // #7700: locals whose declared type says they hold a number — the
+    // evidence that `u8[k]` is a byte read rather than a property read.
+    numeric_locals: &HashSet<u32>,
     on_dep: &mut dyn FnMut(u32),
 ) -> bool {
     use perry_hir::{BinaryOp, Expr};
@@ -117,7 +120,11 @@ pub fn is_strictly_i32_bounded_expr(
             }
             ok
         }
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // #7700: a byte read, hence i32-ranged, only with a numeric key.
+        Expr::Uint8ArrayGet { index, .. } => {
+            super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
+        }
+        Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true,
         // Repsel Phase 1 widening (gated by the caller passing a non-empty
         // view map, itself behind `PERRY_CANONICAL_I32_LOCALS`): a proven
@@ -163,6 +170,7 @@ pub struct StrictWriteFacts {
 }
 
 /// Judge one write to `id` against the oracle and fold the verdict into `out`.
+#[allow(clippy::too_many_arguments)]
 fn record_strict_write(
     id: u32,
     value: &perry_hir::Expr,
@@ -170,6 +178,7 @@ fn record_strict_write(
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
     out: &mut StrictWriteFacts,
 ) {
     let mut deps: Vec<u32> = Vec::new();
@@ -180,6 +189,7 @@ fn record_strict_write(
         flat_row_alias_ids,
         clamp_fn_ids,
         &out.int_ta_views,
+        numeric_locals,
         &mut |d| deps.push(d),
     );
     out.saw_any.insert(id);
@@ -242,6 +252,8 @@ pub fn collect_strictly_i32_bounded_locals(
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
     int_ta_views: HashMap<u32, i64>,
+    // #7700: see `is_strictly_i32_bounded_expr`.
+    numeric_locals: &HashSet<u32>,
 ) -> HashSet<u32> {
     let mut flat_row_alias_ids: HashSet<u32> = HashSet::new();
     collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
@@ -259,6 +271,7 @@ pub fn collect_strictly_i32_bounded_locals(
         flat_const_ids,
         &flat_row_alias_ids,
         clamp_fn_ids,
+        numeric_locals,
         &mut out,
     );
 
@@ -434,6 +447,7 @@ pub fn walk_writes_for_strict(
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
     out: &mut StrictWriteFacts,
 ) {
     use perry_hir::Stmt;
@@ -451,6 +465,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
                 walk_writes_in_expr_for_strict(
@@ -459,6 +474,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
             }
@@ -470,6 +486,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
             }
@@ -481,6 +498,7 @@ pub fn walk_writes_for_strict(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                         out,
                     );
                 }
@@ -496,6 +514,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
                 walk_writes_for_strict(
@@ -504,6 +523,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
                 if let Some(eb) = else_branch {
@@ -513,6 +533,7 @@ pub fn walk_writes_for_strict(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                         out,
                     );
                 }
@@ -524,6 +545,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
                 walk_writes_for_strict(
@@ -532,6 +554,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
             }
@@ -548,6 +571,7 @@ pub fn walk_writes_for_strict(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                         out,
                     );
                 }
@@ -558,6 +582,7 @@ pub fn walk_writes_for_strict(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                         out,
                     );
                 }
@@ -568,6 +593,7 @@ pub fn walk_writes_for_strict(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                         out,
                     );
                 }
@@ -577,6 +603,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
             }
@@ -591,6 +618,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
                 if let Some(c) = catch {
@@ -600,6 +628,7 @@ pub fn walk_writes_for_strict(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                         out,
                     );
                 }
@@ -610,6 +639,7 @@ pub fn walk_writes_for_strict(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                         out,
                     );
                 }
@@ -624,6 +654,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
                 for c in cases {
@@ -634,6 +665,7 @@ pub fn walk_writes_for_strict(
                             flat_const_ids,
                             flat_row_alias_ids,
                             clamp_fn_ids,
+                            numeric_locals,
                             out,
                         );
                     }
@@ -643,6 +675,7 @@ pub fn walk_writes_for_strict(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                         out,
                     );
                 }
@@ -654,6 +687,7 @@ pub fn walk_writes_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
             }
@@ -668,6 +702,7 @@ pub fn walk_writes_in_expr_for_strict(
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
     out: &mut StrictWriteFacts,
 ) {
     use perry_hir::Expr;
@@ -680,6 +715,7 @@ pub fn walk_writes_in_expr_for_strict(
                 flat_const_ids,
                 flat_row_alias_ids,
                 clamp_fn_ids,
+                numeric_locals,
                 out,
             );
             walk_writes_in_expr_for_strict(
@@ -688,6 +724,7 @@ pub fn walk_writes_in_expr_for_strict(
                 flat_const_ids,
                 flat_row_alias_ids,
                 clamp_fn_ids,
+                numeric_locals,
                 out,
             );
         }
@@ -719,6 +756,7 @@ pub fn walk_writes_in_expr_for_strict(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                     out,
                 );
             });
@@ -1211,6 +1249,11 @@ pub fn collect_localset_ids_in_expr_filtered(
             clamp_fn_ids,
         );
     };
+    // Every caller of this walker passes `filter: None` (the only entry point
+    // is `collect_localset_ids_in_stmts`), so the `Some` arm below never runs.
+    // It keeps its shape rather than being deleted; an empty numeric-local set
+    // is the conservative answer if it is ever revived (#7700).
+    let no_numeric_locals: HashSet<u32> = HashSet::new();
     match e {
         Expr::LocalSet(id, value) => {
             match filter {
@@ -1221,6 +1264,7 @@ pub fn collect_localset_ids_in_expr_filtered(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        &no_numeric_locals,
                     ) => {}
                 _ => {
                     out.insert(*id);

@@ -124,6 +124,13 @@ fn is_int_kind_ta_read(e: &Expr, types: &HashMap<u32, HirType>) -> bool {
     matches!(e, Expr::IndexGet { object, .. } if receiver_is_int_kind_ta(object, types))
 }
 
+/// #7700: `u8[k]` is a BYTE read — hence integer-valued — only when `k` is a
+/// number at runtime. With a symbol or string key it reads a PROPERTY, and the
+/// value is whatever that property holds (a method, a length, an expando).
+fn uint8array_get_is_byte_read(index: &Expr, numeric_locals: &HashSet<u32>) -> bool {
+    super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
+}
+
 fn is_bitwise_binop(op: BinaryOp) -> bool {
     matches!(
         op,
@@ -140,7 +147,11 @@ fn is_bitwise_binop(op: BinaryOp) -> bool {
 /// possibly-OOB int typed-array read (integer in-bounds, `undefined` OOB — made
 /// observationally equivalent to `0` by rule (2)). Rejects additive / `*` /
 /// `/` / `%` (i32 overflow / non-integer), copies, calls, and everything else.
-fn write_is_i32_producing_safe(e: &Expr, types: &HashMap<u32, HirType>) -> bool {
+fn write_is_i32_producing_safe(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    numeric_locals: &HashSet<u32>,
+) -> bool {
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         // Hoisted-`var` seed (`var n, l = lr[off]` lowers as `Let{l,
@@ -149,8 +160,9 @@ fn write_is_i32_producing_safe(e: &Expr, types: &HashMap<u32, HirType>) -> bool 
         // already guarantees every observation is ToInt32-coercing — so an
         // `undefined` write is indistinguishable from the 0 it becomes.
         Expr::Undefined => true,
-        // Byte reads: `0` OOB, always integer.
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // Byte reads: `0` OOB, always integer — #7700: with a numeric key.
+        Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
+        Expr::BufferIndexGet { .. } => true,
         // Int-kind typed-array element read (possibly OOB → `undefined`).
         Expr::IndexGet { object, .. } => receiver_is_int_kind_ta(object, types),
         // Bitwise ops coerce both operands to int32 and yield int32 regardless
@@ -213,11 +225,14 @@ fn additive_write_admissible(
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,
     pool: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
 ) -> bool {
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         Expr::LocalGet(id) => pool.contains(id),
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // #7700: a byte read only with a numeric key.
+        Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
+        Expr::BufferIndexGet { .. } => true,
         // In-bounds-proven int-kind typed-array read: never `undefined`.
         Expr::IndexGet { object, index } => {
             receiver_is_int_kind_ta(object, types)
@@ -235,8 +250,8 @@ fn additive_write_admissible(
         } => true,
         Expr::MathImul(_, _) => true,
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            additive_write_admissible(left, types, ta_lens, pool)
-                && additive_write_admissible(right, types, ta_lens, pool)
+            additive_write_admissible(left, types, ta_lens, pool, numeric_locals)
+                && additive_write_admissible(right, types, ta_lens, pool, numeric_locals)
         }
         _ => false,
     }
@@ -261,11 +276,14 @@ fn write_establishes_number(
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,
     numberish: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
 ) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
-        // Byte reads return `0` OOB — always a number.
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // Byte reads return `0` OOB — always a number, with a numeric key
+        // (#7700).
+        Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
+        Expr::BufferIndexGet { .. } => true,
         // Bitwise / `~` / `Math.imul` are number-or-throw (a throw means the
         // write never completes).
         Expr::Binary { op, .. } if is_bitwise_binop(*op) => true,
@@ -285,8 +303,8 @@ fn write_establishes_number(
         }
         Expr::LocalGet(id) => numberish.contains(id),
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            write_establishes_number(left, types, ta_lens, numberish)
-                && write_establishes_number(right, types, ta_lens, numberish)
+            write_establishes_number(left, types, ta_lens, numberish, numeric_locals)
+                && write_establishes_number(right, types, ta_lens, numberish, numeric_locals)
         }
         _ => false,
     }
@@ -320,10 +338,18 @@ fn additive_flow_invalid_targets(
     stmts: &[Stmt],
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,
+    numeric_locals: &HashSet<u32>,
 ) -> HashSet<u32> {
     let mut invalid = HashSet::new();
     let mut numberish = HashSet::new();
-    additive_flow_stmts(stmts, types, ta_lens, &mut numberish, &mut invalid);
+    additive_flow_stmts(
+        stmts,
+        types,
+        ta_lens,
+        numeric_locals,
+        &mut numberish,
+        &mut invalid,
+    );
     invalid
 }
 
@@ -331,11 +357,12 @@ fn additive_flow_stmts(
     stmts: &[Stmt],
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,
+    numeric_locals: &HashSet<u32>,
     numberish: &mut HashSet<u32>,
     invalid: &mut HashSet<u32>,
 ) {
     for s in stmts {
-        additive_flow_stmt(s, types, ta_lens, numberish, invalid);
+        additive_flow_stmt(s, types, ta_lens, numeric_locals, numberish, invalid);
     }
 }
 
@@ -343,30 +370,51 @@ fn additive_flow_stmt(
     s: &Stmt,
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,
+    numeric_locals: &HashSet<u32>,
     numberish: &mut HashSet<u32>,
     invalid: &mut HashSet<u32>,
 ) {
     match s {
         Stmt::Let { id, init, .. } => match init {
-            Some(e) => additive_flow_expr_write(*id, e, types, ta_lens, numberish, invalid),
+            Some(e) => {
+                additive_flow_expr_write(*id, e, types, ta_lens, numeric_locals, numberish, invalid)
+            }
             // `let x;` — undefined.
             None => {
                 numberish.remove(id);
             }
         },
-        Stmt::Expr(e) | Stmt::Throw(e) => additive_flow_expr(e, types, ta_lens, numberish, invalid),
-        Stmt::Return(Some(e)) => additive_flow_expr(e, types, ta_lens, numberish, invalid),
+        Stmt::Expr(e) | Stmt::Throw(e) => {
+            additive_flow_expr(e, types, ta_lens, numeric_locals, numberish, invalid)
+        }
+        Stmt::Return(Some(e)) => {
+            additive_flow_expr(e, types, ta_lens, numeric_locals, numberish, invalid)
+        }
         Stmt::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            additive_flow_expr(condition, types, ta_lens, numberish, invalid);
+            additive_flow_expr(
+                condition,
+                types,
+                ta_lens,
+                numeric_locals,
+                numberish,
+                invalid,
+            );
             let mut then_set = numberish.clone();
-            additive_flow_stmts(then_branch, types, ta_lens, &mut then_set, invalid);
+            additive_flow_stmts(
+                then_branch,
+                types,
+                ta_lens,
+                numeric_locals,
+                &mut then_set,
+                invalid,
+            );
             let mut else_set = numberish.clone();
             if let Some(eb) = else_branch {
-                additive_flow_stmts(eb, types, ta_lens, &mut else_set, invalid);
+                additive_flow_stmts(eb, types, ta_lens, numeric_locals, &mut else_set, invalid);
             }
             *numberish = then_set.intersection(&else_set).copied().collect();
         }
@@ -376,8 +424,15 @@ fn additive_flow_stmt(
             // conservative for later iterations too, since the walk can only
             // remove entries the body would remove on any iteration.
             let mut body_set = numberish.clone();
-            additive_flow_expr(condition, types, ta_lens, &mut body_set, invalid);
-            additive_flow_stmts(body, types, ta_lens, &mut body_set, invalid);
+            additive_flow_expr(
+                condition,
+                types,
+                ta_lens,
+                numeric_locals,
+                &mut body_set,
+                invalid,
+            );
+            additive_flow_stmts(body, types, ta_lens, numeric_locals, &mut body_set, invalid);
             numberish.retain(|id| body_set.contains(id));
         }
         Stmt::For {
@@ -387,19 +442,21 @@ fn additive_flow_stmt(
             body,
         } => {
             if let Some(i) = init {
-                additive_flow_stmt(i, types, ta_lens, numberish, invalid);
+                additive_flow_stmt(i, types, ta_lens, numeric_locals, numberish, invalid);
             }
             let mut body_set = numberish.clone();
             if let Some(c) = condition {
-                additive_flow_expr(c, types, ta_lens, &mut body_set, invalid);
+                additive_flow_expr(c, types, ta_lens, numeric_locals, &mut body_set, invalid);
             }
             if let Some(u) = update {
-                additive_flow_expr(u, types, ta_lens, &mut body_set, invalid);
+                additive_flow_expr(u, types, ta_lens, numeric_locals, &mut body_set, invalid);
             }
-            additive_flow_stmts(body, types, ta_lens, &mut body_set, invalid);
+            additive_flow_stmts(body, types, ta_lens, numeric_locals, &mut body_set, invalid);
             numberish.retain(|id| body_set.contains(id));
         }
-        Stmt::Labeled { body, .. } => additive_flow_stmt(body, types, ta_lens, numberish, invalid),
+        Stmt::Labeled { body, .. } => {
+            additive_flow_stmt(body, types, ta_lens, numeric_locals, numberish, invalid)
+        }
         Stmt::Try {
             body,
             catch,
@@ -408,16 +465,23 @@ fn additive_flow_stmt(
             // The try body may partially execute; the catch entry state is
             // unknown. Meet everything.
             let mut body_set = numberish.clone();
-            additive_flow_stmts(body, types, ta_lens, &mut body_set, invalid);
+            additive_flow_stmts(body, types, ta_lens, numeric_locals, &mut body_set, invalid);
             numberish.retain(|id| body_set.contains(id));
             if let Some(c) = catch {
                 let mut catch_set = numberish.clone();
-                additive_flow_stmts(&c.body, types, ta_lens, &mut catch_set, invalid);
+                additive_flow_stmts(
+                    &c.body,
+                    types,
+                    ta_lens,
+                    numeric_locals,
+                    &mut catch_set,
+                    invalid,
+                );
                 numberish.retain(|id| catch_set.contains(id));
             }
             if let Some(f) = finally {
                 let mut fin_set = numberish.clone();
-                additive_flow_stmts(f, types, ta_lens, &mut fin_set, invalid);
+                additive_flow_stmts(f, types, ta_lens, numeric_locals, &mut fin_set, invalid);
                 numberish.retain(|id| fin_set.contains(id));
             }
         }
@@ -425,14 +489,28 @@ fn additive_flow_stmt(
             discriminant,
             cases,
         } => {
-            additive_flow_expr(discriminant, types, ta_lens, numberish, invalid);
+            additive_flow_expr(
+                discriminant,
+                types,
+                ta_lens,
+                numeric_locals,
+                numberish,
+                invalid,
+            );
             let pre = numberish.clone();
             for case in cases {
                 if let Some(t) = &case.test {
-                    additive_flow_expr(t, types, ta_lens, numberish, invalid);
+                    additive_flow_expr(t, types, ta_lens, numeric_locals, numberish, invalid);
                 }
                 let mut case_set = pre.clone();
-                additive_flow_stmts(&case.body, types, ta_lens, &mut case_set, invalid);
+                additive_flow_stmts(
+                    &case.body,
+                    types,
+                    ta_lens,
+                    numeric_locals,
+                    &mut case_set,
+                    invalid,
+                );
                 numberish.retain(|id| case_set.contains(id));
             }
         }
@@ -454,18 +532,19 @@ fn additive_flow_expr_write(
     rhs: &Expr,
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,
+    numeric_locals: &HashSet<u32>,
     numberish: &mut HashSet<u32>,
     invalid: &mut HashSet<u32>,
 ) {
     // Walk nested writes inside the RHS first (their effects precede the
     // outer store; any imprecision here only removes numberish entries).
-    additive_flow_expr(rhs, types, ta_lens, numberish, invalid);
+    additive_flow_expr(rhs, types, ta_lens, numeric_locals, numberish, invalid);
     if matches!(rhs, Expr::Binary { op, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub))
         && !additive_spine_locals_numberish(rhs, numberish)
     {
         invalid.insert(target);
     }
-    if write_establishes_number(rhs, types, ta_lens, numberish) {
+    if write_establishes_number(rhs, types, ta_lens, numberish, numeric_locals) {
         numberish.insert(target);
     } else {
         numberish.remove(&target);
@@ -476,12 +555,13 @@ fn additive_flow_expr(
     e: &Expr,
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,
+    numeric_locals: &HashSet<u32>,
     numberish: &mut HashSet<u32>,
     invalid: &mut HashSet<u32>,
 ) {
     match e {
         Expr::LocalSet(id, rhs) => {
-            additive_flow_expr_write(*id, rhs, types, ta_lens, numberish, invalid);
+            additive_flow_expr_write(*id, rhs, types, ta_lens, numeric_locals, numberish, invalid);
         }
         // `x++` may produce a BigInt (ToNumeric preserves kind) — drop.
         Expr::Update { id, .. } => {
@@ -497,7 +577,7 @@ fn additive_flow_expr(
         }
         _ => {
             perry_hir::walker::walk_expr_children(e, &mut |c| {
-                additive_flow_expr(c, types, ta_lens, numberish, invalid)
+                additive_flow_expr(c, types, ta_lens, numeric_locals, numberish, invalid)
             });
         }
     }
@@ -518,6 +598,11 @@ pub fn collect_int_valued_ta_locals(
     // Constant typed-array lengths for the wrap-i32 in-bounds proof: in-body
     // literal-length const views plus caller-supplied lengths (spec-ABI
     // `TaPtr` params carry theirs from the call-site pre-pass).
+    // #7700: which locals hold a number, so `u8[k]` keyed on one is a byte
+    // read. `binding_types` covers params and module globals only, so the body
+    // `let`s — above all the counter in `for (let i = …) sum += buf[i]` — have
+    // to be walked for, or the hottest buffer shape loses its i32 slot.
+    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
     let mut ta_lens = super::integer_locals::collect_const_int_ta_views(stmts);
     for (id, len) in extra_ta_lens {
         ta_lens.entry(*id).or_insert(*len);
@@ -529,7 +614,7 @@ pub fn collect_int_valued_ta_locals(
     // writes whose spine operands were not provably NUMBERS at the write site
     // (an `undefined`-able operand breaks `image == ToInt32(true)` through a
     // float add — `undefined + 1` is NaN→0, the image path would say 1).
-    let additive_invalid = additive_flow_invalid_targets(stmts, &types, &ta_lens);
+    let additive_invalid = additive_flow_invalid_targets(stmts, &types, &ta_lens, &numeric_locals);
 
     // Rule (1) admission. A candidate is a `let`-declared local with ≥1
     // int-TA-read write, whose EVERY write is i32-producing-safe (or, in the
@@ -554,10 +639,16 @@ pub fn collect_int_valued_ta_locals(
         let snapshot = pool.clone();
         pool.retain(|id| {
             facts.writes[id].iter().all(|(w, in_loop)| {
-                write_is_i32_producing_safe(w, &types)
+                write_is_i32_producing_safe(w, &types, &numeric_locals)
                     || (!in_loop
                         && !additive_invalid.contains(id)
-                        && additive_write_admissible(w, &types, &ta_lens, &snapshot))
+                        && additive_write_admissible(
+                            w,
+                            &types,
+                            &ta_lens,
+                            &snapshot,
+                            &numeric_locals,
+                        ))
             })
         });
         if pool.len() == before {
@@ -579,6 +670,7 @@ pub fn collect_int_valued_ta_locals(
         let additive_ctx = AdditiveCtx {
             ta_lens: &ta_lens,
             pool: &candidates,
+            numeric_locals: &numeric_locals,
         };
         observe_stmts(stmts, &candidates, &types, &additive_ctx, &mut disqualified);
         if disqualified.is_empty() {
@@ -593,10 +685,16 @@ pub fn collect_int_valued_ta_locals(
             let snapshot = candidates.clone();
             candidates.retain(|id| {
                 facts.writes[id].iter().all(|(w, in_loop)| {
-                    write_is_i32_producing_safe(w, &types)
+                    write_is_i32_producing_safe(w, &types, &numeric_locals)
                         || (!in_loop
                             && !additive_invalid.contains(id)
-                            && additive_write_admissible(w, &types, &ta_lens, &snapshot))
+                            && additive_write_admissible(
+                                w,
+                                &types,
+                                &ta_lens,
+                                &snapshot,
+                                &numeric_locals,
+                            ))
                 })
             });
             changed = candidates.len() != before;
@@ -612,6 +710,8 @@ pub fn collect_int_valued_ta_locals(
 struct AdditiveCtx<'a> {
     ta_lens: &'a HashMap<u32, i64>,
     pool: &'a HashSet<u32>,
+    /// #7700: locals whose declared type says they hold a number.
+    numeric_locals: &'a HashSet<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -894,7 +994,13 @@ fn observe_stmts(
                     // Same additive blessing as the `LocalSet` arm — a
                     // candidate's Let-init may be an admissible additive tree.
                     if cands.contains(id)
-                        && additive_write_admissible(e, types, additive.ta_lens, additive.pool)
+                        && additive_write_admissible(
+                            e,
+                            types,
+                            additive.ta_lens,
+                            additive.pool,
+                            additive.numeric_locals,
+                        )
                     {
                         observe_additive_rhs(e, cands, types, additive, disq);
                     } else {
@@ -1089,7 +1195,13 @@ fn observe(
         // at its Add/Sub-operand positions.
         Expr::LocalSet(target, value) => {
             if cands.contains(target)
-                && additive_write_admissible(value, types, additive.ta_lens, additive.pool)
+                && additive_write_admissible(
+                    value,
+                    types,
+                    additive.ta_lens,
+                    additive.pool,
+                    additive.numeric_locals,
+                )
             {
                 observe_additive_rhs(value, cands, types, additive, disq);
             } else {

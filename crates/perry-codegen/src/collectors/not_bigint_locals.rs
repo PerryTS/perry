@@ -43,6 +43,9 @@ pub fn collect_not_bigint_locals(
     for p in params {
         types.entry(p.id).or_insert_with(|| p.ty.clone());
     }
+    // #7700: locals holding a number, so `u8[k]` keyed on one is a byte read
+    // (which is never a BigInt) rather than a property read (which can be).
+    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
 
     // Every write (Let init + `LocalSet` rhs) per candidate local. Descends
     // into closure bodies so a `LocalSet` to an ENCLOSING local inside a
@@ -68,7 +71,7 @@ pub fn collect_not_bigint_locals(
                 // non-BigInt — so no writes means the local stays.
                 .map(|ws| {
                     ws.iter()
-                        .all(|rhs| expr_not_bigint(rhs, &types, &not_bigint))
+                        .all(|rhs| expr_not_bigint(rhs, &types, &not_bigint, &numeric_locals))
                 })
                 .unwrap_or(true);
             if !all_ok {
@@ -89,7 +92,12 @@ pub fn collect_not_bigint_locals(
 /// `type_analysis::is_provably_not_bigint`: can this expression's value never be
 /// a BigInt? `LocalGet` leaves resolve against `set` (optimistic membership) or
 /// a concrete non-BigInt declared type.
-fn expr_not_bigint(e: &Expr, types: &HashMap<u32, HirType>, set: &HashSet<u32>) -> bool {
+fn expr_not_bigint(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    set: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
+) -> bool {
     match e {
         // Non-BigInt literals.
         Expr::Undefined
@@ -121,15 +129,20 @@ fn expr_not_bigint(e: &Expr, types: &HashMap<u32, HirType>, set: &HashSet<u32>) 
         | Expr::DateNow => true,
 
         // Typed-array / numeric-array element reads yield Number | undefined,
-        // never a BigInt.
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // never a BigInt. #7700: only a NUMERIC key reads an element — with a
+        // symbol or string key this is a PROPERTY read, and an expando holds
+        // anything (`u8.n = 1n; const k: any = "n"; u8[k]` is a BigInt).
+        Expr::Uint8ArrayGet { index, .. } => {
+            super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
+        }
+        Expr::BufferIndexGet { .. } => true,
         Expr::IndexGet { object, .. } => index_receiver_is_numeric(object, types),
 
         // `!x` → boolean; `+x` → Number-or-throw (never a BigInt VALUE).
         // `-x` / `~x` preserve BigInt.
         Expr::Unary { op, operand } => match op {
             UnaryOp::Not | UnaryOp::Pos => true,
-            UnaryOp::Neg | UnaryOp::BitNot => expr_not_bigint(operand, types, set),
+            UnaryOp::Neg | UnaryOp::BitNot => expr_not_bigint(operand, types, set, numeric_locals),
         },
 
         // Arithmetic / bitwise binary ops yield a BigInt only when BOTH
@@ -137,7 +150,8 @@ fn expr_not_bigint(e: &Expr, types: &HashMap<u32, HirType>, set: &HashSet<u32>) 
         // as EITHER operand is. (`BinaryOp` has only arithmetic/bitwise
         // variants.)
         Expr::Binary { left, right, .. } => {
-            expr_not_bigint(left, types, set) || expr_not_bigint(right, types, set)
+            expr_not_bigint(left, types, set, numeric_locals)
+                || expr_not_bigint(right, types, set, numeric_locals)
         }
 
         // Selection: non-BigInt when every branch that can become the value is.
@@ -145,13 +159,17 @@ fn expr_not_bigint(e: &Expr, types: &HashMap<u32, HirType>, set: &HashSet<u32>) 
             then_expr,
             else_expr,
             ..
-        } => expr_not_bigint(then_expr, types, set) && expr_not_bigint(else_expr, types, set),
+        } => {
+            expr_not_bigint(then_expr, types, set, numeric_locals)
+                && expr_not_bigint(else_expr, types, set, numeric_locals)
+        }
         Expr::Logical { left, right, .. } => {
-            expr_not_bigint(left, types, set) && expr_not_bigint(right, types, set)
+            expr_not_bigint(left, types, set, numeric_locals)
+                && expr_not_bigint(right, types, set, numeric_locals)
         }
 
         // A `LocalSet` used as an expression evaluates to the assigned value.
-        Expr::LocalSet(_, rhs) => expr_not_bigint(rhs, types, set),
+        Expr::LocalSet(_, rhs) => expr_not_bigint(rhs, types, set, numeric_locals),
 
         // Leaf locals: proven by the running assumption or a concrete
         // non-BigInt declared type. `Update` (`i++`) yields `ToNumeric(i) ± 1`,
