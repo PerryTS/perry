@@ -278,9 +278,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 object, property, ..
             } = callee.as_ref()
             {
+                // #7191: `ExternFuncRef` is not one shape. It covers an
+                // imported FUNCTION (`import { fn }` — a method-apply dispatch
+                // on it would be wrong, which is why this skip exists) and an
+                // imported VALUE (`import { arr }; arr.map(...args)` — where
+                // method-apply is exactly right). Skipping both meant a spread
+                // method call on any imported receiver never dispatched the
+                // receiver's method: `arr.slice(...[1,3])` returned the whole
+                // array and `nums.includes(...[20])` returned false, because
+                // the spread list arrived as a single array in the builtin's
+                // first slot. `ctx.imported_vars` is the existing discriminator
+                // — "names of imports that are exported variables, not
+                // functions" — so consult it rather than declining the family.
                 let mut skip = matches!(
                     object.as_ref(),
-                    Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
+                    Expr::GlobalGet(_) | Expr::NativeModuleRef(_)
+                ) || matches!(
+                    object.as_ref(),
+                    Expr::ExternFuncRef { name, .. } if !ctx.imported_vars.contains(name.as_str())
                 );
                 // `recv.prop(...args)` where `prop` is an instance ACCESSOR
                 // (`get prop()`) is NOT a method call: it must READ the accessor
