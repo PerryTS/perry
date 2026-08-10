@@ -359,10 +359,26 @@ pub extern "C" fn js_string_replace_string_dyn(
     pattern: *const StringHeader,
     replacement: f64,
 ) -> *mut StringHeader {
+    // #6949(a): `js_string_coerce` is a plain ToString ARGUMENT coercion here,
+    // and it allocates for every shape except an already-heap STRING_TAG value
+    // (`builtins::string_coerce_is_inert`) — an SSO short string materialises,
+    // a number/bool/null/BigInt builds its stringification, and a POINTER_TAG
+    // object runs a user `toString`/`valueOf`. Any of those can collect and
+    // EVACUATE. Rust evaluates arguments left to right, so the raw receiver
+    // params below are copied BEFORE the coercion runs; the copies survive, the
+    // pointees move, and the callee dereferences the stale ones.
     if replacement_is_callable(replacement) {
         return js_string_replace_string_fn(s, pattern, replacement);
     }
-    js_string_replace_string(s, pattern, crate::builtins::js_string_coerce(replacement))
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_raw_const_ptr(s);
+    let pattern_handle = scope.root_raw_const_ptr(pattern);
+    let coerced = crate::builtins::js_string_coerce(replacement);
+    js_string_replace_string(
+        s_handle.get_raw_const_ptr::<StringHeader>(),
+        pattern_handle.get_raw_const_ptr::<StringHeader>(),
+        coerced,
+    )
 }
 
 #[no_mangle]
@@ -374,7 +390,15 @@ pub extern "C" fn js_string_replace_all_string_dyn(
     if replacement_is_callable(replacement) {
         return js_string_replace_all_string_fn(s, pattern, replacement);
     }
-    js_string_replace_all_string(s, pattern, crate::builtins::js_string_coerce(replacement))
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_raw_const_ptr(s);
+    let pattern_handle = scope.root_raw_const_ptr(pattern);
+    let coerced = crate::builtins::js_string_coerce(replacement);
+    js_string_replace_all_string(
+        s_handle.get_raw_const_ptr::<StringHeader>(),
+        pattern_handle.get_raw_const_ptr::<StringHeader>(),
+        coerced,
+    )
 }
 
 /// Resolve a runtime-dynamic `searchValue` (an object-property read, call
@@ -416,7 +440,14 @@ pub extern "C" fn js_string_replace_search_dyn(
     if let Some(re) = needle_regex_ptr(needle) {
         return js_string_replace_regex_dyn(s, re, replacement);
     }
-    js_string_replace_string_dyn(s, crate::builtins::js_string_coerce(needle), replacement)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_raw_const_ptr(s);
+    let needle = crate::builtins::js_string_coerce(needle);
+    js_string_replace_string_dyn(
+        s_handle.get_raw_const_ptr::<StringHeader>(),
+        needle,
+        replacement,
+    )
 }
 
 /// `replaceAll` twin of [`js_string_replace_search_dyn`].
@@ -430,7 +461,14 @@ pub extern "C" fn js_string_replace_all_search_dyn(
     if let Some(re) = needle_regex_ptr(needle) {
         return js_string_replace_all_regex_dyn(s, re, replacement);
     }
-    js_string_replace_all_string_dyn(s, crate::builtins::js_string_coerce(needle), replacement)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_raw_const_ptr(s);
+    let needle = crate::builtins::js_string_coerce(needle);
+    js_string_replace_all_string_dyn(
+        s_handle.get_raw_const_ptr::<StringHeader>(),
+        needle,
+        replacement,
+    )
 }
 
 #[cfg(feature = "regex-engine")]
@@ -444,10 +482,17 @@ pub extern "C" fn js_string_replace_regex_dyn(
         return crate::regex::js_string_replace_regex_fn(s, re, replacement);
     }
     // The `_named` variant handles both `$1` and `$<name>` expansion.
+    // #6949(a): both raw params span the coercion — and `re` is a
+    // `RegExpHeader`, not a string, so a stale one is read for its compiled
+    // pattern rather than merely for bytes.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_raw_const_ptr(s);
+    let re_handle = scope.root_raw_const_ptr(re);
+    let coerced = crate::builtins::js_string_coerce(replacement);
     crate::regex::js_string_replace_regex_named(
-        s,
-        re,
-        crate::builtins::js_string_coerce(replacement),
+        s_handle.get_raw_const_ptr::<StringHeader>(),
+        re_handle.get_raw_const_ptr::<crate::regex::RegExpHeader>(),
+        coerced,
     )
 }
 
@@ -461,10 +506,17 @@ pub extern "C" fn js_string_replace_all_regex_dyn(
     if replacement_is_callable(replacement) {
         return crate::regex::js_string_replace_all_regex_fn(s, re, replacement);
     }
+    // #6949(a): both raw params span the coercion — and `re` is a
+    // `RegExpHeader`, not a string, so a stale one is read for its compiled
+    // pattern rather than merely for bytes.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_raw_const_ptr(s);
+    let re_handle = scope.root_raw_const_ptr(re);
+    let coerced = crate::builtins::js_string_coerce(replacement);
     crate::regex::js_string_replace_all_regex_named(
-        s,
-        re,
-        crate::builtins::js_string_coerce(replacement),
+        s_handle.get_raw_const_ptr::<StringHeader>(),
+        re_handle.get_raw_const_ptr::<crate::regex::RegExpHeader>(),
+        coerced,
     )
 }
 
