@@ -358,6 +358,40 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
         Expr::IndexGet { object, index } => {
+            // #6750 follow-up: a masked-index read covered by an ACTIVE
+            // masked-window fact (dense range-loop / straight-line-region
+            // fast copy) is a guard-proven numeric element load, even when
+            // the receiver's STATIC type is erased (`any` parameter).
+            // Without this, `n ^= S[x & 0xff]` inside a fast copy still
+            // routed through the BigInt-aware dynamic helpers. Facts are
+            // scope-managed by the versioned lowerings, so the answer is
+            // only `true` while a fast copy that proved the window is being
+            // lowered. The fact itself proves the index is an integer, so it
+            // stands ahead of the index check below.
+            if let Expr::LocalGet(arr_id) = object.as_ref() {
+                if crate::expr::masked_window_fact_for_index(ctx, *arr_id, index).is_some() {
+                    return true;
+                }
+            }
+            // #7796: an element type only describes reads at a NUMERIC index.
+            // `a[sym]` on a `number[]` is not an element read at all — it is a
+            // property read on the array OBJECT, and `a[Symbol.iterator]`
+            // answers with a function.
+            //
+            // Getting this wrong is not merely a missed optimization. The
+            // caller acts on "this is a number" by testing the raw double with
+            // `fcmp one %v, 0.0`, and every NaN-boxed pointer IS a NaN, so that
+            // comparison is false for every object, string and function alive.
+            // `if (a[Symbol.iterator])` therefore took the FALSE branch on a
+            // value that `Boolean()` and `typeof` both agreed was a function.
+            //
+            // Proof is required rather than merely the absence of counter-
+            // evidence: an index we cannot type may hold anything at runtime,
+            // and answering `false` here costs a fast path while answering
+            // `true` costs a wrong branch.
+            if !is_numeric_expr(ctx, index) {
+                return false;
+            }
             if receiver_class_name(ctx, object)
                 .as_deref()
                 .is_some_and(is_numeric_typed_array_class)
@@ -367,18 +401,6 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
-            // #6750 follow-up: a masked-index read covered by an ACTIVE
-            // masked-window fact (dense range-loop / straight-line-region
-            // fast copy) is a guard-proven numeric element load, even when
-            // the receiver's STATIC type is erased (`any` parameter).
-            // Without this, `n ^= S[x & 0xff]` inside a fast copy still
-            // routed through the BigInt-aware dynamic helpers. Facts are
-            // scope-managed by the versioned lowerings, so the answer is
-            // only `true` while a fast copy that proved the window is being
-            // lowered.
-            if crate::expr::masked_window_fact_for_index(ctx, *arr_id, index).is_some() {
-                return true;
-            }
             match ctx.local_types.get(arr_id) {
                 Some(HirType::Array(elem)) => {
                     matches!(**elem, HirType::Number | HirType::Int32)

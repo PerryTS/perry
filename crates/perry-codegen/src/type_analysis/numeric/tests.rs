@@ -544,3 +544,125 @@ fn only_number_returning_string_methods_are_claimed_numeric() {
         );
     }
 }
+
+/// #7796 — an element read at a NON-numeric index is not a numeric read.
+///
+/// `a[Symbol.iterator]` on a `number[]` is a property read on the array
+/// object, and it answers with a function. Typing the local that holds it as
+/// `number` made the truthiness test lower to `fcmp one %v, 0.0` — and every
+/// NaN-boxed pointer IS a NaN, so that comparison is false for every function,
+/// object and string alive. `if (f)` took the false branch on a value that
+/// `typeof` called a function and `Boolean()` called true.
+mod symbol_keyed_element_reads {
+    use super::*;
+
+    /// Slice out the probe function so an assertion cannot be satisfied by
+    /// some unrelated part of the module.
+    fn probe_body(ir: &str) -> String {
+        let start = ir
+            .find("__probe(")
+            .map(|i| ir[..i].rfind("define").expect("define before probe"))
+            .expect("probe function must be emitted");
+        let end = ir[start..].find("\n}").expect("probe must terminate") + start;
+        ir[start..end].to_string()
+    }
+
+    fn array_of_numbers(id: u32) -> Stmt {
+        Stmt::Let {
+            id,
+            name: "a".to_string(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: false,
+            init: Some(Expr::Array(vec![Expr::Integer(1)])),
+        }
+    }
+
+    fn truthy_return(local: u32) -> Stmt {
+        Stmt::Return(Some(Expr::Conditional {
+            condition: Box::new(Expr::LocalGet(local)),
+            then_expr: Box::new(Expr::Integer(1)),
+            else_expr: Box::new(Expr::Integer(0)),
+        }))
+    }
+
+    #[test]
+    fn a_symbol_indexed_element_is_tested_with_js_is_truthy() {
+        // const a: number[] = [1];
+        // const sym = Symbol.iterator;
+        // const f = a[sym];
+        // return f ? 1 : 0;
+        let ir = emitted_ir(probe_module(
+            "symbol_keyed_element_read.ts",
+            Vec::new(),
+            vec![
+                array_of_numbers(1),
+                Stmt::Let {
+                    id: 2,
+                    name: "sym".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::SymbolFor(Box::new(Expr::String(
+                        "@@__perry_wk_iterator".to_string(),
+                    )))),
+                },
+                Stmt::Let {
+                    id: 3,
+                    name: "f".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        index: Box::new(Expr::LocalGet(2)),
+                    }),
+                },
+                truthy_return(3),
+            ],
+        ));
+        let body = probe_body(&ir);
+        assert!(
+            body.contains("js_is_truthy"),
+            "a symbol-keyed read must go through the general truthiness \
+             helper, or a NaN-boxed function reads as false:\n{body}"
+        );
+        assert!(
+            !body.contains("fcmp one"),
+            "the numeric fast path must not fire for a non-numeric index:\n{body}"
+        );
+    }
+
+    #[test]
+    fn a_numeric_index_keeps_the_inline_fast_path() {
+        // The guard against over-correcting: requiring a numeric index must
+        // not cost the ordinary `a[i]` element read its inline comparison.
+        let ir = emitted_ir(probe_module(
+            "numeric_element_read.ts",
+            Vec::new(),
+            vec![
+                array_of_numbers(1),
+                Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: false,
+                    init: Some(Expr::Integer(0)),
+                },
+                Stmt::Let {
+                    id: 3,
+                    name: "v".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        index: Box::new(Expr::LocalGet(2)),
+                    }),
+                },
+                truthy_return(3),
+            ],
+        ));
+        let body = probe_body(&ir);
+        assert!(
+            body.contains("fcmp one"),
+            "a numeric index must keep the inline truthiness comparison:\n{body}"
+        );
+    }
+}

@@ -336,11 +336,23 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                 None
             }
         }
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, index } => {
             // arr[i] where arr is Array<T> → element type T.
             // Handles both LocalGet(arr) and PropertyGet(this, "field")
             // — the latter lets `this.parts[i]` get the right type
             // when `parts: string[]`.
+            //
+            // #7796: only at a NUMERIC index. `a[Symbol.iterator]` on a
+            // `number[]` reads a property of the array OBJECT and answers with
+            // a function, so typing the local as `number` is simply false — and
+            // it is a costly kind of false, because a local believed numeric is
+            // tested for truthiness with `fcmp one %v, 0.0`. Every NaN-boxed
+            // pointer is a NaN, so that comparison says false for every
+            // function, object and string, and `if (f)` took the wrong branch
+            // on a value `typeof` and `Boolean()` both called a function.
+            if !is_numeric_expr(ctx, index) {
+                return None;
+            }
             if let Expr::LocalGet(arr_id) = object.as_ref() {
                 if let Some(HirType::Array(elem_ty)) = ctx.local_types.get(arr_id) {
                     return Some((**elem_ty).clone());
