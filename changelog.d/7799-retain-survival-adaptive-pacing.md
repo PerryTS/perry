@@ -108,9 +108,29 @@ side is smaller.
 
 #### Refuted along the way
 
-Batching the per-slot `old_page_account_dirty_slot` map probe into one update per
-4 KB page (and hoisting the per-slot weak-target check to a per-object one)
-measured as **exactly zero** — `retain` 0.344 vs 0.345 s. Not shipped.
+* Batching the per-slot `old_page_account_dirty_slot` map probe into one update
+  per 4 KB page (and hoisting the per-slot weak-target check to a per-object one)
+  measured as **exactly zero** — `retain` 0.344 vs 0.345 s. Not shipped.
+* The gc-ratchet's `11_collect_at_depth` reports six gating REGRESSION rows here
+  (6,150 promoted objects becoming 6,139 copied ones, and `heap_used_bytes`
+  +4.12%), plus `04_dead_after_deep_stack`'s `copied_objects`. **None of them is
+  this change.** A gc_ratchet run of the `origin/main` @ `0a2bf15bd` reference
+  build on the same host produces the identical six rows, byte for byte, and a
+  cell-by-cell comparison of the two artifacts finds **every gating metric across
+  all 13 probes identical** — only `wall_ms` / `rss_bytes` / `peak_rss_bytes`
+  differ, which is exactly the set the `shared_ci` profile deliberately does not
+  gate. `12_large_live_set` holds (`heap_used_bytes` −2.39%, an improvement) with
+  `copied_objects` 61,851, so the probe's subject was live. The rows are red on
+  main on this host and want their own investigation.
+* A first attempt to "fix" those rows scoped the retaining multiplier away from
+  `copied_minor_promotion_handoff_pressure_due`, on the theory that survivor
+  *placement* should not read a band derived from full-GC-yield evidence. Reverted:
+  the premise was the phantom above, and the principle was wrong too — that
+  predicate's own doc says it decides "whether an imminent promotion justifies a
+  full old reclaim FIRST", and `gc::mod.rs` answers it with
+  `note_survivor_promotion_handoff_full`. All three callers of
+  `old_reclaim_pressure_due` are full-collection decisions, so one signal and one
+  multiplier is the coherent shape, not a carve-out.
 
 #### Validation
 
