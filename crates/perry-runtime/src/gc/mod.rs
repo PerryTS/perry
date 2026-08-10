@@ -151,6 +151,7 @@ pub(crate) mod poll_arm;
 /// handled safepoint, so a failing seed is a reproducer. Debug-only
 /// (`PERRY_GC_SCHEDULE_SEED=<u64>`).
 pub(crate) mod schedule;
+pub(crate) use instruments::note_loop_poll_reached;
 pub use instruments::{copying_minor_cycles, loop_polls_reached, moved_objects_total};
 pub use poll_arm::PERRY_GC_POLL_ARMED;
 pub(crate) use poll_arm::{arm_poll, disarm_poll, poll_armed, resolve_poll_seed};
@@ -159,7 +160,6 @@ pub use schedule::{
     schedule_polls_paced,
 };
 pub use verify::*;
-pub(crate) use instruments::note_loop_poll_reached;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 #[cfg(feature = "diagnostics")]
@@ -1031,6 +1031,19 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
 /// gets no verdict. An uncaught throw is the same. Both already bypass every
 /// other exit callback.
 fn emit_schedule_liveness_verdict() {
+    // Same discipline as `report_exit_summary`, for the same reason: every
+    // thread routes through the teardown funnel, the counters are
+    // process-global, and a worker tearing down first would judge — and at
+    // rate 1 `exit(70)` on — counts that are not yet final. Main-thread-only
+    // (via the TLS-free OS-id compare) and once-only.
+    if !crate::native_handle::is_main_thread_or_unrecorded() {
+        return;
+    }
+    static VERDICT_EMITTED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    if VERDICT_EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     match schedule_liveness_report() {
         None => {}
         Some(Ok(summary)) => eprintln!("{summary}"),

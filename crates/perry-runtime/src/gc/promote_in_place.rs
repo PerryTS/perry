@@ -41,7 +41,8 @@
 //!   promotion until a full runs and actually reclaims them, so a workload
 //!   that sits just above the threshold forever cannot bleed footprint
 //!   indefinitely.
-//! * `PERRY_GC_FORCE_EVACUATE` / `PERRY_GC_ZEAL` turn it off outright. Those
+//! * `PERRY_GC_FORCE_EVACUATE` — and every mode that implies it, a resolved
+//!   `PERRY_GC_SCHEDULE_SEED` included — turns it off outright. Those
 //!   knobs exist to make objects MOVE; a promoting cycle moves nothing, and an
 //!   instrument that silently stops exercising its subject is exactly the
 //!   failure mode CLAUDE.md's "a gate must assert its subject was live" rule
@@ -143,8 +144,10 @@ pub(super) fn should_promote_young_in_place() -> bool {
     if !promote_in_place_enabled() {
         return false;
     }
-    // Both of these exist to make objects move. Leave them a copier to drive.
-    if gc_force_evacuate_enabled() || gc_zeal_enabled() {
+    // Forced evacuation exists to make objects move — and it is what every
+    // stress mode implies (a resolved schedule seed included), so this one
+    // predicate covers them all. Leave them a copier to drive.
+    if gc_force_evacuate_enabled() {
         return false;
     }
     if PROMOTED_DEAD_BYTES.with(Cell::get) >= PROMOTED_DEAD_BUDGET_BYTES {

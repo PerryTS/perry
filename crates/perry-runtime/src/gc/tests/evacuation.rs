@@ -1016,10 +1016,8 @@ fn explicit_gc_under_forced_evacuation_runs_a_moving_minor() {
     // copying-minor tests use for exactly this shape.
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _schedule = super::super::schedule::ScheduleGuard::set(
-        7,
-        super::super::schedule::rate_threshold(1.0),
-    );
+    let _schedule =
+        super::super::schedule::ScheduleGuard::set(7, super::super::schedule::rate_threshold(1.0));
     assert!(
         gc_force_evacuate_enabled(),
         "test premise: a resolved seed must imply forced evacuation"

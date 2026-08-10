@@ -230,7 +230,6 @@ fn the_schedule_collects_at_a_safepoint_with_no_pressure_due() {
     );
 }
 
-
 /// The complement: mode ON but the schedule declining. This is the arm that
 /// distinguishes "seeded schedule" from "collect at every safepoint with extra
 /// steps" — if a declined safepoint collected anyway, every seed would behave

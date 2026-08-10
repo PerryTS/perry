@@ -51,6 +51,33 @@ fn current_thread_id() -> u64 {
     hasher.finish()
 }
 
+/// The OS thread id, with NO thread-local storage behind it.
+///
+/// `std::thread::current()` panics when called for the first time on a thread
+/// whose TLS has already been destroyed — and the per-thread teardown funnel
+/// (`js_gc_release_current_thread_collection_side_allocations`) runs exactly
+/// there: a tokio worker unwinding at process exit aborted the whole run
+/// through the schedule's exit summary (#7741 audit). Handle-ownership checks
+/// keep the hashed-`ThreadId` scheme above (an OS id can be recycled after a
+/// thread dies, which those checks must not confuse); this one exists solely
+/// for teardown-path "am I the main thread" reads, where the main thread is
+/// alive by definition and the caller may already be TLS-dead.
+fn current_os_thread_id() -> u64 {
+    #[cfg(unix)]
+    {
+        unsafe { libc::pthread_self() as u64 }
+    }
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetCurrentThreadId() -> u32;
+        }
+        u64::from(unsafe { GetCurrentThreadId() })
+    }
+}
+
+static MAIN_OS_THREAD_ID: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) fn runtime_main_thread_id() -> u64 {
     let current = current_thread_id();
     match MAIN_THREAD_ID.compare_exchange(0, current, Ordering::AcqRel, Ordering::Acquire) {
@@ -59,15 +86,35 @@ pub(crate) fn runtime_main_thread_id() -> u64 {
     }
 }
 
+/// Record the CALLING thread as the owner of teardown-path once-only
+/// diagnostics, first caller wins. Separate from [`runtime_main_thread_id`]'s
+/// capture on purpose: that one races among every handle-creating thread, so
+/// piggy-backing the OS id on its winning arm leaves the word 0 whenever a
+/// handle call recorded main first — and a 0 here reads as "unrecorded",
+/// which waves EVERY thread through [`is_main_thread_or_unrecorded`] and
+/// reintroduces the worker-teardown print this exists to prevent.
+pub(crate) fn record_diagnostics_owner_thread() {
+    let _ = MAIN_OS_THREAD_ID.compare_exchange(
+        0,
+        current_os_thread_id(),
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+}
+
 /// True on the runtime's main thread, or when the main thread has not been
 /// recorded yet. The unrecorded case returns `true` on purpose: callers use
 /// this to gate a once-only diagnostic, and never emitting is worse than
 /// emitting from a not-yet-identified thread. Pure read — unlike
 /// [`runtime_main_thread_id`] it does not capture the caller as main.
+///
+/// Compares OS thread ids, not the hashed `ThreadId`, because its callers sit
+/// on the per-thread teardown funnel where `std::thread::current()` is not
+/// callable — see [`current_os_thread_id`].
 pub(crate) fn is_main_thread_or_unrecorded() -> bool {
-    match MAIN_THREAD_ID.load(Ordering::Acquire) {
+    match MAIN_OS_THREAD_ID.load(Ordering::Acquire) {
         0 => true,
-        main => current_thread_id() == main,
+        main => current_os_thread_id() == main,
     }
 }
 
@@ -361,6 +408,47 @@ pub(crate) unsafe fn finalize_native_handle_for_gc(handle: *mut NativeHandleHead
 mod tests {
     use super::*;
     use std::os::raw::c_int;
+
+    /// The teardown-diagnostics gate must block every thread except the
+    /// recorded owner — the unrecorded arm waving workers through is exactly
+    /// how a TLS-dead worker ends up printing (and panicking) at process exit.
+    /// Runs the whole protocol on ONE spawned thread so it cannot disturb, or
+    /// be disturbed by, another test having recorded an owner already.
+    #[test]
+    fn the_diagnostics_owner_gate_blocks_other_threads() {
+        let recorded_before = MAIN_OS_THREAD_ID.load(Ordering::Acquire);
+        if recorded_before == 0 {
+            record_diagnostics_owner_thread();
+        }
+        let owner = MAIN_OS_THREAD_ID.load(Ordering::Acquire);
+        assert_ne!(owner, 0, "recording must set the owner word");
+        if owner == current_os_thread_id() {
+            assert!(
+                is_main_thread_or_unrecorded(),
+                "the owner itself must pass the gate"
+            );
+        }
+        let other = std::thread::spawn(is_main_thread_or_unrecorded)
+            .join()
+            .expect("gate thread panicked");
+        assert!(
+            !other,
+            "a non-owner thread must be blocked once an owner is recorded"
+        );
+        // Second capture must not steal ownership.
+        let owner_after = {
+            std::thread::spawn(|| {
+                record_diagnostics_owner_thread();
+            })
+            .join()
+            .expect("recorder thread panicked");
+            MAIN_OS_THREAD_ID.load(Ordering::Acquire)
+        };
+        assert_eq!(
+            owner, owner_after,
+            "first recorder wins; later calls are no-ops"
+        );
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static FINALIZER_CALLS: AtomicUsize = AtomicUsize::new(0);

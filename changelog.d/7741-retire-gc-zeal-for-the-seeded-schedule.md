@@ -59,3 +59,18 @@ fails if either direction is broken. `scripts/gc_schedule_fuzz.sh` rejects an
 out-of-range rate rather than letting the runtime clamp it and then printing a
 reproduce command for a density it did not run at, and pins allocation pacing
 into both the runs and the printed command.
+
+**Fixed during the merge audit — worker-teardown abort under any resolved
+seed.** The exit summary runs on the per-thread teardown funnel
+(`js_gc_release_current_thread_collection_side_allocations`), where a tokio
+worker's TLS is already destroyed; its main-thread gate called
+`std::thread::current()` (which panics there), and even past the gate a
+TLS-dead worker printing would panic inside `eprintln!`'s reentrant stderr
+lock. Under the mode's own panic hook that aborted every seeded run
+(exit 134) after correct output. The gate now compares OS thread ids
+(`pthread_self`, no TLS) against an owner recorded when the seed resolves
+(`native_handle::record_diagnostics_owner_thread` — its own word, not
+piggy-backed on the handle-scheme capture, which a handle call could have won
+first and left the gate open). The rate-1 verdict gets the same owner gate
+plus a once-guard, so a worker can never `exit(70)` on non-final counts.
+Regression test: `the_diagnostics_owner_gate_blocks_other_threads`.
