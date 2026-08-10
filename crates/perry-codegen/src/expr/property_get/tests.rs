@@ -223,24 +223,46 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
         ir.contains("@perry_ic_"),
         "test premise: the generic read reaches the inline PIC:\n{ir}"
     );
+    use crate::expr::property_get::generic_dispatch::{PIC_WAYS, PIC_WAY_BASE, PIC_WAY_STATE};
+
+    // Block *text* order is an artifact of emission order, so assert the CFG
+    // instead: the block that calls the miss handler must be reachable only as
+    // a branch target of the way block, never straight-line after it.
+    let ways = ir
+        .find("\npic.ways")
+        .unwrap_or_else(|| panic!("expected a pic.ways block:\n{ir}"));
     let way_load = ir
-        .find("pic.way.load")
-        .unwrap_or_else(|| panic!("expected a polymorphic way load block:\n{ir}"));
-    let miss_call = ir
-        .find("call double @js_object_get_field_ic_miss")
-        .unwrap_or_else(|| panic!("expected the miss handler call:\n{ir}"));
+        .find("\npic.way.load")
+        .unwrap_or_else(|| panic!("expected a pic.way.load block:\n{ir}"));
+    let call_block = ir
+        .find("\npic.miss.call")
+        .unwrap_or_else(|| panic!("expected a pic.miss.call block:\n{ir}"));
+    let ways_body = &ir[ways..[way_load, call_block, ir.len()]
+        .into_iter()
+        .filter(|&x| x > ways)
+        .min()
+        .unwrap()];
     assert!(
-        way_load < miss_call,
-        "the way compares must be emitted before the miss call, not after it:\n{ir}"
+        ways_body.contains("pic.way.load") && ways_body.contains("pic.miss.call"),
+        "pic.ways must end in a branch choosing between the way load and the \
+         miss call — otherwise the compares are not gating anything:\n{ways_body}"
     );
-    // The way compares read (token, slot) pairs at words 3.. of the cache.
-    use crate::expr::property_get::generic_dispatch::{PIC_WAYS, PIC_WAY_BASE};
+    assert!(
+        !ways_body.contains("call double @js_object_get_field_ic_miss"),
+        "the miss call must not sit inside the way block:\n{ways_body}"
+    );
+    // The way compares read (token, slot) pairs at words PIC_WAY_BASE.. and the
+    // gate reads the state word — all inside pic.ways, none anywhere else.
     for w in 0..PIC_WAYS {
         for word in [PIC_WAY_BASE + w * 2, PIC_WAY_BASE + w * 2 + 1] {
             assert!(
-                ir.contains(&format!("i64 {word})")) || ir.contains(&format!("i64 {word}\n")),
-                "way word {word} is never read in the emitted IR:\n{ir}"
+                ways_body.contains(&format!("i64 {word}\n")),
+                "way word {word} is never read in the way block:\n{ways_body}"
             );
         }
     }
+    assert!(
+        ir.contains(&format!("i64 {PIC_WAY_STATE}\n")),
+        "the megamorphic gate must read the way-state word:\n{ir}"
+    );
 }

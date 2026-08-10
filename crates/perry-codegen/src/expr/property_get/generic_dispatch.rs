@@ -28,6 +28,10 @@ pub(crate) const PIC_WAY_BASE: usize = 3;
 /// `(token, slot)` ways beyond the MRU entry; a site resolves `PIC_WAYS + 1`
 /// shapes inline. Mirrors the runtime's `PIC_WAYS`.
 pub(crate) const PIC_WAYS: usize = 4;
+/// Way-state word: `> 0` means at least one way is populated and the compares
+/// are worth running; `0` (fresh / epoch-wiped) and `-1` (sticky megamorphic)
+/// both skip them. Mirrors the runtime's `PIC_WAY_STATE`.
+pub(crate) const PIC_WAY_STATE: usize = PIC_WAY_BASE + PIC_WAYS * 2;
 
 /// The generic per-site monomorphic inline-cache dispatch for `obj.property`.
 /// This is the fall-through tail of the general catch-all arm: all earlier
@@ -508,6 +512,28 @@ pub(crate) fn lower_generic_property_get(
     // therefore has a real `class_id`, which primes the keys-POINTER token. An
     // ID-only way set never fills for the discriminated-union programs this
     // whole block exists to speed up; measured, it cost 6%.
+    //
+    // The compares sit behind their own branch on `cache[PIC_WAY_STATE] > 0`
+    // rather than being folded into one flat predicate, because a site whose
+    // receiver rotation is WIDER than the ways hold never hits one and would
+    // otherwise pay four dependent loads on every read: measured at **+37%** on
+    // a 7-shape site, against a 2.5x speedup on a 5-shape one. `pic_prime_get`
+    // latches that state to `-1` once a site proves itself megamorphic, and a
+    // fresh or epoch-wiped site reads `0`, so for both the branch is one load,
+    // one compare, and a perfectly predicted fall-through to the call — which
+    // is exactly the pre-#7753 code path.
+    let state_ptr = ctx
+        .block()
+        .gep(I64, &cache_ref, &[(I64, &PIC_WAY_STATE.to_string())]);
+    let way_state = ctx.block().load(I64, &state_ptr);
+    let ways_live = ctx.block().icmp_sgt(I64, &way_state, "0");
+    let ways_idx = ctx.new_block("pic.ways");
+    let call_idx = ctx.new_block("pic.miss.call");
+    let ways_label = ctx.block_label(ways_idx);
+    let call_label = ctx.block_label(call_idx);
+    ctx.block().cond_br(&ways_live, &ways_label, &call_label);
+
+    ctx.current_block = ways_idx;
     let mut way_hit = ctx.block().and(I1, &is_object, &epoch_eq);
     way_hit = ctx.block().and(I1, &way_hit, &token_nonnull);
     let mut way_any = String::from("false");
@@ -542,9 +568,7 @@ pub(crate) fn lower_generic_property_get(
     let way_in_bounds = ctx.block().icmp_ult(I64, &way_slot, &way_limit);
     let way_ok = ctx.block().and(I1, &way_hit, &way_in_bounds);
     let way_load_idx = ctx.new_block("pic.way.load");
-    let call_idx = ctx.new_block("pic.miss.call");
     let way_load_label = ctx.block_label(way_load_idx);
-    let call_label = ctx.block_label(call_idx);
     ctx.block().cond_br(&way_ok, &way_load_label, &call_label);
 
     ctx.current_block = way_load_idx;

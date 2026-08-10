@@ -80,6 +80,45 @@ Two things had to be got right, and both were found by a test rather than by rea
   compare sequence running on every miss and never once hitting. `pointer_tokens_do_reach_a_way`
   is the test that fails if it is narrowed again.
 
+A third thing had to be got right, and only a benchmark could have found it.
+**The ways are not a free win — they are a trade, and just past capacity the
+trade inverts.** Holding everything else fixed and varying only the number of
+shapes at one site (`bench/poly_read5.ts` / `poly_read.ts` / `poly_read7.ts`,
+identical but for the arity):
+
+| shapes at the site | 5 (= capacity) | 6 | 7 |
+|---|--:|--:|--:|
+| v0.5.1434 | 1.98 s | 1.97 s | 1.98 s |
+| ways, no off-switch | **0.79 s** | 1.87 s | **2.71 s** |
+
+A 2.5× speedup at capacity and a **37% regression** one shape past it — four
+dependent loads per read that can never hit. Shipping only the left half of that
+table is how a "pure win" turns into a bug report from whoever writes the
+seven-arm union.
+
+So the compares sit behind their own branch on a way-state word, and
+`pic_prime_get` latches that word negative once a site proves its rotation is
+wider than the ways hold. A latched site is left with exactly its pre-#7753 code
+path plus one load and one perfectly-predicted branch.
+
+Getting the latch *policy* right took two more measured failures, and both are
+now tests:
+
+* **Count consecutive capacity evictions, not cumulative ones.** A cumulative
+  counter latches any long-running site that ever sees a stray shape, and
+  `evalNode` handles `let`/`fun` twice per round — 80 stray evictions across a
+  run. The ways switched themselves off on the exact site they were built for:
+  2.39 s → 3.03 s. (`a_rare_extra_shape_does_not_latch_a_site_that_fits`)
+* **The latch must not be permanent.** "Megamorphic" is a property of a program
+  *phase*, not of a site. `interp.ts` runs three sub-programs in a loop, and the
+  string-building one drives `evalNode` through a different shape set; a sticky
+  latch let that phase kill the site for the rest of the process, and the number
+  did not move (3.02 s). The latch is a countdown instead — each miss while
+  latched adds one, and after `PIC_LATCH_RETRY` misses the ways get another
+  chance. A genuinely megamorphic site pays 16 way-compares per 2048 reads to
+  re-confirm; a phase-changed one recovers inside a single window.
+  (`a_wider_than_capacity_rotation_latches_then_re_arms`)
+
 Admitting pointer tokens means the ways inherit #6080a: a keys-array address freed by a
 collection can be recycled under a different shape, and a stale way would pointer-match
 and load the wrong slot **silently**. The ways therefore share word 2's epoch snapshot

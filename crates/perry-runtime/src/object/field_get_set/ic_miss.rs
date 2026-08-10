@@ -255,8 +255,43 @@ pub(crate) const PIC_WAY_BASE: usize = 3;
 /// Number of `(token, slot)` ways beyond the MRU entry. Total shapes a site
 /// can resolve inline is `PIC_WAYS + 1`.
 pub(crate) const PIC_WAYS: usize = 4;
-/// Word holding the round-robin victim index.
-pub(crate) const PIC_VICTIM: usize = PIC_WAY_BASE + PIC_WAYS * 2;
+/// Word holding the way state, which the emitted gate reads as a single signed
+/// compare:
+///
+/// | value | meaning | emitted code |
+/// |---|---|---|
+/// | `0` | no way is populated (fresh site, or just epoch-wiped) | skip the compares |
+/// | `> 0` | armed: bit 0 set, bits 1..7 the round-robin victim, bits 8.. the *consecutive* capacity-eviction run | run the compares |
+/// | `< 0` | **megamorphic** — the rotation is wider than the ways hold. The magnitude is a countdown: each further miss adds 1, and at 0 the site is armed again | skip the compares |
+pub(crate) const PIC_WAY_STATE: usize = PIC_WAY_BASE + PIC_WAYS * 2;
+/// Bit 0 of [`PIC_WAY_STATE`]: at least one way is populated. Carried
+/// explicitly so an armed site with victim 0 and no evictions is still `> 0`,
+/// which is the whole predicate the emitted gate evaluates.
+const PIC_STATE_ARMED: i64 = 1;
+/// **Consecutive** capacity evictions tolerated before a site latches
+/// megamorphic.
+///
+/// Consecutive is load-bearing. A cumulative count latches any long-running
+/// site that ever sees an extra shape: the interpreter's `evalNode` handles
+/// `let`/`fun` nodes twice per round, which is 80 stray evictions over a run,
+/// so a cumulative counter turned the ways off on the very site they were built
+/// for and gave back the entire win (2.39 s → 3.03 s, measured). Any prime that
+/// finds room — a free way, or its shape already in one — proves the site is
+/// coping and resets the run to zero.
+const PIC_MEGAMORPHIC_EVICTIONS: i64 = 16;
+/// Misses a megamorphic site serves before the ways get another chance.
+///
+/// The latch must NOT be permanent. "Megamorphic" is a property of a program
+/// *phase*, not of a site: the interpreter's `evalNode` sees five hot node kinds
+/// while it is running `fib`, and a different set while it is running the
+/// string-building program. A sticky latch let the second phase kill the site
+/// for the rest of the process — 2.39 s → 3.02 s, measured, with the ways
+/// working perfectly right up until the first phase change and never again.
+///
+/// Counting down instead costs a megamorphic site one increment per miss and a
+/// re-warm every `PIC_LATCH_RETRY` misses (16 way-compares out of 2048 reads),
+/// while a phase-changed site recovers within one such window.
+const PIC_LATCH_RETRY: i64 = 2048;
 
 /// Prime the MRU entry, cascading the shape it evicts into the ways.
 ///
@@ -301,15 +336,32 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64, 
     // includes `prev_tok`: cascading it would smuggle a stale pointer token past
     // the very guard the wipe exists to enforce.
     let epoch_held = c[2] == epoch;
-    if !epoch_held {
+    c[0] = token;
+    c[1] = slot;
+    c[2] = epoch;
+    if !epoch_held && c[PIC_WAY_STATE] >= 0 {
         for w in 0..PIC_WAYS {
             c[PIC_WAY_BASE + w * 2] = 0;
             c[PIC_WAY_BASE + w * 2 + 1] = 0;
         }
+        c[PIC_WAY_STATE] = 0;
     }
-    c[0] = token;
-    c[1] = slot;
-    c[2] = epoch;
+    // Megamorphic. A rotation wider than the ways hold never hits one, so the
+    // compare sequence becomes pure cost — measured at **+37%** on a 7-shape
+    // site, against a 2.5x SPEEDUP on a 5-shape one. That asymmetry is the whole
+    // reason this state word exists: without it the ways pay well inside
+    // capacity and punish just past it, which is not a trade a compiler gets to
+    // make on the user's behalf. The ways are already zeroed when the latch is
+    // set and the emitted gate stops reading them, so a latched site is left
+    // with exactly its pre-#7753 code path.
+    //
+    // The countdown is what keeps that from being a one-way door — see
+    // [`PIC_LATCH_RETRY`].
+    let state = c[PIC_WAY_STATE];
+    if state < 0 {
+        c[PIC_WAY_STATE] = state + 1;
+        return;
+    }
     let cascade = epoch_held && prev_tok != 0 && prev_tok != token;
     // One pass over the ways does three things:
     //   * evicts `token` from a way if it has one — it now lives in the MRU
@@ -333,14 +385,39 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64, 
             free = Some(ti);
         }
     }
-    if !cascade || prev_present {
+    if prev_present {
+        // The shape is already cached: the site is coping, so the eviction run
+        // resets here too.
+        c[PIC_WAY_STATE] = PIC_STATE_ARMED | (((c[PIC_WAY_STATE] >> 1) & 0x7f) << 1);
         return;
     }
-    let ti = free.unwrap_or_else(|| {
-        let v = (c[PIC_VICTIM] as usize).wrapping_add(1) % PIC_WAYS;
-        c[PIC_VICTIM] = v as i64;
-        PIC_WAY_BASE + v * 2
-    });
+    if !cascade {
+        return;
+    }
+    let victim = (state >> 1) & 0x7f;
+    let ti = match free {
+        Some(ti) => {
+            // Room was available, so the site is coping: reset the eviction run.
+            c[PIC_WAY_STATE] = PIC_STATE_ARMED | (victim << 1);
+            ti
+        }
+        None => {
+            // No free way: this shape displaces another. Inside capacity that
+            // happens only during warm-up; past it, on every single miss.
+            let run = (state >> 8) + 1;
+            if run >= PIC_MEGAMORPHIC_EVICTIONS {
+                for w in 0..PIC_WAYS {
+                    c[PIC_WAY_BASE + w * 2] = 0;
+                    c[PIC_WAY_BASE + w * 2 + 1] = 0;
+                }
+                c[PIC_WAY_STATE] = -PIC_LATCH_RETRY;
+                return;
+            }
+            let v = (victim + 1) % PIC_WAYS as i64;
+            c[PIC_WAY_STATE] = PIC_STATE_ARMED | (v << 1) | (run << 8);
+            PIC_WAY_BASE + v as usize * 2
+        }
+    };
     c[ti] = prev_tok;
     c[ti + 1] = prev_slot;
 }
@@ -991,7 +1068,7 @@ pub extern "C" fn js_private_guard(
 
 #[cfg(test)]
 mod poly_pic_tests {
-    use super::{pic_prime_get, PicCache, PIC_CACHE_WORDS, PIC_VICTIM, PIC_WAYS, PIC_WAY_BASE};
+    use super::{pic_prime_get, PicCache, PIC_CACHE_WORDS, PIC_WAYS, PIC_WAY_BASE, PIC_WAY_STATE};
     use crate::object::shapes::PIC_ID_TOKEN_BIT;
 
     fn id_tok(n: u64) -> i64 {
@@ -1010,10 +1087,10 @@ mod poly_pic_tests {
             "codegen emits `[12 x i64]`; update both sides together"
         );
         assert!(
-            PIC_VICTIM < PIC_CACHE_WORDS,
-            "the victim counter must fit inside the emitted global"
+            PIC_WAY_STATE < PIC_CACHE_WORDS,
+            "the way-state word must fit inside the emitted global"
         );
-        assert_eq!(PIC_VICTIM, PIC_WAY_BASE + PIC_WAYS * 2);
+        assert_eq!(PIC_WAY_STATE, PIC_WAY_BASE + PIC_WAYS * 2);
     }
 
     /// The MRU entry keeps its pre-#7753 meaning exactly: always overwritten,
@@ -1067,6 +1144,10 @@ mod poly_pic_tests {
                 "shape {tok:#x} (slot {slot}) must be resolvable inline; cache = {c:?}"
             );
         }
+        assert!(
+            c[PIC_WAY_STATE] > 0,
+            "the emitted gate reads PIC_WAY_STATE > 0; a populated way set must arm it"
+        );
         // …and no shape is duplicated across two ways (the dedupe arm works),
         // otherwise capacity silently halves.
         for w in 0..PIC_WAYS {
@@ -1076,6 +1157,129 @@ mod poly_pic_tests {
                 assert!(a == 0 || a != b, "ways {w} and {v} hold the same token");
             }
         }
+    }
+
+    /// The asymmetry that makes the ways a real trade rather than a free win: a
+    /// rotation of `PIC_WAYS + 1` shapes is a 2.5x SPEEDUP, and one shape more
+    /// is a 37% REGRESSION — four dependent loads per read that can never hit.
+    ///
+    /// So a site that keeps evicting a way by capacity latches the ways off,
+    /// leaving no readable way behind (the emitted gate is the only thing
+    /// standing between a megamorphic site and that 37%) — and then COUNTS
+    /// DOWN, because "megamorphic" is a property of a program phase, not of a
+    /// site. Both halves are asserted: it latches, it stays latched across the
+    /// misses that follow, and it comes back on its own.
+    #[test]
+    fn a_wider_than_capacity_rotation_latches_then_re_arms() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        let shapes: Vec<i64> = (0..(PIC_WAYS as i64 + 3))
+            .map(|i| 0x5000_0000_0000 + i * 8)
+            .collect();
+        unsafe {
+            for _ in 0..40 {
+                for (slot, tok) in shapes.iter().enumerate() {
+                    pic_prime_get(&mut c, *tok, slot as i64, 3);
+                }
+            }
+        }
+        assert!(
+            c[PIC_WAY_STATE] < 0,
+            "a rotation wider than the ways must latch megamorphic: {c:?}"
+        );
+        for w in 0..PIC_WAYS {
+            assert_eq!(
+                c[PIC_WAY_BASE + w * 2],
+                0,
+                "a latched site must leave no readable way: {c:?}"
+            );
+        }
+        // Still latched a few misses later, and still holding no way.
+        let latched = c[PIC_WAY_STATE];
+        unsafe {
+            for _ in 0..8 {
+                pic_prime_get(&mut c, shapes[0], 0, 3);
+            }
+        }
+        assert!(c[PIC_WAY_STATE] < 0, "the latch must not clear immediately");
+        assert!(
+            c[PIC_WAY_STATE] > latched,
+            "each miss while latched must count down toward a retry"
+        );
+        for w in 0..PIC_WAYS {
+            assert_eq!(c[PIC_WAY_BASE + w * 2], 0, "latched site re-armed a way");
+        }
+        // …and the MRU entry keeps working exactly as it always did.
+        assert_eq!(c[0], shapes[0]);
+        assert_eq!(c[1], 0);
+
+        // Bounded recovery: enough misses and the site gets another chance, so
+        // a phase change cannot kill it for the rest of the process.
+        unsafe {
+            while c[PIC_WAY_STATE] < 0 {
+                pic_prime_get(&mut c, shapes[0], 0, 3);
+            }
+            // Two shapes is well inside capacity: the ways must fill again.
+            pic_prime_get(&mut c, shapes[1], 1, 3);
+            pic_prime_get(&mut c, shapes[0], 0, 3);
+        }
+        assert!(
+            c[PIC_WAY_STATE] > 0,
+            "a latched site must re-arm after its countdown: {c:?}"
+        );
+        assert!(
+            (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] != 0),
+            "a re-armed site must be able to fill a way again: {c:?}"
+        );
+    }
+
+    /// A rotation exactly AT capacity must not latch — otherwise the threshold
+    /// is set so tight it turns off the very case the ways exist for.
+    #[test]
+    fn a_rotation_at_capacity_never_latches() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            for _ in 0..200 {
+                for i in 0..(PIC_WAYS as i64 + 1) {
+                    pic_prime_get(&mut c, 0x6000_0000_0000 + i * 8, i, 4);
+                }
+            }
+        }
+        assert!(
+            c[PIC_WAY_STATE] > 0,
+            "a {}-shape rotation fits the ways and must stay armed: {c:?}",
+            PIC_WAYS + 1
+        );
+    }
+
+    /// The bug the *consecutive* eviction run exists to prevent, and the one a
+    /// cumulative counter shipped: a site that fits the ways but sees a rare
+    /// extra shape must never latch.
+    ///
+    /// This is not hypothetical. The interpreter's `evalNode` dispatches on five
+    /// hot node kinds plus `let`/`fun` twice per round — 80 stray evictions
+    /// across a run. Counted cumulatively that trips any sane threshold, so the
+    /// ways switched themselves off on the exact site they were built for and
+    /// handed back the whole win: 2.39 s → 3.03 s, measured end to end.
+    #[test]
+    fn a_rare_extra_shape_does_not_latch_a_site_that_fits() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        let hot: Vec<i64> = (0..(PIC_WAYS as i64 + 1))
+            .map(|i| 0x7000_0000_0000 + i * 8)
+            .collect();
+        unsafe {
+            for round in 0..400 {
+                for (slot, tok) in hot.iter().enumerate() {
+                    pic_prime_get(&mut c, *tok, slot as i64, 5);
+                }
+                // One interloper every round — far more than the 80 the
+                // interpreter produced, and 10x the raw threshold.
+                pic_prime_get(&mut c, 0x7000_FFFF_0000 + round, 0, 5);
+            }
+        }
+        assert!(
+            c[PIC_WAY_STATE] > 0,
+            "a fitting site with a rare extra shape must stay armed: {c:?}"
+        );
     }
 
     /// The population that matters is the keys-POINTER one: a plain object
