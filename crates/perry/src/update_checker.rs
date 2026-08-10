@@ -33,6 +33,14 @@ pub struct UpdateCache {
     /// always was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_notification: Option<String>,
+    /// Which version that notice was about.
+    ///
+    /// Without this the notify interval throttles on time alone, which
+    /// swallows the NEXT release when it lands inside the window — so a
+    /// week-long interval set to stop nagging about one version would also hide
+    /// the one that fixed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_notified_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +98,14 @@ fn save_cache(cache: &UpdateCache) {
     // `replace_path` rather than `fs::rename`: on Windows a rename onto an
     // EXISTING file fails, so every write after the first would silently do
     // nothing and the throttle would never advance.
-    let tmp = path.with_extension("json.tmp");
+    // A per-write name. With one shared `*.json.tmp`, two `perry` processes
+    // each write it and each rename it: the loser's rename lands a file the
+    // winner is still writing into, and the cache ends up truncated or mixed.
+    let tmp = path.with_extension(format!(
+        "json.tmp.{}.{}",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     if fs::write(&tmp, content).is_err() {
         let _ = fs::remove_file(&tmp);
         return;
@@ -100,15 +115,44 @@ fn save_cache(cache: &UpdateCache) {
     }
 }
 
+/// Distinguishes the temporary files of concurrent writes in one process.
+static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Take the cross-process lock guarding read-modify-write of the cache.
+///
+/// A background refresh and a notice can be recorded at the same moment, and
+/// each is a load-mutate-store: without a lock the later store overwrites the
+/// earlier one's field, so a notice recorded while a request was in flight
+/// vanishes and the user is told twice. Returns `None` when the lock cannot be
+/// taken, in which case the caller proceeds unlocked — losing a cache update is
+/// better than refusing to update a cache.
+fn lock_cache() -> Option<fslock::LockFile> {
+    let path = cache_path().with_extension("json.lock");
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let mut lock = fslock::LockFile::open(&path).ok()?;
+    // `try_lock`, NOT `lock`. This runs at teardown, after the command the user
+    // asked for has finished — so blocking here would hang their terminal on
+    // another `perry`'s cache write, for a cache. The doc above promises we
+    // proceed unlocked rather than wait, and `lock()` did not honour it.
+    match lock.try_lock() {
+        Ok(true) => Some(lock),
+        _ => None,
+    }
+}
+
 /// Record that the user has just been told about an available update.
 ///
 /// A no-op when there is no cache: the notice can only have come from one, and
 /// inventing a file here would fabricate a `last_check` that never happened.
-pub fn record_notification() {
+pub fn record_notification(version: &str) {
+    let _guard = lock_cache();
     let Some(mut cache) = load_cache() else {
         return;
     };
     cache.last_notification = Some(now_rfc3339());
+    cache.last_notified_version = Some(version.to_string());
     save_cache(&cache);
 }
 
@@ -329,7 +373,6 @@ fn fetch_latest_version() -> Result<UpdateCache> {
 
     let servers = get_update_servers();
     let mut last_err = None;
-    let prior_notification = load_cache().and_then(|c| c.last_notification);
 
     for url in &servers {
         match client.get(url).send() {
@@ -347,16 +390,22 @@ fn fetch_latest_version() -> Result<UpdateCache> {
                         ));
                         continue;
                     }
+                    // Re-read the notice state INSIDE the lock rather than
+                    // before the request. This struct is rebuilt from scratch,
+                    // and a notice recorded while the request was in flight
+                    // would otherwise be overwritten with the stale value read
+                    // minutes earlier — telling the user twice about the same
+                    // release.
+                    let _guard = lock_cache();
+                    let prior = load_cache();
                     let cache = UpdateCache {
                         last_check: now_rfc3339(),
                         latest_version: version,
                         release_url: info.html_url,
-                        // Carry the notice timestamp across the refresh. This
-                        // struct is rebuilt from scratch, so dropping the field
-                        // here would reset the notify throttle on every check
-                        // and `notify_interval_hours` would silently do nothing
-                        // beyond one check interval.
-                        last_notification: prior_notification.clone(),
+                        last_notification: prior.as_ref().and_then(|c| c.last_notification.clone()),
+                        last_notified_version: prior
+                            .as_ref()
+                            .and_then(|c| c.last_notified_version.clone()),
                     };
                     save_cache(&cache);
                     return Ok(cache);
@@ -429,14 +478,24 @@ pub fn print_update_notice(current: &str, latest: &str, url: &str, use_color: bo
             current,
             console::style(latest).green().bold(),
         );
-        eprintln!(
-            "  Run {} to update, or visit {}",
-            console::style("perry update").cyan(),
-            url,
-        );
+        // A custom manifest may carry only `version`, and "or visit " with
+        // nothing after it reads like a bug.
+        if url.is_empty() {
+            eprintln!("  Run {} to update", console::style("perry update").cyan());
+        } else {
+            eprintln!(
+                "  Run {} to update, or visit {}",
+                console::style("perry update").cyan(),
+                url,
+            );
+        }
     } else {
         eprintln!("\nUpdate: {} -> {} available", current, latest);
-        eprintln!("  Run `perry update` to update, or visit {}", url);
+        if url.is_empty() {
+            eprintln!("  Run `perry update` to update");
+        } else {
+            eprintln!("  Run `perry update` to update, or visit {}", url);
+        }
     }
 }
 
@@ -1553,6 +1612,7 @@ mod tests {
             latest_version: "0.2.171".to_string(),
             release_url: "https://github.com/PerryTS/perry/releases/tag/v0.2.171".to_string(),
             last_notification: Some("2025-01-15T11:00:00Z".to_string()),
+            last_notified_version: Some("0.2.171".to_string()),
         };
 
         let json = serde_json::to_string(&cache).unwrap();

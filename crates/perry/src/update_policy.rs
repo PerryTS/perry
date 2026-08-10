@@ -124,6 +124,15 @@ pub(crate) struct UpdatePolicy {
     pub(crate) check_interval: Duration,
     pub(crate) notify_interval: Duration,
     pub(crate) prompt_default: bool,
+    /// A complaint about the config, to print only if this run is going to
+    /// speak at all.
+    ///
+    /// Emitting it from `resolve` would write to stderr before the precedence
+    /// rules below have been applied — so `--format json`, `CI`, a piped stderr
+    /// or `--quiet` would each get a stray line in the middle of output nobody
+    /// asked to be interrupted. The whole point of those rules is that this run
+    /// stays silent.
+    pub(crate) config_warning: Option<&'static str>,
 }
 
 /// The environment inputs, gathered in one place so the decision itself is a
@@ -219,20 +228,21 @@ impl UpdatePolicy {
         let config = crate::commands::publish::load_config()
             .update
             .unwrap_or_default();
-        if matches!(config.mode, Some(UpdateMode::Unknown)) {
-            // One line, once, on the way past. Loud enough to fix, quiet
-            // enough not to be the thing the user remembers about the run.
-            eprintln!(
-                "warning: unrecognized `[update] mode` in ~/.perry/config.toml; \
-                 using \"notify\". Valid values: off, notify, prompt, auto."
-            );
-        }
+        // Held, not printed. Emitting here would write to stderr before the
+        // precedence rules above have been applied, so a `--format json` run,
+        // a CI job, a piped stderr or `--quiet` would each get a stray line in
+        // the middle of output nobody asked to have interrupted.
+        let config_warning = matches!(config.mode, Some(UpdateMode::Unknown)).then_some(
+            "warning: unrecognized `[update] mode` in ~/.perry/config.toml; using \
+             \"notify\". Valid values: off, notify, prompt, auto.",
+        );
 
         Self {
             mode: resolve_mode(env, config.mode),
             check_interval: config.check_interval(),
             notify_interval: config.notify_interval(),
             prompt_default: config.prompt_default.unwrap_or(false),
+            config_warning,
         }
     }
 
@@ -269,9 +279,19 @@ fn structured_output_selected() -> bool {
 pub(crate) fn should_notify(
     notify_interval: Duration,
     last_notification: Option<&str>,
+    last_notified_version: Option<&str>,
+    latest: &str,
     now_rfc3339: &str,
 ) -> bool {
     if notify_interval.is_zero() {
+        return true;
+    }
+    // The interval throttles repeats of the SAME update, which is what it has
+    // always said it does. Keying it on time alone silently swallowed the next
+    // release whenever it arrived inside the window — so a user who set a
+    // week-long interval to stop being nagged about one version would also miss
+    // the one that fixed it.
+    if last_notified_version != Some(latest) {
         return true;
     }
     let (Some(last), Some(now)) = (
@@ -283,7 +303,7 @@ pub(crate) fn should_notify(
         // cache would hide updates indefinitely.
         return true;
     };
-    now.saturating_sub(last) >= notify_interval.as_secs() as i64
+    now.saturating_sub(last).max(0) as u64 >= notify_interval.as_secs()
 }
 
 #[cfg(test)]
@@ -454,10 +474,20 @@ mod tests {
         );
     }
 
+    /// The interval alone, with the announced version held constant — which is
+    /// what these cases were written to exercise.
+    fn notified_before(interval: Duration, last_notification: Option<&str>, now: &str) -> bool {
+        should_notify(interval, last_notification, Some("1.0.0"), "1.0.0", now)
+    }
+
     #[test]
     fn the_notify_throttle_defaults_to_every_run() {
-        assert!(should_notify(Duration::ZERO, None, "2026-08-10T00:00:00Z"));
-        assert!(should_notify(
+        assert!(notified_before(
+            Duration::ZERO,
+            None,
+            "2026-08-10T00:00:00Z"
+        ));
+        assert!(notified_before(
             Duration::ZERO,
             Some("2026-08-10T00:00:00Z"),
             "2026-08-10T00:00:01Z"
@@ -468,12 +498,64 @@ mod tests {
     fn the_notify_throttle_honours_its_interval() {
         let day = Duration::from_secs(24 * 3600);
         assert!(
-            !should_notify(day, Some("2026-08-10T00:00:00Z"), "2026-08-10T01:00:00Z"),
+            !notified_before(day, Some("2026-08-10T00:00:00Z"), "2026-08-10T01:00:00Z"),
             "an hour into a one-day throttle must stay quiet"
         );
         assert!(
-            should_notify(day, Some("2026-08-09T00:00:00Z"), "2026-08-10T01:00:00Z"),
+            notified_before(day, Some("2026-08-09T00:00:00Z"), "2026-08-10T01:00:00Z"),
             "past the interval it must speak up"
+        );
+    }
+
+    /// ★ The interval throttles repeats of the SAME update, which is what it
+    /// always claimed. Keyed on time alone it swallowed the NEXT release
+    /// whenever that landed inside the window — so a week-long interval set to
+    /// stop nagging about one version would also hide the version that fixed
+    /// it.
+    #[test]
+    fn a_different_version_is_announced_regardless_of_the_interval() {
+        let week = Duration::from_secs(7 * 24 * 3600);
+        // One minute into a week-long throttle: the same version stays quiet...
+        assert!(!should_notify(
+            week,
+            Some("2026-08-10T00:00:00Z"),
+            Some("1.0.0"),
+            "1.0.0",
+            "2026-08-10T00:01:00Z"
+        ));
+        // ...and a different one is announced anyway.
+        assert!(should_notify(
+            week,
+            Some("2026-08-10T00:00:00Z"),
+            Some("1.0.0"),
+            "1.0.1",
+            "2026-08-10T00:01:00Z"
+        ));
+        // Never having announced anything is also "not this version".
+        assert!(should_notify(
+            week,
+            Some("2026-08-10T00:00:00Z"),
+            None,
+            "1.0.0",
+            "2026-08-10T00:01:00Z"
+        ));
+    }
+
+    /// An enormous configured interval must still suppress, not wrap around
+    /// into announcing every run. `as i64` on a `Duration`'s seconds can go
+    /// negative, and a negative interval compares as "already elapsed".
+    #[test]
+    fn an_enormous_interval_still_suppresses() {
+        let absurd = Duration::from_secs(u64::MAX);
+        assert!(
+            !should_notify(
+                absurd,
+                Some("2026-08-10T00:00:00Z"),
+                Some("1.0.0"),
+                "1.0.0",
+                "2026-08-10T00:01:00Z"
+            ),
+            "a signed conversion here would read as already-elapsed and notify"
         );
     }
 
@@ -482,13 +564,13 @@ mod tests {
     #[test]
     fn an_unreadable_timestamp_notifies_rather_than_staying_silent() {
         let day = Duration::from_secs(24 * 3600);
-        assert!(should_notify(day, None, "2026-08-10T00:00:00Z"));
-        assert!(should_notify(
+        assert!(notified_before(day, None, "2026-08-10T00:00:00Z"));
+        assert!(notified_before(
             day,
             Some("not-a-date"),
             "2026-08-10T00:00:00Z"
         ));
-        assert!(should_notify(
+        assert!(notified_before(
             day,
             Some("2026-08-10T00:00:00Z"),
             "also-not-a-date"

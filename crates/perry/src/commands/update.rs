@@ -68,7 +68,9 @@ pub fn run(
                     } else {
                         println!("Update available: {} -> {}", cur, latest);
                     }
-                    println!("  Release: {}", release_url);
+                    if !release_url.is_empty() {
+                        println!("  Release: {}", release_url);
+                    }
                 }
                 OutputFormat::Text => {}
             }

@@ -542,12 +542,19 @@ fn main_inner() -> Result<()> {
 
     // Print update notice if available (to stderr, non-blocking)
     if update_surface_active {
+        // The config complaint, if any, goes out only now — this is the first
+        // point at which we know the run is allowed to say anything at all.
+        if let Some(warning) = update_policy.config_warning {
+            eprintln!("{warning}");
+        }
         let use_stderr_color = !cli.no_color && std::io::stderr().is_terminal();
-        let status = if let Some(rx) = bg_check {
-            rx.recv_timeout(std::time::Duration::from_millis(100)).ok()
-        } else {
-            Some(update_checker::check_cached_status())
-        };
+        // A background check that has not answered within 100 ms falls back to
+        // the cache rather than saying nothing. Reading the timeout as "no
+        // update" suppressed a notice the previous run had already earned — the
+        // check being slow is not evidence that the version is current.
+        let status = bg_check
+            .and_then(|rx| rx.recv_timeout(std::time::Duration::from_millis(100)).ok())
+            .or_else(|| Some(update_checker::check_cached_status()));
 
         if let Some(update_checker::UpdateStatus::UpdateAvailable {
             current,
@@ -558,10 +565,14 @@ fn main_inner() -> Result<()> {
             // `notify_interval_hours` throttles repeats of the SAME available
             // update. It defaults to 0 — a notice every run, which is what
             // Perry did before — so this is inert until someone asks for it.
-            let last = update_checker::load_cache().and_then(|c| c.last_notification);
+            let cached = update_checker::load_cache();
             if update_policy::should_notify(
                 update_policy.notify_interval,
-                last.as_deref(),
+                cached.as_ref().and_then(|c| c.last_notification.as_deref()),
+                cached
+                    .as_ref()
+                    .and_then(|c| c.last_notified_version.as_deref()),
+                &latest,
                 &update_checker::now_rfc3339_public(),
             ) {
                 update_checker::print_update_notice(
@@ -570,7 +581,7 @@ fn main_inner() -> Result<()> {
                     &release_url,
                     use_stderr_color,
                 );
-                update_checker::record_notification();
+                update_checker::record_notification(&latest);
             }
         }
     }
