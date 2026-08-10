@@ -95,6 +95,7 @@ where
         | Expr::OsLoadavg
         | Expr::OsMachine
         | Expr::OsVersion
+        | Expr::ArrayIterationPatched
         | Expr::DateNow
         | Expr::MathRandom
         | Expr::MapNew

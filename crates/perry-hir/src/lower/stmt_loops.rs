@@ -776,11 +776,15 @@ fn lower_runtime_for_await_iterator(
     Ok(())
 }
 
-pub(crate) fn lower_stmt_for_of(
+/// Returns `true` when the caller should ALSO emit the lazy arm (#7760): this
+/// was a proven-array index loop, which ignores a patched
+/// `Array.prototype[Symbol.iterator]`.
+pub(super) fn lower_stmt_for_of_inner(
     ctx: &mut LoweringContext,
     module: &mut Module,
     for_of_stmt: &ast::ForOfStmt,
-) -> Result<()> {
+    force_lazy: Option<bool>,
+) -> Result<bool> {
     // `for (… of m.values()/keys()/entries())` on a statically-proven Map/Set
     // is the direct-collection loop written another way; rewrite it to that
     // form so it reaches the delete-safe index fast path instead of building a
@@ -1066,7 +1070,7 @@ pub(crate) fn lower_stmt_for_of(
             .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
 
         ctx.pop_block_scope(for_scope_mark);
-        return Ok(());
+        return Ok(false);
     }
 
     // --- #1646: `for await (const c of <Web ReadableStream>)` ---
@@ -1228,7 +1232,7 @@ pub(crate) fn lower_stmt_for_of(
             }));
 
             ctx.pop_block_scope(for_scope_mark);
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -1410,7 +1414,8 @@ pub(crate) fn lower_stmt_for_of(
         // pre-registration slot (never written) and calling it throws
         // `value is not a function` (claude-code bundle e8/K8).
         ctx.pop_block_scope(for_scope_mark);
-        return lower_runtime_for_await_iterator(ctx, module, for_of_stmt, arr_expr);
+        return lower_runtime_for_await_iterator(ctx, module, for_of_stmt, arr_expr)
+            .map(|()| false);
     }
     // #for-of lazy iterator protocol: a generic/untyped iterable (custom
     // iterator, generator object, any-typed value) must be driven lazily —
@@ -1421,7 +1426,22 @@ pub(crate) fn lower_stmt_for_of(
     // which (a) runs a generator past the point a `break` should have closed
     // it and (b) made IteratorClose impossible. `is_await` is already handled
     // by the early return above, so this is always the synchronous path.
-    let use_lazy_iter = needs_runtime_iterator;
+    // #7760: `force_lazy: Some(true)` builds the protocol arm of a guarded
+    // proven-array loop; `None` is the ordinary lowering.
+    let use_lazy_iter = needs_runtime_iterator || force_lazy == Some(true);
+    // The guard is needed exactly when this loop would otherwise be a plain
+    // array index loop: a proven array, no other fast path, not the await form
+    // (which returned above), and not the arm we are building for the guard.
+    let guard_with_lazy_arm = force_lazy.is_none()
+        && proven_array
+        && !needs_runtime_iterator
+        && !is_string_iter
+        && !is_headers_iter
+        && !is_urlsp_iter
+        && !is_iterable_map
+        && !is_iterable_set
+        && !is_iterable_typed_array
+        && !for_of_stmt.is_await;
     let arr_expr = if is_iterable_map {
         if let Some(args) = map_type_args.as_ref() {
             if args.len() >= 2 {
@@ -1802,7 +1822,7 @@ pub(crate) fn lower_stmt_for_of(
             .init
             .push(lazy_iter_for_stmt(arr_id, result_id, full_body));
         ctx.pop_block_scope(for_scope_mark);
-        return Ok(());
+        return Ok(false);
     }
 
     // Prepend the binding statements to the loop body
@@ -1856,7 +1876,7 @@ pub(crate) fn lower_stmt_for_of(
         body: loop_body,
     });
     ctx.pop_block_scope(for_scope_mark);
-    Ok(())
+    Ok(guard_with_lazy_arm)
 }
 
 pub(crate) fn lower_stmt_for_in(

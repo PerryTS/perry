@@ -44,6 +44,39 @@ own[Symbol.iterator] = function* () {
 };
 console.log("own wins:", JSON.stringify([...own]));
 
+// #7760 item 1: `for…of` honours the patch too — over a module const, a typed
+// local, and an array PARAMETER (which lowers through a second, parallel
+// for-of path in `lower_decl/body_stmt.rs`). And it stays LAZY: an early
+// `break` must stop pulling, which is what rules out materializing the
+// iterator eagerly at loop entry.
+function viaParam(a: number[]): string[] {
+  const o: string[] = [];
+  for (const v of a) o.push(String(v));
+  return o;
+}
+const fromConst: string[] = [];
+for (const v of src) fromConst.push(String(v));
+const typedLocal: number[] = [1, 2, 3];
+const fromLocal: string[] = [];
+for (const v of typedLocal) fromLocal.push(String(v));
+console.log("for-of const:", JSON.stringify(fromConst));
+console.log("for-of local:", JSON.stringify(fromLocal));
+console.log("for-of param:", JSON.stringify(viaParam(src)));
+
+let pulled = 0;
+arrProto[Symbol.iterator] = function* () {
+  for (let i = 0; i < 100; i++) {
+    pulled++;
+    yield i;
+  }
+};
+let seen = 0;
+for (const _v of src) {
+  seen++;
+  if (seen === 2) break;
+}
+console.log("lazy break: seen", seen, "pulled", pulled);
+
 // #7760: restore by reference, and by descriptor round-trip.
 arrProto[Symbol.iterator] = original;
 console.log("restored spread:", JSON.stringify([...src]));

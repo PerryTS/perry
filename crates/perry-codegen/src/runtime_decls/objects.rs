@@ -33,6 +33,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Array [[Prototype]] installation. Normal compiled programs read this
     // byte directly in the inline plain-array index guard.
     module.add_external_global("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED", I8);
+    // #7760: set when `Array.prototype[Symbol.iterator]` is replaced.
+    module.add_external_global("PERRY_ARRAY_PROTO_ITERATOR_PATCHED", I8);
     // Process-wide count of threads with an active incremental marking
     // barrier. Persistent shadow-slot updates use zero as an authoritative
     // fast skip before calling the TLS-backed root barrier.

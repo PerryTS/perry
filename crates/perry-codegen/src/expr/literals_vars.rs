@@ -851,6 +851,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // call returning a `double` (milliseconds since UNIX epoch as
         // produced by `js_date_now` in `perry-runtime/src/date.rs`).
         Expr::DateNow => Ok(ctx.block().call(DOUBLE, "js_date_now", &[])),
+        // #7760: one volatile `i8` load, the same shape the array index fast
+        // path uses for its own invalidation flag. Emitted once at the entry of
+        // a `for…of` over a proven array to choose between the index loop and
+        // the lazy iterator-protocol loop, so the fast arm pays a load and a
+        // predictable branch PER LOOP, never per iteration.
+        Expr::ArrayIterationPatched => {
+            let blk = ctx.block();
+            let flag = blk.load_volatile(crate::types::I8, "@PERRY_ARRAY_PROTO_ITERATOR_PATCHED");
+            let widened = blk.zext(crate::types::I8, &flag, crate::types::I32);
+            Ok(super::i32_bool_to_nanbox(blk, &widened))
+        }
 
         // -------- Arithmetic --------
         // String concatenation (Phase B): if Add receives operands where

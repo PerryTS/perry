@@ -105,6 +105,7 @@ impl LoweringContext {
             scope_local_marks: Vec::new(),
             scope_module_shadow_marks: Vec::new(),
             inside_block_scope: 0,
+            for_of_force_lazy: false,
             namespace_vars: Vec::new(),
             current_namespace: None,
             module_native_instances: Vec::new(),
