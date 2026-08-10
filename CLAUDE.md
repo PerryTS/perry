@@ -82,7 +82,8 @@ cargo build --release                          # Build all crates
 cargo build --profile perry-dev -p perry       # Fast local dev build (#5422; perry-dev profile)
 cargo build --release -p perry-runtime -p perry-stdlib  # Rebuild runtime (MUST rebuild stdlib too!)
 cargo build --release -p perry-runtime-static -p perry-stdlib-static  # Emit libperry_{runtime,stdlib}.a (#5422: runtime/stdlib are now rlib-only; the .a comes from these wrapper crates)
-cargo test --release --workspace \
+RUST_TEST_THREADS=1 cargo test --release -p perry-runtime   # MUST be single-threaded (see below)
+cargo test --release --workspace --exclude perry-runtime \
   --exclude perry-ui-ios --exclude perry-ui-tvos --exclude perry-ui-watchos \
   --exclude perry-ui-visionos --exclude perry-ui-android --exclude perry-ui-windows \
   --exclude perry-ui-gtk4   # Run tests (exclude cross-host UI crates on macOS)
@@ -236,6 +237,7 @@ Build outputs are invisible to `git status`, so a clean tree tells you nothing a
 - **addr-class ratchet** (`scripts/addr_class_inventory.py`) — a file gaining a bare-address site fails `lint`.
 - **`conformance-smoke` shards are flaky.** Before believing a red shard, re-run it and A/B the named tests against a pristine `main` build; several are already in `test-parity/known_failures.json`.
 - **Integration suites under `crates/*/tests/*.rs` do not run per-PR** (nightly/tag only) — a regression there can land green and sit red for days. Prefer putting acceptance coverage in `cargo-test`-visible unit tests (#5960).
+- **`perry-runtime`'s tests are not parallel-safe — run them `RUST_TEST_THREADS=1`.** They share process-global side tables (#1444), and ~180 readers are not required to take the clearing lock (see `gc::tests::global_sink_isolation`'s header; #7672 is converting them to `per_test_global!` one at a time). Every CI path already pins `RUST_TEST_THREADS=1`; a local `cargo test --workspace` does NOT, which is the whole gap. Measured on the default pool: 600 full-suite runs at `--test-threads=16` (load ~90) were clean, but at `--test-threads=64` (load ~115) **2 of 320 runs failed** — in `proxy::…numeric_write_guard…` and `array::element_shape::matrix_tests::matrix_delete_revokes`, neither related to the change under test. The tell is the message: these fail on their own *fixture precondition* ("fixture must start proven, or every verdict below is vacuous"), i.e. another thread wiped the global, not a real defect in the code under test. Chasing such a failure as if it were a regression is wasted days.
 
 ### ★ Four ways a gate can be unable to fail
 
