@@ -155,6 +155,28 @@ pub(super) fn emit_own_method_override_check(
     )
 }
 
+/// One additional `(class id, keys token) -> concrete method` arm for the
+/// shape-guarded direct call, describing a class in the DECLARED receiver
+/// class's subclass closure.
+///
+/// The declared-class guard speculates that the receiver's dynamic class is
+/// exactly its static class. For a receiver typed as the base of a hierarchy —
+/// `nodes: Node2D[]`, every element a `Rect` / `Circle` / `Square` / `Marker` /
+/// `Group` — that speculation is wrong for EVERY element, so the guard misses
+/// 100% of the time and each call pays a wasted guard plus the full
+/// `js_native_call_method` dispatch tower. Each arm here is the same proof the
+/// declared-class guard performs (exact class id + exact keys token), applied
+/// to one more class whose implementation of the method codegen already
+/// resolved statically.
+pub(super) struct SubclassDispatchArm {
+    /// `class_id` of the concrete subclass this arm matches.
+    pub class_id: u32,
+    /// Name of the module global holding that subclass's canonical keys array.
+    pub keys_global: String,
+    /// The method body `property` resolves to when walked from that subclass.
+    pub target_fn: String,
+}
+
 /// Emit a typed-feedback runtime guard before a known class-method direct call.
 ///
 /// The guard validates that the receiver still has the expected class shape,
@@ -175,9 +197,16 @@ pub(super) fn emit_guarded_direct_method_call(
     typed_i1_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     typed_string_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     shape_only_guard: bool,
+    subclass_arms: &[SubclassDispatchArm],
 ) -> Option<String> {
     let expected_class_id = *ctx.class_ids.get(receiver_class_name)?;
     let keys_global_name = ctx.class_keys_globals.get(receiver_class_name)?.clone();
+    // Only the shape-only guard is widened. The typed-feedback guard records an
+    // observation keyed to ONE (class, method, func ptr) contract per site; a
+    // multi-class site would feed it a stream of "different class" observations
+    // and it would (correctly) mark the site polymorphic. That form keeps its
+    // single-arm shape.
+    let subclass_arms: &[SubclassDispatchArm] = if shape_only_guard { subclass_arms } else { &[] };
 
     // Representation-selection Phase 5a: the proven-`this` clone for this
     // (class, method), when the emission loop produced one.
@@ -228,18 +257,82 @@ pub(super) fn emit_guarded_direct_method_call(
         ))
     };
 
+    // Per-arm keys tokens, loaded through the same entry-block init the
+    // declared class's token uses (module-init populates `@perry_class_keys_*`
+    // after the prelude, so the load may not be hoisted above it).
+    let subclass_keys: Vec<String> = subclass_arms
+        .iter()
+        .map(|arm| {
+            let slot = ctx.func.entry_init_load_global(&arm.keys_global, I64);
+            ctx.block().load(I64, &slot)
+        })
+        .collect();
+
     let guard_idx = ctx.new_block("method_direct.guard");
     let fast_idx = ctx.new_block("method_direct.fast");
+    // One test block and one case block per subclass arm. The declared class's
+    // own test lives in the guard block, so arm 0's test block is the guard's
+    // false edge.
+    let sub_test_idxs: Vec<usize> = (0..subclass_arms.len())
+        .map(|i| ctx.new_block(&format!("method_direct.subtest{i}")))
+        .collect();
+    let sub_case_idxs: Vec<usize> = (0..subclass_arms.len())
+        .map(|i| ctx.new_block(&format!("method_direct.sub{i}")))
+        .collect();
     let fallback_idx = ctx.new_block("method_direct.fallback");
     let merge_idx = ctx.new_block("method_direct.merge");
     let guard_label = ctx.block_label(guard_idx);
     let fast_label = ctx.block_label(fast_idx);
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
+    let sub_test_labels: Vec<String> = sub_test_idxs.iter().map(|&i| ctx.block_label(i)).collect();
+    let sub_case_labels: Vec<String> = sub_case_idxs.iter().map(|&i| ctx.block_label(i)).collect();
     ctx.block().br(&guard_label);
 
     ctx.current_block = guard_idx;
-    let guard_ok = if shape_only_guard {
+    // Multi-arm form: ONE probe resolves the receiver's class id and keys
+    // token (every precondition `js_method_direct_shape_guard` checks except
+    // the comparison itself), then an inline compare chain picks the arm. The
+    // single-arm form keeps its original single call.
+    let multi_arm = !subclass_arms.is_empty();
+    if multi_arm {
+        let keys_slot = ctx.func.alloca_entry(I64);
+        let cid = ctx.block().call(
+            I32,
+            "js_method_direct_shape_class",
+            &[(DOUBLE, recv_box), (crate::types::PTR, &keys_slot)],
+        );
+        let keys = ctx.block().load(I64, &keys_slot);
+        {
+            let next = sub_test_labels[0].clone();
+            let blk = ctx.block();
+            let cid_ok = blk.icmp_eq(I32, &cid, &expected_class_id_str);
+            let keys_ok = blk.icmp_eq(I64, &keys, &expected_keys);
+            let pass = blk.and(I1, &cid_ok, &keys_ok);
+            blk.cond_br(&pass, &fast_label, &next);
+        }
+        for (i, arm) in subclass_arms.iter().enumerate() {
+            ctx.current_block = sub_test_idxs[i];
+            let next = sub_test_labels
+                .get(i + 1)
+                .cloned()
+                .unwrap_or_else(|| fallback_label.clone());
+            let case_label = sub_case_labels[i].clone();
+            let class_id_str = arm.class_id.to_string();
+            let arm_keys = subclass_keys[i].clone();
+            let blk = ctx.block();
+            let cid_ok = blk.icmp_eq(I32, &cid, &class_id_str);
+            let keys_ok = blk.icmp_eq(I64, &keys, &arm_keys);
+            let pass = blk.and(I1, &cid_ok, &keys_ok);
+            blk.cond_br(&pass, &case_label, &next);
+        }
+        ctx.current_block = guard_idx;
+    }
+    let guard_ok = if multi_arm {
+        // The chain above already terminated the guard block and every test
+        // block; `fast_idx` / `fallback_idx` are entered from it unchanged.
+        String::new()
+    } else if shape_only_guard {
         ctx.block().call(
             I32,
             "js_method_direct_shape_guard",
@@ -267,9 +360,11 @@ pub(super) fn emit_guarded_direct_method_call(
             ],
         )
     };
-    let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
-    ctx.block()
-        .cond_br(&guard_pass, &fast_label, &fallback_label);
+    if !multi_arm {
+        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+        ctx.block()
+            .cond_br(&guard_pass, &fast_label, &fallback_label);
+    }
 
     ctx.current_block = fast_idx;
     let fast_value = {
@@ -795,6 +890,21 @@ pub(super) fn emit_guarded_direct_method_call(
         ctx.block().br(&merge_label);
     }
 
+    // One direct call per subclass arm. Reached only from that arm's test,
+    // which proved the receiver's class id AND keys token exactly — the same
+    // proof the declared-class arm rests on, so the statically resolved body
+    // is the one the dispatch tower would have found.
+    let mut sub_values: Vec<(String, String)> = Vec::with_capacity(subclass_arms.len());
+    for (i, arm) in subclass_arms.iter().enumerate() {
+        ctx.current_block = sub_case_idxs[i];
+        let value = ctx.block().call(DOUBLE, &arm.target_fn, direct_arg_slices);
+        let after = ctx.block().label.clone();
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+        sub_values.push((value, after));
+    }
+
     ctx.current_block = fallback_idx;
     let (args_ptr, args_len) = if fallback_user_args.is_empty() {
         ("null".to_string(), "0".to_string())
@@ -838,11 +948,11 @@ pub(super) fn emit_guarded_direct_method_call(
     }
 
     ctx.current_block = merge_idx;
-    Some(ctx.block().phi(
-        DOUBLE,
-        &[
-            (fast_value.as_str(), after_fast.as_str()),
-            (fallback_value.as_str(), after_fallback.as_str()),
-        ],
-    ))
+    let mut phi_inputs: Vec<(&str, &str)> = Vec::with_capacity(sub_values.len() + 2);
+    phi_inputs.push((fast_value.as_str(), after_fast.as_str()));
+    for (value, label) in &sub_values {
+        phi_inputs.push((value.as_str(), label.as_str()));
+    }
+    phi_inputs.push((fallback_value.as_str(), after_fallback.as_str()));
+    Some(ctx.block().phi(DOUBLE, &phi_inputs))
 }

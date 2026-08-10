@@ -15,8 +15,14 @@ use crate::types::{DOUBLE, I32, I64};
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
 use crate::lower_call::method_override::{
-    emit_guarded_direct_method_call, emit_own_method_override_check,
+    emit_guarded_direct_method_call, emit_own_method_override_check, SubclassDispatchArm,
 };
+
+/// Cap on the number of extra `(class id, keys token)` arms a shape-guarded
+/// direct call may carry. A wide hierarchy would turn every callsite into a
+/// long inline compare chain — more instruction cache than the single tower
+/// call it replaces — so past this width the site keeps the single-arm guard.
+const MAX_SUBCLASS_DISPATCH_ARMS: usize = 8;
 
 /// #7142: the proven-`this` clone a class-id dispatch-tower case may route to,
 /// plus the keys token the routed path must re-check inline.
@@ -892,6 +898,95 @@ pub(crate) fn try_lower_instance_method_call(
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
+            // Arms for the shape-guarded direct call: every class in
+            // `class_name`'s subclass closure, paired with the body `property`
+            // resolves to from THAT class. Includes subclasses that do NOT
+            // override — a `Marker` receiver fails a `Node2D` class-id guard
+            // just as hard as a `Rect` one does, and the tower it falls into
+            // costs the same either way.
+            //
+            // The declared-class guard alone is a bet that the receiver's
+            // dynamic class equals its static class. Where a base-typed
+            // collection is the whole point of the hierarchy that bet loses
+            // every single time, and the miss is not free: it pays a guard
+            // call AND the full `js_native_call_method` tower.
+            let mut subclass_arms: Vec<SubclassDispatchArm> = Vec::new();
+            {
+                let mut seen_ids: Vec<u32> = vec![*ctx.class_ids.get(&class_name).unwrap_or(&0)];
+                let mut roots: Vec<(&String, u32)> =
+                    ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+                roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+                for (sub_name, sub_id) in roots {
+                    if *sub_name == class_name || sub_id == 0 || seen_ids.contains(&sub_id) {
+                        continue;
+                    }
+                    let mut parent = ctx
+                        .classes
+                        .get(sub_name)
+                        .and_then(|c| c.extends_name.clone());
+                    let mut is_subclass = false;
+                    while let Some(p) = parent {
+                        if p == class_name {
+                            is_subclass = true;
+                            break;
+                        }
+                        parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
+                    }
+                    if !is_subclass {
+                        continue;
+                    }
+                    let Some(keys_global) = ctx.class_keys_globals.get(sub_name).cloned() else {
+                        continue;
+                    };
+                    // Resolve through the SUBCLASS's own chain, and remember
+                    // where it landed: the rest-param shape is a property of
+                    // the declaring class, and a rest-bearing target cannot be
+                    // called with this site's flat, base-arity argument list.
+                    let mut cur = Some(sub_name.clone());
+                    let mut resolved: Option<(String, String)> = None;
+                    while let Some(c) = cur {
+                        let key = (c.clone(), property.to_string());
+                        if let Some(fname) = ctx.methods.get(&key).cloned() {
+                            resolved = Some((c, fname));
+                            break;
+                        }
+                        cur = ctx.classes.get(&c).and_then(|c| c.extends_name.clone());
+                    }
+                    let Some((decl_class, target_fn)) = resolved else {
+                        continue;
+                    };
+                    if target_fn.starts_with("perry_static_") {
+                        continue;
+                    }
+                    if matches!(
+                        ctx.method_has_rest
+                            .get(&(decl_class.clone(), property.to_string())),
+                        Some(&true)
+                    ) {
+                        continue;
+                    }
+                    if ctx
+                        .method_param_counts
+                        .get(&(decl_class, property.to_string()))
+                        .is_some_and(|&n| n > max_explicit_arity)
+                    {
+                        continue;
+                    }
+                    seen_ids.push(sub_id);
+                    subclass_arms.push(SubclassDispatchArm {
+                        class_id: sub_id,
+                        keys_global,
+                        target_fn,
+                    });
+                }
+            }
+            // A wide hierarchy would turn every callsite into a long compare
+            // chain — more instruction cache than the tower call it replaces.
+            // Beyond the cap the site keeps today's single-arm guard.
+            if subclass_arms.len() > MAX_SUBCLASS_DISPATCH_ARMS {
+                subclass_arms.clear();
+            }
+
             if !method_has_rest {
                 let typed_method_key = (class_name.clone(), property.to_string());
                 let typed_formal_count = ctx
@@ -1145,6 +1240,7 @@ pub(crate) fn try_lower_instance_method_call(
                     typed_i1_direct,
                     typed_string_direct,
                     shape_only_guard,
+                    &subclass_arms,
                 ) {
                     return Ok(Some(guarded));
                 }
