@@ -1885,6 +1885,8 @@ pub(crate) mod calls;
 mod child_proc;
 mod closure;
 mod compare;
+#[cfg(test)]
+mod compare_tests;
 mod conditional;
 mod dyn_extern_i18n;
 mod env_clones;

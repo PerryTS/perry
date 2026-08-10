@@ -13,7 +13,7 @@ use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_bigint_expr, is_bool_expr,
     is_numeric_expr, is_string_expr,
 };
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 use super::{lower_expr, unbox_str_handle, unbox_to_i64, FnCtx};
 
@@ -68,6 +68,307 @@ fn canonical_str_cmp_dispatch(
     ctx.current_block = merge_idx;
     ctx.block()
         .phi(I32, &[(&res_heap, &heap_pred), (&res_boxed, &boxed_pred)])
+}
+
+/// `StringHeader` field offsets, duplicated from
+/// `perry-runtime::string::STRING_HEADER_ABI_MATCHES_CODEGEN` (which asserts
+/// them at the definition, so a layout change fails the runtime build rather
+/// than silently miscompiling these loads). The same three numbers
+/// `lower_string_method/char_code_at.rs` pins.
+const STRING_HEADER_BYTE_LEN_OFFSET: &str = "4";
+const STRING_HEADER_SIZE: usize = 20;
+
+/// The SSO (`SHORT_STRING_TAG`) immediate for `bytes`, or `None` when the
+/// literal is too long to have one. The encoding is canonical — length in bits
+/// 40..=47, bytes little-endian in bits 0..=39, everything else zero — which is
+/// what `JSValue::try_short_string` builds and what `js_jsvalue_equals`'s "both
+/// SSO ⇒ the bits decide" fast path already relies on.
+pub(super) fn sso_immediate(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() > 5 {
+        return None;
+    }
+    let mut payload = 0u64;
+    for (i, &b) in bytes.iter().enumerate() {
+        payload |= (b as u64) << (i * 8);
+    }
+    Some(crate::nanbox::SHORT_STRING_TAG | ((bytes.len() as u64) << 40) | payload)
+}
+
+/// LLVM `i8` literals are signed, so a byte >= 0x80 must be written in its
+/// two's-complement form.
+pub(super) fn i8_literal(b: u8) -> String {
+    (b as i8).to_string()
+}
+
+/// Inline ECMAScript `===` against a compile-time string literal.
+///
+/// The motivating shape is a tree-walking interpreter's tag dispatch —
+/// `n.kind === "num"`, `n.op === "+"` — where the operand is `any`-typed, so
+/// every comparison became a `js_eq` -> `js_jsvalue_equals` call pair (~21% of
+/// `gc-handoff/apps/interp.ts`). The literal side makes the dispatch decidable
+/// inline, because *both* of a string's runtime representations are known at
+/// compile time:
+///
+/// * the pooled heap `StringHeader` — one per literal per module, see
+///   `crate::strings` — so **pointer identity** settles the true case in one
+///   `icmp`. Every `{ kind: "num" }` object literal stores that same pooled
+///   pointer, and GC evacuation rewrites the pool root and the object slot
+///   together, so identity survives collection;
+/// * the SSO immediate, a compile-time constant for literals of <= 5 bytes.
+///   `charAt` and `JSON.parse` hand back SSO values, and `"+" === "+"` across
+///   those two representations has to be true.
+///
+/// Everything else is decided by type: a value whose tag is not `STRING_TAG`
+/// can never be `===` a string (a boxed `new String("x")` is `POINTER_TAG`, and
+/// correctly unequal), and a heap string whose `byte_len` or whose first / last
+/// byte differs from the literal's is unequal without reading a byte the length
+/// check has not already proved the header owns. Only a same-length,
+/// same-endpoints heap string reaches `js_string_equals`.
+///
+/// Returns an `i1` that is true iff the two operands are `===`.
+fn lower_string_literal_strict_eq(
+    ctx: &mut FnCtx<'_>,
+    val: &str,
+    lit_box: &str,
+    lit: &str,
+) -> String {
+    let bytes = lit.as_bytes().to_vec();
+    let n = bytes.len();
+
+    let bits = ctx.block().bitcast_double_to_i64(val);
+    let lit_bits = ctx.block().bitcast_double_to_i64(lit_box);
+
+    // Blocks, in the order control flows through them. Only the ones this
+    // literal's length needs are created — an empty block would have no
+    // terminator and fail the LLVM verifier.
+    let sso_idx = sso_immediate(&bytes).map(|_| ctx.new_block("streqlit.sso"));
+    let tag_idx = ctx.new_block("streqlit.tag");
+    let len_idx = ctx.new_block("streqlit.len");
+    let b0_idx = (n >= 1).then(|| ctx.new_block("streqlit.b0"));
+    let bl_idx = (n >= 2).then(|| ctx.new_block("streqlit.bl"));
+    let slow_idx = (n >= 3).then(|| ctx.new_block("streqlit.slow"));
+    let true_idx = ctx.new_block("streqlit.true");
+    let false_idx = ctx.new_block("streqlit.false");
+    let merge_idx = ctx.new_block("streqlit.merge");
+
+    let tag_l = ctx.block_label(tag_idx);
+    let len_l = ctx.block_label(len_idx);
+    let true_l = ctx.block_label(true_idx);
+    let false_l = ctx.block_label(false_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    let sso_l = sso_idx.map(|i| ctx.block_label(i));
+    let b0_l = b0_idx.map(|i| ctx.block_label(i));
+    let bl_l = bl_idx.map(|i| ctx.block_label(i));
+    let slow_l = slow_idx.map(|i| ctx.block_label(i));
+
+    // Entry: pooled-pointer identity. This is the hot true case — the value
+    // under test and the literal are the same pool entry.
+    let ident = ctx.block().icmp_eq(I64, &bits, &lit_bits);
+    let after_ident = sso_l.clone().unwrap_or_else(|| tag_l.clone());
+    ctx.block().cond_br(&ident, &true_l, &after_ident);
+
+    // SSO immediate: equal => true. SSO but a *different* immediate => the
+    // encoding is canonical, so the contents differ; the tag block below
+    // reports that as false, since SSO is not `STRING_TAG`.
+    if let Some(idx) = sso_idx {
+        let imm = crate::nanbox::i64_literal(sso_immediate(&bytes).unwrap());
+        ctx.current_block = idx;
+        let sso_eq = ctx.block().icmp_eq(I64, &bits, &imm);
+        ctx.block().cond_br(&sso_eq, &true_l, &tag_l);
+    }
+
+    // Neither the pooled pointer nor the SSO form: only a *heap* string can
+    // still be equal. Every other tag — number, int32, pointer (including a
+    // boxed String wrapper), bigint, null/undefined/bool, SSO with different
+    // bytes — is a different ECMAScript value.
+    ctx.current_block = tag_idx;
+    let tag = ctx.block().lshr(I64, &bits, "48");
+    let is_heap = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let hp = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+    // The floor `safe_load_i32_from_ptr` uses: a `STRING_TAG` value with a null
+    // or tiny payload is not a dereferenceable header.
+    let hp_ok = ctx.block().icmp_ugt(I64, &hp, "4095");
+    let heap_ok = ctx.block().and(I1, &is_heap, &hp_ok);
+    ctx.block().cond_br(&heap_ok, &len_l, &false_l);
+
+    // `byte_len` is the pool's `value.len()`, hence a compile-time constant.
+    ctx.current_block = len_idx;
+    let hdr_ptr = ctx.block().inttoptr(I64, &hp);
+    let blen_ptr = ctx
+        .block()
+        .gep_inbounds(I8, &hdr_ptr, &[(I64, STRING_HEADER_BYTE_LEN_OFFSET)]);
+    let blen = ctx.block().load(I32, &blen_ptr);
+    let len_ok = ctx.block().icmp_eq(I32, &blen, &n.to_string());
+    let after_len = b0_l.clone().unwrap_or_else(|| true_l.clone());
+    ctx.block().cond_br(&len_ok, &after_len, &false_l);
+
+    // First and last byte. Both sit inside the `n` bytes the length check just
+    // proved this header owns, so the loads need no further guard. For n <= 2
+    // they settle the answer outright.
+    if let Some(idx) = b0_idx {
+        ctx.current_block = idx;
+        let off = STRING_HEADER_SIZE.to_string();
+        let p = ctx.block().gep_inbounds(I8, &hdr_ptr, &[(I64, &off)]);
+        let b = ctx.block().load(I8, &p);
+        let ok = ctx.block().icmp_eq(I8, &b, &i8_literal(bytes[0]));
+        let next = bl_l.clone().unwrap_or_else(|| true_l.clone());
+        ctx.block().cond_br(&ok, &next, &false_l);
+    }
+    if let Some(idx) = bl_idx {
+        ctx.current_block = idx;
+        let off = (STRING_HEADER_SIZE + n - 1).to_string();
+        let p = ctx.block().gep_inbounds(I8, &hdr_ptr, &[(I64, &off)]);
+        let b = ctx.block().load(I8, &p);
+        let ok = ctx.block().icmp_eq(I8, &b, &i8_literal(bytes[n - 1]));
+        let next = slow_l.clone().unwrap_or_else(|| true_l.clone());
+        ctx.block().cond_br(&ok, &next, &false_l);
+    }
+
+    // Same length, same endpoints, different pointer: a real content compare.
+    // Both operands are proven heap `StringHeader*` here, so this is the narrow
+    // two-pointer helper, not the generic value-equality tower.
+    let slow_arm = slow_idx.map(|idx| {
+        ctx.current_block = idx;
+        let rp = ctx.block().and(I64, &lit_bits, POINTER_MASK_I64);
+        let res = ctx
+            .block()
+            .call(I32, "js_string_equals", &[(I64, &hp), (I64, &rp)]);
+        let bit = ctx.block().icmp_ne(I32, &res, "0");
+        let pred = ctx.block().label.clone();
+        ctx.block().br(&merge_l);
+        (bit, pred)
+    });
+
+    ctx.current_block = true_idx;
+    let true_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = false_idx;
+    let false_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = merge_idx;
+    let mut incoming: Vec<(&str, &str)> = vec![("true", &true_pred), ("false", &false_pred)];
+    if let Some((bit, pred)) = slow_arm.as_ref() {
+        incoming.push((bit, pred));
+    }
+    ctx.block().phi(I1, &incoming)
+}
+
+/// Inline prefix for the `===`/`!==` string arms that have **no** literal
+/// operand — `names[i] === name` in an environment lookup, say.
+///
+/// Two cases are settled without leaving the function, and both were paying a
+/// runtime call before:
+///
+/// * identical bits. True for a pooled literal against itself and, more
+///   importantly, for SSO vs SSO: `charAt` and `JSON.parse` hand back inline
+///   values whose encoding is canonical, so equal content *is* equal bits;
+/// * both operands SSO with different bits => different content, again by
+///   canonicality.
+///
+/// The remaining arms are exactly what each caller emitted before, so this is
+/// behaviour-preserving. That matters most for `legacy_unified`, whose fallback
+/// keeps the `js_get_string_pointer_unified` composition — including its
+/// number-coercing behaviour for operands whose `string` annotation lies. Note
+/// that composition *materializes* an SSO operand onto the heap, so routing
+/// SSO x SSO around it removes two allocations per comparison as well as the
+/// calls.
+///
+/// Returns an `i32` that is 1 iff the operands are `===`.
+fn lower_string_strict_eq_inline(
+    ctx: &mut FnCtx<'_>,
+    l: &str,
+    r: &str,
+    legacy_unified: bool,
+) -> String {
+    let l_bits = ctx.block().bitcast_double_to_i64(l);
+    let r_bits = ctx.block().bitcast_double_to_i64(r);
+
+    let tag_idx = ctx.new_block("streq.tag");
+    let heap_idx = ctx.new_block("streq.heap");
+    let sso_idx = ctx.new_block("streq.ssochk");
+    let boxed_idx = ctx.new_block("streq.boxed");
+    let true_idx = ctx.new_block("streq.true");
+    let false_idx = ctx.new_block("streq.false");
+    let merge_idx = ctx.new_block("streq.merge");
+    let tag_l = ctx.block_label(tag_idx);
+    let heap_l = ctx.block_label(heap_idx);
+    let sso_l = ctx.block_label(sso_idx);
+    let boxed_l = ctx.block_label(boxed_idx);
+    let true_l = ctx.block_label(true_idx);
+    let false_l = ctx.block_label(false_idx);
+    let merge_l = ctx.block_label(merge_idx);
+
+    let ident = ctx.block().icmp_eq(I64, &l_bits, &r_bits);
+    ctx.block().cond_br(&ident, &true_l, &tag_l);
+
+    ctx.current_block = tag_idx;
+    let l_tag = ctx.block().lshr(I64, &l_bits, "48");
+    let r_tag = ctx.block().lshr(I64, &r_bits, "48");
+    let l_heap = ctx
+        .block()
+        .icmp_eq(I64, &l_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let r_heap = ctx
+        .block()
+        .icmp_eq(I64, &r_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let both_heap = ctx.block().and(I1, &l_heap, &r_heap);
+    ctx.block().cond_br(&both_heap, &heap_l, &sso_l);
+
+    ctx.current_block = heap_idx;
+    let lh = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
+    let rh = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
+    let heap_res = ctx
+        .block()
+        .call(I32, "js_string_equals", &[(I64, &lh), (I64, &rh)]);
+    let heap_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = sso_idx;
+    let l_sso = ctx
+        .block()
+        .icmp_eq(I64, &l_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let r_sso = ctx
+        .block()
+        .icmp_eq(I64, &r_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let both_sso = ctx.block().and(I1, &l_sso, &r_sso);
+    ctx.block().cond_br(&both_sso, &false_l, &boxed_l);
+
+    ctx.current_block = boxed_idx;
+    let boxed_res = if legacy_unified {
+        let lu = ctx
+            .block()
+            .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, l)]);
+        let ru = ctx
+            .block()
+            .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, r)]);
+        ctx.block()
+            .call(I32, "js_string_equals", &[(I64, &lu), (I64, &ru)])
+    } else {
+        ctx.block()
+            .call(I32, "js_jsvalue_equals", &[(DOUBLE, l), (DOUBLE, r)])
+    };
+    let boxed_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = true_idx;
+    let true_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = false_idx;
+    let false_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        I32,
+        &[
+            ("1", &true_pred),
+            ("0", &false_pred),
+            (&heap_res, &heap_pred),
+            (&boxed_res, &boxed_pred),
+        ],
+    )
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -201,6 +502,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 let tagged = blk.select(
                     crate::types::I1,
+                    &bit_final,
+                    I64,
+                    crate::nanbox::TAG_TRUE_I64,
+                    crate::nanbox::TAG_FALSE_I64,
+                );
+                return Ok(blk.bitcast_i64_to_double(&tagged));
+            }
+            // Strict equality against a string LITERAL. Decidable inline for
+            // every runtime shape (see `lower_string_literal_strict_eq`), so it
+            // pre-empts all the arms below — including the `js_eq` tail that an
+            // `any`-typed operand like `n.kind` would otherwise take, one call
+            // pair per comparison. Strict only: loose `==` coerces (`"5" == 5`)
+            // and stays on `js_loose_eq`. `Expr::WtfString` is excluded — its
+            // pool bytes are the WTF-8 encoding, not `str::as_bytes`.
+            let lit_on_right = matches!(right.as_ref(), Expr::String(_));
+            let lit_on_left = !lit_on_right && matches!(left.as_ref(), Expr::String(_));
+            if (lit_on_right || lit_on_left) && matches!(op, CompareOp::Eq | CompareOp::Ne) {
+                // Source order: the non-literal operand may have side effects.
+                let l = lower_expr(ctx, left)?;
+                let r = lower_expr(ctx, right)?;
+                let (val, lit_box, lit) = if lit_on_right {
+                    let Expr::String(s) = right.as_ref() else {
+                        unreachable!("lit_on_right implies Expr::String")
+                    };
+                    (l, r, s.clone())
+                } else {
+                    let Expr::String(s) = left.as_ref() else {
+                        unreachable!("lit_on_left implies Expr::String")
+                    };
+                    (r, l, s.clone())
+                };
+                let bit = lower_string_literal_strict_eq(ctx, &val, &lit_box, &lit);
+                let blk = ctx.block();
+                let bit_final = if matches!(op, CompareOp::Ne) {
+                    blk.xor(I1, &bit, "true")
+                } else {
+                    bit
+                };
+                let tagged = blk.select(
+                    I1,
                     &bit_final,
                     I64,
                     crate::nanbox::TAG_TRUE_I64,
@@ -368,14 +709,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
-                let i32_eq = canonical_str_cmp_dispatch(
-                    ctx,
-                    &l,
-                    &r,
-                    "js_string_equals",
-                    "js_jsvalue_equals",
-                    "streq",
-                );
+                let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, false);
                 let blk = ctx.block();
                 let bit = blk.icmp_ne(I32, &i32_eq, "0");
                 let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
@@ -400,18 +734,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
-                let blk = ctx.block();
                 // Issue #214: SSO-safe unbox — the inline mask returns
                 // garbage for SHORT_STRING_TAG values (e.g. SSO results
                 // from `JSON.parse('["hello"]')[0]`), causing
                 // `js_string_equals` to deref the inline payload bytes.
-                let l_handle = unbox_str_handle(blk, &l);
-                let r_handle = unbox_str_handle(blk, &r);
-                let i32_eq = blk.call(
-                    I32,
-                    "js_string_equals",
-                    &[(I64, &l_handle), (I64, &r_handle)],
-                );
+                // That unbox is now the *fallback* arm: identical bits and
+                // SSO x SSO are answered inline, which is what keeps a pair of
+                // short runtime strings (`charAt`, `substring`) from
+                // materializing two throwaway heap copies per comparison.
+                let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, true);
+                let blk = ctx.block();
                 let bit = blk.icmp_ne(I32, &i32_eq, "0");
                 let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
                     blk.xor(crate::types::I1, &bit, "true")
