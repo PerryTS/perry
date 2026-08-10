@@ -151,8 +151,8 @@ pub use registration::{
 #[cfg(test)]
 pub(crate) use dispatch::test_bump_vtable_generation;
 pub(crate) use dispatch::{
-    call_vtable_method, fetch_parent_kind_in_chain, vtable_generation, vtable_ic_insert,
-    vtable_ic_lookup, VTABLE_GEN,
+    call_vtable_method, fetch_parent_kind_in_chain, obj_dispatch_ic_insert, obj_dispatch_ic_lookup,
+    vtable_generation, vtable_ic_insert, vtable_ic_lookup, VTABLE_GEN,
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────

@@ -146,6 +146,171 @@ pub(crate) unsafe fn vtable_ic_insert(
     });
 }
 
+// ============================================================================
+// #7769: object-dispatch-tower outcome cache.
+//
+// `js_native_call_method` resolves `obj.m(...)` by running a ~900-line tower of
+// probes (native-module namespace, disposal protocol, TextDecoder handles,
+// console, WeakMap/WeakSet, perf entries, own-field scan, prototype-chain
+// walk) before finally consulting `CLASS_VTABLE_REGISTRY`. For an ordinary
+// user-class instance every one of those probes misses, and the tail alone
+// cost a `String` allocation for the method name, a GC-heap `StringHeader`
+// allocation for the prototype probe, a `RwLock` read and two SipHash probes —
+// per virtual call.
+//
+// This table records the tower's OUTCOME: an entry exists for
+// `(class_id, method name)` only because a previous call for that exact pair
+// ran the tower and reached a class-vtable resolution, which is the proof that
+// no earlier probe claims this (class, name).
+//
+// There are two such resolution points and BOTH populate it: the parent-chain
+// walk in `native_call_method::handle_methods` (which is where an INHERITED
+// method resolves — `class Square extends Rect` calling `Rect`'s `area` — and
+// therefore the common case in any real hierarchy), and the tail vtable arm of
+// `js_native_call_method` (own-class methods). Populating only the tail left
+// every inherited call permanently on the slow path.
+//
+// Writes go through `native_call_method::note_class_vtable_resolution`, which
+// re-checks the receiver-shape predicate before storing, and the per-RECEIVER
+// preconditions are re-verified again on every fast-path hit — see
+// `native_call_method::class_vtable_fast_guard` — so a cache hit never
+// substitutes for an object-specific check.
+//
+// Deliberately SEPARATE from `VTABLE_IC` above: that one is also written from
+// the collection dispatcher, and it is keyed on the name's ADDRESS.
+// ============================================================================
+
+// The key is the method-name BYTES, never its address. `VTABLE_IC` above keys
+// on the rodata pointer codegen passes, which is stable — but
+// `js_native_call_method_str_key` reaches the same tower with a name
+// materialised into a CALLER-STACK scratch buffer (`str_bytes_from_jsvalue`
+// with a `[u8; SHORT_STRING_MAX_LEN]`), and two different short names can land
+// at the same stack address in successive calls. Comparing content makes the
+// cache exact for both sources; names too long to store inline are simply not
+// cached.
+const OBJ_DISPATCH_IC_SIZE: usize = 1024;
+const OBJ_DISPATCH_IC_MASK: usize = OBJ_DISPATCH_IC_SIZE - 1;
+/// Longest method name the cache stores. Comfortably above every method name
+/// in practice; longer names fall through to the tower.
+const OBJ_DISPATCH_IC_NAME_MAX: usize = 24;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct ObjDispatchICEntry {
+    gen: u64,
+    class_id: u32,
+    name_len: u32,
+    name: [u8; OBJ_DISPATCH_IC_NAME_MAX],
+    func_ptr: usize,
+    param_count: u32,
+    has_synthetic_arguments: u32,
+    has_rest: u32,
+    _pad: u32,
+}
+
+const EMPTY_OBJ_DISPATCH_IC_ENTRY: ObjDispatchICEntry = ObjDispatchICEntry {
+    gen: 0,
+    class_id: 0,
+    name_len: 0,
+    name: [0; OBJ_DISPATCH_IC_NAME_MAX],
+    func_ptr: 0,
+    param_count: 0,
+    has_synthetic_arguments: 0,
+    has_rest: 0,
+    _pad: 0,
+};
+
+crate::perry_thread_local! {
+    // Boxed for the same arm64_32 reason as `VTABLE_IC`: oversized inline TLS
+    // storage overflows the ILP32 TLS layout. `perry_thread_local!` (#7469)
+    // rather than `std::thread_local!` — Darwin has no local-exec TLS, so the
+    // std form costs a real `_tlv_get_addr` call, which is exactly the tax the
+    // fast path exists to remove.
+    static OBJ_DISPATCH_IC: UnsafeCell<Box<[ObjDispatchICEntry]>> =
+        UnsafeCell::new(vec![EMPTY_OBJ_DISPATCH_IC_ENTRY; OBJ_DISPATCH_IC_SIZE].into_boxed_slice());
+}
+
+/// FNV-1a over the name bytes, mixed with the class id.
+#[inline(always)]
+fn obj_dispatch_ic_slot(class_id: u32, name: &[u8]) -> usize {
+    let mut h: u64 =
+        0xcbf2_9ce4_8422_2325 ^ ((class_id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    for &b in name {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    ((h ^ (h >> 29)) as usize) & OBJ_DISPATCH_IC_MASK
+}
+
+/// The vtable entry the object-dispatch tower previously resolved for this
+/// `(class_id, method name)`, if it is still current.
+#[inline]
+pub(crate) fn obj_dispatch_ic_lookup(
+    class_id: u32,
+    name: &[u8],
+) -> Option<(usize, u32, bool, bool)> {
+    if name.is_empty() || name.len() > OBJ_DISPATCH_IC_NAME_MAX {
+        return None;
+    }
+    let cur_gen = VTABLE_GEN.load(Ordering::Relaxed);
+    let slot = obj_dispatch_ic_slot(class_id, name);
+    OBJ_DISPATCH_IC.with(|cell| {
+        // SAFETY: the cache is thread-local and never handed out by reference
+        // across a call that could re-enter this module.
+        let entry = unsafe { &(**cell.get())[slot] };
+        if entry.gen == cur_gen
+            && entry.class_id == class_id
+            && entry.name_len as usize == name.len()
+            && entry.name[..name.len()] == *name
+        {
+            Some((
+                entry.func_ptr,
+                entry.param_count,
+                entry.has_synthetic_arguments != 0,
+                entry.has_rest != 0,
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+/// Record that the tower resolved `(class_id, name)` to this vtable entry.
+/// Only the tower's own vtable arm may call this.
+#[inline]
+pub(crate) fn obj_dispatch_ic_insert(
+    class_id: u32,
+    name: &[u8],
+    func_ptr: usize,
+    param_count: u32,
+    has_synthetic_arguments: bool,
+    has_rest: bool,
+) {
+    if name.is_empty() || name.len() > OBJ_DISPATCH_IC_NAME_MAX {
+        return;
+    }
+    let cur_gen = VTABLE_GEN.load(Ordering::Relaxed);
+    let slot = obj_dispatch_ic_slot(class_id, name);
+    let mut stored = [0u8; OBJ_DISPATCH_IC_NAME_MAX];
+    stored[..name.len()].copy_from_slice(name);
+    OBJ_DISPATCH_IC.with(|cell| {
+        // SAFETY: thread-local, no outstanding borrows (see `_lookup`).
+        unsafe {
+            (**cell.get())[slot] = ObjDispatchICEntry {
+                gen: cur_gen,
+                class_id,
+                name_len: name.len() as u32,
+                name: stored,
+                func_ptr,
+                param_count,
+                has_synthetic_arguments: u32::from(has_synthetic_arguments),
+                has_rest: u32::from(has_rest),
+                _pad: 0,
+            };
+        }
+    });
+}
+
 /// Maximum positional arity `call_vtable_method` can invoke directly. The
 /// dispatch builds a fixed-arity `extern "C"` fn signature for each arity up to
 /// this cap (see `vtable_call_dispatch!`). Synthesized capture-stashing
@@ -171,14 +336,59 @@ pub(crate) const MAX_VTABLE_DISPATCH_ARITY: usize = 512;
 /// registers (first 8) with the remainder spilled to the stack per the platform
 /// C ABI, exactly as a native call of that arity would. All Perry-generated
 /// method/ctor params are `f64`, so an all-f64 calling convention is faithful.
+///
+/// #7769: the argument vector is built ONCE, in a stack buffer for the arities
+/// that actually occur. This used to be two `Vec<f64>` allocations per dynamic
+/// method call (`positional` in [`call_vtable_method`], then `all` here) —
+/// i.e. two `malloc`/`free` round-trips for a zero-argument virtual call such
+/// as `shape.area()`. On `gc-handoff/apps/shapes.ts` (360 k virtual calls)
+/// that was pure overhead against a call that does one multiply.
+const INLINE_DISPATCH_ARGS: usize = 24;
+
+/// Invoke `func_ptr` with `this_f64` followed by `param_count` positional
+/// arguments read from `args` (missing trailing slots → `undefined`).
 #[inline]
-unsafe fn call_fn_with_f64_args(func_ptr: usize, this_f64: f64, args: &[f64]) -> f64 {
-    debug_assert!(args.len() <= MAX_VTABLE_DISPATCH_ARITY);
-    // Build the full argument vector: `this` followed by the positional args.
-    let mut all: Vec<f64> = Vec::with_capacity(args.len() + 1);
-    all.push(this_f64);
-    all.extend_from_slice(args);
-    crate::abi_trampoline::call_all_f64(func_ptr, &all)
+unsafe fn call_fn_with_this_and_args(
+    func_ptr: usize,
+    this_f64: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    param_count: usize,
+) -> f64 {
+    debug_assert!(param_count <= MAX_VTABLE_DISPATCH_ARITY);
+    let total = param_count + 1;
+    let mut inline_buf = [0.0f64; INLINE_DISPATCH_ARGS + 1];
+    let mut heap_buf: Vec<f64>;
+    let all: &[f64] = if total <= INLINE_DISPATCH_ARGS + 1 {
+        inline_buf[0] = this_f64;
+        for (i, slot) in inline_buf[1..total].iter_mut().enumerate() {
+            *slot = arg_or_undefined(args_ptr, args_len, i);
+        }
+        &inline_buf[..total]
+    } else {
+        heap_buf = Vec::with_capacity(total);
+        heap_buf.push(this_f64);
+        for i in 0..param_count {
+            heap_buf.push(arg_or_undefined(args_ptr, args_len, i));
+        }
+        &heap_buf[..]
+    };
+    crate::abi_trampoline::call_all_f64(func_ptr, all)
+}
+
+/// A missing trailing argument is `undefined` per spec (NOT NaN): default
+/// parameters lower to a `param === undefined ? <default> : param` check in
+/// the method prologue, so padding a hole with NaN left the default
+/// un-applied (`async method(a, b, c = 99)` called via the dynamic vtable
+/// path — e.g. a detached `C.prototype.method` value — saw `c = NaN`). Pad
+/// with TAG_UNDEFINED so the prologue's default-check fires.
+#[inline(always)]
+unsafe fn arg_or_undefined(args_ptr: *const f64, args_len: usize, idx: usize) -> f64 {
+    if idx < args_len && !args_ptr.is_null() {
+        *args_ptr.add(idx)
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
 }
 
 /// Call a vtable method with the correct arity.
@@ -192,25 +402,8 @@ pub(crate) unsafe fn call_vtable_method(
     has_synthetic_arguments: bool,
     has_rest: bool,
 ) -> f64 {
-    // A missing trailing argument is `undefined` per spec (NOT NaN): default
-    // parameters lower to a `param === undefined ? <default> : param` check in
-    // the method prologue, so padding a hole with NaN left the default
-    // un-applied (`async method(a, b, c = 99)` called via the dynamic vtable
-    // path — e.g. a detached `C.prototype.method` value — saw `c = NaN`). Pad
-    // with TAG_UNDEFINED so the prologue's default-check fires.
-    #[inline(always)]
-    unsafe fn arg_or_undefined(args_ptr: *const f64, args_len: usize, idx: usize) -> f64 {
-        if idx < args_len {
-            *args_ptr.add(idx)
-        } else {
-            // A missing argument is `undefined` per spec, not a bare IEEE NaN.
-            // This vtable path is reached without call-site padding when a
-            // method is invoked as a value (`const f = obj.m; f()`, or a bound
-            // method from a getter), so NaN here defeated the callee's
-            // default-param / destructuring prologue (`if (p === undefined)`).
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        }
-    }
+    // (`arg_or_undefined` — the spec-correct missing-argument padding — is a
+    // module-level helper now, shared with `call_fn_with_this_and_args`.)
 
     // LLVM-generated methods have signature `double(double this, double arg0, ...)`.
     // `this` is NaN-boxed as f64, so we must pass it as f64 — not i64 — to match
@@ -297,11 +490,13 @@ pub(crate) unsafe fn call_vtable_method(
         param_count,
         MAX_VTABLE_DISPATCH_ARITY
     );
-    let mut positional: Vec<f64> = Vec::with_capacity(param_count as usize);
-    for i in 0..(param_count as usize) {
-        positional.push(arg_or_undefined(call_args_ptr, call_args_len, i));
-    }
-    call_fn_with_f64_args(func_ptr, this_f64, &positional)
+    call_fn_with_this_and_args(
+        func_ptr,
+        this_f64,
+        call_args_ptr,
+        call_args_len,
+        param_count_usize,
+    )
 }
 
 /// Walk the class parent chain looking for a recorded fetch-builtin parent
@@ -323,4 +518,103 @@ pub(crate) fn fetch_parent_kind_in_chain(class_id: u32) -> Option<u8> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod obj_dispatch_ic_tests {
+    use super::*;
+
+    const CID: u32 = 61_001;
+
+    /// Run `body` on a stable vtable generation.
+    ///
+    /// Entries are keyed on `VTABLE_GEN`, and the whole point of that key is
+    /// that ANY class registration anywhere retires the cache. Sibling tests in
+    /// this crate register classes concurrently, so an insert/lookup pair can
+    /// straddle a bump and miss for a reason that has nothing to do with what
+    /// is being asserted. Retry until the pair runs inside one generation.
+    fn with_stable_gen(body: &dyn Fn()) {
+        for _ in 0..64 {
+            let before = VTABLE_GEN.load(Ordering::Acquire);
+            body();
+            if VTABLE_GEN.load(Ordering::Acquire) == before {
+                return;
+            }
+        }
+        panic!("vtable generation never stayed still long enough to assert");
+    }
+
+    #[test]
+    fn a_hit_requires_matching_name_bytes_not_a_matching_address() {
+        with_stable_gen(&|| {
+            // The hazard this test exists for: `js_native_call_method_str_key`
+            // materialises a short method name into a CALLER-STACK scratch buffer,
+            // so two different names genuinely do arrive at the same address in
+            // successive calls. An address-keyed cache would answer the second
+            // call with the first call's method — a silent wrong-method dispatch.
+            //
+            // Sabotage it deliberately: cache under one name, then look up a
+            // different name through the SAME backing storage.
+            let mut scratch = *b"area\0\0\0\0";
+            obj_dispatch_ic_insert(CID, &scratch[..4], 0xAAAA, 1, false, false);
+            assert_eq!(
+                obj_dispatch_ic_lookup(CID, &scratch[..4]),
+                Some((0xAAAA, 1, false, false)),
+                "the entry we just inserted must be findable"
+            );
+
+            scratch[..4].copy_from_slice(b"perim"[..4].try_into().unwrap());
+            assert_eq!(
+                obj_dispatch_ic_lookup(CID, &scratch[..4]),
+                None,
+                "a different name at the same address must MISS"
+            );
+        });
+    }
+
+    #[test]
+    fn a_hit_requires_the_matching_class_id() {
+        with_stable_gen(&|| {
+            obj_dispatch_ic_insert(CID, b"describe", 0xBBBB, 1, false, false);
+            assert_eq!(
+                obj_dispatch_ic_lookup(CID, b"describe"),
+                Some((0xBBBB, 1, false, false))
+            );
+            assert_eq!(obj_dispatch_ic_lookup(CID + 1, b"describe"), None);
+        });
+    }
+
+    #[test]
+    fn a_class_registration_invalidates_every_entry() {
+        obj_dispatch_ic_insert(CID, b"perimeter", 0xCCCC, 1, false, false);
+        assert!(obj_dispatch_ic_lookup(CID, b"perimeter").is_some());
+        // Registering a method anywhere bumps `VTABLE_GEN`; every cached
+        // resolution predates the new vtable shape and must stop being used.
+        test_bump_vtable_generation();
+        assert_eq!(obj_dispatch_ic_lookup(CID, b"perimeter"), None);
+    }
+
+    #[test]
+    fn names_too_long_to_store_are_never_cached() {
+        with_stable_gen(&|| {
+            let long = vec![b'x'; OBJ_DISPATCH_IC_NAME_MAX + 1];
+            obj_dispatch_ic_insert(CID, &long, 0xDDDD, 1, false, false);
+            assert_eq!(
+                obj_dispatch_ic_lookup(CID, &long),
+                None,
+                "an over-long name must fall through to the tower, not alias a \
+             truncated key"
+            );
+        });
+    }
+
+    /// A name one byte shorter than a cached one must not hit it — the stored
+    /// length is part of the key, not just the prefix bytes.
+    #[test]
+    fn a_prefix_of_a_cached_name_misses() {
+        with_stable_gen(&|| {
+            obj_dispatch_ic_insert(CID, b"describe", 0xEEEE, 1, false, false);
+            assert_eq!(obj_dispatch_ic_lookup(CID, b"describ"), None);
+        });
+    }
 }

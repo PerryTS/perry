@@ -33,6 +33,242 @@ pub(crate) use proto_dispatch::{
 };
 pub(super) use typed_array::dispatch_typed_array_method;
 
+/// #7769: skip the dispatch tower for an ordinary user-class instance whose
+/// `(class_id, method_name)` the tower has already resolved to a vtable method.
+///
+/// `js_native_call_method` is the virtual-call path for every receiver whose
+/// static type does not pin the callee — which is *every* call through a
+/// base-typed collection, the shape a class hierarchy is written in. Reaching
+/// its vtable arm costs a `String` allocation for the method name, a
+/// `RuntimeHandleScope`, ~900 lines of probes for exotic receiver kinds, a
+/// GC-heap `StringHeader` allocation for the prototype-chain probe, a
+/// process-global `RwLock` read and two SipHash lookups. For `shape.area()`
+/// that is four heap allocations and a lock around a single multiply.
+///
+/// # Why a cache hit is sound
+///
+/// An [`obj_dispatch_ic`](crate::object::class_registry::obj_dispatch_ic_lookup)
+/// entry exists ONLY because an earlier call with this exact
+/// `(class_id, method_name_ptr)` ran the entire tower and fell through to the
+/// vtable arm. That is the proof that no *name-keyed* or *class-keyed* probe in
+/// the tower claims this pair.
+///
+/// Everything the tower decides per RECEIVER rather than per (class, name) is
+/// re-established here, on every hit:
+///
+/// * the value is a NaN-boxed pointer to a real heap object above the handle
+///   band (excludes every small-handle registry receiver, and every primitive);
+/// * its GC type is `GC_TYPE_OBJECT` and its `object_type` is
+///   `OBJECT_TYPE_REGULAR` (excludes errors, arrays, maps, buffers, regexes,
+///   closures — each of which the tower routes elsewhere);
+/// * `class_id` matches the cache key;
+/// * `meta` is null, so the object carries no `Object.setPrototypeOf` override,
+///   no per-key descriptor state, and no exotic-kind tag — this is *stricter*
+///   than the tower, which tolerates a meta record and resolves through it;
+/// * no OWN key equals the method name, using the same byte comparison the
+///   tower's field scan uses (an own field shadows the vtable);
+/// * no static prototype is recorded for the address, so the tower's
+///   `resolve_inherited_field` probe would have found nothing to shadow with.
+///
+/// A miss (`None`) is always safe: the caller falls through to the full tower.
+/// The receiver-shape predicate `G` shared by the fast path and by the sites
+/// that are allowed to populate its cache.
+///
+/// Returns the receiver's `class_id` when `object` is an ORDINARY heap
+/// instance of a user class: everything the dispatch tower decides per RECEIVER
+/// rather than per (class, name) is pinned here, so two receivers that both
+/// satisfy `G` with the same class id and method name provably reach the same
+/// resolution.
+///
+/// * NaN-boxed pointer above the handle band — excludes every small-handle
+///   registry receiver (timers, sockets, zlib streams, TextDecoder, …) and
+///   every primitive;
+/// * `GC_TYPE_OBJECT` + `OBJECT_TYPE_REGULAR` — excludes arrays, strings,
+///   errors, maps, sets, regexes, closures, each of which the tower routes to
+///   its own dispatcher;
+/// * not a registered `Buffer` and not a typed array — the two address-keyed
+///   probes the tower runs ahead of the class walk that a `GC_TYPE_OBJECT`
+///   receiver could in principle also answer. Both are latched (#7755), so in
+///   a program using neither this is two atomic loads;
+/// * `meta` null — no `Object.setPrototypeOf` override, no per-key descriptor
+///   state, no exotic-kind tag. STRICTER than the tower, which resolves
+///   through a meta record;
+/// * no OWN key equal to the method name (an own field shadows the vtable),
+///   using the tower's own byte comparison;
+/// * no recorded static prototype for the address, so the tower's
+///   `resolve_inherited_field` probe had nothing to shadow with.
+#[inline]
+unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(usize, u32)> {
+    let bits = object.to_bits();
+    if (bits >> 48) != (crate::value::POINTER_TAG >> 48) {
+        return None;
+    }
+    let obj_addr = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_above_handle_band(obj_addr) {
+        return None;
+    }
+    // `gc_pointer_and_type_from_value` — NOT a bare `obj - GC_HEADER_SIZE`
+    // read. Buffers, ArrayBuffers, typed arrays, Sets, Maps, RegExps, Symbols
+    // and AsyncResource handles are raw allocations with no `GcHeader` at that
+    // offset, so reading one directly loads foreign allocator bytes that can
+    // and do coincidentally equal a real GC type (see `handle_methods.rs`'s
+    // buffer comment, and #5625 where a typed array's stale bytes matched
+    // `GC_TYPE_TEMPORAL`). This helper screens every one of those registries
+    // first — and it is the same screen the tower's own object-pointer
+    // resolution uses, so the fast path cannot classify a receiver differently
+    // from the code it is short-circuiting.
+    let (ptr, gc_type) = gc_pointer_and_type_from_value(object)?;
+    if gc_type != crate::gc::GC_TYPE_OBJECT || ptr as usize != obj_addr {
+        return None;
+    }
+    // `meta_capable_object` rather than a bare header read: it is the
+    // classifier `may_have_descriptor_entry` and `object_static_prototype` use,
+    // so a `Some` here means both of those answer authoritatively from the meta
+    // slot rather than falling back to a conservative `true`.
+    let obj = super::prototype_chain::meta_capable_object(obj_addr)?;
+    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+        return None;
+    }
+    // Null `meta` on a meta-capable object is what rules out BOTH a per-instance
+    // `[[Prototype]]` override AND any own descriptor entry — including an
+    // accessor installed on THIS instance for THIS name
+    // (`Object.defineProperty(instance, "m", { get() {…} })`), which would make
+    // the tower invoke the getter and call its result. That is a per-object
+    // divergence the class/name cache key cannot see, and
+    // `may_have_descriptor_entry` returns `false` for exactly this state.
+    if !(*obj).meta.is_null() {
+        return None;
+    }
+    let class_id = (*obj).class_id;
+    if class_id == 0 {
+        return None;
+    }
+
+    // Own fields shadow vtable methods — same scan, same comparison, as the
+    // tower's field lookup.
+    let keys = (*obj).keys_array;
+    if !keys.is_null() {
+        let keys_ptr = keys as usize;
+        if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+            return None;
+        }
+        let key_count = crate::array::js_array_length(keys) as usize;
+        if key_count > 65536 {
+            return None;
+        }
+        for i in 0..key_count {
+            let key_val = crate::array::js_array_get(keys, i as u32);
+            if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
+                return None;
+            }
+        }
+    }
+
+    // A recorded prototype could carry a shadowing field; the tower consults it
+    // before the class walk, so a fast path may not.
+    if super::prototype_chain::object_static_prototype(obj_addr).is_some() {
+        return None;
+    }
+
+    Some((obj_addr, class_id))
+}
+
+/// True for the method names whose tower probes depend on per-object state
+/// [`class_vtable_fast_guard`] does not pin.
+///
+/// * the `using` / `await using` disposal hooks read a SYMBOL-keyed own
+///   property (`obj[Symbol.dispose]`), which the guard's string-`keys_array`
+///   scan cannot see: two instances of one class can differ, so a resolution
+///   cached from an instance without the symbol would route a later instance
+///   with one straight past its custom disposer;
+/// * the iterator helpers (`map`/`filter`/`take`/…) dispatch on whether the
+///   receiver *is* an iterator.
+#[inline]
+pub(crate) fn method_name_is_fast_dispatch_ineligible(name: &str) -> bool {
+    matches!(
+        name,
+        "__perry_dispose__" | "__perry_async_dispose__" | "__perry_using_check__"
+    ) || crate::iterator_helpers::is_iterator_helper_method(name)
+}
+
+#[inline]
+unsafe fn try_class_vtable_fast_dispatch(
+    object: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method_name_ptr.is_null() || method_name_len == 0 {
+        return None;
+    }
+    let method_bytes = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
+    let (obj_addr, class_id) = class_vtable_fast_guard(object, method_bytes)?;
+    let (func_ptr, param_count, has_synthetic_arguments, has_rest) =
+        crate::object::class_registry::obj_dispatch_ic_lookup(class_id, method_bytes)?;
+    // A synthesized `arguments` object or a user rest param makes
+    // `call_vtable_method` allocate a JS array for that slot — a collection
+    // point. `obj_addr` is a bare local here (no handle scope: not creating one
+    // is most of the win), so keep the fast path free of any allocation
+    // between reading the receiver address and entering the callee. These two
+    // shapes are rare; the tower roots the receiver and handles them.
+    if has_synthetic_arguments || has_rest {
+        return None;
+    }
+
+    // The recursion-depth guard is kept on the fast path. Skipping it would be
+    // a few instructions cheaper, but a cached dispatch is still a dispatch:
+    // mutually-recursive `a.m()`/`b.m()` chains reach the same unbounded stack
+    // growth this guard exists to stop, and once cached they would reach it
+    // WITHOUT ever being counted.
+    let _depth_guard = CallMethodDepthGuard::enter("")?;
+
+    Some(crate::object::class_registry::call_vtable_method(
+        func_ptr,
+        obj_addr as i64,
+        args_ptr,
+        args_len,
+        param_count,
+        has_synthetic_arguments,
+        has_rest,
+    ))
+}
+
+/// Record a class-walk resolution for the fast path, but only for a receiver
+/// that satisfies [`class_vtable_fast_guard`] — the same predicate the fast
+/// path re-checks — and only for a name whose tower probes are class/name
+/// keyed.
+///
+/// Callers are the two sites where the tower resolves an ORDINARY class
+/// instance's method: the parent-chain walk in
+/// `native_call_method::handle_methods` (which serves inherited methods, the
+/// common case) and the tail vtable arm in `js_native_call_method`.
+#[inline]
+pub(crate) unsafe fn note_class_vtable_resolution(
+    object: f64,
+    method_name: &str,
+    func_ptr: usize,
+    param_count: u32,
+    has_synthetic_arguments: bool,
+    has_rest: bool,
+) {
+    if method_name_is_fast_dispatch_ineligible(method_name) {
+        return;
+    }
+    let bytes = method_name.as_bytes();
+    let Some((_, class_id)) = class_vtable_fast_guard(object, bytes) else {
+        return;
+    };
+    crate::object::class_registry::obj_dispatch_ic_insert(
+        class_id,
+        bytes,
+        func_ptr,
+        param_count,
+        has_synthetic_arguments,
+        has_rest,
+    );
+}
+
 unsafe fn call_primitive_closure_value(
     receiver: f64,
     value: JSValue,
@@ -711,14 +947,27 @@ pub unsafe extern "C" fn js_native_call_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    // Get the method name (parsed early for depth guard logging)
-    let method_name_owned = if method_name_ptr.is_null() || method_name_len == 0 {
-        String::new()
+    // #7769: the tower's own previously-computed answer for this
+    // (class_id, method_name) pair, when the receiver still satisfies every
+    // per-object precondition. See `try_class_vtable_fast_dispatch`.
+    if let Some(result) =
+        try_class_vtable_fast_dispatch(object, method_name_ptr, method_name_len, args_ptr, args_len)
+    {
+        return result;
+    }
+
+    // Get the method name (parsed early for depth guard logging).
+    //
+    // #7769: borrowed, not owned. Codegen interns every method name as valid
+    // UTF-8 rodata, so the `Cow` is `Borrowed` on every real dispatch and the
+    // `into_owned()` this replaced was a `malloc`/`memcpy`/`free` per call.
+    let method_name_cow = if method_name_ptr.is_null() || method_name_len == 0 {
+        std::borrow::Cow::Borrowed("")
     } else {
         let bytes = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
-        String::from_utf8_lossy(bytes).into_owned()
+        String::from_utf8_lossy(bytes)
     };
-    let method_name = method_name_owned.as_str();
+    let method_name: &str = &method_name_cow;
     let root_scope = crate::gc::RuntimeHandleScope::new();
     let object_handle = root_scope.root_nanbox_f64(object);
     let original_args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
@@ -1558,14 +1807,32 @@ pub unsafe extern "C" fn js_native_call_method(
                     if let Some(vtable) = reg.get(&class_id) {
                         if let Some(entry) = vtable.methods.get(method_name) {
                             let this_i64 = jsval().as_pointer::<u8>() as i64;
+                            // #7769: reaching HERE is the proof that no
+                            // name-keyed or class-keyed probe above claims
+                            // this (class_id, method_name) — record it so the
+                            // next call can go straight to the method. The
+                            // per-receiver preconditions are re-checked on
+                            // every hit; see `try_class_vtable_fast_dispatch`.
+                            let func_ptr = entry.func_ptr;
+                            let param_count = entry.param_count;
+                            let has_synthetic_arguments = entry.has_synthetic_arguments;
+                            let has_rest = entry.has_rest;
+                            note_class_vtable_resolution(
+                                object(),
+                                method_name,
+                                func_ptr,
+                                param_count,
+                                has_synthetic_arguments,
+                                has_rest,
+                            );
                             return call_vtable_method(
-                                entry.func_ptr,
+                                func_ptr,
                                 this_i64,
                                 args_ptr,
                                 args_len,
-                                entry.param_count,
-                                entry.has_synthetic_arguments,
-                                entry.has_rest,
+                                param_count,
+                                has_synthetic_arguments,
+                                has_rest,
                             );
                         }
                     }

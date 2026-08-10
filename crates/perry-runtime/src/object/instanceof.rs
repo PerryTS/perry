@@ -1008,7 +1008,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // off the class id (OWN lookup only — never resolves Function.prototype's
     // default @@hasInstance thunk, so no recursion). A present-but-non-callable
     // value throws; only `null`/`undefined` falls through to the chain.
-    {
+    //
+    // The latch check is what keeps `well_known_symbol("hasInstance")` — a
+    // string-keyed interning probe — off the path entirely in the (dominant)
+    // case where no class in the program declares any static Symbol member.
+    if crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.is_armed() {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
             let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());

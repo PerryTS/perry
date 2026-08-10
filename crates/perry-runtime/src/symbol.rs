@@ -710,8 +710,18 @@ pub(crate) fn store_object_symbol_property_root(
     true
 }
 
+/// Idle until a class declares a static Symbol-keyed member.
+///
+/// `js_instanceof` consults `CLASS_STATIC_SYMBOLS` for a `Symbol.hasInstance`
+/// override on EVERY evaluation, which meant a process-global `Mutex` plus a
+/// SipHash probe of an empty map for every `x instanceof C` in a program that
+/// never mentions a Symbol (#7769).
+pub(crate) static CLASS_STATIC_SYMBOLS_LATCH: crate::registry_latch::RegistryLatch =
+    crate::registry_latch::RegistryLatch::new();
+
 pub(crate) fn store_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64) {
     note_symbol_key_installed(sym_key);
+    CLASS_STATIC_SYMBOLS_LATCH.arm();
     {
         let mut guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
         if guard.is_none() {

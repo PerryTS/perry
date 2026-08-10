@@ -571,34 +571,13 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
 }
 
 fn set_timer_ref_state(id: i64, has_ref: bool) {
+    ref_states::TIMER_IDS_NONEMPTY.arm();
     let mut slot = TIMER_REF_STATES.lock().unwrap();
     slot.get_or_insert_with(TimerRefStates::default)
         .insert_bounded(id, has_ref, TIMER_REF_STATES_CAP);
 }
 
-/// Whether `id` corresponds to a timer that was scheduled by this runtime
-/// (active or already cleared). Used by the small-handle method/property
-/// fast paths in `object/*.rs` and by `js_number_coerce` to decide whether
-/// to apply Timeout-shaped semantics to a NaN-boxed small pointer. Without
-/// this gate, any small handle (UI widget, drizzle, etc.) would accidentally
-/// route through timer dispatch.
-///
-/// Entries in `TIMER_REF_STATES` are inserted at schedule time and never
-/// removed — clearing a timer marks it cleared in the queue but keeps the
-/// id registered as "this was a timer" so post-clear `.hasRef()` / `+timer`
-/// / `.unref()` still route through timer dispatch (Node keeps the
-/// Timeout object alive after `clearTimeout` and methods still work).
-pub fn is_known_timer_id(id: i64) -> bool {
-    if id <= 0 {
-        return false;
-    }
-    TIMER_REF_STATES
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|s| s.states.contains_key(&id))
-        .unwrap_or(false)
-}
+pub use ref_states::is_known_timer_id;
 
 fn throw_mock_timer_invalid_state(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);

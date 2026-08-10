@@ -8,6 +8,9 @@ pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
     // Parent linking changes what a class chain can intercept — flush cached
     // store plans (`object::prop_plan`).
     crate::object::prop_plan::prop_plan_epoch_bump();
+    // Publish into the dense mirror BEFORE the map, so no reader can observe
+    // the edge through the map without it also being visible densely.
+    crate::object::class_meta_registry::parent_dense_store(class_id, parent_class_id);
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(HashMap::new());
@@ -1613,11 +1616,9 @@ pub unsafe extern "C" fn js_class_static_method_call(
     receiver
 }
 
-/// Look up parent class ID from the registry
-pub(crate) fn get_parent_class_id(class_id: u32) -> Option<u32> {
-    let registry = CLASS_REGISTRY.read().unwrap();
-    registry.as_ref().and_then(|r| r.get(&class_id).copied())
-}
+// `get_parent_class_id` now lives in `object::class_meta_registry` next to the
+// dense mirror it reads; it is re-exported through `object::mod` unchanged.
+pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 
 /// Look up a method by name in the class vtable, walking the parent chain.
 /// Returns `Some((func_ptr, param_count, has_synthetic_arguments, has_rest))`

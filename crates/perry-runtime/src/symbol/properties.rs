@@ -561,7 +561,16 @@ pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64
 
 /// Look up a static Symbol-keyed property on a class by class_id.
 /// Returns the stored value bits or `None` if no entry. Refs #420.
+#[inline]
 pub fn class_static_symbol_lookup(class_id: u32, sym_f64: f64) -> Option<u64> {
+    if super::CLASS_STATIC_SYMBOLS_LATCH.is_idle() {
+        return None;
+    }
+    class_static_symbol_lookup_slow(class_id, sym_f64)
+}
+
+#[inline(never)]
+fn class_static_symbol_lookup_slow(class_id: u32, sym_f64: f64) -> Option<u64> {
     unsafe {
         let sym_key = sym_key_from_f64(sym_f64);
         if class_id == 0 || sym_key == 0 {

@@ -69,6 +69,14 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
     // and the class-registry state path), so one generation bump here retires
     // every outstanding record at O(1).
     crate::array::invalidate_all_element_shapes();
+    // #7769: prototype surgery can change which member a `recv.m()` resolves
+    // to, and the method-dispatch caches (`vtable_ic`, `obj_dispatch_ic`) key
+    // their entries on `VTABLE_GEN`. Those caches were only retired by class
+    // REGISTRATION, so a `Class.prototype.m = fn` after first dispatch left
+    // them serving the pre-surgery answer. Retire them here, at the one latch
+    // all three prototype-write entry points funnel through — the same O(1)
+    // argument as the element-shape invalidation above.
+    VTABLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Release);
 }
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
