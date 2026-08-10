@@ -31,6 +31,7 @@
 
 use super::hot_tls::{hot_layout_slot_masks, hot_per_object_layout_hint, hot_typed_layouts};
 use super::layout::{LayoutSlotMask, TypedLayoutDescriptor};
+use super::types::{GcHeader, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_OBJECT};
 use std::cell::{Cell, RefCell};
 
 thread_local! {
@@ -301,6 +302,71 @@ pub(crate) fn per_object_layout_table_sizes() -> (usize, usize) {
     )
 }
 
+/// Smallest payload slot count for which minting a **per-object pointer mask**
+/// is worth its side-table entry. Below it the object takes
+/// `GC_LAYOUT_UNKNOWN` — the tag-checked scan-all-slots state — instead.
+///
+/// The two sides are not symmetric. A mask's benefit is bounded by the object:
+/// it can skip at most `slots - pointers` tag checks per trace. Its cost is
+/// **program-global and unbounded** — one live entry arms
+/// [`PER_OBJECT_LAYOUTS_NONEMPTY`], which puts a two-map hash probe back on
+/// every allocation anywhere in the program for as long as that entry lives
+/// (see the module docs, and #7510's "one immortal entry nullifies
+/// `is_empty()`"). At the bottom of the range the asymmetry is total rather
+/// than merely lopsided: over a **single** slot a mask cannot skip anything at
+/// all, because the tracer consults `layout_pointer_bearing_bits` on that one
+/// slot either way, so the entry is the mask's entire contribution.
+///
+/// A tag check is exact at both mint sites: neither is reached for an object
+/// with an intact typed descriptor, so there are no raw-f64 slots whose bits a
+/// tag check could misread as a pointer. #7630 recorded the same conclusion for
+/// the materialiser cohort — "a pointer mask can never skip anything a tag
+/// check would not reject anyway ... the mask machinery buys nothing here".
+///
+/// `PERRY_LAYOUT_MASK_MIN_SLOTS` overrides it for bisection.
+#[inline(always)]
+pub(in crate::gc) fn layout_mask_min_slots() -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    /// `usize::MAX` = "not yet read from the environment".
+    static N: AtomicUsize = AtomicUsize::new(usize::MAX);
+    match N.load(Ordering::Relaxed) {
+        usize::MAX => {
+            let v = std::env::var("PERRY_LAYOUT_MASK_MIN_SLOTS")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_MASK_MIN_SLOTS);
+            N.store(v, Ordering::Relaxed);
+            v
+        }
+        v => v,
+    }
+}
+
+/// Only single-slot payloads take the scan. This is deliberately the
+/// *provable* end of the range: at one slot the mask demonstrably skips
+/// nothing, so no judgement about tracing cost is being made.
+///
+/// Measured on the 19-benchmark corpus (quiet M1 mini, best-of-5, interleaved
+/// against the same binaries with the policy disabled):
+///
+/// | bench | before | after |
+/// |---|--:|--:|
+/// | `interp` | 1.894 | **1.697** |
+/// | `iso_miss` | 2.371 | **2.157** |
+/// | `bench/mask_tax` | 0.1218 | **0.1049** |
+/// | `bench/mask_tax_nopointer` (control) | 0.0929 | 0.0929 |
+///
+/// Every other benchmark — including the GC-heavy `tree`, `tree_wide`,
+/// `retain*`, `cycles`, `deeplist` — is unchanged within noise.
+///
+/// Raising it pays roughly twice as much and costs test churn, both measured:
+/// `9` and above gives `interp` 1.619 / `iso_miss` 2.046 with still no
+/// regression on the corpus, but 21 tests in this crate encode "a small mixed
+/// payload uses a mask" as a precondition (5 do at `2`, 11 at `3`, saturating
+/// at 21 from `9`). That is a contract change worth making on purpose rather
+/// than as a side effect of a perf patch.
+pub(in crate::gc) const DEFAULT_MASK_MIN_SLOTS: usize = 2;
+
 /// True when either per-object side table may hold an entry. `false` is a
 /// proof of emptiness (see [`PER_OBJECT_LAYOUTS_NONEMPTY`]); `true` is only a
 /// hint, so every caller still has to handle a miss.
@@ -498,4 +564,69 @@ pub(in crate::gc) fn layout_forget_object(user_ptr: usize) {
 #[cfg(test)]
 pub(in crate::gc) fn test_per_object_tables_are_empty() -> bool {
     hot_layout_slot_masks().borrow().is_empty() && hot_typed_layouts().borrow().is_empty()
+}
+
+/// An upper bound on the payload slots the tracer would enumerate for
+/// `user_ptr`, or `usize::MAX` when this module cannot cheaply tell.
+///
+/// Both directions of error are *correct*, only differently priced, which is
+/// what lets this be a bound rather than an exact count: over-estimating mints
+/// a mask that was not needed (the pre-existing behaviour), and
+/// under-estimating routes the object to `GC_LAYOUT_UNKNOWN`, where the tracer
+/// scans every slot and so visits a superset of what a mask would have
+/// selected. Neither can hide a live child.
+///
+/// An array reports its `length` — exactly the range the tracer walks, and so
+/// exactly the bound on what a mask could skip — but **only for a store into an
+/// already-formed array**. A store at the append position (`slot_index >=
+/// length`) reports `usize::MAX` instead, because every append protocol writes
+/// the element and notes the slot *before* bumping `length` (see
+/// [`layout_all_pointer_array_append`]): mid-construction `length` is the
+/// pre-append value, usually 0 or 1, and judging on it would strand every
+/// incrementally built array — a `push` loop, a JSON parse — in the scan state
+/// no matter how large it eventually grew. Capacity is not a substitute:
+/// `MIN_ARRAY_CAPACITY` is 16, so a one-element literal reports 16 and the
+/// distinction this is drawing disappears.
+///
+/// An object reports the bound derived from [`GcHeader::size`] rather than its
+/// `field_count`: `size` is maintained for every GC allocation whatever its
+/// type-specific header says, so this stays correct for a payload that is not a
+/// well-formed `ObjectHeader`, and it errs high — towards the old mask path.
+#[inline]
+pub(in crate::gc) unsafe fn layout_payload_slot_count(
+    header: *const GcHeader,
+    user_ptr: usize,
+    slot_index: usize,
+) -> usize {
+    match (*header).obj_type {
+        GC_TYPE_ARRAY => {
+            let arr = user_ptr as *const crate::array::ArrayHeader;
+            let length = (*arr).length as usize;
+            let capacity = (*arr).capacity as usize;
+            if length > capacity || length > 16_000_000 || slot_index >= length {
+                usize::MAX
+            } else {
+                length
+            }
+        }
+        GC_TYPE_OBJECT => {
+            let size = (*header).size as usize;
+            match size.checked_sub(GC_HEADER_SIZE) {
+                Some(payload) => payload / 8,
+                None => usize::MAX,
+            }
+        }
+        _ => usize::MAX,
+    }
+}
+
+/// True when `user_ptr` is small enough that a tag-checked scan of every slot
+/// beats a per-object pointer mask. See [`layout_mask_min_slots`].
+#[inline]
+pub(in crate::gc) unsafe fn layout_prefers_scan_over_mask(
+    header: *const GcHeader,
+    user_ptr: usize,
+    slot_index: usize,
+) -> bool {
+    layout_payload_slot_count(header, user_ptr, slot_index) < layout_mask_min_slots()
 }

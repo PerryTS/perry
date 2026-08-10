@@ -461,3 +461,104 @@ fn test_addr_filter_proves_absence_while_the_global_flag_is_armed() {
     clear_marks();
     clear_mark_seeds();
 }
+
+/// A **single-slot** payload must never mint a per-object pointer mask.
+///
+/// The mask could not skip anything — the tracer tag-checks that one slot
+/// either way — but the entry it creates arms `PER_OBJECT_LAYOUTS_NONEMPTY`,
+/// which puts a two-map hash probe back on every allocation in the program for
+/// as long as it lives. `interp.ts` minted ~1.8M of these (one per `[arg]`
+/// environment array), grew `LAYOUT_SLOT_MASKS` past 400k live entries, and
+/// spent ~19% of its runtime in `layout_forget_object` probing it.
+///
+/// The child must still be traced: `GC_LAYOUT_UNKNOWN` scans every slot and
+/// tag-checks it, which is exact for an object with no typed descriptor.
+#[test]
+fn test_single_slot_pointer_payload_traces_without_a_side_table_entry() {
+    clear_marks();
+    clear_mark_seeds();
+    assert_flag_sound("before single-slot store");
+
+    let child = crate::string::js_string_from_bytes(b"one-slot-child".as_ptr(), 14) as *mut u8;
+    let child_header = unsafe { header_from_user_ptr(child) };
+    let arr = crate::array::js_array_alloc_with_length(1);
+    crate::array::js_array_set_f64(
+        arr,
+        0,
+        f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
+    );
+
+    assert!(
+        test_per_object_tables_are_empty(),
+        "a one-slot pointer payload must not create a per-object record — one \
+         live entry taxes every allocation in the program"
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (arr as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    trace_marked_objects(&valid_ptrs);
+    unsafe {
+        assert_ne!(
+            (*child_header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "the one-slot child must still be traced through the tag-checked scan"
+        );
+    }
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+/// The other side of the threshold: above it the mask machinery must still be
+/// live. Without this the test above would pass just as well if per-object
+/// masks had been deleted outright.
+#[test]
+fn test_multi_slot_pointer_payload_still_mints_a_mask() {
+    clear_marks();
+    clear_mark_seeds();
+
+    assert!(
+        crate::gc::layout_tables::DEFAULT_MASK_MIN_SLOTS >= 2,
+        "a threshold below 2 would leave no regime for this test to cover"
+    );
+
+    let child = crate::string::js_string_from_bytes(b"multi-slot-child".as_ptr(), 16) as *mut u8;
+    let child_header = unsafe { header_from_user_ptr(child) };
+    let slots = crate::gc::layout_tables::DEFAULT_MASK_MIN_SLOTS;
+    let arr = crate::array::js_array_alloc_with_length(slots as u32);
+    for i in 0..slots {
+        crate::array::js_array_set_f64(arr, i as u32, 1.0);
+    }
+    crate::array::js_array_set_f64(
+        arr,
+        (slots - 1) as u32,
+        f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
+    );
+
+    assert!(
+        !test_per_object_tables_are_empty(),
+        "a payload at or above the threshold must still mint a per-object mask"
+    );
+    assert_eq!(
+        test_layout_pointer_slot_count(arr as usize, slots),
+        Some(1),
+        "the mask must record exactly the one pointer slot"
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    assert!(try_mark_value(
+        POINTER_TAG | (arr as u64 & POINTER_MASK),
+        &valid_ptrs
+    ));
+    trace_marked_objects(&valid_ptrs);
+    unsafe {
+        assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
+    }
+
+    crate::gc::layout_clear_for_ptr(arr as usize);
+    clear_marks();
+    clear_mark_seeds();
+}

@@ -909,16 +909,25 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                         set_layout_state(header, GC_LAYOUT_SIDE_MASK);
                     }
                 } else if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
-                    if super::layout_tables::immortal_layout_scope_active() {
-                        // An object built inside an `ImmortalLayoutScope` is
+                    if super::layout_tables::immortal_layout_scope_active()
+                        || super::layout_tables::layout_prefers_scan_over_mask(
+                            header,
+                            parent_user,
+                            slot_index,
+                        )
+                    {
+                        // Two reasons to decline the mask, one fallback. An
+                        // object built inside an `ImmortalLayoutScope` is
                         // rooted for the life of the process, so the entry it
                         // would mint here is never removed — and one such
                         // entry disables `PER_OBJECT_LAYOUTS_NONEMPTY` for
-                        // every allocation the program will ever make. Take
+                        // every allocation the program will ever make (see
+                        // `ImmortalLayoutScope`). And a payload too small for
+                        // the mask to earn its side-table entry
+                        // (`layout_prefers_scan_over_mask`) skips nothing the
+                        // tag-checked scan would not check anyway. Both take
                         // the same `GC_LAYOUT_UNKNOWN` fallback the `else`
-                        // arm below uses for this exact situation; see
-                        // `ImmortalLayoutScope` for why that is the safe
-                        // state and not a weaker one.
+                        // arm below uses for this exact situation.
                         set_layout_state(header, GC_LAYOUT_UNKNOWN);
                     } else {
                         let mut mask = LayoutSlotMask::Inline(0);
@@ -1354,13 +1363,17 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
     if mask.is_empty() {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
         slot_masks_remove(user_ptr as usize);
-    } else if super::layout_tables::immortal_layout_scope_active() {
-        // Same reasoning as the `layout_note_slot` branch: an object built
-        // inside an `ImmortalLayoutScope` never dies, so the mask it would
-        // install here is a permanent tenant of a side table whose emptiness
-        // is a process-wide fast path. Falling back to the tag-checked scan is
-        // sound *for this rebuild specifically* because the mask above is
-        // itself derived from `layout_pointer_bearing_bits` — exactly the test
+    } else if super::layout_tables::immortal_layout_scope_active()
+        || slot_count < super::layout_tables::layout_mask_min_slots()
+    {
+        // Same two reasons as the `layout_note_slot` branch, same fallback. An
+        // object built inside an `ImmortalLayoutScope` never dies, so the mask
+        // it would install here is a permanent tenant of a side table whose
+        // emptiness is a process-wide fast path; and too few slots means the
+        // mask cannot earn its side-table entry — the tag-checked scan is
+        // exact and costs the program nothing globally. Falling back is sound
+        // *for this rebuild specifically* because the mask above is itself
+        // derived from `layout_pointer_bearing_bits` — exactly the test
         // `GC_LAYOUT_UNKNOWN` re-runs per slot. (This is why the scope may not
         // be applied to a TYPED descriptor, whose raw-f64 slots the tag test
         // would misread; see `ImmortalLayoutScope`.)
