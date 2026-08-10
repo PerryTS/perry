@@ -149,7 +149,11 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     let keys = (*obj).keys_array;
     if !keys.is_null() {
         let keys_ptr = keys as usize;
-        if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
+        // Band predicate, not a bare floor (#7531/#7709): the 0x10000 floor this
+        // replaced sits below the fetch/zlib/proxy handle bands, so a handle id
+        // would have been dereferenced as a keys array.
+        if (keys_ptr as u64) >> 48 != 0 || !crate::value::addr_class::is_above_handle_band(keys_ptr)
+        {
             return None;
         }
         let key_count = crate::array::js_array_length(keys) as usize;
