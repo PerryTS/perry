@@ -446,7 +446,26 @@ pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
         .map(|(k, _)| *k)
 }
 
+/// #7757: a monomorphized specialization (`Gen$num`) must present the GENERIC's
+/// reflective surface. TypeScript erases type arguments, so at runtime there is
+/// exactly one `Gen`, one `Gen.prototype` and one `Gen.prototype.constructor` —
+/// the specializations are an implementation detail of monomorphization
+/// (`monomorph::mangle::generate_specialized_name`), and without this redirect
+/// each one materialized its OWN decl-prototype object. That made
+/// `a.constructor !== Gen`, `a.constructor !== b.constructor` and
+/// `getPrototypeOf(a) !== getPrototypeOf(b)` where node says all three are
+/// equal.
+///
+/// Same origin edge `instanceof` uses (#7575) and the display name uses
+/// (#7632), applied to the third and last identity surface. METHOD DISPATCH is
+/// unaffected: it runs off the per-class-id vtable, not this object, so each
+/// specialization keeps its own monomorphized bodies.
+fn decl_prototype_identity_id(class_id: u32) -> u32 {
+    crate::object::class_generic_origin(class_id).unwrap_or(class_id)
+}
+
 pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
+    let class_id = decl_prototype_identity_id(class_id);
     if let Ok(read) = CLASS_DECL_PROTOTYPE_OBJECTS.read() {
         if let Some(map) = read.as_ref() {
             return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
@@ -485,6 +504,8 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
 }
 
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
+    // #7757: a specialization answers with its generic's prototype.
+    let class_id = decl_prototype_identity_id(class_id);
     if class_id == crate::wasi::CLASS_ID_WASI {
         crate::wasi::ensure_wasi_prototype_for_subclass();
         let proto = class_prototype_object(class_id);

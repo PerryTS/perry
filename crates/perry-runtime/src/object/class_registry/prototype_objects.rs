@@ -277,6 +277,13 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
 /// object pointer for a synthetic class id, or null if none.
 #[inline]
 pub(crate) fn class_prototype_object(class_id: u32) -> *mut ObjectHeader {
+    // #7757: a monomorphized specialization shares its GENERIC's prototype
+    // object — there is exactly one `Gen.prototype` at runtime, since
+    // TypeScript erases the type arguments. This is the second of the two
+    // prototype registries (the other is `CLASS_DECL_PROTOTYPE_OBJECTS`); both
+    // must redirect or `x.constructor` and `Object.getPrototypeOf` disagree
+    // about whether the specialization is `Gen`.
+    let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
     if let Ok(read) = CLASS_PROTOTYPE_OBJECTS.read() {
         if let Some(map) = read.as_ref() {
             return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
