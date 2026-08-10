@@ -296,27 +296,20 @@ fn a_blocked_safepoint_consumes_no_schedule_slot() {
 
 /// A scheduled minor that leaves survivors in place would move nothing, so it
 /// could not surface a stale-pointer bug at all — the mode would be a knob whose
-/// name promises relocation stress and whose effect is sweep pressure. It must
-/// still lose to an explicit `PERRY_GEN_GC_EVACUATE=0`, so the knobs can never
-/// silently disagree about whether objects move.
+/// name promises relocation stress and whose effect is sweep pressure.
+///
+/// (This test originally also asserted the schedule loses to an explicit
+/// `PERRY_GEN_GC_EVACUATE=0`. That knob was DELETED in #7611 — its one unique
+/// effect was vetoing forced evacuation, i.e. silently disarming exactly the
+/// instruments this mode joins — so the veto branch is gone with it.)
 #[test]
 fn the_schedule_implies_forced_evacuation() {
-    // Split by ambient policy so BOTH branches assert something (the vacuous
-    // `a || !b` shape this file's zeal counterpart was corrected for).
-    if !gen_gc_evacuate_enabled() {
-        let _on = ScheduleGuard::set(7, rate_threshold(1.0));
-        assert!(
-            !gc_force_evacuate_enabled(),
-            "an explicit PERRY_GEN_GC_EVACUATE=0 must win over the seeded schedule"
-        );
-        return;
-    }
     let _off = ScheduleGuard::off();
     let off = gc_force_evacuate_enabled();
     let _on = ScheduleGuard::set(7, rate_threshold(1.0));
     assert!(
         gc_force_evacuate_enabled(),
-        "evacuation is permitted, so a resolved seed must force it (force_off={off})"
+        "a resolved seed must force evacuation (force_off={off})"
     );
 }
 
@@ -332,7 +325,7 @@ fn unset_is_inert_for_evacuation_policy() {
     ) || super::super::gc_zeal_enabled();
     assert_eq!(
         gc_force_evacuate_enabled(),
-        gen_gc_evacuate_enabled() && baseline,
+        baseline,
         "with no seed set, forced evacuation must be decided exactly as it was \
          before this mode existed"
     );
