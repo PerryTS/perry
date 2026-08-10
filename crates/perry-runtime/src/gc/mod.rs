@@ -1031,7 +1031,8 @@ fn emit_zeal_liveness_verdict() {
             eprintln!("{complaint}");
             std::process::exit(70);
         }
-    }}
+    }
+}
 
 /// #5093: parse a boolean-ish env var by value (not mere presence): true for
 /// `1`/`true`/`on`/`yes` (case-insensitive), false for unset / `0`/`false`/`off`

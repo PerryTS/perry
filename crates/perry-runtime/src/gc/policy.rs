@@ -2594,7 +2594,8 @@ fn js_gc_loop_safepoint_armed() {
         // forced one costs a full stride of new allocation on top of whatever
         // survived — see `gc/zeal.rs` for why this is a high-water mark and not
         // a delta.
-        super::zeal::note_zeal_poll_collection(crate::arena::copying_from_space_in_use_bytes());        return;
+        super::zeal::note_zeal_poll_collection(crate::arena::copying_from_space_in_use_bytes());
+        return;
     }
     gc_safepoint_moving_minor();
 }
