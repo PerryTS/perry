@@ -257,9 +257,9 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 // An own property on the Buffer shadows the same-named prototype
                 // method; both reads live in `buffer_own_prop`.
-                if let Some(v) = super::buffer_own_prop::buffer_own_prop_or_method(
-                    obj, key_bytes, key_ptr, key_len,
-                ) {
+                if let Some(v) =
+                    super::buffer_own_prop::buffer_own_prop_or_method(obj, key_bytes)
+                {
                     return v;
                 }
                 // ArrayBuffer.prototype `resizable` / `maxByteLength` getters.

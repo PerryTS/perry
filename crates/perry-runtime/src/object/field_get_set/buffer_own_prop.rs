@@ -23,18 +23,20 @@ use super::*;
 pub(super) fn buffer_own_prop_or_method(
     obj: *const ObjectHeader,
     key_bytes: &[u8],
-    key_ptr: *const u8,
-    key_len: usize,
 ) -> Option<JSValue> {
     let name = std::str::from_utf8(key_bytes).ok()?;
     if let Some(v) = crate::buffer::buffer_get_own_prop(obj as usize, name) {
         return Some(JSValue::from_bits(v.to_bits()));
     }
-    if crate::object::buffer_dispatch::is_buffer_method_name(name) {
+    // The bound closure keeps the name POINTER and re-reads it at call time
+    // (`dispatch_bound_method`), so it must not point into the key string:
+    // that is a movable GC heap allocation, and `key_bytes` borrows its
+    // interior. Bind the `'static` literal instead.
+    if let Some(method) = crate::object::buffer_dispatch::buffer_method_name_static(name) {
         let bound = crate::object::js_class_method_bind(
             crate::value::js_nanbox_pointer(obj as i64),
-            key_ptr,
-            key_len,
+            method.as_ptr(),
+            method.len(),
         );
         return Some(JSValue::from_bits(bound.to_bits()));
     }
