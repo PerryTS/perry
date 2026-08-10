@@ -545,7 +545,7 @@ fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringH
 /// FOR DENSE KEYS/PROPERTY ARRAYS ONLY — general JS arrays may have
 /// `length > capacity` (sparse), where this cap would be incorrect.
 pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) -> usize {
-    // #7768: a well-formed dense keys array answers from its own two words.
+    // #7765: a well-formed dense keys array answers from its own two words.
     // `js_array_length` re-derives the same number through a proxy probe, a
     // second header read for its lazy/object arms, and a `clean_arr_ptr`
     // forwarding walk — once per property read on the field-get funnel.
@@ -664,7 +664,7 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
     };
     if !arr.is_null() {
         let addr = arr as usize;
-        // #7768: gate both probes on the receiver's own type tag — see
+        // #7765: gate both probes on the receiver's own type tag — see
         // `js_array_get_f64` for why the tag answers, why it is ABA-proof, and
         // why a header-less buffer receiver still lands on the same result.
         // This reads the byte the `GC_TYPE_LAZY_ARRAY` / `GC_TYPE_OBJECT` block
@@ -895,7 +895,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             crate::buffer::js_buffer_get(arr as *const crate::buffer::BufferHeader, index as i32);
         return byte_val as f64;
     }
-    // #7768: ONE `GcHeader` read now gates both collection probes below and
+    // #7765: ONE `GcHeader` read now gates both collection probes below and
     // supplies the descriptor flags further down, which `array_object_flags`
     // used to re-derive through a second `clean_arr_ptr` and a second header
     // read. On `gc-handoff/apps/asyncpipe_big.ts` this call site was 76% of all

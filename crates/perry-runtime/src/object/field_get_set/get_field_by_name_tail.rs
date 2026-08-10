@@ -461,7 +461,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // been true since `js_set_alloc` moved to
         // `arena_alloc_gc(_, _, GC_TYPE_SET)`: a registered Set IS a GC
         // allocation and its `obj_type` classifies it. `js_array_get_f64` and
-        // `js_array_length` gate their probes on exactly that byte (#7768);
+        // `js_array_length` gate their probes on exactly that byte (#7765);
         // this receiver is not proven to carry a header at this point, so it
         // still asks the registry.)
         if crate::set::is_registered_set(obj as usize) {

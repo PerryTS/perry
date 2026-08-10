@@ -193,7 +193,7 @@ fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
 
 /// Every entry into [`is_registered_map`], i.e. every caller that could not
 /// rule a `Map` out more cheaply. The `js_array_get_f64` / `js_array_length`
-/// receiver-tag gates (#7768) are asserted against this: a plain-array element
+/// receiver-tag gates (#7765) are asserted against this: a plain-array element
 /// read must not move it. Remove those gates and the assertion fails, which is
 /// the point — a fast path nobody can prove ran is not a fast path.
 ///

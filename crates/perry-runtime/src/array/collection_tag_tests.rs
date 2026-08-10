@@ -1,4 +1,4 @@
-//! Receiver-tag gating of the `Map`/`Set` registry probes (#7768).
+//! Receiver-tag gating of the `Map`/`Set` registry probes (#7765).
 //!
 //! `js_array_get_f64` and `js_array_length` used to ask both collection
 //! registries "is this receiver a Set? a Map?" on every element read of an

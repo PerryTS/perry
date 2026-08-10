@@ -1,4 +1,4 @@
-### Array element reads stop asking whether an array is a Map (#7768)
+### Array element reads stop asking whether an array is a Map (#7765)
 
 `gc-handoff/apps/asyncpipe.ts` — an async service pipeline, and the worst gap in
 the corpus at 13x node — spent **13.5% of its run in `set::is_registered_set` +
