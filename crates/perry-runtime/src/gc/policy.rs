@@ -1351,23 +1351,43 @@ const OLD_RECLAIM_GROWTH_DIVISOR: usize = 2;
 /// the "is it due" predicate and the debt arithmetic cannot diverge (#7024's
 /// two-predicates-collapse family).
 pub(super) fn gc_old_reclaim_growth_band_bytes(baseline: usize) -> usize {
-    let band = gc_old_gen_reclaim_growth_dyn_bytes().max(baseline / OLD_RECLAIM_GROWTH_DIVISOR);
-    // Survival-adaptive, the same signal and the same multiplier the
-    // arena-growth escalation uses (`MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER`).
-    //
-    // `credit_promoted_bytes_to_old_baseline` already exempts old-gen growth
-    // that a minor PROVED live, but a large object is allocated straight into
-    // old-gen and never passes through promotion, so its bytes are uncredited
-    // growth even when they are the program's live data. On `retain.ts` that is
-    // the element array itself: with the arena-growth escalation correctly
-    // declining, this band became the binding constraint and fired a 452 ms
-    // full that reclaimed 7.6% — the same futile-full shape one trigger over,
-    // reached by the same route. While the young generation is not dying, old
-    // growth is priced as live here too.
+    gc_old_gen_reclaim_growth_dyn_bytes().max(baseline / OLD_RECLAIM_GROWTH_DIVISOR)
+}
+
+/// The same band, widened while the heap is RETAINING, for the decisions that
+/// answer **"run a FULL collection now?"**.
+///
+/// `credit_promoted_bytes_to_old_baseline` already exempts old-gen growth that
+/// a minor PROVED live, but a large object is allocated straight into old-gen
+/// and never passes through promotion, so its bytes are uncredited growth even
+/// when they are the program's live data. On `retain.ts` that is the element
+/// array itself: with the arena-growth escalation correctly declining, this
+/// band became the binding constraint and fired a 452 ms full that reclaimed
+/// 7.6% — the same futile-full shape one trigger over, reached by the same
+/// route.
+///
+/// **Deliberately not folded into `gc_old_reclaim_growth_band_bytes`.** That
+/// predicate has a second caller,
+/// `copied_minor_promotion_handoff_pressure_due`, which decides where a
+/// copying minor's survivors LIVE — not whether to collect. Widening it there
+/// too made the handoff stop firing on a retaining heap, and the gc-ratchet's
+/// `11_collect_at_depth` recorded exactly that: 6,150 promoted objects became
+/// 6,139 copied ones. Placement and collection are different questions and only
+/// the second one is paying for a futile full.
+fn old_reclaim_full_growth_band_bytes(baseline: usize) -> usize {
+    let band = gc_old_reclaim_growth_band_bytes(baseline);
     if GC_MAJOR_PACING_RETAINING.with(|c| c.get()) {
         return band.saturating_mul(MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER);
     }
     band
+}
+
+/// [`old_reclaim_pressure_due`] for the callers that respond by running a full
+/// collection. Same shape, retaining-adaptive band.
+pub(super) fn old_reclaim_full_due(old_in_use: usize, baseline: usize) -> bool {
+    (old_in_use >= gc_old_gen_reclaim_threshold_dyn_bytes()
+        && baseline < gc_old_gen_reclaim_threshold_dyn_bytes())
+        || old_in_use.saturating_sub(baseline) >= old_reclaim_full_growth_band_bytes(baseline)
 }
 
 #[inline]
@@ -1576,7 +1596,9 @@ pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
     let old_in_use =
         old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
-    if old_reclaim_pressure_due(old_in_use, baseline) {
+    // `_full_due`: this schedules a FULL collection, so it reads the
+    // retaining-adaptive band. The survivor-placement caller does not.
+    if old_reclaim_full_due(old_in_use, baseline) {
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
     }
 }
@@ -2453,7 +2475,7 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     let old_in_use =
         old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
-    if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
+    if old_pending || old_reclaim_full_due(old_in_use, old_baseline) {
         return Some(BudgetedGcTrigger::OldReclaim);
     }
 
