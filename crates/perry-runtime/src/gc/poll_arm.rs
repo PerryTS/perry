@@ -117,7 +117,15 @@ pub(crate) fn disarm_poll() {
 pub(crate) fn resolve_poll_seed() {
     static SEED: std::sync::Once = std::sync::Once::new();
     SEED.call_once(|| {
-        if !super::gc_zeal_enabled() {
+        // #7778: the seeded schedule keeps the word armed for exactly zeal's
+        // reason — its collection decision lives inside the safepoint, so a
+        // disarmed poll never presents the safepoint to decide at. Measured
+        // before this line existed: `PERRY_GC_SCHEDULE_RATE=1` on #7606's
+        // reproduction saw SIX safepoints against zeal's 9,648 loop polls —
+        // the "collect at every opportunity" end of the dial was an
+        // event-loop-boundary instrument only, and the loop-safepoint bypass
+        // #7317 added was downstream of a gate that never opened.
+        if !super::gc_zeal_enabled() && !super::schedule::gc_schedule_enabled() {
             disarm_poll();
         }
     });

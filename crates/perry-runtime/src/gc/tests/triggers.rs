@@ -1197,3 +1197,29 @@ fn zeal_holds_the_poll_word_armed_with_nothing_pending() {
     );
     crate::gc::set_safepoint_pending(false);
 }
+
+/// #7778: the schedule's mirror of the zeal test above, and the regression
+/// test for the gap that made `PERRY_GC_SCHEDULE_RATE=1` an event-loop-only
+/// instrument: on #7606's reproduction it saw SIX safepoints against zeal's
+/// 9,648 loop polls, because nothing armed the poll word for the mode whose
+/// decision lives inside the safepoint the word gates.
+#[test]
+fn the_schedule_holds_the_poll_word_armed_like_zeal() {
+    let _isolation = GcTestIsolationGuard::new();
+    crate::gc::set_safepoint_pending(false);
+    let base = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+    {
+        let _sched = super::super::schedule::ScheduleGuard::set(7, u64::MAX);
+        assert_eq!(
+            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+            base + 1,
+            "a live schedule must keep the poll reachable — its collection \
+             decision happens inside the safepoint the word gates"
+        );
+    }
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base,
+        "dropping the ScheduleGuard must release the arm it took"
+    );
+}

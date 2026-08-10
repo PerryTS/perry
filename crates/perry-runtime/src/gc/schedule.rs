@@ -305,17 +305,35 @@ pub(crate) struct ScheduleGuard(Option<(u64, u64)>);
 #[cfg(test)]
 impl ScheduleGuard {
     pub(crate) fn set(seed: u64, threshold: u64) -> Self {
-        Self(SCHEDULE_OVERRIDE.with(|cell| cell.replace(Some((seed, threshold)))))
+        // #7778: mirror `ZealGuard` — a schedule that cannot reach the poll
+        // decides at six event-loop boundaries instead of thousands of
+        // back-edges. Arm on set, release on drop, exactly the zeal pair.
+        let prev = SCHEDULE_OVERRIDE.with(|cell| cell.replace(Some((seed, threshold))));
+        if prev.is_none() {
+            super::arm_poll();
+        }
+        Self(prev)
     }
     pub(crate) fn off() -> Self {
-        Self(SCHEDULE_OVERRIDE.with(|cell| cell.replace(None)))
+        let prev = SCHEDULE_OVERRIDE.with(|cell| cell.replace(None));
+        if prev.is_some() {
+            super::disarm_poll();
+        }
+        Self(prev)
     }
 }
 
 #[cfg(test)]
 impl Drop for ScheduleGuard {
     fn drop(&mut self) {
-        SCHEDULE_OVERRIDE.with(|cell| cell.set(self.0));
+        let restored = self.0;
+        let current = SCHEDULE_OVERRIDE.with(|cell| cell.replace(restored));
+        // Re-balance the arm to match the transition this drop performs.
+        match (current.is_some(), restored.is_some()) {
+            (true, false) => super::disarm_poll(),
+            (false, true) => super::arm_poll(),
+            _ => {}
+        }
     }
 }
 
