@@ -22,16 +22,16 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 /// below), so the pairing is held by `pic_cache_layout_matches_runtime` here and
 /// `pic_cache_words_match_codegen` in the runtime: change one and both fail.
 pub(crate) const PIC_CACHE_WORDS: usize = 12;
-/// First word of the polymorphic way array (words 0..2 are the MRU entry).
-/// Mirrors the runtime's `PIC_WAY_BASE`.
-pub(crate) const PIC_WAY_BASE: usize = 3;
+/// First word of the polymorphic way array (words 0..2 are the MRU entry and
+/// word 3 is the gate). Mirrors the runtime's `PIC_WAY_BASE`.
+pub(crate) const PIC_WAY_BASE: usize = 4;
 /// `(token, slot)` ways beyond the MRU entry; a site resolves `PIC_WAYS + 1`
 /// shapes inline. Mirrors the runtime's `PIC_WAYS`.
 pub(crate) const PIC_WAYS: usize = 4;
 /// Way-state word: `> 0` means at least one way is populated and the compares
 /// are worth running; `0` (fresh / epoch-wiped) and `-1` (sticky megamorphic)
 /// both skip them. Mirrors the runtime's `PIC_WAY_STATE`.
-pub(crate) const PIC_WAY_STATE: usize = PIC_WAY_BASE + PIC_WAYS * 2;
+pub(crate) const PIC_WAY_STATE: usize = 3;
 
 /// The generic per-site monomorphic inline-cache dispatch for `obj.property`.
 /// This is the fall-through tail of the general catch-all arm: all earlier

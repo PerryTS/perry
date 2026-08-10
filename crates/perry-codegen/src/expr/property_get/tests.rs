@@ -192,9 +192,10 @@ fn pic_cache_layout_matches_runtime() {
         PIC_CACHE_WORDS, 12,
         "perry-runtime's PIC_CACHE_WORDS is 12; update both sides together"
     );
-    assert!(
-        PIC_WAY_BASE + PIC_WAYS * 2 < PIC_CACHE_WORDS,
-        "the ways plus the victim counter must fit in the emitted global"
+    assert_eq!(
+        PIC_WAY_BASE + PIC_WAYS * 2,
+        PIC_CACHE_WORDS,
+        "the ways must fill the emitted global exactly"
     );
     let ir = emit(false, None);
     assert!(

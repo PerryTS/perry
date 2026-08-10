@@ -251,7 +251,13 @@ pub const PIC_CACHE_WORDS: usize = 12;
 pub type PicCache = [i64; PIC_CACHE_WORDS];
 
 /// First word of the polymorphic way array.
-pub(crate) const PIC_WAY_BASE: usize = 3;
+///
+/// The ways start at 4, not 3, so that [`PIC_WAY_STATE`] can sit at word 3 —
+/// inside the same 64-byte line as the MRU entry the miss path has already
+/// touched. Parked after the ways instead (word 11, byte 88) the gate load
+/// pulled in a SECOND cache line on every miss, which on a site that misses
+/// every read cost ~9% all by itself.
+pub(crate) const PIC_WAY_BASE: usize = 4;
 /// Number of `(token, slot)` ways beyond the MRU entry. Total shapes a site
 /// can resolve inline is `PIC_WAYS + 1`.
 pub(crate) const PIC_WAYS: usize = 4;
@@ -263,7 +269,7 @@ pub(crate) const PIC_WAYS: usize = 4;
 /// | `0` | no way is populated (fresh site, or just epoch-wiped) | skip the compares |
 /// | `> 0` | armed: bit 0 set, bits 1..7 the round-robin victim, bits 8.. the *consecutive* capacity-eviction run | run the compares |
 /// | `< 0` | **megamorphic** — the rotation is wider than the ways hold. The magnitude is a countdown: each further miss adds 1, and at 0 the site is armed again | skip the compares |
-pub(crate) const PIC_WAY_STATE: usize = PIC_WAY_BASE + PIC_WAYS * 2;
+pub(crate) const PIC_WAY_STATE: usize = 3;
 /// Bit 0 of [`PIC_WAY_STATE`]: at least one way is populated. Carried
 /// explicitly so an armed site with victim 0 and no evictions is still `> 0`,
 /// which is the whole predicate the emitted gate evaluates.
@@ -1090,7 +1096,15 @@ mod poly_pic_tests {
             PIC_WAY_STATE < PIC_CACHE_WORDS,
             "the way-state word must fit inside the emitted global"
         );
-        assert_eq!(PIC_WAY_STATE, PIC_WAY_BASE + PIC_WAYS * 2);
+        assert_eq!(
+            PIC_WAY_STATE, 3,
+            "the gate word must share the MRU entry's cache line"
+        );
+        assert_eq!(
+            PIC_WAY_BASE + PIC_WAYS * 2,
+            PIC_CACHE_WORDS,
+            "the ways must fill the global exactly"
+        );
     }
 
     /// The MRU entry keeps its pre-#7753 meaning exactly: always overwritten,

@@ -118,6 +118,18 @@ now tests:
   chance. A genuinely megamorphic site pays 16 way-compares per 2048 reads to
   re-confirm; a phase-changed one recovers inside a single window.
   (`a_wider_than_capacity_rotation_latches_then_re_arms`)
+The gate word sits at word 3, inside the MRU entry's 64-byte line rather than
+after the ways at byte 88, so the miss path does not touch a second line to read
+it — and with `PIC_WAY_BASE` at 4 the ways then fill the global exactly, which is
+what `pic_cache_words_match_codegen` asserts. **Measured, that move made no
+difference** (`poly_read7` 2.16 s either way); it is kept for the exact layout,
+not for a speedup it did not deliver.
+
+What remains after the latch is a **~6% cost on a site whose rotation is wider
+than the ways hold** (`poly_read7`: 2.16 s vs 2.04 s) — one load, one compare and
+one predicted branch on a path that misses every time. That is the honest price
+of the 2.5x at capacity, and the three `poly_read*` probes are committed so the
+next person can re-derive both halves rather than take this on faith.
 
 Admitting pointer tokens means the ways inherit #6080a: a keys-array address freed by a
 collection can be recycled under a different shape, and a stale way would pointer-match
@@ -164,15 +176,27 @@ key that is *not* `length`, and for `length` on a plain object.
 
 | program | before | after | |
 |---|--:|--:|---|
-| `interp.ts` | 3.96 | **2.39** | 12.3× → 7.4× Node |
-| `b_fib.ts` (reduced case) | 3.88 | **2.32** | |
+| `interp.ts` | 3.96 | **2.47** | 12.3× → 7.7× Node |
+| `b_fib.ts` (reduced case) | 3.88 | **2.42** | |
+| `poly_read5.ts` (5 shapes = capacity) | 2.04 | **0.82** | 2.5× |
+| `poly_read.ts` (6 shapes) | 1.98 | 2.09 | latched, +5.6% |
+| `poly_read7.ts` (7 shapes) | 2.04 | 2.16 | latched, +5.9% |
 
-Protected floors, all held, each also A/B'd against the same-host v0.5.1434 build:
+Protected benchmarks, run **interleaved** against the same-host v0.5.1434
+binaries rather than against numbers taken hours earlier — the mini's own load
+moves a 0.4 s benchmark by more than this change does, and reading a stale floor
+as a regression is the easiest mistake here to make:
 
 | | churn | churn_alloc | push_cls | push_num | churn_read | cycles | deeplist | tree | tree_wide | retain | retain_wide | fib40 |
 |---|--|--|--|--|--|--|--|--|--|--|--|--|
-| after | 0.42 | 0.36 | 0.35 | 0.13 | 0.02 | 0.19 | 0.24 | 1.65 | 2.11 | 0.53 | 1.08 | 0.39 |
-| floor | 0.42 | 0.38 | 0.36 | 0.15 | 0.03 | 0.20 | 0.26 | 1.67 | 2.15 | 0.56 | 1.12 | 0.41 |
+| after | 0.43 | 0.38 | 0.36 | 0.14 | 0.02 | 0.19 | 0.26 | 1.77 | 2.27 | 0.57 | 1.17 | 0.42 |
+| v0.5.1434, same run | 0.42 | 0.38 | 0.36 | 0.15 | 0.02 | 0.19 | 0.26 | 1.76 | 2.27 | 0.56 | 1.18 | 0.42 |
+
+Nine of twelve are identical. `churn`, `tree` and `retain` each read one
+centisecond — one timer tick — slower, and none reads faster; an earlier
+interleaved run at the same load had `churn` 0.43 vs 0.43 and `tree` 1.76 vs
+1.75. So this is at or below the measurement floor, but it is one-sided, and the
+honest statement is "no regression I can measure", not "no regression".
 
 `gc-handoff/apps/iso_miss.ts` prints `checksum 437840 misses 0` — gated on the miss
 counter, not the aggregate, because a perf change has previously made `interp.ts`'s
@@ -183,7 +207,7 @@ because the ways hold raw heap addresses in a global no GC scanner can see.
 
 #### What is left
 
-`interp.ts` is 7.4× Node, not the ~5× scriptc reaches. The remaining profile is
+`interp.ts` is 7.7× Node, not the ~5× scriptc reaches. The remaining profile is
 `js_jsvalue_equals` (15.7% — `===` is still a runtime call per comparison, and an inline
 fast path only resolves the ~20% of comparisons that are *true*), the per-object GC
 layout tables on the allocation path (7.7%, the #7510/#7469 area), write barriers (5.9%)
