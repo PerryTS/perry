@@ -1,4 +1,4 @@
-**repsel: element-group members now claim numeric fields — proven reads drop `js_number_coerce` (#7770, PR #7774).**
+**repsel: element-group members now claim numeric fields (~10-12% on the target read loop) — proven reads drop `js_number_coerce` (#7770, PR #7774).**
 
 A `Ptr<Shape>`-proven `const r = a[i]` (or a producer pushed into an
 element-shape-proven array) stood down to zero numeric fields, so every
@@ -26,7 +26,14 @@ byte-identical vs Node 26.5.1 across sibling/push-site/method poison
 channels, NaN / Infinity / −0 payloads, and `null`/`{}`/`1n`/`true` stores
 (`test-files/test_gap_repsel_element_group_numeric.ts`), and a
 `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1` run relocated 4014 objects
-under the bare loads with a clean verdict. Pass 4 moved wholesale into the
+under the bare loads with a clean verdict. On the pinned quiet mini
+(interleaved, best-of-15, two runs) the issue's read loop goes 101/102 ms ->
+91/90 ms while `batch.ts`, `suite/04_array_read` and `suite/09_method_calls`
+are unchanged; the A/B's subject is verified live (base arm emits 4
+`js_number_coerce` sites and 12 checked-load diamonds on the benchmarked
+source, branch arm zero) -- note that benchmarking this needs the array and
+its read loop in ONE function, since an array crossing a function boundary is
+the #7766 shape this change does not address. Pass 4 moved wholesale into the
 `ptr_shape_numeric.rs` child module for the 2000-line gate. A neighbouring
 PRE-EXISTING divergence found during validation (`o.x + 1` coercing where
 Node concatenates, plus an evaporating any-laundered add) is filed as #7773.
