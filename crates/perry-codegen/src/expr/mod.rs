@@ -1613,6 +1613,14 @@ pub(crate) struct ElementShapeLoopFact {
     /// Largest packed slot index the loop touches — the per-element
     /// `field_count` check covers every tracked access with one compare.
     pub max_field_index: u32,
+    /// #7771: the body's `const r = arr[counter]` binding, when the matcher
+    /// admitted the element-binding form. Inside the fast clone the `Let`
+    /// itself emits nothing (`stmt/let_stmt.rs`) and every `r.field` read
+    /// lowers through [`element_shape_loop_fact_for_property_get`]'s
+    /// `LocalGet` arm; the slow clone, lowered after this fact is popped,
+    /// binds `r` generically. `None` for the single-statement accumulator
+    /// form.
+    pub element_binding: Option<u32>,
 }
 
 /// Find the innermost active element-shape loop fact covering a
@@ -1652,23 +1660,40 @@ pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
     if ctx.element_shape_loop_facts.is_empty() {
         return None;
     }
-    let Expr::IndexGet { object, index } = object else {
-        return None;
-    };
-    let (Expr::LocalGet(array_local_id), Expr::LocalGet(index_local_id)) =
-        (object.as_ref(), index.as_ref())
-    else {
-        return None;
-    };
-    if !ctx.i32_counter_slots.contains_key(index_local_id) {
-        return None;
-    }
-    ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
-        if fact.array_local_id != *array_local_id || fact.index_local_id != *index_local_id {
-            return None;
+    match object {
+        Expr::IndexGet { object, index } => {
+            let (Expr::LocalGet(array_local_id), Expr::LocalGet(index_local_id)) =
+                (object.as_ref(), index.as_ref())
+            else {
+                return None;
+            };
+            if !ctx.i32_counter_slots.contains_key(index_local_id) {
+                return None;
+            }
+            ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
+                if fact.array_local_id != *array_local_id
+                    || fact.index_local_id != *index_local_id
+                {
+                    return None;
+                }
+                fact.fields.get(property).map(|idx| (fact, *idx))
+            })
         }
-        fact.fields.get(property).map(|idx| (fact, *idx))
-    })
+        // #7771: `r.field` through the clone's element binding. The matcher
+        // pinned `r = arr[counter]` as the body's first statement, so this is
+        // the same tracked element access spelled through the binding. The
+        // counter-slot obligation is checked against the fact's own counter,
+        // because the binding form carries no index expression at the read.
+        Expr::LocalGet(recv_id) => ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
+            if fact.element_binding != Some(*recv_id)
+                || !ctx.i32_counter_slots.contains_key(&fact.index_local_id)
+            {
+                return None;
+            }
+            fact.fields.get(property).map(|idx| (fact, *idx))
+        }),
+        _ => None,
+    }
 }
 
 /// Find the innermost active class-field loop fact covering

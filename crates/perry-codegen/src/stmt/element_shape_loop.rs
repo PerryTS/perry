@@ -35,9 +35,12 @@
 //!
 //! 1. **By shape (the matcher).** The body must be a single
 //!    `acc = <pure numeric>` statement over tracked `arr[i].field` reads,
-//!    numeric locals, literals and pure arithmetic / `Math`. No store of any
-//!    kind, no call, no closure, no `await`, no update other than the
-//!    counter's.
+//!    numeric locals, literals and pure arithmetic / `Math` — or, since
+//!    #7771, that statement preceded by exactly one `const r = arr[i]`
+//!    binding whose only uses are tracked `r.field` reads (the binding is
+//!    virtual in the fast clone: its `Let` emits nothing and the reads lower
+//!    through the fact). No store of any kind, no call, no closure, no
+//!    `await`, no update other than the counter's.
 //! 2. **By construction (the lowering).** After the fast clone is emitted,
 //!    every one of its blocks is scanned for a GC-unsafe call
 //!    (`LlBlock::contains_gc_unsafe_call`). If ANY call survived — because
@@ -133,6 +136,9 @@ struct ElementShapeVersionedLoop {
     keys_global_name: String,
     /// property name -> packed slot index.
     fields: std::collections::BTreeMap<String, u32>,
+    /// #7771: the body's `const r = arr[counter]` binding in the two-statement
+    /// form; `None` for the original single-statement accumulator body.
+    element_binding: Option<u32>,
 }
 
 /// Effect-free expression walk for the element-shape loop.
@@ -147,6 +153,7 @@ fn element_shape_loop_pure_expr_collect(
     ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
     counter_id: u32,
+    element_binding: Option<u32>,
     array: &mut Option<u32>,
     props: &mut std::collections::BTreeSet<String>,
 ) -> bool {
@@ -154,34 +161,48 @@ fn element_shape_loop_pure_expr_collect(
     match expr {
         Expr::PropertyGet {
             object, property, ..
-        } => {
-            let Expr::IndexGet { object, index } = object.as_ref() else {
-                return false;
-            };
-            let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
-                (object.as_ref(), index.as_ref())
-            else {
-                return false;
-            };
-            // The index must be the loop counter itself. An offset index
-            // (`arr[j + 1]`) would need the preheader's `length >= bound`
-            // check widened; deliberately out of the first slice.
-            if *idx_id != counter_id || *arr_id == counter_id {
-                return false;
+        } => match object.as_ref() {
+            Expr::IndexGet { object, index } => {
+                let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
+                    (object.as_ref(), index.as_ref())
+                else {
+                    return false;
+                };
+                // The index must be the loop counter itself. An offset index
+                // (`arr[j + 1]`) would need the preheader's `length >= bound`
+                // check widened; deliberately out of the first slice.
+                if *idx_id != counter_id || *arr_id == counter_id {
+                    return false;
+                }
+                match array {
+                    Some(a) if *a == *arr_id => {}
+                    Some(_) => return false, // one array per loop
+                    None => *array = Some(*arr_id),
+                }
+                props.insert(property.clone());
+                true
             }
-            match array {
-                Some(a) if *a == *arr_id => {}
-                Some(_) => return false, // one array per loop
-                None => *array = Some(*arr_id),
+            // #7771: `r.field` through the body's `const r = arr[counter]`
+            // binding is the same tracked read spelled through the Let the
+            // body match admitted; the binding already pins (array, counter),
+            // so only the property is left to record.
+            Expr::LocalGet(recv_id) if element_binding == Some(*recv_id) => {
+                props.insert(property.clone());
+                true
             }
-            props.insert(property.clone());
-            true
-        }
-        // A bare read of the array or the counter as a VALUE could flow it
-        // into arbitrary lowering; only scalar reads the analysis proves
-        // numeric are admitted.
+            _ => false,
+        },
+        // A bare read of the array, the counter, or the element binding as a
+        // VALUE could flow it into arbitrary lowering; only scalar reads the
+        // analysis proves numeric are admitted. The element binding is
+        // excluded EXPLICITLY rather than via the numeric test: a bare `r`
+        // would hand out a reference the clone's skipped `Let` never bound
+        // (#7771), and betting that exclusion on a type predicate is the
+        // #6377 shape this walk's docs warn about.
         Expr::LocalGet(id) => {
-            array.is_none_or(|a| a != *id) && crate::type_analysis::is_numeric_expr(ctx, expr)
+            element_binding != Some(*id)
+                && array.is_none_or(|a| a != *id)
+                && crate::type_analysis::is_numeric_expr(ctx, expr)
         }
         Expr::Number(_) | Expr::Integer(_) => true,
         // NOTE (#7480 step 3): deliberately NOT gated on
@@ -201,19 +222,33 @@ fn element_shape_loop_pure_expr_collect(
         // object-literal element). Keeping it would have declined #7480's own
         // kernel before the class resolver was ever consulted.
         Expr::Binary { left, right, .. } => {
-            element_shape_loop_pure_expr_collect(ctx, left, counter_id, array, props)
-                && element_shape_loop_pure_expr_collect(ctx, right, counter_id, array, props)
+            element_shape_loop_pure_expr_collect(ctx, left, counter_id, element_binding, array, props)
+                && element_shape_loop_pure_expr_collect(
+                    ctx,
+                    right,
+                    counter_id,
+                    element_binding,
+                    array,
+                    props,
+                )
         }
         Expr::NumberCoerce(operand) => {
-            element_shape_loop_pure_expr_collect(ctx, operand, counter_id, array, props)
+            element_shape_loop_pure_expr_collect(ctx, operand, counter_id, element_binding, array, props)
         }
         Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
-            element_shape_loop_pure_expr_collect(ctx, left, counter_id, array, props)
-                && element_shape_loop_pure_expr_collect(ctx, right, counter_id, array, props)
+            element_shape_loop_pure_expr_collect(ctx, left, counter_id, element_binding, array, props)
+                && element_shape_loop_pure_expr_collect(
+                    ctx,
+                    right,
+                    counter_id,
+                    element_binding,
+                    array,
+                    props,
+                )
         }
         Expr::MathMin(values) | Expr::MathMax(values) => values
             .iter()
-            .all(|e| element_shape_loop_pure_expr_collect(ctx, e, counter_id, array, props)),
+            .all(|e| element_shape_loop_pure_expr_collect(ctx, e, counter_id, element_binding, array, props)),
         Expr::MathAbs(value)
         | Expr::MathSqrt(value)
         | Expr::MathFloor(value)
@@ -222,7 +257,7 @@ fn element_shape_loop_pure_expr_collect(
         | Expr::MathTrunc(value)
         | Expr::MathSign(value)
         | Expr::MathF16round(value) => {
-            element_shape_loop_pure_expr_collect(ctx, value, counter_id, array, props)
+            element_shape_loop_pure_expr_collect(ctx, value, counter_id, element_binding, array, props)
         }
         _ => false,
     }
@@ -521,10 +556,52 @@ fn match_element_shape_versioned_loop(
         return None;
     }
 
-    // Store-free single-statement body: a scalar accumulator over tracked
-    // element-field reads. NOTHING else is admitted (see the module docs).
-    let [Stmt::Expr(Expr::LocalSet(acc_id, value))] = body else {
-        return None;
+    // Store-free body, in one of two admitted shapes (see the module docs):
+    //
+    //   1. `acc = <pure numeric over arr[j].field>` — the original single
+    //      statement;
+    //   2. `const r = arr[j]; acc = <pure numeric over r.field>` — #7771's
+    //      element-binding form, the shape real read loops are written in.
+    //      The binding is VIRTUAL inside the fast clone: its `Let` emits
+    //      nothing (`stmt/let_stmt.rs`) and every `r.field` lowers through
+    //      the fact, so the revocation argument (no store, no call in the
+    //      clone) is unchanged. `const`-only, deliberately: a `var` binding
+    //      is function-scoped and observable after the loop, where the
+    //      skipped `Let` would leave the slot holding its pre-loop value.
+    //
+    // NOTHING else is admitted.
+    let (element_binding, acc_id, value) = match body {
+        [Stmt::Expr(Expr::LocalSet(acc_id, value))] => (None, acc_id, value),
+        [Stmt::Let {
+            id,
+            mutable: false,
+            init: Some(Expr::IndexGet { object, index }),
+            ..
+        }, Stmt::Expr(Expr::LocalSet(acc_id, value))] => {
+            let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
+                (object.as_ref(), index.as_ref())
+            else {
+                return None;
+            };
+            // Same receiver/index discipline as the walk's IndexGet arm: the
+            // fetch must be `arr[counter]` exactly.
+            if *idx_id != counter_id || *arr_id == counter_id || *id == counter_id {
+                return None;
+            }
+            // The binding must be a plain, loop-owned const local. A boxed or
+            // captured binding lives in a cell the skipped `Let` would leave
+            // stale for an observer outside the clone; a module-global id is
+            // not a body-scoped binding at all.
+            if *id == *arr_id
+                || ctx.boxed_vars.contains(id)
+                || ctx.module_globals.contains_key(id)
+                || ctx.closure_captures.contains_key(id)
+            {
+                return None;
+            }
+            (Some((*id, *arr_id)), acc_id, value)
+        }
+        _ => return None,
     };
     if *acc_id == counter_id
         || !ctx.locals.contains_key(acc_id)
@@ -535,9 +612,22 @@ fn match_element_shape_versioned_loop(
     {
         return None;
     }
-    let mut array: Option<u32> = None;
+    // The binding form pins the array before the walk runs, so a body mixing
+    // `r.field` with `other[j].field` is declined by the walk's one-array rule.
+    let mut array: Option<u32> = element_binding.map(|(_, arr_id)| arr_id);
+    let element_binding = element_binding.map(|(id, _)| id);
+    if element_binding == Some(*acc_id) {
+        return None;
+    }
     let mut props: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    if !element_shape_loop_pure_expr_collect(ctx, value, counter_id, &mut array, &mut props) {
+    if !element_shape_loop_pure_expr_collect(
+        ctx,
+        value,
+        counter_id,
+        element_binding,
+        &mut array,
+        &mut props,
+    ) {
         return None;
     }
     let array_id = array?;
@@ -546,7 +636,7 @@ fn match_element_shape_versioned_loop(
     }
     match bound {
         ElementShapeLoopBound::Local(bound_id) => {
-            if bound_id == array_id || bound_id == *acc_id {
+            if bound_id == array_id || bound_id == *acc_id || Some(bound_id) == element_binding {
                 return None;
             }
         }
@@ -639,6 +729,7 @@ fn match_element_shape_versioned_loop(
         expected_class_id,
         keys_global_name,
         fields,
+        element_binding,
     })
 }
 
@@ -755,6 +846,7 @@ pub(super) fn lower_element_shape_versioned_for(
             side_exit_label: slow_pre_label.clone(),
             fields: matched.fields.clone(),
             max_field_index,
+            element_binding: matched.element_binding,
         });
     let lowered = lower_for_after_init_with_i32_bound(
         ctx,

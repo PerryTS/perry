@@ -1170,3 +1170,210 @@ fn the_repair_does_not_put_a_call_inside_the_fast_clone() {
         "the clone must still be reached after the #7480 repair"
     );
 }
+
+// ── #7771: the element-binding body form ────────────────────────────────────
+//
+// `for (let j = 0; j < N; j++) { const r = keep[j]; sum = sum + r.v; }` — the
+// shape real read loops are written in. The binding is VIRTUAL inside the
+// fast clone: its `Let` emits nothing and every `r.field` lowers through the
+// fact, so the element fetch is a bare load under the preheader guard instead
+// of the generic index-get's runtime-call diamond.
+
+const BINDING_ID: u32 = 9;
+
+/// `const r = keep[j];` (or `let r = ...` when `mutable`).
+fn binding_stmt(mutable: bool) -> Stmt {
+    Stmt::Let {
+        id: BINDING_ID,
+        name: "r".to_string(),
+        ty: Type::Named("Node".to_string()),
+        mutable,
+        init: Some(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(ARRAY_ID)),
+            index: Box::new(Expr::LocalGet(COUNTER_ID)),
+        }),
+    }
+}
+
+/// `sum = sum + <value>`
+fn binding_accumulate(value: Expr) -> Stmt {
+    Stmt::Expr(Expr::LocalSet(
+        SUM_ID,
+        Box::new(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(SUM_ID)),
+            right: Box::new(value),
+        }),
+    ))
+}
+
+/// `r.<prop>`
+fn binding_field(prop: &str) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(BINDING_ID)),
+        property: prop.to_string(),
+        byte_offset: 0,
+    }
+}
+
+#[test]
+fn element_shape_versioned_loop_fires_for_the_7771_element_binding_shape() {
+    let ir = emit(&element_shape_module(
+        vec![binding_stmt(false), binding_accumulate(binding_field("v"))],
+        None,
+    ));
+    for label in CLONE_LABELS {
+        assert!(
+            ir.contains(label),
+            "expected the element-binding form to be admitted, but `{label}` is \
+             absent — the matcher in stmt/element_shape_loop.rs declined the \
+             two-statement body"
+        );
+    }
+    // Entered, not merely emitted. This is ALSO the assertion that proves the
+    // binding's `Let` really was skipped: had it lowered generically, its
+    // index-get diamond would put `js_array_get_f64` inside the clone, the
+    // call-free scan would fail, and the guard would branch unconditionally
+    // to the slow clone (#7690's deletion mode).
+    assert_fast_clone_is_entered(&ir);
+    let fast = fast_clone_slice(&ir);
+    assert!(
+        !fast.contains(" call "),
+        "the fast clone must be call-free; found a call in:\n{fast}"
+    );
+    assert!(
+        !fast.contains("js_array_get_f64"),
+        "the element fetch must be a bare load in the fast clone"
+    );
+    // The slow clone is the unchanged generic body: it must still bind `r`
+    // through the generic index-get, whose runtime call handles every shape
+    // the guard declines (holes, forwarding stubs, descriptors, subclasses).
+    assert!(
+        ir.contains("js_array_get_f64"),
+        "the slow clone must keep the generic element fetch"
+    );
+}
+
+#[test]
+fn element_binding_reads_every_tracked_field_through_the_fact() {
+    let ir = emit(&element_shape_module(
+        vec![
+            binding_stmt(false),
+            binding_accumulate(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(binding_field("v")),
+                right: Box::new(binding_field("w")),
+            }),
+        ],
+        None,
+    ));
+    assert_fast_clone_is_entered(&ir);
+    let fast = fast_clone_slice(&ir);
+    assert!(
+        !fast.contains(" call "),
+        "the two-field fast clone must be call-free; found a call in:\n{fast}"
+    );
+    // One `element_shape.load` chain per tracked field read.
+    let load_defs = ir
+        .lines()
+        .filter(|l| l.starts_with("element_shape.load") && l.trim_end().ends_with(':'))
+        .count();
+    assert!(
+        load_defs >= 2,
+        "both `r.v` and `r.w` must lower through the fact's bare load; found \
+         {load_defs} element_shape.load block(s)"
+    );
+}
+
+/// SABOTAGE (scoping): a `let`/`var` binding is not admitted. `var` is
+/// function-scoped and observable after the loop, where the skipped `Let`
+/// would leave the slot holding its pre-loop value; the matcher keys on
+/// `mutable: false`, so this must decline rather than emit a clone.
+#[test]
+fn element_binding_declines_a_mutable_binding() {
+    let ir = emit(&element_shape_module(
+        vec![binding_stmt(true), binding_accumulate(binding_field("v"))],
+        None,
+    ));
+    assert!(
+        !ir.contains("element_shape.loop.fast.preheader"),
+        "a mutable element binding must decline the clone"
+    );
+}
+
+/// SABOTAGE (escape): the binding used as a bare VALUE hands out a reference
+/// the clone's skipped `Let` never bound. The walk must exclude it
+/// EXPLICITLY — not via the numeric-type test, which a lying annotation
+/// could satisfy.
+#[test]
+fn element_binding_declines_a_bare_value_use() {
+    let ir = emit(&element_shape_module(
+        vec![
+            binding_stmt(false),
+            binding_accumulate(Expr::LocalGet(BINDING_ID)),
+        ],
+        None,
+    ));
+    assert!(
+        !ir.contains("element_shape.loop.fast.preheader"),
+        "a bare use of the element binding must decline the clone"
+    );
+}
+
+/// SABOTAGE (field admission): a property the element class does not declare
+/// as a raw-f64 slot has no packed index to load; the per-prop admission
+/// must decline the whole loop for the binding form exactly as it does for
+/// the `arr[j].field` form.
+#[test]
+fn element_binding_declines_an_untracked_field() {
+    let ir = emit(&element_shape_module(
+        vec![
+            binding_stmt(false),
+            binding_accumulate(binding_field("missing")),
+        ],
+        None,
+    ));
+    assert!(
+        !ir.contains("element_shape.loop.fast.preheader"),
+        "a field the class does not declare must decline the clone"
+    );
+}
+
+/// SABOTAGE (one array per loop): the binding pins the array it was fetched
+/// from; a body that ALSO reads a different array's element must decline via
+/// the walk's one-array rule.
+#[test]
+fn element_binding_declines_a_second_array() {
+    const OTHER_ID: u32 = 11;
+    let mut m = element_shape_module(
+        vec![
+            Stmt::Let {
+                id: BINDING_ID,
+                name: "r".to_string(),
+                ty: Type::Named("Node".to_string()),
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(OTHER_ID)),
+                    index: Box::new(Expr::LocalGet(COUNTER_ID)),
+                }),
+            },
+            binding_accumulate(elem_field(ARRAY_ID, Expr::LocalGet(COUNTER_ID))),
+        ],
+        None,
+    );
+    m.init.insert(
+        1,
+        Stmt::Let {
+            id: OTHER_ID,
+            name: "other".to_string(),
+            ty: Type::Array(Box::new(Type::Named("Node".to_string()))),
+            mutable: false,
+            init: Some(Expr::Array(Vec::new())),
+        },
+    );
+    let ir = emit(&m);
+    assert!(
+        !ir.contains("element_shape.loop.fast.preheader"),
+        "a body reading two different arrays must decline the clone"
+    );
+}

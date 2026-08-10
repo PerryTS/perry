@@ -133,6 +133,24 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
         return;
     }
+    // #7771: inside an element-shape fast clone the tracked `const r = arr[j]`
+    // binding is VIRTUAL — its `Let` emits nothing (`stmt/let_stmt.rs`) and
+    // its slot is never (re)bound in the clone, so this lexical-death clear
+    // would be the clone's ONLY runtime call. Depending on the shadow-frame
+    // mode that call is real (`js_shadow_slot_set`), and a call inside a
+    // call-free-by-construction clone does not slow it, it DELETES it
+    // (#7690). Skipping is sound in every mode: the slot still holds whatever
+    // it held before the loop, a stale-but-rooted value is over-rooting that
+    // a moving collection rewrites like any root, and every later user of a
+    // shared slot index binds before use. The slow clone, lowered after the
+    // fact is popped, keeps its clear.
+    if ctx.element_shape_loop_facts.iter().any(|fact| {
+        fact.element_binding
+            .and_then(|id| ctx.shadow_slot_map.get(&id))
+            == Some(&slot_idx)
+    }) {
+        return;
+    }
     // Never-bound slot: it provably still holds its initial 0 (slots are only
     // written through bind/set, and every value-set site binds first), so the
     // clear would be a redundant `js_shadow_slot_set(idx, 0)` TLS hit.

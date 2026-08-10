@@ -61,6 +61,27 @@ pub(crate) fn lower_let(
     ty: &perry_hir::types::Type,
     mutable: bool,
 ) -> Result<()> {
+    // #7771: inside an element-shape fast clone, the tracked
+    // `const r = arr[j]` binding is VIRTUAL. The matcher admitted the body
+    // only because every use of `r` is a tracked `r.field` read, and each of
+    // those lowers through `element_shape_loop_fact_for_property_get` to a
+    // bare element load — so the binding itself emits nothing. Lowering the
+    // generic `IndexGet` here would put a runtime-call diamond inside the
+    // clone, fail its call-free admission scan, and DELETE the clone rather
+    // than slow it (#7690's lesson). Skipping is sound: nothing reads `r`
+    // bare inside the clone (matcher), the clone is call-free so no GC
+    // observes the slot mid-loop, `const` scoping means nothing after the
+    // loop can read it, and a residual-check side exit re-runs the current
+    // iteration in the slow clone, whose OWN `Let` binds the slot before any
+    // use. The fact is popped before the slow clone lowers, so this arm
+    // cannot fire there.
+    if ctx
+        .element_shape_loop_facts
+        .iter()
+        .any(|fact| fact.element_binding == Some(id))
+    {
+        return Ok(());
+    }
     // `let C = SomeClass` aliases the local `C` to the class
     // `SomeClass` for `new C()` site rerouting. The HIR lowers
     // class identifiers referenced as values to `Expr::ClassRef`,
