@@ -15,8 +15,8 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-const HUB_URL: &str = "https://hub.perryts.com/api/v1/version/latest";
-const GITHUB_URL: &str = "https://api.github.com/repos/PerryTS/perry/releases/latest";
+pub(crate) const HUB_URL: &str = "https://hub.perryts.com/api/v1/version/latest";
+pub(crate) const GITHUB_URL: &str = "https://api.github.com/repos/PerryTS/perry/releases/latest";
 const CACHE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -33,6 +33,14 @@ pub struct UpdateCache {
     /// always was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_notification: Option<String>,
+    /// Which version that notice was about.
+    ///
+    /// Without this the notify interval throttles on time alone, which
+    /// swallows the NEXT release when it lands inside the window — so a
+    /// week-long interval set to stop nagging about one version would also hide
+    /// the one that fixed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_notified_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +98,14 @@ fn save_cache(cache: &UpdateCache) {
     // `replace_path` rather than `fs::rename`: on Windows a rename onto an
     // EXISTING file fails, so every write after the first would silently do
     // nothing and the throttle would never advance.
-    let tmp = path.with_extension("json.tmp");
+    // A per-write name. With one shared `*.json.tmp`, two `perry` processes
+    // each write it and each rename it: the loser's rename lands a file the
+    // winner is still writing into, and the cache ends up truncated or mixed.
+    let tmp = path.with_extension(format!(
+        "json.tmp.{}.{}",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     if fs::write(&tmp, content).is_err() {
         let _ = fs::remove_file(&tmp);
         return;
@@ -100,15 +115,44 @@ fn save_cache(cache: &UpdateCache) {
     }
 }
 
+/// Distinguishes the temporary files of concurrent writes in one process.
+static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Take the cross-process lock guarding read-modify-write of the cache.
+///
+/// A background refresh and a notice can be recorded at the same moment, and
+/// each is a load-mutate-store: without a lock the later store overwrites the
+/// earlier one's field, so a notice recorded while a request was in flight
+/// vanishes and the user is told twice. Returns `None` when the lock cannot be
+/// taken, in which case the caller proceeds unlocked — losing a cache update is
+/// better than refusing to update a cache.
+fn lock_cache() -> Option<fslock::LockFile> {
+    let path = cache_path().with_extension("json.lock");
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let mut lock = fslock::LockFile::open(&path).ok()?;
+    // `try_lock`, NOT `lock`. This runs at teardown, after the command the user
+    // asked for has finished — so blocking here would hang their terminal on
+    // another `perry`'s cache write, for a cache. The doc above promises we
+    // proceed unlocked rather than wait, and `lock()` did not honour it.
+    match lock.try_lock() {
+        Ok(true) => Some(lock),
+        _ => None,
+    }
+}
+
 /// Record that the user has just been told about an available update.
 ///
 /// A no-op when there is no cache: the notice can only have come from one, and
 /// inventing a file here would fabricate a `last_check` that never happened.
-pub fn record_notification() {
+pub fn record_notification(version: &str) {
+    let _guard = lock_cache();
     let Some(mut cache) = load_cache() else {
         return;
     };
     cache.last_notification = Some(now_rfc3339());
+    cache.last_notified_version = Some(version.to_string());
     save_cache(&cache);
 }
 
@@ -283,42 +327,6 @@ pub fn compare_versions(a: &str, b: &str) -> Result<Ordering> {
     Ok(a.cmp_precedence(&b))
 }
 
-fn get_update_servers() -> Vec<String> {
-    let mut servers = Vec::new();
-
-    // 1. Environment variable (highest priority)
-    if let Ok(url) = std::env::var("PERRY_UPDATE_SERVER") {
-        if !url.is_empty() {
-            servers.push(url);
-        }
-    }
-
-    // 2. Config file
-    if servers.is_empty() {
-        if let Some(url) = load_config_update_server() {
-            servers.push(url);
-        }
-    }
-
-    // 3. Perry Hub
-    servers.push(HUB_URL.to_string());
-
-    // 4. GitHub API
-    servers.push(GITHUB_URL.to_string());
-
-    servers
-}
-
-/// The configured update server, read through the SHARED config loader.
-///
-/// This used to parse `~/.perry/config.toml` again into a private pair of
-/// structs. That is what let `[update]` be silently erased: the real
-/// `PerryConfig` had no field for it, so every `save_config` reconstructed the
-/// file without it and threw the section away.
-fn load_config_update_server() -> Option<String> {
-    crate::commands::publish::load_config().update?.server
-}
-
 fn fetch_latest_version() -> Result<UpdateCache> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -327,10 +335,59 @@ fn fetch_latest_version() -> Result<UpdateCache> {
         .build()
         .context("Failed to create HTTP client")?;
 
-    let servers = get_update_servers();
     let mut last_err = None;
-    let prior_notification = load_cache().and_then(|c| c.last_notification);
 
+    // A configured source answers on its own. Nothing falls back to the ladder
+    // after it: a user who said "ask npm" and got an error wants to hear that,
+    // not a version from somewhere they did not name.
+    if let Some(source) = crate::release_source::resolve() {
+        let (url, headers) = source.request()?;
+        let mut request = client.get(&url);
+        for (name, value) in &headers {
+            request = request.header(*name, value);
+        }
+        let response = request
+            .send()
+            .with_context(|| format!("{} check failed ({url})", source.label()))?;
+        if !response.status().is_success() {
+            bail!(
+                "{} check failed: HTTP {} from {url}",
+                source.label(),
+                response.status()
+            );
+        }
+        let body = response.text().context("update source returned no body")?;
+        let probe = source.parse(&body)?;
+        parse_version(&probe.latest_version).with_context(|| {
+            format!(
+                "{} returned an invalid version: {}",
+                source.label(),
+                probe.latest_version
+            )
+        })?;
+        // Same discipline as the fallback ladder below: take the lock, then
+        // re-read the notice state. Reading it before the request would let a
+        // notice recorded while the request was in flight be overwritten with a
+        // minutes-old value, and telling the user twice about one release is the
+        // exact thing the throttle exists to prevent. Both notice fields carry
+        // forward — dropping `last_notified_version` reset the version-keyed
+        // throttle on every refresh.
+        let _guard = lock_cache();
+        let prior = load_cache();
+        let cache = UpdateCache {
+            last_check: now_rfc3339(),
+            latest_version: probe.latest_version,
+            release_url: probe.release_url,
+            last_notification: prior.as_ref().and_then(|c| c.last_notification.clone()),
+            last_notified_version: prior
+                .as_ref()
+                .and_then(|c| c.last_notified_version.clone()),
+        };
+        save_cache(&cache);
+        return Ok(cache);
+    }
+
+    let servers = crate::release_source::release_info_servers();
     for url in &servers {
         match client.get(url).send() {
             Ok(resp) if resp.status().is_success() => match resp.json::<ReleaseInfo>() {
@@ -347,16 +404,22 @@ fn fetch_latest_version() -> Result<UpdateCache> {
                         ));
                         continue;
                     }
+                    // Re-read the notice state INSIDE the lock rather than
+                    // before the request. This struct is rebuilt from scratch,
+                    // and a notice recorded while the request was in flight
+                    // would otherwise be overwritten with the stale value read
+                    // minutes earlier — telling the user twice about the same
+                    // release.
+                    let _guard = lock_cache();
+                    let prior = load_cache();
                     let cache = UpdateCache {
                         last_check: now_rfc3339(),
                         latest_version: version,
                         release_url: info.html_url,
-                        // Carry the notice timestamp across the refresh. This
-                        // struct is rebuilt from scratch, so dropping the field
-                        // here would reset the notify throttle on every check
-                        // and `notify_interval_hours` would silently do nothing
-                        // beyond one check interval.
-                        last_notification: prior_notification.clone(),
+                        last_notification: prior.as_ref().and_then(|c| c.last_notification.clone()),
+                        last_notified_version: prior
+                            .as_ref()
+                            .and_then(|c| c.last_notified_version.clone()),
                     };
                     save_cache(&cache);
                     return Ok(cache);
@@ -429,14 +492,24 @@ pub fn print_update_notice(current: &str, latest: &str, url: &str, use_color: bo
             current,
             console::style(latest).green().bold(),
         );
-        eprintln!(
-            "  Run {} to update, or visit {}",
-            console::style("perry update").cyan(),
-            url,
-        );
+        // A custom manifest may carry only `version`, and "or visit " with
+        // nothing after it reads like a bug.
+        if url.is_empty() {
+            eprintln!("  Run {} to update", console::style("perry update").cyan());
+        } else {
+            eprintln!(
+                "  Run {} to update, or visit {}",
+                console::style("perry update").cyan(),
+                url,
+            );
+        }
     } else {
         eprintln!("\nUpdate: {} -> {} available", current, latest);
-        eprintln!("  Run `perry update` to update, or visit {}", url);
+        if url.is_empty() {
+            eprintln!("  Run `perry update` to update");
+        } else {
+            eprintln!("  Run `perry update` to update, or visit {}", url);
+        }
     }
 }
 
@@ -713,7 +786,10 @@ pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
         .build()?;
     let mut release_info = None;
     let mut last_err = None;
-    let servers = get_update_servers();
+    // The ARTIFACT ladder, deliberately not the check source: this is where
+    // the signed `.update.json` manifest lives, and no configured check source
+    // may redirect it. See `release_source`'s module docs.
+    let servers = crate::release_source::release_info_servers();
 
     for url in &servers {
         match client.get(url).send() {
@@ -1553,6 +1629,7 @@ mod tests {
             latest_version: "0.2.171".to_string(),
             release_url: "https://github.com/PerryTS/perry/releases/tag/v0.2.171".to_string(),
             last_notification: Some("2025-01-15T11:00:00Z".to_string()),
+            last_notified_version: Some("0.2.171".to_string()),
         };
 
         let json = serde_json::to_string(&cache).unwrap();

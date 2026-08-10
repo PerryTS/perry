@@ -286,16 +286,41 @@ fn check_runtime_library() -> CheckResult {
 }
 
 fn check_update_available() -> CheckResult {
+    // Say which mode is in effect and who owns this binary. Both are things a
+    // user asks `doctor` about precisely when updates are not behaving as they
+    // expect — "why did it not install" is almost always one of the two.
+    let policy = crate::update_policy::UpdatePolicy::resolve();
+    let channel = crate::install_channel::detect();
+    // Configured, not effective: `doctor --format json` and `doctor | less` both
+    // suppress the update surface for their own run, so reporting the effective
+    // mode would answer "off" to the very question being asked.
+    let mut detail = format!(" (mode: {}", policy.configured_mode.label());
+    if !policy.is_active() && policy.configured_mode != crate::update_policy::UpdateMode::Off {
+        detail.push_str("; suppressed for this run");
+    }
+    if let Some(command) = channel.upgrade_command() {
+        detail.push_str(&format!(
+            "; installed by {} — upgrade with `{}`",
+            channel.label(),
+            command
+        ));
+    }
+    detail.push(')');
+    let context = detail;
+
     match update_checker::check_cached_status() {
         update_checker::UpdateStatus::UpdateAvailable { latest, .. } => CheckResult {
             name: "update status".to_string(),
             status: CheckStatus::Warning,
-            details: Some(format!("v{} available — run `perry update`", latest)),
+            details: Some(format!(
+                "v{} available — run `perry update`{}",
+                latest, context
+            )),
         },
         update_checker::UpdateStatus::UpToDate => CheckResult {
             name: "update status".to_string(),
             status: CheckStatus::Ok,
-            details: Some("up to date".to_string()),
+            details: Some(format!("up to date{}", context)),
         },
         update_checker::UpdateStatus::CheckFailed => CheckResult {
             name: "update status".to_string(),
