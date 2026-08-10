@@ -1299,12 +1299,24 @@ mod tests {
         }
 
         let after_workers = super::claimed_slots();
-        assert_eq!(
-            after_main,
-            after_workers,
-            "64 worker threads claimed {} extra slots; indices must be per \
-             declaration, not per thread",
-            after_workers - after_main,
+        // A TOLERANCE, not equality, and the reason is the measurement rather
+        // than the mechanism: `claimed_slots()` is PROCESS-global, so any other
+        // test in this binary that touches a converted declaration for the
+        // first time lands a claim inside this window. Under `--test-threads=1`
+        // the delta is exactly 0; in parallel it is 0 or a stray 1-2 from a
+        // neighbour. Asserting equality made this fail 6/6 under load while
+        // passing 3/3 in isolation and 1/1 single-threaded.
+        //
+        // The tolerance still separates the two outcomes by two orders of
+        // magnitude: per-THREAD claiming — the bug this test exists to catch —
+        // would add 5 declarations x 64 workers = 320, not 1.
+        const TURNOVER_CLAIM_TOLERANCE: u32 = 8;
+        let extra = after_workers.saturating_sub(after_main);
+        assert!(
+            extra <= TURNOVER_CLAIM_TOLERANCE,
+            "64 worker threads claimed {extra} extra slots (tolerance \
+             {TURNOVER_CLAIM_TOLERANCE}); indices must be per declaration, not \
+             per thread — per-thread claiming would add 5 x 64 = 320",
         );
         assert!(
             (after_workers as usize) < super::HOT_SLOT_CAPACITY,
