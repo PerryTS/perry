@@ -216,7 +216,9 @@ impl UpdatePolicy {
             structured_output,
         };
 
-        let config = crate::commands::publish::load_config().update.unwrap_or_default();
+        let config = crate::commands::publish::load_config()
+            .update
+            .unwrap_or_default();
         if matches!(config.mode, Some(UpdateMode::Unknown)) {
             // One line, once, on the way past. Loud enough to fix, quiet
             // enough not to be the thing the user remembers about the run.
@@ -328,7 +330,10 @@ mod tests {
     #[test]
     fn ci_is_detected_by_presence_but_an_empty_value_is_not_ci() {
         for raw in ["1", "true", "yes", "anything"] {
-            let env = PolicyEnv { ci: Some(raw), ..tty() };
+            let env = PolicyEnv {
+                ci: Some(raw),
+                ..tty()
+            };
             assert_eq!(
                 resolve_mode(env, Some(UpdateMode::Auto)),
                 UpdateMode::Off,
@@ -339,7 +344,10 @@ mod tests {
         // latter because `is-ci` (what npm's update-notifier uses) tests JS
         // truthiness, where an empty string is falsy.
         for raw in ["0", "false", "off", "no", ""] {
-            let env = PolicyEnv { ci: Some(raw), ..tty() };
+            let env = PolicyEnv {
+                ci: Some(raw),
+                ..tty()
+            };
             assert_eq!(
                 resolve_mode(env, None),
                 UpdateMode::Notify,
@@ -365,10 +373,16 @@ mod tests {
 
     #[test]
     fn the_environment_beats_the_config_file() {
-        let env = PolicyEnv { mode: Some("off"), ..tty() };
+        let env = PolicyEnv {
+            mode: Some("off"),
+            ..tty()
+        };
         assert_eq!(resolve_mode(env, Some(UpdateMode::Auto)), UpdateMode::Off);
 
-        let env = PolicyEnv { mode: Some("AUTO"), ..tty() };
+        let env = PolicyEnv {
+            mode: Some("AUTO"),
+            ..tty()
+        };
         assert_eq!(
             resolve_mode(env, Some(UpdateMode::Notify)),
             UpdateMode::Auto,
@@ -381,8 +395,14 @@ mod tests {
     /// user actually said.
     #[test]
     fn an_unparseable_environment_value_falls_through() {
-        let env = PolicyEnv { mode: Some("of"), ..tty() };
-        assert_eq!(resolve_mode(env, Some(UpdateMode::Prompt)), UpdateMode::Prompt);
+        let env = PolicyEnv {
+            mode: Some("of"),
+            ..tty()
+        };
+        assert_eq!(
+            resolve_mode(env, Some(UpdateMode::Prompt)),
+            UpdateMode::Prompt
+        );
         assert_eq!(resolve_mode(env, None), UpdateMode::Notify);
     }
 
@@ -397,10 +417,9 @@ mod tests {
             license_key: String,
             update: UpdateConfig,
         }
-        let parsed: Wrapper = toml::from_str(
-            "license_key = \"keep-me\"\n[update]\nmode = \"yolo\"\n",
-        )
-        .expect("an unknown mode must not fail the parse");
+        let parsed: Wrapper =
+            toml::from_str("license_key = \"keep-me\"\n[update]\nmode = \"yolo\"\n")
+                .expect("an unknown mode must not fail the parse");
         assert_eq!(parsed.license_key, "keep-me");
         assert_eq!(parsed.update.mode, Some(UpdateMode::Unknown));
         assert_eq!(
@@ -464,7 +483,15 @@ mod tests {
     fn an_unreadable_timestamp_notifies_rather_than_staying_silent() {
         let day = Duration::from_secs(24 * 3600);
         assert!(should_notify(day, None, "2026-08-10T00:00:00Z"));
-        assert!(should_notify(day, Some("not-a-date"), "2026-08-10T00:00:00Z"));
-        assert!(should_notify(day, Some("2026-08-10T00:00:00Z"), "also-not-a-date"));
+        assert!(should_notify(
+            day,
+            Some("not-a-date"),
+            "2026-08-10T00:00:00Z"
+        ));
+        assert!(should_notify(
+            day,
+            Some("2026-08-10T00:00:00Z"),
+            "also-not-a-date"
+        ));
     }
 }

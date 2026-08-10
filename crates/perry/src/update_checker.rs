@@ -1585,7 +1585,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_is_cache_stale_no_cache() {
         // When there's no cache file, it should be stale
