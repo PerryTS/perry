@@ -606,7 +606,10 @@ mod latch_drain_tests_7737 {
         // The owner dies and is pruned — the registry is empty again.
         prune_dead_object_prototype_owners(&|o| o == owner);
         assert!(
-            get_object_prototypes().lock().map(|m| m.is_empty()).unwrap_or(false),
+            get_object_prototypes()
+                .lock()
+                .map(|m| m.is_empty())
+                .unwrap_or(false),
             "setup: the prune must actually have emptied the map"
         );
 
