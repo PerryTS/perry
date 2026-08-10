@@ -27,7 +27,7 @@ const X: u32 = 1;
 const Y: u32 = 2;
 const R: u32 = 3;
 
-/// `let x: any = "seed"; let y: any = "other"; let r: any = <lhs> op <rhs>;`
+/// `let x: any = undefined; let y: any = undefined; let r: any = <lhs> op <rhs>;`
 fn cmp_ir(name: &str, op: CompareOp, lhs: Expr, rhs: Expr) -> String {
     ir_for(
         name,
@@ -37,14 +37,18 @@ fn cmp_ir(name: &str, op: CompareOp, lhs: Expr, rhs: Expr) -> String {
                 name: "x".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::String("seed".to_string())),
+                // `undefined`, not a string literal: initializing an `any`
+                // local with a string refines its static type to `string`,
+                // which routes the comparison to the both-strings arm and
+                // makes the two negatives below vacuous.
+                init: Some(Expr::Undefined),
             },
             Stmt::Let {
                 id: Y,
                 name: "y".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::String("other".to_string())),
+                init: Some(Expr::Undefined),
             },
             Stmt::Let {
                 id: R,
