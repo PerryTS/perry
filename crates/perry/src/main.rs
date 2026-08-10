@@ -11,6 +11,7 @@ mod telemetry;
 #[cfg(test)]
 mod test_env_lock;
 mod update_checker;
+mod update_policy;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -441,15 +442,21 @@ fn main_inner() -> Result<()> {
     // env overrides as the generic telemetry channel).
     compat_reports::install_sink();
 
-    // Spawn background update check (non-blocking, cached for 24h)
+    // Resolve the update policy ONCE, here, and use it at both hook sites.
+    //
+    // These used to ask `should_skip_check()` separately, and the notice site
+    // had its own cached-status fallback. Wiring a policy into only one of them
+    // leaves the other honouring the old rules — so a user who set
+    // `mode = "off"` would still get notices from the warm-cache path. One
+    // value, read once, is what makes "off" mean off.
     let is_update_cmd = matches!(cli.command, Some(Commands::Update(_)));
-    let bg_check = if !cli.quiet && !is_update_cmd && !update_checker::should_skip_check() {
-        if update_checker::is_cache_stale() {
-            let (_handle, rx) = update_checker::spawn_background_check();
-            Some(rx)
-        } else {
-            None // will check cache after command runs
-        }
+    let update_policy = update_policy::UpdatePolicy::resolve();
+    let update_surface_active = !cli.quiet && !is_update_cmd && update_policy.is_active();
+    let bg_check = if update_surface_active
+        && update_checker::is_cache_stale_with(update_policy.check_interval)
+    {
+        let (_handle, rx) = update_checker::spawn_background_check();
+        Some(rx)
     } else {
         None
     };
@@ -534,14 +541,12 @@ fn main_inner() -> Result<()> {
     }
 
     // Print update notice if available (to stderr, non-blocking)
-    if !cli.quiet && !is_update_cmd {
+    if update_surface_active {
         let use_stderr_color = !cli.no_color && std::io::stderr().is_terminal();
         let status = if let Some(rx) = bg_check {
             rx.recv_timeout(std::time::Duration::from_millis(100)).ok()
-        } else if !update_checker::should_skip_check() {
-            Some(update_checker::check_cached_status())
         } else {
-            None
+            Some(update_checker::check_cached_status())
         };
 
         if let Some(update_checker::UpdateStatus::UpdateAvailable {
@@ -550,7 +555,23 @@ fn main_inner() -> Result<()> {
             release_url,
         }) = status
         {
-            update_checker::print_update_notice(&current, &latest, &release_url, use_stderr_color);
+            // `notify_interval_hours` throttles repeats of the SAME available
+            // update. It defaults to 0 — a notice every run, which is what
+            // Perry did before — so this is inert until someone asks for it.
+            let last = update_checker::load_cache().and_then(|c| c.last_notification);
+            if update_policy::should_notify(
+                update_policy.notify_interval,
+                last.as_deref(),
+                &update_checker::now_rfc3339_public(),
+            ) {
+                update_checker::print_update_notice(
+                    &current,
+                    &latest,
+                    &release_url,
+                    use_stderr_color,
+                );
+                update_checker::record_notification();
+            }
         }
     }
 

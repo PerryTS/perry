@@ -35,6 +35,17 @@ pub(crate) struct PerryConfig {
     pub(crate) telemetry: Option<crate::telemetry::TelemetryConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) beta: Option<BetaConfig>,
+    /// The `[update]` section.
+    ///
+    /// ★ This field is why the section survives a save. `update_checker` read
+    /// `[update] server` through its own private structs, but `PerryConfig` —
+    /// which is what `save_config` writes — had no field for it. serde
+    /// reconstructs the file from this struct, so every save silently deleted
+    /// the user's `[update]` section, and `save_config` is called from the
+    /// telemetry prompt, the compatibility-report prompt, the beta notice and
+    /// the setup wizards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) update: Option<crate::update_policy::UpdateConfig>,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -262,5 +273,56 @@ pub(crate) fn prompt_input(prompt: &str, default: Option<&str>) -> Option<String
         Ok(val) if val.is_empty() => None,
         Ok(val) => Some(val),
         Err(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod saved_config_tests {
+    use super::*;
+
+    /// ★ The erasure regression.
+    ///
+    /// `update_checker` read `[update] server` through its own private structs,
+    /// but `PerryConfig` — which is what `save_config` writes — had no field
+    /// for it. serde rebuilds the file from this struct, so any save deleted
+    /// the section: the telemetry prompt, the compatibility-report prompt, the
+    /// beta notice and the setup wizards all call `save_config`, so a user
+    /// answering one prompt silently lost their update settings.
+    ///
+    /// String-level rather than filesystem-level on purpose: the bug is in the
+    /// serde round trip, and a test that wrote to `~/.perry` would depend on
+    /// the developer's home directory.
+    #[test]
+    fn the_update_section_survives_a_round_trip() {
+        let original = r#"
+license_key = "keep-me"
+
+[telemetry]
+enabled = true
+client_id = "abc"
+
+[update]
+mode = "prompt"
+server = "https://updates.example.test/latest"
+check_interval_hours = 6
+"#;
+        let config: PerryConfig =
+            toml::from_str(original).expect("the fixture must parse as a whole config");
+        let written = toml::to_string_pretty(&config).expect("serialize");
+
+        assert!(
+            written.contains("[update]"),
+            "the [update] section was dropped on save:\n{written}"
+        );
+        assert!(
+            written.contains("updates.example.test"),
+            "the update server was dropped on save:\n{written}"
+        );
+        assert!(
+            written.contains("check_interval_hours"),
+            "an [update] key was dropped on save:\n{written}"
+        );
+        // ...and nothing else was lost on the way past.
+        assert!(written.contains("keep-me") && written.contains("[telemetry]"));
     }
 }

@@ -26,6 +26,13 @@ pub struct UpdateCache {
     pub last_check: String,
     pub latest_version: String,
     pub release_url: String,
+    /// When the user was last told about this update, if ever.
+    ///
+    /// `default` + `skip_serializing_if` so a cache written by an older Perry
+    /// still loads, and a cache that has never notified stays the shape it
+    /// always was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_notification: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,9 +78,50 @@ fn save_cache(cache: &UpdateCache) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Ok(content) = serde_json::to_string_pretty(cache) {
-        let _ = fs::write(&path, content);
+    let Ok(content) = serde_json::to_string_pretty(cache) else {
+        return;
+    };
+    // Two `perry` invocations can be in here at once — a background check
+    // finishing in one while another records a notice. A plain `fs::write`
+    // truncates first, so a reader arriving mid-write gets a partial file and
+    // `load_cache` throws the whole thing away. Write beside the target and
+    // rename over it, which is atomic for readers on every platform we ship.
+    //
+    // `replace_path` rather than `fs::rename`: on Windows a rename onto an
+    // EXISTING file fails, so every write after the first would silently do
+    // nothing and the throttle would never advance.
+    let tmp = path.with_extension("json.tmp");
+    if fs::write(&tmp, content).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
     }
+    if replace_path(&tmp, &path).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
+/// Record that the user has just been told about an available update.
+///
+/// A no-op when there is no cache: the notice can only have come from one, and
+/// inventing a file here would fabricate a `last_check` that never happened.
+pub fn record_notification() {
+    let Some(mut cache) = load_cache() else {
+        return;
+    };
+    cache.last_notification = Some(now_rfc3339());
+    save_cache(&cache);
+}
+
+/// `now` as RFC3339, for callers outside this module that need to compare
+/// against a cached timestamp.
+pub fn now_rfc3339_public() -> String {
+    now_rfc3339()
+}
+
+/// Seconds since the epoch for an RFC3339 timestamp, or `None` if it cannot be
+/// read. Exposed for `update_policy`'s throttle arithmetic.
+pub fn parse_rfc3339(s: &str) -> Option<i64> {
+    chrono_parse_rfc3339(s).map(|t| t as i64)
 }
 
 pub fn should_skip_check() -> bool {
@@ -90,6 +138,12 @@ pub fn should_skip_check() -> bool {
 }
 
 pub fn is_cache_stale() -> bool {
+    is_cache_stale_with(CACHE_MAX_AGE)
+}
+
+/// Staleness against a caller-chosen interval, so `[update] check_interval_hours`
+/// means something. `is_cache_stale` is this with the shipped default.
+pub fn is_cache_stale_with(max_age: Duration) -> bool {
     let cache = match load_cache() {
         Some(c) => c,
         None => return true,
@@ -112,7 +166,7 @@ pub fn is_cache_stale() -> bool {
         .unwrap_or_default()
         .as_secs();
 
-    now.saturating_sub(last_check) > CACHE_MAX_AGE.as_secs()
+    now.saturating_sub(last_check) > max_age.as_secs()
 }
 
 /// Simple RFC3339 timestamp to unix seconds parser
@@ -255,21 +309,14 @@ fn get_update_servers() -> Vec<String> {
     servers
 }
 
+/// The configured update server, read through the SHARED config loader.
+///
+/// This used to parse `~/.perry/config.toml` again into a private pair of
+/// structs. That is what let `[update]` be silently erased: the real
+/// `PerryConfig` had no field for it, so every `save_config` reconstructed the
+/// file without it and threw the section away.
 fn load_config_update_server() -> Option<String> {
-    let path = dirs::home_dir()?.join(".perry").join("config.toml");
-    let content = fs::read_to_string(&path).ok()?;
-
-    #[derive(Deserialize)]
-    struct Config {
-        update: Option<UpdateConfig>,
-    }
-    #[derive(Deserialize)]
-    struct UpdateConfig {
-        server: Option<String>,
-    }
-
-    let config: Config = toml::from_str(&content).ok()?;
-    config.update?.server
+    crate::commands::publish::load_config().update?.server
 }
 
 fn fetch_latest_version() -> Result<UpdateCache> {
@@ -282,6 +329,7 @@ fn fetch_latest_version() -> Result<UpdateCache> {
 
     let servers = get_update_servers();
     let mut last_err = None;
+    let prior_notification = load_cache().and_then(|c| c.last_notification);
 
     for url in &servers {
         match client.get(url).send() {
@@ -303,6 +351,12 @@ fn fetch_latest_version() -> Result<UpdateCache> {
                         last_check: now_rfc3339(),
                         latest_version: version,
                         release_url: info.html_url,
+                        // Carry the notice timestamp across the refresh. This
+                        // struct is rebuilt from scratch, so dropping the field
+                        // here would reset the notify throttle on every check
+                        // and `notify_interval_hours` would silently do nothing
+                        // beyond one check interval.
+                        last_notification: prior_notification.clone(),
                     };
                     save_cache(&cache);
                     return Ok(cache);
@@ -1498,12 +1552,39 @@ mod tests {
             last_check: "2025-01-15T10:30:00Z".to_string(),
             latest_version: "0.2.171".to_string(),
             release_url: "https://github.com/PerryTS/perry/releases/tag/v0.2.171".to_string(),
+            last_notification: Some("2025-01-15T11:00:00Z".to_string()),
         };
 
         let json = serde_json::to_string(&cache).unwrap();
         let parsed: UpdateCache = serde_json::from_str(&json).unwrap();
         assert_eq!(cache, parsed);
     }
+
+    /// A cache file written by a Perry that predates the notify throttle must
+    /// still load. Without `serde(default)` it would fail to parse, `load_cache`
+    /// would return `None`, and every user's first run on the new build would
+    /// re-check the network for no reason.
+    #[test]
+    fn a_cache_without_the_notification_field_still_loads() {
+        let legacy = r#"{
+            "last_check": "2025-01-15T10:30:00Z",
+            "latest_version": "0.2.171",
+            "release_url": "https://example.test/v0.2.171"
+        }"#;
+        let parsed: UpdateCache =
+            serde_json::from_str(legacy).expect("a pre-throttle cache must still parse");
+        assert_eq!(parsed.last_notification, None);
+        assert_eq!(parsed.latest_version, "0.2.171");
+
+        // ...and a cache that has never notified round-trips to the same shape
+        // it always had, rather than growing a null field.
+        let written = serde_json::to_string(&parsed).unwrap();
+        assert!(
+            !written.contains("last_notification"),
+            "an unset field must not be written: {written}"
+        );
+    }
+
 
     #[test]
     fn test_is_cache_stale_no_cache() {
