@@ -185,12 +185,16 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
                 if let Some(v) = crate::buffer::buffer_get_own_prop(raw as usize, &name) {
                     return v;
                 }
-                if crate::object::buffer_dispatch::is_buffer_method_name(&name) {
-                    let bytes = name.as_bytes();
+                // The bound closure keeps the name POINTER and re-reads it at
+                // call time, so it must not borrow from `name` — a local
+                // `String` freed the moment this returns.
+                if let Some(method) =
+                    crate::object::buffer_dispatch::buffer_method_name_static(&name)
+                {
                     return crate::object::js_class_method_bind(
                         crate::value::js_nanbox_pointer(raw as i64),
-                        bytes.as_ptr(),
-                        bytes.len(),
+                        method.as_ptr(),
+                        method.len(),
                     );
                 }
             }
