@@ -2183,9 +2183,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let spec_budget = spec_abi::spec_abi_max();
         let mut spec_emitted = 0usize;
         for f in &hir.functions {
-            let Some(sites) = spec_facts.call_sites.get(&f.id) else {
-                continue;
-            };
             let reject =
                 |reason: typed_abi::TypedCloneRejectionReason,
                  records: &mut Vec<crate::native_value::NativeRepRecord>| {
@@ -2201,6 +2198,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         ],
                     );
                 };
+            // #7111: a function whose call sites were all inlined away — and
+            // then constant-folded by `unroll_static_loops` — has no entry in
+            // `spec_facts.call_sites`, which is built by walking `hir.init` and
+            // every body for direct `Call` expressions. This used to `continue`
+            // BEFORE any rejection was constructed, so `--opt-report` said
+            // nothing at all about the function: indistinguishable from "not
+            // analysed" and from "analysed and denied". Say "moot" instead.
+            let Some(sites) = spec_facts.call_sites.get(&f.id) else {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecNoCallSites,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            };
             if f.is_async || f.is_generator || f.was_plain_async {
                 reject(
                     typed_abi::TypedCloneRejectionReason::AsyncOrGenerator,
