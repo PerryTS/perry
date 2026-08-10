@@ -131,4 +131,6 @@ pub(crate) use crate::lower_types::*;
 #[cfg(test)]
 mod collection_view_tests;
 #[cfg(test)]
+mod for_of_counter_tests;
+#[cfg(test)]
 mod tests;
