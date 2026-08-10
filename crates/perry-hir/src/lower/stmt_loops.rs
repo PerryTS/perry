@@ -1859,13 +1859,22 @@ pub(super) fn lower_stmt_for_of_inner(
     };
     // Create the for loop:
     // for (let __i = 0; __i < __arr.length; __i++) { ... }
+    //
+    // #7766: the init is `Integer(0)`, not `Number(0.0)` — the same shape a
+    // user-written `let i = 0` lowers to. The counter is integral by
+    // construction (zero init, `++` only), and the literal kind is what the
+    // integer-local collector seeds on (`collect_integer_let_ids`): with
+    // `Number(0.0)` the desugared counter never joined `integer_locals`,
+    // never got a canonical i32 slot, and every i32-counter loop
+    // optimization — the element-shape versioned clone included — silently
+    // declined the `for…of` spelling of a loop it served in indexed form.
     module.init.push(Stmt::For {
         init: Some(Box::new(Stmt::Let {
             id: idx_id,
             name: format!("__idx_{}", idx_id),
             ty: Type::Number,
             mutable: true,
-            init: Some(Expr::Number(0.0)),
+            init: Some(Expr::Integer(0)),
         })),
         condition: Some(condition),
         update: Some(Expr::Update {

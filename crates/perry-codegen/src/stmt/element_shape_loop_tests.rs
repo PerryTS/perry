@@ -1377,3 +1377,158 @@ fn element_binding_declines_a_second_array() {
         "a body reading two different arrays must decline the clone"
     );
 }
+
+/// The full positive contract in one helper: the clone was admitted, the
+/// deref block cond_brs INTO it, and its fast region carries neither a call
+/// nor any element-read/field-diamond runtime symbol. Stronger than the
+/// [`CLONE_LABELS`] presence checks alone — an emitted-but-deleted clone
+/// passes those (#7690's failure shape).
+fn assert_clone_fires_call_free(ir: &str, what: &str) {
+    for label in CLONE_LABELS {
+        assert!(
+            ir.contains(label),
+            "{what}: expected the element-shape clone, but `{label}` is absent \
+             — the matcher declined"
+        );
+    }
+    assert_fast_clone_is_entered(ir);
+    let fast = fast_clone_slice(ir);
+    assert!(
+        !fast.contains(" call "),
+        "{what}: the fast clone must be call-free; found a call in:\n{fast}"
+    );
+    assert!(
+        !fast.contains("js_array_get_f64") && !fast.contains("js_array_get_index_or_string"),
+        "{what}: the element-read tier must be gone from the fast clone"
+    );
+    assert!(
+        !fast.contains("js_object_get_field_by_name_f64")
+            && !fast.contains("js_typed_feedback_class_field_get_guard")
+            && !fast.contains("js_number_coerce"),
+        "{what}: the by-name field diamond must be gone from the fast clone"
+    );
+}
+
+#[test]
+fn an_element_binding_indexed_by_a_non_counter_declines() {
+    // `const r = keep[0]` is not the induction read; the preheader's range
+    // argument covers only `arr[counter]`.
+    let ir = emit(&element_shape_module(
+        vec![
+            Stmt::Let {
+                id: BINDING_ID,
+                name: "r".to_string(),
+                ty: Type::Named("Node".to_string()),
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(ARRAY_ID)),
+                    index: Box::new(Expr::Integer(0)),
+                }),
+            },
+            binding_accumulate(binding_field("v")),
+        ],
+        None,
+    ));
+    assert!(
+        !ir.contains("element_shape.loop.fast.preheader"),
+        "a non-counter-indexed element binding must decline the clone"
+    );
+}
+
+#[test]
+fn element_binding_form_through_a_parameter_gets_the_clone() {
+    // #7766's case (A), binding spelling: `function total(ps: Node[])`. The
+    // array's provenance is the CALLER's — no static rule can prove it — and
+    // the clone must be admitted anyway, because its preheader establishes
+    // the element shape at run time and the declared type only names the
+    // class id to check against.
+    const PS_ID: u32 = 21;
+    const F_SUM_ID: u32 = 22;
+    const F_COUNTER_ID: u32 = 23;
+    const F_BINDING_ID: u32 = 24;
+    let mut m = Module::new("element_shape_loop.ts");
+    m.classes = vec![node_class(None)];
+    m.functions = vec![perry_hir::Function {
+        id: 900,
+        name: "total".to_string(),
+        type_params: Vec::new(),
+        params: vec![perry_hir::Param {
+            id: PS_ID,
+            name: "ps".to_string(),
+            ty: Type::Array(Box::new(Type::Named("Node".to_string()))),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: F_SUM_ID,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: F_COUNTER_ID,
+                    name: "j".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(F_COUNTER_ID)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(PS_ID)),
+                        property: "length".to_string(),
+                        byte_offset: 0,
+                    }),
+                }),
+                update: Some(Expr::Update {
+                    id: F_COUNTER_ID,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![
+                    Stmt::Let {
+                        id: F_BINDING_ID,
+                        name: "r".to_string(),
+                        ty: Type::Named("Node".to_string()),
+                        mutable: false,
+                        init: Some(Expr::IndexGet {
+                            object: Box::new(Expr::LocalGet(PS_ID)),
+                            index: Box::new(Expr::LocalGet(F_COUNTER_ID)),
+                        }),
+                    },
+                    Stmt::Expr(Expr::LocalSet(
+                        F_SUM_ID,
+                        Box::new(Expr::Binary {
+                            op: BinaryOp::Add,
+                            left: Box::new(Expr::LocalGet(F_SUM_ID)),
+                            right: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::LocalGet(F_BINDING_ID)),
+                                property: "v".to_string(),
+                                byte_offset: 0,
+                            }),
+                        }),
+                    )),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(F_SUM_ID))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    m.init_kind = ModuleInitKind::Eager;
+    let ir = emit(&m);
+    assert_clone_fires_call_free(&ir, "parameter binding form");
+}

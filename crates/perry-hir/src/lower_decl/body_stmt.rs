@@ -1840,13 +1840,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 }
             };
             // Create the for loop
+            //
+            // #7766: `Integer(0)`, not `Number(0.0)` — same shape as a
+            // user-written `let i = 0`, and the same change as the module-init
+            // for-of desugar (`lower/stmt_loops.rs`). The integer-local
+            // collector seeds on the literal kind, so a `Number(0.0)` counter
+            // never gets a canonical i32 slot and every i32-counter loop
+            // optimization silently declines the `for…of` spelling.
             result.push(Stmt::For {
                 init: Some(Box::new(Stmt::Let {
                     id: idx_id,
                     name: format!("__idx_{}", idx_id),
                     ty: Type::Number,
                     mutable: true,
-                    init: Some(Expr::Number(0.0)),
+                    init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(condition),
                 update: Some(Expr::Update {

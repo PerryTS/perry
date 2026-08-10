@@ -403,6 +403,36 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
                     "element_shape=homogeneous_class".to_string(),
                 ],
             );
+            // `--opt-report` consumption (#7766): the selection recorded at
+            // clone emission was APPLIED here. Without this row a build under
+            // the report would print "selected, consumed 0" — the wasted-proof
+            // outcome — for a proof that is in fact doing the work.
+            if crate::opt_report::enabled() {
+                let (name, local_id) = match fact.element_binding {
+                    Some(id) => (
+                        ctx.local_id_to_name
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("<local {id}>")),
+                        Some(id),
+                    ),
+                    None => (
+                        ctx.local_id_to_name
+                            .get(&arr_id)
+                            .map(|n| format!("elements of `{n}`"))
+                            .unwrap_or_else(|| format!("elements of <local {arr_id}>")),
+                        None,
+                    ),
+                };
+                crate::opt_report::consume(
+                    crate::opt_report::Position::Local,
+                    &name,
+                    local_id,
+                    crate::opt_report::Analysis::PtrShape,
+                    "Ptr<Shape>",
+                    "element_shape_loop.raw_f64_load",
+                );
+            }
             return Ok(Some(value));
         }
     }
