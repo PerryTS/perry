@@ -186,7 +186,10 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
         (*recycled).length = 2;
         (*recycled).capacity = 2;
         let elements = (addr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // GC_STORE_AUDIT(POINTER_FREE): raw f64 numerics into a buffer this
+        // test allocated and re-stamped itself; no heap pointer is stored.
         std::ptr::write(elements, 111.0);
+        // GC_STORE_AUDIT(POINTER_FREE): second slot of the same test-owned buffer.
         std::ptr::write(elements.add(1), 222.0);
     }
 
