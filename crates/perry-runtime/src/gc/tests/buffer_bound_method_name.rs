@@ -30,7 +30,8 @@ use super::support::*;
 
 /// The name bytes a bound closure keeps, as raw parts.
 unsafe fn captured_name(bound: crate::value::JSValue) -> (*const u8, usize) {
-    let closure = crate::value::js_nanbox_get_pointer(f64::from_bits(bound.bits())) as *const crate::ClosureHeader;
+    let closure = crate::value::js_nanbox_get_pointer(f64::from_bits(bound.bits()))
+        as *const crate::ClosureHeader;
     assert!(!closure.is_null(), "the read must produce a bound closure");
     let ptr = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const u8;
     let len = crate::closure::js_closure_get_capture_ptr(closure, 2) as usize;
@@ -48,7 +49,8 @@ fn a_bound_buffer_method_never_captures_the_key_strings_interior() {
         let key = crate::string::js_string_from_bytes(b"readUInt8".as_ptr(), 9);
         let key_interior = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
 
-        let bound = crate::object::js_object_get_field_by_name(buf as *const crate::ObjectHeader, key);
+        let bound =
+            crate::object::js_object_get_field_by_name(buf as *const crate::ObjectHeader, key);
         let (name_ptr, name_len) = captured_name(bound);
 
         let static_name = crate::object::buffer_method_name_static("readUInt8")
@@ -126,8 +128,8 @@ fn a_computed_key_buffer_method_never_captures_a_temporary() {
 #[test]
 fn the_static_method_name_lookup_does_not_borrow_its_argument() {
     let owned = String::from("readUInt8");
-    let found = crate::object::buffer_method_name_static(&owned)
-        .expect("readUInt8 is a Buffer method");
+    let found =
+        crate::object::buffer_method_name_static(&owned).expect("readUInt8 is a Buffer method");
 
     assert_ne!(
         found.as_ptr(),
