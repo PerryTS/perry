@@ -45,6 +45,15 @@ pub use parse_api::{
 pub use raw_json::{js_json_is_raw_json, js_json_raw_json};
 pub use replacer::{js_json_stringify_full, js_json_stringify_with_replacer};
 pub use reviver::js_json_parse_with_reviver;
+/// #7448: exported so the cross-host UI crates can ASK the runtime whether an
+/// address is GC-tracked instead of each carrying its own bit-pattern guess.
+/// `perry-ui-android`'s copy tested for a positive IEEE-754 subnormal, which
+/// classifies every denormal `Number` as an untagged heap pointer — the exact
+/// predicate #7447 removed here after it SIGSEGV'd on `JSON.stringify(1e-317)`.
+/// No bit test can decide this: a raw pointer and a positive subnormal occupy
+/// the same bit patterns by construction, so the answer has to come from
+/// allocation membership, which only the runtime can answer.
+pub use stringify::ptr_is_tracked_heap_object;
 pub use stringify_api::{
     js_json_get_bool, js_json_get_number, js_json_get_string, js_json_is_valid, js_json_stringify,
     js_json_stringify_bool, js_json_stringify_null, js_json_stringify_number,

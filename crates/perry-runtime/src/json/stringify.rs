@@ -33,7 +33,7 @@ use super::stringify_shape_template::{
 /// yet point at an UNMAPPED page — `is_valid_obj_ptr` accepts it and the
 /// subsequent `(*obj).keys_array` read then SIGSEGVs. Mirrors the `path.rs` /
 /// `current_heap_header_for_user_ptr` Unknown→malloc rule.
-pub(super) unsafe fn ptr_is_tracked_heap_object(ptr: *const u8) -> bool {
+pub unsafe fn ptr_is_tracked_heap_object(ptr: *const u8) -> bool {
     let addr = ptr as usize;
     if crate::value::addr_class::is_handle_band(addr) {
         return false;
