@@ -29,7 +29,7 @@
 //! Split out of `layout.rs` to stay under the repo's 2000-line-per-file cap
 //! (`scripts/check_file_size.sh`).
 
-use super::hot_tls::{hot_layout_slot_masks, hot_per_object_layouts_nonempty, hot_typed_layouts};
+use super::hot_tls::{hot_layout_slot_masks, hot_per_object_layout_hint, hot_typed_layouts};
 use super::layout::{LayoutSlotMask, TypedLayoutDescriptor};
 use std::cell::{Cell, RefCell};
 
@@ -47,7 +47,258 @@ thread_local! {
     /// once they are empty. A stale `true` therefore costs exactly the
     /// pre-#7510 probe and nothing else — the flag is an accelerator, never an
     /// authority, and no caller may treat it as one.
-    pub(in crate::gc) static PER_OBJECT_LAYOUTS_NONEMPTY: Cell<bool> = const { Cell::new(false) };
+    pub(in crate::gc) static PER_OBJECT_LAYOUTS_NONEMPTY: PerObjectLayoutHint =
+        const { PerObjectLayoutHint::new() };
+}
+
+/// The flag, the address filter, and the filter's rebuild counter in ONE
+/// thread-local.
+///
+/// They are co-located for a measured reason. On Darwin a thread-local access
+/// is an out-of-line `_tlv_get_addr` call, and `crate::tls_hot` exists to pay
+/// that once per hot region instead of once per table. `layout_forget_object`
+/// consults the flag and then the filter on every allocation, death and
+/// relocation; as two separate thread-locals that is two slot reads on exactly
+/// the workloads that are legitimately armed, which measured +3.4% on `interp`
+/// and +4.6% on `iso_miss`. One struct behind the existing named hot slot makes
+/// it one.
+pub(in crate::gc) struct PerObjectLayoutHint {
+    /// #7510's global emptiness proof — see [`PER_OBJECT_LAYOUTS_NONEMPTY`].
+    pub(in crate::gc) nonempty: Cell<bool>,
+    /// Bits set in `filter` since the last rebuild.
+    pub(in crate::gc) sets: Cell<u32>,
+    /// Which addresses may have an entry — see [`layout_addr_filter_may_hold`].
+    pub(in crate::gc) filter: std::cell::UnsafeCell<[u64; LAYOUT_ADDR_FILTER_WORDS]>,
+}
+
+impl PerObjectLayoutHint {
+    const fn new() -> Self {
+        Self {
+            nonempty: Cell::new(false),
+            sets: Cell::new(0),
+            filter: std::cell::UnsafeCell::new([0u64; LAYOUT_ADDR_FILTER_WORDS]),
+        }
+    }
+}
+
+/// Bits in the per-object address filter (see [`layout_addr_filter_may_hold`]).
+/// 4096 bits is 512 B of thread-local storage, held INLINE in
+/// [`PerObjectLayoutHint`] so the flag and the filter share one hot slot. One
+/// 8-byte word is read per query and the whole filter stays L1-resident even
+/// when the addresses probed sweep a 16 MB nursery. Steady-state occupancy
+/// after the `ImmortalLayoutScope` is one or two entries, so the false-positive
+/// rate is ~0.05% — sizing this up buys nothing and costs inline TLS on every
+/// thread.
+const LAYOUT_ADDR_FILTER_BITS: usize = 4096;
+const LAYOUT_ADDR_FILTER_WORDS: usize = LAYOUT_ADDR_FILTER_BITS / 64;
+/// Rebuild the filter from the live keys once this many bits have been set
+/// since the last rebuild. Without it a workload that churns per-object
+/// records would saturate the filter and never recover; with it the false
+/// positive rate is bounded by (live entries / bits) rather than by
+/// (entries ever inserted / bits), at an amortised O(1) per insert.
+const LAYOUT_ADDR_FILTER_REBUILD_AFTER: u32 = (LAYOUT_ADDR_FILTER_BITS / 2) as u32;
+
+/// Word index + bit mask for `user_ptr`. Heap pointers are at least 8-byte
+/// aligned and clustered, so the low bits alone would collide systematically;
+/// a single multiply spreads the whole address across the filter.
+#[inline(always)]
+fn layout_addr_filter_slot(user_ptr: usize) -> (usize, u64) {
+    let h = (user_ptr as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let idx = (h >> (64 - LAYOUT_ADDR_FILTER_BITS.trailing_zeros() as u64)) as usize;
+    (idx >> 6, 1u64 << (idx & 63))
+}
+
+/// Could either per-object side table hold an entry keyed by `user_ptr`?
+///
+/// `false` is a **proof of absence**; `true` is a hint (a real entry, or a
+/// collision). This is the address-precise half of the accelerator, and it is
+/// the half that survives an immortal resident: [`PER_OBJECT_LAYOUTS_NONEMPTY`]
+/// is a single global bit, so ONE entry that is never removed — one long-lived
+/// object anywhere in the process — turns `layout_forget_object` back into two
+/// `RefCell` round-trips plus two hashes on every allocation, death and
+/// relocation for the rest of the run. Removing 1113 of 1115 such entries buys
+/// nothing while the last two remain; only an address-keyed test does.
+///
+/// ## Why the flag is still tested FIRST, even though this subsumes it
+///
+/// It does subsume it — both maps empty implies every bit is clear, because the
+/// flag's own clear path clears the filter — and dropping the flag would make
+/// the armed path one thread-local resolution cheaper. Measured on the quiet
+/// mini, that trade is a loss: filter-only moved `interp` 1.948 → 1.934 and
+/// `iso_miss` 2.476 → 2.464, but moved `push_cls` 0.367 → 0.383 (past its
+/// budget), `churn` 0.422 → 0.438 and `tree` 1.642 → 1.673. Almost every
+/// workload is *disarmed*, and for those the flag is a single load while this
+/// is a multiply, a shift, a load and a test. The flag stays in front as the
+/// cheap common-case gate; the filter is what rescues the armed case.
+///
+/// The residual cost of consulting both — a second thread-local resolution on a
+/// legitimately-armed workload, +3.4% on `interp` and +4.6% on `iso_miss` —
+/// is not inherent. It goes away by co-locating the flag and this filter in one
+/// thread-local so the armed path resolves once; that is a `tls_hot` change and
+/// is deliberately left out of this one.
+#[inline(always)]
+pub(in crate::gc) fn layout_addr_filter_may_hold(user_ptr: usize) -> bool {
+    hint_may_hold(hot_per_object_layout_hint(), user_ptr)
+}
+
+/// [`layout_addr_filter_may_hold`] against an already-resolved hint, so a
+/// caller that also reads the flag pays ONE slot resolution for both.
+#[inline(always)]
+pub(in crate::gc) fn hint_may_hold(hint: &PerObjectLayoutHint, user_ptr: usize) -> bool {
+    let (word, bit) = layout_addr_filter_slot(user_ptr);
+    unsafe { (*hint.filter.get())[word] & bit != 0 }
+}
+
+/// Record that `user_ptr` now has an entry. Called by every insert site.
+/// The rebuild check runs BEFORE the bit is set, never after: a rebuild
+/// reconstructs the filter from the maps' live keys, and this key is not in
+/// the map yet at any call site, so rebuilding afterwards would erase the bit
+/// just set and make a live record invisible to the filter.
+#[inline]
+fn layout_addr_filter_add(user_ptr: usize) {
+    if hot_per_object_layout_hint().sets.get() >= LAYOUT_ADDR_FILTER_REBUILD_AFTER {
+        layout_addr_filter_rebuild();
+    }
+    layout_addr_filter_note(user_ptr);
+}
+
+/// Set `user_ptr`'s bit WITHOUT the rebuild check.
+///
+/// `layout_note_slot` calls this from inside its own `borrow_mut` on
+/// `LAYOUT_SLOT_MASKS`, and [`layout_addr_filter_rebuild`] borrows both maps —
+/// so the rebuilding form would panic there. Skipping the rebuild is safe: the
+/// counter is an accuracy heuristic, not a correctness one.
+#[inline]
+pub(in crate::gc) fn layout_addr_filter_note(user_ptr: usize) {
+    let hint = hot_per_object_layout_hint();
+    let (word, bit) = layout_addr_filter_slot(user_ptr);
+    unsafe {
+        (*hint.filter.get())[word] |= bit;
+    }
+    hint.sets.set(hint.sets.get().saturating_add(1));
+}
+
+/// Drop every bit and re-add the live keys. Removals cannot clear a bit on
+/// their own (two keys may share one), so this is what keeps a workload that
+/// genuinely churns per-object records from saturating the filter forever.
+fn layout_addr_filter_rebuild() {
+    layout_addr_filter_clear();
+    let keys: Vec<usize> = {
+        let masks = hot_layout_slot_masks().borrow();
+        let typed = hot_typed_layouts().borrow();
+        masks.keys().copied().chain(typed.keys().copied()).collect()
+    };
+    let hint = hot_per_object_layout_hint();
+    for k in keys {
+        let (word, bit) = layout_addr_filter_slot(k);
+        unsafe {
+            (*hint.filter.get())[word] |= bit;
+        }
+    }
+    hint.sets.set(0);
+}
+
+fn layout_addr_filter_clear() {
+    let hint = hot_per_object_layout_hint();
+    unsafe {
+        (*hint.filter.get()).fill(0);
+    }
+    hint.sets.set(0);
+}
+
+crate::perry_thread_local! {
+    /// Nesting depth of the innermost [`ImmortalLayoutScope`].
+    ///
+    /// Read only from the *cold* half of `layout_note_slot` — the branch that
+    /// would otherwise mint a brand-new per-object mask — so an inactive scope
+    /// costs nothing on any hot path.
+    static IMMORTAL_LAYOUT_SCOPE_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// True while an [`ImmortalLayoutScope`] is open on this thread.
+#[inline]
+pub(in crate::gc) fn immortal_layout_scope_active() -> bool {
+    IMMORTAL_LAYOUT_SCOPE_DEPTH.with(|d| d.get()) != 0
+}
+
+/// Marks a window whose objects are **immortal by construction** — reachable
+/// from a GC root for the life of the process — so that none of them may take
+/// out a per-object layout record.
+///
+/// ## Why this exists (#7510's lesson, repeating)
+///
+/// [`PER_OBJECT_LAYOUTS_NONEMPTY`] is a *global emptiness* proof: it turns
+/// `layout_forget_object` — which runs on every allocation, every object death
+/// and every relocation — into a single load whenever both side tables happen
+/// to be empty. On a monomorphic workload they are empty for the entire run,
+/// which is exactly what makes the accelerator worth having.
+///
+/// A *single* entry that is never removed converts that accelerator into
+/// permanently-disabled code. #7510 already paid this once, via one interned
+/// keys-array the shape cache anchored forever. The `globalThis` bootstrap is
+/// the same trap at several hundred times the scale: it builds hundreds of
+/// plain objects whose first pointer field mints a mask, every one of them
+/// rooted at `globalThis` forever. Since a plain-object property miss forces
+/// that bootstrap, *every real TypeScript program* armed the regime before
+/// user code ran — measured as +28% on `churn` and +29% on `tree`, with
+/// `layout_forget_object` going 112 → 916 ms and 194 → 740 ms of self time.
+///
+/// ## Why dropping the mask is sound
+///
+/// The alternative the code already uses for the very same situation — a
+/// pointer stored into an object whose state is not `POINTER_FREE` — is
+/// [`super::layout::GC_LAYOUT_UNKNOWN`], the tag-checked payload scan. That is
+/// the universally safe state, not a weaker one; the mask is a *precision*
+/// optimization that lets the collector skip known-pointer-free slots.
+///
+/// For an immortal object that precision buys nothing measurable: the object
+/// is never reclaimed, and it is scanned only as part of the root graph. It
+/// costs one tag test per slot on a few hundred objects, against two `RefCell`
+/// round-trips and two hash probes on every allocation the program will ever
+/// make.
+///
+/// ## Deliberately NOT applied to typed-shape layouts
+///
+/// The scope gates ONLY the mask-minting branch of `layout_note_slot`. It must
+/// never redirect a *typed* layout (`init_typed_shape_layout`,
+/// `layout_rebuild_from_slots`) to `GC_LAYOUT_UNKNOWN`: those describe objects
+/// with raw-f64 slots, and a raw double's bit pattern can alias a heap pointer.
+/// A conservative scan would then trace — and, under a copying collector,
+/// *rewrite* — a slot holding a number. `GC_LAYOUT_UNKNOWN` is only safe where
+/// every slot is a NaN-boxed value, which is what the mask-minting branch
+/// already assumes.
+pub struct ImmortalLayoutScope {
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl Default for ImmortalLayoutScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ImmortalLayoutScope {
+    pub fn new() -> Self {
+        IMMORTAL_LAYOUT_SCOPE_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+        Self {
+            _not_send: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for ImmortalLayoutScope {
+    fn drop(&mut self) {
+        IMMORTAL_LAYOUT_SCOPE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// Live entry counts of the two per-object side tables, for `PERRY_GC_DIAG`
+/// and for the tests that assert the bootstrap left them alone.
+pub(crate) fn per_object_layout_table_sizes() -> (usize, usize) {
+    (
+        hot_layout_slot_masks().borrow().len(),
+        hot_typed_layouts().borrow().len(),
+    )
 }
 
 /// True when either per-object side table may hold an entry. `false` is a
@@ -55,7 +306,7 @@ thread_local! {
 /// hint, so every caller still has to handle a miss.
 #[inline(always)]
 pub(in crate::gc) fn per_object_layouts_maybe_nonempty() -> bool {
-    hot_per_object_layouts_nonempty().get()
+    hot_per_object_layout_hint().nonempty.get()
 }
 
 /// Arm the flag. Called by anything that inserts into either map — including
@@ -63,7 +314,7 @@ pub(in crate::gc) fn per_object_layouts_maybe_nonempty() -> bool {
 /// through the wrappers below.
 #[inline(always)]
 pub(in crate::gc) fn mark_per_object_layouts_nonempty() {
-    hot_per_object_layouts_nonempty().set(true);
+    hot_per_object_layout_hint().nonempty.set(true);
 }
 
 /// Re-establish the flag after a removal emptied one map: clear it once the
@@ -79,7 +330,11 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
         return;
     }
     if hot_layout_slot_masks().borrow().is_empty() && hot_typed_layouts().borrow().is_empty() {
-        hot_per_object_layouts_nonempty().set(false);
+        hot_per_object_layout_hint().nonempty.set(false);
+        // Both maps are empty, so every bit is now stale. Clearing here is what
+        // makes the filter's occupancy track LIVE entries rather than every
+        // entry the program has ever created.
+        layout_addr_filter_clear();
     }
 }
 
@@ -87,6 +342,7 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
 #[inline]
 pub(in crate::gc) fn typed_layouts_insert(user_ptr: usize, descriptor: TypedLayoutDescriptor) {
     mark_per_object_layouts_nonempty();
+    layout_addr_filter_add(user_ptr);
     hot_typed_layouts()
         .borrow_mut()
         .insert(user_ptr, descriptor);
@@ -96,13 +352,14 @@ pub(in crate::gc) fn typed_layouts_insert(user_ptr: usize, descriptor: TypedLayo
 #[inline]
 pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) {
     mark_per_object_layouts_nonempty();
+    layout_addr_filter_add(user_ptr);
     hot_layout_slot_masks().borrow_mut().insert(user_ptr, mask);
 }
 
 /// Drop `user_ptr`'s per-object typed descriptor (only).
 #[inline]
 pub(in crate::gc) fn typed_layouts_remove(user_ptr: usize) {
-    if !per_object_layouts_maybe_nonempty() {
+    if !per_object_layouts_maybe_nonempty() || !layout_addr_filter_may_hold(user_ptr) {
         return;
     }
     let emptied = {
@@ -115,7 +372,7 @@ pub(in crate::gc) fn typed_layouts_remove(user_ptr: usize) {
 /// Drop `user_ptr`'s per-object pointer mask (only).
 #[inline]
 pub(in crate::gc) fn slot_masks_remove(user_ptr: usize) {
-    if !per_object_layouts_maybe_nonempty() {
+    if !per_object_layouts_maybe_nonempty() || !layout_addr_filter_may_hold(user_ptr) {
         return;
     }
     let emptied = {
@@ -133,7 +390,7 @@ pub(in crate::gc) fn with_per_object_descriptor<R>(
     user_ptr: usize,
     f: impl FnOnce(&TypedLayoutDescriptor) -> R,
 ) -> Option<R> {
-    if !per_object_layouts_maybe_nonempty() {
+    if !per_object_layouts_maybe_nonempty() || !layout_addr_filter_may_hold(user_ptr) {
         return None;
     }
     hot_typed_layouts().borrow().get(&user_ptr).map(f)
@@ -144,7 +401,7 @@ pub(in crate::gc) fn with_per_object_descriptor<R>(
 /// as much here as it is on the mutator side.
 #[inline]
 pub(in crate::gc) fn per_object_slot_mask(user_ptr: usize) -> Option<LayoutSlotMask> {
-    if !per_object_layouts_maybe_nonempty() {
+    if !per_object_layouts_maybe_nonempty() || !layout_addr_filter_may_hold(user_ptr) {
         return None;
     }
     hot_layout_slot_masks().borrow().get(&user_ptr).cloned()
@@ -160,7 +417,12 @@ pub(in crate::gc) fn per_object_slot_mask(user_ptr: usize) -> Option<LayoutSlotM
 /// evacuation. The shape-keyed half is unaffected: it needs no move at all.
 #[inline]
 pub(in crate::gc) fn transfer_per_object_descriptor(old_user: usize, new_user: usize) -> bool {
-    if !per_object_layouts_maybe_nonempty() {
+    // BOTH addresses are touched (the destination is cleared of a previous
+    // tenant's record before the source's is moved in), so the filter can only
+    // prove this call unnecessary when it proves both absent.
+    if !per_object_layouts_maybe_nonempty()
+        || (!layout_addr_filter_may_hold(old_user) && !layout_addr_filter_may_hold(new_user))
+    {
         return false;
     }
     let mut typed = hot_typed_layouts().borrow_mut();
@@ -168,6 +430,8 @@ pub(in crate::gc) fn transfer_per_object_descriptor(old_user: usize, new_user: u
     match typed.remove(&old_user) {
         Some(layout) => {
             typed.insert(new_user, layout);
+            drop(typed);
+            layout_addr_filter_add(new_user);
             true
         }
         None => false,
@@ -177,13 +441,17 @@ pub(in crate::gc) fn transfer_per_object_descriptor(old_user: usize, new_user: u
 /// Move `old_user`'s per-object pointer mask to `new_user` (relocation).
 #[inline]
 pub(in crate::gc) fn transfer_per_object_slot_mask(old_user: usize, new_user: usize) {
-    if !per_object_layouts_maybe_nonempty() {
+    if !per_object_layouts_maybe_nonempty()
+        || (!layout_addr_filter_may_hold(old_user) && !layout_addr_filter_may_hold(new_user))
+    {
         return;
     }
     let mut masks = hot_layout_slot_masks().borrow_mut();
     masks.remove(&new_user);
     if let Some(mask) = masks.remove(&old_user) {
         masks.insert(new_user, mask);
+        drop(masks);
+        layout_addr_filter_add(new_user);
     }
 }
 
@@ -200,7 +468,11 @@ pub(in crate::gc) fn transfer_per_object_slot_mask(old_user: usize, new_user: us
 /// pre-#7510 path unchanged, and re-arms the flag on the way out.
 #[inline]
 pub(in crate::gc) fn layout_forget_object(user_ptr: usize) {
-    if !per_object_layouts_maybe_nonempty() {
+    // ONE hot-slot resolution for both halves of the guard: the flag (cheap,
+    // and false for the overwhelming majority of workloads) and then the
+    // address filter (what rescues a workload with an immortal record).
+    let hint = hot_per_object_layout_hint();
+    if !hint.nonempty.get() || !hint_may_hold(hint, user_ptr) {
         return;
     }
     // One `borrow_mut` per map, not a `borrow` to test emptiness followed by a

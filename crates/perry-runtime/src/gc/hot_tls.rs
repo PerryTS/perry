@@ -24,7 +24,9 @@ use super::barrier::{
     GC_BIRTH_EXTRA_FLAGS, INCREMENTAL_MARK_BARRIER_MINOR_ONLY, INCREMENTAL_MARK_BARRIER_VALID_PTRS,
 };
 use super::layout::{LayoutSlotMask, TypedLayoutDescriptor, SHAPE_LAYOUTS};
-use super::layout_tables::{LAYOUT_SLOT_MASKS, PER_OBJECT_LAYOUTS_NONEMPTY, TYPED_LAYOUTS};
+use super::layout_tables::{
+    PerObjectLayoutHint, LAYOUT_SLOT_MASKS, PER_OBJECT_LAYOUTS_NONEMPTY, TYPED_LAYOUTS,
+};
 use super::malloc::{ARENA_FREE_LIST, ARENA_FREE_LIST_NONEMPTY};
 use super::trace::ValidPointerSet;
 use std::cell::{Cell, RefCell};
@@ -120,9 +122,9 @@ pub(super) fn hot_shape_layouts() -> &'static RefCell<ShapeLayoutMap> {
 /// per-object layout record at all" question the allocation, store, death and
 /// trace paths all ask (#7510).
 #[inline(always)]
-pub(super) fn hot_per_object_layouts_nonempty() -> &'static Cell<bool> {
+pub(super) fn hot_per_object_layout_hint() -> &'static PerObjectLayoutHint {
     // SAFETY: paired with `per_object_layouts_nonempty_hot_addr` above.
-    unsafe { &*(crate::tls_hot::hot().per_object_layouts_nonempty as *const Cell<bool>) }
+    unsafe { &*(crate::tls_hot::hot().per_object_layouts_nonempty as *const PerObjectLayoutHint) }
 }
 
 // --- gc::malloc -------------------------------------------------------------

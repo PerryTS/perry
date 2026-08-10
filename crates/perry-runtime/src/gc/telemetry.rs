@@ -3,6 +3,14 @@ use super::*;
 /// Number of most-recent pause samples retained per thread (#6187).
 pub const GC_RECENT_PAUSE_WINDOW: usize = 32;
 
+/// Is `PERRY_GC_DIAG` set? Read once and cached, so a diagnostic call site can
+/// sit on a path that runs before/around `main` without paying a `getenv` each
+/// time. Diagnostic-only: nothing may branch on this for behaviour.
+pub fn gc_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("PERRY_GC_DIAG").is_some())
+}
+
 pub struct GcStats {
     pub collection_count: u64,
     pub total_freed_bytes: u64,

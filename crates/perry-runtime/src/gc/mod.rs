@@ -75,6 +75,11 @@ pub(crate) use layout_slot_visit::*;
 /// keeps them off the allocation, store, death and trace paths. Split out of
 /// `layout.rs` so it stays under the repo's 2000-line-per-file cap.
 mod layout_tables;
+// The immortal-object construction window and the table-occupancy readout, both
+// consumed from OUTSIDE `gc`: `object::global_this` opens the window around the
+// `globalThis` bootstrap and prints the residue under `PERRY_GC_DIAG`.
+pub(crate) use layout_tables::per_object_layout_table_sizes;
+pub use layout_tables::ImmortalLayoutScope;
 /// #7510 item 1: the construction-side memo that turns an already-installed
 /// typed shape into two header bit-writes instead of a descriptor build plus a
 /// `SHAPE_LAYOUTS` round-trip.

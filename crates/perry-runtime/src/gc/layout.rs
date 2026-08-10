@@ -909,11 +909,27 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                         set_layout_state(header, GC_LAYOUT_SIDE_MASK);
                     }
                 } else if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
-                    let mut mask = LayoutSlotMask::Inline(0);
-                    mask.set_slot(slot_index);
-                    masks.insert(parent_user, mask);
-                    mark_per_object_layouts_nonempty();
-                    set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+                    if super::layout_tables::immortal_layout_scope_active() {
+                        // An object built inside an `ImmortalLayoutScope` is
+                        // rooted for the life of the process, so the entry it
+                        // would mint here is never removed — and one such
+                        // entry disables `PER_OBJECT_LAYOUTS_NONEMPTY` for
+                        // every allocation the program will ever make. Take
+                        // the same `GC_LAYOUT_UNKNOWN` fallback the `else`
+                        // arm below uses for this exact situation; see
+                        // `ImmortalLayoutScope` for why that is the safe
+                        // state and not a weaker one.
+                        set_layout_state(header, GC_LAYOUT_UNKNOWN);
+                    } else {
+                        let mut mask = LayoutSlotMask::Inline(0);
+                        mask.set_slot(slot_index);
+                        masks.insert(parent_user, mask);
+                        mark_per_object_layouts_nonempty();
+                        // The one insert site that holds its own `borrow_mut`,
+                        // so it maintains the address filter inline too.
+                        super::layout_tables::layout_addr_filter_note(parent_user);
+                        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+                    }
                 } else {
                     set_layout_state(header, GC_LAYOUT_UNKNOWN);
                 }
@@ -1337,6 +1353,18 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
 
     if mask.is_empty() {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        slot_masks_remove(user_ptr as usize);
+    } else if super::layout_tables::immortal_layout_scope_active() {
+        // Same reasoning as the `layout_note_slot` branch: an object built
+        // inside an `ImmortalLayoutScope` never dies, so the mask it would
+        // install here is a permanent tenant of a side table whose emptiness
+        // is a process-wide fast path. Falling back to the tag-checked scan is
+        // sound *for this rebuild specifically* because the mask above is
+        // itself derived from `layout_pointer_bearing_bits` — exactly the test
+        // `GC_LAYOUT_UNKNOWN` re-runs per slot. (This is why the scope may not
+        // be applied to a TYPED descriptor, whose raw-f64 slots the tag test
+        // would misread; see `ImmortalLayoutScope`.)
+        set_layout_state(header, GC_LAYOUT_UNKNOWN);
         slot_masks_remove(user_ptr as usize);
     } else {
         set_layout_state(header, GC_LAYOUT_SIDE_MASK);
