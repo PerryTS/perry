@@ -15,3 +15,8 @@ serde = { workspace = true, optional = true }
 default = []
 # Enables Serialize/Deserialize on ApiEntry for JSON emit (--print-api-manifest).
 serde = ["dep:serde"]
+
+[dev-dependencies]
+# For the dispatch-table/manifest parity test: the table claims to be
+# "auto-derivable" from these entries and nothing checked that it was.
+perry-dispatch = { workspace = true }

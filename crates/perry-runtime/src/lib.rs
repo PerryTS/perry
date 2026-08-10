@@ -247,6 +247,7 @@ mod ui_harmonyos_stubs;
 /// target-aware branching. UI crates register their handlers here at
 /// startup. See module docs for the ohos-napi gating story.
 pub mod ui_text_registry;
+pub mod update_notify;
 pub mod util_abort;
 pub mod util_call_sites;
 pub mod util_debuglog;

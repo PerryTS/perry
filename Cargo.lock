@@ -5609,6 +5609,7 @@ dependencies = [
 name = "perry-api-manifest"
 version = "0.5.1457"
 dependencies = [
+ "perry-dispatch",
  "serde",
 ]
 

@@ -20,6 +20,13 @@ pub struct AppMetadata {
     /// `app_group_*` calls fall through to the runtime's "not configured"
     /// stub-warn diagnostic. Refs #1178.
     pub app_group: Option<String>,
+    /// The validated `perry.update` block, as the JSON blob the runtime reads,
+    /// or `None` when the project configures no update check.
+    ///
+    /// `None` must emit NOTHING — not an empty blob and not a disabled one. A
+    /// binary that configures no updates is byte-identical to one built before
+    /// this existed, and `entry.rs`'s absence test asserts it.
+    pub update_config: Option<String>,
 }
 
 impl Default for AppMetadata {
@@ -29,6 +36,7 @@ impl Default for AppMetadata {
             build_number: 1,
             bundle_id: "com.perry.app".to_string(),
             app_group: None,
+            update_config: None,
         }
     }
 }

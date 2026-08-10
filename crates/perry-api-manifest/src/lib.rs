@@ -1340,3 +1340,47 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod dispatch_parity_tests {
+    /// ★ `PERRY_UPDATER_TABLE`'s own comment says it is "auto-derivable from"
+    /// these entries — but the entries are hand-listed, and nothing checked the
+    /// two agreed.
+    ///
+    /// A dispatch row without its manifest entry makes the strict
+    /// unimplemented-API gate reject user code that calls it. That failure
+    /// surfaces in somebody else's build, which is the wrong place to find out.
+    #[test]
+    fn every_updater_dispatch_row_has_a_manifest_entry() {
+        let declared: Vec<&str> = crate::entries_for_module("perry/updater")
+            .map(|entry| entry.name)
+            .collect();
+        let missing: Vec<&str> = perry_dispatch::PERRY_UPDATER_TABLE
+            .iter()
+            .map(|row| row.method)
+            .filter(|method| !declared.contains(method))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "dispatch rows with no manifest entry: {missing:?} — user code \
+             calling these is rejected by the unimplemented-API gate"
+        );
+    }
+
+    /// And the runtime symbols must stay clear of the prefixes Windows
+    /// synthesizes no-op stubs for. A stubbed symbol returns garbage rather than
+    /// failing to link, which is the worst way to discover a missing definition.
+    #[test]
+    fn no_updater_runtime_symbol_lands_in_the_windows_stub_net() {
+        const STUBBED: &[&str] = &["perry_get_", "perry_ui_", "perry_system_", "perry_plugin_"];
+        for row in perry_dispatch::PERRY_UPDATER_TABLE {
+            for prefix in STUBBED {
+                assert!(
+                    !row.runtime.starts_with(prefix),
+                    "{} starts with {prefix}, which Windows stubs to a no-op",
+                    row.runtime
+                );
+            }
+        }
+    }
+}

@@ -375,6 +375,26 @@ pub(super) fn compile_module_entry(
                 .filter(|s| !s.is_empty())
                 .map(|suite| llmod.add_string_constant(suite))
         };
+        // The `perry.update` blob (Phase B): one string constant plus one
+        // `perry_update_notify_startup(ptr, len)` call at the top of `main`, so
+        // a configured app checks for its own updates without its author
+        // writing a version check. Emitted ONLY when the project configures the
+        // block — a binary with no update settings must be byte-identical to
+        // one built before this existed, which `entry.rs`'s absence test pins.
+        //
+        // Skipped for a dylib for the same reason `app_group` is: there is no
+        // `main` to put a prelude in, so the call would reference a startup
+        // path that does not exist here.
+        let update_init: Option<(String, usize)> = if is_dylib {
+            None
+        } else {
+            cross_module
+                .app_metadata
+                .update_config
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|blob| llmod.add_string_constant(blob))
+        };
         // i18n startup init: when the project configures `[i18n]`, bake the
         // configured locale-code list (and the optional `[i18n.currencies]`
         // map) into `main`'s prelude as a single `perry_i18n_init` call —
@@ -492,6 +512,17 @@ pub(super) fn compile_module_entry(
                 blk.call_void(
                     "perry_app_group_init",
                     &[(PTR, suite_ptr.as_str()), (I32, len_str.as_str())],
+                );
+            }
+            // The update check runs before user code, so an app that exits
+            // early still gets its notice, and so the per-app state directory
+            // is resolved before anything can change the working directory.
+            if let Some((const_name, byte_len)) = update_init.as_ref() {
+                let blob_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                blk.call_void(
+                    "perry_update_notify_startup",
+                    &[(PTR, blob_ptr.as_str()), (I32, len_str.as_str())],
                 );
             }
             // i18n: register the configured locale list + resolve the runtime
