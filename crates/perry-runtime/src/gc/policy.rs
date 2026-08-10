@@ -1529,6 +1529,10 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(post_in_use));
     update_major_pacing_backoff(post_in_use);
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+    // #7742: the dead bytes that whole-block promotion parked in old-gen are
+    // exactly what this collection just reclaimed, so the running budget that
+    // caps them starts over.
+    super::note_full_collection_reclaimed_old_gen();
 }
 
 /// Percent of the pre-full live set a full must reclaim to count as productive.
@@ -1824,7 +1828,13 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
     let stepped = new_total.saturating_add(step);
     let capped = stepped.min(gc_trigger_absolute_ceiling_bytes());
     let floor = new_total.saturating_add(gc_trigger_headroom_floor_bytes());
-    let next_trigger = std::cmp::max(capped, floor);
+    // #7742: whole-block promotion hands Eden's blocks to old-gen instead of
+    // recycling them, so the free young capacity that would have carried the
+    // mutator to the next collection is gone from `new_total`. Give it back as
+    // headroom (consumed once) rather than by re-reserving the blocks, which
+    // would map memory the program may never reach.
+    let next_trigger =
+        std::cmp::max(capped, floor).saturating_add(super::take_promoted_young_capacity_credit());
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
     GC_TRIGGER_ARMED.with(|a| a.set(true));
     // Rebaseline the malloc-count trigger only if this collection

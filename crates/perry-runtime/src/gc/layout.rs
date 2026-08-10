@@ -567,6 +567,30 @@ pub(super) fn reserved_with_copied_survival_age(reserved: u16, age: u8) -> u16 {
     (reserved & !GC_COPY_SURVIVAL_AGE_MASK) | (capped << GC_COPY_SURVIVAL_AGE_SHIFT)
 }
 
+/// Stamp a header the way `move_young`'s promoting arm stamps its to-space
+/// copy — except that whole-block promotion (#7742) has no copy, so the SAME
+/// header is aged in place.
+///
+/// Both halves matter. `GC_FLAG_TENURED` upholds the `Old ⟹ TENURED`
+/// invariant the generated write barrier's fast path is gated on (#7511):
+/// without it, a store into a promoted object would skip the remembering call
+/// entirely and its young child would be swept alive. Clearing
+/// `GC_FLAG_HAS_SURVIVED` and pinning the survival age to
+/// `GC_COPY_PROMOTION_SURVIVALS` keeps `copied_survival_age` reading the same
+/// value it would have read off an evacuated copy, so nothing downstream can
+/// tell a promoted-in-place object from a promoted-by-copy one.
+///
+/// # Safety
+/// `header` must point at a live `GcHeader` inside a block that is being
+/// promoted to old-gen this cycle.
+#[inline]
+pub(crate) unsafe fn stamp_header_promoted_in_place(header: *mut GcHeader) {
+    let flags = (*header).gc_flags;
+    (*header).gc_flags = (flags | GC_FLAG_TENURED) & !GC_FLAG_HAS_SURVIVED;
+    (*header)._reserved =
+        reserved_with_copied_survival_age((*header)._reserved, GC_COPY_PROMOTION_SURVIVALS);
+}
+
 #[inline]
 pub(super) fn strip_nanbox_user_ptr(bits: u64) -> usize {
     if (bits >> 48) >= 0x7FF8 {

@@ -1249,6 +1249,14 @@ fn deferred_registration_flush_sites() {
         ),
         ("defer_old_object_page_registration", "the producer"),
         (
+            "register_promoted_page_run",
+            "#7742: called once per PAGE from `finish_in_place_promotion`'s \
+             single linear walk of a promoted block, which flushes once before \
+             the whole walk. Flushing per call would be the same flush repeated \
+             256 times per 1 MiB block — and cannot be needed, because nothing \
+             between the walk's start and its end allocates into old-gen",
+        ),
+        (
             "flush_deferred_old_page_registrations",
             "the flush entry point",
         ),

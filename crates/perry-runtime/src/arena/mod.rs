@@ -12,6 +12,9 @@ mod allocators;
 mod block;
 mod inline;
 mod page_meta;
+/// #7742: whole-block in-place promotion of a (near-)fully-live young
+/// generation, in place of object-by-object evacuation.
+mod promote;
 /// #7154 tooling: from-space quarantine + poison + `mprotect` so a stale
 /// pointer faults at the instruction that used it. Default-off.
 mod quarantine;
@@ -91,6 +94,14 @@ pub(crate) use reset::{
 };
 pub use reset::{arena_reset_all_blocks_to_zero, arena_reset_empty_blocks};
 
+// promote.rs (#7742 whole-block in-place promotion)
+#[cfg(debug_assertions)]
+pub(crate) use promote::young_in_use_bytes_after_retag;
+pub(crate) use promote::{
+    finish_in_place_promotion, retag_young_for_in_place_promotion, InPlacePromotion,
+    InPlacePromotionStats,
+};
+
 // quarantine.rs (#7154 from-space protection; default-off)
 pub(crate) use quarantine::{copying_quarantine_from_spaces_and_flip, protect_fromspace_enabled};
 #[cfg(test)]
@@ -111,13 +122,14 @@ pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_res
 
 // page_meta.rs (public + pub(crate) classification/page-meta API)
 pub(crate) use page_meta::{
-    classify_heap_generation, classify_heap_space, generation_page_for_addr,
-    old_arena_page_index_remove_object, old_arena_source_blocks_for_pages,
-    old_arena_walk_objects_on_pages, old_object_page_overlaps, old_page_account_dirty_slot,
-    old_page_account_promoted_object, old_page_account_swept_object, old_page_clear_dirty,
-    old_page_mark_dirty, old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
-    old_pages_reset_sweep_accounting, unregister_old_object_pages, HeapGeneration, HeapSpace,
-    OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    classify_heap_generation, classify_heap_space, classify_heap_space_in_range,
+    generation_page_for_addr, old_arena_page_index_remove_object,
+    old_arena_source_blocks_for_pages, old_arena_walk_objects_on_pages, old_object_page_overlaps,
+    old_page_account_dirty_slot, old_page_account_promoted_object, old_page_account_swept_object,
+    old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
+    old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, unregister_old_object_pages,
+    HeapGeneration, HeapSpace, OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta,
+    OldPageSummary,
 };
 
 #[cfg(test)]

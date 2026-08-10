@@ -25,6 +25,17 @@ pub(crate) enum HeapSpace {
     Survivor1,
     Longlived,
     Old,
+    /// A young block that a copying minor decided to promote **whole, in
+    /// place** (`arena/promote.rs`, #7742). Its generation is already `Old` —
+    /// the write barrier, `remembered_child_needs_tracking` and
+    /// `barrier_parent_needs_remembering` all see old-gen semantics from the
+    /// instant the retag lands — but the space stays distinguishable for the
+    /// duration of that one cycle so the copier can tell "must still be
+    /// traced once, because it was young when the cycle began" from a
+    /// genuinely old object it may skip. The finish walk retags it to
+    /// [`HeapSpace::Old`] before the mutator runs again, so no mutator-visible
+    /// classification ever observes this variant.
+    PromotedYoung,
 }
 
 impl HeapSpace {
@@ -474,6 +485,100 @@ pub(crate) fn register_block_space(
     invalidate_generation_cache();
 }
 
+/// Change the generation/space a block already registered at `base..base+size`
+/// reports, **without** disturbing the old-page metadata that
+/// [`unregister_block_generation`] would tear down.
+///
+/// Whole-block promotion (#7742) needs exactly this: the block's bytes do not
+/// move, only their generation label does, and the sequence
+/// `unregister_block_generation` + `register_block_space` is *not* equivalent —
+/// the unregister half drops every `OLD_GEN_PAGE_META` / `OLD_GEN_PAGE_OBJECTS`
+/// entry on those pages, which for the second (PromotedYoung → Old) retag would
+/// throw away the object index the finish walk just built.
+///
+/// Only ranges whose `base`/`end` match exactly are retagged, so a block that
+/// shares a 1 MiB generation class with its neighbours cannot relabel them.
+pub(crate) fn retag_block_space(
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+) {
+    if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
+        return;
+    }
+    let end = base + size;
+    let first_key = generation_class_key_for_addr(base);
+    let last_key = generation_class_key_for_addr(end - 1);
+    PAGE_GENERATIONS.with(|pages| {
+        let mut pages = pages.borrow_mut();
+        for key in first_key..=last_key {
+            let Some(slot) = pages.get_mut(&key) else {
+                continue;
+            };
+            match slot {
+                PageGenerationSlot::Single(range) => {
+                    if range.base == base && range.end == end {
+                        range.generation = generation;
+                        range.space = space;
+                    }
+                }
+                PageGenerationSlot::Multiple(ranges) => {
+                    for range in ranges.iter_mut() {
+                        if range.base == base && range.end == end {
+                            range.generation = generation;
+                            range.space = space;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    if matches!(generation, HeapGeneration::Old) {
+        register_old_block_pages(base, size);
+    }
+    invalidate_generation_cache();
+}
+
+/// Bulk registration of a run of freshly-promoted old-gen objects that share
+/// one 4 KiB page, in **address order**, onto a page whose object list this
+/// promotion is the sole author of.
+///
+/// This is the whole-block-promotion twin of
+/// [`flush_deferred_old_page_registrations_batch`]. It exists because that path
+/// still pays, per object, an `entry(page)` hash lookup, a `contains` scan of
+/// the page's pre-batch list and a `refresh_policy_bits` recompute — costs that
+/// are amortisable when the caller knows, as here, that it is filling one page
+/// once from a linear walk. `headers` is appended wholesale and the meta is
+/// updated once for the whole run.
+///
+/// `bytes` is the number of bytes of the run that fall inside `page` (an object
+/// straddling a page boundary contributes its overlap to each page it touches),
+/// matching `update_old_page_meta_for_object`'s accounting exactly.
+pub(crate) fn register_promoted_page_run(page: usize, headers: &[usize], bytes: usize) {
+    if headers.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_OBJECTS.with(|index| {
+        let mut index = index.borrow_mut();
+        index
+            .entry(page)
+            .or_insert_with(Vec::new)
+            .extend_from_slice(headers);
+    });
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        let page_meta = meta
+            .entry(page)
+            .or_insert_with(|| OldPageMeta::zero_for_page(page));
+        page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
+        page_meta.object_count = page_meta.object_count.saturating_add(headers.len());
+        page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+        page_meta.live_object_count = page_meta.live_object_count.saturating_add(headers.len());
+        page_meta.refresh_policy_bits();
+    });
+}
+
 pub(crate) fn unregister_block_generation(base: usize, size: usize) {
     if base == 0 || size == 0 {
         return;
@@ -571,13 +676,29 @@ fn classify_heap_generation_uncached(addr: usize, key: usize) -> HeapGeneration 
 
 #[inline]
 pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
+    classify_heap_space_in_range(addr).map_or(HeapSpace::Unknown, |(space, _)| space)
+}
+
+/// [`classify_heap_space`] plus the base of the registered range `addr` fell
+/// in.
+///
+/// The base is what lets a caller answer a SECOND classification — the one for
+/// `addr - GC_HEADER_SIZE`, which every object-classifying path needs — with a
+/// bounds compare instead of a second map lookup. A header is on the same
+/// registered range as its user pointer for every real object (a block always
+/// begins with a header, so a user pointer is never within `GC_HEADER_SIZE` of
+/// a range base); the base is precisely the guard that keeps a *garbage*
+/// candidate address at the very start of a range from turning into a read of
+/// the unmapped page below it (#7742).
+#[inline]
+pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, usize)> {
     if addr == 0 {
-        return HeapSpace::Unknown;
+        return None;
     }
     let key = generation_class_key_for_addr(addr);
     // SAFETY: thread-local, single-threaded, and the borrow ends here.
     if let Some(range) = unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
-        return range.space;
+        return Some((range.space, range.base));
     }
 
     let found = {
@@ -587,9 +708,9 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
     if let Some(range) = found {
         // SAFETY: as above.
         unsafe { (*hot_page_generation_cache()).insert(key, range) };
-        range.space
+        Some((range.space, range.base))
     } else {
-        HeapSpace::Unknown
+        None
     }
 }
 

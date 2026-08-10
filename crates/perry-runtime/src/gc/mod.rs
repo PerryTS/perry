@@ -121,6 +121,11 @@ use old_free::*;
 pub(crate) use old_free::{old_free_bytes, old_free_filter_range, old_free_take_exact};
 mod tenuring;
 use tenuring::*;
+/// #7742: the measured policy behind whole-block in-place promotion. The
+/// mechanism is `arena/promote.rs`; this decides when to use it.
+mod promote_in_place;
+use promote_in_place::*;
+pub use promote_in_place::{in_place_promoted_objects, in_place_promotion_cycles};
 mod oldgen;
 use oldgen::*;
 mod oldgen_defrag;

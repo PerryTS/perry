@@ -29,6 +29,7 @@ mod lazy_intrinsic_towers;
 mod lazy_tape_side_alloc;
 mod oldgen;
 mod os_tag;
+mod promote_in_place;
 mod root_words;
 mod roots;
 mod runtime_roots;
