@@ -37,10 +37,12 @@
 //!    `acc = <pure numeric>` statement over tracked `arr[i].field` reads,
 //!    numeric locals, literals and pure arithmetic / `Math` — or, since
 //!    #7771, that statement preceded by exactly one `const r = arr[i]`
-//!    binding whose only uses are tracked `r.field` reads (the binding is
-//!    virtual in the fast clone: its `Let` emits nothing and the reads lower
-//!    through the fact). No store of any kind, no call, no closure, no
-//!    `await`, no update other than the counter's.
+//!    binding whose only uses are tracked `r.field` reads (#7766: the shape
+//!    the `for…of` desugar emits, and the form a parameter array reaches the
+//!    clone through — the binding is virtual in the fast clone: its `Let`
+//!    emits nothing and the reads lower through the fact). No store of any
+//!    kind, no call, no closure, no `await`, no update other than the
+//!    counter's.
 //! 2. **By construction (the lowering).** After the fast clone is emitted,
 //!    every one of its blocks is scanned for a GC-unsafe call
 //!    (`LlBlock::contains_gc_unsafe_call`). If ANY call survived — because
