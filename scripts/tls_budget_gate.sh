@@ -83,7 +83,20 @@ for entry in "${PROGRAMS[@]}"; do
     echo "--- compiling $name"
     # Debug symbols so `sample` can name frames: an unsymbolicated profile
     # reports 0% for everything, which would read as a pass.
-    ( cd "$OUT_DIR" && PERRY_DEBUG_SYMBOLS=1 "$PERRY_BIN" "$src" -o "$exe" >/dev/null )
+    #
+    # Explicitly checked rather than left to `set -e`: a compiler that cannot
+    # run is the one failure that must never be mistaken for "nothing to
+    # measure", and a subshell's status is easy to lose behind a pipe.
+    if ! ( cd "$OUT_DIR" && PERRY_DEBUG_SYMBOLS=1 "$PERRY_BIN" "$src" -o "$exe" >/dev/null ); then
+        echo "tls-budget: compiling $name failed" >&2
+        rc=1
+        continue
+    fi
+    if [[ ! -x "$exe" ]]; then
+        echo "tls-budget: compiling $name produced no executable" >&2
+        rc=1
+        continue
+    fi
 
     # Correctness BEFORE timing: a program that prints the wrong answer is not
     # a faster program.
