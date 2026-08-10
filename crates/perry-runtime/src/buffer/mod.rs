@@ -37,6 +37,10 @@ pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
 pub(crate) use header::is_small_buf_slab_addr;
+// `shared_sab` publishes process-global backings that `is_registered_buffer`
+// reports as buffers without them entering `BUFFER_REGISTRY`, so it arms the
+// same monotone latch — before the backing becomes reachable.
+pub(crate) use header::note_buffer_like_registered;
 pub use header::{
     asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
     buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,

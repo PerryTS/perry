@@ -139,6 +139,9 @@ pub mod pty;
 pub mod punycode;
 pub mod readline_helpers;
 pub mod regex;
+pub mod registry_latch;
+#[cfg(test)]
+mod registry_latch_probes;
 pub mod safe_area;
 pub mod set;
 pub mod shared_sab;

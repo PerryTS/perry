@@ -300,13 +300,36 @@ fn ta_kind_cache_get(addr: usize) -> Option<Option<u8>> {
     }
 }
 
+/// Monotone "this process has created at least one typed array" latch.
+///
+/// `lookup_typed_array_kind` is one of the two hottest generic-path probes in
+/// the runtime (measured 2.45% of an async-pipeline program and 3.4% of a
+/// tree-walking interpreter, neither of which constructs a typed array). Even
+/// with the #5525 direct-mapped cache in front of it, a program with no typed
+/// arrays pays a cache probe, a `_tlv_get_addr`, a `RefCell` borrow, a hash and
+/// a negative-entry write-back for every untyped element access and every
+/// generic "is this special?" question. The latch collapses all of that to one
+/// atomic load. See `crate::registry_latch` for the ordering rule.
+static TYPED_ARRAY_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
+    crate::registry_latch::RegistryLatch::new();
+
 pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
+    // Arm BEFORE either table becomes readable — an arm placed after the stores
+    // would leave a window in which `lookup_typed_array_kind` answers `None` for
+    // this very array. See `crate::registry_latch`.
+    TYPED_ARRAY_EVER_REGISTERED.arm();
     // Keep the cache authoritative: overwrite any colliding/stale slot so a
     // freed-then-reused address never reads back its previous kind.
     ta_kind_cache_store(ptr as usize, kind);
     TYPED_ARRAY_REGISTRY.with(|r| {
         r.borrow_mut().insert(ptr as usize, kind);
     });
+}
+
+/// Test hook: has any typed array ever been registered in this process?
+#[cfg(test)]
+pub(crate) fn typed_array_registry_ever_used() -> bool {
+    TYPED_ARRAY_EVER_REGISTERED.is_armed()
 }
 
 pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
@@ -326,6 +349,17 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
 /// Returns Some(kind) if the (already-stripped) address is a registered
 /// typed array, else None.
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
+    // Nothing has ever been registered ⟹ nothing to find. Checked ahead of the
+    // #5525 cache because it is the only arm that costs neither a cache-slot
+    // load nor a negative-entry write-back: a program with no typed arrays runs
+    // every untyped `arr[i]` through here, and every one of those would
+    // otherwise miss the direct-mapped cache (cold address), resolve the
+    // thread-local registry and then dirty a shared cache line recording the
+    // miss. `register_typed_array` arms the latch before it populates either
+    // table, so an armed==false answer can never be wrong.
+    if TYPED_ARRAY_EVER_REGISTERED.is_idle() {
+        return None;
+    }
     // #5525 fast path: the process-global cache resolves the hot,
     // repeated-same-address lookups without touching the thread-local
     // registry. A miss (cold address or direct-mapped eviction) falls back to

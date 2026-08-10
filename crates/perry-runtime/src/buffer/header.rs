@@ -138,30 +138,82 @@ thread_local! {
         RefCell::new(new_ptr_hash_map());
 }
 
+use crate::registry_latch::RegistryLatch;
+
+/// Monotone "at least one `Buffer`-shaped allocation exists" latch.
+///
+/// `is_registered_buffer` is one of the two hottest generic-path probes in the
+/// runtime (measured 2.40% of an async service pipeline and 1.9% of a
+/// tree-walking interpreter, neither of which allocates a `Buffer`): it is
+/// reached from `typedarray::is_offheap_sidetable_alloc` — and therefore from
+/// every `Date`/`Temporal` brand check — from `JSON.stringify` for every
+/// pointer value serialized (#6009), from console formatting, from array
+/// indexing and from ~200 other sites. Without the latch each of those pays a
+/// `_tlv_get_addr`, a `RefCell` borrow and a hash probe, plus a call into
+/// `shared_sab::is_shared_sab`.
+///
+/// The latch covers the SAB fallback too, so the idle answer is a single atomic
+/// load rather than one per registry — hence [`note_buffer_like_registered`],
+/// which `shared_sab::alloc_shared_sab` calls before publishing a backing.
+static BUFFER_LIKE_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
+
+/// Arm the `is_registered_buffer` latch from outside this module.
+///
+/// `shared_sab` publishes process-global backings that `is_registered_buffer`
+/// reports as buffers without them ever entering `BUFFER_REGISTRY`, so it must
+/// arm the same latch — and, per the [`crate::registry_latch`] rule, must do so
+/// *before* the backing becomes reachable.
+pub(crate) fn note_buffer_like_registered() {
+    BUFFER_LIKE_EVER_REGISTERED.arm();
+}
+
+/// Monotone latches for the remaining address-keyed buffer side tables. Each
+/// probe below sits on a generic path (`util.types` predicates, `.buffer` /
+/// `.byteLength` property reads, KeyObject dispatch, typed-array own-property
+/// resolution) and each is a pure "is this value special?" question that a
+/// program never using the feature should answer for free.
+static ARRAY_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+static SHARED_ARRAY_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+static DATA_VIEW_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+static UINT8ARRAY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+static SECRET_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+static CRYPTO_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+static ASYMMETRIC_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+static BUFFER_AB_ALIAS_EVER_SET: RegistryLatch = RegistryLatch::new();
+
 pub fn mark_as_array_buffer(addr: usize) {
+    ARRAY_BUFFER_EVER_MARKED.arm();
     ARRAY_BUFFER_REGISTRY.with(|r| {
         r.borrow_mut().insert(addr);
     });
 }
 
 pub fn is_array_buffer(addr: usize) -> bool {
+    if ARRAY_BUFFER_EVER_MARKED.is_idle() {
+        return false;
+    }
     ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
 pub fn mark_as_shared_array_buffer(addr: usize) {
+    SHARED_ARRAY_BUFFER_EVER_MARKED.arm();
     SHARED_ARRAY_BUFFER_REGISTRY.with(|r| {
         r.borrow_mut().insert(addr);
     });
 }
 
 pub fn is_shared_array_buffer(addr: usize) -> bool {
-    if SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+    if SHARED_ARRAY_BUFFER_EVER_MARKED.is_armed()
+        && SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+    {
         return true;
     }
     // #4913: a SAB backing is process-global. If this thread received it as a
     // module-level value (not a serialized `perry/thread` capture, which would
     // have re-registered it locally) the thread-local set misses, so fall back
     // to the process-global registry. Slow path only — thread-local hits first.
+    // (`is_shared_sab` carries its own `SHARED_SAB_NONEMPTY` latch, so the
+    // no-SAB process pays one more atomic load and no lock.)
     crate::shared_sab::is_shared_sab(addr)
 }
 
@@ -170,12 +222,16 @@ pub fn is_any_array_buffer(addr: usize) -> bool {
 }
 
 pub fn mark_as_data_view(addr: usize) {
+    DATA_VIEW_EVER_MARKED.arm();
     DATA_VIEW_REGISTRY.with(|r| {
         r.borrow_mut().insert(addr);
     });
 }
 
 pub fn is_data_view(addr: usize) -> bool {
+    if DATA_VIEW_EVER_MARKED.is_idle() {
+        return false;
+    }
     DATA_VIEW_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
@@ -202,6 +258,10 @@ pub fn register_buffer(ptr: *const BufferHeader) {
     // address, and without this the no-ops would carry over and the real packet
     // would serialize as all zeros (the MySQL server then times out reading it).
     super::own_props::clear_buffer_own_props(ptr as usize);
+    // Arm BEFORE the insert: an arm placed afterwards leaves a window in which
+    // this buffer is in the registry while `is_registered_buffer` still takes
+    // the idle fast path and denies it. See `crate::registry_latch`.
+    BUFFER_LIKE_EVER_REGISTERED.arm();
     BUFFER_REGISTRY.with(|r| r.borrow_mut().insert(ptr as usize));
 }
 
@@ -221,6 +281,13 @@ pub(crate) fn is_small_buf_slab_addr(_addr: usize) -> bool {
 
 /// Check if a pointer is a registered buffer (for instanceof Uint8Array)
 pub fn is_registered_buffer(addr: usize) -> bool {
+    // Nothing buffer-shaped has ever been registered anywhere in this process
+    // ⟹ nothing to find, in one atomic load. `register_buffer` (which
+    // `js_buffer_register_external` also routes through) and
+    // `shared_sab::alloc_shared_sab` both arm this latch before they publish.
+    if BUFFER_LIKE_EVER_REGISTERED.is_idle() {
+        return false;
+    }
     if BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
         return true;
     }
@@ -241,6 +308,7 @@ pub fn is_registered_buffer(addr: usize) -> bool {
 /// Mark this buffer as one that came from `new Uint8Array(...)` so it
 /// formats as `Uint8Array(N) [ ... ]` rather than `<Buffer ...>`.
 pub fn mark_as_uint8array(addr: usize) {
+    UINT8ARRAY_EVER_MARKED.arm();
     UINT8ARRAY_FROM_CTOR.with(|r| {
         r.borrow_mut().insert(addr);
     });
@@ -267,12 +335,16 @@ pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
 }
 
 pub fn mark_as_secret_key(addr: usize) {
+    SECRET_KEY_EVER_MARKED.arm();
     SECRET_KEY_REGISTRY.with(|r| {
         r.borrow_mut().insert(addr);
     });
 }
 
 pub fn is_secret_key(addr: usize) -> bool {
+    if SECRET_KEY_EVER_MARKED.is_idle() {
+        return false;
+    }
     SECRET_KEY_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
@@ -297,6 +369,7 @@ pub fn mark_as_crypto_key_with_flags(
     usages: u32,
     bit_length: u32,
 ) {
+    CRYPTO_KEY_EVER_MARKED.arm();
     CRYPTO_KEY_META_REGISTRY.with(|r| {
         r.borrow_mut()
             .insert(addr, (algo, hash, kind, extractable, usages, bit_length));
@@ -333,6 +406,11 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
 }
 
 pub fn crypto_key_meta(addr: usize) -> Option<CryptoKeyMeta> {
+    // `js_buffer_mark_as_crypto_key_external` arms via
+    // `mark_as_crypto_key_with_flags` before touching either table.
+    if CRYPTO_KEY_EVER_MARKED.is_idle() {
+        return None;
+    }
     CRYPTO_KEY_META_REGISTRY
         .with(|r| r.borrow().get(&addr).copied())
         .or_else(|| {
@@ -376,16 +454,28 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
 
 /// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec, 3 ed25519, 4 x25519.
 pub fn mark_as_asymmetric_key(addr: usize, kind: u8, asym_type: u8) {
+    ASYMMETRIC_KEY_EVER_MARKED.arm();
     ASYMMETRIC_KEY_REGISTRY.with(|r| {
         r.borrow_mut().insert(addr, (kind, asym_type));
     });
 }
 
 pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
+    if ASYMMETRIC_KEY_EVER_MARKED.is_idle() {
+        return None;
+    }
     ASYMMETRIC_KEY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
 }
 
 pub fn is_uint8array_buffer(addr: usize) -> bool {
+    // Reached from `typedarray_props::typed_array_owner_kind` for every untyped
+    // element access, so the idle case must not take the global mutex: before
+    // the latch this locked `external_uint8arrays()` on EVERY thread-local
+    // miss, i.e. on every non-Uint8Array value, in every process — the one
+    // probe in this family whose miss cost a lock rather than a hash.
+    if UINT8ARRAY_EVER_MARKED.is_idle() {
+        return false;
+    }
     UINT8ARRAY_FROM_CTOR.with(|r| r.borrow().contains(&addr))
         || external_uint8arrays()
             .lock()
@@ -397,6 +487,7 @@ pub fn is_uint8array_buffer(addr: usize) -> bool {
 /// `buf` itself.  Used by copy paths (`Buffer.from(src)`) to propagate the
 /// source's ArrayBuffer identity onto the new buffer — see #1225.
 pub fn set_buffer_ab_alias(buf: usize, alias: usize) {
+    BUFFER_AB_ALIAS_EVER_SET.arm();
     BUFFER_AB_ALIAS.with(|m| {
         m.borrow_mut().insert(buf, alias);
     });
@@ -406,6 +497,9 @@ pub fn set_buffer_ab_alias(buf: usize, alias: usize) {
 /// buffers that haven't been involved in a copy chain (their `.buffer` just
 /// returns themselves, as before).
 pub fn buffer_ab_alias(buf: usize) -> Option<usize> {
+    if BUFFER_AB_ALIAS_EVER_SET.is_idle() {
+        return None;
+    }
     BUFFER_AB_ALIAS.with(|m| m.borrow().get(&buf).copied())
 }
 
