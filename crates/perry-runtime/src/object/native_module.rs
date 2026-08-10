@@ -46,7 +46,7 @@ pub(crate) use namespace_builders::{
 };
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
 
-thread_local! {
+crate::perry_thread_local! {
     pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     pub(crate) static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =

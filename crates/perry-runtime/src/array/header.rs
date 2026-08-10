@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Tagged-template `.raw` side-table — maps a cooked-strings array
     /// pointer to its corresponding raw-strings array pointer. Populated
     /// by `js_tagged_template_register_raw` at the tagged-call site; read

@@ -18,7 +18,7 @@ use super::*;
 use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use std::cell::RefCell;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Buffers detached via `transfer`/`transferToFixedLength`/structuredClone
     /// transfer. A detached buffer also has `length == capacity == 0`, but that
     /// alone cannot be the probe: `new ArrayBuffer(0)` is empty yet NOT

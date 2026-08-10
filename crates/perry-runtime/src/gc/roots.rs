@@ -91,7 +91,7 @@ pub(super) enum RuntimeHandleSlot {
     HeapWord(u64),
 }
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
     pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScannerEntry>> = const { RefCell::new(Vec::new()) };
     pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());

@@ -68,7 +68,7 @@ const EMPTY_VTABLE_IC_ENTRY: VTableICEntry = VTableICEntry {
     has_rest: 0,
 };
 
-thread_local! {
+crate::perry_thread_local! {
     // arm64_32 fix: HEAP-allocate (Box) this ~160KB cache instead of inline TLS.
     // Oversized `#[thread_local]` storage overflows the ILP32 TLS layout and its
     // writes corrupt adjacent thread-locals. Boxing keeps only a pointer in TLS.

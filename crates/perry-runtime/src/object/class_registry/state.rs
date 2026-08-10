@@ -2,7 +2,7 @@ use super::*;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-thread_local! {
+crate::perry_thread_local! {
     pub(crate) static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }

@@ -94,7 +94,7 @@ pub use exec::js_regexp_exec;
 #[cfg(feature = "regex-engine")]
 pub use match_string::{js_string_match, js_string_match_value, js_string_search_value};
 
-thread_local! {
+crate::perry_thread_local! {
     /// Last exec result metadata: (index, groups_object_ptr)
     /// Stored per-thread so that `m.index` and `m.groups` can retrieve them
     /// after the exec call.
@@ -218,7 +218,7 @@ pub(crate) unsafe fn regex_gc_slot_ptrs(re: *mut RegExpHeader) -> (*mut u64, usi
 }
 
 #[cfg(feature = "regex-engine")]
-thread_local! {
+crate::perry_thread_local! {
     /// Cache of compiled regex objects, keyed by (pattern, flags).
     static REGEX_CACHE: RefCell<HashMap<(String, String), Arc<Regex>>> = RefCell::new(HashMap::new());
     /// Fancy-regex fallback cache for patterns with lookbehind/lookahead.

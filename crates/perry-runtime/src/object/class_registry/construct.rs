@@ -1,7 +1,7 @@
 use super::*;
 use crate::JSValue;
 
-thread_local! {
+crate::perry_thread_local! {
     /// `new.target` for the construction currently on this thread's stack.
     ///
     /// **This is a GC root, and must stay one (#7231).** It holds a NaN-boxed

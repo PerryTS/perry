@@ -136,7 +136,7 @@ pub(crate) struct ElementShapeProof {
     pub(crate) epoch: u64,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Address-keyed element-shape records. `PtrHashMap` for the same reason
     /// `ARRAY_NAMED_PROPS` uses it (#6386): the key is already a
     /// well-distributed address and SipHash dominates the probe.

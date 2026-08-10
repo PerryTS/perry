@@ -168,7 +168,7 @@ pub struct TypedArrayHeader {
     pub _pad: [u8; 6],
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Address -> kind, so we can detect typed arrays at format/instanceof time.
     /// PtrHasher (Fibonacci-multiplicative + xorshift): heap pointers don't
     /// need SipHash. Hot on `is_registered_buffer`-adjacent dispatch paths

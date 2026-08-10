@@ -14,7 +14,7 @@ use super::*;
 // evaporates" signature. Find it by diffing the unmatched-await backtraces of
 // a working run against a hanging one; the SUSPEND line carries the site.
 // A no-op (one cached bool check) when the env var is unset.
-thread_local! {
+crate::perry_thread_local! {
     static TRACE_ASYNC_ON: std::cell::Cell<i8> = const { std::cell::Cell::new(-1) };
     static TRACE_ASYNC_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static TRACE_ASYNC_AWAITED: std::cell::RefCell<std::collections::HashSet<usize>> =
@@ -853,7 +853,7 @@ static KEEP_JS_ASYNC_GENERATOR_RESUME: extern "C" fn(f64, f64, f64) -> f64 =
 // return the cached thunks; otherwise we allocate. The thunks are
 // GC-rooted via `ASYNC_STEP_THUNK_CACHE_SCANNER` so they survive
 // collection until evicted by a different step closure.
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static LAST_ASYNC_STEP_THUNKS: std::cell::Cell<(usize, *mut crate::closure::ClosureHeader, *mut crate::closure::ClosureHeader)> =
         const { std::cell::Cell::new((0, std::ptr::null_mut(), std::ptr::null_mut())) };
 }

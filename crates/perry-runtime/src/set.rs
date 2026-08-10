@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
-thread_local! {
+crate::perry_thread_local! {
     static SET_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
 }
 
@@ -60,7 +60,7 @@ pub(crate) fn test_clear_set_iterator_arrays() {
 }
 
 #[cfg(test)]
-thread_local! {
+crate::perry_thread_local! {
     static TEST_FORCE_HELPER_GC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -140,7 +140,7 @@ impl Drop for SetSideAllocation {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static SET_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, SetSideAllocation>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
@@ -190,7 +190,7 @@ impl Eq for JSValueKey {}
 // avalanche step handles both cleanly. Same rationale as MAP_INDEX
 // (commit 39e253cd) — the perry-runtime registries don't need
 // SipHash's DoS-resistance for keys that never come from external input.
-thread_local! {
+crate::perry_thread_local! {
     static SET_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<JSValueKey, u32>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());

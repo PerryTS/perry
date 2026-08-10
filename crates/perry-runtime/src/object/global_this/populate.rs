@@ -848,7 +848,7 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
     );
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Raw address of THIS thread's `Error` constructor closure, captured at
     /// install. Read by `error::error_prepare_stack_trace_override` so
     /// `captureStackTrace` / `error.stack` can honor a user-set

@@ -44,7 +44,7 @@ struct AsyncGeneratorQueueState {
     queue: VecDeque<AsyncGeneratorRequest>,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static STATES: RefCell<Vec<AsyncGeneratorQueueState>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -182,7 +182,7 @@ fn set_method(obj: *mut ObjectHeader, name: &[u8], closure: *mut ClosureHeader) 
 /// uninitialized stack slot for `arg` instead of `undefined`. Record arity 1
 /// for all three func pointers so the call path pads the missing argument.
 fn register_wrapper_arities() {
-    thread_local! {
+    crate::perry_thread_local! {
         static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     REGISTERED.with(|done| {

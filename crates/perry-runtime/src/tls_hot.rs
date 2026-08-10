@@ -83,7 +83,26 @@
 //! every thread falls back to `_tlv_get_addr`, permanently and silently
 //! correctly. It cannot degrade into reading a wrong address.
 
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
+
+/// How many generic [`HotKey`] slots one thread's cache can hold.
+///
+/// One `*mut u8` each, in `__thread_bss`, so the cost is address space rather
+/// than image size. `perry-runtime` declares ~520 `thread_local!`s in total, so
+/// this leaves headroom for every one of them plus `perry-stdlib`'s, and the
+/// `tls_hot_capacity_covers_every_declaration` gate in
+/// `scripts/check_thread_locals.py` fails the build before a claim can be
+/// refused. Overflow is *correct* — the declaration simply falls back to the
+/// plain `thread_local!` path forever — but it is silent, which is exactly the
+/// failure mode this file exists to abolish, hence the gate.
+pub const HOT_SLOT_CAPACITY: usize = 768;
+
+/// A [`SlotId`] that has never been claimed.
+const SLOT_UNASSIGNED: u32 = u32::MAX;
+/// A [`SlotId`] that asked for a slot after the last one was handed out. Both
+/// sentinels are `>= HOT_SLOT_CAPACITY`, so the one bound check on the hot path
+/// rejects them together.
+const SLOT_OVERFLOW: u32 = u32::MAX - 1;
 
 /// Cached addresses of the per-thread state on the allocation hot path.
 ///
@@ -115,9 +134,31 @@ pub(crate) struct HotTls {
     pub(crate) learned_inline_fields: *mut u8,
     // gc/roots/temp_roots.rs
     pub(crate) temp_roots: *mut u8,
+    /// Generic slots, one per [`crate::perry_thread_local`] declaration that
+    /// this thread has resolved at least once. Last, so the named fields above
+    /// keep their small fixed offsets.
+    slots: [Cell<*mut u8>; HOT_SLOT_CAPACITY],
 }
 
 impl HotTls {
+    /// Read a claimed slot. `idx` must have passed the `< HOT_SLOT_CAPACITY`
+    /// test that both sentinels fail.
+    #[inline(always)]
+    fn slot(&self, idx: u32) -> *mut u8 {
+        debug_assert!((idx as usize) < HOT_SLOT_CAPACITY);
+        // SAFETY: the caller checked the bound; this elides the panic path from
+        // every hot read, which is the whole point of the check being a single
+        // unsigned compare against a constant.
+        unsafe { self.slots.get_unchecked(idx as usize).get() }
+    }
+
+    #[inline(always)]
+    fn set_slot(&self, idx: u32, value: *mut u8) {
+        debug_assert!((idx as usize) < HOT_SLOT_CAPACITY);
+        // SAFETY: as `slot` above.
+        unsafe { self.slots.get_unchecked(idx as usize).set(value) }
+    }
+
     const EMPTY: Self = Self {
         arena: std::ptr::null_mut(),
         inline_state: std::ptr::null_mut(),
@@ -135,6 +176,7 @@ impl HotTls {
         shape_install_memo: std::ptr::null_mut(),
         learned_inline_fields: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
+        slots: [const { Cell::new(std::ptr::null_mut()) }; HOT_SLOT_CAPACITY],
     };
 }
 
@@ -378,6 +420,390 @@ pub(crate) fn hot() -> &'static HotTls {
     hot_via_tls()
 }
 
+// ---------------------------------------------------------------------------
+// Generic slots: the same collapse, without a list anyone has to maintain.
+// ---------------------------------------------------------------------------
+
+/// The process-wide slot index for one [`crate::perry_thread_local`]
+/// declaration.
+///
+/// Claimed once, on the first thread that resolves the declaration, and stable
+/// for the life of the process — so every thread finds the same declaration at
+/// the same index in its own cache.
+pub struct SlotId(std::sync::atomic::AtomicU32);
+
+impl SlotId {
+    pub const fn new() -> Self {
+        Self(std::sync::atomic::AtomicU32::new(SLOT_UNASSIGNED))
+    }
+
+    /// The claimed index, or a sentinel `>= HOT_SLOT_CAPACITY`.
+    ///
+    /// Relaxed is sufficient: the index is a pure allocation decision, and the
+    /// *pointer* it selects is per-thread and published by that same thread.
+    #[inline(always)]
+    fn raw(&self) -> u32 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Claim this declaration's index, once per process.
+    ///
+    /// Under a mutex rather than a bare `fetch_add` because a lost race would
+    /// *leak* the index it lost with: eight `parallelMap` workers first-touching
+    /// the same declaration together would burn eight slots for one declaration,
+    /// and `HOT_SLOT_CAPACITY` is sized for declarations, not for declarations
+    /// times threads.
+    #[cold]
+    #[inline(never)]
+    fn claim(&self) -> u32 {
+        use std::sync::atomic::Ordering;
+        let mut next = match CLAIM_LOCK.lock() {
+            Ok(next) => next,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let current = self.0.load(Ordering::Relaxed);
+        if current != SLOT_UNASSIGNED {
+            return current;
+        }
+        let idx = if (*next as usize) < HOT_SLOT_CAPACITY {
+            let idx = *next;
+            *next += 1;
+            idx
+        } else {
+            SLOT_OVERFLOW
+        };
+        self.0.store(idx, Ordering::Relaxed);
+        idx
+    }
+}
+
+impl Default for SlotId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The next index [`SlotId::claim`] will hand out. Also the count of
+/// declarations claimed so far, which is what
+/// [`claimed_slots`] reports and what the capacity test asserts against.
+static CLAIM_LOCK: std::sync::Mutex<u32> = std::sync::Mutex::new(0);
+
+/// How many declarations have claimed a slot in this process.
+///
+/// Instrumentation for the capacity assertion: overflow is silent by design
+/// (the declaration keeps working, slowly), so something has to be able to see
+/// how close the process is to the ceiling.
+pub fn claimed_slots() -> u32 {
+    match CLAIM_LOCK.lock() {
+        Ok(next) => *next,
+        Err(poisoned) => *poisoned.into_inner(),
+    }
+}
+
+/// The storage a [`crate::perry_thread_local`] declaration actually owns.
+///
+/// `GUARD` is `needs_drop::<T>() as usize`, filled in by the macro at each
+/// declaration, and it is the whole reason this is a const-generic type rather
+/// than a plain struct.
+///
+/// * `T` owns something (`RefCell<HashMap<…>>`): `GUARD == 1`. The array's
+///   element runs first — fields drop in declaration order, and `guard` is
+///   declared first — so this thread's cached address is un-published *before*
+///   `inner` is destroyed. A later access finds a null slot, falls back to the
+///   real `thread_local!`, and gets std's "accessed during or after
+///   destruction" panic instead of reading a dropped `HashMap`. The named-field
+///   cache above has no such hook; this is strictly safer than it.
+/// * `T` owns nothing (`Cell<u64>`): `GUARD == 0`. A zero-length array has no
+///   drop glue, so `HotCell` has none either: no destructor is registered, the
+///   `const`-init fast path in std is preserved, and a value that could always
+///   be read during teardown still can be. Caching cannot make it dangle
+///   because there is nothing to destroy.
+pub struct HotCell<T: 'static, const GUARD: usize> {
+    guard: [SlotGuard; GUARD],
+    inner: T,
+}
+
+impl<T: 'static, const GUARD: usize> HotCell<T, GUARD> {
+    pub const fn new(inner: T) -> Self {
+        Self {
+            guard: [const { SlotGuard::new() }; GUARD],
+            inner,
+        }
+    }
+
+    /// The address the cache stores: the *value*, so [`HotKey`] never has to
+    /// know this type's layout — or its `GUARD`.
+    #[doc(hidden)]
+    pub fn value_addr(&self) -> *mut u8 {
+        &self.inner as *const T as *mut u8
+    }
+
+    /// Tell the teardown guard, if there is one, which slot to un-publish.
+    #[doc(hidden)]
+    pub fn arm_guard(&self, idx: u32) {
+        if let Some(guard) = self.guard.first() {
+            guard.idx.set(idx);
+        }
+    }
+}
+
+/// Nulls this thread's cached pointer when the value it points into is about
+/// to be destroyed.
+struct SlotGuard {
+    idx: Cell<u32>,
+}
+
+impl SlotGuard {
+    const fn new() -> Self {
+        Self {
+            idx: Cell::new(SLOT_UNASSIGNED),
+        }
+    }
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        let idx = self.idx.get();
+        if (idx as usize) < HOT_SLOT_CAPACITY {
+            hot().set_slot(idx, std::ptr::null_mut());
+        }
+    }
+}
+
+/// A thread-local whose address is cached in this thread's [`HotTls`].
+///
+/// Drop-in for `std::thread::LocalKey` at the call site: `with` and `try_with`
+/// keep the same signatures, so converting a declaration converts every one of
+/// its uses.
+pub struct HotKey<T: 'static> {
+    slot: &'static SlotId,
+    /// Resolves the owning `thread_local!` the ordinary way and returns the
+    /// address of its *value*. Cold path only — never called once the slot is
+    /// populated, so the indirect call never appears on a hot path.
+    resolve: fn() -> Result<*mut u8, std::thread::AccessError>,
+    /// Records the claimed index in this thread's teardown guard, if the value
+    /// has one. Generated alongside the storage, so it knows the `GUARD` that
+    /// `HotKey` deliberately does not.
+    arm_guard: fn(u32),
+    _not_send: std::marker::PhantomData<*const T>,
+}
+
+// SAFETY: exactly `LocalKey`'s argument. `HotKey` is a handle, not storage:
+// every path through it resolves the *calling* thread's own cell, so no `T` is
+// ever observed from a thread other than the one that owns it.
+unsafe impl<T: 'static> Sync for HotKey<T> {}
+
+impl<T: 'static> HotKey<T> {
+    #[doc(hidden)]
+    pub const fn new(
+        slot: &'static SlotId,
+        resolve: fn() -> Result<*mut u8, std::thread::AccessError>,
+        arm_guard: fn(u32),
+    ) -> Self {
+        Self {
+            slot,
+            resolve,
+            arm_guard,
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
+    /// Borrow this thread's value.
+    ///
+    /// The fast path is: one load of the declaration's index, the [`hot`]
+    /// cache (an `mrs` plus two loads on Apple aarch64, CSE'd across the whole
+    /// enclosing function), one load from the slot array. No call, so no
+    /// caller-saved register is clobbered at the site.
+    #[inline(always)]
+    pub fn with<F, R>(&'static self, f: F) -> R
+    where
+        F: FnOnce(&T) -> R,
+    {
+        f(self.get())
+    }
+
+    /// As [`HotKey::with`], but reports rather than panics when this thread's
+    /// value is being or has been destroyed.
+    #[inline(always)]
+    pub fn try_with<F, R>(&'static self, f: F) -> Result<R, std::thread::AccessError>
+    where
+        F: FnOnce(&T) -> R,
+    {
+        let idx = self.slot.raw();
+        if (idx as usize) < HOT_SLOT_CAPACITY {
+            let cell = hot().slot(idx);
+            if !cell.is_null() {
+                // SAFETY: see `value_of`.
+                return Ok(f(unsafe { Self::value_of(cell) }));
+            }
+        }
+        let cell = self.resolve_and_cache()?;
+        // SAFETY: see `value_of`.
+        Ok(f(unsafe { Self::value_of(cell) }))
+    }
+
+    #[inline(always)]
+    fn get(&'static self) -> &'static T {
+        let idx = self.slot.raw();
+        if (idx as usize) < HOT_SLOT_CAPACITY {
+            let cell = hot().slot(idx);
+            if !cell.is_null() {
+                // SAFETY: see `value_of`.
+                return unsafe { Self::value_of(cell) };
+            }
+        }
+        self.get_slow()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn get_slow(&'static self) -> &'static T {
+        let cell = self
+            .resolve_and_cache()
+            .expect("cannot access a Perry thread-local during or after thread destruction");
+        // SAFETY: see `value_of`.
+        unsafe { Self::value_of(cell) }
+    }
+
+    /// This declaration's claimed slot index, or a sentinel
+    /// `>= HOT_SLOT_CAPACITY` if it has none. Liveness instrumentation: a test
+    /// that does not check this passes identically when the cache is inert.
+    #[doc(hidden)]
+    pub fn slot_index(&'static self) -> u32 {
+        self.slot.raw()
+    }
+
+    /// `value` is the address of this thread's `T`, published by this key.
+    ///
+    /// # Safety
+    /// `value` must have come from this key's slot or from its own `resolve`.
+    /// That is what makes the cross-cast the module docs warn about impossible
+    /// here: [`crate::perry_thread_local`] generates the storage, the resolver
+    /// and this key's `T` from one declaration, so there is no hand-written
+    /// pairing left to get wrong.
+    #[inline(always)]
+    unsafe fn value_of(value: *mut u8) -> &'static T {
+        // SAFETY: the caller guarantees provenance; the value outlives this
+        // thread's use of it (see the `SlotGuard` note on destruction).
+        unsafe { &*(value as *const T) }
+    }
+
+    /// Resolve through the real `thread_local!`, claim this declaration's slot
+    /// if it has none yet, and publish the address for this thread.
+    #[cold]
+    #[inline(never)]
+    fn resolve_and_cache(&'static self) -> Result<*mut u8, std::thread::AccessError> {
+        // Resolve first, and outside the claim lock: initialising the value can
+        // run arbitrary runtime code, including other `perry_thread_local!`
+        // first touches.
+        let value = (self.resolve)()?;
+        let mut idx = self.slot.raw();
+        if idx == SLOT_UNASSIGNED {
+            idx = self.slot.claim();
+        }
+        if (idx as usize) < HOT_SLOT_CAPACITY {
+            // Arm before publishing: after this store any thread-teardown of
+            // the value un-publishes the slot it is about to invalidate.
+            (self.arm_guard)(idx);
+            hot().set_slot(idx, value);
+        }
+        Ok(value)
+    }
+}
+
+/// Declare a thread-local that is on the fast path **by default**.
+///
+/// Same syntax as `std::thread_local!`, same `with` / `try_with` at every call
+/// site — the only difference is that the address of the value lands in this
+/// thread's [`HotTls`] cache, so reads cost loads instead of a `_tlv_get_addr`
+/// call on Darwin.
+///
+/// # Why this is the default rather than an allowlist
+///
+/// The named fields at the top of this file are an opt-in list of sixteen,
+/// curated against whichever workload was profiled last. Every hot path the
+/// list did not anticipate silently paid full price: `churn` read 0% of
+/// `_tlv_get_addr` for months while `asyncpipe` — Map/Set registries, buffer
+/// brands, descriptor state, none of them on the list — paid 20.5%. Adding a
+/// field took four manual steps including a hand-written test, which does not
+/// scale to ~520 declarations and, worse, gets the *default* wrong: forgetting
+/// the steps produces a working slow path rather than a build error.
+///
+/// Here there is nothing to wire. The declaration generates its own storage,
+/// its own resolver and its own [`HotKey`], so a mis-pairing of slot and type —
+/// the hazard the untyped named slots need `cached_addresses_match_thread_locals`
+/// to catch — cannot be expressed.
+///
+/// # Forms
+///
+/// ```ignore
+/// crate::perry_thread_local! {
+///     static COUNTER: Cell<u64> = const { Cell::new(0) };
+///     static REGISTRY: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
+/// }
+/// ```
+///
+/// Both forms behave exactly as `std::thread_local!`'s do, including whether a
+/// destructor is registered: the teardown guard is present iff
+/// `needs_drop::<T>()`, so a `Cell<u64>` keeps std's drop-free `const` path and
+/// a `RefCell<HashMap<…>>` gets un-published before it is destroyed.
+#[macro_export]
+macro_rules! perry_thread_local {
+    () => {};
+
+    // `= const { ... }`
+    ($(#[$attr:meta])* $vis:vis static $name:ident: $t:ty = const $init:block; $($rest:tt)*) => {
+        $crate::__perry_thread_local_one! { $(#[$attr])* $vis $name, $t, const $init }
+        $crate::perry_thread_local!($($rest)*);
+    };
+
+    // `= expr`
+    ($(#[$attr:meta])* $vis:vis static $name:ident: $t:ty = $init:expr; $($rest:tt)*) => {
+        $crate::__perry_thread_local_one! { $(#[$attr])* $vis $name, $t, expr ($init) }
+        $crate::perry_thread_local!($($rest)*);
+    };
+}
+
+/// One declaration. Split out only so the two init forms share everything but
+/// the line that hands the initialiser to `std::thread_local!`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __perry_thread_local_one {
+    ($(#[$attr:meta])* $vis:vis $name:ident, $t:ty, $($init:tt)+) => {
+        $(#[$attr])*
+        $vis static $name: $crate::tls_hot::HotKey<$t> = {
+            static SLOT: $crate::tls_hot::SlotId = $crate::tls_hot::SlotId::new();
+            // `GUARD` is 1 exactly when `$t` has drop glue, so the guard —
+            // and with it the thread-local's destructor — exists exactly when
+            // a cached address could otherwise outlive the value.
+            type Storage = $crate::tls_hot::HotCell<$t, { ::core::mem::needs_drop::<$t>() as usize }>;
+            $crate::__perry_thread_local_storage!(Storage, $($init)+);
+            fn resolve() -> ::core::result::Result<*mut u8, ::std::thread::AccessError> {
+                STORAGE.try_with(|cell| cell.value_addr())
+            }
+            fn arm_guard(idx: u32) {
+                let _ = STORAGE.try_with(|cell| cell.arm_guard(idx));
+            }
+            $crate::tls_hot::HotKey::new(&SLOT, resolve, arm_guard)
+        };
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __perry_thread_local_storage {
+    ($storage:ty, const $init:block) => {
+        ::std::thread_local! {
+            static STORAGE: $storage = const { <$storage>::new($init) };
+        }
+    };
+    ($storage:ty, expr ($init:expr)) => {
+        ::std::thread_local! {
+            static STORAGE: $storage = <$storage>::new($init);
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     /// Every cached address must equal the address of the `thread_local!` it
@@ -601,5 +1027,178 @@ mod tests {
             mine, theirs,
             "two threads resolved the same temp-root address"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Generic slots
+    // -----------------------------------------------------------------
+
+    crate::perry_thread_local! {
+        static PROBE_CONST: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        static PROBE_EXPR: std::cell::RefCell<Vec<u64>> = std::cell::RefCell::new(Vec::new());
+        static PROBE_SECOND: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The address a `perry_thread_local!` hands out is this thread's real
+    /// storage, and it is stable across accesses.
+    ///
+    /// The named slots need `cached_addresses_match_thread_locals` because a
+    /// human writes the pairing; here the storage, the resolver and the key's
+    /// `T` all come from one declaration, so this is a liveness check (the slot
+    /// really is being used) rather than a correctness one.
+    #[test]
+    fn a_generic_slot_is_this_threads_storage() {
+        PROBE_CONST.with(|c| c.set(0x5eed));
+        let first = PROBE_CONST.with(|c| c as *const _ as usize);
+        let second = PROBE_CONST.with(|c| c as *const _ as usize);
+        assert_eq!(first, second, "the cached address moved between accesses");
+        assert_eq!(PROBE_CONST.with(|c| c.get()), 0x5eed);
+
+        // Liveness: the access above must actually have gone through a slot.
+        // Every other assertion in this module passes identically whether the
+        // cache is used or every read falls back to `_tlv_get_addr`, so without
+        // this one the whole mechanism could be inert and nothing would go red.
+        let idx = PROBE_CONST.slot_index();
+        assert!(
+            (idx as usize) < super::HOT_SLOT_CAPACITY,
+            "the declaration never claimed a slot (idx {idx})",
+        );
+        assert_eq!(
+            super::hot().slot(idx) as usize,
+            first,
+            "the slot does not hold the address `with` handed out",
+        );
+    }
+
+    /// Distinct declarations must never share a slot: that is the one way a
+    /// generic slot could hand out a correctly-typed reference to the wrong
+    /// object, which is the hazard the module docs are about.
+    #[test]
+    fn distinct_declarations_do_not_share_a_slot() {
+        PROBE_CONST.with(|c| c.set(11));
+        PROBE_SECOND.with(|c| c.set(22));
+        assert_eq!(PROBE_CONST.with(|c| c.get()), 11);
+        assert_eq!(PROBE_SECOND.with(|c| c.get()), 22);
+        let a = PROBE_CONST.with(|c| c as *const _ as usize);
+        let b = PROBE_SECOND.with(|c| c as *const _ as usize);
+        assert_ne!(a, b, "two declarations resolved to one address");
+    }
+
+    /// Each thread resolves its own storage, and a worker's slot must not
+    /// leak into the parent's cache.
+    #[test]
+    fn a_generic_slot_is_per_thread() {
+        PROBE_EXPR.with(|v| v.borrow_mut().push(1));
+        let mine = PROBE_EXPR.with(|v| v as *const _ as usize);
+        let theirs = std::thread::spawn(|| {
+            PROBE_EXPR.with(|v| {
+                assert!(
+                    v.borrow().is_empty(),
+                    "a worker inherited the parent thread's value"
+                );
+                v.borrow_mut().push(2);
+            });
+            PROBE_EXPR.with(|v| v as *const _ as usize)
+        })
+        .join()
+        .expect("probe thread panicked");
+        assert_ne!(mine, theirs, "two threads shared one slot's storage");
+        assert_eq!(PROBE_EXPR.with(|v| v.borrow().clone()), vec![1]);
+    }
+
+    /// Hammer the claim path from many threads at once: a lost race that
+    /// leaked an index would show up as capacity draining far past the number
+    /// of declarations.
+    #[test]
+    fn concurrent_first_touch_claims_one_slot_per_declaration() {
+        let before = super::claimed_slots();
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    PROBE_CONST.with(|c| c.get());
+                    PROBE_EXPR.with(|v| v.borrow().len());
+                    PROBE_SECOND.with(|c| c.get());
+                })
+            })
+            .collect();
+        for w in workers {
+            w.join().expect("probe thread panicked");
+        }
+        let after = super::claimed_slots();
+        assert!(
+            after - before <= 3,
+            "8 threads first-touching 3 declarations claimed {} slots",
+            after - before
+        );
+        assert!(
+            (after as usize) < super::HOT_SLOT_CAPACITY,
+            "slot capacity {} exhausted at {after} claims",
+            super::HOT_SLOT_CAPACITY
+        );
+    }
+
+    /// A value with a destructor must stop being served from the cache the
+    /// moment its thread starts destroying it.
+    ///
+    /// The ordering is the point. std runs thread-local destructors in reverse
+    /// registration order, so touching `AFTER_PROBE` *first* and `PROBE_EXPR`
+    /// second puts `PROBE_EXPR`'s destructor ahead of `AFTER_PROBE`'s: by the
+    /// time `AFTER_PROBE` drops and re-reads the key, the guard must already
+    /// have un-published it. Without the guard this test reads a dropped `Vec`
+    /// — the exact use-after-free the named-field cache has no defence against.
+    #[test]
+    fn teardown_unpublishes_a_dropping_value() {
+        use std::sync::atomic::{AtomicU8, Ordering};
+        static OBSERVED: AtomicU8 = AtomicU8::new(0);
+        const UNSEEN: u8 = 0;
+        const REPORTED_DESTROYED: u8 = 1;
+        const SERVED_STALE: u8 = 2;
+
+        struct AfterProbe;
+        impl Drop for AfterProbe {
+            fn drop(&mut self) {
+                let state = match PROBE_EXPR.try_with(|v| v.borrow().len()) {
+                    Ok(_) => SERVED_STALE,
+                    Err(_) => REPORTED_DESTROYED,
+                };
+                OBSERVED.store(state, Ordering::SeqCst);
+            }
+        }
+        thread_local! {
+            static AFTER_PROBE: AfterProbe = const { AfterProbe };
+        }
+
+        std::thread::spawn(|| {
+            // Registration order: AFTER_PROBE, then PROBE_EXPR's storage.
+            AFTER_PROBE.with(|_| {});
+            PROBE_EXPR.with(|v| v.borrow_mut().push(7));
+        })
+        .join()
+        .expect("probe thread panicked");
+
+        assert_eq!(
+            OBSERVED.load(Ordering::SeqCst),
+            REPORTED_DESTROYED,
+            "a destroyed thread-local was still served from the hot cache \
+             (0 = the probe never ran, 2 = it read the dropped value)",
+        );
+        assert_ne!(OBSERVED.load(Ordering::SeqCst), UNSEEN);
+    }
+
+    /// The guard exists exactly when the value has something to destroy — that
+    /// is what keeps drop-free declarations off std's destructor path.
+    #[test]
+    fn the_guard_tracks_drop_glue() {
+        assert_eq!(
+            std::mem::size_of::<super::HotCell<std::cell::Cell<u64>, 0>>(),
+            std::mem::size_of::<std::cell::Cell<u64>>(),
+            "a drop-free declaration paid for a guard",
+        );
+        assert!(!std::mem::needs_drop::<
+            super::HotCell<std::cell::Cell<u64>, 0>,
+        >());
+        assert!(std::mem::needs_drop::<
+            super::HotCell<std::cell::RefCell<Vec<u64>>, 1>,
+        >());
     }
 }

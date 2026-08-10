@@ -6,7 +6,7 @@ use crate::typedarray::{
     js_typed_array_get, js_typed_array_set, lookup_typed_array_kind, TypedArrayHeader,
 };
 
-thread_local! {
+crate::perry_thread_local! {
     static TYPED_ARRAY_OWN_PROPS: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<TypedArrayOwnProp>>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
@@ -313,7 +313,7 @@ fn throw_typed_array_define_error(message: String) -> ! {
     throw_type_error(message.as_bytes())
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Typed arrays marked non-extensible by `Object.preventExtensions`.
     /// A SIDE TABLE, not the GC-header flag: small typed arrays are plain
     /// `alloc`ed without a `GcHeader`, so flag reads/writes at `addr - 8`

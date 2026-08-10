@@ -747,7 +747,7 @@ fn ordinary_has_instance(constructor: f64, value: f64) -> bool {
     result.to_bits() == crate::value::TAG_TRUE
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// When set, `js_instanceof_dynamic` returns `false` instead of throwing on
     /// an unresolved / non-callable right-hand side. Used by
     /// `OrdinaryHasInstance` (#3662), whose spec returns `false` there rather

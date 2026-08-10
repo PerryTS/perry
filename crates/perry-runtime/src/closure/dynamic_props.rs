@@ -643,7 +643,7 @@ pub(crate) fn function_prototype_fallback_target(ptr: usize, prop: &str) -> Opti
     {
         return None;
     }
-    thread_local! {
+    crate::perry_thread_local! {
         static IN_FN_PROTO_FALLBACK: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
     }

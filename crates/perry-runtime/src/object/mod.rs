@@ -266,7 +266,7 @@ pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 //
 // This handles cases like Object.assign() adding many fields to an object
 // that was allocated with only 8 slots (e.g., @noble/curves Fp field with 21 properties).
-thread_local! {
+crate::perry_thread_local! {
     static CLASS_PROTOTYPE_METHOD_VALUES: RefCell<HashMap<(u32, String), u64>> =
         RefCell::new(HashMap::new());
 }
@@ -417,7 +417,7 @@ fn keys_index_insert(
 
 // Recursion depth guard for js_native_call_method to prevent stack overflow
 // from circular module dependencies during initialization.
-thread_local! {
+crate::perry_thread_local! {
     static CALL_METHOD_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 const MAX_CALL_METHOD_DEPTH: u32 = 512;
@@ -553,7 +553,7 @@ pub(crate) struct ShapeCacheEntry {
     keys_array: *mut ArrayHeader,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Issue #618-followup / drizzle SQL.Aliased: dynamic properties added
     /// via the IIFE pattern `((SQL2) => { SQL2.Aliased = Aliased; })(SQL)`
     /// to imported classes (which Perry stores as INT32-tagged class ids).

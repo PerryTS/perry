@@ -153,7 +153,7 @@ impl ExceptionState {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static EXCEPTION_STATE: std::cell::UnsafeCell<ExceptionState> =
         std::cell::UnsafeCell::new(ExceptionState::new());
 }

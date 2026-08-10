@@ -30,7 +30,7 @@ pub struct BoolBox {
     pub value: bool,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Registry of every active box pointer. GC traces the contained
     /// JSValue bits so that NaN-boxed heap pointers stored in boxes (e.g.
     /// the generator state machine's iter object held in `__iter`'s
@@ -226,7 +226,7 @@ pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// #6052: >0 while codegen-emitted Perry-internal materialization reads
     /// (the `RegisterClassCaptures` decl-site snapshot refresh) are running —
     /// a dead-zone box then reads as `undefined` (pre-#6044 behavior) instead

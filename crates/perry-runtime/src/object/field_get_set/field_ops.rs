@@ -34,7 +34,7 @@ use super::*;
 const WARN_NULL_PTR_LOG_LIMIT: u64 = 64;
 const WARN_NULL_PTR_ABORT_LIMIT: u64 = 100_000;
 
-thread_local! {
+crate::perry_thread_local! {
     static WARN_NULL_PTR_STATE: std::cell::Cell<WarnNullPtrState>
         = const { std::cell::Cell::new(WarnNullPtrState {
             total_count: 0,

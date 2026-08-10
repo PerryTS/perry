@@ -552,7 +552,7 @@ extern "C" fn async_from_sync_async_iterator(closure: *const crate::closure::Clo
 }
 
 fn register_async_from_sync_thunks_once() {
-    thread_local! {
+    crate::perry_thread_local! {
         static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     REGISTERED.with(|flag| {

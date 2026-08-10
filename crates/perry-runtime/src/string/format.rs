@@ -12,7 +12,7 @@ use super::*;
 /// across threads would hand back arena pointers that are invalid in
 /// the caller's address space (use-after-free / cross-arena UB).
 const SMALL_INT_CACHE_SIZE: usize = 256;
-thread_local! {
+crate::perry_thread_local! {
     static SMALL_INT_CACHE: std::cell::UnsafeCell<[*mut StringHeader; SMALL_INT_CACHE_SIZE]> =
         const { std::cell::UnsafeCell::new([std::ptr::null_mut(); SMALL_INT_CACHE_SIZE]) };
 }

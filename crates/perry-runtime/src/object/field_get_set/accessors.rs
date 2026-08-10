@@ -114,7 +114,7 @@ pub(crate) unsafe fn own_data_field_by_name(
     None
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static OBJECT_PROTOTYPE_LOOKUP_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -224,7 +224,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
     default_object_prototype_property_value(obj as usize, key)
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Receiver to bind when an accessor getter is reached by walking a
     /// prototype chain. `js_object_get_field_by_name(proto, key)` re-derives the
     /// accessor receiver from its `obj` argument — which is the PROTOTYPE during

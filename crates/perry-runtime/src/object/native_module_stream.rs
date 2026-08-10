@@ -2,7 +2,7 @@
 
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     static STREAM_EVENT_EMITTER_PROTOTYPES: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 

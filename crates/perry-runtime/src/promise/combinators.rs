@@ -20,7 +20,7 @@ pub(crate) struct PromiseAllState {
     pub index: u32,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Keyed by input-promise address. See `keyed_table.rs`: a dense `Vec` is
     /// still the GC scanners' traversal/rewrite surface, with an O(1) key index
     /// layered on top (#6084 item 2 — this used to be a raw `Vec` that every
@@ -531,7 +531,7 @@ static KEEP_PROMISE_ALL_SETTLED_ITERABLE: extern "C" fn(f64) -> *mut Promise =
 static KEEP_PROMISE_ANY_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_any_iterable;
 
 // Queue for scheduled promise resolutions
-thread_local! {
+crate::perry_thread_local! {
     pub(in crate::promise) static SCHEDULED_RESOLVES: RefCell<Vec<(*mut Promise, f64)>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -658,7 +658,7 @@ fn take_already_resolved(guard: *mut crate::array::ArrayHeader) -> bool {
 /// (observed as the denormal `5e-324`, i.e. bits = 1), corrupting the
 /// resolution value. (test262 exception-after-resolve-in-{executor,thenable-job}.)
 pub(super) fn ensure_native_resolving_arity_registered() {
-    thread_local! {
+    crate::perry_thread_local! {
         static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     DONE.with(|d| {

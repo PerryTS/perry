@@ -287,7 +287,7 @@ pub(crate) fn mt_profile_register() {
 // generators (async functions rewritten via async→generator). User-
 // visible generators (`function*`) still allocate real `{value, done}`
 // objects so `for...of` and external consumers see the spec shape.
-thread_local! {
+crate::perry_thread_local! {
     static ITER_RESULT_VALUE: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
     static ITER_RESULT_VALUE_I32: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
     static ITER_RESULT_VALUE_I1: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -574,7 +574,7 @@ pub(crate) enum Task {
 // their continuations in source order (1 first, then 2). Using a
 // `Vec` with `.pop()` produces LIFO ordering, breaking every test
 // that prints inside multiple parallel promise chains.
-thread_local! {
+crate::perry_thread_local! {
 pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
         = const { RefCell::new(std::collections::VecDeque::new()) };
 

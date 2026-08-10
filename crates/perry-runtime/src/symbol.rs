@@ -137,7 +137,7 @@ pub(crate) fn registered_symbol_description(sym_ptr: usize) -> Option<std::sync:
     guard.as_ref().and_then(|m| m.get(&sym_ptr).cloned())
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// ★ #7246: descriptions of FRESH (`Symbol("x")`) symbols, off the GC heap.
     ///
     /// A `SymbolHeader` used to store its description as a `*mut StringHeader`

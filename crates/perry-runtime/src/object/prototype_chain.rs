@@ -44,7 +44,7 @@ pub(crate) fn array_static_proto_recorded() -> bool {
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
 static OBJECT_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
-thread_local! {
+crate::perry_thread_local! {
     /// Owners currently walking a recorded prototype chain. Although
     /// `Object.setPrototypeOf` normally rejects cycles, residual/native owners
     /// and custom-construction links can still expose a malformed chain. Keep

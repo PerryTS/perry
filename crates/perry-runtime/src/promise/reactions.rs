@@ -16,7 +16,7 @@ pub(super) struct PromiseSettleListener {
     pub(super) context: AsyncContextSnapshot,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Keyed by pending-promise address — see `keyed_table.rs` (#6084 item 2:
     /// this used to be a raw `Vec` that every settlement scanned end to end).
     pub(super) static PROMISE_SETTLE_LISTENERS: RefCell<PromiseKeyedTable<PromiseSettleListener>> =
@@ -159,7 +159,7 @@ pub(super) struct OverflowReaction {
     pub(super) context: AsyncContextSnapshot,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Keyed by pending-promise address — see `keyed_table.rs` (#6084 item 2:
     /// this used to be a raw `Vec` that every settlement scanned end to end).
     pub(super) static PROMISE_OVERFLOW_REACTIONS: RefCell<PromiseKeyedTable<OverflowReaction>> =

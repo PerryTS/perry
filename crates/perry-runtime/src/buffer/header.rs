@@ -76,7 +76,7 @@ fn notify_crypto_key_death(addr: usize) {
 
 pub type CryptoKeyMeta = (u8, u8, u8, bool, u32, u32);
 
-thread_local! {
+crate::perry_thread_local! {
     static BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
     /// Buffers that were specifically created via `new Uint8Array(...)` —
     /// formatted as `Uint8Array(N) [ a, b, c ]` instead of `<Buffer aa bb cc>`.

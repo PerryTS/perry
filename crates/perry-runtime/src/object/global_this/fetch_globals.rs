@@ -1,7 +1,7 @@
 use super::super::*;
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     /// This thread's `globalThis`. The realm global is allocated in a *per-thread*
     /// arena, but `GLOBAL_THIS_PTR` (the GC-root slot) is a process-global static.
     /// A pointer published there by another, now-finished thread (the unit-test
@@ -13,7 +13,7 @@ thread_local! {
     static THREAD_GLOBAL_THIS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Module top-level `this` (Node-CJS `module.exports` stand-in) — a
     /// lazily-allocated plain object distinct from `globalThis`. See
     /// `Expr::ModuleTopThis`.

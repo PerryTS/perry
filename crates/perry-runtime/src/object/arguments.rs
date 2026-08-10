@@ -12,7 +12,7 @@ struct ArgumentsMeta {
     restricted_callee: bool,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static ARGUMENTS_OBJECTS: RefCell<crate::fast_hash::PtrHashMap<usize, ArgumentsMeta>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
