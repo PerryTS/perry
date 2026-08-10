@@ -57,14 +57,23 @@ array, a null pointer — so no general semantics move.
 `keys_array_len_capped_to_capacity` stops paying the same toll through
 `js_array_length` once per property read.
 
-Measured on the pinned mini, both arms timed back to back, min of 5 (the five
-benchmarks closest to their floor re-measured interleaved at 9):
-**`asyncpipe.ts` 0.9065 s → 0.7143 s, −21.2%** — it stops being the corpus's
+Measured on the pinned mini, both arms rebuilt from the same merge-base and run
+**interleaved** — 4 passes × best-of-5, alternating arms per benchmark per pass:
+**`asyncpipe.ts` 0.9211 s → 0.7284 s, −20.9%** — it stops being the corpus's
 worst gap. `is_registered_map` + `is_registered_set` fall from **13.51% to
 1.2–1.4%** of the `asyncpipe_big.ts` profile (two agreeing runs), and
 `array_object_flags`, `js_array_get_f64` and `js_array_length` all leave the top
-of it. `shapes.ts` (−4.5%) and `interp.ts` improve as a side effect — same
-funnel. No protected benchmark regresses beyond run-to-run noise.
+of it. `shapes.ts` (−4.7%) improves as a side effect — same funnel. No protected
+benchmark moves: the largest is `push_num` at +0.4%, and `churn_alloc`, `tree`,
+`retain` and `fib40` are flat to four decimals.
+
+Interleaving is not a nicety here. The mini oscillates ~3% between passes, so a
+block-sequential A/B (all of one arm, then the other) manufactured a +7.3%
+`interp` "regression" and a uniform ~3% shift on eight benchmarks purely from
+which phase each block landed in — visible only because the per-pass series
+showed passes 1 and 3 slow on *both* arms. An earlier +1.2% on `churn_alloc`,
+measured that way against a different base, likewise disappears (+0.0%) once the
+arms are interleaved.
 
 `crates/perry-runtime/src/array/collection_tag_tests.rs` asserts THE SUBJECT,
 not just the answer — the registry is a correct fallback, so a test that only
