@@ -42,6 +42,31 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
 /// The common forms — `arr.map(fn)` (codegen's NativeMethodCall) and
 /// `Array.prototype.map.call(arr, fn)` (HIR rewrite, see
 /// `try_builtin_prototype_method_apply_call`) — are unaffected.
+/// #7760: install `value` as `proto_obj`'s OWN `[Symbol.iterator]`, with the
+/// spec descriptor. Mirrors `collection_proto_thunks::install_collection_iterator_symbol`;
+/// kept here because `Array.prototype` is populated in this module.
+fn install_array_iterator_symbol(proto_obj: *mut ObjectHeader, value: f64) {
+    if proto_obj.is_null() || value.to_bits() == crate::value::TAG_UNDEFINED {
+        return;
+    }
+    let iter = crate::symbol::well_known_symbol("iterator");
+    if iter.is_null() {
+        return;
+    }
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            crate::value::js_nanbox_pointer(proto_obj as i64),
+            f64::from_bits(crate::value::JSValue::pointer(iter as *const u8).bits()),
+            value,
+        );
+    }
+    crate::symbol::set_symbol_property_attrs(
+        proto_obj as usize,
+        iter as usize,
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
 pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
@@ -97,7 +122,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("toSorted", 1),
                     ("toSpliced", 2),
                     ("toString", 0),
-                    ("values", 0),
                     ("with", 2),
                 ],
             );
@@ -105,6 +129,20 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // reference works: `obj.pop = Array.prototype.pop; obj.pop()` and
             // `Array.prototype.splice.call(obj, …)`. Each reads IMPLICIT_THIS and
             // runs the array algorithm on a real array or array-like object.
+            // #7760: `values` was a NOOP in the list above, and
+            // `Array.prototype[Symbol.iterator]` was not an own property at all
+            // — the symbol getter synthesized a receiver-bound method on every
+            // read. Install one real function and make it the own `@@iterator`,
+            // matching Map/Set/String/%TypedArray%, which already do this
+            // (`install_collection_iterator_symbol`). Attributes are the spec's
+            // `{ writable: true, enumerable: false, configurable: true }`.
+            let values_value = install_proto_method(
+                proto_obj,
+                "values",
+                array_prototype_values_thunk as *const u8,
+                0,
+            );
+            install_array_iterator_symbol(proto_obj, values_value);
             install_proto_method(proto_obj, "pop", array_prototype_pop_thunk as *const u8, 0);
             install_proto_method(
                 proto_obj,
