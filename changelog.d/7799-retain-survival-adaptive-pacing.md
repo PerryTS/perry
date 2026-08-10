@@ -160,5 +160,14 @@ on the `origin/main` @ `0a2bf15bd` reference build**, on the same host:
   `test_gap_http_req_async_iterator`,
   `test_gap_http_res_socket_writable_onfinished`, `test_gap_net_connect_bound_value`
   — SIGABRT (exit 134) on both builds.
-* `test_gap_specabi_reassign` — diverges from the node oracle byte-identically on
-  both builds.
+* `test_gap_specabi_reassign`, `test_gap_zlib_3285_params` — diverge from the node
+  oracle byte-identically on both builds.
+
+The harness also reports ten `node_fail -> parity_fail` status changes
+(`test_gap_4510_enum_forward_ref`, `..._backoff_options`, `..._cron_cronjob`,
+`..._dayjs_factory_arg`, `..._derived_param_props`, `..._enum_in_function_body`,
+`..._moment_methods`, `..._prop_plan_cache_invalidation`, `..._ratelimiter_memory`,
+`..._slugify_options`) and one improvement (`test_gap_iterator_helpers_2874`).
+Those are the oracle's environment, not Perry's output: the snapshot records
+`node_fail` for files whose node run cannot resolve an npm import or whose
+TypeScript syntax strip-only mode refuses, and this host resolves some of them.
