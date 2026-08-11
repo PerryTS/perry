@@ -138,6 +138,35 @@ fn survivor_reclaim_resets_dead_blocks() {
     });
 }
 
+#[test]
+fn budgeted_survivor_reclaim_accumulates_release_stats_across_slices() {
+    run_with_fresh_arenas(|| {
+        for _ in 0..3 {
+            let ptr = arena_alloc_gc_survivor(BLOCK_SIZE, 8, GC_TYPE_STRING);
+            assert!(!ptr.is_null());
+        }
+
+        let snapshots = arena_block_snapshots();
+        let block_has_live = vec![false; snapshots.len()];
+        let mut reclaim = SurvivorArenaReclaimDeadBlocksState::new(&block_has_live, &snapshots);
+        let mut slices = 0;
+        while !reclaim.step(1) {
+            slices += 1;
+            assert!(slices < 32, "one-unit survivor reclaim must converge");
+        }
+
+        let stats = reclaim.stats();
+        assert!(slices > 3, "the test must span multiple reclamation slices");
+        assert_eq!(stats.reset_blocks, 3);
+        assert_eq!(stats.removed_blocks, 2);
+        assert!(stats.removed_bytes >= 2 * BLOCK_SIZE);
+        assert_eq!(stats.pooled_blocks, 2);
+        assert_eq!(stats.pooled_bytes, stats.removed_bytes);
+        assert_eq!(stats.deallocated_blocks, 0);
+        assert_eq!(stats.deallocated_bytes, 0);
+    });
+}
+
 fn page_range_for(base: usize, size: usize) -> std::ops::RangeInclusive<usize> {
     generation_page_for_addr(base)..=generation_page_for_addr(base + size - 1)
 }

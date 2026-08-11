@@ -843,16 +843,18 @@ impl SurvivorArenaReclaimDeadBlocksState {
         match self.active {
             0 => {
                 let before = self.state0.stats;
-                if self.state0.step(budget) {
-                    self.stats = self.add_delta(self.stats, before, self.state0.stats);
+                let finished = self.state0.step(budget);
+                self.stats = self.add_delta(self.stats, before, self.state0.stats);
+                if finished {
                     self.active = 1;
                 }
                 false
             }
             1 => {
                 let before = self.state1.stats;
-                if self.state1.step(budget) {
-                    self.stats = self.add_delta(self.stats, before, self.state1.stats);
+                let finished = self.state1.step(budget);
+                self.stats = self.add_delta(self.stats, before, self.state1.stats);
+                if finished {
                     self.active = 2;
                     return true;
                 }
