@@ -280,13 +280,46 @@ fn block_body(ir: &str, label_prefix: &str) -> Option<String> {
     (inside && !out.is_empty()).then(|| out.join("\n"))
 }
 
-/// (1) + (2): the gate exists, is BRANCHED INTO, and its condition is the live
-/// header test rather than a constant.
+/// The instruction that defines `%reg` inside `body`, without its `%reg = `
+/// prefix. `None` for a constant operand or a value defined elsewhere.
+fn def_of<'a>(body: &'a str, reg: &str) -> Option<&'a str> {
+    let needle = format!("{reg} = ");
+    body.lines()
+        .map(str::trim)
+        .find(|l| l.starts_with(&needle))
+        .map(|l| l[needle.len()..].trim())
+}
+
+/// The `i`th SSA operand (`%…`) of an instruction.
+fn operand(instr: &str, i: usize) -> Option<String> {
+    instr
+        .match_indices('%')
+        .nth(i)
+        .map(|(pos, _)| {
+            instr[pos..]
+                .split(|c: char| c == ',' || c.is_whitespace() || c == ')')
+                .next()
+                .unwrap()
+                .to_string()
+        })
+}
+
+/// (1) + (2): the gate exists, is BRANCHED INTO, and its condition **is** the
+/// live header test — proved by walking the def chain, not by looking for the
+/// instructions somewhere nearby.
 ///
-/// This is the assertion the sabotage targets: replace
-/// `emit_parent_may_need_remembering_check(...)` with a literal `"true"` and
-/// the branch stops being a `br i1 %reg`; replace it with `"false"` and the
-/// TENURED mask / incremental-count loads vanish from the branching block.
+/// ★ The weaker version of this test (assert the block *contains* an
+/// `and i8 …, 32` and the incremental global) passed a deliberate sabotage that
+/// hard-wired the branch to `br i1 false` while leaving the now-dead predicate
+/// instructions in the block. That is precisely the "gate that cannot fail"
+/// shape CLAUDE.md catalogues, so the assertion walks:
+///
+///   cond → `or i1 %a, %b`
+///   %a   → `icmp ne i8 %t, 0` → %t → `and i8 %f, 32` → %f → `load i8`
+///   %b   → `icmp ne i32 %c, 0` → %c → atomic load of the incremental count
+///
+/// Any constant condition, any dropped disjunct, and any substitution of a
+/// different predicate breaks a named link in that chain.
 #[test]
 fn the_class_field_barrier_sits_behind_a_live_parent_generation_test() {
     assert_default_barrier_env_not_disabled();
@@ -298,17 +331,65 @@ fn the_class_field_barrier_sits_behind_a_live_parent_generation_test() {
              remembered-set call from the nursery:\n{ir}"
         )
     });
+
+    let cond = branch
+        .trim_start()
+        .strip_prefix("br i1 ")
+        .and_then(|rest| rest.split(',').next())
+        .map(str::trim)
+        .unwrap_or("");
     assert!(
-        body.contains(TENURED_MASK) && body.contains(TENURED_VALUE),
-        "the branching block does not mask GC_FLAG_TENURED (0x20) out of \
-         gc_flags, so the branch rests on something other than the parent's \
-         generation:\n{body}"
+        cond.starts_with('%'),
+        "the gate's condition is the constant `{cond}` — the branch cannot \
+         fail, so the barrier is either always taken (no win) or NEVER taken \
+         (a stranded child on the next minor GC): {branch}"
     );
+    let or_instr = def_of(&body, cond).unwrap_or_else(|| {
+        panic!("the gate's condition {cond} is not defined in the branching block:\n{body}")
+    });
     assert!(
-        body.contains(INCREMENTAL_GLOBAL),
-        "the predicate dropped its incremental-cycle disjunct; skipping the \
-         barrier also skips barrier_child_prologue's SATB shading, which is \
-         NOT a generational question:\n{body}"
+        or_instr.starts_with("or i1 "),
+        "the gate's condition is `{or_instr}`, not the disjunction of the \
+         generational and incremental clauses:\n{body}"
+    );
+    let tenured_cmp_reg = operand(or_instr, 0).expect("or lhs");
+    let incremental_cmp_reg = operand(or_instr, 1).expect("or rhs");
+
+    // Clause 1: gc_flags & GC_FLAG_TENURED != 0, off a real i8 header load.
+    let tenured_cmp = def_of(&body, &tenured_cmp_reg).unwrap_or_default();
+    assert!(
+        tenured_cmp.starts_with("icmp ne i8 ") && tenured_cmp.ends_with(", 0"),
+        "the generational clause is `{tenured_cmp}`, not `gc_flags & TENURED != 0`:\n{body}"
+    );
+    let mask_reg = operand(tenured_cmp, 0).expect("icmp lhs");
+    let mask = def_of(&body, &mask_reg).unwrap_or_default();
+    assert!(
+        mask.starts_with(TENURED_MASK) && mask.ends_with(TENURED_VALUE),
+        "the generational clause masks `{mask}` rather than GC_FLAG_TENURED \
+         (0x20) — a different bit would answer a different question:\n{body}"
+    );
+    let flags_reg = operand(mask, 0).expect("and lhs");
+    assert!(
+        def_of(&body, &flags_reg).unwrap_or_default().starts_with("load i8"),
+        "the masked value is not loaded from the parent's GcHeader, so the \
+         gate rests on something other than the live header:\n{body}"
+    );
+
+    // Clause 2: the incremental-cycle count. Dropping it would also drop
+    // barrier_child_prologue's SATB shading, which is not a generational
+    // question and must never be skipped while a cycle is live.
+    let incremental_cmp = def_of(&body, &incremental_cmp_reg).unwrap_or_default();
+    assert!(
+        incremental_cmp.starts_with("icmp ne i32 ") && incremental_cmp.ends_with(", 0"),
+        "the incremental clause is `{incremental_cmp}`:\n{body}"
+    );
+    let count_reg = operand(incremental_cmp, 0).expect("icmp lhs");
+    assert!(
+        def_of(&body, &count_reg)
+            .unwrap_or_default()
+            .contains(INCREMENTAL_GLOBAL),
+        "the incremental clause does not read {INCREMENTAL_GLOBAL}; skipping \
+         the barrier also skips SATB shading:\n{body}"
     );
     // The barrier must be on the TAKEN edge. A swapped `cond_br` compiles,
     // prints the right answer, and strands a child on the next minor GC.
