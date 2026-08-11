@@ -554,6 +554,11 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("perry/i18n", "LongDate", false, None),
     method("perry/i18n", "Raw", false, None),
     // --- perry/updater — auto-derivable from PERRY_UPDATER_TABLE. ---
+    method("perry/updater", "getEmbeddedConfig", false, None),
+    method("perry/updater", "embeddedCheckUrl", false, None),
+    method("perry/updater", "embeddedCheckHeaders", false, None),
+    method("perry/updater", "recordEmbeddedResponse", false, None),
+    method("perry/updater", "embeddedRefreshDue", false, None),
     method("perry/updater", "compareVersions", false, None),
     method("perry/updater", "verifyHash", false, None),
     method("perry/updater", "verifySignature", false, None),

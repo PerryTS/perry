@@ -531,7 +531,14 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
     let is_pointer = top16 == 0x7FFD || (top16 == 0 && bits > 0x10000);
     if is_pointer {
         let ptr = (bits & POINTER_MASK) as usize;
-        if ptr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        // #7531: `value` is `argumentsList` from `Reflect.apply(target,
+        // thisArg, argumentsList)` / `Reflect.construct` -- caller-supplied,
+        // so it can be a fetch/zlib/proxy/common-registry handle id under
+        // the same POINTER_TAG as a real Array. The old floor
+        // (`GC_HEADER_SIZE + 0x1000`) sits below every handle band and had
+        // no other guard before the deref below -- a handle reached
+        // `addr - GC_HEADER_SIZE` unconditionally.
+        if crate::value::addr_class::is_plausible_heap_addr(ptr) {
             unsafe {
                 let gc =
                     (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -866,7 +873,17 @@ fn raw_ptr_from_value(value: f64) -> Option<usize> {
     } else {
         return None;
     } as usize;
-    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // #7531: `value` is a Proxy `target`/`key` candidate -- caller-supplied,
+    // so it can be a fetch/zlib/proxy/common-registry handle id. The old
+    // floor (`GC_HEADER_SIZE + 0x1000`) sits below every handle band; the
+    // local name `raw` also made this invisible to
+    // `scripts/addr_class_inventory.py`'s `handle-floor` regex (it only
+    // matches `ptr`/`addr`/`bits`-shaped identifiers), so this was debt the
+    // ratchet could not see. `array_ptr_from_value` derefs
+    // `raw - GC_HEADER_SIZE` right after this with only a magnitude-only
+    // `is_valid_obj_ptr` guard in between, so a handle id reached that
+    // deref.
+    if !crate::value::addr_class::is_above_handle_band(raw) {
         return None;
     }
     Some(raw)
@@ -1146,7 +1163,17 @@ fn prototype_of_for_set(value: f64) -> Option<f64> {
     let bits = value.to_bits();
     if (bits >> 48) == (POINTER_TAG >> 48) {
         let raw = (bits & POINTER_MASK) as usize;
-        if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        // #7531: `lookup(value)` above only recognizes an already-registered
+        // revocable-Proxy id; a fetch/zlib/common-registry handle id (or a
+        // Proxy id from a DIFFERENT realm/registry) reaches here instead.
+        // The old floor (`GC_HEADER_SIZE + 0x1000`) sits below every handle
+        // band, and the local name `raw` made it invisible to
+        // `scripts/addr_class_inventory.py`'s `handle-floor` regex. Below,
+        // a rejected `object_static_prototype` lookup falls through to
+        // `is_valid_obj_ptr(obj)` -- a magnitude-only check whose own floor
+        // is 0x1000 -- followed by an unconditional `(*obj).class_id` read,
+        // so an admitted handle id reached that deref.
+        if crate::value::addr_class::is_above_handle_band(raw) {
             if let Some(proto_bits) = crate::object::prototype_chain::object_static_prototype(raw) {
                 if proto_bits == TAG_NULL || proto_bits == TAG_UNDEFINED || proto_bits == bits {
                     return None;
@@ -2262,5 +2289,100 @@ mod tests {
             0,
             "a key beyond the four-slot physical allocation must reject"
         );
+    }
+
+    /// #7531: `create_list_from_array_like` backs `Reflect.apply(target,
+    /// thisArg, argumentsList)` / `Reflect.construct` -- `argumentsList` is
+    /// caller-supplied and can be a fetch/zlib/proxy/common-registry handle
+    /// id under the same POINTER_TAG as a real Array. The OLD "is this an
+    /// Array?" fast path was a bare magnitude floor
+    /// (`GC_HEADER_SIZE + 0x1000` = 0x1008) with NO other guard before
+    /// dereferencing `addr - GC_HEADER_SIZE` -- every probe below is at/above
+    /// that floor, so the old code would have derefed unconditionally.
+    /// Calling the real function end-to-end (not just the predicate) proves
+    /// the fast path is skipped without crashing; Node's semantics for a
+    /// lengthless array-like is an empty list.
+    #[test]
+    fn create_list_from_array_like_rejects_handle_band_fast_path_without_dereferencing() {
+        use crate::value::addr_class;
+        const OLD_FLOOR: usize = 0x1008;
+        let probes = [
+            addr_class::COMMON_HANDLE_BAND_END,
+            addr_class::FETCH_HANDLE_BAND_START,
+            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::PROXY_ID_BAND_START,
+            addr_class::HANDLE_BAND_MAX - 1,
+        ];
+        for addr in probes {
+            assert!(
+                addr >= OLD_FLOOR,
+                "{addr:#x} must be at/above the old floor to prove the gap"
+            );
+            let boxed = f64::from_bits(POINTER_TAG | (addr as u64));
+            assert!(
+                create_list_from_array_like(boxed).is_empty(),
+                "{addr:#x} must not be misread as a live Array"
+            );
+        }
+    }
+
+    /// #7531: `raw_ptr_from_value` feeds `array_ptr_from_value`, which derefs
+    /// `raw - GC_HEADER_SIZE` right after a magnitude-only `is_valid_obj_ptr`
+    /// guard. The OLD floor here (`GC_HEADER_SIZE + 0x1000`) sat below every
+    /// handle band, and the local variable name `raw` made it invisible to
+    /// `scripts/addr_class_inventory.py`'s `handle-floor` regex.
+    #[test]
+    fn array_ptr_from_value_rejects_every_handle_band_without_dereferencing() {
+        use crate::value::addr_class;
+        const OLD_FLOOR: usize = 0x1008;
+        let probes = [
+            addr_class::COMMON_HANDLE_BAND_END,
+            addr_class::FETCH_HANDLE_BAND_START,
+            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::PROXY_ID_BAND_START,
+            addr_class::HANDLE_BAND_MAX - 1,
+        ];
+        for addr in probes {
+            assert!(
+                addr >= OLD_FLOOR,
+                "{addr:#x} must be at/above the old floor to prove the gap"
+            );
+            let boxed = f64::from_bits(POINTER_TAG | (addr as u64));
+            assert!(
+                array_ptr_from_value(boxed).is_none(),
+                "{addr:#x} must not resolve to an ArrayHeader"
+            );
+        }
+    }
+
+    /// #7531: `prototype_of_for_set` backs `Reflect.getPrototypeOf` /
+    /// `is(value, type)` prototype walks. `lookup(value)` only recognizes an
+    /// ALREADY-REGISTERED revocable Proxy id; any other handle-band value
+    /// (fetch/zlib/common-registry, or a foreign Proxy id) falls through to
+    /// the POINTER_TAG block, whose OLD floor
+    /// (`GC_HEADER_SIZE + 0x1000`) admitted it into
+    /// `object_static_prototype` (safe) and then a magnitude-only
+    /// `is_valid_obj_ptr(obj)` guard followed by an unconditional
+    /// `(*obj).class_id` read.
+    #[test]
+    fn prototype_of_for_set_rejects_every_handle_band_without_dereferencing() {
+        use crate::value::addr_class;
+        const OLD_FLOOR: usize = 0x1008;
+        let probes = [
+            addr_class::COMMON_HANDLE_BAND_END,
+            addr_class::FETCH_HANDLE_BAND_START,
+            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::PROXY_ID_BAND_START,
+            addr_class::HANDLE_BAND_MAX - 1,
+        ];
+        for addr in probes {
+            assert!(
+                addr >= OLD_FLOOR,
+                "{addr:#x} must be at/above the old floor to prove the gap"
+            );
+            let boxed = f64::from_bits(POINTER_TAG | (addr as u64));
+            // Reaching this assertion at all (no SIGSEGV) is half the test.
+            let _ = prototype_of_for_set(boxed);
+        }
     }
 }

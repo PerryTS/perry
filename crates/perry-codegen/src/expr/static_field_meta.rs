@@ -8,6 +8,10 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::nanbox::double_literal;
+use crate::rooting::{
+    any_operand_may_collect, with_operands_rooted, with_rooted_accumulator, with_rooted_group, Arg,
+    Repr,
+};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, FnCtx};
@@ -504,118 +508,147 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 || !captured_args.is_empty()
                 || !symbol_statics.is_empty()
                 || !block_fns.is_empty();
-            let rooted = super::temp_root::rooted_handle_begin(ctx, &obj, protect_handle);
-            for (name, init) in named_statics {
-                let key_idx = ctx.strings.intern(name);
-                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                let v = lower_expr(ctx, init)?;
-                let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
-                let blk = ctx.block();
-                let key_box = blk.load(DOUBLE, &key_handle_global);
-                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-                blk.call_void(
-                    "js_object_set_field_by_name",
-                    &[(I64, &obj), (I64, &key_raw), (DOUBLE, &v)],
-                );
-            }
-            // #1787: snapshot the captured outer-scope values onto the class
-            // object as the `__perry_ctor_caps` own array (in the constructor's
-            // capture-param order). `new <thisClassObjectValue>()` reads it back
-            // in `js_new_function_construct` and replays the constructor with the
-            // right captured environment — which the static `new ClassName()`
-            // inlining can't do once the class escapes its defining scope.
-            if !captured_args.is_empty() {
-                let cap_len = captured_args.len().to_string();
-                let mut caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
-                // #6523: these capture loads are Perry-internal materialization
-                // at the class's DEFINITION site, same as the
-                // `RegisterClassCaptures` snapshot loads above (#6052). A
-                // captured `const` declared AFTER the class (bundled semver's
-                // `class Comparator` + trailing debug/require consts) is still
-                // in its dead zone here — legal JS, since TDZ applies at
-                // method-call time. Without the suppression window the checked
-                // box read threw "Cannot access undefined before
-                // initialization" while merely DEFINING the class. Suppressed
-                // loads snapshot `undefined`; the #6037 refresh statements
-                // re-register the live values right after each captured
-                // refresh the evaluated object's array right after each
-                // captured binding's initializer runs.
-                ctx.block().call_void("js_tdz_suppress_begin", &[]);
-                for arg in captured_args {
-                    let v = lower_expr(ctx, arg)?;
-                    caps_arr = ctx.block().call(
-                        I64,
-                        "js_array_push_f64",
-                        &[(I64, &caps_arr), (DOUBLE, &v)],
+            with_rooted_group(ctx, 1, |ctx, group| {
+                let rooted = group.adopt_emitted(ctx, Repr::Ptr, &obj, protect_handle);
+                for (name, init) in named_statics {
+                    let key_idx = ctx.strings.intern(name);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let v = lower_expr(ctx, init)?;
+                    let obj = group.reread_emitted(ctx, rooted);
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+                    blk.call_void(
+                        "js_object_set_field_by_name",
+                        &[(I64, &obj), (I64, &key_raw), (DOUBLE, &v)],
                     );
                 }
-                ctx.block().call_void("js_tdz_suppress_end", &[]);
-                let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
-                let key_idx = ctx.strings.intern("__perry_ctor_caps");
-                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                // #7154: re-read the class object — the capture lowerings above
-                // are arbitrary expressions and may have moved it.
-                let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
-                let blk = ctx.block();
-                let key_box = blk.load(DOUBLE, &key_handle_global);
-                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-                blk.call_void(
-                    "js_object_set_field_by_name",
-                    &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
-                );
-            }
-            for (key, init) in symbol_statics {
-                let k = lower_expr(ctx, key)?;
-                // #7154: `key` is lowered before `init`, so the Symbol sits in
-                // an SSA register across an arbitrary initializer — the same
-                // exposure the receiver has, one operand over. Root it.
-                let key_guard = super::temp_root::guard_store_operand(ctx, key, &k, init);
-                let v = lower_expr(ctx, init)?;
-                let k = super::temp_root::reread_store_operand(ctx, &key_guard, key, &k)?;
-                // #7154: both lowerings above can collect; re-derive the
-                // receiver from the root rather than reusing the register.
-                let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
+                // #1787: snapshot the captured outer-scope values onto the class
+                // object as the `__perry_ctor_caps` own array (in the constructor's
+                // capture-param order). `new <thisClassObjectValue>()` reads it back
+                // in `js_new_function_construct` and replays the constructor with the
+                // right captured environment — which the static `new ClassName()`
+                // inlining can't do once the class escapes its defining scope.
+                if !captured_args.is_empty() {
+                    let cap_len = captured_args.len().to_string();
+                    let caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
+                    // #7615 slice 8: the capture snapshot is an ACCUMULATOR — the
+                    // array holds the only reference to everything pushed so far
+                    // while the next element is lowered — and it was threaded
+                    // through a bare SSA register, which is #6951's shape exactly.
+                    //
+                    // The window is EMPTY on today's HIR, and the flag says so
+                    // rather than the code assuming it: `captured_args` is built at
+                    // exactly one site (`lower/lower_expr/arm_class.rs`) as
+                    // `ids.iter().map(|id| Expr::LocalGet(*id))`, and
+                    // `expr_may_trigger_gc` answers `false` for every `LocalGet`.
+                    // So `protect_caps` is false today, `advance` threads the same
+                    // register the old code threaded, and the emitted IR is byte
+                    // for byte what it was. What changes is that the day a
+                    // non-inert expression reaches this list it is rooted by
+                    // construction instead of silently entering the window.
+                    let protect_caps = any_operand_may_collect(ctx, captured_args.iter());
+                    // #6523: these capture loads are Perry-internal materialization
+                    // at the class's DEFINITION site, same as the
+                    // `RegisterClassCaptures` snapshot loads above (#6052). A
+                    // captured `const` declared AFTER the class (bundled semver's
+                    // `class Comparator` + trailing debug/require consts) is still
+                    // in its dead zone here — legal JS, since TDZ applies at
+                    // method-call time. Without the suppression window the checked
+                    // box read threw "Cannot access undefined before
+                    // initialization" while merely DEFINING the class. Suppressed
+                    // loads snapshot `undefined`; the #6037 refresh statements
+                    // re-register the live values right after each captured
+                    // refresh the evaluated object's array right after each
+                    // captured binding's initializer runs.
+                    let caps_box = with_rooted_accumulator(
+                        ctx,
+                        Repr::Ptr,
+                        &caps_arr,
+                        protect_caps,
+                        |ctx, acc| {
+                            ctx.block().call_void("js_tdz_suppress_begin", &[]);
+                            for arg in captured_args {
+                                let v = lower_expr(ctx, arg)?;
+                                acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v)]);
+                            }
+                            ctx.block().call_void("js_tdz_suppress_end", &[]);
+                            Ok(())
+                        },
+                        |ctx, arr| Ok(nanbox_pointer_inline(ctx.block(), arr)),
+                    )?;
+                    let key_idx = ctx.strings.intern("__perry_ctor_caps");
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    // #7154: re-read the class object — the capture lowerings above
+                    // are arbitrary expressions and may have moved it.
+                    let obj = group.reread_emitted(ctx, rooted);
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+                    blk.call_void(
+                        "js_object_set_field_by_name",
+                        &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
+                    );
+                }
+                for (key, init) in symbol_statics {
+                    // #7154: `key` is lowered before `init`, so the Symbol sits in
+                    // an SSA register across an arbitrary initializer — the same
+                    // exposure the receiver has, one operand over. Root it.
+                    //
+                    // The inner scope is cut per iteration rather than by the
+                    // group's own release: the setter this call may invoke is user
+                    // code, and N statics would otherwise hold N slots across all
+                    // of them. A release is a stack CUT, so the inner scope drops
+                    // only what it pushed above the class object.
+                    with_operands_rooted(ctx, &[key, init], |ctx, values| {
+                        // #7154: both lowerings above can collect; re-derive the
+                        // receiver from the root rather than reusing the register.
+                        let obj = group.reread_emitted(ctx, rooted);
+                        let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_object_set_symbol_property",
+                            &[
+                                (DOUBLE, &obj_box),
+                                (DOUBLE, &values[0]),
+                                (DOUBLE, &values[1]),
+                            ],
+                        );
+                        Ok(())
+                    })?;
+                }
+                // #685: run the class's `static { … }` blocks NOW — at the class
+                // expression's evaluation, with `this` = THIS fresh class object.
+                // The `ClassExprFresh` fast path previously never invoked them
+                // (they are also skipped by the module-init fallback when another
+                // evaluation site invokes them inline), so `return class { static
+                // { this.viaBlock = tag } }` factories produced objects whose
+                // blocks simply never ran. Arm the one-shot static-`this`
+                // override before each call so the compiled body's
+                // `js_static_this_resolve` prologue binds `this` to the fresh
+                // object (writes land as own properties of this evaluation's
+                // object, not the shared template). Blocks run after the named
+                // static fields above — the source interleaving of fields and
+                // blocks is not reproduced on this path (pre-existing limitation).
+                //
+                // `block_fns` is computed above, next to `protect_handle`.
+                for fn_name in block_fns {
+                    // #7154: a static block runs arbitrary user code, so re-derive
+                    // the receiver from the root before each one.
+                    let obj = group.reread_emitted(ctx, rooted);
+                    let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+                    ctx.block()
+                        .call_void("js_static_this_arm_value", &[(DOUBLE, &obj_box)]);
+                    ctx.block().call(DOUBLE, &fn_name, &[]);
+                }
+                let obj = group.reread_emitted(ctx, rooted);
                 let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                ctx.block().call(
-                    DOUBLE,
-                    "js_object_set_symbol_property",
-                    &[(DOUBLE, &obj_box), (DOUBLE, &k), (DOUBLE, &v)],
-                );
-                // Cut per iteration rather than letting `rooted`'s release do it
-                // at the end: the setter this call may invoke is user code, and
-                // N statics would otherwise hold N slots across all of them.
-                super::temp_root::release_store_operand(ctx, key_guard);
-            }
-            // #685: run the class's `static { … }` blocks NOW — at the class
-            // expression's evaluation, with `this` = THIS fresh class object.
-            // The `ClassExprFresh` fast path previously never invoked them
-            // (they are also skipped by the module-init fallback when another
-            // evaluation site invokes them inline), so `return class { static
-            // { this.viaBlock = tag } }` factories produced objects whose
-            // blocks simply never ran. Arm the one-shot static-`this`
-            // override before each call so the compiled body's
-            // `js_static_this_resolve` prologue binds `this` to the fresh
-            // object (writes land as own properties of this evaluation's
-            // object, not the shared template). Blocks run after the named
-            // static fields above — the source interleaving of fields and
-            // blocks is not reproduced on this path (pre-existing limitation).
-            //
-            // `block_fns` is computed above, next to `protect_handle`.
-            for fn_name in block_fns {
-                // #7154: a static block runs arbitrary user code, so re-derive
-                // the receiver from the root before each one.
-                let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
-                let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                ctx.block()
-                    .call_void("js_static_this_arm_value", &[(DOUBLE, &obj_box)]);
-                ctx.block().call(DOUBLE, &fn_name, &[]);
-            }
-            let obj = super::temp_root::rooted_handle_get(ctx, &rooted);
-            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-            super::temp_root::rooted_handle_release(ctx, rooted);
-            Ok(obj_box)
+                Ok(obj_box)
+            })
         }
         // Issue #711 part 2: `<expr>.prototype = <expr>` pattern.
         // Calls `js_set_function_prototype(func, proto)`, which (when

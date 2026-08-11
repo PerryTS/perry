@@ -684,8 +684,11 @@ fn set_option_value(
         return;
     }
 
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let current = js_object_get_field_by_name_f64(values.get_raw_mut_ptr(), key);
+    // #7341: `js_string_from_bytes` allocates, so pair it with the re-read.
+    let (key, values_after) = values.across_mut::<crate::object::ObjectHeader, _>(|| {
+        js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    });
+    let current = js_object_get_field_by_name_f64(values_after, key);
     if let Some(arr) = array_ptr(current) {
         let pushed = js_array_push_f64(arr as *mut crate::array::ArrayHeader, value);
         set_prop_on_obj(

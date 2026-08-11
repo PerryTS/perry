@@ -12,6 +12,8 @@ pub fn monomorphize_module(module: &mut Module) {
     // Process work queues until empty
     let mut new_functions = Vec::new();
     let mut new_classes = Vec::new();
+    // #7632: (specialization class id, the JS-visible name of its origin).
+    let mut new_display_names: Vec<(crate::ClassId, String)> = Vec::new();
 
     while !ctx.func_work_queue.is_empty() || !ctx.class_work_queue.is_empty() {
         // Process function specializations
@@ -68,6 +70,27 @@ pub fn monomorphize_module(module: &mut Module) {
                     // Continue with specialization even on constraint errors (for now)
                 }
                 let new_id = ctx.fresh_class_id();
+                // #7632: `new Gen<number>()` constructs `Gen$num`, and the
+                // instance's `constructor.name` reported that mangled name.
+                // The mangling is Perry's business — TypeScript erases type
+                // arguments, so node says `Gen` for every specialization.
+                //
+                // Register the ORIGIN's display name against the
+                // specialization's class id. `class_display_names` is the
+                // existing mechanism for exactly this (#5592 uses it when a
+                // class-expression binding is uniquified), and
+                // `codegen/string_pool.rs` already prefers it over the
+                // registration key when emitting the named-class constants.
+                //
+                // Read through the origin's own display name rather than its
+                // `name`, so a specialization of an already-uniquified class
+                // reports the JS name and not the internal key.
+                let display_name = module
+                    .class_display_names
+                    .get(&original.id)
+                    .cloned()
+                    .unwrap_or_else(|| original.name.clone());
+                new_display_names.push((new_id, display_name));
                 let specialized = specialize_class(original, &request.type_args, new_id);
                 new_classes.push(specialized);
             }
@@ -77,6 +100,10 @@ pub fn monomorphize_module(module: &mut Module) {
     // Add specialized functions and classes to the module
     module.functions.extend(new_functions);
     module.classes.extend(new_classes);
+    // #7632: deferred out of the loop above, which holds `module` immutably.
+    for (class_id, display_name) in new_display_names {
+        module.class_display_names.insert(class_id, display_name);
+    }
 
     // Update call sites to use specialized versions
     update_call_sites(module, &ctx);

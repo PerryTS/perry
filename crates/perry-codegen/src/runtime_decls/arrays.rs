@@ -44,6 +44,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Refs #488: bulk push for `arr.push(...src)` spread call.
     module.declare_function("js_array_push_spread_f64", I64, &[I64, I64]);
     module.declare_function("js_array_get_f64", DOUBLE, &[I64, I32]);
+    // repsel #7480 / #5093: the element-shape versioned loop's preheader
+    // guard. Establishes-or-confirms the per-array homogeneous element-shape
+    // invariant and returns the proven class id (0 = no proof). O(n) on the
+    // first visit, O(1) after — see `array/element_shape.rs`.
+    module.declare_function("js_array_ensure_element_shape", I32, &[I64]);
     module.declare_function("js_array_get_index_or_string", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_array_numeric_get_f64_unboxed", DOUBLE, &[I64, I32]);
     module.declare_function("js_array_set_f64", VOID, &[I64, I32, DOUBLE]);
@@ -135,6 +140,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // collection can run at a precise-root safepoint. No-op at runtime unless
     // moving mode is on and a collection is pending.
     module.declare_function("js_gc_loop_safepoint", VOID, &[]);
+    // The poll's arming word (`perry-runtime/src/gc/poll_arm.rs`). Non-zero
+    // means `js_gc_loop_safepoint` has something to consider; zero is a proof
+    // it would return immediately, so `emit_gc_loop_safepoint` loads this and
+    // branches around the call. Process-global on purpose: a thread-local would
+    // cost a `_tlv_get_addr` CALL per back-edge on Darwin, which is the
+    // regression this replaces.
+    module.add_external_global("PERRY_GC_POLL_ARMED", I32);
 
     // Write barrier for the generational GC (Phase C per the
     // gen-GC plan). Called by codegen-emitted heap-store sites

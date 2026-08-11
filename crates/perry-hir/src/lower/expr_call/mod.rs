@@ -33,6 +33,7 @@ mod module_class_static;
 mod module_static;
 mod name_fold;
 mod native_module;
+mod native_module_spread_tests;
 mod nested_namespace;
 mod object_static;
 mod os;
@@ -452,128 +453,144 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                 }
             }
 
-            // node-forge deeply-nested namespace calls
-            // (`forge.pki.rsa.generateKeyPair()`, `forge.pki.createCertificate()`,
-            // `forge.md.sha256.create()`). Must run before the generic
-            // namespace / `module.Class.staticMethod` dispatch, which would
-            // otherwise claim the 2-level `forge.pki.createCertificate()` shape
-            // and gate its `forge.pki` object-read as unimplemented.
-            args = match native_module::try_node_forge_namespace(ctx, expr, args) {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+            // #7720: a spread argument (`path.join(...parts)`) makes every
+            // native fast path below WRONG, not merely unoptimized: each one
+            // consumes `args` positionally, so the spread operand is folded in
+            // as a single argument holding the whole array. `path.join` then
+            // threw `ERR_INVALID_ARG_TYPE` on it, `util.format` inspected it
+            // instead of formatting, `fs.existsSync` tested an array for
+            // existence. Decline the whole chain for a node-core module call
+            // and let the fall-through tail build an `Expr::CallSpread` over
+            // the namespace member — the variadic runtime dispatch the
+            // value-read form (`const j = path.join; j(...parts)`) already
+            // uses. See `native_module::is_node_builtin_module_call` for why
+            // this is scoped to node-core (and not ext/npm native modules).
+            let node_builtin_spread_call =
+                has_spread && native_module::is_node_builtin_module_call(ctx, expr);
+            if !node_builtin_spread_call {
+                // node-forge deeply-nested namespace calls
+                // (`forge.pki.rsa.generateKeyPair()`, `forge.pki.createCertificate()`,
+                // `forge.md.sha256.create()`). Must run before the generic
+                // namespace / `module.Class.staticMethod` dispatch, which would
+                // otherwise claim the 2-level `forge.pki.createCertificate()` shape
+                // and gate its `forge.pki` object-read as unimplemented.
+                args = match native_module::try_node_forge_namespace(ctx, expr, args) {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Nested 3-level Member dispatch: process.hrtime.bigint(),
-            // crypto.subtle.<method>(), util.types.<method>(), and
-            // path.posix/win32.<method>().
-            args = match try_process_hrtime_bigint(expr, args) {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
-            args = match try_process_memory_usage_rss(expr, args) {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
-            args = match try_web_crypto_subtle(ctx, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
-            args = match try_util_types_namespace(ctx, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
-            args = match try_dns_promises_namespace(ctx, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
-            args = match try_punycode_ucs2_namespace(ctx, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
-            args = match try_path_subnamespace(ctx, expr, args) {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Nested 3-level Member dispatch: process.hrtime.bigint(),
+                // crypto.subtle.<method>(), util.types.<method>(), and
+                // path.posix/win32.<method>().
+                args = match try_process_hrtime_bigint(expr, args) {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
+                args = match try_process_memory_usage_rss(expr, args) {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
+                args = match try_web_crypto_subtle(ctx, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
+                args = match try_util_types_namespace(ctx, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
+                args = match try_dns_promises_namespace(ctx, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
+                args = match try_punycode_ucs2_namespace(ctx, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
+                args = match try_path_subnamespace(ctx, expr, args) {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // TextEncoder/TextDecoder direct methods need to win before
-            // native-instance dispatch, because node:util named constructors
-            // can leave native tags on the local binding.
-            args = match try_textencoder_decoder(ctx, call, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // TextEncoder/TextDecoder direct methods need to win before
+                // native-instance dispatch, because node:util named constructors
+                // can leave native tags on the local binding.
+                args = match try_textencoder_decoder(ctx, call, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // module.Class.staticMethod() and process.std{in,out} dispatch.
-            args = match try_module_class_static(ctx, call, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // module.Class.staticMethod() and process.std{in,out} dispatch.
+                args = match try_module_class_static(ctx, call, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Native module method calls (process/tty/os/Buffer/Uint8Array/Object/Symbol/Array/net).
-            args = match try_native_module_methods(ctx, call, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Native module method calls (process/tty/os/Buffer/Uint8Array/Object/Symbol/Array/net).
+                args = match try_native_module_methods(ctx, call, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Static class method + native-instance method dispatch.
-            args = match try_static_method_and_instance(ctx, call, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Static class method + native-instance method dispatch.
+                args = match try_static_method_and_instance(ctx, call, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // `<inst>.exports.<method>(...)` for WebAssembly JS API.
-            args = match try_wasm_instance_exports(ctx, call, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // `<inst>.exports.<method>(...)` for WebAssembly JS API.
+                args = match try_wasm_instance_exports(ctx, call, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // fs/path/JSON/Math/Number/String/crypto/os/Buffer/cp/net/AbortSignal/Date/URL static methods.
-            args = match try_module_static_methods(ctx, call, expr, args, has_spread)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // fs/path/JSON/Math/Number/String/crypto/os/Buffer/cp/net/AbortSignal/Date/URL static methods.
+                args = match try_module_static_methods(ctx, call, expr, args, has_spread)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // URL/URLSearchParams/Date instance methods + WeakRef/FinalizationRegistry.
-            args = match try_url_date_weakref_instance(ctx, call, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // URL/URLSearchParams/Date instance methods + WeakRef/FinalizationRegistry.
+                args = match try_url_date_weakref_instance(ctx, call, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Array method calls on local-variable receivers.
-            args = match try_local_array_methods(ctx, call, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Array method calls on local-variable receivers.
+                args = match try_local_array_methods(ctx, call, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Array methods on imported variables (ExternFuncRef receivers).
-            args = match try_imported_array_methods(ctx, call, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Array methods on imported variables (ExternFuncRef receivers).
+                args = match try_imported_array_methods(ctx, call, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Array methods on inline array literals.
-            args = match try_inline_array_methods(ctx, call, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Array methods on inline array literals.
+                args = match try_inline_array_methods(ctx, call, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Array-only methods on arbitrary expressions.
-            args = match try_array_only_methods(ctx, call, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Array-only methods on arbitrary expressions.
+                args = match try_array_only_methods(ctx, call, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Regex .test()/.exec() + String .match(regex).
-            args = match try_regex_string_methods(ctx, call, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Regex .test()/.exec() + String .match(regex).
+                args = match try_regex_string_methods(ctx, call, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
 
-            // Global builtins (parseInt/parseFloat/Number/String/isNaN/isFinite/...).
-            args = match try_global_builtins(ctx, call, expr, args)? {
-                Ok(e) => return Ok(e),
-                Err(a) => a,
-            };
+                // Global builtins (parseInt/parseFloat/Number/String/isNaN/isFinite/...).
+                args = match try_global_builtins(ctx, call, expr, args)? {
+                    Ok(e) => return Ok(e),
+                    Err(a) => a,
+                };
+            }
 
             // ---------------------------------------------------------------
             // Fall-through tail: lower the callee, fill in default arguments

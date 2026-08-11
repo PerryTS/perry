@@ -84,7 +84,7 @@ pub(super) struct Capability {
 // missing slots with `undefined` (rather than reading uninitialised registers).
 // ---------------------------------------------------------------------------
 
-thread_local! {
+crate::perry_thread_local! {
     static ARITY_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 

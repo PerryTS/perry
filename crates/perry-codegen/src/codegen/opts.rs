@@ -20,6 +20,13 @@ pub struct AppMetadata {
     /// `app_group_*` calls fall through to the runtime's "not configured"
     /// stub-warn diagnostic. Refs #1178.
     pub app_group: Option<String>,
+    /// The validated `perry.update` block, as the JSON blob the runtime reads,
+    /// or `None` when the project configures no update check.
+    ///
+    /// `None` must emit NOTHING — not an empty blob and not a disabled one. A
+    /// binary that configures no updates is byte-identical to one built before
+    /// this existed, and `entry.rs`'s absence test asserts it.
+    pub update_config: Option<String>,
 }
 
 impl Default for AppMetadata {
@@ -29,6 +36,7 @@ impl Default for AppMetadata {
             build_number: 1,
             bundle_id: "com.perry.app".to_string(),
             app_group: None,
+            update_config: None,
         }
     }
 }
@@ -203,6 +211,15 @@ pub struct CompileOptions {
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
     pub namespace_imports: Vec<String>,
+    /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
+    /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
+    ///
+    /// These have no `perry_fn_<mod>__<name>` symbol to call, because the member
+    /// is a whole module rather than a binding inside one. They resolve instead
+    /// to that module's `@__perry_ns_<prefix>` global — the same object a
+    /// dynamic `import()` of it would hand back — with the prefix coming from
+    /// `namespace_member_prefixes` under the same key.
+    pub namespace_member_nested: Vec<(String, String)>,
     /// Imported class definitions from other native modules, keyed by
     /// the local alias (or original name when no alias). Each entry
     /// carries the class HIR, the module prefix of its origin, and an
@@ -565,6 +582,15 @@ impl ImportedCtor {
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx {
     pub namespace_imports: std::collections::HashSet<String>,
+    /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
+    /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
+    ///
+    /// These have no `perry_fn_<mod>__<name>` symbol to call, because the member
+    /// is a whole module rather than a binding inside one. They resolve instead
+    /// to that module's `@__perry_ns_<prefix>` global — the same object a
+    /// dynamic `import()` of it would hand back — with the prefix coming from
+    /// `namespace_member_prefixes` under the same key.
+    pub namespace_member_nested: std::collections::HashSet<(String, String)>,
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,

@@ -635,6 +635,34 @@ const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
 /// optimization horizon worth measuring.
 static USED_PROVIDERS: Mutex<Option<HashSet<OwnerKind>>> = Mutex::new(None);
 
+/// Test-only: the thread that holds `PROVIDER_TEST_LOCK`.
+///
+/// `USED_PROVIDERS` is process-wide but `PROVIDER_TEST_LOCK` only serialises
+/// tests that TAKE it, so a concurrently-running test that lowers any code
+/// touching an ext symbol used to add providers to the holder's set. Observed:
+/// `ext_prefix_net_does_not_over_match` asserts the set is empty after an
+/// unlisted symbol and failed once in twenty once #7662 added `child_process`
+/// lowering tests, which call `record_ffi_call`. Recording is narrowed to the
+/// holder's thread while a provider test is running; production is untouched
+/// (`PROVIDER_TEST_THREAD` is `None` outside tests, which permits everything).
+#[cfg(test)]
+static PROVIDER_TEST_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+
+/// May the calling thread record into `USED_PROVIDERS`? Always yes in
+/// production and whenever no provider test holds the lock.
+#[inline]
+fn provider_recording_permitted() -> bool {
+    #[cfg(test)]
+    {
+        if let Ok(holder) = PROVIDER_TEST_THREAD.lock() {
+            if let Some(id) = *holder {
+                return id == std::thread::current().id();
+            }
+        }
+    }
+    true
+}
+
 // Per-module capture buffer, active only between [`begin_module_capture`]
 // and [`take_module_capture`] on the same thread.
 //
@@ -663,7 +691,7 @@ thread_local! {
 pub(crate) fn record_ffi_call(symbol: &str) {
     for (name, owner) in FFI_REGISTRY {
         if *name == symbol {
-            {
+            if provider_recording_permitted() {
                 let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
                 guard.get_or_insert_with(HashSet::new).insert(*owner);
             }
@@ -797,6 +825,30 @@ mod tests {
 
     static PROVIDER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Takes `PROVIDER_TEST_LOCK` **and** claims `PROVIDER_TEST_THREAD`, so
+    /// `record_ffi_call` on any other thread stops writing into this test's
+    /// `USED_PROVIDERS` snapshot. Taking the lock alone is not enough: it only
+    /// serialises tests that take it, and a neighbouring lowering test does not.
+    struct ProviderTestGuard(std::sync::MutexGuard<'static, ()>);
+
+    impl ProviderTestGuard {
+        fn new() -> Self {
+            let g = PROVIDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            if let Ok(mut t) = super::PROVIDER_TEST_THREAD.lock() {
+                *t = Some(std::thread::current().id());
+            }
+            ProviderTestGuard(g)
+        }
+    }
+
+    impl Drop for ProviderTestGuard {
+        fn drop(&mut self) {
+            if let Ok(mut t) = super::PROVIDER_TEST_THREAD.lock() {
+                *t = None;
+            }
+        }
+    }
+
     /// #6439: per-module capture must see exactly what this thread emitted,
     /// sorted and deduped, and must end cleanly. This is what the object
     /// cache persists beside each `.o`.
@@ -837,7 +889,7 @@ mod tests {
     /// the same providers, hence the same link line.
     #[test]
     fn replayed_symbols_route_like_live_codegen() {
-        let _guard = PROVIDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ProviderTestGuard::new();
         let _ = take_used_providers();
         replay_ffi_symbols(["js_ws_connect_start", "js_not_a_real_symbol"]);
         let got = take_used_providers();
@@ -868,9 +920,7 @@ mod tests {
     // one test cannot steal another test's providers.
     #[test]
     fn registry_dispatch_routes_to_correct_owner() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         // Drain anything left over from prior tests.
         let _ = take_used_providers();
 
@@ -927,9 +977,7 @@ mod tests {
     /// `Undefined symbols: _js_node_http_create_server_with_options`.
     #[test]
     fn emitted_create_server_symbol_routes_to_http() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         assert_symbol_routes_to(
             "js_node_http_create_server_with_options",
             OwnerKind::WellKnown("http"),
@@ -943,9 +991,7 @@ mod tests {
     /// owner so the wrapper joins the link line.
     #[test]
     fn emitted_http_suite_external_symbols_route_to_owners() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         for symbol in [
             "js_http_request_overload",
             "js_http_set_header",
@@ -983,9 +1029,7 @@ mod tests {
     /// perry-runtime and must NOT flip the feature.
     #[test]
     fn emitted_crypto_symbols_route_to_stdlib_crypto_feature() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         let crypto_owner = OwnerKind::Stdlib {
             feature: Some("crypto"),
         };
@@ -1015,9 +1059,7 @@ mod tests {
     /// (#6439 shape).
     #[test]
     fn crypto_prefix_net_marker_survives_module_capture_replay() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         let _ = take_used_providers();
 
         begin_module_capture();
@@ -1046,9 +1088,7 @@ mod tests {
     /// failed with `Undefined symbols: _js_event_emitter_new_with_options`.
     #[test]
     fn emitted_event_emitter_symbols_route_to_events() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         for symbol in [
             "js_event_emitter_new",
             "js_event_emitter_new_with_options",
@@ -1078,9 +1118,7 @@ mod tests {
     /// compiles the fixtures instead of linking unresolved `js_net_*` calls.
     #[test]
     fn emitted_net_validation_external_symbols_route_to_net() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         for symbol in [
             "js_net_create_server",
             "js_net_server_listen",
@@ -1104,9 +1142,7 @@ mod tests {
     /// codegen provenance alone — no exact-table row per symbol required.
     #[test]
     fn emitted_ext_prefix_symbols_route_to_well_known_binding() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         for (symbol, binding) in [
             ("js_ioredis_new", "ioredis"),
             ("js_ioredis_set", "ioredis"),
@@ -1125,9 +1161,7 @@ mod tests {
     /// prefix-family symbol must never leak into a DIFFERENT binding.
     #[test]
     fn ext_prefix_net_does_not_over_match() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         let _ = take_used_providers();
         record_ffi_call("js_ioredis_new");
         let got = take_used_providers();
@@ -1150,9 +1184,7 @@ mod tests {
     /// flip, so a warm `.o` cache links identically to a cold one (#6439 shape).
     #[test]
     fn ext_prefix_marker_survives_module_capture_replay() {
-        let _guard = PROVIDER_TEST_LOCK
-            .lock()
-            .expect("provider test lock poisoned");
+        let _guard = ProviderTestGuard::new();
         let _ = take_used_providers();
 
         begin_module_capture();

@@ -18,7 +18,7 @@ use super::*;
 use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use std::cell::RefCell;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Buffers detached via `transfer`/`transferToFixedLength`/structuredClone
     /// transfer. A detached buffer also has `length == capacity == 0`, but that
     /// alone cannot be the probe: `new ArrayBuffer(0)` is empty yet NOT
@@ -27,8 +27,17 @@ thread_local! {
         RefCell::new(new_ptr_hash_set());
 }
 
+/// Monotone "an ArrayBuffer has been detached in this process" latch — nothing
+/// detached ⟹ nothing to find. See `crate::registry_latch`.
+static EVER_DETACHED: crate::registry_latch::RegistryLatch =
+    crate::registry_latch::RegistryLatch::new();
+
 /// `ArrayBuffer.prototype.detached` — true after a successful transfer.
+#[inline]
 pub fn is_detached_buffer(addr: usize) -> bool {
+    if EVER_DETACHED.is_idle() {
+        return false;
+    }
     DETACHED_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
@@ -51,6 +60,8 @@ pub fn detach_array_buffer(addr: usize) {
         (*buf).length = 0;
         (*buf).capacity = 0;
     }
+    // Arm before the insert — see `crate::registry_latch`.
+    EVER_DETACHED.arm();
     DETACHED_BUFFER_REGISTRY.with(|r| {
         r.borrow_mut().insert(addr);
     });

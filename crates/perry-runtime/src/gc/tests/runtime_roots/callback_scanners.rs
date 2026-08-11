@@ -1043,7 +1043,7 @@ fn test_evacuation_verify_copy_only_pinned_root_allows_non_forwarded_target() {
     let user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let valid_ptrs = build_valid_pointer_set();
     unsafe {
-        (*header_from_user_ptr(user)).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(header_from_user_ptr(user));
     }
     verify_copy_only_scanner_bits(
         POINTER_TAG | (user as u64 & POINTER_MASK),
@@ -1051,7 +1051,7 @@ fn test_evacuation_verify_copy_only_pinned_root_allows_non_forwarded_target() {
         "copy-only root scanner",
     );
     unsafe {
-        (*header_from_user_ptr(user)).gc_flags &= !GC_FLAG_PINNED;
+        crate::gc::unpin_object(header_from_user_ptr(user));
     }
 }
 

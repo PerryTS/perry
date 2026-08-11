@@ -71,13 +71,19 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
         (*buf).length = size;
         (*buf).capacity = size;
     }
+    // Latch BEFORE the insert, not after. `buffer::is_registered_buffer` and
+    // `buffer::is_shared_array_buffer` both report a SAB backing as a buffer
+    // without it ever entering their thread-local registries, so both latches
+    // must be armed before this address can be found — an arm placed after the
+    // insert leaves a window in which the entry is live and a probe still takes
+    // the idle fast path. (This is the ordering `js_buffer_register_external`
+    // already documents; see also `crate::registry_latch`.)
+    SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
+    crate::buffer::note_buffer_like_registered();
     registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(buf as usize);
-    // Release-store AFTER the insert is visible, so a thread that observes the
-    // latch also observes the entry it was latched for.
-    SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
     buf
 }
 
@@ -125,11 +131,15 @@ pub(crate) fn snapshot_shared_sabs() -> Option<HashSet<usize>> {
 /// registry is process-global and never cleared.
 #[cfg(test)]
 pub(crate) fn test_seed_shared_sab(addr: usize) {
+    // Same arm-before-publish ordering as `alloc_shared_sab`, so a seeded
+    // fixture exercises the real fast/slow-path split rather than a state the
+    // production path never produces.
+    SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
+    crate::buffer::note_buffer_like_registered();
     registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(addr);
-    SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
 }
 
 #[cfg(test)]

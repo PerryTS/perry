@@ -133,6 +133,24 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
         return;
     }
+    // #7771: inside an element-shape fast clone the tracked `const r = arr[j]`
+    // binding is VIRTUAL — its `Let` emits nothing (`stmt/let_stmt.rs`) and
+    // its slot is never (re)bound in the clone, so this lexical-death clear
+    // would be the clone's ONLY runtime call. Depending on the shadow-frame
+    // mode that call is real (`js_shadow_slot_set`), and a call inside a
+    // call-free-by-construction clone does not slow it, it DELETES it
+    // (#7690). Skipping is sound in every mode: the slot still holds whatever
+    // it held before the loop, a stale-but-rooted value is over-rooting that
+    // a moving collection rewrites like any root, and every later user of a
+    // shared slot index binds before use. The slow clone, lowered after the
+    // fact is popped, keeps its clear.
+    if ctx.element_shape_loop_facts.iter().any(|fact| {
+        fact.element_binding
+            .and_then(|id| ctx.shadow_slot_map.get(&id))
+            == Some(&slot_idx)
+    }) {
+        return;
+    }
     // Never-bound slot: it provably still holds its initial 0 (slots are only
     // written through bind/set, and every value-set site binds first), so the
     // clear would be a redundant `js_shadow_slot_set(idx, 0)` TLS hit.
@@ -210,7 +228,7 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
 
 /// Bind frame slot `slot_idx` to the root alloca `slot_ptr` — the raw form of
 /// [`emit_shadow_slot_bind_for_local`], for roots that are not named locals
-/// (#7469: the pooled temp-root allocas in `temp_root.rs`).
+/// (#7469: the pooled temp-root allocas in `rooting/temp_root.rs`).
 ///
 /// The caller owns the pairing of `slot_idx` and `slot_ptr`; everything else
 /// — the stack-map textual marker, the #7088 inline frame write, the FFI

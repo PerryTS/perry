@@ -3,7 +3,7 @@
 use super::*;
 use std::cell::RefCell;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Singleton cache keyed by `func_ptr` for non-capturing closures.
     /// See `js_closure_alloc_singleton` and `scan_singleton_closure_roots_mut`.
     /// Pointer-keyed; uses `PtrHasher` (Fibonacci-multiplicative) to
@@ -302,7 +302,7 @@ const MAX_CAPTURED_CLOSURE_SLOTS: usize = 64;
 const CAPTURED_MISS_STREAK_DISABLE: u32 = 256;
 const CAPTURED_DISABLED_SENTINEL: u32 = u32::MAX;
 
-thread_local! {
+crate::perry_thread_local! {
     static CAPTURED_MISS_STREAK: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }

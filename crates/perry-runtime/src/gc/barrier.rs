@@ -241,20 +241,42 @@ fn dirty_slot_ranges_for(
         return Vec::new();
     };
 
+    // Walk whichever side is smaller. Iterating the dirty-page set is O(dirty
+    // pages) regardless of the range's size, which is the right shape for the
+    // one huge array this exists for — but it is quadratic when a heap holds
+    // MANY small pointer ranges (each would rescan the whole set). Enumerating
+    // the range's own pages instead is O(range pages) with one set probe each.
+    // Both arms produce the same ranges; only the traversal order differs, and
+    // the merge below sorts.
+    let range_pages = (slots_end - 1).saturating_sub(slots) / PAGE_SIZE + 1;
     let mut ranges = Vec::new();
-    for &page in dirty_pages {
+    let push_page = |page: usize, ranges: &mut Vec<(usize, usize)>, stats: &mut _| {
         let page_start = page << PAGE_SHIFT;
         let page_end = page_start + PAGE_SIZE;
         let start = slots.max(page_start);
         let end = slots_end.min(page_end);
         if start >= end {
-            continue;
+            return;
         }
+        let stats: &mut RememberedSetTraceStats = stats;
         stats.dirty_slot_pages_considered += 1;
         let first = (start - slots) / std::mem::size_of::<u64>();
         let last = (end - slots).div_ceil(std::mem::size_of::<u64>());
         if first < last {
             ranges.push((first.min(slot_count), last.min(slot_count)));
+        }
+    };
+    if range_pages <= dirty_pages.len() {
+        let first_page = slots >> PAGE_SHIFT;
+        let last_page = (slots_end - 1) >> PAGE_SHIFT;
+        for page in first_page..=last_page {
+            if dirty_pages.contains(&page) {
+                push_page(page, &mut ranges, stats);
+            }
+        }
+    } else {
+        for &page in dirty_pages {
+            push_page(page, &mut ranges, stats);
         }
     }
 
@@ -657,7 +679,21 @@ thread_local! {
         const { Cell::new(BarrierTraceCounters::zero()) };
 }
 
-pub(super) static GENERATED_WRITE_BARRIERS_EMITTED: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    /// #7672, fifth instance. Two test guards own this flag under two DIFFERENT
+    /// locks — `CopyingNurseryTestGuard` sets it to 1 under the copying-nursery
+    /// isolation lock, `GeneratedWriteBarrierTestGuard` swaps it under
+    /// `GENERATED_BARRIER_TEST_LOCK` — and `generated_write_barriers_active()`
+    /// is read by tests holding neither. A `GeneratedWriteBarrierTestGuard::
+    /// inactive()` on one libtest thread therefore silences the runtime barrier
+    /// under another thread's test, whose store then dirties no page.
+    ///
+    /// Observed, not theoretical: `sabotaged_parent_gate_strands_a_young_child_
+    /// the_shipped_gate_keeps` failed 1 run in 22 with
+    /// `missing_edges=1 ... slot_page_ever_dirty=false` — the barrier did not
+    /// fire, which is a wrong VALUE and not a timing symptom.
+    pub(super) static GENERATED_WRITE_BARRIERS_EMITTED: AtomicUsize = AtomicUsize::new(0);
+}
 
 /// Number of threads whose incremental mark barrier is currently active.
 ///
@@ -1234,6 +1270,19 @@ pub(super) fn barrier_parent_needs_remembering(parent_addr: usize, external_slot
         crate::arena::classify_heap_generation(parent_addr),
         crate::arena::HeapGeneration::Old
     ) {
+        // #7511: generated code skips this whole call when the parent's header
+        // has no `GC_FLAG_TENURED` (`emit_parent_may_need_remembering_check`),
+        // which is sound only while `Old ⟹ TENURED` — and nothing in the
+        // allocator enforces that, so it is pinned by
+        // `gc::tests::inline_generation_gate_contract` over the production
+        // birth paths instead.
+        //
+        // A `debug_assert!` here was tried and REVERTED: it is the right
+        // enforcement point in principle, but dozens of tests build old-gen
+        // fixtures straight from `arena_alloc_gc_old` without the bit
+        // (`alloc_old_test_object`, `alloc_old_test_promise`, the
+        // `gc/tests/oldgen.rs` family), some deliberately. It fired on those,
+        // not on a defect. Reinstating it means fixing those fixtures first.
         return true;
     }
     external_slot && malloc_gc_parent_addr(parent_addr)
@@ -1440,110 +1489,6 @@ pub(super) fn mark_dirty_external_slot_page(header_addr: usize, page: usize) -> 
         }
         header_was_new
     })
-}
-
-pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
-    if !write_barriers_enabled() {
-        incremental_mark_barrier_value(child_bits);
-        return;
-    }
-    write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, false);
-}
-
-/// Canonicalize an **INT32-boxed** numeric store into a raw-f64-masked slot of
-/// an intact typed-shape descriptor (`0x7FFE…` → the plain IEEE bits of the same
-/// number). The object twin of `canonicalize_array_numeric_store_bits`
-/// (`array/header.rs`), and needed for the same reason.
-///
-/// `layout_note_slot` treats any non-raw-f64 bit pattern landing in a raw-f64
-/// slot as a representation change and calls `layout_set_typed_unknown`, which
-/// evicts the object's `TypedLayoutDescriptor` **permanently and one-way**.
-/// INT32 boxes genuinely reach object fields from FFI / native modules (sqlite
-/// row columns, `v8` deserialization, …), and unlike codegen's guarded class-
-/// field store — which canonicalizes inline behind a plain-finite check — this
-/// runtime choke point wrote the bits verbatim. One FFI integer therefore cost
-/// the object its typed fast path forever.
-///
-/// There is no observable behavior change: an INT32 box and its f64 are `===`
-/// and print identically. `value_bits_to_number` supplies the class-ref
-/// exclusion (a `ClassRef` shares INT32_TAG and must keep its tag), so a class
-/// value still downgrades the descriptor rather than being stripped to a bare
-/// number.
-///
-/// Ordered tag-first so the (hot) non-INT32 store never pays the thread-local
-/// descriptor probe.
-#[inline]
-fn canonicalize_typed_slot_store_bits(
-    parent_user: usize,
-    slot_index: usize,
-    value_bits: u64,
-) -> u64 {
-    if value_bits & TAG_MASK != crate::value::INT32_TAG {
-        return value_bits;
-    }
-    if !crate::gc::layout_slot_is_raw_f64_typed(parent_user, slot_index) {
-        return value_bits;
-    }
-    match crate::array::value_bits_to_number(value_bits) {
-        Some(number) => number.to_bits(),
-        None => value_bits,
-    }
-}
-
-#[inline]
-pub(crate) fn runtime_store_jsvalue_slot(
-    parent_user: usize,
-    slot_addr: usize,
-    slot_index: usize,
-    value_bits: u64,
-) {
-    let value_bits = canonicalize_typed_slot_store_bits(parent_user, slot_index, value_bits);
-    unsafe {
-        std::ptr::write(slot_addr as *mut u64, value_bits);
-    }
-    // A heap string stored into an object field / array element is now aliased
-    // from the heap, so a later `js_string_append` must NOT mutate its buffer
-    // in place while this slot still references it. Demote it from "uniquely
-    // owned" (refcount==1) to shared (refcount==0). This realizes the
-    // documented `js_string_addref` contract ("stored into an array/object" —
-    // see string/alloc.rs): codegen wires the local-copy alias case (`let y =
-    // x`) but never the heap-store case, so refcount=1 strings leaked into
-    // object/array slots and were corrupted by the in-place append fast path.
-    // Concretely: code that snapshots a string into a heap slot
-    // (`slot = newState`) and later grows the same buffer via `+=` would have
-    // the in-place append silently rewrite the stored slot, so a later equality
-    // check against the snapshot wrongly saw the two as identical. Every dynamic
-    // object-field and array-element write funnels through here, so this is the
-    // single complete choke point.
-    if value_bits & TAG_MASK == STRING_TAG {
-        crate::string::js_string_addref((value_bits & POINTER_MASK) as *mut crate::StringHeader);
-    }
-    layout_note_slot(parent_user, slot_index, value_bits);
-    runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
-}
-
-pub(crate) fn runtime_write_barrier_external_slot(
-    parent_addr: usize,
-    slot_addr: usize,
-    child_bits: u64,
-) {
-    if !write_barriers_enabled() {
-        incremental_mark_barrier_value(child_bits);
-        return;
-    }
-    write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, true);
-}
-
-pub(crate) fn runtime_write_barrier_gc_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
-    if !write_barriers_enabled() {
-        incremental_mark_barrier_value(child_bits);
-        return;
-    }
-    let parent_is_malloc_gc = matches!(
-        crate::arena::classify_heap_generation(parent_addr),
-        crate::arena::HeapGeneration::Unknown
-    ) && malloc_gc_parent_addr(parent_addr);
-    write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, parent_is_malloc_gc);
 }
 
 #[inline]

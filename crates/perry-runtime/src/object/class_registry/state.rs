@@ -2,7 +2,7 @@ use super::*;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-thread_local! {
+crate::perry_thread_local! {
     pub(crate) static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
@@ -97,11 +97,45 @@ pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
                 props
                     .keys()
                     .filter(|k| !k.starts_with('#'))
+                    // #7190: a key installed by `Object.defineProperty` without
+                    // `enumerable: true` shares this table with static fields
+                    // but is NOT enumerable.
+                    .filter(|k| !class_static_key_is_non_enumerable(class_id, k))
                     .cloned()
                     .collect()
             })
             .unwrap_or_default()
     })
+}
+
+/// #7190: record a `defineProperty`-installed static key's attributes. Called
+/// only from the define path; `static x = …` never touches it, so a declared
+/// field keeps its CreateDataPropertyOrThrow `(writable, enumerable) = (true,
+/// true)` reporting.
+pub(crate) fn class_static_set_defined_attrs(
+    class_id: u32,
+    name: &str,
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
+) {
+    crate::object::CLASS_STATIC_DEFINED_ATTRS.with(|m| {
+        m.borrow_mut()
+            .entry(class_id)
+            .or_default()
+            .insert(name.to_string(), (writable, enumerable, configurable));
+    });
+}
+
+/// `(writable, enumerable)` if this static key was installed by
+/// `Object.defineProperty`; `None` for a declared `static x = …` field.
+pub(crate) fn class_static_defined_attrs(class_id: u32, name: &str) -> Option<(bool, bool, bool)> {
+    crate::object::CLASS_STATIC_DEFINED_ATTRS
+        .with(|m| m.borrow().get(&class_id).and_then(|k| k.get(name)).copied())
+}
+
+pub(crate) fn class_static_key_is_non_enumerable(class_id: u32, name: &str) -> bool {
+    class_static_defined_attrs(class_id, name).is_some_and(|(_, enumerable, _)| !enumerable)
 }
 
 /// True when `name` is an own static data property (a static field, or a
@@ -179,8 +213,10 @@ pub static CLASS_VTABLE_REGISTRY: RwLock<Option<HashMap<u32, ClassVTable>>> = Rw
 pub static CLASS_STATIC_METHODS: RwLock<Option<HashMap<u32, HashMap<String, (usize, u32, bool)>>>> =
     RwLock::new(None);
 
-pub static CLASS_STATIC_ACCESSORS: RwLock<Option<HashMap<u32, HashMap<String, (usize, usize)>>>> =
-    RwLock::new(None);
+per_test_global! {
+    pub static CLASS_STATIC_ACCESSORS: RwLock<Option<HashMap<u32, HashMap<String, (usize, usize)>>>> =
+        RwLock::new(None);
+}
 
 /// Spec `Function.prototype.length` per (class_id, method/accessor name) — the
 /// count of formal parameters before the first one with a default or a rest.
@@ -199,40 +235,46 @@ pub static CLASS_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>
 pub static CLASS_STATIC_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>> =
     RwLock::new(None);
 
-pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
-    RwLock::new(None);
+per_test_global! {
+    pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
+        RwLock::new(None);
 
-pub static CLASS_SYMBOL_ACCESSORS: RwLock<Option<HashMap<(u32, usize, bool), (usize, usize)>>> =
-    RwLock::new(None);
+    pub static CLASS_SYMBOL_ACCESSORS: RwLock<Option<HashMap<(u32, usize, bool), (usize, usize)>>> =
+        RwLock::new(None);
+}
 
 /// Set of all registered class ids. Populated at module init by codegen
 /// emitting `js_register_class_id(cid)` for every user class — even
 /// classes without any methods. Refs #618 / #420 followup.
 pub static REGISTERED_CLASS_IDS: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
 
-/// Issue #711 part 2: `function Base() {}; Base.prototype = obj` pattern.
-/// Effect's `internal/effectable.ts` declares classes via prototype
-/// assignment on a plain function, not via `class` syntax. To make
-/// `class Derived extends Base {}` walk into `obj`'s methods at dispatch
-/// time, we model this as a synthetic class:
-///   - `js_set_function_prototype(func, obj)` allocates a synthetic
-///     class_id (high-bit-set to avoid collision with codegen-assigned
-///     ids), stores `func_bits → synthetic_cid` in `FUNCTION_CLASS_IDS`,
-///     and `synthetic_cid → obj_ptr` in `CLASS_PROTOTYPE_OBJECTS`.
-///   - `js_register_class_parent_dynamic` extends to detect closure
-///     parent values, looks up the synthetic class_id, and registers
-///     the (child, synthetic) edge in CLASS_REGISTRY.
-///   - The method-dispatch chain walk in `js_native_call_method`
-///     consults `CLASS_PROTOTYPE_OBJECTS` when it reaches a synthetic
-///     class_id: it resolves the method as a regular field lookup on
-///     the prototype object and calls it with `this` bound to the
-///     receiver.
-pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(None);
+per_test_global! {
+    /// Issue #711 part 2: `function Base() {}; Base.prototype = obj` pattern.
+    /// Effect's `internal/effectable.ts` declares classes via prototype
+    /// assignment on a plain function, not via `class` syntax. To make
+    /// `class Derived extends Base {}` walk into `obj`'s methods at dispatch
+    /// time, we model this as a synthetic class:
+    ///   - `js_set_function_prototype(func, obj)` allocates a synthetic
+    ///     class_id (high-bit-set to avoid collision with codegen-assigned
+    ///     ids), stores `func_bits → synthetic_cid` in `FUNCTION_CLASS_IDS`,
+    ///     and `synthetic_cid → obj_ptr` in `CLASS_PROTOTYPE_OBJECTS`.
+    ///   - `js_register_class_parent_dynamic` extends to detect closure
+    ///     parent values, looks up the synthetic class_id, and registers
+    ///     the (child, synthetic) edge in CLASS_REGISTRY.
+    ///   - The method-dispatch chain walk in `js_native_call_method`
+    ///     consults `CLASS_PROTOTYPE_OBJECTS` when it reaches a synthetic
+    ///     class_id: it resolves the method as a regular field lookup on
+    ///     the prototype object and calls it with `this` bound to the
+    ///     receiver.
+    pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(None);
+}
 // Stored as `usize` (raw address) so the map is Send + Sync. The
 // pointer is always converted back to `*mut ObjectHeader` at call sites
 // (`class_prototype_object` / the dispatch walk) where single-threaded
 // usage is guaranteed.
-pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+per_test_global! {
+    pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+}
 
 /// Lazily materialized `Class.prototype` objects for declared ES classes.
 /// These are separate from `CLASS_PROTOTYPE_OBJECTS`: that older table is
@@ -285,17 +327,19 @@ pub(crate) fn class_prototype_method_is_enumerable(class_id: u32, name: &str) ->
     true
 }
 
-/// #36 / #321: maps a child class_id to the raw address of a parent CLOSURE
-/// (function value) when `class Child extends <function value> {}`. effect's
-/// `class Svc extends Context.Tag("Svc")<...>() {}` extends the function
-/// `TagClass` returned by `Tag(id)()`. In JS this sets `Svc.__proto__ =
-/// TagClass` so static-property reads on `Svc` (`Svc.key`, `Svc._op`,
-/// `Svc[TagTypeId]`) walk to the parent function's own props + ITS static
-/// prototype. Perry's existing dynamic-parent path only models OBJECT parents
-/// (class-expression values), so this records the closure-parent axis so the
-/// class-ref static getters can reach the closure's props and proto chain.
-/// Stored as `usize` (raw address) for Send + Sync; converted back at use.
-pub static CLASS_PARENT_CLOSURES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+per_test_global! {
+    /// #36 / #321: maps a child class_id to the raw address of a parent CLOSURE
+    /// (function value) when `class Child extends <function value> {}`. effect's
+    /// `class Svc extends Context.Tag("Svc")<...>() {}` extends the function
+    /// `TagClass` returned by `Tag(id)()`. In JS this sets `Svc.__proto__ =
+    /// TagClass` so static-property reads on `Svc` (`Svc.key`, `Svc._op`,
+    /// `Svc[TagTypeId]`) walk to the parent function's own props + ITS static
+    /// prototype. Perry's existing dynamic-parent path only models OBJECT parents
+    /// (class-expression values), so this records the closure-parent axis so the
+    /// class-ref static getters can reach the closure's props and proto chain.
+    /// Stored as `usize` (raw address) for Send + Sync; converted back at use.
+    pub static CLASS_PARENT_CLOSURES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+}
 
 /// Maps a child class_id to the raw NaN-boxed bits of the parent constructor
 /// VALUE that `js_register_class_parent_dynamic` evaluated at class-definition
@@ -436,7 +480,26 @@ pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
         .map(|(k, _)| *k)
 }
 
+/// #7757: a monomorphized specialization (`Gen$num`) must present the GENERIC's
+/// reflective surface. TypeScript erases type arguments, so at runtime there is
+/// exactly one `Gen`, one `Gen.prototype` and one `Gen.prototype.constructor` —
+/// the specializations are an implementation detail of monomorphization
+/// (`monomorph::mangle::generate_specialized_name`), and without this redirect
+/// each one materialized its OWN decl-prototype object. That made
+/// `a.constructor !== Gen`, `a.constructor !== b.constructor` and
+/// `getPrototypeOf(a) !== getPrototypeOf(b)` where node says all three are
+/// equal.
+///
+/// Same origin edge `instanceof` uses (#7575) and the display name uses
+/// (#7632), applied to the third and last identity surface. METHOD DISPATCH is
+/// unaffected: it runs off the per-class-id vtable, not this object, so each
+/// specialization keeps its own monomorphized bodies.
+fn decl_prototype_identity_id(class_id: u32) -> u32 {
+    crate::object::class_generic_origin(class_id).unwrap_or(class_id)
+}
+
 pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
+    let class_id = decl_prototype_identity_id(class_id);
     if let Ok(read) = CLASS_DECL_PROTOTYPE_OBJECTS.read() {
         if let Some(map) = read.as_ref() {
             return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
@@ -475,6 +538,8 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
 }
 
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
+    // #7757: a specialization answers with its generic's prototype.
+    let class_id = decl_prototype_identity_id(class_id);
     if class_id == crate::wasi::CLASS_ID_WASI {
         crate::wasi::ensure_wasi_prototype_for_subclass();
         let proto = class_prototype_object(class_id);
@@ -495,7 +560,32 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    invalidate_class_prototype_fast_guards();
+    // #7769 follow-up: materializing a declared class's prototype object is
+    // not prototype SURGERY, and it used to invalidate the fast guards as if
+    // it were.
+    //
+    // `invalidate_class_prototype_fast_guards()` trips a process-global,
+    // MONOTONIC latch. It disables every `js_method_direct_shape_guard` /
+    // `js_typed_feedback_method_direct_call_guard` in the program, retires
+    // every outstanding element-shape record (`invalidate_all_element_shapes`)
+    // and bumps `VTABLE_GEN`, retiring the `vtable_ic` / `obj_dispatch_ic`
+    // dispatch caches. It exists for the one event that can change which
+    // member `recv.m()` resolves to: a WRITE to a prototype
+    // (`Class.prototype.m = fn`), which is what the two call sites in
+    // `prototype_methods.rs` cover.
+    //
+    // Reaching this line changes none of that. The object being created is
+    // fresh and unobserved; the writes immediately below install
+    // `constructor` plus exactly the methods the class already declares, i.e.
+    // the same answers the vtable already gives. But because ANY demand for
+    // `Class.prototype` lands here — `instanceof`, `Object.getPrototypeOf`,
+    // a `super` chain — a plain class-hierarchy program disarmed its own
+    // dispatch speculation during startup and then ran every `recv.m()`
+    // through the `js_native_call_method` tower.
+    //
+    // Measured on `gc-handoff/apps/shapes.ts`: 384,000 of 384,000 shape-guard
+    // probes failed here and nowhere else, and every element read fell back to
+    // the generic index path for the same reason.
     class_decl_prototype_object_root_store(class_id, proto);
 
     let constructor_key =

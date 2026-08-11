@@ -272,6 +272,12 @@ fn region_i32_bounded_write_locals(stmts: &[Stmt]) -> std::collections::HashSet<
                     &empty,
                     &empty,
                     &empty_views,
+                    // #7700: this region walker deliberately consults none of
+                    // the function-wide oracles (see the doc comment), so it
+                    // has no numeric-local evidence either — a `u8[k]` write
+                    // source keyed on a bare local drops out, exactly like the
+                    // copy-shaped writes it already drops.
+                    &empty,
                     &mut |_| {},
                 );
                 if !strict {

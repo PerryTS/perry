@@ -27,6 +27,16 @@ use crate::value::{JSValue, POINTER_MASK};
 /// `MapHeader`/`SetHeader` pointer.
 pub(crate) const BACKING_KEY: &[u8] = b"__perry_collection_backing__";
 
+/// Has any `class X extends Map | Set` instance EVER stashed a backing
+/// collection in this process? Same rationale as
+/// `promise::subclass::PROMISE_SUBCLASS_EVER`: `subclass_backing_of` costs a
+/// key-string alloc plus a full recursive property read per call, and it is
+/// reached from generic iteration/dispatch paths in programs that never
+/// subclass a collection. Set at the single stash site (the only writer of
+/// `BACKING_KEY`). (#7795)
+pub(crate) static MAP_SET_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[derive(Clone, Copy)]
 pub(crate) enum CollectionBacking {
     Map(*mut MapHeader),
@@ -75,6 +85,10 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
 /// real Maps/Sets, ordinary objects, and non-objects — so callers fall through
 /// to their existing handling.
 pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
+    // #7795: no Map/Set subclass instance exists, so this cannot return `Some`.
+    if !MAP_SET_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
     unsafe {
         let obj = instance_object_ptr(value)?;
         let backing = js_object_get_field_by_name_f64(
@@ -180,6 +194,11 @@ pub(crate) enum CollectionKind {
 /// synthesize the built-in default iterator when none exists. Returns `false`
 /// for non-subclass values.
 pub(crate) fn subclass_has_iterator_override(value: f64) -> bool {
+    // #7795: only ever asked about Map/Set SUBCLASS instances; with no subclass
+    // in the process the answer is `false` without the symbol lookups below.
+    if !MAP_SET_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
     unsafe {
         let Some(obj) = instance_object_ptr(value) else {
             return false;
@@ -351,6 +370,9 @@ pub extern "C" fn js_map_set_subclass_init(this: f64, kind: i32, iterable: f64) 
         set as *mut u8
     };
 
+    // #7795: arm the probe gate before the field exists, so no reader can
+    // observe a stashed backing while the flag still says "never".
+    MAP_SET_SUBCLASS_EVER.store(true, std::sync::atomic::Ordering::Relaxed);
     let key = crate::string::js_string_from_bytes(BACKING_KEY.as_ptr(), BACKING_KEY.len() as u32);
     let backing_bits = JSValue::pointer(backing_ptr as *const u8).bits();
     js_object_set_field_by_name(obj, key, f64::from_bits(backing_bits));

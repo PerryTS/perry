@@ -14,7 +14,7 @@ use std::ptr;
 /// Must match value.rs TAG_UNDEFINED
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-thread_local! {
+crate::perry_thread_local! {
     static MAP_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
 }
 
@@ -63,7 +63,7 @@ pub(crate) fn test_clear_map_iterator_arrays() {
 }
 
 #[cfg(test)]
-thread_local! {
+crate::perry_thread_local! {
     static TEST_FORCE_HELPER_GC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -151,7 +151,7 @@ impl Drop for MapSideAllocation {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static MAP_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, MapSideAllocation>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
@@ -191,7 +191,28 @@ fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
     });
 }
 
+/// Every entry into [`is_registered_map`], i.e. every caller that could not
+/// rule a `Map` out more cheaply. The `js_array_get_f64` / `js_array_length`
+/// receiver-tag gates (#7765) are asserted against this: a plain-array element
+/// read must not move it. Remove those gates and the assertion fails, which is
+/// the point — a fast path nobody can prove ran is not a fast path.
+///
+/// Per THREAD, not per process: the registries themselves are thread-local, and
+/// `cargo test` runs every case on its own thread in one process, so a global
+/// counter would be moved by whatever else happens to be running.
+#[cfg(test)]
+thread_local! {
+    static TEST_MAP_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_map_registry_probe_count() -> u64 {
+    TEST_MAP_REGISTRY_PROBES.with(|c| c.get())
+}
+
 pub fn is_registered_map(addr: usize) -> bool {
+    #[cfg(test)]
+    TEST_MAP_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     // #7469: nothing has ever been registered ⟹ nothing can be found. Checked
     // first because it is the only arm that costs neither a thread-local
     // resolution nor a hash.
@@ -326,7 +347,7 @@ fn is_safe_numeric_key(bits: u64) -> bool {
 // collapse hundreds of keys into bucket 0 (caught by a 2x regression
 // the first time around). With the avalanche step, even the worst-case
 // integer-f64 inputs distribute across buckets normally.
-thread_local! {
+crate::perry_thread_local! {
     static MAP_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<NumericKey, u32>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
@@ -348,7 +369,7 @@ thread_local! {
 // Pre-fix `Map.set("key_" + i, …)` over 500k inserts was O(N²) because
 // each `set` did a linear `find_key_index` to dedup-check; with this
 // table the dedup probe is O(1) amortized.
-thread_local! {
+crate::perry_thread_local! {
     static MAP_STRING_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, std::collections::HashMap<u64, Vec<u32>>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
@@ -459,7 +480,7 @@ fn is_ptr_index_key(bits: u64) -> bool {
 // (remembered-set dirty scan, copying field scan, verify/force-evacuate
 // rewrites), and `map_header_moved_for_gc` migrates the outer key when the
 // MapHeader itself moves.
-thread_local! {
+crate::perry_thread_local! {
     static MAP_PTR_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<MapPtrKey, u32>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());

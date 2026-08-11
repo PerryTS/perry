@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-thread_local! {
+crate::perry_thread_local! {
     /// The `signal` from the in-progress `fetch(url, { signal })` call, stashed
     /// so the stdlib `js_fetch_with_options` (whose 4-arg ABI predates
     /// AbortSignal support) can pick it up at entry without an ABI change.

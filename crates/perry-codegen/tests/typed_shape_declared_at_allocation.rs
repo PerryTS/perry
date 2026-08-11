@@ -45,6 +45,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -160,6 +161,7 @@ fn class(name: &str, fields: Vec<ClassField>, constructor: Option<Function>) -> 
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
@@ -340,11 +342,17 @@ fn a_number_field_outside_the_prologue_refuses_the_declaration() {
     );
 }
 
-/// Negative: a pointer field would install `SIDE_MASK` at birth and hand the
-/// collector slots holding the allocator's fill. Out of scope — the declared
-/// state must stay byte-identical to what `layout_init_pointer_free` sets.
+/// P1 (#5094): a pointer field DOES get the declaration, and it carries a real
+/// pointer mask.
+///
+/// This is the case #7510 deliberately excluded, and the exclusion cost the
+/// class every store in its constructor: the post-constructor install arrives
+/// after all of them, so each one missed its intact-bit guard and fell to
+/// `js_object_set_field_by_name`. Obligation 2 is now discharged rather than
+/// avoided — both `new` allocation paths pre-fill every slot with
+/// `TAG_UNDEFINED`, which the tracer rejects at its tag check.
 #[test]
-fn a_pointer_field_refuses_the_declaration() {
+fn a_pointer_field_gets_the_declaration_with_a_pointer_mask() {
     let ir = compile_ir(&module_with_new(
         class(
             "WithPointer",
@@ -362,18 +370,30 @@ fn a_pointer_field_refuses_the_declaration() {
         ),
         2,
     ));
+    let line = ir
+        .lines()
+        .find(|l| l.contains(DECLARE_CALL))
+        .unwrap_or_else(|| panic!("a pointer-bearing class must declare:\n{ir}"));
     assert!(
-        !ir.contains(DECLARE_CALL),
-        "a class with a pointer-bearing field must keep the post-constructor \
-         install:\n{ir}"
+        line.contains("@perry_typed_shape_raw_f64_mask_"),
+        "the raw-f64 mask must still be passed: {line}"
+    );
+    assert!(
+        line.contains("@perry_typed_shape_mask_"),
+        "a pointer-bearing class must pass a non-null pointer mask: {line}"
+    );
+    assert!(
+        !ir.contains(INIT_CALL),
+        "the declaration still replaces the post-constructor install:\n{ir}"
     );
 }
 
-/// Negative: an untyped field lands on `Any`, which is pointer-bearing — the
-/// same condition, and the reason the synthesized anon-shape classes behind
-/// object literals do not qualify (their inferred field types are `Any`).
+/// An untyped field lands on `Any`, which is pointer-bearing — so it takes the
+/// same route the `string` field above does. This is what puts the synthesized
+/// anon-shape classes behind object literals on the at-allocation declaration
+/// (their inferred field types are all `Any`).
 #[test]
-fn an_untyped_field_refuses_the_declaration() {
+fn an_untyped_field_gets_the_declaration() {
     let ir = compile_ir(&module_with_new(
         class(
             "Untyped",
@@ -389,13 +409,14 @@ fn an_untyped_field_refuses_the_declaration() {
         2,
     ));
     assert!(
-        !ir.contains(DECLARE_CALL),
-        "`Any` is pointer-bearing:\n{ir}"
+        ir.contains(DECLARE_CALL),
+        "`Any` is pointer-bearing, which is now a reason TO declare:\n{ir}"
     );
 }
 
-/// Negative: with no raw-f64 field there is nothing to unlock, so the extra
-/// call would be pure cost.
+/// Negative: with neither a raw-f64 nor a pointer-bearing field, both masks are
+/// empty — the declaration would install the state `layout_init_pointer_free`
+/// already set and unlock nothing, so the extra call would be pure cost.
 #[test]
 fn a_class_with_no_number_field_refuses_the_declaration() {
     let ir = compile_ir(&module_with_new(

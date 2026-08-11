@@ -1,22 +1,158 @@
 //! Proxy / Reflect metaprogramming.
 //!
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
-//! Pure mechanical move — match arm bodies are verbatim copies, called from
-//! `lower_expr`'s outer dispatch.
+//!
+//! # Layer 1 rooting (#7615 slice 7)
+//!
+//! Before this slice exactly one arm in the file made a rooting decision — the
+//! `PutValueSet` write-IC, which #7201 fixed — and the other **twenty-eight**
+//! made none. Every `Proxy.*` and `Reflect.*` entry point is the same shape:
+//! two to four operands, each an arbitrary user expression, lowered in order
+//! and then handed together to one runtime helper. `Reflect.has(target, key)`
+//! lowered `target`, then lowered `key` — which can run a `Symbol.toPrimitive`,
+//! a getter, or any other JS — and then passed the pre-collection `target`
+//! register to `js_reflect_has`. That is #7280 taxonomy (c), operand-to-operand,
+//! and `root_reload` cannot repair it.
+//!
+//! The arms are now `crate::rooting::with_operands_rooted` and read as an
+//! operand list plus a consuming call. Four shapes needed more than that and
+//! are commented where they sit:
+//!
+//! * `Proxy.apply` / `Proxy.construct` and the two proxy-callee lowerers build
+//!   an **argument array** while lowering the arguments, so they take a
+//!   [`crate::rooting::RootedGroup`] that holds the receiver and the
+//!   accumulator in one scope (the #7154 shape — `proxy_build_args_array`
+//!   threaded a raw `*mut ArrayHeader` through its push loop in a bare SSA
+//!   register, and is deleted here in favour of the group);
+//! * `process.env[k] = v` stripped its key to a **raw** `StringHeader*` above
+//!   the value's lowering, which is taxonomy (a);
+//! * the eight `reflect-metadata` arms had eight copies of one body and now
+//!   share [`lower_reflect_metadata`];
+//! * `Reflect.construct`'s capture write-back reads the call's own result, so
+//!   it needs no operand root — it is below every lowering.
 
 use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::MaterializationReason;
+use crate::rooting::{any_operand_may_collect, with_operands_rooted, with_rooted_group, Repr};
 use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::{
     downgrade_buffer_aliases_in_expr, emit_jsvalue_slot_store_scalar_aware_on_block,
     expr_produces_non_pointer_bits_by_construction, lower_expr, nanbox_pointer_inline,
-    proxy_build_args_array, unbox_str_handle, unbox_to_i64, FnCtx,
+    unbox_str_handle, unbox_to_i64, FnCtx,
 };
+
+/// The NaN-boxed `undefined` literal, for an absent optional operand.
+fn undefined_literal() -> String {
+    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+}
+
+/// Borrow a re-read operand list as call arguments, every one a `double`.
+///
+/// Every helper in this file takes NaN-boxed operands and nothing else, so the
+/// argument vector is always this and the per-arm code is the callee name plus
+/// the operand list.
+fn boxed_args<'v>(values: &'v [String]) -> Vec<(LlvmType, &'v str)> {
+    values.iter().map(|v| (DOUBLE, v.as_str())).collect()
+}
+
+/// The whole shape of most of this file: lower `operands` in order, keep each
+/// one valid across the ones after it, and hand the re-read list to `callee`.
+///
+/// Sixteen arms are exactly this and were sixteen copies of the unrooted form.
+fn lower_boxed_operand_call(
+    ctx: &mut FnCtx<'_>,
+    callee: &str,
+    operands: &[&Expr],
+) -> Result<String> {
+    with_operands_rooted(ctx, operands, |ctx, values| {
+        Ok(ctx.block().call(DOUBLE, callee, &boxed_args(values)))
+    })
+}
+
+/// Where the argument array sits in a trap helper's parameter list.
+enum TrapArgOrder {
+    /// `js_proxy_apply(proxy, thisArg, argArray)`.
+    ThisFirst,
+    /// `js_proxy_construct(proxy, argArray, newTarget)`.
+    ArrayFirst,
+}
+
+/// `Proxy.apply` / `Proxy.construct`: the proxy, plus an argument array built
+/// out of the call's own arguments.
+///
+/// One group holds both. The proxy is live across `js_array_alloc` and across
+/// every argument's lowering; the array is live across every argument after the
+/// first. Before this slice neither was rooted.
+fn lower_proxy_trap_with_args(
+    ctx: &mut FnCtx<'_>,
+    callee: &str,
+    proxy: &Expr,
+    args: &[Expr],
+    order: TrapArgOrder,
+) -> Result<String> {
+    let arg_exprs: Vec<&Expr> = args.iter().collect();
+    with_rooted_group(ctx, 1, |ctx, g| {
+        // Unconditional: the array build emits `js_array_alloc` plus one
+        // `js_array_push_f64` per argument even when the arguments themselves
+        // are inert, so there is no argument list for which this window is
+        // empty.
+        let p = g.lower(ctx, proxy, true)?;
+        let arr = build_args_array(ctx, g, &arg_exprs)?;
+        let arr_box = nanbox_pointer_inline(ctx.block(), &arr);
+        let p = g.reread(ctx, p)?;
+        let undef = undefined_literal();
+        let call_args = match order {
+            TrapArgOrder::ThisFirst => [
+                (DOUBLE, p.as_str()),
+                (DOUBLE, undef.as_str()),
+                (DOUBLE, arr_box.as_str()),
+            ],
+            TrapArgOrder::ArrayFirst => [
+                (DOUBLE, p.as_str()),
+                (DOUBLE, arr_box.as_str()),
+                (DOUBLE, undef.as_str()),
+            ],
+        };
+        Ok(ctx.block().call(DOUBLE, callee, &call_args))
+    })
+}
+
+/// The `reflect-metadata` family: two or three required operands plus an
+/// optional `propertyKey`, all NaN-boxed, all fed to one runtime helper with
+/// `undefined` filling an absent key.
+///
+/// Eight arms carried eight copies of this body, and therefore eight copies of
+/// the same window: `key` live across `target`'s lowering and `propertyKey`'s,
+/// `target` live across `propertyKey`'s, each of them arbitrary user code.
+fn lower_reflect_metadata(
+    ctx: &mut FnCtx<'_>,
+    callee: &str,
+    required: &[&Expr],
+    property_key: Option<&Expr>,
+) -> Result<String> {
+    for operand in required {
+        downgrade_unknown_call_expr(ctx, operand);
+    }
+    if let Some(property_key) = property_key {
+        downgrade_unknown_call_expr(ctx, property_key);
+    }
+    let mut operands: Vec<&Expr> = required.to_vec();
+    operands.extend(property_key);
+    let fill_undefined = property_key.is_none();
+    with_operands_rooted(ctx, &operands, |ctx, values| {
+        let undef = undefined_literal();
+        let mut args = boxed_args(values);
+        if fill_undefined {
+            args.push((DOUBLE, undef.as_str()));
+        }
+        Ok(ctx.block().call(DOUBLE, callee, &args))
+    })
+}
 
 fn downgrade_unknown_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) {
     downgrade_buffer_aliases_in_expr(ctx, expr, MaterializationReason::UnknownCallEscape);
@@ -50,33 +186,70 @@ pub(crate) fn try_lower_proxy_fn_call_apply(
     };
     downgrade_unknown_call_expr(ctx, proxy);
     downgrade_unknown_call_args(ctx, args);
-    let p = lower_expr(ctx, proxy)?;
-    let this_arg = match args.first() {
-        Some(a) => lower_expr(ctx, a)?,
-        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+    // The proxy is live across `thisArg`'s lowering AND across the argument
+    // array's construction, and `thisArg` across the latter; the array is the
+    // #7154 accumulator on top of that. One group holds all three.
+    let rest: Vec<&Expr> = if is_apply {
+        Vec::new()
+    } else {
+        args.iter().skip(1).collect()
     };
-    let arr_box = if is_apply {
-        // 2nd arg is the already-built argument array (a JSValue). When absent,
-        // synthesize an empty array so the trap receives a real argArray.
-        match args.get(1) {
+    let this_expr = args.first();
+    let apply_array_expr = if is_apply { args.get(1) } else { None };
+    let result = with_rooted_group(ctx, 2, |ctx, g| {
+        let p = g.lower(ctx, proxy, true)?;
+        let this_slot = match this_expr {
+            Some(a) => Some(g.lower(ctx, a, true)?),
+            None => None,
+        };
+        let arr_box = match apply_array_expr {
+            // 2nd arg is the already-built argument array (a JSValue), and it
+            // is the LAST lowering in the arm — only the two group re-reads
+            // below it, which are loads.
             Some(a) => lower_expr(ctx, a)?,
             None => {
-                let arr_handle = proxy_build_args_array(ctx, &[])?;
-                let blk = ctx.block();
-                nanbox_pointer_inline(blk, &arr_handle)
+                let arr = build_args_array(ctx, g, &rest)?;
+                nanbox_pointer_inline(ctx.block(), &arr)
             }
-        }
-    } else {
-        let rest: Vec<Expr> = args.iter().skip(1).cloned().collect();
-        let arr_handle = proxy_build_args_array(ctx, &rest)?;
-        let blk = ctx.block();
-        nanbox_pointer_inline(blk, &arr_handle)
-    };
-    Ok(Some(ctx.block().call(
-        DOUBLE,
-        "js_proxy_apply",
-        &[(DOUBLE, &p), (DOUBLE, &this_arg), (DOUBLE, &arr_box)],
-    )))
+        };
+        let p = g.reread(ctx, p)?;
+        let this_arg = match this_slot {
+            Some(i) => g.reread(ctx, i)?,
+            None => undefined_literal(),
+        };
+        Ok(ctx.block().call(
+            DOUBLE,
+            "js_proxy_apply",
+            &[(DOUBLE, &p), (DOUBLE, &this_arg), (DOUBLE, &arr_box)],
+        ))
+    })?;
+    Ok(Some(result))
+}
+
+/// Build a NaN-boxed argument array inside `group`'s scope.
+///
+/// Replaces `expr::helpers::proxy_build_args_array`, which threaded the array's
+/// raw `*mut ArrayHeader` through its push loop in a bare SSA register while
+/// each element — arbitrary user code — was lowered. That is #7154's canonical
+/// accumulator bug: the register held the ONLY reference to everything pushed
+/// so far, and every `js_array_push_f64` allocates. The array now lives in the
+/// group, so the push re-reads it and publishes the possibly-reallocated
+/// pointer back.
+///
+/// Returns the raw handle, read below the last push and above the consuming
+/// call — the group is still holding it, and is released by the caller.
+fn build_args_array(
+    ctx: &mut FnCtx<'_>,
+    group: &mut crate::rooting::RootedGroup<'_>,
+    args: &[&Expr],
+) -> Result<String> {
+    let cap = args.len().to_string();
+    let acc = group.begin_array(ctx, &cap);
+    for a in args {
+        let v = lower_expr(ctx, a)?;
+        group.push_array(ctx, acc, &v);
+    }
+    Ok(group.read_array(ctx, acc))
 }
 
 /// `proxy.method(args)` for a method name other than `call`/`apply` — the
@@ -107,40 +280,45 @@ pub(crate) fn try_lower_proxy_method_call(
     }
     downgrade_unknown_call_expr(ctx, proxy);
     downgrade_unknown_call_args(ctx, args);
-    let recv_box = lower_expr(ctx, proxy)?;
-    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-    for a in args {
-        lowered_args.push(lower_expr(ctx, a)?);
-    }
-    let (args_ptr, args_len) = if lowered_args.is_empty() {
-        ("null".to_string(), "0".to_string())
-    } else {
-        let n = lowered_args.len();
-        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-        {
-            let blk = ctx.block();
-            for (i, value) in lowered_args.iter().enumerate() {
-                let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                blk.store(DOUBLE, value, &slot);
+    // The receiver is live across EVERY argument's lowering, and argument `i`
+    // across every argument after it. The stack buffer below is not a root —
+    // `alloca_entry_array` is the plain-alloca shape `--unrooted-allocas`
+    // reports (#7210) — so the values must be current when they are stored into
+    // it, which means the whole list is re-read below the last lowering.
+    let operands: Vec<&Expr> = std::iter::once(proxy.as_ref()).chain(args.iter()).collect();
+    let result = with_operands_rooted(ctx, &operands, |ctx, values| {
+        let (recv_box, lowered_args) = values.split_first().expect("receiver is always present");
+        let (args_ptr, args_len) = if lowered_args.is_empty() {
+            ("null".to_string(), "0".to_string())
+        } else {
+            let n = lowered_args.len();
+            let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+            {
+                let blk = ctx.block();
+                for (i, value) in lowered_args.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                    blk.store(DOUBLE, value, &slot);
+                }
             }
-        }
-        (buf, n.to_string())
-    };
-    let method_idx = ctx.strings.intern(method_name);
-    let entry = ctx.strings.entry(method_idx);
-    let bytes_global = format!("@{}", entry.bytes_global);
-    let name_len = entry.byte_len.to_string();
-    Ok(Some(ctx.block().call(
-        DOUBLE,
-        "js_native_call_method",
-        &[
-            (DOUBLE, &recv_box),
-            (PTR, &bytes_global),
-            (I64, &name_len),
-            (PTR, &args_ptr),
-            (I64, &args_len),
-        ],
-    )))
+            (buf, n.to_string())
+        };
+        let method_idx = ctx.strings.intern(method_name);
+        let entry = ctx.strings.entry(method_idx);
+        let bytes_global = format!("@{}", entry.bytes_global);
+        let name_len = entry.byte_len.to_string();
+        Ok(ctx.block().call(
+            DOUBLE,
+            "js_native_call_method",
+            &[
+                (DOUBLE, recv_box.as_str()),
+                (PTR, &bytes_global),
+                (I64, &name_len),
+                (PTR, &args_ptr),
+                (I64, &args_len),
+            ],
+        ))
+    })?;
+    Ok(Some(result))
 }
 
 fn put_value_static_property_fast_path(
@@ -1026,25 +1204,63 @@ fn try_lower_process_env_put_value_set(
         return Ok(None);
     }
 
-    let key_handle = match key {
-        Expr::String(property) => {
-            let key_idx = ctx.strings.intern(property);
-            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-            let blk = ctx.block();
-            let key_box = blk.load(DOUBLE, &key_handle_global);
-            unbox_to_i64(blk, &key_box)
-        }
-        _ => {
-            let key_box = lower_expr(ctx, key)?;
-            let blk = ctx.block();
-            let property_key = blk.call(DOUBLE, "js_to_property_key", &[(DOUBLE, &key_box)]);
-            unbox_str_handle(blk, &property_key)
-        }
-    };
-    let val_double = lower_expr(ctx, value)?;
-    ctx.block()
-        .call_void("js_setenv", &[(I64, &key_handle), (DOUBLE, &val_double)]);
-    Ok(Some(val_double))
+    // #7615 slice 7. `key_handle` used to be stripped to a RAW `StringHeader*`
+    // here and then held across `value`'s lowering — arbitrary user code —
+    // before `js_setenv` dereferenced it. That is #7280 taxonomy (a): once a
+    // pointer has left the NaN-boxed representation, no re-read of a rooted
+    // slot can repair it, because the slot holds the box and the register holds
+    // the address.
+    //
+    // Both branches were exposed and for different reasons. The literal branch
+    // loads the key's `__perry_init_strings_*` handle global, which is a
+    // registered root that evacuation REWRITES — #7114 exactly, one operand
+    // over from the `PutValueSet` key that #7201 fixed. The computed branch is
+    // worse: `js_to_property_key` returns a FRESH string with no other root at
+    // all, so a sweep between here and `js_setenv` frees it.
+    //
+    // The fix is to keep the key NaN-boxed across the value's lowering and take
+    // the raw pointer below it. The literal branch is `Expr::String`, which
+    // `operand_protection` answers with `Reload` — no runtime slot, just the
+    // load emitted again below the window.
+    if let Expr::String(property) = key {
+        // Literal key. Its `__perry_init_strings_*` handle global is a
+        // registered root, so nothing needs a slot — but the global is one the
+        // collector REWRITES, so the load has to sit below `value`'s lowering
+        // or the strip reads a pre-move address. That is #7114, and #7201 fixed
+        // the same shape one operand over in `PutValueSet`.
+        //
+        // The load stays an explicit `handle_global` read rather than becoming
+        // `lower_expr(key)`: a short string literal lowers to an inline
+        // SHORT_STRING_TAG immediate, and `unbox_to_i64` is documented garbage
+        // for those.
+        let val_double = lower_expr(ctx, value)?;
+        let key_idx = ctx.strings.intern(property);
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let blk = ctx.block();
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let key_handle = unbox_to_i64(blk, &key_box);
+        blk.call_void("js_setenv", &[(I64, &key_handle), (DOUBLE, &val_double)]);
+        return Ok(Some(val_double));
+    }
+    // Computed key. `js_to_property_key` must run ABOVE the value's evaluation
+    // — ES2022 moved `ToPropertyKey` before the RHS — so the value that has to
+    // survive that evaluation is the COERCED key, a fresh heap string produced
+    // by an emitted call rather than by lowering an expression. That is what
+    // `RootedGroup::adopt_emitted` is for.
+    with_rooted_group(ctx, 1, |ctx, g| {
+        let key_box = lower_expr(ctx, key)?;
+        let property_key = ctx
+            .block()
+            .call(DOUBLE, "js_to_property_key", &[(DOUBLE, &key_box)]);
+        let key_slot = g.adopt_emitted(ctx, Repr::Boxed, &property_key, true);
+        let val_double = lower_expr(ctx, value)?;
+        // The strip happens BELOW the window, never above it.
+        let key_box = g.reread_emitted(ctx, key_slot);
+        let key_handle = unbox_str_handle(ctx.block(), &key_box);
+        ctx.block()
+            .call_void("js_setenv", &[(I64, &key_handle), (DOUBLE, &val_double)]);
+        Ok(Some(val_double))
+    })
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -1052,93 +1268,70 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ProxyNew { target, handler } => {
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, handler);
-            let t = lower_expr(ctx, target)?;
-            let h = lower_expr(ctx, handler)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_proxy_new", &[(DOUBLE, &t), (DOUBLE, &h)]))
+            lower_boxed_operand_call(ctx, "js_proxy_new", &[target, handler])
         }
         Expr::ProxyGet { proxy, key } => {
             downgrade_unknown_call_expr(ctx, proxy);
             downgrade_unknown_call_expr(ctx, key);
-            let p = lower_expr(ctx, proxy)?;
-            let k = lower_expr(ctx, key)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_proxy_get", &[(DOUBLE, &p), (DOUBLE, &k)]))
+            lower_boxed_operand_call(ctx, "js_proxy_get", &[proxy, key])
         }
         Expr::ProxySet { proxy, key, value } => {
             downgrade_unknown_call_expr(ctx, proxy);
             downgrade_unknown_call_expr(ctx, key);
             downgrade_unknown_call_expr(ctx, value);
-            let p = lower_expr(ctx, proxy)?;
-            let k = lower_expr(ctx, key)?;
-            let v = lower_expr(ctx, value)?;
-            let _ = ctx.block().call(
-                DOUBLE,
-                "js_proxy_set",
-                &[(DOUBLE, &p), (DOUBLE, &k), (DOUBLE, &v)],
-            );
-            Ok(v)
+            with_operands_rooted(ctx, &[proxy, key, value], |ctx, v| {
+                let _ = ctx.block().call(DOUBLE, "js_proxy_set", &boxed_args(v));
+                // The assignment's value is `value` as the trap OBSERVED it, so
+                // it is the re-read register rather than the pre-call one.
+                Ok(v[2].clone())
+            })
         }
         Expr::ProxyHas { proxy, key } => {
             downgrade_unknown_call_expr(ctx, proxy);
             downgrade_unknown_call_expr(ctx, key);
-            let p = lower_expr(ctx, proxy)?;
-            let k = lower_expr(ctx, key)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_proxy_has", &[(DOUBLE, &p), (DOUBLE, &k)]))
+            lower_boxed_operand_call(ctx, "js_proxy_has", &[proxy, key])
         }
         Expr::ProxyDelete { proxy, key } => {
             downgrade_unknown_call_expr(ctx, proxy);
             downgrade_unknown_call_expr(ctx, key);
             let strict = if ctx.is_strict_fn { "1" } else { "0" };
-            let p = lower_expr(ctx, proxy)?;
-            let k = lower_expr(ctx, key)?;
-            let blk = ctx.block();
-            // `js_proxy_delete` reports the `[[Delete]]` boolean; a strict-mode
-            // `delete proxy.key` that resolves to `false` (non-configurable
-            // property, forwarded through the trap chain) must throw a TypeError
-            // just like the ordinary member-delete path. Route the boolean
-            // through `js_delete_result` so both modes match spec (test262
-            // Proxy/deleteProperty/*-target-is-proxy `delete funcProxy.prototype`
-            // under "use strict").
-            let deleted_box = blk.call(DOUBLE, "js_proxy_delete", &[(DOUBLE, &p), (DOUBLE, &k)]);
-            let deleted_i32 = blk.call(I32, "js_is_truthy", &[(DOUBLE, &deleted_box)]);
-            Ok(blk.call(
-                DOUBLE,
-                "js_delete_result",
-                &[(I32, &deleted_i32), (I32, strict)],
-            ))
+            with_operands_rooted(ctx, &[proxy, key], |ctx, v| {
+                let blk = ctx.block();
+                // `js_proxy_delete` reports the `[[Delete]]` boolean; a strict-mode
+                // `delete proxy.key` that resolves to `false` (non-configurable
+                // property, forwarded through the trap chain) must throw a TypeError
+                // just like the ordinary member-delete path. Route the boolean
+                // through `js_delete_result` so both modes match spec (test262
+                // Proxy/deleteProperty/*-target-is-proxy `delete funcProxy.prototype`
+                // under "use strict").
+                let deleted_box = blk.call(
+                    DOUBLE,
+                    "js_proxy_delete",
+                    &[(DOUBLE, &v[0]), (DOUBLE, &v[1])],
+                );
+                let deleted_i32 = blk.call(I32, "js_is_truthy", &[(DOUBLE, &deleted_box)]);
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_delete_result",
+                    &[(I32, &deleted_i32), (I32, strict)],
+                ))
+            })
         }
         Expr::ProxyApply { proxy, args } => {
             downgrade_unknown_call_expr(ctx, proxy);
             downgrade_unknown_call_args(ctx, args);
-            let p = lower_expr(ctx, proxy)?;
-            let arr_handle = proxy_build_args_array(ctx, args)?;
-            let blk = ctx.block();
-            let arr_box = nanbox_pointer_inline(blk, &arr_handle);
-            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_proxy_apply",
-                &[(DOUBLE, &p), (DOUBLE, &undef), (DOUBLE, &arr_box)],
-            ))
+            lower_proxy_trap_with_args(ctx, "js_proxy_apply", proxy, args, TrapArgOrder::ThisFirst)
         }
         Expr::ProxyConstruct { proxy, args } => {
             downgrade_unknown_call_expr(ctx, proxy);
             downgrade_unknown_call_args(ctx, args);
-            let p = lower_expr(ctx, proxy)?;
-            let arr_handle = proxy_build_args_array(ctx, args)?;
-            let blk = ctx.block();
-            let arr_box = nanbox_pointer_inline(blk, &arr_handle);
-            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            Ok(ctx.block().call(
-                DOUBLE,
+            lower_proxy_trap_with_args(
+                ctx,
                 "js_proxy_construct",
-                &[(DOUBLE, &p), (DOUBLE, &arr_box), (DOUBLE, &undef)],
-            ))
+                proxy,
+                args,
+                TrapArgOrder::ArrayFirst,
+            )
         }
         Expr::ProxyRevocable { target, handler } => {
             // #2846: return a real `{ proxy, revoke }` record so `typeof
@@ -1146,11 +1339,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // revoke function survives aliasing/storage.
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, handler);
-            let t = lower_expr(ctx, target)?;
-            let h = lower_expr(ctx, handler)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_proxy_revocable", &[(DOUBLE, &t), (DOUBLE, &h)]))
+            lower_boxed_operand_call(ctx, "js_proxy_revocable", &[target, handler])
         }
         Expr::ProxyRevoke(proxy) => {
             downgrade_unknown_call_expr(ctx, proxy);
@@ -1169,14 +1358,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, key);
             downgrade_unknown_call_expr(ctx, receiver);
-            let t = lower_expr(ctx, target)?;
-            let k = lower_expr(ctx, key)?;
-            let r = lower_expr(ctx, receiver)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_get",
-                &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &r)],
-            ))
+            lower_boxed_operand_call(ctx, "js_reflect_get", &[target, key, receiver])
         }
         Expr::ReflectSet {
             target,
@@ -1192,15 +1374,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             downgrade_unknown_call_expr(ctx, key);
             downgrade_unknown_call_expr(ctx, value);
             downgrade_unknown_call_expr(ctx, receiver);
-            let t = lower_expr(ctx, target)?;
-            let k = lower_expr(ctx, key)?;
-            let v = lower_expr(ctx, value)?;
-            let r = lower_expr(ctx, receiver)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_set",
-                &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &v), (DOUBLE, &r)],
-            ))
+            lower_boxed_operand_call(ctx, "js_reflect_set", &[target, key, value, receiver])
         }
         Expr::PutValueSet {
             target,
@@ -1245,15 +1419,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // FAST arm is mode-independent (its precheck rejects frozen /
             // descriptor-bearing receivers and non-number values), so emit it
             // here with a sloppy-correct miss path instead of surrendering the
-            // whole optimization. See
-            // `property_set::try_lower_sloppy_class_field_raw_store`.
+            // whole optimization. #5094/P1 extends it to boxed slots. See
+            // `property_set::try_lower_sloppy_class_field_store`.
             if !*strict {
                 if let Expr::String(property) = key.as_ref() {
                     if same_put_value_receiver_expr(target, receiver)
                         && matches!(target.as_ref(), Expr::LocalGet(_) | Expr::This)
                     {
                         if let Some(result) =
-                            super::property_set::try_lower_sloppy_class_field_raw_store(
+                            super::property_set::try_lower_sloppy_class_field_store(
                                 ctx, target, property, value,
                             )?
                         {
@@ -1310,102 +1484,97 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let dyn_inline = same_put_value_receiver_expr(target, receiver)
                 && matches!(target.as_ref(), Expr::LocalGet(_) | Expr::This);
             if dyn_inline {
-                let k = lower_expr(ctx, key)?;
-                let key_guard = super::temp_root::guard_store_operand(ctx, key, &k, value);
-                let v = lower_expr(ctx, value)?;
-                let k = super::temp_root::reread_store_operand(ctx, &key_guard, key, &k)?;
-                let t = lower_expr(ctx, target)?;
-                let result = lower_put_value_dyn_ic_inline(ctx, &t, &k, &v, strict_i32)?;
-                // After the store: the outlined helper allocates while reading
-                // the key (interning, keys-array growth, shape transition).
-                super::temp_root::release_store_operand(ctx, key_guard);
-                return Ok(result);
+                // Migrated onto `RootedGroup` without moving an emission: the
+                // key's window is still derived from `value` alone, and the
+                // re-read still sits above `target`'s lowering, which the
+                // comment above argues is safe because `target` is a
+                // `LocalGet` / `This`.
+                return with_rooted_group(ctx, 1, |ctx, g| {
+                    let collects = any_operand_may_collect(ctx, std::iter::once(value.as_ref()));
+                    let key_slot = g.lower(ctx, key, collects)?;
+                    let v = lower_expr(ctx, value)?;
+                    let k = g.reread(ctx, key_slot)?;
+                    let t = lower_expr(ctx, target)?;
+                    // Released by the group below the store: the outlined
+                    // helper allocates while reading the key (interning,
+                    // keys-array growth, shape transition).
+                    lower_put_value_dyn_ic_inline(ctx, &t, &k, &v, strict_i32)
+                });
             }
             // #7201, outlined arms: `t` is lowered FIRST here, so it is live
             // across both `k`'s and `v`'s lowering, and `k` across `v`'s. Both
             // are consumed by helpers that dereference them.
-            let t = lower_expr(ctx, target)?;
-            // The receiver's window covers BOTH the key's lowering and the
-            // value's, so its `collects` is the disjunction — `o[f()] = 1` has
-            // an inert value and a collecting key.
-            let recv_collects = super::temp_root::expr_may_trigger_gc(ctx, key)
-                || super::temp_root::expr_may_trigger_gc(ctx, value)
-                || super::temp_root::expr_may_trigger_gc(ctx, receiver);
-            let recv_guard =
-                super::temp_root::guard_store_operand_across(ctx, target, &t, recv_collects);
-            let k = lower_expr(ctx, key)?;
-            // Pushed AFTER the receiver's so the two `temp_root_truncate` cuts
-            // nest: a release of the outer one drops the inner.
-            let key_collects = super::temp_root::expr_may_trigger_gc(ctx, value)
-                || super::temp_root::expr_may_trigger_gc(ctx, receiver);
-            let key_guard =
-                super::temp_root::guard_store_operand_across(ctx, key, &k, key_collects);
-            let v = lower_expr(ctx, value)?;
-            // #6812 (w12): same-receiver dynamic-key stores that failed the
-            // inline gate (computed target expressions) still take the
-            // outlined 3-way IC helper.
-            let result = if same_put_value_receiver_expr(target, receiver) {
-                let k = super::temp_root::reread_store_operand(ctx, &key_guard, key, &k)?;
-                let t = super::temp_root::reread_store_operand(ctx, &recv_guard, target, &t)?;
-                let site_id = ctx.ic_site_counter;
-                ctx.ic_site_counter += 1;
-                let cache_name = format!("perry_ic_{}", site_id);
-                ctx.ic_globals.push(cache_name.clone());
-                let cache_ref = format!("@{}", cache_name);
-                ctx.block().call(
-                    DOUBLE,
-                    "js_put_value_set_dyn_ic",
-                    &[
-                        (crate::types::PTR, &cache_ref),
-                        (DOUBLE, &t),
-                        (DOUBLE, &k),
-                        (DOUBLE, &v),
-                        (I32, strict_i32),
-                    ],
-                )
-            } else {
-                // The explicit-receiver form lowers a FOURTH operand, so the
-                // re-reads have to sit below it, not above.
-                let r = lower_expr(ctx, receiver)?;
-                let k = super::temp_root::reread_store_operand(ctx, &key_guard, key, &k)?;
-                let t = super::temp_root::reread_store_operand(ctx, &recv_guard, target, &t)?;
-                ctx.block().call(
-                    DOUBLE,
-                    "js_put_value_set",
-                    &[
-                        (DOUBLE, &t),
-                        (DOUBLE, &k),
-                        (DOUBLE, &v),
-                        (DOUBLE, &r),
-                        (I32, strict_i32),
-                    ],
-                )
-            };
-            // Released after the store: every one of these helpers allocates
-            // while reading the operands.
-            super::temp_root::release_store_operand(ctx, key_guard);
-            super::temp_root::release_store_operand(ctx, recv_guard);
-            Ok(result)
+            //
+            // The two operands go into ONE group rather than two nested guards.
+            // A group release is a single truncate at the LOWEST slot, which is
+            // the same stack cut the nested pair performed — with the ordering
+            // no longer expressible wrongly, since the caller never holds
+            // either index.
+            with_rooted_group(ctx, 2, |ctx, g| {
+                // The receiver's window covers BOTH the key's lowering and the
+                // value's, so its `collects` is the disjunction — `o[f()] = 1`
+                // has an inert value and a collecting key.
+                let recv_collects =
+                    any_operand_may_collect(ctx, [key.as_ref(), value.as_ref(), receiver.as_ref()]);
+                let recv_slot = g.lower(ctx, target, recv_collects)?;
+                let key_collects =
+                    any_operand_may_collect(ctx, [value.as_ref(), receiver.as_ref()]);
+                let key_slot = g.lower(ctx, key, key_collects)?;
+                let v = lower_expr(ctx, value)?;
+                // #6812 (w12): same-receiver dynamic-key stores that failed the
+                // inline gate (computed target expressions) still take the
+                // outlined 3-way IC helper.
+                if same_put_value_receiver_expr(target, receiver) {
+                    let k = g.reread(ctx, key_slot)?;
+                    let t = g.reread(ctx, recv_slot)?;
+                    let site_id = ctx.ic_site_counter;
+                    ctx.ic_site_counter += 1;
+                    let cache_name = format!("perry_ic_{}", site_id);
+                    ctx.ic_globals.push(cache_name.clone());
+                    let cache_ref = format!("@{}", cache_name);
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_put_value_set_dyn_ic",
+                        &[
+                            (crate::types::PTR, &cache_ref),
+                            (DOUBLE, &t),
+                            (DOUBLE, &k),
+                            (DOUBLE, &v),
+                            (I32, strict_i32),
+                        ],
+                    ))
+                } else {
+                    // The explicit-receiver form lowers a FOURTH operand, so the
+                    // re-reads have to sit below it, not above.
+                    let r = lower_expr(ctx, receiver)?;
+                    let k = g.reread(ctx, key_slot)?;
+                    let t = g.reread(ctx, recv_slot)?;
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_put_value_set",
+                        &[
+                            (DOUBLE, &t),
+                            (DOUBLE, &k),
+                            (DOUBLE, &v),
+                            (DOUBLE, &r),
+                            (I32, strict_i32),
+                        ],
+                    ))
+                }
+            })
         }
         Expr::ReflectHas { target, key } => {
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, key);
-            let t = lower_expr(ctx, target)?;
-            let k = lower_expr(ctx, key)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_reflect_has", &[(DOUBLE, &t), (DOUBLE, &k)]))
+            lower_boxed_operand_call(ctx, "js_reflect_has", &[target, key])
         }
         Expr::ReflectDelete { target, key } => {
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, key);
-            let t = lower_expr(ctx, target)?;
-            let k = lower_expr(ctx, key)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_reflect_delete", &[(DOUBLE, &t), (DOUBLE, &k)]))
+            lower_boxed_operand_call(ctx, "js_reflect_delete", &[target, key])
         }
         Expr::ReflectOwnKeys(target) => {
+            // One operand, consumed by the very next emission: no window.
             downgrade_unknown_call_expr(ctx, target);
             let t = lower_expr(ctx, target)?;
             Ok(ctx
@@ -1420,14 +1589,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             downgrade_unknown_call_expr(ctx, func);
             downgrade_unknown_call_expr(ctx, this_arg);
             downgrade_unknown_call_expr(ctx, args);
-            let f = lower_expr(ctx, func)?;
-            let ta = lower_expr(ctx, this_arg)?;
-            let a = lower_expr(ctx, args)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_apply",
-                &[(DOUBLE, &f), (DOUBLE, &ta), (DOUBLE, &a)],
-            ))
+            lower_boxed_operand_call(ctx, "js_reflect_apply", &[func, this_arg, args])
         }
         Expr::ReflectConstruct {
             target,
@@ -1437,14 +1599,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, args);
             downgrade_unknown_call_expr(ctx, new_target);
-            let t = lower_expr(ctx, target)?;
-            let a = lower_expr(ctx, args)?;
-            let nt = lower_expr(ctx, new_target)?;
-            let result = ctx.block().call(
-                DOUBLE,
-                "js_reflect_construct",
-                &[(DOUBLE, &t), (DOUBLE, &a), (DOUBLE, &nt)],
-            );
+            let result =
+                lower_boxed_operand_call(ctx, "js_reflect_construct", &[target, args, new_target])?;
             // Write-back captured outer locals: when `target` is a
             // statically-known user class, the constructor body stores
             // mutations to `this.__perry_cap_*` but can't reach the
@@ -1477,38 +1633,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, key);
             downgrade_unknown_call_expr(ctx, descriptor);
-            let t = lower_expr(ctx, target)?;
-            let k = lower_expr(ctx, key)?;
-            let d = lower_expr(ctx, descriptor)?;
-            Ok(ctx.block().call(
-                DOUBLE,
+            lower_boxed_operand_call(
+                ctx,
                 "js_reflect_define_property",
-                &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &d)],
-            ))
+                &[target, key, descriptor],
+            )
         }
         Expr::ReflectGetOwnPropertyDescriptor { target, key } => {
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, key);
-            let t = lower_expr(ctx, target)?;
-            let k = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(
-                DOUBLE,
+            lower_boxed_operand_call(
+                ctx,
                 "js_reflect_get_own_property_descriptor",
-                &[(DOUBLE, &t), (DOUBLE, &k)],
-            ))
+                &[target, key],
+            )
         }
         Expr::ReflectSetPrototypeOf { target, proto } => {
             // #2761: Reflect-specific boolean result (false on rejected change)
             // + TypeError on bad args, distinct from Object.setPrototypeOf.
             downgrade_unknown_call_expr(ctx, target);
             downgrade_unknown_call_expr(ctx, proto);
-            let t = lower_expr(ctx, target)?;
-            let p = lower_expr(ctx, proto)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_set_prototype_of",
-                &[(DOUBLE, &t), (DOUBLE, &p)],
-            ))
+            lower_boxed_operand_call(ctx, "js_reflect_set_prototype_of", &[target, proto])
         }
         Expr::ReflectGetPrototypeOf(target) => {
             // #2757: return the actual [[Prototype]] (shared with
@@ -1546,182 +1691,80 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             target,
             property_key,
-        } => {
-            downgrade_unknown_call_expr(ctx, key);
-            downgrade_unknown_call_expr(ctx, value);
-            downgrade_unknown_call_expr(ctx, target);
-            if let Some(property_key) = property_key {
-                downgrade_unknown_call_expr(ctx, property_key);
-            }
-            let k = lower_expr(ctx, key)?;
-            let v = lower_expr(ctx, value)?;
-            let t = lower_expr(ctx, target)?;
-            let p = property_key
-                .as_ref()
-                .map(|p| lower_expr(ctx, p))
-                .transpose()?
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_define_metadata",
-                &[(DOUBLE, &k), (DOUBLE, &v), (DOUBLE, &t), (DOUBLE, &p)],
-            ))
-        }
+        } => lower_reflect_metadata(
+            ctx,
+            "js_reflect_define_metadata",
+            &[key, value, target],
+            property_key.as_deref(),
+        ),
         Expr::ReflectGetMetadata {
             key,
             target,
             property_key,
-        } => {
-            downgrade_unknown_call_expr(ctx, key);
-            downgrade_unknown_call_expr(ctx, target);
-            if let Some(property_key) = property_key {
-                downgrade_unknown_call_expr(ctx, property_key);
-            }
-            let k = lower_expr(ctx, key)?;
-            let t = lower_expr(ctx, target)?;
-            let p = property_key
-                .as_ref()
-                .map(|p| lower_expr(ctx, p))
-                .transpose()?
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_get_metadata",
-                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
-            ))
-        }
+        } => lower_reflect_metadata(
+            ctx,
+            "js_reflect_get_metadata",
+            &[key, target],
+            property_key.as_deref(),
+        ),
         Expr::ReflectGetOwnMetadata {
             key,
             target,
             property_key,
-        } => {
-            downgrade_unknown_call_expr(ctx, key);
-            downgrade_unknown_call_expr(ctx, target);
-            if let Some(property_key) = property_key {
-                downgrade_unknown_call_expr(ctx, property_key);
-            }
-            let k = lower_expr(ctx, key)?;
-            let t = lower_expr(ctx, target)?;
-            let p = property_key
-                .as_ref()
-                .map(|p| lower_expr(ctx, p))
-                .transpose()?
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_get_own_metadata",
-                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
-            ))
-        }
+        } => lower_reflect_metadata(
+            ctx,
+            "js_reflect_get_own_metadata",
+            &[key, target],
+            property_key.as_deref(),
+        ),
         Expr::ReflectHasMetadata {
             key,
             target,
             property_key,
-        } => {
-            downgrade_unknown_call_expr(ctx, key);
-            downgrade_unknown_call_expr(ctx, target);
-            if let Some(property_key) = property_key {
-                downgrade_unknown_call_expr(ctx, property_key);
-            }
-            let k = lower_expr(ctx, key)?;
-            let t = lower_expr(ctx, target)?;
-            let p = property_key
-                .as_ref()
-                .map(|p| lower_expr(ctx, p))
-                .transpose()?
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_has_metadata",
-                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
-            ))
-        }
+        } => lower_reflect_metadata(
+            ctx,
+            "js_reflect_has_metadata",
+            &[key, target],
+            property_key.as_deref(),
+        ),
         Expr::ReflectHasOwnMetadata {
             key,
             target,
             property_key,
-        } => {
-            downgrade_unknown_call_expr(ctx, key);
-            downgrade_unknown_call_expr(ctx, target);
-            if let Some(property_key) = property_key {
-                downgrade_unknown_call_expr(ctx, property_key);
-            }
-            let k = lower_expr(ctx, key)?;
-            let t = lower_expr(ctx, target)?;
-            let p = property_key
-                .as_ref()
-                .map(|p| lower_expr(ctx, p))
-                .transpose()?
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_has_own_metadata",
-                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
-            ))
-        }
+        } => lower_reflect_metadata(
+            ctx,
+            "js_reflect_has_own_metadata",
+            &[key, target],
+            property_key.as_deref(),
+        ),
         Expr::ReflectGetMetadataKeys {
             target,
             property_key,
-        } => {
-            downgrade_unknown_call_expr(ctx, target);
-            if let Some(property_key) = property_key {
-                downgrade_unknown_call_expr(ctx, property_key);
-            }
-            let t = lower_expr(ctx, target)?;
-            let p = property_key
-                .as_ref()
-                .map(|p| lower_expr(ctx, p))
-                .transpose()?
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_get_metadata_keys",
-                &[(DOUBLE, &t), (DOUBLE, &p)],
-            ))
-        }
+        } => lower_reflect_metadata(
+            ctx,
+            "js_reflect_get_metadata_keys",
+            &[target],
+            property_key.as_deref(),
+        ),
         Expr::ReflectGetOwnMetadataKeys {
             target,
             property_key,
-        } => {
-            downgrade_unknown_call_expr(ctx, target);
-            if let Some(property_key) = property_key {
-                downgrade_unknown_call_expr(ctx, property_key);
-            }
-            let t = lower_expr(ctx, target)?;
-            let p = property_key
-                .as_ref()
-                .map(|p| lower_expr(ctx, p))
-                .transpose()?
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_get_own_metadata_keys",
-                &[(DOUBLE, &t), (DOUBLE, &p)],
-            ))
-        }
+        } => lower_reflect_metadata(
+            ctx,
+            "js_reflect_get_own_metadata_keys",
+            &[target],
+            property_key.as_deref(),
+        ),
         Expr::ReflectDeleteMetadata {
             key,
             target,
             property_key,
-        } => {
-            downgrade_unknown_call_expr(ctx, key);
-            downgrade_unknown_call_expr(ctx, target);
-            if let Some(property_key) = property_key {
-                downgrade_unknown_call_expr(ctx, property_key);
-            }
-            let k = lower_expr(ctx, key)?;
-            let t = lower_expr(ctx, target)?;
-            let p = property_key
-                .as_ref()
-                .map(|p| lower_expr(ctx, p))
-                .transpose()?
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_reflect_delete_metadata",
-                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
-            ))
-        }
+        } => lower_reflect_metadata(
+            ctx,
+            "js_reflect_delete_metadata",
+            &[key, target],
+            property_key.as_deref(),
+        ),
 
         // Issue #100: compile-time-resolved dynamic `import()`.
         //

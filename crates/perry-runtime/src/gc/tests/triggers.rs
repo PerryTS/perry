@@ -200,28 +200,148 @@ fn test_old_reclaim_pressure_uses_threshold_and_growth() {
     ));
 }
 
+/// #7592: the handoff full fires on CURRENT old-gen pressure only. It used to
+/// add `promotable_bytes` into the pressure estimate — a prediction of where
+/// old-gen would land after the promotion — but promotable bytes sit in the
+/// survivor space, where a full mark-sweep can neither reclaim them nor the
+/// old-gen space they have not yet occupied. A handoff over a near-empty
+/// old-gen is guaranteed futile (measured: 1,015 ms over 4.2 MB, 0 freed).
 #[test]
-fn test_copying_minor_promotion_handoff_uses_predicted_old_pressure() {
+fn test_copying_minor_promotion_handoff_requires_current_old_pressure() {
+    // Below the handoff minimum: never due, whatever old-gen looks like.
     assert!(!copied_minor_promotion_handoff_pressure_due(
         GC_COPY_PROMOTION_HANDOFF_MIN_BYTES - 1,
         GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
         0,
     ));
-    assert!(copied_minor_promotion_handoff_pressure_due(
-        GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES - GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
+    // The #7592 shape: a huge imminent promotion over a near-empty old-gen.
+    // Predicted pressure said "due" here; a full over 4 MB frees nothing.
+    assert!(!copied_minor_promotion_handoff_pressure_due(
+        108 * 1024 * 1024,
+        4 * 1024 * 1024,
         0,
     ));
+    // Current old-gen pressure is real (threshold crossing): due.
+    assert!(copied_minor_promotion_handoff_pressure_due(
+        GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
+        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
+        0,
+    ));
+    // Current growth past the baseline exceeds the proportional band: due.
     assert!(copied_minor_promotion_handoff_pressure_due(
         26 * 1024 * 1024,
-        20 * 1024 * 1024,
+        60 * 1024 * 1024,
         8 * 1024 * 1024,
     ));
+    // Same growth, but the baseline's proportional band swallows it: not due.
     assert!(!copied_minor_promotion_handoff_pressure_due(
         26 * 1024 * 1024,
-        20 * 1024 * 1024,
-        20 * 1024 * 1024,
+        160 * 1024 * 1024,
+        120 * 1024 * 1024,
     ));
+}
+
+/// #7592: the proportional old-reclaim growth band and the promoted-bytes
+/// baseline credit.
+#[test]
+fn test_old_reclaim_band_is_proportional_and_promotion_credits_baseline() {
+    // Small baselines keep the constant floor.
+    assert_eq!(
+        gc_old_reclaim_growth_band_bytes(0),
+        gc_old_gen_reclaim_growth_dyn_bytes()
+    );
+    // Large baselines scale: the band is baseline/2 once that exceeds the
+    // floor, so major count is logarithmic in heap growth.
+    let big = 400 * 1024 * 1024;
+    assert_eq!(gc_old_reclaim_growth_band_bytes(big), big / 2);
+    // Dueness and debt share the band: at exactly band-1 past the baseline,
+    // not due and zero debt; at band, due and debt begins.
+    let baseline = big;
+    let band = gc_old_reclaim_growth_band_bytes(baseline);
+    assert!(!old_reclaim_pressure_due(baseline + band - 1, baseline));
+    assert!(old_reclaim_pressure_due(baseline + band, baseline));
+    // Debt counts bytes strictly PAST the trigger (pre-existing convention:
+    // due at the trigger with zero debt), but both must derive the trigger
+    // from the same proportional band.
+    assert_eq!(gc_old_reclaim_debt_bytes(baseline + band - 1, baseline), 0);
+    assert_eq!(gc_old_reclaim_debt_bytes(baseline + band + 1, baseline), 1);
+
+    // Promotion credit: promoted bytes are live by construction, so a reclaim
+    // must not become due merely because promotion crossed a threshold.
+    let _guard = GcTestIsolationGuard::new();
+    let prev = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(4 * 1024 * 1024));
+    credit_promoted_bytes_to_old_baseline(270 * 1024 * 1024);
+    let credited = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
+    assert_eq!(credited, 274 * 1024 * 1024);
+    // The #7592 cycle-6 shape: old-gen jumped to 274 MB purely by promotion.
+    assert!(
+        !old_reclaim_pressure_due(274 * 1024 * 1024, credited),
+        "a reclaim right after promotion is guaranteed to free nothing"
+    );
+    credit_promoted_bytes_to_old_baseline(0);
+    assert_eq!(
+        GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get()),
+        credited,
+        "zero promotion must not move the baseline"
+    );
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(prev));
+}
+
+/// #7592: a handoff full must not repeat without the copying minor it exists to
+/// enable.
+///
+/// The handoff replaces a minor with a full mark-sweep to make room for
+/// survivors about to be promoted, but a full mark-sweep is non-moving and
+/// promotes nothing — so it cannot relieve the pressure that scheduled it, and
+/// the predicate is true again at the next minor. Without the latch that is a
+/// livelock: json_pipeline at 200k records ran 19 consecutive
+/// `survivor_promotion_bytes` fulls, each freeing 0.0 MB at ~400 ms.
+///
+/// The latch short-circuits before any arena inspection, so this asserts the
+/// suppression itself rather than reproducing the heap state that arms it.
+#[test]
+fn test_survivor_promotion_handoff_waits_for_the_copying_minor() {
+    let _guard = GcTestIsolationGuard::new();
+
+    note_copying_minor_completed();
+    assert!(
+        !survivor_promotion_handoff_awaiting_minor(),
+        "latch must start clear"
+    );
+
+    note_survivor_promotion_handoff_full();
+    assert!(survivor_promotion_handoff_awaiting_minor());
+    // Assert the SUPPRESSION, not just the `false`. With an empty heap the
+    // predicate returns false at the survivor-occupancy check regardless, so a
+    // bare `assert!(!due)` passes with the latch deleted — it would be a test
+    // that cannot fail. The counter only moves if the latch branch ran.
+    for kind in [GcTriggerKind::ArenaBytes, GcTriggerKind::MallocCount] {
+        let before = survivor_promotion_handoff_suppressions();
+        assert!(
+            !copied_minor_promotion_handoff_due(kind),
+            "a second handoff must be suppressed while the first still awaits \
+             its copying minor ({kind:?})"
+        );
+        assert_eq!(
+            survivor_promotion_handoff_suppressions(),
+            before + 1,
+            "the latch branch must be what rejected it ({kind:?})"
+        );
+    }
+    // A trigger kind the handoff never applies to must not be counted as a
+    // latch suppression — it is rejected earlier, on its own merits.
+    let before = survivor_promotion_handoff_suppressions();
+    assert!(!copied_minor_promotion_handoff_due(GcTriggerKind::Direct));
+    assert_eq!(survivor_promotion_handoff_suppressions(), before);
+
+    // Only a COPYING minor clears it: a non-moving minor fallback promotes
+    // nothing and would reinstate the livelock at half rate.
+    note_copying_minor_completed();
+    assert!(
+        !survivor_promotion_handoff_awaiting_minor(),
+        "the copying minor consumes the handoff"
+    );
 }
 
 // 2026-07-09 audit (device-blind policy): budget-scaled threshold math.
@@ -384,14 +504,19 @@ fn test_effective_arena_trigger_respects_armed_values() {
         GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,
     };
     // `effective_next_arena_trigger` additionally clamps to the small nursery cap
-    // whenever moving mode is active (the default-on evacuating scavenge) or the
-    // PERRY_GC_SCAVENGE de-risking flag is set; otherwise it clamps only the
-    // UN-armed cell to the device ceiling and lets an armed trigger exceed it.
-    // Assert the value correct for the mode this process runs in, so the NEW
-    // nursery-cap behavior is exercised under the default and the legacy ceiling
-    // behavior under the PERRY_GC_MOVING_LOOP_POLLS=0 kill switch. This mirrors
-    // the gate in `effective_next_arena_trigger` exactly.
-    let nursery_capped = super::super::gc_scavenge_enabled() || gc_moving_loop_polls_enabled();
+    // whenever the collection that clamp schedules can EVACUATE; otherwise it
+    // clamps only the UN-armed cell to the device ceiling and lets an armed
+    // trigger exceed it. Assert the value correct for the mode this process runs
+    // in, so the nursery-cap behavior is exercised under moving pacing and the
+    // ceiling behavior under the PERRY_GC_MOVING_LOOP_POLLS=0 kill switch. This
+    // mirrors the gate in `policy::nursery_cap_active` exactly.
+    //
+    // `gc_scavenge_enabled()` used to be ORed in here, mirroring the gate as it
+    // stood. It is not part of that gate since #7682: scavenge routes nursery
+    // pressure to the direct alloc-point minor, and that minor is now always
+    // non-moving, so a cap keyed on it schedules a collection that cannot lower
+    // the cap's own basis.
+    let nursery_capped = gc_moving_loop_polls_enabled();
     let ceiling = gc_trigger_absolute_ceiling_bytes();
     let nursery_cap = gc_scavenge_nursery_cap_bytes();
 
@@ -429,31 +554,17 @@ fn test_effective_arena_trigger_respects_armed_values() {
     GC_TRIGGER_ARMED.with(|c| c.set(prev_armed));
 }
 
-// #7154 stopgap: the moving-loop (evacuating) minor must be OFF by default.
-// #7019 flipped it default-on, but the evacuating minor has a use-after-free
-// that corrupts the heap in the default config, so the default must select the
-// non-evacuating minor; the moving path stays reachable only via an explicit
-// PERRY_GC_MOVING_LOOP_POLLS=1/on/true opt-in.
-#[test]
-fn test_moving_loop_minor_off_by_default_7154() {
-    use super::super::policy::moving_loop_polls_enabled_from_env as enabled;
-    // Default (unset) is non-evacuating.
-    assert!(
-        !enabled(None),
-        "moving-loop minor must be OFF by default (#7154)"
-    );
-    // Kill-switch values remain off.
-    assert!(!enabled(Some("0")));
-    assert!(!enabled(Some("off")));
-    assert!(!enabled(Some("false")));
-    // Unknown / garbage values fall back to the safe default (off).
-    assert!(!enabled(Some("")));
-    assert!(!enabled(Some("2")));
-    // Explicit opt-in enables the moving path.
-    assert!(enabled(Some("1")));
-    assert!(enabled(Some("on")));
-    assert!(enabled(Some("true")));
-}
+// #7682: the moving-loop (evacuating) minor is ON by default again, and the
+// SAFE fallback direction has inverted with it.
+//
+// Under #7161's stopgap the safe direction was "off": a garbage value selected
+// the non-evacuating minor. It is now "on", and that is not a weakening. With
+// polls off, nursery pressure has NO precise collection point in a compute-only
+// program — neither this poll nor the microtask-pump boundary is reached — so
+// every nursery collection lands at the register-imprecise allocation point,
+// which #7682 established must not move. Off is the state in which the
+// collector cannot do its job precisely at all; a typo in the env var should
+// not select it.
 
 // #6184: the OS memory-pressure entry must run a real collection when the
 // thread is at a safe point, and must lower+arm the arena trigger.
@@ -485,4 +596,770 @@ fn test_memory_pressure_collects_and_clamps_trigger() {
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(prev_trigger));
     GC_TRIGGER_ARMED.with(|c| c.set(prev_armed));
     assert_eq!(js_gc_memory_pressure(0), 0);
+}
+
+/// #7690 shipped its entire default-ON argument in doc comments and left the
+/// predicate matching `1|on|true`. Nothing failed, because the function that was
+/// factored out expressly to make the default "unit-testable without touching
+/// process env" had no test. This is that test.
+///
+/// A default of OFF is not a slower configuration, it is a different collector:
+/// with no poll there is no precise safepoint, so after #7687 made the
+/// alloc-point minor non-moving the nursery is never evacuated at all. Measured
+/// on the quiet bench host at `12e48edd6`, `churn_alloc` ran 13 whole-arena full
+/// collections (0.477 s of pause) where the same program at `a853135aa` ran 105
+/// copying minors (0.016 s), and `tree` spent 4.1 s of a 5.1 s wall in GC.
+#[test]
+fn polls_default_is_on() {
+    assert!(
+        moving_loop_polls_enabled_from_env(None),
+        "unset PERRY_GC_MOVING_LOOP_POLLS must select the moving-loop path — \
+         a default of OFF leaves the nursery with no precise safepoint to evacuate at"
+    );
+    for kill in ["0", "off", "false"] {
+        assert!(
+            !moving_loop_polls_enabled_from_env(Some(kill)),
+            "PERRY_GC_MOVING_LOOP_POLLS={kill} must remain the kill switch"
+        );
+    }
+    for on in ["1", "on", "true"] {
+        assert!(
+            moving_loop_polls_enabled_from_env(Some(on)),
+            "PERRY_GC_MOVING_LOOP_POLLS={on} must stay an explicit opt-in"
+        );
+    }
+    // An unrecognised value is ON, like every other non-kill value. Spelled out
+    // because the pre-#7690 predicate answered OFF here, so this is the arm that
+    // silently changes meaning if the `matches!` is ever inverted back.
+    assert!(
+        moving_loop_polls_enabled_from_env(Some("yes")),
+        "only the documented kill-switch spellings may disable polls"
+    );
+}
+
+/// The runtime decides whether to DEFER a nursery collection; codegen decides
+/// whether to emit the poll that DRAINS it. They read the same env var from two
+/// crates that cannot share a symbol, and a disagreement is silent in both
+/// directions — polls nothing consumes, or a deferral nothing drains. #7690 left
+/// them agreeing at OFF while documenting ON; this pins them as a pair against a
+/// copy of codegen's table.
+#[test]
+fn polls_default_matches_codegen_mirror() {
+    // Mirrors `perry_codegen::stmt::loops::moving_safepoint_polls_enabled_from_env`.
+    fn codegen_mirror(value: Option<&str>) -> bool {
+        !matches!(value, Some("0") | Some("off") | Some("false"))
+    }
+    for value in [
+        None,
+        Some("0"),
+        Some("off"),
+        Some("false"),
+        Some("1"),
+        Some("on"),
+        Some("true"),
+        Some(""),
+        Some("yes"),
+    ] {
+        assert_eq!(
+            moving_loop_polls_enabled_from_env(value),
+            codegen_mirror(value),
+            "runtime and codegen must agree on PERRY_GC_MOVING_LOOP_POLLS={value:?}"
+        );
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Yield-adaptive major-GC pacing (#7726).
+//
+// `arena_growth_full_escalation_due` escalates a minor to a FULL once arena
+// live-bytes pass K× the last full's live set. On a monotonically growing
+// all-live heap that gate fires on the growth itself and reclaims ~nothing:
+// measured on `gc-handoff/bench/retain.ts`, the two escalated fulls cost 644 ms
+// of a 1.31 s run and moved arena in-use by 4 MB total — the second by zero.
+// So price each full by what it reclaimed and push the next escalation out when
+// the answer is "almost nothing".
+//
+// These assert the DECISION FUNCTION over recorded (pre, post) pairs, which is
+// the part a benchmark cannot pin: a green retain time proves the backoff fired
+// on that one shape, not that a productive full still resets it.
+// ───────────────────────────────────────────────────────────────────────────
+#[test]
+fn major_pacing_backoff_defaults_to_zero_and_needs_a_recorded_cycle_start() {
+    use super::super::policy::{
+        major_pacing_backoff_shift, test_note_full_cycle_reclaimed, test_reset_major_pacing_backoff,
+    };
+    test_reset_major_pacing_backoff();
+    assert_eq!(
+        major_pacing_backoff_shift(),
+        0,
+        "default pacing must be exactly today's: escalate at K× the baseline"
+    );
+    // A full with no recorded start (`note_full_cycle_started` never ran — an
+    // explicit `gc()`, not an arena-growth escalation) must not move the shift:
+    // its yield says nothing about the gate this backoff paces.
+    test_note_full_cycle_reclaimed(0, 0);
+    assert_eq!(major_pacing_backoff_shift(), 0);
+    test_reset_major_pacing_backoff();
+}
+
+#[test]
+fn major_pacing_backs_off_on_futile_fulls_and_resets_on_a_productive_one() {
+    use super::super::policy::{
+        major_pacing_backoff_shift, test_note_full_cycle_reclaimed, test_reset_major_pacing_backoff,
+    };
+    const MB: usize = 1024 * 1024;
+    test_reset_major_pacing_backoff();
+
+    // retain.ts's own two fulls: 67 MB → 63 MB (5.9%) and 204 MB → 204 MB (0%).
+    test_note_full_cycle_reclaimed(67 * MB, 63 * MB);
+    assert_eq!(
+        major_pacing_backoff_shift(),
+        1,
+        "a 5.9%-yield full backs off"
+    );
+    test_note_full_cycle_reclaimed(204 * MB, 204 * MB);
+    assert_eq!(
+        major_pacing_backoff_shift(),
+        2,
+        "a 0%-yield full backs off again"
+    );
+
+    // Capped: a long run of futile fulls must not disable pacing outright.
+    test_note_full_cycle_reclaimed(400 * MB, 400 * MB);
+    test_note_full_cycle_reclaimed(800 * MB, 800 * MB);
+    assert_eq!(major_pacing_backoff_shift(), 2, "the shift is capped");
+
+    // A churn-shaped full reclaims most of the heap and restores the original
+    // pacing immediately — the backoff is not a ratchet.
+    test_note_full_cycle_reclaimed(800 * MB, 200 * MB);
+    assert_eq!(
+        major_pacing_backoff_shift(),
+        0,
+        "a productive full resets the backoff in one step"
+    );
+
+    // Exactly at the threshold counts as productive (>=, not >).
+    test_note_full_cycle_reclaimed(100 * MB, 80 * MB);
+    assert_eq!(major_pacing_backoff_shift(), 0);
+    // One percent under it does not.
+    test_note_full_cycle_reclaimed(100 * MB, 81 * MB);
+    assert_eq!(major_pacing_backoff_shift(), 1);
+    test_reset_major_pacing_backoff();
+}
+
+/// The escalation and the pricing of its result must not be separable.
+///
+/// #7726's first cut recorded the pre-full reading at the two
+/// `gc_start_budgeted_cycle_for_pressure` call sites and missed the one in
+/// `gc::gc_collect_minor_with_trigger_inner` — the site the shipped safepoint
+/// path actually takes. Every test still passed, the decision function was
+/// correct in isolation, and the change measured as a 30 ms no-op on a
+/// benchmark it should have taken 480 ms off. The recording now lives INSIDE
+/// `arena_growth_full_escalation_due`; this pins that coupling, in the one
+/// direction a unit test can force without a 32 MB heap.
+#[test]
+fn declining_to_escalate_records_no_pre_full_reading() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+    };
+    test_reset_major_pacing_backoff();
+    // A baseline no live arena can exceed forces the verdict to `false`.
+    let previous = test_set_major_pacing_baseline(usize::MAX / 4);
+    let due = arena_growth_full_escalation_due();
+    let recorded = test_major_pacing_pre_in_use_bytes();
+    test_set_major_pacing_baseline(previous);
+    test_reset_major_pacing_backoff();
+    assert!(!due, "an unreachable baseline must not escalate");
+    assert_eq!(
+        recorded, 0,
+        "a declined escalation must leave no pre-full reading behind — a stale \
+         one would price the NEXT full against the wrong heap"
+    );
+}
+
+/// #7737 item 2: the POSITIVE direction of the same recording.
+///
+/// `declining_to_escalate_records_no_pre_full_reading` proves only that a
+/// declined escalation leaves `pre_in_use == 0`. Nothing asserted that a `true`
+/// verdict from the REAL `arena_growth_full_escalation_due()` — not the
+/// `test_note_full_cycle_reclaimed` bypass, which sets the reading itself —
+/// leaves a non-zero one behind.
+///
+/// That gap is exactly the shape of the first-cut bug #7733's changelog
+/// describes: the recording wired at the wrong call sites,
+/// `update_major_pacing_backoff` silently no-op'ing on `pre_in_use == 0`, and
+/// every test still green. A negative-only test cannot see it, because the
+/// no-op and the correct decline produce the same `0`.
+///
+/// Forcing `due == true` needs the arena reading above the floor
+/// (`PERRY_GC_MAJOR_PACING_FLOOR_MB`, 32 MB by default), and the floor is not
+/// lowerable per-test — `major_pacing_config` is a process-wide `OnceLock`. So
+/// the reading is injected through `pacing_arena_in_use_bytes`, the one
+/// accessor both the predicate and the recording now share.
+#[test]
+fn escalating_records_the_pre_full_arena_reading() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, _growth) = major_pacing_config();
+    if floor_bytes == 0 {
+        // `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` disables pacing outright: no
+        // reading escalates, so there is no positive direction to assert.
+        return;
+    }
+
+    test_reset_major_pacing_backoff();
+    // Baseline 0 ("no full yet") makes the floor itself the boundary, so the
+    // reading below is unambiguously over it.
+    let previous_baseline = test_set_major_pacing_baseline(0);
+    let reading = floor_bytes + 1;
+    let previous_reading = test_set_pacing_arena_in_use(Some(reading));
+
+    let due = arena_growth_full_escalation_due();
+    let recorded = test_major_pacing_pre_in_use_bytes();
+
+    test_set_pacing_arena_in_use(previous_reading);
+    test_set_major_pacing_baseline(previous_baseline);
+    test_reset_major_pacing_backoff();
+
+    assert!(
+        due,
+        "an arena reading one byte over the floor ({floor_bytes}) must escalate \
+         with no prior full — `major_pacing_escalation_threshold_for` returns \
+         the floor verbatim when the baseline is 0"
+    );
+    assert_eq!(
+        recorded, reading,
+        "an ESCALATED full must leave the pre-full reading behind, and it must \
+         be the same reading the predicate decided on. A 0 here is the #7726 \
+         no-op: `update_major_pacing_backoff` returns early on a zero pre \
+         reading, so the backoff never fires and pacing silently reverts to the \
+         unconditional K× rule — with every test still green"
+    );
+}
+
+/// The predicate and the pre-full recording must read the SAME metric.
+///
+/// `update_major_pacing_backoff`'s doc asserts this in prose ("deliberately
+/// measured on the SAME metric the escalation gate reads"). Before #7737 both
+/// sites called `arena_in_use_bytes()` independently, so the guarantee was a
+/// convention two call sites happened to honour. Routing an injected reading
+/// through and requiring it to come back out the other side is what makes it
+/// checkable: if either site is re-pointed at a different metric, the recorded
+/// value stops matching what the decision was taken on.
+#[test]
+fn the_recorded_reading_is_the_one_the_predicate_decided_on() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, _growth) = major_pacing_config();
+    if floor_bytes == 0 {
+        return;
+    }
+
+    for over in [1usize, 7, 4096] {
+        test_reset_major_pacing_backoff();
+        let previous_baseline = test_set_major_pacing_baseline(0);
+        let reading = floor_bytes + over;
+        let previous_reading = test_set_pacing_arena_in_use(Some(reading));
+
+        let due = arena_growth_full_escalation_due();
+        let recorded = test_major_pacing_pre_in_use_bytes();
+
+        test_set_pacing_arena_in_use(previous_reading);
+        test_set_major_pacing_baseline(previous_baseline);
+        test_reset_major_pacing_backoff();
+
+        assert!(due, "reading {reading} is over the floor {floor_bytes}");
+        assert_eq!(
+            recorded, reading,
+            "the recording must observe the same arena reading the predicate did"
+        );
+    }
+}
+
+/// A reading exactly ON the floor escalates (the clause is `>=`), and one below
+/// it does not — the boundary the positive test sits above.
+#[test]
+fn the_floor_is_inclusive_and_below_it_declines() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, _growth) = major_pacing_config();
+    if floor_bytes == 0 {
+        return;
+    }
+
+    let mut verdicts = Vec::new();
+    for reading in [floor_bytes - 1, floor_bytes] {
+        test_reset_major_pacing_backoff();
+        let previous_baseline = test_set_major_pacing_baseline(0);
+        let previous_reading = test_set_pacing_arena_in_use(Some(reading));
+
+        let due = arena_growth_full_escalation_due();
+        let recorded = test_major_pacing_pre_in_use_bytes();
+
+        test_set_pacing_arena_in_use(previous_reading);
+        test_set_major_pacing_baseline(previous_baseline);
+        test_reset_major_pacing_backoff();
+        verdicts.push((due, recorded));
+    }
+    assert_eq!(
+        verdicts[0],
+        (false, 0),
+        "one byte under the floor must decline, and record nothing"
+    );
+    assert_eq!(
+        verdicts[1],
+        (true, floor_bytes),
+        "exactly on the floor must escalate — the clause is `>=`, which is why \
+         `major_pacing_escalation_threshold_for` adds the `+1` to the growth \
+         boundary and not to the floor"
+    );
+}
+
+/// The escalation boundary the GC trace reports must be the boundary the
+/// predicate takes its decision on.
+///
+/// #7733 added `major_pacing_snapshot` for exactly one purpose: so a gate could
+/// assert the pacing subject was LIVE in the trace rather than merely that
+/// nothing threw. It then recomputed the boundary as `baseline × growth` with
+/// the floor dropped on the floor of the function (`let (_floor, growth_num)`),
+/// while `arena_growth_full_escalation_due` rejects everything under that same
+/// floor. Wherever the floor dominates the two disagreed — most starkly before
+/// the first full, where the trace reported `0` ("escalates at any size") for a
+/// collector that escalates at 32 MB. A probe that misreports its own subject
+/// is worse than no probe, because it reads green.
+///
+/// `escalates_reference` below is a deliberate INDEPENDENT transcription of the
+/// four clauses the predicate used to spell out inline — not a call into the
+/// code under test. The point is to pin the boundary against a second statement
+/// of the rule, so collapsing both onto one helper cannot quietly redefine it.
+#[test]
+fn the_reported_escalation_boundary_is_the_one_the_predicate_decides_on() {
+    use super::super::policy::major_pacing_escalation_threshold_for;
+    const MB: usize = 1024 * 1024;
+
+    fn escalates_reference(
+        floor: usize,
+        growth_num: usize,
+        baseline: usize,
+        shift: u32,
+        in_use: usize,
+    ) -> bool {
+        if floor == 0 {
+            return false; // pacing disabled
+        }
+        if in_use < floor {
+            return false; // under the absolute floor: small heaps never pay
+        }
+        if baseline == 0 {
+            return true; // no full yet
+        }
+        in_use > baseline.saturating_mul(growth_num.saturating_mul(1usize << shift))
+    }
+
+    // The named cases first: each is a different bug if it breaks.
+    assert_eq!(
+        major_pacing_escalation_threshold_for(32 * MB, 2, 4 * MB, 0),
+        Some(32 * MB),
+        "FLOOR DOMINATES (4 MB baseline × 2 = 8 MB, under the 32 MB floor): the \
+         boundary is the floor. Reporting 8 MB names a collection the collector \
+         will decline to run."
+    );
+    assert_eq!(
+        major_pacing_escalation_threshold_for(32 * MB, 2, 64 * MB, 0),
+        Some(128 * MB + 1),
+        "GROWTH DOMINATES: strictly ABOVE K× the baseline, per the `>` clause"
+    );
+    assert_eq!(
+        major_pacing_escalation_threshold_for(32 * MB, 2, 0, 0),
+        Some(32 * MB),
+        "no full yet: the floor is the boundary — the old snapshot reported 0 \
+         here, i.e. 'always', for a collector that escalates at 32 MB"
+    );
+    assert_eq!(
+        major_pacing_escalation_threshold_for(32 * MB, 2, 64 * MB, 2),
+        Some(512 * MB + 1),
+        "the backoff shift multiplies the GROWTH term, not the floor"
+    );
+    assert_eq!(
+        major_pacing_escalation_threshold_for(0, 2, 64 * MB, 0),
+        None,
+        "PERRY_GC_MAJOR_PACING_FLOOR_MB=0 disables the pacing outright: no \
+         arena reading escalates, so there is no boundary to report"
+    );
+
+    // ...then exhaustively against the reference, probing each boundary's own
+    // ±1 neighbourhood so an off-by-one cannot hide between the named cases.
+    for &floor in &[0, 1, 8 * MB, 32 * MB] {
+        for &growth_num in &[1, 2, 3] {
+            for &baseline in &[0, 1, 4 * MB, 32 * MB, usize::MAX / 4, usize::MAX] {
+                for shift in 0..=2u32 {
+                    let threshold =
+                        major_pacing_escalation_threshold_for(floor, growth_num, baseline, shift);
+                    let mut probes =
+                        vec![0usize, 1, 8 * MB, 32 * MB, 64 * MB, 512 * MB, usize::MAX];
+                    if let Some(boundary) = threshold {
+                        probes.extend([
+                            boundary.saturating_sub(1),
+                            boundary,
+                            boundary.saturating_add(1),
+                        ]);
+                    }
+                    for in_use in probes {
+                        assert_eq!(
+                            threshold.is_some_and(|boundary| in_use >= boundary),
+                            escalates_reference(floor, growth_num, baseline, shift, in_use),
+                            "floor={floor} growth={growth_num} baseline={baseline} \
+                             shift={shift} in_use={in_use}: the reported boundary \
+                             disagrees with the escalation rule"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// ...and the SHIPPED pair must agree, not just the pure helper.
+///
+/// The pure test above proves the formula; this proves both production callers
+/// are actually reading it. It drives the real `arena_growth_full_escalation_due`
+/// against the real `major_pacing_snapshot` on this thread's real arena, so a
+/// future re-split (a snapshot that recomputes "the same" boundary inline)
+/// fails here even if the pure helper stays correct.
+///
+/// `baseline = 0` is the discriminating row and it needs no particular heap
+/// size: the pre-#7740 snapshot reported `0` there, i.e. `in_use >= 0`, which
+/// is true of every arena including an empty one, while the predicate declines
+/// under the floor.
+#[test]
+fn the_shipped_predicate_and_the_shipped_snapshot_read_one_boundary() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, major_pacing_snapshot,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+    };
+    let (floor_bytes, _growth_num) = major_pacing_config();
+    test_reset_major_pacing_backoff();
+    let saved = test_set_major_pacing_baseline(0);
+
+    for baseline in [0usize, 1, floor_bytes / 4, usize::MAX / 4] {
+        test_set_major_pacing_baseline(baseline);
+        let (reported_baseline, _shift, threshold) = major_pacing_snapshot();
+        let in_use = crate::arena::arena_in_use_bytes();
+        let due = arena_growth_full_escalation_due();
+        // `due == true` records a pre-full reading; drop it so the next row and
+        // every later test on this thread start from a clean pacing state.
+        test_reset_major_pacing_backoff();
+
+        assert_eq!(
+            reported_baseline, baseline,
+            "the snapshot must report the live baseline"
+        );
+        assert_eq!(
+            due,
+            threshold.is_some_and(|boundary| in_use >= boundary),
+            "baseline={baseline}: the trace's escalate_at_or_above_bytes \
+             ({threshold:?}) disagrees with the verdict the collector actually \
+             took on this arena ({in_use} bytes)"
+        );
+    }
+
+    test_set_major_pacing_baseline(saved);
+    test_reset_major_pacing_backoff();
+}
+
+// ---------------------------------------------- the poll's arming word -----
+
+/// The deferral flag and `PERRY_GC_POLL_ARMED` are one piece of state with two
+/// representations, and only the second one is visible to the code that decides
+/// whether to call the poll at all. This pins the transition in both directions.
+///
+/// The unsound direction is a `set` that bypasses `set_safepoint_pending`: the
+/// word stays zero, codegen's inline guard branches around the call, and the
+/// deferred collection is stranded until the next event-loop boundary — which a
+/// compute-only program never reaches. That is #7690's failure mode (a collector
+/// with no nursery evacuation) arriving through a different door, and it is
+/// invisible to every existing test, because a program with no collections still
+/// produces the right answer.
+#[test]
+fn a_deferral_arms_the_poll_word_and_draining_disarms_it() {
+    let _isolation = GcTestIsolationGuard::new();
+    crate::gc::set_safepoint_pending(false);
+    let base = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+
+    crate::gc::set_safepoint_pending(true);
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base + 1,
+        "arming a deferral must make the poll's global word non-zero — it is \
+         the ONLY thing a codegen-emitted back-edge consults"
+    );
+
+    // Idempotent: the flag is a bool, so a second set is not a second arm.
+    crate::gc::set_safepoint_pending(true);
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base + 1,
+        "only TRANSITIONS may move the counter, or a thread that defers twice \
+         leaks an arm and pins the poll on for the life of the process"
+    );
+
+    crate::gc::set_safepoint_pending(false);
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base,
+        "draining must give the arm back"
+    );
+}
+
+/// A poll whose word reads zero must do NOTHING — not even the bookkeeping.
+///
+/// This is the assertion that makes the optimisation real rather than
+/// decorative. `note_loop_poll_reached` is an unconditional atomic RMW on a
+/// process-shared line; leaving it above the gate would keep the most expensive
+/// single instruction of the old fast path on every back-edge while looking, in
+/// every other test, exactly like this one.
+#[test]
+fn an_unarmed_poll_touches_nothing() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _schedule = super::super::schedule::ScheduleGuard::off();
+    crate::gc::set_safepoint_pending(false);
+    let restore = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+    crate::gc::PERRY_GC_POLL_ARMED.store(0, std::sync::atomic::Ordering::Relaxed);
+
+    let polls_before = crate::gc::loop_polls_reached();
+    let collections_before = gc_collection_count();
+    js_gc_loop_safepoint();
+    js_gc_loop_safepoint();
+    let polls_after = crate::gc::loop_polls_reached();
+    let collections_after = gc_collection_count();
+
+    crate::gc::PERRY_GC_POLL_ARMED.store(restore, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        polls_after, polls_before,
+        "an unarmed poll must not reach the counter — reaching it means the \
+         atomic increment is still on every back-edge"
+    );
+    assert_eq!(
+        collections_after, collections_before,
+        "and it certainly must not collect"
+    );
+}
+
+/// The seeded schedule selects among safepoints an alloc-point trigger did NOT
+/// already defer. That is expressible only if the poll word stays armed with
+/// nothing pending, so a resolved seed owns a permanent arm — and a run
+/// WITHOUT a seed must give that arm back, or every program pays for the slow
+/// path forever.
+///
+/// Without the first half, `PERRY_GC_SCHEDULE_SEED` silently becomes a no-op on
+/// the poll path: every back-edge reads zero, skips the call and forces
+/// nothing, leaving `schedule_liveness_report` to report the vacuity after the
+/// fact instead of the instrument simply working.
+///
+/// Both directions run the REAL resolution (`resolve_poll_seed`) rather than
+/// reading the startup value, because the startup value is 1 whatever the mode
+/// is — an assertion against it passes without the guard having done anything,
+/// and fails outright if some earlier test in this binary already resolved the
+/// seed. That is why the resolution is a resettable flag rather than a
+/// `std::sync::Once`.
+#[test]
+fn the_startup_seed_is_kept_only_for_a_resolved_seed() {
+    let _isolation = GcTestIsolationGuard::new();
+    crate::gc::set_safepoint_pending(false);
+
+    // The word is process-global; put it back whatever this test proves.
+    let restore = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+    let seed_armed = |armed: u32| {
+        crate::gc::PERRY_GC_POLL_ARMED.store(armed, std::sync::atomic::Ordering::Relaxed);
+        super::super::poll_arm::reset_poll_seed_for_test();
+    };
+
+    // WITH a seed: resolution must KEEP the startup arm.
+    seed_armed(1);
+    {
+        let _schedule = super::super::schedule::ScheduleGuard::set(
+            7,
+            super::super::schedule::rate_threshold(1.0),
+        );
+        super::super::poll_arm::resolve_poll_seed();
+        assert!(
+            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "a resolved seed must keep the poll reachable with no deferral \
+             outstanding — released, every back-edge reads zero and the mode \
+             selects nothing at all"
+        );
+    }
+
+    // WITHOUT one: resolution must RELEASE it, or the poll's fast path stays
+    // needlessly live for the rest of the process.
+    seed_armed(1);
+    {
+        let _schedule = super::super::schedule::ScheduleGuard::off();
+        super::super::poll_arm::resolve_poll_seed();
+        assert_eq!(
+            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "with no seed resolved the startup arm must be given back"
+        );
+    }
+
+    crate::gc::PERRY_GC_POLL_ARMED.store(restore, std::sync::atomic::Ordering::Relaxed);
+    super::super::poll_arm::reset_poll_seed_for_test();
+    crate::gc::set_safepoint_pending(false);
+}
+
+/// #7781: the regression
+/// test for the gap that made `PERRY_GC_SCHEDULE_RATE=1` an event-loop-only
+/// instrument: on #7606's reproduction it saw SIX safepoints against the
+/// 9,648 loop polls the retired every-safepoint instrument reached, because
+/// nothing armed the poll word for the mode whose decision lives inside the
+/// safepoint the word gates.
+#[test]
+fn the_schedule_holds_the_poll_word_armed() {
+    let _isolation = GcTestIsolationGuard::new();
+    crate::gc::set_safepoint_pending(false);
+    let base = crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed);
+    {
+        let _sched = super::super::schedule::ScheduleGuard::set(7, u64::MAX);
+        assert_eq!(
+            crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+            base + 1,
+            "a live schedule must keep the poll reachable — its collection \
+             decision happens inside the safepoint the word gates"
+        );
+    }
+    assert_eq!(
+        crate::gc::PERRY_GC_POLL_ARMED.load(std::sync::atomic::Ordering::Relaxed),
+        base,
+        "dropping the ScheduleGuard must release the arm it took"
+    );
+}
+
+/// The survival-adaptive arm must CHANGE a verdict, in both directions, from
+/// the same arena reading.
+///
+/// A test that only armed the retaining flag and checked the boundary grew
+/// would pass on a build where the flag never reaches the predicate — the
+/// #7024/#6942 shape this repo keeps paying for. So the assertion is on
+/// `arena_growth_full_escalation_due()` itself, at a reading chosen to sit
+/// strictly between the un-retained boundary and the retained one: today's
+/// policy escalates there, and the retaining arm is the only thing that can
+/// make it decline.
+#[test]
+fn retaining_survival_widens_the_escalation_band_and_low_survival_restores_it() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, major_pacing_retaining,
+        note_copying_minor_young_survival, test_major_pacing_pre_in_use_bytes,
+        test_reset_major_pacing_backoff, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, growth_num) = major_pacing_config();
+    if floor_bytes == 0 {
+        return; // pacing disabled outright: no boundary to widen
+    }
+
+    test_reset_major_pacing_backoff();
+    // Baseline high enough that the growth clause, not the floor, is the
+    // boundary — the floor would mask the multiplier entirely.
+    let baseline = floor_bytes;
+    let previous_baseline = test_set_major_pacing_baseline(baseline);
+    // Above `growth_num × baseline` (today's boundary), below `4 ×` that.
+    let reading = baseline * growth_num + 1;
+    let previous_reading = test_set_pacing_arena_in_use(Some(reading));
+
+    // 1. Not retaining (the OFF state): this reading escalates, as before.
+    note_copying_minor_young_survival(0);
+    let off_retaining = major_pacing_retaining();
+    let off_due = arena_growth_full_escalation_due();
+    test_reset_major_pacing_backoff();
+    test_set_major_pacing_baseline(baseline);
+
+    // 2. Retaining: the same reading no longer escalates. Re-arm the reading
+    //    first — the retaining path re-baselines from it, and `max` keeps the
+    //    baseline where it is here (reading > baseline would raise it, which is
+    //    itself part of the effect being asserted).
+    note_copying_minor_young_survival(1000);
+    let on_retaining = major_pacing_retaining();
+    let on_due = arena_growth_full_escalation_due();
+    let on_recorded = test_major_pacing_pre_in_use_bytes();
+
+    // 3. A single low-survival minor disarms it again, same reading.
+    note_copying_minor_young_survival(0);
+    let back_retaining = major_pacing_retaining();
+
+    test_set_pacing_arena_in_use(previous_reading);
+    test_set_major_pacing_baseline(previous_baseline);
+    test_reset_major_pacing_backoff();
+
+    assert!(!off_retaining, "survival 0 must not arm the retaining arm");
+    assert!(
+        off_due,
+        "the reading must escalate WITHOUT the retaining arm, or this test \
+         proves nothing about the arm"
+    );
+    assert!(on_retaining, "survival 1000 must arm the retaining arm");
+    assert!(
+        !on_due,
+        "a retaining heap must not escalate at a reading only the un-widened \
+         growth band rejects"
+    );
+    assert_eq!(
+        on_recorded, 0,
+        "a declined escalation must leave no pre-full reading behind"
+    );
+    assert!(
+        !back_retaining,
+        "one non-retaining minor must disarm the band immediately — a decayed \
+         window would keep pacing a churning heap as if it were retaining"
+    );
+}
+
+/// The retaining re-baseline is a ratchet, never a decrease: a minor must not
+/// be able to pull the boundary in below what the last full established.
+#[test]
+fn retaining_rebaseline_never_lowers_the_pacing_baseline() {
+    use super::super::policy::{
+        major_pacing_snapshot, note_copying_minor_young_survival, test_reset_major_pacing_backoff,
+        test_set_major_pacing_baseline, test_set_pacing_arena_in_use,
+    };
+
+    test_reset_major_pacing_backoff();
+    let high = 512 * 1024 * 1024;
+    let previous_baseline = test_set_major_pacing_baseline(high);
+    let previous_reading = test_set_pacing_arena_in_use(Some(1024));
+
+    note_copying_minor_young_survival(1000);
+    let (after_low, _, _) = major_pacing_snapshot();
+
+    test_set_pacing_arena_in_use(Some(high * 2));
+    note_copying_minor_young_survival(1000);
+    let (after_high, _, _) = major_pacing_snapshot();
+
+    test_set_pacing_arena_in_use(previous_reading);
+    test_set_major_pacing_baseline(previous_baseline);
+    test_reset_major_pacing_backoff();
+
+    assert_eq!(
+        after_low, high,
+        "a small post-minor occupancy must not lower the baseline"
+    );
+    assert_eq!(
+        after_high,
+        high * 2,
+        "a larger post-minor occupancy must raise it"
+    );
 }

@@ -25,7 +25,7 @@ pub(crate) const INTERN_MAX_BYTE_LEN: u32 = 64;
 // read from worker B. The previous design used a single process-wide
 // `static mut`, which both raced under concurrent allocation and risked
 // handing back foreign-arena pointers.
-thread_local! {
+crate::perry_thread_local! {
     // arm64_32 fix: HEAP-allocate this table instead of inline TLS.
     // Oversized `#[thread_local]` storage overflows the ILP32 TLS layout and its
     // writes corrupt adjacent thread-locals. Boxing keeps only a pointer in TLS.

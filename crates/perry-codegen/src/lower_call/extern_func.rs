@@ -1757,7 +1757,7 @@ pub fn try_lower_extern_func_call(
     ctx.pending_declares
         .push((fname.clone(), DOUBLE, param_types));
     let mut lowered: Vec<String> = Vec::with_capacity(target_arity);
-    let arg_guard: Option<String>;
+    let arg_group: crate::rooting::RootedGroup<'_>;
     if has_rest {
         // #7154: the rest twin of the arm below. Fixed params were lowered into
         // bare registers and then held across `js_array_alloc` plus a
@@ -1780,12 +1780,12 @@ pub fn try_lower_extern_func_call(
                 mark_arguments_object: has_synthetic_args,
             }],
         )?;
-        arg_guard = guard;
+        arg_group = guard;
         lowered.extend(values);
     } else {
         // #7154: the registry's residual. See `super::lower_call_args_rooted`.
         let (values, guard) = super::lower_call_args_rooted(ctx, args)?;
-        arg_guard = guard;
+        arg_group = guard;
         lowered.extend(values);
         // Pad with TAG_UNDEFINED for the missing trailing args.
         let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
@@ -1793,6 +1793,6 @@ pub fn try_lower_extern_func_call(
             lowered.push(undefined_lit.clone());
         }
     }
-    let call = super::emit_rooted_call(ctx, &fname, &lowered, arg_guard);
+    let call = super::emit_rooted_call(ctx, &fname, &lowered, arg_group);
     Ok(Some(call))
 }

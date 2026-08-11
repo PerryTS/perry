@@ -1470,87 +1470,114 @@ pub(super) fn emit_namespace_populator(
     let vals_buf = blk.next_reg();
     blk.emit_raw(format!("{} = alloca [{} x double]", vals_buf, buf_len));
 
-    // Per-entry: store key ptr + len + value.
-    for (i, entry) in entries.iter().enumerate() {
-        let (key_global, key_len) = &key_globals[i];
-        let idx_str = format!("{}", i);
-        let blk = ctx.block();
+    // #7210 (2): `vals_buf` is a plain stack alloca, not a shadow slot the
+    // collector scans. Each entry's value is a NaN-boxed JSValue that can be
+    // a real GC pointer (a closure singleton, a nested namespace object, a
+    // re-exported var read through an arbitrary getter), and materialising
+    // entry i+1 (`js_closure_alloc_singleton`, or calling an exported
+    // getter) can allocate -- so storing entry i into `vals_buf` and then
+    // moving on left it an unrooted stack copy while later entries were
+    // computed. Root every value as it is produced, in one `RootedGroup` for
+    // the whole populator, and defer every `vals_buf` store to a second pass
+    // that runs back-to-back with the `js_create_namespace` call below —
+    // nothing in that second pass can collect, so the buffer is guaranteed
+    // fresh at the moment the runtime reads it.
+    let mut handles = Vec::with_capacity(n);
+    crate::rooting::with_rooted_group(ctx, buf_len, |ctx, group| {
+        // Per-entry: store key ptr + len, and root the value.
+        for (i, entry) in entries.iter().enumerate() {
+            let (key_global, key_len) = &key_globals[i];
+            let idx_str = format!("{}", i);
+            let blk = ctx.block();
 
-        // keys[i] = @<key_global> as ptr
-        let key_slot = blk.gep(PTR, &keys_buf, &[(I64, &idx_str)]);
-        blk.store(PTR, &format!("@{}", key_global), &key_slot);
+            // keys[i] = @<key_global> as ptr
+            let key_slot = blk.gep(PTR, &keys_buf, &[(I64, &idx_str)]);
+            blk.store(PTR, &format!("@{}", key_global), &key_slot);
 
-        // key_lens[i] = byte_len
-        let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
-        blk.store(I32, &format!("{}", key_len), &len_slot);
+            // key_lens[i] = byte_len
+            let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
+            blk.store(I32, &format!("{}", key_len), &len_slot);
 
-        // Materialise the value per kind. We drop the `blk` borrow so
-        // each sub-emission can re-borrow ctx mutably for runtime calls
-        // / declares; then re-acquire for the store.
-        let val_str = match &entry.kind {
-            NamespaceEntryKind::LocalVar { global_name } => {
-                ctx.block().load(DOUBLE, &format!("@{}", global_name))
-            }
-            NamespaceEntryKind::LocalFunction { wrap_symbol } => {
-                let blk = ctx.block();
-                let handle = blk.call(
-                    I64,
-                    "js_closure_alloc_singleton",
-                    &[(PTR, &format!("@{}", wrap_symbol))],
-                );
-                crate::expr::nanbox_pointer_inline(blk, &handle)
-            }
-            NamespaceEntryKind::LocalClass { class_id } => {
-                // INT32-tagged class-id NaN-box: 0x7FFE_0000_0000_0000 |
-                // (class_id & 0xFFFFFFFF). Matches `Expr::ClassRef`.
-                let bits = crate::nanbox::INT32_TAG | (*class_id as u64 & 0xFFFF_FFFF);
-                crate::nanbox::double_literal(f64::from_bits(bits))
-            }
-            NamespaceEntryKind::ForeignVar {
-                source_prefix,
-                source_local,
-            } => {
-                let getter = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
-                ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
-                ctx.block().call(DOUBLE, &getter, &[])
-            }
-            NamespaceEntryKind::ForeignFunction {
-                source_prefix,
-                source_local,
-                param_count,
-            } => {
-                // Function-shaped re-exports must materialize a function
-                // value, not call the function while building the namespace.
-                // Source modules emit `__perry_wrap_perry_fn_<src>__<name>`
-                // for every user function; hand that wrapper to the same
-                // singleton allocator used by local function exports.
-                let wrapper_name = format!(
-                    "__perry_wrap_perry_fn_{}__{}",
+            // Materialise the value per kind. We drop the `blk` borrow so
+            // each sub-emission can re-borrow ctx mutably for runtime calls
+            // / declares; then root it in this scope's group.
+            let val_str = match &entry.kind {
+                NamespaceEntryKind::LocalVar { global_name } => {
+                    ctx.block().load(DOUBLE, &format!("@{}", global_name))
+                }
+                NamespaceEntryKind::LocalFunction { wrap_symbol } => {
+                    let blk = ctx.block();
+                    let handle = blk.call(
+                        I64,
+                        "js_closure_alloc_singleton",
+                        &[(PTR, &format!("@{}", wrap_symbol))],
+                    );
+                    crate::expr::nanbox_pointer_inline(blk, &handle)
+                }
+                NamespaceEntryKind::LocalClass { class_id } => {
+                    // INT32-tagged class-id NaN-box: 0x7FFE_0000_0000_0000 |
+                    // (class_id & 0xFFFFFFFF). Matches `Expr::ClassRef`.
+                    let bits = crate::nanbox::INT32_TAG | (*class_id as u64 & 0xFFFF_FFFF);
+                    crate::nanbox::double_literal(f64::from_bits(bits))
+                }
+                NamespaceEntryKind::ForeignVar {
                     source_prefix,
-                    sanitize(source_local)
-                );
-                let arity = (*param_count).min(16);
-                let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
-                wrapper_params.extend(std::iter::repeat_n(DOUBLE, arity));
-                ctx.pending_declares
-                    .push((wrapper_name.clone(), DOUBLE, wrapper_params));
-                let blk = ctx.block();
-                let handle = blk.call(
-                    I64,
-                    "js_closure_alloc_singleton",
-                    &[(PTR, &format!("@{}", wrapper_name))],
-                );
-                crate::expr::nanbox_pointer_inline(blk, &handle)
-            }
-            NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
-                .block()
-                .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
-        };
+                    source_local,
+                } => {
+                    let getter = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
+                    ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
+                    ctx.block().call(DOUBLE, &getter, &[])
+                }
+                NamespaceEntryKind::ForeignFunction {
+                    source_prefix,
+                    source_local,
+                    param_count,
+                } => {
+                    // Function-shaped re-exports must materialize a function
+                    // value, not call the function while building the namespace.
+                    // Source modules emit `__perry_wrap_perry_fn_<src>__<name>`
+                    // for every user function; hand that wrapper to the same
+                    // singleton allocator used by local function exports.
+                    let wrapper_name = format!(
+                        "__perry_wrap_perry_fn_{}__{}",
+                        source_prefix,
+                        sanitize(source_local)
+                    );
+                    let arity = (*param_count).min(16);
+                    let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
+                    wrapper_params.extend(std::iter::repeat_n(DOUBLE, arity));
+                    ctx.pending_declares
+                        .push((wrapper_name.clone(), DOUBLE, wrapper_params));
+                    let blk = ctx.block();
+                    let handle = blk.call(
+                        I64,
+                        "js_closure_alloc_singleton",
+                        &[(PTR, &format!("@{}", wrapper_name))],
+                    );
+                    crate::expr::nanbox_pointer_inline(blk, &handle)
+                }
+                NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
+                    .block()
+                    .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
+            };
 
-        let blk = ctx.block();
-        let val_slot = blk.gep(DOUBLE, &vals_buf, &[(I64, &idx_str)]);
-        blk.store(DOUBLE, &val_str, &val_slot);
-    }
+            handles.push(group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &val_str, true));
+        }
+
+        // Flush pass: re-read each value from its root -- picking up any
+        // relocation the loop above caused -- and store it into `vals_buf`.
+        // No call runs between these stores and the `js_create_namespace`
+        // call that follows, so every slot the runtime reads is live.
+        for (i, handle) in handles.iter().enumerate() {
+            let idx_str = format!("{}", i);
+            let fresh = group.reread_emitted(ctx, *handle);
+            let blk = ctx.block();
+            let val_slot = blk.gep(DOUBLE, &vals_buf, &[(I64, &idx_str)]);
+            blk.store(DOUBLE, &fresh, &val_slot);
+        }
+        anyhow::Ok(())
+    })
+    .expect("emit_namespace_populator's rooted group body is infallible");
 
     // Call `js_create_namespace(n, keys, key_lens, values)` and store
     // the result into the namespace global. The result is a NaN-boxed

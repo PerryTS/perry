@@ -14,6 +14,9 @@ use crate::types::DOUBLE;
 #[cfg(test)]
 mod class_field_loop_tests;
 mod counter_range;
+mod element_shape_loop;
+#[cfg(test)]
+mod element_shape_loop_tests;
 mod if_stmt;
 mod let_buffer_views;
 mod let_stmt;

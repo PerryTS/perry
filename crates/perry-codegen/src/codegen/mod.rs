@@ -44,6 +44,8 @@ mod artifacts;
 mod boxed_locals;
 mod closure;
 mod closure_collect;
+#[cfg(test)]
+mod emission_order_tests;
 mod entry;
 mod func_registry;
 mod function;
@@ -477,6 +479,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // #6812: width hints don't cross module metadata; imported stubs
             // fall back to runtime learned sizing.
             alloc_width_hint: 0,
+            // #7575: monomorphization is per-module, so an imported stub never
+            // stands in for a specialization — its defining module registers
+            // the origin edge itself.
+            specialized_from: None,
             type_params: Vec::new(),
             extends: None,
             extends_name: ic.parent_name.clone(),
@@ -1613,6 +1619,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 
     let mut cross_module = CrossModuleCtx {
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
+        namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
         namespace_member_origin_names: opts.namespace_member_origin_names,
         imported_async_funcs: opts.imported_async_funcs,
@@ -2177,9 +2184,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let spec_budget = spec_abi::spec_abi_max();
         let mut spec_emitted = 0usize;
         for f in &hir.functions {
-            let Some(sites) = spec_facts.call_sites.get(&f.id) else {
-                continue;
-            };
             let reject =
                 |reason: typed_abi::TypedCloneRejectionReason,
                  records: &mut Vec<crate::native_value::NativeRepRecord>| {
@@ -2195,6 +2199,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         ],
                     );
                 };
+            // #7111: a function whose call sites were all inlined away — and
+            // then constant-folded by `unroll_static_loops` — has no entry in
+            // `spec_facts.call_sites`, which is built by walking `hir.init` and
+            // every body for direct `Call` expressions. This used to `continue`
+            // BEFORE any rejection was constructed, so `--opt-report` said
+            // nothing at all about the function: indistinguishable from "not
+            // analysed" and from "analysed and denied". Say "moot" instead.
+            let Some(sites) = spec_facts.call_sites.get(&f.id) else {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecNoCallSites,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            };
             if f.is_async || f.is_generator || f.was_plain_async {
                 reject(
                     typed_abi::TypedCloneRejectionReason::AsyncOrGenerator,

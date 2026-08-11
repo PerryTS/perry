@@ -141,16 +141,16 @@ const m7: Map<string, number> = new MyMap<string, number>();
 console.log("7 set returns receiver:", m7.set("a", 1) === m7);
 m7.set("b", 2).set("c", 3);
 console.log("7 chained:", m7.size, m7.get("b"), m7.get("c"));
-// NOTE: only the BASE `instanceof` is asserted here. `m7 instanceof MyMap` is
-// a separate, pre-existing gap — it is false for a Map/Set subclass instance
-// with or without the annotation, so it is not part of this fix.
-console.log("7 still a Map:", m7 instanceof Map);
+// The SUBCLASS edge is asserted too since #7575: `MyMap<K, V>` is generic, so
+// `new MyMap<string, number>()` constructs the monomorphized `MyMap$str_num`
+// and `instanceof MyMap` used to miss the class the user actually wrote.
+console.log("7 still a Map:", m7 instanceof Map, m7 instanceof MyMap);
 
 const s7: Set<number> = new MySet<number>();
 console.log("7 add returns receiver:", s7.add(1) === s7);
 s7.add(2).add(3);
 console.log("7 set chained:", s7.size, s7.has(2), s7.has(3));
-console.log("7 still a Set:", s7 instanceof Set);
+console.log("7 still a Set:", s7 instanceof Set, s7 instanceof MySet);
 
 // ── 8. `clear()` through an annotated binding ──
 const m8: Map<string, number> = new MyMap<string, number>([["z", 1]]);

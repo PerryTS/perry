@@ -45,6 +45,15 @@ pub use parse_api::{
 pub use raw_json::{js_json_is_raw_json, js_json_raw_json};
 pub use replacer::{js_json_stringify_full, js_json_stringify_with_replacer};
 pub use reviver::js_json_parse_with_reviver;
+/// #7448: exported so the cross-host UI crates can ASK the runtime whether an
+/// address is GC-tracked instead of each carrying its own bit-pattern guess.
+/// `perry-ui-android`'s copy tested for a positive IEEE-754 subnormal, which
+/// classifies every denormal `Number` as an untagged heap pointer — the exact
+/// predicate #7447 removed here after it SIGSEGV'd on `JSON.stringify(1e-317)`.
+/// No bit test can decide this: a raw pointer and a positive subnormal occupy
+/// the same bit patterns by construction, so the answer has to come from
+/// allocation membership, which only the runtime can answer.
+pub use stringify::ptr_is_tracked_heap_object;
 pub use stringify_api::{
     js_json_get_bool, js_json_get_number, js_json_get_string, js_json_is_valid, js_json_stringify,
     js_json_stringify_bool, js_json_stringify_null, js_json_stringify_number,
@@ -89,19 +98,43 @@ thread_local! {
     pub(crate) static STRINGIFY_BUF: std::cell::Cell<Option<String>> =
         std::cell::Cell::new(Some(String::with_capacity(4096)));
 
-    /// Per-call shape-template cache (#64 follow-up). Keys on `keys_array`
-    /// raw pointer — within one top-level stringify call no GC runs over
-    /// the user object graph (the buffer/result allocations don't move
-    /// keys arrays), so pointer identity is a stable shape ID. Cleared
-    /// (saved+restored) at the entry of each `js_json_stringify` /
-    /// `js_json_stringify_full` / `..with_replacer` call so reentrant
-    /// `toJSON` callbacks don't return stale templates.
+    /// Per-call shape-template cache (#64 follow-up), as a STACK of frames.
+    /// Each template is keyed on its `keys_array` raw pointer, which is a
+    /// **GC-managed `ArrayHeader*`** — so `scan_parse_roots_mut` visits every
+    /// frame's every key as a real (marking AND rewriting) root.
+    ///
+    /// ★ #7268: this comment used to assert the invariant that made the raw
+    /// key safe —
+    ///
+    /// > within one top-level stringify call no GC runs over the user object
+    /// > graph (the buffer/result allocations don't move keys arrays), so
+    /// > pointer identity is a stable shape ID
+    ///
+    /// — and `toJSON` falsifies it. A `toJSON` is user JS: it allocates, it
+    /// can reach a safepoint, and the minor there is evacuating. A stale key
+    /// then either misses (merely slow) or, worse, **collides with a
+    /// newly-allocated array at the recycled address and matches the wrong
+    /// shape**; and `set_to_json_key_for_template_field` reads the property
+    /// NAME strings out of `keys_arr`, i.e. dereferences retired from-space.
+    ///
+    /// ★ Why a stack rather than a moved-out `Vec`. Reentrancy used to be
+    /// handled by `take_shape_cache()` moving the whole cache into a Rust
+    /// local for the duration of the inner call. While it sat there the root
+    /// scanner could not see it, so the inner call — the `toJSON`, i.e.
+    /// precisely the code that moves things — left every saved key stale, and
+    /// the outer call resumed using them. Keeping the frames in the TLS is
+    /// what makes the scanner's coverage complete; `take`/`restore` now push
+    /// and pop a frame instead of moving the storage out of the collector's
+    /// reach.
+    ///
+    /// Frame 0 always exists (the top-level call's), so the emit path never
+    /// has to check for an empty stack.
     ///
     /// `Box<ShapeTemplate>` lives on the heap so its address is stable
-    /// even when the cache `Vec` reallocates — we hand out raw pointers
+    /// even when a frame `Vec` reallocates — we hand out raw pointers
     /// to the templates and they must outlive the borrow.
-    pub(crate) static SHAPE_CACHE: RefCell<Vec<(*mut crate::ArrayHeader, Box<ShapeTemplate>)>> =
-        const { RefCell::new(Vec::new()) };
+    pub(crate) static SHAPE_CACHE: RefCell<Vec<Vec<Box<ShapeTemplate>>>> =
+        RefCell::new(vec![Vec::new()]);
 
     /// Key string intern cache for JSON.parse (issue #51 follow-up).
     /// Maps key bytes → already-allocated StringHeader pointer.
@@ -421,26 +454,80 @@ pub(crate) fn json_string_from_output_bytes(bytes: &[u8]) -> *mut StringHeader {
     }
 }
 
-/// Save & clear the shape cache for the duration of a top-level stringify
-/// call. Reentrant `toJSON` callbacks would otherwise inherit the outer
-/// call's templates and (worse) clear them on exit, dangling pointers we
-/// already handed out. Mirrors `take_stringify_buf` in spirit.
+/// Receipt for a pushed shape-cache frame. Consumed by `restore_shape_cache`.
+///
+/// It is not `Copy` and carries a `Drop` that pops the frame, so a JS exception
+/// unwinding past the matching `restore_shape_cache` cannot leave the stack one
+/// frame deep forever. (`clear_shape_cache` truncates to frame 0 as a second
+/// line of defence, for the `longjmp`-style exits that skip `Drop` entirely.)
+pub(crate) struct SavedShapeCache {
+    restored: bool,
+}
+
+impl Drop for SavedShapeCache {
+    fn drop(&mut self) {
+        if !self.restored {
+            SHAPE_CACHE.with(|c| {
+                let mut stack = c.borrow_mut();
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+            });
+        }
+    }
+}
+
+/// Push a fresh shape-cache frame for the duration of a nested stringify call.
+/// A reentrant `toJSON` callback would otherwise inherit the outer call's
+/// templates and (worse) clear them on exit, dangling pointers we already
+/// handed out. Mirrors `take_stringify_buf` in spirit.
+///
+/// #7268: this used to `mem::take` the cache into a Rust local. The storage
+/// then sat outside the TLS — and therefore outside `scan_parse_roots_mut`'s
+/// reach — for the whole of the inner call, which is the call that runs user
+/// `toJSON` code and moves things. Pushing a frame keeps every saved key
+/// visible to the collector.
 #[inline]
-pub(crate) fn take_shape_cache() -> Vec<(*mut crate::ArrayHeader, Box<ShapeTemplate>)> {
-    SHAPE_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()))
+pub(crate) fn take_shape_cache() -> SavedShapeCache {
+    SHAPE_CACHE.with(|c| c.borrow_mut().push(Vec::new()));
+    SavedShapeCache { restored: false }
 }
 
 #[inline]
-pub(crate) fn restore_shape_cache(saved: Vec<(*mut crate::ArrayHeader, Box<ShapeTemplate>)>) {
-    SHAPE_CACHE.with(|c| *c.borrow_mut() = saved);
+pub(crate) fn restore_shape_cache(mut saved: SavedShapeCache) {
+    saved.restored = true;
+    SHAPE_CACHE.with(|c| {
+        let mut stack = c.borrow_mut();
+        if stack.len() > 1 {
+            stack.pop();
+        }
+    });
 }
 
-/// Clear cache without allocating a fresh Vec (keeps capacity, drops entries).
-/// Used in place of restore when we know the cache was empty at call entry —
-/// the outermost stringify call in a tight loop skips the save entirely.
+/// Clear the cache without allocating a fresh Vec (keeps capacity, drops
+/// entries). Used in place of restore when we know the cache was empty at call
+/// entry — the outermost stringify call in a tight loop skips the save
+/// entirely.
+///
+/// It also truncates the frame stack back to one, which is what re-establishes
+/// the invariant after a JS exception unwound past a `restore_shape_cache`.
 #[inline]
 pub(crate) fn clear_shape_cache() {
-    SHAPE_CACHE.with(|c| c.borrow_mut().clear());
+    SHAPE_CACHE.with(|c| {
+        let mut stack = c.borrow_mut();
+        stack.truncate(1);
+        stack[0].clear();
+    });
+}
+
+/// The live shape-cache frame — the innermost stringify call's.
+#[inline]
+pub(crate) fn with_shape_cache_frame<R>(f: impl FnOnce(&mut Vec<Box<ShapeTemplate>>) -> R) -> R {
+    SHAPE_CACHE.with(|c| {
+        let mut stack = c.borrow_mut();
+        let frame = stack.last_mut().expect("shape cache always has frame 0");
+        f(frame)
+    })
 }
 
 #[inline]
@@ -473,6 +560,25 @@ pub fn scan_parse_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
             for key in entry.keys.iter_mut() {
                 visitor.visit_tagged_raw_const_ptr_slot(key, crate::value::STRING_TAG);
+            }
+        }
+    });
+    // #7268: the STRINGIFY-side shape cache keys every template on a raw
+    // `ArrayHeader*` and reads the property-name strings back out of it. Its
+    // doc comment used to claim no GC could run over the user object graph
+    // during one stringify call; `toJSON` is user JS and falsifies that. Marked
+    // AND rewritten, on EVERY frame — the reentrancy save is a pushed frame
+    // rather than a moved-out `Vec` precisely so that "every frame" is
+    // reachable from here (see `SHAPE_CACHE`).
+    SHAPE_CACHE.with(|c| {
+        for frame in c.borrow_mut().iter_mut() {
+            for template in frame.iter_mut() {
+                let mut keys_arr = template.keys_arr.get();
+                if keys_arr.is_null() {
+                    continue;
+                }
+                visitor.visit_raw_mut_ptr_slot(&mut keys_arr);
+                template.keys_arr.set(keys_arr);
             }
         }
     });
@@ -514,12 +620,44 @@ pub(crate) fn test_seed_parse_roots(value: f64, key_ptr: *const StringHeader) {
     });
 }
 
+/// Seed the stringify-side shape cache with a template keyed on `keys_arr`,
+/// so #7268's scanner tests can exercise the mark/rewrite halves without
+/// having to drive a whole `JSON.stringify` to populate it.
+#[cfg(test)]
+pub(crate) fn test_seed_stringify_shape_cache(keys_arr: *mut crate::ArrayHeader) {
+    clear_shape_cache();
+    with_shape_cache_frame(|frame| {
+        frame.push(Box::new(ShapeTemplate {
+            keys_arr: std::cell::Cell::new(keys_arr),
+            prefixes: vec![String::from("{\"id\":")],
+            shape_fields: 1,
+            primitive_only: true,
+        }));
+    });
+}
+
+/// Every frame's every `keys_arr`, in order — what the scanner is expected to
+/// have rewritten.
+#[cfg(test)]
+pub(crate) fn test_stringify_shape_cache_keys() -> Vec<usize> {
+    SHAPE_CACHE.with(|c| {
+        c.borrow()
+            .iter()
+            .flat_map(|frame| frame.iter().map(|t| t.keys_arr.get() as usize))
+            .collect()
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_parse_roots() {
     PARSE_ROOTS.with(|r| r.borrow_mut().clear());
     PARSE_KEY_CACHE.with(|c| c.borrow_mut().clear());
     PARSE_KEY_RING.with(|ring| ring.borrow_mut().clear());
     PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+    // #7268: the stringify-side cache is a GC root now, so a template left
+    // behind by an earlier test on this thread would hand the next test's
+    // collector a pointer into an arena that no longer exists.
+    clear_shape_cache();
 }
 
 #[cfg(test)]
@@ -683,6 +821,61 @@ mod tests {
         let nested = (b.bits() & POINTER_MASK) as *const crate::ObjectHeader;
         unsafe {
             assert_eq!((*(*nested).keys_array).length, 1);
+        }
+    }
+
+    /// #7792 — deeply nested input must throw, not take the process out.
+    ///
+    /// Both parsers that read the document recurse once per nesting level, so
+    /// a deep enough document exhausted the stack: SIGSEGV, exit 139, no
+    /// output at all. The input shape here is a well-known one for untrusted
+    /// data, which is why a crash is the wrong answer even though a very deep
+    /// document is unusual.
+    mod nesting_depth {
+        use super::*;
+        use crate::json::parser::{nesting_depth_exceeds, MAX_NESTING_DEPTH};
+
+        #[test]
+        fn the_scan_counts_only_structural_brackets() {
+            assert!(!nesting_depth_exceeds(b"[[[]]]", 8));
+            assert!(nesting_depth_exceeds(b"[[[[[[[[[[]]]]]]]]]]", 4));
+            assert!(!nesting_depth_exceeds(br#"{"a":{"b":1}}"#, 4));
+            assert!(nesting_depth_exceeds(br#"{"a":{"b":1}}"#, 1));
+
+            // Brackets inside a string are text, not structure. Without this a
+            // single long string value would be rejected as deep nesting.
+            assert!(!nesting_depth_exceeds(br#"{"a":"[[[[[[[[[["}"#, 3));
+            // ...including one that ends in an escaped quote, so the scanner
+            // does not lose track of where the string closes.
+            assert!(!nesting_depth_exceeds(br#"{"a":"[[[\"[[["}"#, 3));
+
+            // The scan runs BEFORE syntax validation, so it sees malformed
+            // input. An unbalanced closer must clamp, not underflow.
+            assert!(!nesting_depth_exceeds(b"]]]]]]", 2));
+            assert!(!nesting_depth_exceeds(b"", 0));
+        }
+
+        /// The limit is the point of the change, so pin the boundary itself:
+        /// one level under passes, one level over is refused.
+        #[test]
+        fn parse_refuses_input_past_the_limit_and_accepts_input_under_it() {
+            let ok_depth = MAX_NESTING_DEPTH - 1;
+            let mut ok = vec![b'['; ok_depth];
+            ok.extend(std::iter::repeat(b']').take(ok_depth));
+            let text = js_string_from_bytes(ok.as_ptr(), ok.len() as u32);
+            assert!(
+                unsafe { js_json_parse_result(text) }.is_ok(),
+                "input inside the limit must still parse"
+            );
+
+            let deep_depth = MAX_NESTING_DEPTH + 1;
+            let mut deep = vec![b'['; deep_depth];
+            deep.extend(std::iter::repeat(b']').take(deep_depth));
+            let text = js_string_from_bytes(deep.as_ptr(), deep.len() as u32);
+            assert!(
+                unsafe { js_json_parse_result(text) }.is_err(),
+                "input past the limit must be refused rather than descended into"
+            );
         }
     }
 

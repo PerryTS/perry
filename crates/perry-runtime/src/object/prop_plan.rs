@@ -67,7 +67,7 @@ struct PlanEntry {
 const PLAN_CACHE_SIZE: usize = 4096;
 const PLAN_CACHE_MASK: usize = PLAN_CACHE_SIZE - 1;
 
-thread_local! {
+crate::perry_thread_local! {
     // Heap-allocate the table (~112KB) — oversized inline TLS overflows the
     // ILP32 TLS layout on arm64_32 (same fix as string/intern.rs).
     static STORE_PLAN_CACHE: std::cell::UnsafeCell<Box<[PlanEntry]>> =
@@ -181,7 +181,7 @@ struct ReadPlanEntry {
 const READ_PLAN_SIZE: usize = 8192;
 const READ_PLAN_MASK: usize = READ_PLAN_SIZE - 1;
 
-thread_local! {
+crate::perry_thread_local! {
     // Heap-allocated for the same arm64_32 TLS-size reason as the store table.
     static READ_PLAN_CACHE: std::cell::UnsafeCell<Box<[ReadPlanEntry]>> =
         std::cell::UnsafeCell::new(

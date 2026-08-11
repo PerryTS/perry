@@ -56,9 +56,9 @@
 // The literal arm needs the collection EARLY: a string literal is allocated by
 // `__perry_init_strings_*` at startup, so it is young for the first couple of
 // minors and tenured after that, and only a young object is evacuated. Under
-// `PERRY_GC_ZEAL=1` the first back-edge poll inside `churn` already runs an
+// `PERRY_GC_SCHEDULE_RATE=1` the first back-edge poll inside `churn` already runs an
 // evacuating minor, so iteration 0 is where the literal arm bites. The loop is
-// short on purpose — zeal collects at every safepoint.
+// short on purpose — rate 1 collects at every safepoint.
 
 import { joinArgs } from "./fixtures/gc_call_arg_rooting_pkg/callee.ts";
 

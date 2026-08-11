@@ -51,7 +51,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::LocalGet(..)
         | Expr::LocalSet(..)
         | Expr::Update { .. }
-        | Expr::DateNow => super::literals_vars::lower(ctx, expr),
+        | Expr::DateNow
+        | Expr::ArrayIterationPatched => super::literals_vars::lower(ctx, expr),
         Expr::Binary { .. } => super::binary::lower(ctx, expr),
         Expr::Unary { .. } => super::unary::lower(ctx, expr),
         Expr::Compare { .. } => super::compare::lower(ctx, expr),
@@ -64,7 +65,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PropertyGet { .. } => super::property_get::lower(ctx, expr),
         Expr::Conditional { .. } => super::conditional::lower(ctx, expr),
         Expr::ArrayPush { .. } | Expr::ArrayPushSpread { .. } => {
-            super::array_push::lower(ctx, expr)
+            super::array_push::lower(ctx, expr, value_discarded)
         }
         Expr::Closure { .. } => super::closure::lower(ctx, expr),
         Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => {

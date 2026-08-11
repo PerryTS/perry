@@ -33,6 +33,7 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -174,4 +175,188 @@ fn fs_parent_promises_property_installs_before_resolution() {
         install < resolve,
         "fs.promises submodule installation must precede property resolution:\n{ir}"
     );
+}
+
+/// #7753, paired with `pic_cache_words_match_codegen` in
+/// `perry-runtime/src/object/field_get_set/ic_miss.rs`.
+///
+/// The runtime writes a `@perry_ic_N` global through `*mut [i64;
+/// PIC_CACHE_WORDS]`. If codegen emits a NARROWER global, `pic_prime_get`'s way
+/// stores run past the end of it into whatever global the linker placed next —
+/// silent memory corruption that no property-read test would notice. This pins
+/// the emitted width to the constant both sides share, and pins the constant
+/// itself so the runtime's copy cannot drift.
+#[test]
+fn pic_cache_layout_matches_runtime() {
+    use crate::expr::property_get::generic_dispatch::{PIC_CACHE_WORDS, PIC_WAYS, PIC_WAY_BASE};
+    assert_eq!(
+        PIC_CACHE_WORDS, 12,
+        "perry-runtime's PIC_CACHE_WORDS is 12; update both sides together"
+    );
+    assert_eq!(
+        PIC_WAY_BASE + PIC_WAYS * 2,
+        PIC_CACHE_WORDS,
+        "the ways must fill the emitted global exactly"
+    );
+    let ir = emit(false, None);
+    assert!(
+        ir.contains(&format!(
+            "= private global [{PIC_CACHE_WORDS} x i64] zeroinitializer"
+        )),
+        "every @perry_ic_N must be emitted at the width the runtime writes:\n{ir}"
+    );
+}
+
+/// #7753: the polymorphic ways must be consulted BEFORE the miss call, and the
+/// monomorphic path must not have grown any work.
+///
+/// A one-entry cache misses on essentially every read at a site whose receiver
+/// alternates between shapes — the shape of every discriminated-union dispatch
+/// — and each miss runs the full `js_object_get_field_ic_miss` ladder
+/// (proxy/closure/buffer/typed-array probes, an accessors thread-local, then a
+/// linear keys scan with a `js_string_equals` per key). If the way block is
+/// ever deleted or floated below the call it stops paying for itself entirely,
+/// and nothing else in the suite would show it — the program still computes the
+/// right answer, just slowly. So assert the ORDER, not merely the presence.
+#[test]
+fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
+    let ir = emit(false, None);
+    assert!(
+        ir.contains("@perry_ic_"),
+        "test premise: the generic read reaches the inline PIC:\n{ir}"
+    );
+    use crate::expr::property_get::generic_dispatch::{PIC_WAYS, PIC_WAY_BASE, PIC_WAY_STATE};
+
+    // Block *text* order is an artifact of emission order, so assert the CFG
+    // instead: the block that calls the miss handler must be reachable only as
+    // a branch target of the way block, never straight-line after it.
+    let ways = ir
+        .find("\npic.ways")
+        .unwrap_or_else(|| panic!("expected a pic.ways block:\n{ir}"));
+    let way_load = ir
+        .find("\npic.way.load")
+        .unwrap_or_else(|| panic!("expected a pic.way.load block:\n{ir}"));
+    let call_block = ir
+        .find("\npic.miss.call")
+        .unwrap_or_else(|| panic!("expected a pic.miss.call block:\n{ir}"));
+    let ways_body = &ir[ways..[way_load, call_block, ir.len()]
+        .into_iter()
+        .filter(|&x| x > ways)
+        .min()
+        .unwrap()];
+    assert!(
+        ways_body.contains("pic.way.load") && ways_body.contains("pic.miss.call"),
+        "pic.ways must end in a branch choosing between the way load and the \
+         miss call — otherwise the compares are not gating anything:\n{ways_body}"
+    );
+    assert!(
+        !ways_body.contains("call double @js_object_get_field_ic_miss"),
+        "the miss call must not sit inside the way block:\n{ways_body}"
+    );
+    // The way compares read (token, slot) pairs at words PIC_WAY_BASE.. and the
+    // gate reads the state word — all inside pic.ways, none anywhere else.
+    for w in 0..PIC_WAYS {
+        for word in [PIC_WAY_BASE + w * 2, PIC_WAY_BASE + w * 2 + 1] {
+            assert!(
+                ways_body.contains(&format!("i64 {word}\n")),
+                "way word {word} is never read in the way block:\n{ways_body}"
+            );
+        }
+    }
+    assert!(
+        ir.contains(&format!("i64 {PIC_WAY_STATE}\n")),
+        "the megamorphic gate must read the way-state word:\n{ir}"
+    );
+}
+
+/// #7189 — `B.ns` where the imported module says `export * as ns from "./m.ts"`.
+///
+/// The member's value is another module's namespace OBJECT, so there is no
+/// `perry_fn_<mod>__ns` symbol for it. Every other namespace-member arm
+/// resolves to a symbol, so before this the read fell through to the generic
+/// path and produced `undefined` — which is how `z.coerce`, `z.iso`, `z.core`
+/// and `z.locales` all came back undefined under zod.
+mod nested_namespace_members {
+    use super::*;
+
+    fn nested_opts() -> CompileOptions {
+        let mut opts = ir_opts(false, None);
+        opts.namespace_imports = vec!["B".to_string()];
+        opts.namespace_member_prefixes
+            .insert(("B".to_string(), "deep".to_string()), "ns2_ts".to_string());
+        opts.namespace_member_prefixes
+            .insert(("B".to_string(), "gamma".to_string()), "ns3_ts".to_string());
+        opts.namespace_member_nested = vec![("B".to_string(), "deep".to_string())];
+        opts
+    }
+
+    fn module_reading(member: &str) -> Module {
+        let mut m = Module::new("nsmain.ts");
+        m.init = vec![Stmt::Expr(Expr::PropertyGet {
+            object: Box::new(Expr::ExternFuncRef {
+                name: "B".to_string(),
+                param_types: Vec::new(),
+                return_type: perry_hir::types::Type::Any,
+            }),
+            property: member.to_string(),
+            byte_offset: 0,
+        })];
+        m.init_kind = ModuleInitKind::Eager;
+        m
+    }
+
+    fn emit_read(member: &str) -> String {
+        String::from_utf8(compile_module(&module_reading(member), nested_opts()).unwrap())
+            .expect("LLVM IR should be UTF-8")
+    }
+
+    /// Slice out the body that actually runs the module's statements.
+    ///
+    /// Assertions have to be made HERE and not against the whole module. The
+    /// declaration pass emits `@__perry_ns_ns2_ts = external` on its own, so a
+    /// test that searched the whole IR passed with the read-site fix removed —
+    /// it was confirming the declaration existed, not that anything used it.
+    ///
+    /// For an entry module the statements land in `@main`; `<mod>__init` is an
+    /// empty stub. Slicing the stub is its own way of asserting nothing, which
+    /// is the mistake this helper exists to avoid making twice.
+    fn entry_body(ir: &str) -> String {
+        let start = ir.find("define i32 @main()").expect("main must be emitted");
+        let end = ir[start..].find("\n}").expect("main must terminate") + start;
+        ir[start..end].to_string()
+    }
+
+    #[test]
+    fn a_nested_namespace_member_loads_the_target_namespace_global() {
+        let ir = emit_read("deep");
+        let body = entry_body(&ir);
+        assert!(
+            body.contains("load double, ptr @__perry_ns_ns2_ts"),
+            "the read must load the target module's namespace object:\n{body}"
+        );
+        // The target's init has to run first, or the namespace is read before
+        // it has been populated and every member comes back undefined.
+        assert!(
+            body.contains("call void @ns2_ts__init()"),
+            "the target's init must run before its namespace is loaded:\n{body}"
+        );
+        // The global lives in another module, so this one must declare it or
+        // LLVM refuses to parse the IR at all.
+        assert!(
+            ir.contains("@__perry_ns_ns2_ts = external"),
+            "the foreign namespace global must be declared, not just referenced:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_namespace_member_is_untouched() {
+        // The guard against over-reaching: a normal member still resolves the
+        // way it always did, through its origin module's symbol rather than a
+        // namespace object.
+        let body = entry_body(&emit_read("gamma"));
+        assert!(
+            !body.contains("load double, ptr @__perry_ns_ns3_ts"),
+            "a plain member must not be turned into a namespace load:\n{body}"
+        );
+    }
 }

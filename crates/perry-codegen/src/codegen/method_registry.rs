@@ -39,7 +39,18 @@ pub(crate) fn build_method_names(
     // which mangled function name to call for `obj.method(args)`. Method
     // names are also scoped by module prefix.
     let mut method_names: HashMap<(String, String), String> = HashMap::new();
-    for c in class_table.values() {
+    // Walk `class_table` by SORTED key, not in `HashMap` order (#7622). The
+    // body writes into `method_names` two order-dependent ways — plain
+    // `insert` (last writer wins) for the class's own keys, and
+    // `entry().or_insert_with` (first writer wins) for its `aliases` — and
+    // `class_table` is not key-unique over `&Class`: it mixes local classes,
+    // their self-binding alias keys, and imported class stubs, so two distinct
+    // `&Class` can contend for the same registry entry. `method_names` is what
+    // every call site consults to pick its `perry_method_*` callee, so a
+    // hash-order tie-break there is visible in the emitted IR.
+    let mut class_table_sorted: Vec<(&String, &&perry_hir::Class)> = class_table.iter().collect();
+    class_table_sorted.sort_unstable_by_key(|(name, _)| *name);
+    for (_, c) in class_table_sorted {
         // Use the source module prefix for imported classes so the method
         // symbol name matches where the method was actually compiled.
         let class_prefix = imported_class_prefix

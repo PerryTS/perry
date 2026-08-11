@@ -1,0 +1,11 @@
+**One of #7365's two named flaky tests is fixed**: `obj_dispatch_ic_tests` goes from **10 of 12** isolated runs failing to **0 of 20**.
+
+`with_stable_gen` exists because dispatch-IC entries are keyed on `VTABLE_GEN`, and any class registration anywhere retires the cache — including `a_class_registration_invalidates_every_entry` in the *same module*, which calls `test_bump_vtable_generation()` on purpose. So an insert/lookup pair can straddle a bump and miss for a reason that has nothing to do with what is being asserted. The helper was written to retry in exactly that case.
+
+**The retry could never fire.** `body` asserted internally, so a straddled pair panicked on the *setup* assertion ("the entry we just inserted must be findable") before the loop got to re-check the generation. The 64-retry budget was never spent.
+
+`body` now returns whether its observations were valid: `false` means "a bump landed mid-pair, nothing was learned", which is a retry rather than a failure. The assertions the tests exist for — a different name at the same address must miss, a different class id must miss, an over-long name must not alias a truncated key, a prefix must not hit — stay assertions.
+
+**Why this matters beyond one test, and why it looked so strange.** The failure rate *inverted with scope*: running only this module put its five tests — including the deliberate bumper — on threads together and failed **10 of 12**, while the full 2000-test suite spread them apart and failed about **1 in 6**. So the standard triage move, re-running just the failing test, made an intermittent test look reliably broken, and running the suite made it look nearly fine. Both readings were wrong, and #7365 is largely a catalogue of exactly that confusion.
+
+Measured after the fix: **0/20** isolated runs fail. The full suite still fails about 1 in 10, but on a different test — `gc::tests::root_words::bare_address_in_global_root_survives_a_real_collection`, a sibling of the `bare_address_in_shadow_slot_…` case already measured at 2/10 on clean `main`. That family is untouched here and remains #7365's other half; it is a GC-timing intermittency rather than a test-isolation one, so it needs a different fix.

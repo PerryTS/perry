@@ -78,151 +78,172 @@ fn validate_buffer_target(value: f64, name: &str) {
 /// is the raw heap pointer (already stripped of NaN-box tags). Routes
 /// the Node-style numeric read/write/search/swap method family through
 /// `crate::buffer` helpers; unknown methods return undefined.
-/// Issue #639 followup: list of method names recognized by `dispatch_buffer_method`.
-/// Used by `js_object_get_field_by_name`'s Buffer arm to decide whether a
-/// non-length property read should synthesize a bound-method closure (so
-/// duck-type tests like `typeof v.readUInt8 === "function"` pass and a
+/// Issue #639 followup: the method names `dispatch_buffer_method` recognizes,
+/// kept as ONE list that generates both the predicate and the `'static` lookup.
+/// `js_object_get_field_by_name`'s Buffer arm uses the predicate to decide
+/// whether a non-length property read should synthesize a bound-method closure
+/// (so duck-type tests like `typeof v.readUInt8 === "function"` pass and a
 /// subsequent call dispatches through `js_native_call_method`).
 ///
 /// Keep this list aligned with the `match method_name` arms below — every
 /// arm there should be reachable from a method-as-value read.
-pub fn is_buffer_method_name(name: &str) -> bool {
-    matches!(
-        name,
-        "toString"
-            | "inspect"
-            | "slice"
-            | "subarray"
-            | "set"
-            | "copy"
-            | "write"
-            | "toJSON"
-            | "export"
-            | "toCryptoKey"
-            | "fill"
-            | "equals"
-            | "compare"
-            | "indexOf"
-            | "lastIndexOf"
-            | "includes"
-            | "at"
-            | "swap16"
-            | "swap32"
-            | "swap64"
-            // Issue #1206: explicit iterator-protocol surface.
-            | "values"
-            | "keys"
-            | "entries"
-            // Object.prototype methods exposed on Buffer instances so
-            // safer-buffer's `if (buffer.hasOwnProperty(...))` probe (and
-            // similar duck-type tests in express / body-parser dependents)
-            // resolve to a callable, not undefined. Without these,
-            // `typeof buf.hasOwnProperty` is `"undefined"` and the
-            // subsequent invocation throws "buffer.hasOwnProperty is not
-            // a function" at express startup.
-            | "hasOwnProperty"
-            | "propertyIsEnumerable"
-            | "valueOf"
-            | "isPrototypeOf"
-            | "toLocaleString"
-            | "readUInt8"
-            | "readUint8"
-            | "readInt8"
-            | "readUInt16BE"
-            | "readUint16BE"
-            | "readUInt16LE"
-            | "readUint16LE"
-            | "readInt16BE"
-            | "readInt16LE"
-            | "readUInt32BE"
-            | "readUint32BE"
-            | "readUInt32LE"
-            | "readUint32LE"
-            | "readInt32BE"
-            | "readInt32LE"
-            | "readFloatBE"
-            | "readFloatLE"
-            | "readDoubleBE"
-            | "readDoubleLE"
-            | "readBigInt64BE"
-            | "readBigInt64LE"
-            | "readBigUInt64BE"
-            | "readBigUint64BE"
-            | "readBigUInt64LE"
-            | "readBigUint64LE"
-            | "readUIntBE"
-            | "readUintBE"
-            | "readUIntLE"
-            | "readUintLE"
-            | "readIntBE"
-            | "readIntLE"
-            | "writeUInt8"
-            | "writeUint8"
-            | "writeInt8"
-            | "writeUInt16BE"
-            | "writeUint16BE"
-            | "writeUInt16LE"
-            | "writeUint16LE"
-            | "writeInt16BE"
-            | "writeInt16LE"
-            | "writeUInt32BE"
-            | "writeUint32BE"
-            | "writeUInt32LE"
-            | "writeUint32LE"
-            | "writeInt32BE"
-            | "writeInt32LE"
-            | "writeFloatBE"
-            | "writeFloatLE"
-            | "writeDoubleBE"
-            | "writeDoubleLE"
-            | "writeBigInt64BE"
-            | "writeBigInt64LE"
-            | "writeBigUInt64BE"
-            | "writeBigUint64BE"
-            | "writeBigUInt64LE"
-            | "writeBigUint64LE"
-            | "writeUIntBE"
-            | "writeUintBE"
-            | "writeUIntLE"
-            | "writeUintLE"
-            | "writeIntBE"
-            | "writeIntLE"
-            // #2901: TC39 Uint8Array base64/hex instance conversion APIs.
-            | "toBase64"
-            | "toHex"
-            | "setFromBase64"
-            | "setFromHex"
-            // #2879: typed-array mutators that reach buffer dispatch for the
-            // Uint8Array/Buffer shape.
-            | "copyWithin"
-            // #2878: DataView numeric accessors. These resolve as bound-method
-            // values on a DataView-marked buffer (so `typeof dv.getUint8 ===
-            // "function"`); the call routes through `dispatch_buffer_method`.
-            | "getInt8"
-            | "getUint8"
-            | "getInt16"
-            | "getUint16"
-            | "getInt32"
-            | "getUint32"
-            | "getFloat32"
-            | "getFloat64"
-            | "setInt8"
-            | "setUint8"
-            | "setInt16"
-            | "setUint16"
-            | "setInt32"
-            | "setUint32"
-            | "setFloat32"
-            | "setFloat64"
-            // #4365: DataView BigInt64/BigUint64 accessors (8-byte BigInt
-            // read/write). Route through `dispatch_buffer_method` like the
-            // other DataView numeric methods.
-            | "getBigInt64"
-            | "getBigUint64"
-            | "setBigInt64"
-            | "setBigUint64"
-    )
+macro_rules! buffer_method_names {
+    ($($name:literal),+ $(,)?) => {
+        pub fn is_buffer_method_name(name: &str) -> bool {
+            matches!(name, $($name)|+)
+        }
+
+        /// The matched name as a `'static` string: the literal out of this
+        /// list, never a borrow of `name`.
+        ///
+        /// `js_class_method_bind` captures the name *pointer* into the bound
+        /// closure and `dispatch_bound_method` re-reads it at CALL time, so a
+        /// caller that hands it bytes the caller owns gives the closure a
+        /// pointer that outlives them. Codegen satisfies that contract with
+        /// per-module rodata globals; runtime callers satisfy it with this.
+        pub fn buffer_method_name_static(name: &str) -> Option<&'static str> {
+            match name {
+                $($name => Some($name),)+
+                _ => None,
+            }
+        }
+    };
 }
+
+buffer_method_names!(
+    "toString",
+    "inspect",
+    "slice",
+    "subarray",
+    "set",
+    "copy",
+    "write",
+    "toJSON",
+    "export",
+    "toCryptoKey",
+    "fill",
+    "equals",
+    "compare",
+    "indexOf",
+    "lastIndexOf",
+    "includes",
+    "at",
+    "swap16",
+    "swap32",
+    "swap64",
+    // Issue #1206: explicit iterator-protocol surface.
+    "values",
+    "keys",
+    "entries",
+    // Object.prototype methods exposed on Buffer instances so
+    // safer-buffer's `if (buffer.hasOwnProperty(...))` probe (and
+    // similar duck-type tests in express / body-parser dependents)
+    // resolve to a callable, not undefined. Without these,
+    // `typeof buf.hasOwnProperty` is `"undefined"` and the
+    // subsequent invocation throws "buffer.hasOwnProperty is not
+    // a function" at express startup.
+    "hasOwnProperty",
+    "propertyIsEnumerable",
+    "valueOf",
+    "isPrototypeOf",
+    "toLocaleString",
+    "readUInt8",
+    "readUint8",
+    "readInt8",
+    "readUInt16BE",
+    "readUint16BE",
+    "readUInt16LE",
+    "readUint16LE",
+    "readInt16BE",
+    "readInt16LE",
+    "readUInt32BE",
+    "readUint32BE",
+    "readUInt32LE",
+    "readUint32LE",
+    "readInt32BE",
+    "readInt32LE",
+    "readFloatBE",
+    "readFloatLE",
+    "readDoubleBE",
+    "readDoubleLE",
+    "readBigInt64BE",
+    "readBigInt64LE",
+    "readBigUInt64BE",
+    "readBigUint64BE",
+    "readBigUInt64LE",
+    "readBigUint64LE",
+    "readUIntBE",
+    "readUintBE",
+    "readUIntLE",
+    "readUintLE",
+    "readIntBE",
+    "readIntLE",
+    "writeUInt8",
+    "writeUint8",
+    "writeInt8",
+    "writeUInt16BE",
+    "writeUint16BE",
+    "writeUInt16LE",
+    "writeUint16LE",
+    "writeInt16BE",
+    "writeInt16LE",
+    "writeUInt32BE",
+    "writeUint32BE",
+    "writeUInt32LE",
+    "writeUint32LE",
+    "writeInt32BE",
+    "writeInt32LE",
+    "writeFloatBE",
+    "writeFloatLE",
+    "writeDoubleBE",
+    "writeDoubleLE",
+    "writeBigInt64BE",
+    "writeBigInt64LE",
+    "writeBigUInt64BE",
+    "writeBigUint64BE",
+    "writeBigUInt64LE",
+    "writeBigUint64LE",
+    "writeUIntBE",
+    "writeUintBE",
+    "writeUIntLE",
+    "writeUintLE",
+    "writeIntBE",
+    "writeIntLE",
+    // #2901: TC39 Uint8Array base64/hex instance conversion APIs.
+    "toBase64",
+    "toHex",
+    "setFromBase64",
+    "setFromHex",
+    // #2879: typed-array mutators that reach buffer dispatch for the
+    // Uint8Array/Buffer shape.
+    "copyWithin",
+    // #2878: DataView numeric accessors. These resolve as bound-method
+    // values on a DataView-marked buffer (so `typeof dv.getUint8 ===
+    // "function"`); the call routes through `dispatch_buffer_method`.
+    "getInt8",
+    "getUint8",
+    "getInt16",
+    "getUint16",
+    "getInt32",
+    "getUint32",
+    "getFloat32",
+    "getFloat64",
+    "setInt8",
+    "setUint8",
+    "setInt16",
+    "setUint16",
+    "setInt32",
+    "setUint32",
+    "setFloat32",
+    "setFloat64",
+    // #4365: DataView BigInt64/BigUint64 accessors (8-byte BigInt
+    // read/write). Route through `dispatch_buffer_method` like the
+    // other DataView numeric methods.
+    "getBigInt64",
+    "getBigUint64",
+    "setBigInt64",
+    "setBigUint64",
+);
 
 unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
     let raw = bits.to_bits();

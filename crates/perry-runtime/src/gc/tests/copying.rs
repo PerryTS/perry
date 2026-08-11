@@ -1,5 +1,7 @@
 mod adaptive_tenuring;
 mod all_pointer_elements_7469;
+mod deferred_finalize_7635;
+mod latch;
 mod pointer_publish_7154;
 mod promise_side_tables;
 mod survival_and_malloc;
@@ -487,7 +489,12 @@ fn test_copying_minor_rewrites_exact_object_pointer_slot_only() {
     assert_eq!(third, 33.0);
     assert!(crate::arena::pointer_in_nursery(obj_after));
     assert!(crate::arena::pointer_in_nursery(child_after));
-    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 2);
+    // ONE read, not two: #7645 removed the eligibility preflight's traversal
+    // of the same graph, so the pointer slot is now visited only by the copy
+    // phase. This assertion is the unit-level witness of that counter drop —
+    // it must go back to 2 if the preflight walk ever returns.
+    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 1);
+    assert!(trace.copying_nursery.preflight_skipped);
     assert_eq!(trace.layout_scans.unknown_layout_slots_read, 0);
 }
 
@@ -521,7 +528,12 @@ fn test_copying_minor_rewrites_exact_closure_pointer_capture_only() {
     assert_eq!(third, 30.0);
     assert!(crate::arena::pointer_in_nursery(closure_after));
     assert!(crate::arena::pointer_in_nursery(child_after));
-    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 2);
+    // ONE read, not two: #7645 removed the eligibility preflight's traversal
+    // of the same graph, so the pointer slot is now visited only by the copy
+    // phase. This assertion is the unit-level witness of that counter drop —
+    // it must go back to 2 if the preflight walk ever returns.
+    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 1);
+    assert!(trace.copying_nursery.preflight_skipped);
     assert_eq!(trace.layout_scans.unknown_layout_slots_read, 0);
 }
 

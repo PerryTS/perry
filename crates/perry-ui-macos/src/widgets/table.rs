@@ -1,4 +1,4 @@
-use crate::ffi::js_string_from_bytes;
+use crate::ffi::{js_gc_pin_user_ptr, js_string_from_bytes};
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -569,9 +569,9 @@ pub fn get_filter_text(handle: i64) -> *const u8 {
     let bytes = text.as_bytes();
     unsafe {
         let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-        // Pin the GC allocation: GcHeader sits at ptr-8, gc_flags at offset 1.
-        let gc_flags_ptr = (ptr as *mut u8).sub(8).add(1);
-        *gc_flags_ptr |= 0x04; // GC_FLAG_PINNED
+        // Pin the GC allocation (mirrors `textfield::get_string_value`); the
+        // runtime helper also arms the young-pin latch (#7645).
+        js_gc_pin_user_ptr(ptr as *mut u8);
         ptr as *const u8
     }
 }

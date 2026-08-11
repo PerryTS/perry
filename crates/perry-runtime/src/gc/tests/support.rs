@@ -352,11 +352,16 @@ pub(super) struct CopyingNurseryTestGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
-fn reset_copying_nursery_runtime_test_state() {
+pub(super) fn reset_copying_nursery_runtime_test_state() {
     // Age-sensitive tests assume the power-on tenuring threshold (promote at
     // the 4th survival); pin it so a heavy-influx test earlier on the same
     // thread cannot leak a lowered adaptive threshold in.
     crate::gc::tenuring::reset_for_test();
+    // #7645: the young-pin latch is process-wide and monotone, so one
+    // earlier pinning test would otherwise leave every later copying test
+    // running the preflight — masking the skip path entirely. Callers hold
+    // the copying-nursery isolation lock, so this reset is not racy.
+    crate::gc::test_reset_young_pin_latch();
     activate_malloc_registry_for_tests();
     crate::object::test_clear_overflow_fields_root();
     crate::object::test_clear_transition_cache_root();

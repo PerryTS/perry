@@ -398,6 +398,11 @@ pub struct LoweringContext {
     /// `inside_block_scope == 0`; `const captured = i` inside a top-level for
     /// loop must still be per-iteration box, not a shared global slot.
     pub(crate) inside_block_scope: usize,
+    /// #7760: while true, a `for…of` over a statically-proven array lowers to
+    /// the LAZY iterator-protocol form instead of the index loop. Set only by
+    /// the guard emission, which lowers the same statement twice — once each
+    /// way — and wraps them in a runtime branch on `Expr::ArrayIterationPatched`.
+    pub(crate) for_of_force_lazy: bool,
     /// Namespace exported variables: (namespace_name, member_name, local_id)
     /// Used to resolve Namespace.member access to module-level LocalGet
     pub(crate) namespace_vars: Vec<(String, String, LocalId)>,

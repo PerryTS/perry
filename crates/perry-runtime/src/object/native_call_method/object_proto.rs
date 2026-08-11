@@ -92,6 +92,29 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     if crate::temporal::is_temporal_value(receiver) {
         return crate::temporal::dispatch::call_method(receiver, "toLocaleString", &[]);
     }
+    // #7428: a BigInt receiver must format through
+    // `BigInt.prototype.toLocaleString`, i.e. with the DEFAULT locale's digit
+    // grouping — `(12345678901234567890n).toLocaleString()` is
+    // `"12,345,678,901,234,567,890"`, not the bare digits.
+    //
+    // Without this arm a BigInt falls through to the generic tail below, whose
+    // job is Object.prototype.toLocaleString's "Invoke(O, 'toString')" — and
+    // `BigInt.prototype.toString` has no grouping. That tail is correct for the
+    // receivers it is written for; a BigInt simply is not one of them, the same
+    // way a number and a Date are handled above rather than left to it.
+    //
+    // Only the ZERO-ARG form reaches here at all: codegen lowers
+    // `x.toLocaleString()` to `Expr::DateToLocaleString`, while any call
+    // carrying locales/options goes down the generic method-call path to
+    // `bigint_proto_to_locale_string_thunk`. That asymmetry is why the explicit
+    // `toLocaleString(undefined)` was already correct while the bare call was
+    // not — the two forms never met.
+    #[cfg(feature = "intl-namespace")]
+    if jsval.is_bigint() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let s = crate::intl::bigint_to_locale_string(receiver, undef, undef);
+        return f64::from_bits(JSValue::string_ptr(s).bits());
+    }
     // Symbols are POINTER-tagged, so `!jsval.is_pointer()` would be false for
     // them — check before the pointer guard so the branch is reachable.
     let is_symbol = unsafe { crate::symbol::js_is_symbol(receiver) } != 0;
@@ -116,7 +139,7 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
         };
         if !builtin_name.is_empty() {
             if let Some(patched) =
-                unsafe { super::builtin_proto_user_method(builtin_name, "toString") }
+                unsafe { super::builtin_proto_user_method(builtin_name, "toString", receiver) }
             {
                 if let Some(result) =
                     unsafe { call_primitive_closure_value(receiver, patched, std::ptr::null(), 0) }

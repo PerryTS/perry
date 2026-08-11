@@ -631,6 +631,34 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
 /// methods were noop-backed (`global_this_builtin_noop_thunk`), so a borrowed
 /// reference (`obj.pop = Array.prototype.pop; obj.pop()` or
 /// `Array.prototype.pop.call(obj)`) returned `undefined` / looped.
+/// `Array.prototype.values` / `Array.prototype[Symbol.iterator]` (#7760).
+///
+/// `values` used to be installed by `install_noop_proto_methods`, so it existed
+/// and did nothing, and `Array.prototype[Symbol.iterator]` was not an own
+/// property at all — `js_object_get_symbol_property` synthesized a
+/// receiver-bound method on every read. Two consequences, both spec violations:
+///
+///   * `Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)` was
+///     `undefined`, and the symbol was absent from `getOwnPropertySymbols`,
+///     while every other builtin prototype (Map/Set/String/%TypedArray%) had a
+///     real descriptor.
+///   * saving and restoring the method — `const o = p[Symbol.iterator]; …;
+///     p[Symbol.iterator] = o` — left a closure bound to the PROTOTYPE, so the
+///     restored iterator threw `next is not a function`. That is the ordinary
+///     patch-and-restore idiom, and it also made the whole family untestable
+///     against the node oracle (#7542).
+///
+/// Reading `this` at CALL time is the fix for the second: the value is one
+/// function, and `Array.prototype.values.call(arr)` / a restored slot both
+/// iterate the receiver they are given.
+pub(crate) extern "C" fn array_prototype_values_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _a: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::array::array_values_iter(this)
+}
+
 pub(crate) extern "C" fn array_prototype_pop_thunk(
     _c: *const crate::closure::ClosureHeader,
     _a: f64,

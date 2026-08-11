@@ -6,7 +6,20 @@
 every dated status section, incident narrative and superseded sequencing lives
 in [`engine-plan-history.md`](engine-plan-history.md); this file holds only the
 current state and the remaining work so it stays readable across context loads.
-Last synced **2026-08-07** (v0.5.1324). The v0.5.1299 public-baseline sweep is
+Last synced **2026-08-08** (v0.5.1350). Since v0.5.1345: the gc-ratchet is
+repaired, re-pinned, and liveness-proven (#7609 — fail open per cell, fail
+closed on the verdict; owner action: promote to required after its first green
+`main` run); the element-shape invariant gained a real revocation matrix
+(#7608) and its first consumer — the versioned loop clone, `keep[j].v` at
+**node parity**, 3.15× (#7612); and promote-on-first-copy landed (#7613):
+`json_pipeline` 500k copies the 268 MB cohort ONCE — wall −24.6% AND peak RSS
+−21%, the first change to improve both goal axes at once. #7592 total:
+**60.4 s → 3.86 s (~6× bun)**, `JSON.parse` (~742 ms) is the remaining tail.
+The Layer-1 emitter migration is **finished at its stated terminal condition**
+(#7615, slice 8): the raw rooting API is now `crate::rooting::temp_root`, a
+PRIVATE module whose accessors carry `pub(in crate::rooting)`, so a lowering
+cannot reach past the combinators — unreachable, not merely uncounted. 36
+modules on the ledger; fourteen raw entry points deleted for want of a caller. The v0.5.1299 public-baseline sweep is
 kept as the baseline measurement event; rows fixed since are annotated in place
 rather than overwritten, because they were measured individually rather than in
 a fresh sweep.
@@ -22,6 +35,50 @@ a fresh sweep.
 
 ## Status quo
 
+### 2026-08-07/08 in one table — what closed, what opened
+
+Twenty-two merges, v0.5.1324 → v0.5.1345. The construction campaign's measured
+levers are now **all worked or retired**, and the day's dominant discovery —
+`json_pipeline` at 500k records, found by the first published baseline sweep in
+five days — went **97.6× → ~8× bun** in four PRs:
+
+| item | closed by | result |
+|---|---|--:|
+| survivor-promotion handoff livelock | #7594 | 57.2 s → 12.1 s |
+| constant pacing bands (both generations) | #7596 | → 5.8 s; 4 cycles, none futile |
+| `charCodeAt` through the dynamic-bitwise helper | #7601 | fnv1a 11.2× |
+| statement-position `push` length computation | #7600 | 2.77× pure-push |
+| array-push write barrier (parent-side gate) | #7602 | `push_cls` 1.33–1.38× |
+| typed-shape install re-derivation | #7586 | `push_cls` 1.091× |
+| **Map/Set subclass as raw header (SIGBUS)** | #7573 | memory safety |
+| **Array subclass as raw header (SIGSEGV)** | #7603 | memory safety |
+| inherited Array statics on a subclass | #7605 | `MyArr.from` works |
+| iterator-helpers surface dead (class-id collision) | #7583 | whole TC39 surface |
+| second class-id collision (JSX/rawJSON) + scanning gate | #7589 | gate in `lint` |
+| `known_failures.json` suppression → ratchet | #7599 | 37 entries → 10 |
+| public baseline unpublishable (2 independent causes) | #7593 | `check` exits 0 |
+
+**The `declared type as layout proof` bug class now has a named fix pattern**
+(#7573/#7603): brand-check on `GcHeader.obj_type` at the shared runtime
+funnels, redirect subclass receivers onto the spec-generic engine, PLUS guards
+at any codegen tier that never calls into the runtime — #7603 proved the
+runtime funnel alone cannot stop the inline-store tiers. Remaining known member
+of the family: none filed. Adjacent leftovers: `ArraySpeciesCreate` on
+subclasses, static-method GET form, `instanceof` a subclass (#7575).
+
+**Remaining top levers, in order:** the #7592 remainder (~8× bun: two-hop
+promotion copies 268 MB twice — promote-on-first-copy design is on the issue
+with the fixed-point trap named; and `JSON.parse` 742 ms); class-field-store
+barriers (the half #7602 could not reach); #7480 repsel element-shape proofs;
+Layer-3 ceiling list (#7615's sibling half — Layer 1 reached its terminal
+condition in slice 8, so the remaining rooting work is runtime-side).
+
+**Gate debt still open:** #7554 (gc-ratchet CI has measured nothing since
+2026-08-05 — REPAIR THIS BEFORE the next GC-pacing change, which needs it),
+#7502–#7507 (root-lowering suites partly vacuous), #7300 (flaky codegen tests),
+#7604 (the stress schedule can arm without firing on compute-only benches), #7606 (two macOS
+gc-rooting gap crashes, untriaged), #6847 reopened (zlib link on macOS).
+
 ### GC correctness — the four layers
 
 *The shape, stated once: a GC-managed pointer exists somewhere the collector
@@ -31,7 +88,7 @@ has three homes, each needing its own mechanism.*
 | Layer | Home | Mechanism | Status |
 |---|---|---|---|
 | **0** | *enabler* | in-process LLVM | ✅ shipped (#7301), default cargo feature (#7353) |
-| **1** | `perry-codegen` lowering code | `Raw`/`Rooted` discipline | design **validated & corrected** (#7459 — the RFC's own constructor was `E0499`); combinator form proven on the real emitter (#7461); the raw-pointer-across-lowering bug shape **eliminated crate-wide** (#7453, #7462–#7465); full emitter migration **not started** |
+| **1** | `perry-codegen` lowering code | `Raw`/`Rooted` discipline | design **validated & corrected** (#7459 — the RFC's own constructor was `E0499`); combinator form proven on the real emitter (#7461); the raw-pointer-across-lowering bug shape **eliminated crate-wide** (#7453, #7462–#7465). **Migration COMPLETE at its terminal condition (#7615, slices 1-8)**: `expr/temp_root.rs` is now the private `crate::rooting::temp_root`, every accessor `pub(in crate::rooting)`, so the raw API is unreachable from a lowering rather than merely unnamed — asserted by a source-level test with its own sabotage arm. 36 modules on the ledger; fourteen raw entry points (the `StoreOperandGuard` and `RootedHandle` families, `lower_exprs_rooted`, `lower_operand_pair_rooted`, `temp_root_scope_*`, …) DELETED for want of a caller. ★ Read the ledger's own caveat: a listed module cannot make an ORDERING mistake, which is not the same as "every window in it has a decision" — that audit half is per-module reading and is what remains. **Measured limit, stated once: on the real emitter this does NOT make the bug fail to compile** — `FnCtx` has no interior mutability, so the borrow form is unbuildable on it; the combinator removes the bug from the path of least resistance and the ledger denies the escape hatch, and that is all |
 | **2** | emitted code's liveness | statepoints | ✅ **the default**, target-aware (#7370): native roots where the runtime can walk frames, shadow stack elsewhere |
 | **3** | `perry-runtime` hand-written Rust | `RuntimeHandleScope`, non-optional | per-module ceilings (#7457): **595 of 705 modules locked at zero**, 107 listed with ceilings, 999 sites, and the list can only shrink — a cleaned module cannot regress (#7458). `across_*` combinators are the prescribed form (#7455). **End state not reached:** the raw accessor is still reachable inside listed modules |
 
@@ -40,11 +97,19 @@ has three homes, each needing its own mechanism.*
 Phases **1 / 2 / 3a (#6909) / 3b (#6911) / 4a (#6915 + #7421/#7425) / 4b
 (#6919)** are all merged; #6904's 26× histogram is closed (#7485 deleted the
 dead 4b prototype flag). Next gap:
-**element-shape proofs through array reads** — `keep[j].v` measured **6.2× vs
-node** on the pure shape — route decided in **#7480**: both candidate routes
-share one prerequisite (a per-array homogeneous-element-shape invariant,
-construction-maintained, self-healing like 4a's dense bit), consumed first by
-the #5093 versioned-loop clone, then by element `Ptr<Shape>`.
+**element-shape proofs through array reads** — `keep[j].v`, route decided in
+**#7480**: both candidate routes share one prerequisite (a per-array
+homogeneous-element-shape invariant, construction-maintained, self-healing
+like 4a's dense bit), consumed first by the #5093 versioned-loop clone, then
+by element `Ptr<Shape>`. Prerequisite and consumer both landed (#7496, #7612);
+the consumer's growth-forwarding crash is #7660, and the consumer now resolves
+**object-literal** element types too (#7669), which took #7480's own kernel
+from 34.5× node to **parity — 12 ms against node's 12 and bun's 12**. What
+remains is element `Ptr<Shape>` *outside* a loop, which needs the type
+visibility `receiver_class_name` deliberately still does not have; see backlog
+item 6 for the closing table, for why the named-class arm's node baseline is
+not the literal arm's, and for why the element-class proof and the
+accumulator's numeric proof are one lever rather than two.
 
 ### Object construction — the dominant cost (#7469 campaign)
 
@@ -254,48 +319,72 @@ each moved by an order of magnitude instead of a few percent:
   delete-safe index walk over the flat entries it is **5 ms**. Perry already won
   lookup before the fix (76 ms vs node 115, bun 103).
 
-**Read this section before picking up any row above.** Three times this campaign
+**Read this section before picking up any row above.** Four times this campaign
 a ticket was worked from a headline number that had already collapsed — #7510
-(33.6% → 11%), `layout_forget_object` (14.5% → 3.0% → 1.7%), and `layout_note_slot`
-(7.5% → 0.03%, correctly closed with **no code at all**). Re-measure the row
-before profiling it.
+(33.6% → 11%), `layout_forget_object` (14.5% → 3.0% → 1.7%), `layout_note_slot`
+(7.5% → 0.03%, correctly closed with **no code at all**), and #7478 (a 2.3x scan
+penalty that was 1.01x by the time anyone re-ran it). Re-measure the row before
+profiling it.
 
-### JSON polyglot legs — the tape is a net negative on scans
+#7478 adds a second failure mode to watch for: **a stale floor is as
+misleading as a stale headline.** Its acceptance bar was "materially under the
+1350 ms `idiomatic` row" — but `idiomatic` is a *measurement*, not a constant,
+and it had moved to 938 ms. A bar quoted as a number silently becomes a bar
+quoted against a different build. When acceptance is "beat arm X", re-measure
+arm X in the same run, never carry its number forward.
 
-Same run. `roundtrip` is the crown jewel and `field_access` is the problem:
+### JSON polyglot legs — the tape's scan penalty is closed (#7478)
+
+`roundtrip` is the crown jewel and `field_access` was the standing problem: at
+the v0.5.1299 sweep the optimized configuration was 2.2x SLOWER than the
+unoptimized one at 3.6x the RSS, with a sigma of 136 against every other row's
+under 5.
 
 | leg | perry optimized | perry idiomatic | bun | node | rust serde_json |
 |---|--:|--:|--:|--:|--:|
 | roundtrip | **192 ms** (82 MB) | 1307 ms | 216 | 379 | 178 |
 | field_access | **2984 ms** (219 MB, sigma 136) | **1350 ms** (61 MB) | 218 | 380 | 183 |
 
-Perry **wins roundtrip** against both JS runtimes and lands within ~8% of Rust
-serde_json. `field_access` was the standing problem: the optimized configuration
-was 2.2x SLOWER than the unoptimized one at 3.6x the RSS, with a sigma of 136
-against every other row's under 5.
+**That inversion is closed** — #7483 (DirectParser float parity), #7499
+(reparse-on-materialize), #7537 (early batch flip), #7539 (tape
+side-allocation), with #7546 fixing the wrong-JSON defect the work surfaced.
+Re-measured at **v0.5.1370** on the pinned quiet mini, 11 interleaved rounds,
+every arm's checksum identical to node 26.5.1:
 
-**That inversion is now closed** (#7478 → #7537 early batch flip, then #7539
-tape side-allocation), measured on the same host:
+| phase | tape on, then → now | tape off, then → now |
+|---|--:|--:|
+| parse only | 210 → **160 ms** | 1220 → 1196 ms |
+| parse + full scan | 3030 → **1233 ms** | 1287 → 1224 ms |
+| parse + stringify | 254 → **171 ms** | 1756 → 1449 ms |
+| field_access | 2981 → **1721 ms** | — → 1480 ms |
 
-| `field_access` | median | sigma | peak RSS |
+The issue's headline was that a full scan cost **2.3x the direct parser**
+(3030 vs 1287). It is now **1.01x** (1233 vs 1224): the tape neither wins nor
+loses a scan, which is the correct resting state for a structure whose whole
+value is on the paths that skip materialization. `roundtrip` — the memcpy path
+this must not regress — went the other way, 254 → 171 ms.
+
+**The two remaining terms are now orthogonal, which is the real result.** The
+issue documented an *interaction* (scan sigma 214.9 under gen-GC vs 8.8 under
+mark-sweep for the identical tape). Measuring all four `PERRY_JSON_TAPE` x
+`PERRY_GEN_GC` combinations, `field_access` decomposes additively:
+
+| | tape on | tape off | tape term |
 |---|--:|--:|--:|
-| sweep (v0.5.1299) | 2984 ms | 136 | 219 MB |
-| after #7537 | 2043 ms | 146 | 195 MB |
-| **after #7539** | **1809 ms** | **17.3** | **155 MB** |
+| gen-GC | 1721 ms | 1480 ms | **+241** |
+| mark-sweep | 1133 ms | 938 ms | **+195** |
+| gen-GC term | **+588** | **+542** | |
 
-Sigma collapses **8.3x** — that was the headline symptom, not the median — and
-the decisive result is that **turning the tape ON is no longer worse than
-turning it OFF**. The tape-off arm still carries sigma 117.2 and 168 MB, so the
-residual variance and footprint belong to the generational collector's behaviour
-on this workload and have nothing left to do with the tape. The GC trace agrees
-to the cycle: 19 cycles / 9 full / 6 `old_gen_bytes` becomes **14 / 5 / 2**,
-which is the `PERRY_JSON_TAPE=0` arm's profile exactly.
+The tape costs ~200 ms whichever collector runs, and the collector costs
+~560 ms whether or not the tape exists. The ~200 ms *is* the tape build (parse
+only is 160 ms) and is structural, exactly as #7537 recorded: the build is
+purely additive whenever the whole tree ends up materialized anyway, and
+nothing can predict scan-shaped access before the parse.
 
-`roundtrip` — the memcpy path this must not regress — **improved**, 201 → 193 ms,
-with peak old-generation in-use down 39.6 → 14.1 MB.
-
-Still open: 1809 ms has not reached the 1350 ms idiomatic floor, and the gap is
-now collector behaviour rather than tape design.
+So `field_access`'s remaining ~560 ms is a **generational-collector** term that
+the tape-off arm carries identically. It is not a tape-policy problem and does
+not belong to #7478; it is the same collector behaviour the GC campaign is
+already working, on a workload that happens to reach it through `JSON.parse`.
 
 ### Gates and blockers
 
@@ -325,8 +414,23 @@ now collector behaviour rather than tape design.
    rooting re-reads are material on a spread-heavy workload. If they are, the
    answer is hoisting them (#7487's pooled-alloca precedent), never removing
    them — they close real use-after-frees.
-2. **#7478 — the JSON tape's scan path**, where our optimized build is 2.2x
-   slower than our unoptimized one. The 1350 ms idiomatic row is the floor.
+2. ~~**#7478 — the JSON tape's scan path**~~ — **closed, re-measured at
+   v0.5.1370.** The headline (a full scan costs 2.3x the direct parser) is
+   gone: 3030 → 1233 ms against the tape-off arm's 1224, i.e. **1.01x**, and
+   `roundtrip` improved 254 → 171 ms rather than paying for it. The four-way
+   `PERRY_JSON_TAPE` x `PERRY_GEN_GC` decomposition above is what closes it —
+   the tape term (~200 ms, its own build) and the collector term (~560 ms) are
+   now **additive and independent**, where the issue had documented them as an
+   interaction. The residual on this benchmark is therefore the collector's,
+   carried identically by the tape-off arm, and is tracked with the GC work
+   rather than here.
+
+   Worth recording as method: **this ticket's headline was stale in both
+   directions.** The 2.3x had been fixed by four merges nobody had re-measured
+   together, and its stated floor (the 1350 ms `idiomatic` row) had itself
+   moved to 938 ms — so coding to the ticket would have chased a target that
+   had already moved and declared failure against a bar that no longer existed.
+   Two switches, measured one at a time, was the whole difference.
 3. ~~**`_tlv_get_addr` — thread-local addressing**~~ — **measured out (#7565).**
    Re-measuring first is what decided the design: the 27.0% was real, but the
    ticket's "41 distinct call-graph sites, this is diffuse" was not — **seven
@@ -363,20 +467,199 @@ now collector behaviour rather than tape design.
    `gc-rooting-invariant.md` records as having already shipped broken. Today's
    ~20 rooting bugs were all found by hand with `PERRY_GC_PROTECT_FROMSPACE`
    because nothing else can find them. This is the structural fix.
-6. **Repsel** — the element-shape invariant landed (#7496); the versioned-loop
-   consumer and element `Ptr<Shape>` remain. Deliberately sequenced **after**
-   the bookkeeping levers: element reads are 13% of `churn` at 4.3×, the best
-   ratio in the table, so this is an RSS/footprint play more than a time one.
-7. **Layer 1** — migrate remaining lowerings onto the rooted-combinator API
-   (`crates/perry-codegen/src/rooting.rs`); the arm-aware scan is the
-   worklist tool. **Layer 3** — shrink the 107-module ceiling list toward
-   empty; the end state is the raw accessor unreachable, not counted.
+6. ~~**Repsel — element `Ptr<Shape>` for object-literal element types**~~ —
+   **closed.** The element-shape invariant landed (#7496), its versioned-loop
+   consumer landed (#7612, matrix #7608, corpus #7619) and stopped SIGBUSing
+   (#7660); the last piece of #7480 was that `element_class_name` resolved
+   `Array(Named(C))` only, so #7480's own kernel (`keep: {v,w}[]`) never
+   reached the clone at all. Re-measured on the pinned quiet host, 200k
+   elements × 50 sweeps, 7 interleaved rounds, checksums equal across all four
+   runtimes, `rustc`/`cargo` at zero and 94.6–94.9% idle throughout:
+
+   | kernel | perry before | perry after | node | bun |
+   |---|--:|--:|--:|--:|
+   | `keep: {v,w}[]` — #7480's kernel | 408 ms | **12 ms** | 12 ms | 12 ms |
+   | `keep: Node[]` — what #7612 covered | 13 ms | 13 ms | 56 ms | 12 ms |
+   | region-local `{v,w}[]` (#7034 §3) | 15 ms | 14 ms | 12 ms | — |
+
+   **34× on the object-literal arm, to parity with both engines**, and the
+   named-class arm is unchanged. The recorded 93 ms / 6.2× in the issue was
+   stale in the *optimistic* direction (the real figure was 34.5× node); its
+   cost model was wrong too, and the correction is the load-bearing part:
+
+   **The two levers are not separable, and that is a property of the design,
+   not of this kernel.** #7480 recorded "no out-of-line guard calls, the cost
+   is stacked inline diamonds"; the object-literal arm actually carried three
+   calls per iteration, the third being `js_dynamic_string_or_number_add` —
+   with no resolvable class the accumulator loses its numeric proof, so `+` is
+   not an `fadd`. The plan called that "a second, separable lever". It is not
+   one: the clone is admitted only if it is provably call-free
+   (`LlBlock::contains_gc_unsafe_call`, which counts every non-`llvm.` call),
+   so a fix that resolved the element class WITHOUT also restoring the numeric
+   proof emits the clone, fails the call-free test, branches unconditionally to
+   the slow arm, and buys exactly zero at a cost in code size. Anything gated
+   on call-freeness has this shape: the enabling proof and the proof that makes
+   the body cheap are the same admission test.
+
+   **What was deliberately NOT taken: `receiver_class_name` is unchanged.**
+   Widening it to type an `Object`-typed element read is the #6377 blast radius
+   #7612 refused, and it is not needed — the resolver lives in the matcher, and
+   the clone was made self-contained instead (its `ElementShapeLoopFact`
+   carries the class name and packed slot index, and the field lowering,
+   `is_numeric_expr` and the arithmetic-operand router all consult that fact).
+   So `keep[j].v` OUTSIDE an element-shape loop is byte-for-byte what it was.
+   The numeric claim inside the clone is stronger than the annotation it
+   replaces: the residual per-element check already proves
+   `GC_OBJ_TYPED_LAYOUT_INTACT`, i.e. that the slot holds a raw double.
+
+   **What remains, and why it is a different ticket.** Route A proper — a
+   `Ptr<Shape>` element representation that survives outside a loop — is still
+   open for the parameter/global case. It needs the type-visibility change
+   above, with its own gap-suite A/B, and it should be scoped against the fact
+   that the region-local case is already covered: `collectors/ptr_shape_elements.rs`
+   (#7034 §3, E1–E5) puts that row at 14–15 ms with no work from this change.
+   Sequencing note carried from before: element reads are 13% of `churn`, so
+   against the bookkeeping levers this stays an RSS/footprint play more than a
+   time one — but the 34× above is the kernel, and it was real.
+
+   Method note for the next person: the IR census that proves the clone is
+   call-free had been **vacuous since #7612**. `fast_clone_slice` sliced from
+   the first *substring* match of `for.element_shape_fast.cond`, which is the
+   `br label %…` terminator of the fast preheader — four lines above the slow
+   preheader — and every assertion made against the result is a negative
+   (`!fast.contains(" call ")`). The slicer now finds the block DEFINITION and
+   asserts the slice contains the cloned body and its element load, so it
+   cannot pass on an empty subject again. Same family as #7024/#7025: the gate
+   ran, its subject did not.
+
+7. ~~**Layer 1** — migrate remaining lowerings onto the rooted-combinator
+   API~~ — **done at the stated terminal condition** (#7615, eight slices).
+   The condition was "`expr/temp_root.rs` going `pub(in crate::rooting)` — the
+   raw accessor unreachable, not merely uncounted". As literally spelled it is
+   not expressible in Rust (`pub(in path)` needs `path` to be an ANCESTOR of
+   the item — E0742), so the file MOVED: it is `crate::rooting::temp_root`,
+   declared `mod temp_root;` (private) with `pub(in crate::rooting)` on every
+   accessor. Both belts, because either alone is one keyword from being undone.
+   A raw call planted in a migrated module no longer compiles (E0603); that is
+   the sabotage arm, and it is the difference between this and a ledger line.
+
+   Two items keep `pub(crate)` and are re-exported, neither an accessor:
+   `TempRootPool` (compile-time slot bookkeeping) and `expr_is_inert_primitive`
+   (the purity predicate the loop back-edge poll shares). Fourteen raw entry
+   points were DELETED rather than narrowed, per CLAUDE.md's kill-policy.
+
+   ★ **What this does NOT claim.** The ledger's own caveat, drawn the hard way
+   in slice 4: a listed module cannot make an ORDERING mistake against the raw
+   API, because it no longer names it. A window with **no rooting decision at
+   all** is invisible to that check, and the only instrument for it is reading
+   the module. 36 modules are listed; the remaining audit is per-module reading
+   and #7640 is where the deferred sites live.
+
+   **Layer 3** — shrink the 107-module ceiling list toward empty; same end
+   state, same reason. That is now the whole of the remaining rooting work.
 8. **Statepoint-side static checker** — teach `gc_root_dominance_check.py` to
    read relocation bundles, closing the gap the #7452/#7460 repairs named.
-9. **RSS re-derivation under the statepoint default** (#7056) — the earlier
-   numbers were measured under the shadow stack.
-10. **Ratchet large-Eden probe arm** (#7481's lesson), plus the pending
-   quiet-host re-pins (`wt-scavtenure` baseline).
+9. ~~**RSS re-derivation under the statepoint default** (#7056)~~ — **done, and
+   the answer is that the root lowering is not an RSS lever.** Re-derived at
+   `7bde3de24` on the pinned quiet mini (95% idle, zero `rustc`/`cargo`
+   throughout), 12 ratchet probes x 7 repeats x **3 interleaved rotations**,
+   every probe byte-identical to the pinned Node oracle in all 72 probe-runs:
+
+   | | statepoint (default) | shadow stack (`PERRY_RS4GC=0`) | ratio |
+   |---|--:|--:|--:|
+   | peak RSS, 12 probes | 544.2 MB | 545.1 MB | **1.002** |
+   | retained heap after `gc()` | 114,594,904 B | 114,596,520 B | **1.000** |
+   | wall | 4,808 ms | 4,894 ms | 1.018 |
+
+   **104 of 108 deterministic cells are bit-identical between the two
+   lowerings.** All four that move are on `10_store_receiver_across_alloc` and
+   are ≤0.31% — the shadow stack keeps 7 more objects live at that collection
+   point than the statepoint map does. Between-rotation spread: retention
+   **0.000%**, peak RSS max 0.621% (median 0.000%), wall max 2.779%. The arms
+   were shown to differ before they were compared, per probe, not per suite:
+   `statepoint-example` + `addrspace(1)` roots present on 12/12 under the
+   default and **0 of both** under `PERRY_RS4GC=0`, with `js_shadow_frame_enter`
+   rising to match.
+
+   So #7056's RSS numbers were not invalidated by #7370. What *did* invalidate
+   parts of it is everything else that shipped since, and the re-derivation
+   should be read for those:
+
+   - **§9's recommendation shipped** (#7377): the 16 MB cap no longer hangs off
+     `gc_moving_loop_polls_enabled()`, and the poll has been default-off since
+     #7161. The five arms #7056 tabulates (`on`/`off`/`off_rt`/`on_cap128`/
+     `off_scav`) no longer name anything that ships.
+   - **The cap is still the whole footprint lever, and now measured on 12
+     probes rather than 8**: at `PERRY_GC_SCAVENGE_NURSERY_MB=128`, peak RSS is
+     **1.911x** and retained heap **2.475x** the shipped cap, for **0.947x** the
+     wall — up to 5.005x peak RSS on `04_dead_after_deep_stack` and 6.350x
+     retention on `07_array_grow_evacuate`. Identical to 0.6% under both root
+     lowerings, so this is a pacing result and not a rooting one.
+   - **§7's false-retention table is gone, not shrunk.** It recorded a
+     4.6x–54.8x conservative-vs-precise band on probes 01–08. `classify` at
+     `7bde3de24` reports **excess 0.00% and spread 0 on all twelve**, with no
+     `manual_collect` scan site anywhere — #7657 removed the forced scan at
+     `gc()` rather than the reading.
+   - **§6's real finding survives intact**: a conservative scan does not
+     degrade the copying minor, it **disables** it. Forcing
+     `PERRY_CONSERVATIVE_STACK_SCAN=full` under statepoints takes
+     `minor_cycles` to **0 on all twelve probes** (`copied + promoted` 0 on
+     all twelve), costs 1.98x retained heap (0.70x–6.35x) and 1.46x peak RSS
+     (0.93x–3.47x). Smaller than the +364%..+5371% #7056 recorded, same sign,
+     same mechanism.
+
+   Not re-derived, and stated rather than hidden: #7056's largest RSS numbers
+   (§3–§5, 272 MB -> 421 MB) came from three server-shaped workloads it wrote
+   and never landed, so there is nothing in the tree to re-run. The 12 probes
+   are what replaced them.
+10. ~~**Ratchet large-Eden probe arm** (#7481's lesson), plus the pending
+   quiet-host re-pins (`wt-scavtenure` baseline)~~ — **both done.**
+
+    `13_large_eden_survivors` pins the cadence the matrix had no coverage of,
+    via a per-probe `// gc-ratchet-env:` declaration that `check` compares like
+    a metric (delete the directive and every band is still satisfied, which is
+    exactly why the arm itself has to be gated). Full rationale and the
+    perturbations that turn it red: `benchmarks/gc_ratchet/README.md`.
+
+    **The finding that shaped it is worth carrying forward.** A large Eden on a
+    small retained set runs **zero copying minors** —
+    `arena_growth_full_escalation_due` escalates every minor to a full
+    mark-sweep once arena in-use clears its 32 MB floor and exceeds twice the
+    post-full baseline, which a 64 MB Eden over a ~1 MB live set does every
+    time. The first draft of the probe did precisely that and would have been
+    pinned on a collector it never reached. So `PERRY_GC_SCAVENGE_NURSERY_MB`
+    is not, on its own, a "larger Eden" knob: above ~32 MB it is a "no
+    copying minor" knob unless the workload also holds a live set. Sizing the
+    retained set to 262,144 objects buys 4 copying minors freeing 37/36/68/68 MB
+    — 49.7 MB per minor, the first copying 532,482 objects in one cycle —
+    against 14.6–16.6 MB per minor on eleven of the twelve default-cap probes
+    and 21.8 MB on `12_large_live_set`, whose tenured-proportional cap term is
+    the shipped path to a larger Eden and tops out around 22 MB here.
+
+    **`wt-scavtenure` is subsumed, measured rather than assumed.** #7432 is
+    merged, its worktree exists on neither host, and the baseline has been
+    re-pinned five times since — most recently in full by #7657 at `59d522052`
+    on the pinned host, which also closed #7652's mixed provenance. Running the
+    quiet-host driver's `--check` at this PR's commit against that artifact:
+    **every one of the 144 pinned cells `ok`**, the only failure being the new
+    probe's absence from the baseline, which is the friction adding a probe is
+    supposed to cost. There is no pending re-pin.
+
+    ★ **One trap found the hard way, and it is worth the four lines.** An
+    ad-hoc `measure --probes-dir <copy>` first reported
+    `09_try_catch_roots.heap_used_bytes` **−17.98%** against the pin, which
+    reads exactly like drift since `59d522052`. It is not drift: a probe
+    compiled with a `package.json` in scope retains one more 1 MiB arena block
+    at `gc()` than the same source compiled without one, and 09 sits on that
+    block boundary. Reproduced three ways — repo dir 5,825,256; any of three
+    `/tmp` directories 4,777,624; `/tmp` **plus a copied `package.json`**
+    5,825,256 — each stable 3/3, and unmoved by Perry's known build
+    non-determinism (two builds from the same directory differ byte-wise and
+    report the identical number). The driver and CI always compile from the
+    repo, so the gate is self-consistent; **a copied probes directory outside
+    the repo is a different compilation and its absolute retention is not
+    comparable to the artifact.** Ratios between arms measured in the same
+    directory are unaffected, which is why item 9's 2x2 stands.
 
 ---
 

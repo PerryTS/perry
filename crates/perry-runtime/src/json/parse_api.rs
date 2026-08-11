@@ -69,8 +69,38 @@ fn syntax_error_value(message: &str) -> f64 {
     f64::from_bits(JSValue::pointer(err as *const u8).bits())
 }
 
+/// A catchable `RangeError`, for the one JSON failure that is about size
+/// rather than shape: input nested deeper than the parser can descend.
+fn range_error_value(message: &str) -> f64 {
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg_ptr);
+    f64::from_bits(JSValue::pointer(err as *const u8).bits())
+}
+
 fn throw_syntax_error(message: &str) -> ! {
     crate::exception::js_throw(syntax_error_value(message))
+}
+
+fn throw_range_error(message: &str) -> ! {
+    crate::exception::js_throw(range_error_value(message))
+}
+
+/// The one depth check, called by every entry that is about to descend.
+///
+/// `js_json_parse` and `js_json_parse_result` are separate implementations of
+/// the same flow, and the typed-array path is a third. Sharing the decision is
+/// what keeps them from drifting — the first version of this fix guarded only
+/// one of the three and appeared to do nothing at all, because the entry point
+/// codegen actually calls was one of the other two.
+fn nesting_is_too_deep(bytes: &[u8]) -> bool {
+    crate::json::parser::nesting_depth_exceeds(bytes, crate::json::parser::MAX_NESTING_DEPTH)
+}
+
+fn too_deep_message() -> String {
+    format!(
+        "JSON.parse: input nested deeper than {} levels",
+        crate::json::parser::MAX_NESTING_DEPTH
+    )
 }
 
 fn is_json_null_literal(bytes: &[u8]) -> bool {
@@ -104,6 +134,14 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
 
     if len == 0 {
         return Err(syntax_error_value("Unexpected end of JSON input"));
+    }
+
+    // #7792: depth first, BEFORE the validation pass below. That pass recurses
+    // once per nesting level itself, so a check placed after it would run after
+    // the crash it exists to prevent. The scan is one linear pass over bytes we
+    // are about to read anyway.
+    if nesting_is_too_deep(bytes) {
+        return Err(range_error_value(&too_deep_message()));
     }
 
     // Validate without constructing a second full JSON tree. The Perry parser
@@ -197,6 +235,12 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
 
     if len == 0 {
         throw_syntax_error("Unexpected end of JSON input");
+    }
+    // #7792: depth first, ahead of the validation pass, for the same reason as
+    // the `_result` twin above. This is the entry codegen emits, so a guard
+    // that covered only the twin covered nothing a compiled program can reach.
+    if nesting_is_too_deep(bytes) {
+        throw_range_error(&too_deep_message());
     }
     // Keep serde_json's strict syntax validation, but discard tokens as they
     // are read instead of allocating an intermediate `serde_json::Value`
@@ -514,6 +558,13 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     }
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
+
+    // #7792: this path builds its own parser, so it needs its own guard. Hand
+    // deep input to the generic entry rather than repeating the error here, so
+    // both report it identically.
+    if nesting_is_too_deep(bytes) {
+        return js_json_parse(text_ptr);
+    }
 
     // Build the shape hint once. The keys_array + pre-interned key
     // pointers are owned by longlived arena + shape-cache structures,

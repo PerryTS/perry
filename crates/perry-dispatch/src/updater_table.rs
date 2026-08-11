@@ -13,6 +13,42 @@ use super::*;
 /// through `Str` (raw `*StringHeader` ptr extracted via
 /// `js_get_string_pointer_unified` on the codegen side).
 pub static PERRY_UPDATER_TABLE: &[MethodRow] = &[
+    // perry-runtime::update_notify — the embedded `perry.update` block a
+    // compiled app carries. These are how an app performs its own check: the
+    // runtime says what to request and reads the answer, the app's own `fetch()`
+    // makes the request. Named `perry_updater_*` rather than `perry_get_*`
+    // because Windows synthesizes no-op stubs for undefined symbols with that
+    // prefix, which would return garbage instead of failing to link.
+    MethodRow {
+        method: "getEmbeddedConfig",
+        runtime: "perry_updater_get_config",
+        args: &[],
+        ret: ReturnKind::Str,
+    },
+    MethodRow {
+        method: "embeddedCheckUrl",
+        runtime: "perry_updater_check_url",
+        args: &[ArgKind::F64],
+        ret: ReturnKind::Str,
+    },
+    MethodRow {
+        method: "embeddedCheckHeaders",
+        runtime: "perry_updater_check_headers",
+        args: &[ArgKind::F64],
+        ret: ReturnKind::Str,
+    },
+    MethodRow {
+        method: "recordEmbeddedResponse",
+        runtime: "perry_updater_record_response",
+        args: &[ArgKind::F64],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "embeddedRefreshDue",
+        runtime: "perry_updater_refresh_due",
+        args: &[],
+        ret: ReturnKind::I64AsF64,
+    },
     // perry-updater::core — pure cross-platform helpers.
     MethodRow {
         method: "compareVersions",

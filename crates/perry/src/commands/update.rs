@@ -15,6 +15,14 @@ pub struct UpdateArgs {
     /// Ignore cache, always fetch from server
     #[arg(long)]
     pub force: bool,
+
+    /// Save how Perry should handle updates from now on, then exit.
+    ///
+    /// This is the writable half of `[update] mode` in ~/.perry/config.toml —
+    /// there to save people hand-editing TOML for the one setting they are
+    /// most likely to want to change.
+    #[arg(long, value_name = "off|notify|prompt|auto")]
+    pub mode: Option<String>,
 }
 
 pub fn run(
@@ -24,6 +32,10 @@ pub fn run(
     verbose: u8,
     quiet: bool,
 ) -> Result<()> {
+    if let Some(raw) = args.mode.as_deref() {
+        return set_mode(raw);
+    }
+
     let current = env!("CARGO_PKG_VERSION");
 
     let status = if !args.force && !update_checker::is_cache_stale() {
@@ -68,7 +80,9 @@ pub fn run(
                     } else {
                         println!("Update available: {} -> {}", cur, latest);
                     }
-                    println!("  Release: {}", release_url);
+                    if !release_url.is_empty() {
+                        println!("  Release: {}", release_url);
+                    }
                 }
                 OutputFormat::Text => {}
             }
@@ -117,5 +131,36 @@ pub fn run(
         },
     }
 
+    Ok(())
+}
+
+/// Persist `[update] mode`, and nothing else.
+///
+/// Read-modify-write through the shared loader so the rest of the file — the
+/// license key, the telemetry section, anything a newer Perry wrote — comes
+/// back out the way it went in.
+fn set_mode(raw: &str) -> Result<()> {
+    let Some(mode) = crate::update_policy::UpdateMode::parse(raw) else {
+        anyhow::bail!("unknown update mode `{raw}`. Valid values: off, notify, prompt, auto.");
+    };
+    if mode == crate::update_policy::UpdateMode::Unknown {
+        anyhow::bail!("unknown update mode `{raw}`. Valid values: off, notify, prompt, auto.");
+    }
+
+    crate::commands::publish::update_config_file(|config| {
+        config.update.get_or_insert_with(Default::default).mode = Some(mode);
+    })?;
+
+    let path = crate::commands::publish::config_path();
+    println!("Update mode set to \"{raw}\" ({}).", path.display());
+    if mode == crate::update_policy::UpdateMode::Auto {
+        // Say the limits up front rather than letting someone discover them
+        // the first time an update does not happen.
+        println!(
+            "Perry will install updates at the end of a successful run — except \
+             on a package-manager-managed install, where it names that manager's \
+             command instead."
+        );
+    }
     Ok(())
 }

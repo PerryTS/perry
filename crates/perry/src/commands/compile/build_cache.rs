@@ -55,11 +55,81 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // the linked artifact, not merely diagnostics.
     "PERRY_ALLOW_PERRY_FEATURES",
     "PERRY_REQUIRE_FAITHFUL_BINDINGS",
+    // #7183 — audited, not patched one-by-one. #6394's rule is that the object
+    // cache keys EVERY codegen env var; #7161 made
+    // `PERRY_GC_MOVING_LOOP_POLLS` a compile-time gate (codegen emits or omits
+    // `js_gc_loop_safepoint`) without adding it here, and an audit of
+    // `perry-codegen`'s `env::var("PERRY_*")` reads found 35 in the same state.
+    // Each of these changes the EMITTED CODE, so a build-level no-op probe that
+    // ignores them is one `-o` collision away from handing back a binary built
+    // under a different configuration. `moving_loop_polls` is the one that must
+    // not go dark: it is the only configuration exercising the evacuating minor
+    // end to end.
+    //
+    // Adding a key can only make the probe MORE conservative, so the bias here
+    // is inclusion; the deliberate exclusions are listed in
+    // `codegen_env_vars_are_build_cache_inputs` below.
+    "PERRY_GC_MOVING_LOOP_POLLS",
+    "PERRY_CANONICAL_I32_LOCALS",
+    "PERRY_CANONICAL_STR_LOCALS",
+    "PERRY_CODEGEN_UNITS",
+    "PERRY_CODEGEN_UNIT_SIZE",
+    "PERRY_ENTRY_SYMBOL",
+    "PERRY_FULL_OUTLINE_IC",
+    "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
+    "PERRY_INLINE_HOT_SMALL",
+    "PERRY_INLINE_HOT_SMALL_CAP",
+    "PERRY_INLINE_HOT_SMALL_MAX_SITES",
+    "PERRY_INLINE_HOT_SMALL_THRESHOLD",
+    "PERRY_INLINE_NONBIGINT_BITWISE",
+    "PERRY_INT_VALUED_LOCALS",
+    "PERRY_JSCVT",
+    "PERRY_LD",
+    "PERRY_LLVM_OPT",
+    "PERRY_LL_O0_THRESHOLD_BYTES",
+    "PERRY_LL_SIZE_OPT",
+    "PERRY_LL_SIZE_OPT_MAX_FN_BYTES",
+    "PERRY_OUTLINE_METHOD_DISPATCH",
+    "PERRY_PTR_NUMARRAY_LOCALS",
+    "PERRY_PTR_SHAPE_LOCALS",
+    "PERRY_PTR_SHAPE_THIS",
+    "PERRY_SPECIALIZED_ABI",
+    "PERRY_SPECIALIZED_ABI_MAX",
+    "PERRY_STATIC_STRING_LOWERING",
+    "PERRY_STRING_INIT_CHUNK_SIZE",
+    "PERRY_TA_PARAM_F64_READ",
+    "PERRY_WATCHOS_ARM64_32",
+];
+
+/// #7183: codegen env vars that deliberately do NOT key the build cache.
+///
+/// Each either produces a side artifact without changing the emitted object, or
+/// varies per-invocation for reasons unrelated to output — keying on those
+/// would thrash the cache rather than protect it. Anything not listed here must
+/// be a build-cache input; `codegen_env_vars_are_build_cache_inputs` enforces
+/// that, so a new compile-time gate cannot repeat #7161's omission silently.
+const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
+    // Diagnostics: emit an extra file / extra stderr, same object bytes.
+    "PERRY_SAVE_LL",
+    "PERRY_LLVM_DIFF_DIR",
+    "PERRY_REPSEL_DEBUG",
+    "PERRY_STATEPOINT_REPORT",
+    // `opt_report`'s own module doc states the contract this exclusion rests
+    // on: "Observational only. Nothing in this module is read by codegen …
+    // the returned fact sets are bit-identical with the report on and off,
+    // which the CLI's byte-identical-object test asserts." Found by the test
+    // below rather than by the audit that preceded it, which is the point of
+    // having the test.
+    "PERRY_OPT_REPORT",
+    // Parallelism only — partitioning is keyed by PERRY_CODEGEN_UNIT_SIZE /
+    // PERRY_CODEGEN_UNITS, which ARE inputs; the job count just decides how
+    // many threads chew through the same units.
+    "PERRY_CODEGEN_UNIT_JOBS",
 ];
 
 #[cfg(test)]
 mod tests {
-    use super::BUILD_CACHE_ENV_VARS;
+    use super::{BUILD_CACHE_ENV_EXCLUSIONS, BUILD_CACHE_ENV_VARS};
 
     #[test]
     fn binding_policy_switches_are_build_cache_inputs() {
@@ -69,6 +139,83 @@ mod tests {
         ] {
             assert!(BUILD_CACHE_ENV_VARS.contains(&name), "missing {name}");
         }
+    }
+
+    /// #7183 / #6394: every `PERRY_*` env var codegen reads is either a
+    /// build-cache input or an explicit, justified exclusion.
+    ///
+    /// This exists because the list rotted once already and did so silently:
+    /// #7161 turned `PERRY_GC_MOVING_LOOP_POLLS` into a compile-time gate and
+    /// nothing noticed it was missing here. A list maintained by hand against a
+    /// growing set of gates will rot again; scanning the source makes the next
+    /// omission a red test instead of a stale comment.
+    #[test]
+    fn codegen_env_vars_are_build_cache_inputs() {
+        use std::collections::BTreeSet;
+
+        let codegen_src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/ reachable from CARGO_MANIFEST_DIR")
+            .join("perry-codegen")
+            .join("src");
+        assert!(codegen_src.is_dir(), "{} missing", codegen_src.display());
+
+        let mut found: BTreeSet<String> = BTreeSet::new();
+        let mut stack = vec![codegen_src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("readable source");
+                // `env::var("PERRY_…")` in either spelling. Deliberately literal:
+                // a computed name would not be auditable from here anyway, and
+                // there are none today.
+                for (idx, _) in text.match_indices("env::var(\"PERRY_") {
+                    let rest = &text[idx + "env::var(\"".len()..];
+                    if let Some(end) = rest.find('"') {
+                        found.insert(rest[..end].to_string());
+                    }
+                }
+            }
+        }
+        assert!(
+            found.len() > 20,
+            "scan found only {} vars — the matcher is probably broken, which \
+             would make this test vacuous",
+            found.len()
+        );
+
+        let missing: Vec<&String> = found
+            .iter()
+            .filter(|name| {
+                !BUILD_CACHE_ENV_VARS.contains(&name.as_str())
+                    && !BUILD_CACHE_ENV_EXCLUSIONS.contains(&name.as_str())
+            })
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these codegen env vars key neither the build cache nor an \
+             exclusion (#6394's rule): {missing:?}. Add each to \
+             BUILD_CACHE_ENV_VARS, or to BUILD_CACHE_ENV_EXCLUSIONS with a \
+             reason it cannot change emitted code."
+        );
+
+        // A stale exclusion is also a defect: it claims a var exists and is
+        // deliberately unkeyed, when codegen may no longer read it at all.
+        let stale: Vec<&&str> = BUILD_CACHE_ENV_EXCLUSIONS
+            .iter()
+            .filter(|name| !found.contains(&(**name).to_string()))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these exclusions name vars codegen no longer reads: {stale:?}"
+        );
     }
 }
 

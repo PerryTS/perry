@@ -577,6 +577,29 @@ fn build_generator_tower(
     proto_slot: &std::sync::atomic::AtomicI64,
     gen_proto_slot: &std::sync::atomic::AtomicI64,
 ) {
+    // #7251: this builds an IMMORTAL object graph (the tower hangs off a
+    // process-global intrinsic slot for the life of the thread) by threading
+    // `ctor`/`proto`/`gen_proto` as raw `*mut ObjectHeader` / `*mut
+    // ClosureHeader` locals across a dozen-plus allocating installs below.
+    // None of those locals is a slot the collector rewrites, so a relocating
+    // collection reached from one of this function's own allocations would
+    // leave the rest of the build writing through from-space addresses —
+    // exactly the invariant #7217 fixed for `populate_global_this_builtins`
+    // ("a bootstrap that builds an IMMORTAL object graph through raw pointers
+    // held across its own allocations must run in a NO-MOVE WINDOW").
+    //
+    // On the SAFEPOINT route this was unreachable: a back-edge poll only
+    // fires while user JS runs, and this function runs none. It IS reachable
+    // on the allocation-point route — this tower is lazily built ahead of
+    // `populate_global_this_builtins` by `generator_prototype_ptr` /
+    // `generator_function_prototype_of`, called from the codegen-emitted
+    // `js_generator_attach_prototype` / `js_generator_attach_closure_prototype`
+    // helpers on literally the FIRST `gen()` call in a program that has not
+    // yet touched `globalThis`. See `gc::tests::lazy_intrinsic_towers` for the
+    // gate: it arms a collection at the very next arena-block-crossing
+    // allocation (this tower is far smaller than a block, so it cannot arm
+    // one on its own) and asserts this function does not service it.
+    let _no_move = crate::gc::GcSuppressScope::new();
     let (ctor_name, ctor_tag, inst_tag) = if is_async {
         (
             "AsyncGeneratorFunction",

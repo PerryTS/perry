@@ -10,9 +10,25 @@ use std::collections::{HashMap, HashSet};
 use super::*;
 use crate::ir::*;
 
-fn stable_tagged_template_site_salt(source_file_path: &str) -> u64 {
+/// #7177: the per-module salt must be CHECKOUT-INVARIANT.
+///
+/// It used to hash the canonical ABSOLUTE source path, so the same source
+/// compiled from two different directories produced different
+/// `__perry_cap_<id>m<salt>` names — and therefore different IR and different
+/// objects. Measured: 29 of 29 same-compiler control runs differed once the
+/// harness used per-run `mkdtemp` working directories, and every IR/object A/B
+/// campaign had to independently discover it and pin cwd.
+///
+/// The module NAME is the right key. It is already what every other emitted
+/// symbol is prefixed with (`perry_fn_<mod>__…`, `perry_global_<mod>__…`), so
+/// it is already reproducible by construction, and it keeps the property the
+/// salt exists for: it carries directory components, so `a/util.ts` and
+/// `b/util.ts` are `a_util_ts` and `b_util_ts` — distinct salts, and
+/// cross-module capture chains stay isolated exactly as before. Same module ⇒
+/// same salt ⇒ same-module inheritance keeps sharing parent stashes.
+fn stable_module_salt(module_identity: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
-    for b in source_file_path.as_bytes() {
+    for b in module_identity.as_bytes() {
         h ^= u64::from(*b);
         h = h.wrapping_mul(0x100000001b3);
     }
@@ -32,8 +48,26 @@ impl LoweringContext {
         source_file_path: impl Into<String>,
         start_class_id: ClassId,
     ) -> Self {
+        // No module name available (the `#[cfg(test)]` lowering entry points).
+        // Salting on the path preserves the pre-#7177 behaviour for those; the
+        // production path below passes the module name.
         let source_file_path = source_file_path.into();
-        let tagged_template_site_salt = stable_tagged_template_site_salt(&source_file_path);
+        let identity = source_file_path.clone();
+        Self::with_class_id_start_salted(source_file_path, identity, start_class_id)
+    }
+
+    /// #7177: as [`Self::with_class_id_start`], but salts the module's
+    /// `__perry_cap_*` names on `salt_identity` — the module NAME — instead of
+    /// its absolute source path, so the emitted symbols do not change with the
+    /// checkout location.
+    pub fn with_class_id_start_salted(
+        source_file_path: impl Into<String>,
+        salt_identity: impl Into<String>,
+        start_class_id: ClassId,
+    ) -> Self {
+        let source_file_path = source_file_path.into();
+        let module_identity = salt_identity.into();
+        let tagged_template_site_salt = stable_module_salt(&module_identity);
         Self {
             next_local_id: 0,
             next_global_id: 0,
@@ -105,6 +139,7 @@ impl LoweringContext {
             scope_local_marks: Vec::new(),
             scope_module_shadow_marks: Vec::new(),
             inside_block_scope: 0,
+            for_of_force_lazy: false,
             namespace_vars: Vec::new(),
             current_namespace: None,
             module_native_instances: Vec::new(),
@@ -1101,6 +1136,7 @@ impl LoweringContext {
             // timing is irrelevant.
             is_nested: false,
             alloc_width_hint,
+            specialized_from: None,
         });
 
         self.anon_shape_classes

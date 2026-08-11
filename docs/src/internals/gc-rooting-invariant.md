@@ -24,7 +24,13 @@ A "collection point" is any of:
   transition. `js_object_get_property` allocates: it can run a getter, which is
   user code;
 - `js_gc_loop_safepoint`, the back-edge poll (only emitted under
-  `PERRY_GC_MOVING_LOOP_POLLS=1`, off by default since #7161).
+  `PERRY_GC_MOVING_LOOP_POLLS`, ON by default again, kill switch `=0`);
+- `js_gc_collect` — a JS-level `gc()`. Since #7558 this runs a full mark-sweep
+  on **precise roots** like everything else, so a value live across it and not
+  reachable from a root is *freed*. It used to force the conservative
+  native-stack scan (#4977), which hid exactly this shape; it does not any more.
+  Note that a `gc()`-only window is invisible to `--moving-only`, because a full
+  mark-sweep frees rather than moves — check such a function without that flag.
 
 The safe default is that **a call collects unless you have read the runtime
 source and proved otherwise**. The checker described below encodes exactly this
@@ -41,11 +47,15 @@ wrong:
   dereferenced;
 - **no runtime GC probe can see it.** At the moment of the collection there is
   nothing for the collector to find, so a from-space scan, a verify-roots pass
-  and a zeal run all come back clean. `PERRY_GC_VERIFY_EVACUATION` checks that
+  and a rate-1 seeded run all come back clean. `PERRY_GC_VERIFY_EVACUATION` checks that
   reachable slots were forwarded; it cannot check a register it does not know
   exists;
-- it is **invisible by default**, because the back-edge poll that triggers it is
-  off. A green default test run says nothing about this class.
+- it is **visible by default only where a poll is emitted.** The back-edge poll
+  is on by default again, but `emit_gc_loop_safepoint` emits it only into loops
+  `loop_purity::loop_may_allocate` says can allocate — so a default run covers
+  this class exactly when execution reaches such a loop, and covers nothing in
+  a program whose hot path is a proven alloc-free loop. `PERRY_GC_MOVING_LOOP_POLLS=0`
+  removes the coverage entirely.
 
 Four instances shipped in a single day. The detection lag, not the fix, was the
 cost every time.
@@ -114,7 +124,7 @@ not intermittently, suggests this class rather than a stale register.
 
 **`scripts/gc_root_dominance_check.py` is structurally blind to this class** — it
 reads emitted LLVM IR and cannot see a runtime table. The instruments that catch it
-are `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
+are `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
 on a real workload. When adding a cache of a heap pointer, register it in
 `gc_register_mutable_root_scanner` in `gc/mod.rs` in the same commit.
 
@@ -141,16 +151,66 @@ evidence for any of them:**
   and 31 stale uses were dropped by `--moving-only`. **Audit these sets against
   what codegen actually emits, the way #7227 audits `ALLOC_RE`.**
 
-For the classes above, the instruments that catch them are the zeal/quarantine
+For the classes above, the instruments that catch them are the schedule/quarantine
 arms below and a *dependency-scale* workload — #7280 records 25 curated corpus
 files passing while 20 lines of stock zod fail.
 
+**A fourth class was on this list until #7663 and is now covered: the lowering
+that actually ships.** The corpus used to be compiled under `PERRY_RS4GC=0` —
+the shadow stack — because the checker anchored on `@js_shadow_slot_bind` and
+the native lowering emits zero of them. That made a green `gc-root-dominance` a
+statement about a lowering that has not been the default on any walkable-frame
+target since #7370. **Run both**, and know which one you ran:
+
 ```bash
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+
+# SHADOW (PERRY_RS4GC=0): still the lowering on arm64_32 watchOS and ARM64
+# Windows. Anchors on root stores.
 ./scripts/gc_root_dominance_corpus.sh ir-corpus
 python3 scripts/gc_root_dominance_check.py ir-corpus --moving-only \
   --allowlist scripts/gc_root_dominance_allowlist.json -v
+
+# NATIVE (PERRY_RS4GC=1): the default everywhere else. Anchors on
+# `gc.statepoint` `"gc-live"` bundles. Needs an LLVM `opt` -- codegen emits
+# `ptr addrspace(1)` root allocas and LLVM inserts the safepoints later, so the
+# corpus is `--trace llvm` output plus the production statepoint rewrite.
+./scripts/gc_root_dominance_corpus.sh ir-corpus-native --lowering native
+python3 scripts/gc_root_dominance_check.py ir-corpus-native --statepoints \
+  --moving-only -v
 ```
+
+Each mode **refuses the other's corpus** rather than reporting it clean: the
+native corpus has zero root stores, so `--min-binds` fails there, and the
+shadow corpus has zero safepoints, so `--min-statepoints` fails there.
+
+### What `--statepoints` checks, and how it differs
+
+Under native roots a value is a root at a safepoint iff it appears in that
+`gc.statepoint`'s `"gc-live"` bundle, and its identity below the safepoint is
+the `gc.relocate` result. So "the root store must dominate every later
+collection point" becomes:
+
+> No register naming a GC object may be USED below a safepoint unless it is the
+> relocated value.
+
+The line that does the work is **tracked vs untracked**. LLVM relocates
+`ptr addrspace(1)` SSA values and rewrites their dominated uses, so those are
+never stale. Everything else is invisible to it — and Perry NaN-boxes, so a
+JSValue spends most of its life as a `double`. Two verdict classes, because
+they have two different fixes:
+
+| class | means | fix |
+|---|---|---|
+| `unrooted` | no `ptr addrspace(1)` value in the register's cast chain is in the safepoint's live bundle. Nothing marks or rewrites the object. | root it |
+| `stale` | the object IS in the bundle and is relocated, but a raw copy of its pre-move address is used below | re-derive from the relocated value (`OperandProtection::Reload`) |
+
+Two things this mode gets for free that the shadow modes cannot:
+**`NONCOLLECTING` is not consulted** — LLVM already decided which calls are
+safepoints and put the answer in the IR, so a wrong entry in that hand-kept
+list cannot hide a hazard here; and every safepoint **names its wrapped
+callee**, so `--moving-only` classifies against the real symbol rather than
+`llvm.experimental.gc.statepoint.p0`.
 
 It parses the emitted LLVM IR, builds per-function CFGs, computes real
 Cooper/Harvey/Kennedy dominance, and reports every **collection point** that can
@@ -219,11 +279,48 @@ like coverage while doing it. Two rounds of this have now been measured:
    entry points are `js_closure_callN`, which `RECEIVER_SINKS` in the same file
    already spelled correctly.
 
-`--audit-poll-capable` is the gate for this, and `gc-root-dominance.yml` runs it
-alongside `--audit-alloc-re` before the build. It fails on any entry that names
-no exported `extern "C" fn js_*`. When it goes red, **replace** the phantom with
-the symbol codegen actually emits rather than deleting it — deleting turns the
-audit green and leaves the hole.
+3. **A real symbol that was simply not in the set** (#7616 / #7453). The two
+   rounds above are both a NAME WITH NO REFERENT, and both audits look only in
+   that direction. `new URL(input, base)` held a raw `*mut StringHeader` from
+   `js_url_coerce_string` across the lowering of `base`; #7453's fix added
+   `url_coerce_string` to `ALLOC_RE` — its comment says *"that gap is why the
+   checker did not flag #7453"* — and stopped one list short, so the shape was
+   never catchable under the mode CI runs. Re-planting that exact code and
+   running every mode (#7616):
+
+   | mode | clean | sabotaged |
+   |---|--:|--:|
+   | `--moving-only` (dominance) | 0 | **0** |
+   | `--unrooted-allocas --moving-only` | 0 | **0** |
+   | `--stale-registers --moving-only` | 2 | **2** |
+   | `--statepoints --moving-only` (the lowering that ships) | 2 | **2** |
+   | `--stale-registers` (unfiltered) | 24 | 35 |
+   | `--statepoints` (unfiltered) | 15 | 21 |
+
+   Every gated arm blind, both unfiltered arms not — *including* `--statepoints`,
+   added in #7663 precisely because the other three were blind to the shipping
+   lowering. Adding the one name takes the sabotaged arms to 13 and 8 and leaves
+   the clean arms at 2 and 2.
+
+`--audit-poll-capable` is the gate for rounds 1–2 and `--audit-poll-reach` is
+the gate for round 3; `gc-root-dominance.yml` runs both alongside
+`--audit-alloc-re` before the build. `--audit-poll-capable` fails on any entry
+that names no exported `extern "C" fn js_*`. When it goes red, **replace** the
+phantom with the symbol codegen actually emits rather than deleting it —
+deleting turns the audit green and leaves the hole.
+
+`--audit-poll-reach` fails when a symbol `ALLOC_RE` matches reaches a
+`POLL_CAPABLE_RUNTIME` symbol through the runtime's own call graph without being
+listed itself. It is deliberately NOT "every poll-capable symbol must be
+listed" — 297 exported symbols call one directly, and deciding that is a
+coverage change with its own hit count. It asserts only that **the checker's two
+lists must not disagree about the same symbol**: if ALLOC_RE says a call's
+result is a heap value to track, and the runtime shows that call invoking
+something this set already grants can re-enter JS, the premise for listing it is
+one the set already granted. The reach relation is a fixpoint over exported
+symbols (a one-hop version reported 52 names, and re-running after adding them
+found 10 more), and comments and string literals are stripped first so a name
+mentioned in prose cannot become a premise.
 
 Checking a *plausible* name is not enough. Confirm against emitted IR:
 
@@ -264,10 +361,30 @@ python3 scripts/gc_root_dominance_check.py .perry-trace/llvm \
 
 From #7196:
 
-- `PERRY_GC_ZEAL=1` — collect at every safepoint. Slow, thorough.
+- `PERRY_GC_SCHEDULE_RATE=1` (with a seed) — collect at every candidate
+  safepoint, allocation-paced (#7728): one candidate per
+  `PERRY_GC_SCHEDULE_ALLOC_KB` (default 4) of new nursery material. Slow,
+  thorough. Add `PERRY_GC_SCHEDULE_ALLOC_KB=0` for the literal every-poll mode
+  when the window you are hunting executes only once — it is far slower.
 - `PERRY_GC_PROTECT_FROMSPACE=1` — `mprotect` from-space after evacuation so a
   stale read faults immediately instead of reading plausible garbage.
 - `PERRY_GC_FROMSPACE_SCAN_ABORT` — now actually runs.
+- `PERRY_GC_SCHEDULE_SEED=<u64>` (+ `PERRY_GC_SCHEDULE_RATE`, default `0.05`) —
+  collect on a deterministic pseudo-random schedule. At `RATE=1` it collects at
+  every safepoint: slow, thorough, maximum pressure. Drop the rate when that is
+  *too* blunt — on a workload whose timing it distorts enough to kill somewhere
+  uninteresting — and the schedule thins out without losing the property that
+  matters. The schedule is a pure function of `(seed, per-thread safepoint
+  ordinal)`, so a seed that fails is a reproducer, which is what turns "1 run in
+  60" into something you can bisect against.
+  `scripts/gc_schedule_fuzz.sh <binary> [seed-count]` sweeps seeds and prints a
+  reproduce command per failure.
+
+> **A rate is not a substitute for a schedule.** Re-running one binary 60 times
+> re-runs one schedule 60 times; with zero failures in `N` runs the 95% upper
+> bound on the true rate is only ~`3/N`, so 120 clean runs bound a 1.7% bug at
+> 2.5% — no evidence at all. Varying *when* collections fire is the only cheap
+> way to explore the space the bug actually lives in.
 
 > **`PERRY_GC_PROTECT_FROMSPACE_DEPTH` defaults to 4, and that default produces
 > FALSE GREENS.** Four levels of retained from-space is not enough to still be
@@ -415,6 +532,16 @@ this is documentation. Per CLAUDE.md's corollary, promote it **after** the job's
 first green run on `main` with the `--unrooted-allocas` step included — a gate
 that has never been green in its current shape blocks every open PR the day it
 becomes required.
+
+**`gc-root-dominance-statepoints` is a SEPARATE context and a separate
+decision.** It was added by #7663 as a second job for exactly that reason: it
+reads a different corpus, its floors are about safepoints rather than root
+stores, and it should be promotable without dragging the shadow arms along.
+Promote it on the same terms — after its first green run on `main`, never
+before — and note that its `--max-unrooted` budget is a *ratchet under triage*,
+not a calibrated zero: the residual is enumerated by shape in #7664. Lower it as
+the population is fixed; a promotion that freezes the budget where it is has
+bought a number, not an invariant.
 
 ## Rules of thumb
 

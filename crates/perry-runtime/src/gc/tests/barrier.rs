@@ -1768,7 +1768,7 @@ fn test_minor_gc_promotes_after_two_survivals() {
     let user_ptr = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     unsafe {
         let header = header_from_user_ptr(user_ptr);
-        (*header).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(header);
         // Initial state: not yet survived, not tenured.
         assert_eq!((*header).gc_flags & GC_FLAG_HAS_SURVIVED, 0);
         assert_eq!((*header).gc_flags & GC_FLAG_TENURED, 0);

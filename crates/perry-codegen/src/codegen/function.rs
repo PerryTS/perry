@@ -743,6 +743,7 @@ pub(super) fn compile_function(
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
+        namespace_member_nested: &cross_module.namespace_member_nested,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
@@ -771,7 +772,7 @@ pub(super) fn compile_function(
         persistent_shadow_slots: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         shadow_slots_bound: bound_param_slots,
-        temp_roots: crate::expr::temp_root::TempRootPool::default(),
+        temp_roots: crate::rooting::TempRootPool::default(),
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
@@ -781,6 +782,7 @@ pub(super) fn compile_function(
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        element_shape_loop_facts: Vec::new(),
         // Specialized entries seed the canonical-i32 registry with their raw
         // i32 params (empty otherwise — identical to the pre-phase behavior).
         local_slot_reps: spec_i32_param_slots
@@ -1064,8 +1066,9 @@ pub(super) fn compile_function(
     }
     for ic_name in &ic_globals {
         llmod.add_raw_global(format!(
-            "@{} = private global [8 x i64] zeroinitializer",
-            ic_name
+            "@{} = private global [{} x i64] zeroinitializer",
+            ic_name,
+            crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
         ));
     }
     for raw in &typed_parse_rodata {

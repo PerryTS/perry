@@ -94,7 +94,10 @@ pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
         }
         if !GC_SAFEPOINT_PENDING.with(std::cell::Cell::get) {
             GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(total));
-            GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+            // Through the helper, never the `Cell`: it also arms the global
+            // shadow that codegen's inline poll check reads. See
+            // `policy::set_safepoint_pending`.
+            super::set_safepoint_pending(true);
         }
         return 1;
     }

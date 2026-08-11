@@ -44,6 +44,19 @@ SCAN_ROOTS = (
     "crates/perry-stdlib/src",
 )
 
+# #7272: `crates/perry-ext-*/src` is first-party runtime code and is scanned
+# too, matching the sibling gate `gc_store_site_inventory.py`, whose
+# `iter_scan_roots()` has globbed these all along.
+#
+# The two audits disagreeing was not academic. #6826 moved the HTTP server out
+# of `perry-stdlib/src/http.rs` into `crates/perry-ext-http/`, and this gate
+# reported the file's 11 handle-floor sites as "found 0 — lower it to 0". They
+# had not been fixed; they had walked out of the gate's field of view, and the
+# ratchet's own bookkeeping invited someone to ratify that as progress. A gate
+# whose coverage shrinks silently when code moves is the shape CLAUDE.md's
+# "four ways a gate can be unable to fail" is about.
+EXT_CRATE_GLOB = "perry-ext-*"
+
 # The module that owns the band constants/predicates, and the collector
 # internals that legitimately manipulate GcHeader layout directly.
 EXCLUDED_PREFIXES = (
@@ -215,8 +228,16 @@ def scan_text(rel_path: str, text: str) -> list[Finding]:
 def collect_inventory() -> tuple[list[Finding], int]:
     findings: list[Finding] = []
     files_scanned = 0
-    for root in SCAN_ROOTS:
-        for path in sorted((REPO_ROOT / root).rglob("*.rs")):
+    scan_dirs = [REPO_ROOT / root for root in SCAN_ROOTS]
+    scan_dirs.extend(
+        src
+        for src in (
+            ext / "src" for ext in sorted((REPO_ROOT / "crates").glob(EXT_CRATE_GLOB))
+        )
+        if src.is_dir()
+    )
+    for root in scan_dirs:
+        for path in sorted(root.rglob("*.rs")):
             rel_path = path.relative_to(REPO_ROOT).as_posix()
             # Skip parked/hidden trees (e.g. `.value.parked/`) — not compiled.
             if any(part.startswith(".") for part in rel_path.split("/")):

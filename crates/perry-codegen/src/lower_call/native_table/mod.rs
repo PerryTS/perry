@@ -16,6 +16,7 @@ mod async_decimal;
 mod bun;
 mod databases;
 mod dates;
+mod events_dispatch_parity_tests;
 mod extras;
 mod fastify;
 mod http_client;

@@ -20,9 +20,10 @@ use super::new_helpers::{
     ctor_body_has_value_return, ctor_body_uses_this, ctor_chain_uses_new_target,
     emit_promise_subclass_init, local_constructor_symbol_exists, node_stream_parent_kind,
 };
-use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, temp_root, FnCtx};
+use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::types::{DOUBLE, I32, I64, I8, PTR};
+use crate::rooting::{self, open_rooted_group, EmittedValue, Repr, RootedGroup};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Does `new <class_name>(…)` run user code — an own or inherited constructor
 /// body, or field initializers — between the instance allocation and the value
@@ -46,7 +47,7 @@ fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     // `ctx.imported_class_ctors[class_name]` (its `has_imported_ctor` arm, and
     // the `Stmt::Return` writer at the tail of this file). That left BOTH
     // consumers of this predicate unprotected across a real constructor body:
-    // #7192's `instance_root`, and the `this`-slot bind added for #7202.
+    // #7192's instance root, and the `this`-slot bind added for #7202.
     //
     // Keeping it ONE predicate rather than two is the point — the consumers
     // have to agree by construction, which is what stops the divergence
@@ -73,46 +74,33 @@ fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
 /// keep their old IR byte for byte.
 fn reload_instance(
     ctx: &mut FnCtx<'_>,
-    instance_root: &Option<String>,
+    group: &RootedGroup<'_>,
+    instance: &Instance,
     obj_handle: &str,
     obj_box: &str,
 ) -> (String, String) {
-    let Some(idx) = instance_root.clone() else {
+    if !instance.protected {
         return (obj_handle.to_string(), obj_box.to_string());
-    };
-    let handle = temp_root::temp_root_get_i64(ctx, &idx);
+    }
+    let handle = group.reread_emitted(ctx, instance.root);
     let boxed = nanbox_pointer_inline(ctx.block(), &handle);
     (handle, boxed)
 }
 
+/// The freshly-allocated instance's place in the `new` scope.
+///
+/// `protected` is `construction_runs_user_code`, taken ONCE. It gates three
+/// things that must agree — the temp root, the `this`-slot bind (#7202), and
+/// whether [`reload_instance`] re-reads at all — and the reason it is a field
+/// rather than three calls is the same reason `construction_runs_user_code` is
+/// one predicate rather than two: a fork here is how #7114's pair diverged.
+struct Instance {
+    root: EmittedValue,
+    protected: bool,
+}
+
 pub(crate) use super::capture_writeback::emit_class_capture_writeback;
 use super::typed_shape_init::{emit_typed_shape_layout_declare, emit_typed_shape_layout_init};
-
-/// #7469: is the `new` site being lowered inside a **loop body**?
-///
-/// This is the gate on the inline bump allocator. Inlining removes the
-/// `js_object_alloc_class_inline_keys` FFI call and, with it, the thread-local
-/// resolutions that call performs — measured 1.81× on `churn_alloc`, 1.78× on
-/// `push_cls`. But it costs ~268 bytes of machine code **per site** (measured
-/// over 10 / 200 / 800-site programs: +0, +49,536, +214,656 bytes), so it
-/// cannot be the unconditional default against this repo's binary-size
-/// campaign — a 5,000-site application would pay ~1.3 MB.
-///
-/// Loop membership is the cheapest sound proxy for "this site runs many
-/// times", and it bounds the size cost to loop bodies. A `new` executed once
-/// keeps the outlined call and contributes nothing to binary growth.
-///
-/// `loop_targets` is reused rather than a new counter added, because it is
-/// already maintained by all three loop lowerings. It also carries `switch`
-/// frames, which push an EMPTY continue label (`switch_stmt.rs`) while every
-/// loop pushes a real one — the same discriminator `Stmt::Continue`'s
-/// scan-outward-past-switch-frames logic uses. A `new` inside a bare `switch`
-/// is therefore correctly treated as not-in-a-loop.
-fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
-    ctx.loop_targets
-        .iter()
-        .any(|(continue_label, _, _)| !continue_label.is_empty())
-}
 
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
@@ -174,8 +162,8 @@ pub(crate) fn lower_new_member_captured(
 ///   *mutable* root that an evacuating cycle rewrites in place, leaving the
 ///   register pushed beforehand stale;
 /// - an argument that was NOT rooted because it reads an *immutable* registered
-///   root — a string literal, the only `temp_root::operand_is_reloadable` case
-///   — is **re-loaded**. It is never swept, but evacuation rewrote its handle
+///   root — a string literal, the only `operand_is_reloadable` case — is
+///   **re-loaded**. It is never swept, but evacuation rewrote its handle
 ///   global too, so the cached register points at where the string used to be.
 ///   Re-lowering emits the load again and costs no runtime call. (A
 ///   shadow-slotted local or a module global is a registered root as well, but
@@ -185,25 +173,21 @@ pub(crate) fn lower_new_member_captured(
 /// Called after the instance allocation and again before the late consumers
 /// that sit behind further arbitrary lowering (field initializers, an inlined
 /// constructor body) — each of those is another chance to relocate.
-fn refresh_rooted_args(
-    ctx: &mut FnCtx<'_>,
-    args: &[Expr],
-    lowered_args: &mut [String],
-    arg_roots: &[Option<String>],
-) -> Result<()> {
-    for (i, (value, slot)) in lowered_args.iter_mut().zip(arg_roots.iter()).enumerate() {
-        match slot {
-            Some(idx) => {
-                let idx = idx.clone();
-                *value = temp_root::temp_root_get_double(ctx, &idx);
-            }
-            None if temp_root::operand_is_reloadable(&args[i]) => {
-                *value = lower_constructor_arg(ctx, &args[i])?;
-            }
-            None => {}
-        }
-    }
-    Ok(())
+fn refresh_rooted_args(ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>) -> Result<Vec<String>> {
+    // `RootedGroup`'s re-read re-lowers a `Reload` operand through
+    // `crate::expr::lower_expr`, while the ORIGINAL lowering of every
+    // constructor argument went through `lower_constructor_arg` — which is
+    // `lower_expr` with `discard_expr_value` forced false (#7590: the flag
+    // means "this STATEMENT's value is discarded" and is not cleared on
+    // recursion). Re-lowering under a different flag would be free to pick
+    // `materialize_js_value_without_record`, so the re-read is wrapped in the
+    // same suppression the first lowering had. A no-op for `Root` and `Reuse`
+    // operands, which emit no lowering at all.
+    let prev_discard = ctx.discard_expr_value;
+    ctx.discard_expr_value = false;
+    let out = group.reread_all(ctx);
+    ctx.discard_expr_value = prev_discard;
+    out
 }
 
 fn lower_new_impl(
@@ -212,30 +196,60 @@ fn lower_new_impl(
     args: &[Expr],
     caps_absent_from_args: bool,
 ) -> Result<String> {
-    // #6969: expression-scope temp-root barrier. The body below roots its
+    // #6969: one expression-scope temp-root barrier. The body below roots its
     // constructor arguments across the instance allocation, and it has ~20
     // return paths with `lowered_args` consumed at a dozen of them — one cut
-    // here releases the group whichever path ran, instead of a
-    // `temp_root_release` at each that reviewers and future edits must keep
-    // balanced.
+    // here releases the group whichever path ran, instead of a release at each
+    // that reviewers and future edits must keep balanced.
     //
-    // #7154: the body also roots the freshly-allocated instance across the
-    // constructor body, so the marker is required whenever construction runs
-    // user code — not only when an argument needs a root. `new C()` with no
-    // arguments is exactly the shape that would otherwise push a slot with no
-    // marker above it to cut.
-    let scope =
-        temp_root::temp_root_scope_begin(ctx, args, construction_runs_user_code(ctx, class_name));
-    let result = lower_new_impl_inner(ctx, class_name, args, caps_absent_from_args);
-    temp_root::temp_root_scope_end(ctx, scope);
+    // #7615 slice 8: this is [`open_rooted_group`], and the escaping form is
+    // the right one for exactly the reason its doc names — the release has to
+    // post-dominate every one of those return paths, which no closure form can
+    // own without swallowing the whole 1,000-line dispatch.
+    //
+    // The null MARKER slot `temp_root_scope_begin` used to push is gone with
+    // it. It existed only because a raw truncate needs a base index even when
+    // nothing else was pushed; `RootedGroup::release` truncates at the group's
+    // own lowest slot and emits nothing at all when the group is empty, so the
+    // marker has no work left to do. One fewer slot and one fewer push per
+    // `new` site that roots anything.
+    let mut group = open_rooted_group(args.len() + 1);
+    let result = lower_new_impl_inner(ctx, class_name, args, caps_absent_from_args, &mut group);
+    group.release(ctx);
     result
 }
 
-fn lower_new_impl_inner(
+/// Lower every constructor argument into `group`, rooting each one **as it is
+/// produced** rather than after the list (#6969: rooting a finished list
+/// publishes an already-dangling argument 0 to the scanner, which turns a
+/// silent wrong answer into a SIGSEGV — strictly worse than not rooting).
+///
+/// Returns the group indices, in argument order, for the caller to re-read at
+/// the point it emits its call. `lower_constructor_arg` rather than
+/// `RootedGroup::lower` because it clears `ctx.discard_expr_value` for the
+/// operand — #7590: that flag means "this STATEMENT's value is discarded" and
+/// is not cleared on recursion, so lowering an operand under it can evaluate a
+/// typed-array store to `0`.
+fn adopt_constructor_args<'a>(
+    ctx: &mut FnCtx<'_>,
+    args: &'a [Expr],
+    group: &mut RootedGroup<'a>,
+) -> Result<Vec<usize>> {
+    let mut slots = Vec::with_capacity(args.len());
+    for (i, a) in args.iter().enumerate() {
+        let value = lower_constructor_arg(ctx, a)?;
+        let collects = rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+        slots.push(group.adopt(ctx, a, &value, collects));
+    }
+    Ok(slots)
+}
+
+fn lower_new_impl_inner<'a>(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
-    args: &[Expr],
+    args: &'a [Expr],
     caps_absent_from_args: bool,
+    group: &mut RootedGroup<'a>,
 ) -> Result<String> {
     // Built-in Web classes that the runtime provides constructors for.
     // These are checked BEFORE the ctx.classes lookup because the user
@@ -254,15 +268,30 @@ fn lower_new_impl_inner(
             ctx.import_function_node_submodule.get(class_name).cloned()
         {
             if submod_key == "readline_promises" && exported_name == "Readline" {
-                let output = if let Some(first) = args.first() {
-                    lower_expr(ctx, first)?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                // #6986: `output` was live in an SSA register across `options`'
+                // lowering AND across every `extra`'s — each an arbitrary
+                // expression — before `js_readline_promises_readline_new` read
+                // it. Same repair as the main class loop below: adopt into the
+                // enclosing group as each operand is lowered (never after the
+                // list — that publishes an already-dangling pointer, #6969),
+                // and re-read at the call.
+                //
+                // The `undefined` fillers are literals, not operands: nothing
+                // to root, and `Arg::Plain` keeps them out of the group so an
+                // absent argument still costs no slot.
+                let output = match args.first() {
+                    Some(first) => {
+                        let collects = rooting::any_operand_may_collect(ctx, args[1..].iter());
+                        Some(group.lower(ctx, first, collects)?)
+                    }
+                    None => None,
                 };
-                let options = if let Some(second) = args.get(1) {
-                    lower_expr(ctx, second)?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                let options = match args.get(1) {
+                    Some(second) => {
+                        let collects = rooting::any_operand_may_collect(ctx, args[2..].iter());
+                        Some(group.lower(ctx, second, collects)?)
+                    }
+                    None => None,
                 };
                 for extra in args.iter().skip(2) {
                     let _ = lower_expr(ctx, extra)?;
@@ -272,6 +301,15 @@ fn lower_new_impl_inner(
                     DOUBLE,
                     vec![DOUBLE, DOUBLE],
                 ));
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let output = match output {
+                    Some(i) => group.reread(ctx, i)?,
+                    None => undef.clone(),
+                };
+                let options = match options {
+                    Some(i) => group.reread(ctx, i)?,
+                    None => undef,
+                };
                 return Ok(ctx.block().call(
                     DOUBLE,
                     "js_readline_promises_readline_new",
@@ -279,7 +317,7 @@ fn lower_new_impl_inner(
                 ));
             }
         }
-        if let Some(val) = lower_builtin_new(ctx, class_name, args)? {
+        if let Some(val) = lower_builtin_new(ctx, class_name, args, group)? {
             return Ok(val);
         }
         // Aliased built-in import: a minified bundle renames a node built-in
@@ -295,7 +333,7 @@ fn lower_new_impl_inner(
         // can't shadow a real local class.
         if let Some(original) = ctx.imported_class_original_names.get(class_name).cloned() {
             if original != class_name {
-                if let Some(val) = lower_builtin_new(ctx, &original, args)? {
+                if let Some(val) = lower_builtin_new(ctx, &original, args, group)? {
                     return Ok(val);
                 }
             }
@@ -355,6 +393,13 @@ fn lower_new_impl_inner(
             if ctx.import_function_prefixes.contains_key(class_name)
                 && !ctx.import_function_v8_specifiers.contains_key(class_name)
             {
+                // #6986: `func_double` was live across every argument's
+                // lowering (arbitrary user code) and each argument across the
+                // ones after it, all of them in bare SSA registers, before
+                // `js_new_function_construct` read them. `lower_js_args_array`
+                // is no rescue — it is a plain `alloca_entry_array` pack with
+                // no `js_shadow_slot_bind`, so it copies whatever bits it is
+                // handed, stale or not.
                 let func_double = lower_expr(
                     ctx,
                     &Expr::ExternFuncRef {
@@ -363,11 +408,15 @@ fn lower_new_impl_inner(
                         return_type: HirType::Any,
                     },
                 )?;
+                let func_collects = rooting::any_operand_may_collect(ctx, args.iter());
+                let func_root = group.adopt_emitted(ctx, Repr::Boxed, &func_double, func_collects);
+                let arg_slots = adopt_constructor_args(ctx, args, group)?;
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered_args.push(lower_constructor_arg(ctx, a)?);
+                for slot in &arg_slots {
+                    lowered_args.push(group.reread(ctx, *slot)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                let func_double = group.reread_emitted(ctx, func_root);
                 return Ok(ctx.block().call(
                     DOUBLE,
                     "js_new_function_construct",
@@ -384,9 +433,14 @@ fn lower_new_impl_inner(
             // `send` → Next.js) and returns a working native function; anything
             // else still gets the placeholder. NO general JS interpreter.
             if class_name == "Function" {
+                // #6986: same shape as the imported-constructor branch above —
+                // argument `i` was live in a bare SSA register across every
+                // argument after it. `new Function(fresh(0), "return " + churn(N))`
+                // is the reproducer named in the issue.
+                let arg_slots = adopt_constructor_args(ctx, args, group)?;
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered_args.push(lower_constructor_arg(ctx, a)?);
+                for slot in &arg_slots {
+                    lowered_args.push(group.reread(ctx, *slot)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 return Ok(ctx.block().call(
@@ -434,478 +488,19 @@ fn lower_new_impl_inner(
     // collects; the re-read is immediately after it (see `obj_box`), and the
     // scope cut in `lower_new_impl` is the release.
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-    let mut arg_roots: Vec<Option<String>> = Vec::with_capacity(args.len());
     for a in args {
         let value = lower_constructor_arg(ctx, a)?;
-        let slot = if temp_root::operand_needs_root(ctx, a) {
-            Some(temp_root::temp_root_push_double(ctx, &value))
-        } else {
-            None
-        };
+        // `collects` is unconditionally true: the instance allocation below
+        // always collects, so every argument is live across it. That is the
+        // same answer the pre-migration code gave by consulting
+        // `operand_needs_root` with no window test at all.
+        group.adopt(ctx, a, &value, true);
         lowered_args.push(value);
-        arg_roots.push(slot);
     }
 
-    // Compute total field count including inherited parent fields.
-    // The runtime allocates at least 8 inline slots regardless, so this
-    // mostly matters for shapes >8 fields.
-    let mut field_count = class.fields.len() as u32;
-    // Imported classes now carry their real field_names from the source
-    // module. If the field count is still 0 (no fields info available),
-    // use a generous default as a safety net.
-    if field_count == 0 && class.constructor.is_none() {
-        field_count = 32;
-    }
-    let mut parent = class.extends_name.as_deref();
-    while let Some(parent_name) = parent {
-        if let Some(p) = ctx.classes.get(parent_name).copied() {
-            field_count += p.fields.len() as u32;
-            parent = p.extends_name.as_deref();
-        } else {
-            break;
-        }
-    }
-    // Issue #26 / #321: prefer the authoritative per-class field count computed
-    // by the source-prefix-disambiguated keys-global builder. The walk above
-    // resolves parents via `ctx.classes` — a name-keyed map that holds only
-    // ONE same-named stub — so when a cross-module parent name collides
-    // (effect's `Type` in SchemaAST.ts vs ParseResult.ts) it counts the wrong
-    // parent's fields. Using the keys-global's count keeps the allocated slot
-    // count and the header `field_count` in lockstep with the keys array,
-    // which `Object.keys()` walks. Falls back to the computed walk when this
-    // class has no keys global (anonymous / no-keys path).
-    if let Some(&authoritative) = ctx.class_field_counts.get(class_name) {
-        field_count = authoritative;
-    }
-    // #6812 (w16): a per-site empty-literal anon-shape class may carry a
-    // compile-time proven builder width. Allocate that many inline slots so
-    // the FIRST instance of the site is as wide as the runtime-learned
-    // resizes make every later one — a lone under-sized first instance
-    // permanently vetoes whole-loop clone eligibility for arrays built at
-    // the site. Capacity only: the keys array stays authoritative for
-    // enumeration, and the runtime treats header field_count as alloc_limit.
-    if class.alloc_width_hint > field_count {
-        field_count = class.alloc_width_hint;
-    }
-
-    // Allocate the object with the per-class id and (if applicable)
-    // parent class id, so the runtime registers the inheritance
-    // chain for instanceof / virtual dispatch lookups.
-    //
-    // Use `js_object_alloc_class_with_keys`, which pre-populates the
-    // `keys_array` with the class's field names in declaration order
-    // (parent fields first, walking from the deepest ancestor down,
-    // then own fields). This is REQUIRED so the LLVM PropertyGet/Set
-    // fast path's slot indices match the runtime's by-name dispatch
-    // (which walks `keys_array`). Mixing the two access patterns on
-    // the same object — e.g. constructor writes via the fast path,
-    // PropertyUpdate reads via the runtime helper — only produces
-    // consistent results when both agree on the slot mapping.
-    //
-    // The packed-keys constant is interned via the StringPool. Two
-    // classes with the same field-name set + order share one constant.
-    let cid = ctx.class_ids.get(class_name).copied().unwrap_or(0);
-    let parent_cid = class
-        .extends_name
-        .as_deref()
-        .and_then(|p| ctx.class_ids.get(p).copied())
-        .unwrap_or(0);
-    let cid_str = cid.to_string();
-    let parent_cid_str = parent_cid.to_string();
-    let n_str = field_count.to_string();
-
-    // Fast path: if the class has a per-class keys global (built once
-    // at module init via `js_build_class_keys_array`), emit INLINE
-    // bump-allocator IR — no function call into the runtime at all on
-    // the hot path. The runtime exposes a `InlineArenaState` struct
-    // (data ptr at offset 0, current bump offset at offset 8, current
-    // block size at offset 16) via `js_inline_arena_state()`. We call
-    // that ONCE per JS function entry (cached in `arena_state_slot`)
-    // and then emit a 5-instruction bump check + GcHeader/ObjectHeader
-    // store sequence at every `new ClassName()` site. The slow path
-    // (block overflow) calls `js_inline_arena_slow_alloc` which syncs
-    // the inline state back to the underlying arena, allocates a new
-    // block, and updates the inline state.
-    //
-    // Cycles per inlined alloc on the M-series fast path:
-    //    load offset       (1)
-    //    add+and align     (2)
-    //    add new_offset    (1)
-    //    load size + cmp   (2)
-    //    cond br           (predicted, 0)
-    //    store offset      (1)
-    //    load data + gep   (2)
-    //    write GcHeader    (1)  — packed i64 store
-    //    write ObjectHeader×2 (2) — packed i64 stores
-    //    write keys_ptr    (1)
-    //  total: ~13 cycles vs ~140 cycles for the function-call path.
-    //
-    // Layout assumption: GcHeader is 8 bytes
-    //    {obj_type:u8, gc_flags:u8, _reserved:u16, size:u32}
-    // and ObjectHeader is 24 bytes
-    //    {object_type:u32, class_id:u32, parent_class_id:u32,
-    //     field_count:u32, keys_array:*ptr}
-    // followed by `max(field_count, 8)` 8-byte field slots. The user
-    // pointer the rest of the codegen sees is `raw + 8` (i.e. the
-    // ObjectHeader address) — same as what
-    // `js_object_alloc_class_inline_keys` returns.
-    //
-    // Layout constants are duplicated here from the runtime; if
-    // `GcHeader` or `ObjectHeader` ever change in
-    // `crates/perry-runtime/src/{gc,object}.rs`, update both sides.
-    let obj_handle = if class.extends_expr.is_some() {
-        // Wall 45: dynamic-parent subclass (`class X extends _mod.default`).
-        // The parent's field layout is unknown at this compile time (the
-        // `extends` target is an unresolvable cross-module value, so the
-        // parent-chain walk above contributed 0 fields and `field_count` /
-        // `packed_keys` cover only X's OWN fields). Allocating with that
-        // own-only layout under-sizes and mis-lays-out the instance: the
-        // parent's constructor and inherited methods address the inherited
-        // fields at the PARENT's slot indices (parent fields first), which fall
-        // past X's own slots → OOB heap reads (captures read as garbage).
-        // Route to `js_object_alloc_class_dynamic_parent`, which resolves the
-        // runtime-registered parent edge + keys-array (both established at
-        // module init by `js_register_class_parent_dynamic` /
-        // `js_build_class_keys_array`, before any `new X()`) and allocates with
-        // the merged `[parent keys..] ++ [own keys..]` layout. Bypasses the
-        // inline bump-alloc fast path (which would bake the wrong layout).
-        let mut packed_keys = String::new();
-        for f in &class.fields {
-            if f.key_expr.is_some() {
-                continue;
-            }
-            packed_keys.push_str(&f.name);
-            packed_keys.push('\0');
-        }
-        let keys_idx = ctx.strings.intern(&packed_keys);
-        let keys_entry = ctx.strings.entry(keys_idx);
-        let keys_global = format!("@{}", keys_entry.bytes_global);
-        let keys_len_str = keys_entry.byte_len.to_string();
-        ctx.block().call(
-            I64,
-            "js_object_alloc_class_dynamic_parent",
-            &[
-                (I32, &cid_str),
-                (I32, &n_str),
-                (PTR, &keys_global),
-                (I32, &keys_len_str),
-            ],
-        )
-    } else if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-        // [#bloat] Outline the per-`new`-site allocator EXCEPT inside a loop.
-        //
-        // Outlining collapses ~145 lines of per-class-constant IR per site into
-        // a single `js_object_alloc_class_inline_keys` call (~3 lines), which
-        // performs the identical bump alloc + header init + slot zero-fill and
-        // returns the same user pointer. That is the right default for code
-        // size, and the size half of the original measurement still holds:
-        // ~268 bytes of machine code per site, +214,656 bytes over an 800-site
-        // program.
-        //
-        // The SPEED half of that measurement has since inverted. It read
-        // "~17% faster on an 8M-allocation loop (the inline bump bloated the
-        // hot loop, hurting icache/regalloc more than the saved call)"; today
-        // the outlined form is **1.81× SLOWER** on `churn_alloc` and 1.78× on
-        // `push_cls`. Nothing about the inline bump changed — everything
-        // *around* the allocation got cheaper (#7474, #7486, #7487, #7501,
-        // #7525, #7532, #7535, #7536, #7552), so the surviving FFI call and
-        // the thread-local resolutions it performs now dominate what the
-        // inline bump's code bloat costs. On Darwin those resolutions cannot
-        // be made cheaper — Mach-O has no local-exec TLS model, and building
-        // the runtime with `-Ztls-model=local-exec` leaves the `blr` through
-        // the TLV descriptor byte-identical (measured: 1.02×). Only their
-        // COUNT can be reduced, and inlining removes them outright.
-        //
-        // So the choice is per site, not global: a `new` inside a loop takes
-        // the inline bump (it runs many times, and the size cost is bounded to
-        // loop bodies); everything else keeps the outlined call and
-        // contributes nothing to binary growth. `PERRY_INLINE_NEW=1` still
-        // forces the inline form everywhere, for A/B measurement.
-        //
-        // NOTE the env test is `is_none()`: `PERRY_INLINE_NEW=""` *enables*
-        // the inline path, because an empty string is `Some("")`.
-        let force_inline_new = std::env::var_os("PERRY_INLINE_NEW").is_some();
-        if !force_inline_new && !new_site_is_in_loop(ctx) {
-            let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
-                s
-            } else {
-                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
-                ctx.class_keys_slots
-                    .insert(class_name.to_string(), s.clone());
-                s
-            };
-            let keys_ptr = ctx.block().load(I64, &keys_slot);
-            ctx.pending_declares.push((
-                "js_object_alloc_class_inline_keys".to_string(),
-                I64,
-                vec![I32, I32, I32, I64],
-            ));
-            ctx.block().call(
-                I64,
-                "js_object_alloc_class_inline_keys",
-                &[
-                    (I32, &cid_str),
-                    (I32, &parent_cid_str),
-                    (I32, &field_count.to_string()),
-                    (I64, &keys_ptr),
-                ],
-            )
-        } else {
-            // Compile-time layout constants.
-            const GC_HEADER_SIZE: u64 = 8;
-            // arm64_32 watchOS: `size_of::<ObjectHeader>()` is 24 on 64-bit but
-            // 20 on ILP32 (4-byte `keys_array` pointer). Derive from the target
-            // triple so the inline alloc size and field-region base match the
-            // target-compiled runtime (no-op on 64-bit; see `target_layout`).
-            let object_header_size: u64 =
-                crate::target_layout::object_header_size_bytes(ctx.target_triple);
-            // #6759 Phase B: pointer width for the trailing `meta` header
-            // field (computed here, before `ctx.block()` mutably borrows).
-            let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-                4
-            } else {
-                8
-            };
-            const FIELD_SLOT_SIZE: u64 = 8;
-            // Inline-slot floor — MUST match perry-runtime `object::INLINE_SLOT_FLOOR`
-            // (they independently pad `new` objects to the same minimum; a mismatch
-            // where codegen allocs fewer slots than the runtime's get/set bound-check
-            // assumes is heap corruption). Lowered 8->4 to shrink small-object footprint.
-            const MIN_FIELD_SLOTS: u64 = 4;
-            const GC_TYPE_OBJECT: u64 = 2;
-            const GC_FLAG_ARENA: u64 = 0x02;
-            // PR #1146: pointer-free hint for inline-allocated regular
-            // objects. The field-store sites issue per-slot
-            // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
-            // slots regardless of this initial tag.
-            const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
-            const OBJECT_TYPE_REGULAR: u64 = 1;
-
-            let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
-            let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
-            // Round the whole allocation up to FIELD_SLOT_SIZE (8). The inline
-            // bump allocator's offset invariant (below) requires every
-            // allocation to be a multiple of 8; on ILP32 `object_header_size`
-            // is 20, so an unpadded total is 4-skewed (e.g. 92) and would
-            // misalign the next bump. No-op on 64-bit (8 + 24 + 8·n is already
-            // 8-aligned → 96 for ≤8 fields).
-            let total_size = (GC_HEADER_SIZE + payload_size).next_multiple_of(FIELD_SLOT_SIZE);
-            let total_size_str = total_size.to_string();
-
-            // Lazy: allocate the per-function arena-state slot on the
-            // first `new` we see. The slot init (`call @js_inline_arena_state`
-            // + store) lives in the entry block via `entry_init_call_ptr`,
-            // so it dominates every reachable use.
-            let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
-                slot
-            } else {
-                let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
-                ctx.arena_state_slot = Some(slot.clone());
-                slot
-            };
-
-            // Hoist the per-class `keys_array` global load to the function
-            // entry block (cached in a stack slot per class). Without this
-            // hoisting, LLVM would reload `@perry_class_keys_<class>` on
-            // every loop iteration, because the loop body's `call
-            // @js_inline_arena_slow_alloc` blocks LICM — LLVM can't prove
-            // the call doesn't modify the global.
-            let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
-                s
-            } else {
-                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
-                ctx.class_keys_slots
-                    .insert(class_name.to_string(), s.clone());
-                s
-            };
-            let keys_ptr = ctx.block().load(I64, &keys_slot);
-
-            // Inline bump-allocator IR.
-            let blk = ctx.block();
-            let state_ptr = blk.load(PTR, &arena_state_slot);
-
-            // offset = state.offset (at byte offset 8 in InlineArenaState).
-            // The offset is invariant 8-aligned: arena blocks start at offset 0
-            // (8-aligned), every allocation is a multiple of 8 (`total_size`
-            // includes the 8-byte GcHeader and `MIN_FIELD_SLOTS=4` slots ×
-            // 8 bytes), and `js_inline_arena_slow_alloc` only ever swings the
-            // state to `block.offset` which is also always 8-aligned. So we
-            // skip the `(offset + 7) & -8` align-up step entirely — saves
-            // 2 instructions per iter on the hot path.
-            let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
-            let offset_val = blk.load(I64, &offset_field_ptr);
-            let aligned_off = offset_val.clone();
-
-            // new_offset = aligned + total_size
-            let new_offset = blk.add(I64, &aligned_off, &total_size_str);
-
-            // size = state.size (at byte offset 16)
-            let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
-            let size_val = blk.load(I64, &size_field_ptr);
-
-            // fits = new_offset <= size
-            let fits = blk.icmp_ule(I64, &new_offset, &size_val);
-
-            // Set up fast/slow/merge basic blocks.
-            let fast_idx = ctx.new_block("alloc.fast");
-            let slow_idx = ctx.new_block("alloc.slow");
-            let merge_idx = ctx.new_block("alloc.merge");
-            let fast_label = ctx.block_label(fast_idx);
-            let slow_label = ctx.block_label(slow_idx);
-            let merge_label = ctx.block_label(merge_idx);
-
-            ctx.block().cond_br(&fits, &fast_label, &slow_label);
-
-            // ---- Fast path: bump and return data + aligned ----
-            ctx.current_block = fast_idx;
-            let blk = ctx.block();
-            // GC_STORE_AUDIT(INIT): inline arena bump offset is allocator metadata, not a JS heap edge.
-            blk.store(I64, &new_offset, &offset_field_ptr);
-            // data ptr is at byte offset 0 in InlineArenaState
-            let data_ptr = blk.load(PTR, &state_ptr);
-            let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-            let fast_pred_label = blk.label.clone();
-            blk.br(&merge_label);
-
-            // ---- Slow path: call into the runtime ----
-            ctx.current_block = slow_idx;
-            let raw_slow = ctx.block().call(
-                PTR,
-                "js_inline_arena_slow_alloc",
-                &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
-            );
-            let slow_pred_label = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
-
-            // ---- Merge: phi the raw pointer, write headers, NaN-box ----
-            ctx.current_block = merge_idx;
-            let blk = ctx.block();
-            let raw = blk.phi(
-                PTR,
-                &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
-            );
-
-            // Write GcHeader (8 bytes) as a single i64 store. Field
-            // packing (little-endian):
-            //   bits  0..7   = obj_type (u8)
-            //   bits  8..15  = gc_flags (u8)
-            //   bits 16..31  = _reserved (u16)
-            //   bits 32..63  = size (u32)
-            let gc_packed: u64 = GC_TYPE_OBJECT
-                | (GC_FLAG_ARENA << 8)
-                | (GC_LAYOUT_POINTER_FREE << 16)
-                | ((total_size as u64) << 32);
-            // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
-            blk.store(I64, &gc_packed.to_string(), &raw);
-
-            // Write ObjectHeader at raw + 8.
-            // First 8 bytes: object_type (u32, low) | class_id (u32, high)
-            let oh_addr_1 = blk.gep(I8, &raw, &[(I64, "8")]);
-            let oh_word_1: u64 = OBJECT_TYPE_REGULAR | ((cid as u64) << 32);
-            blk.store(I64, &oh_word_1.to_string(), &oh_addr_1);
-
-            // Second 8 bytes: parent_class_id (u32, low) | field_count (u32, high)
-            let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
-            let oh_word_2: u64 = (parent_cid as u64) | ((field_count as u64) << 32);
-            blk.store(I64, &oh_word_2.to_string(), &oh_addr_2);
-
-            // Third 8 bytes: keys_array pointer. The keys_ptr we loaded
-            // above is an i64 (carries the ArrayHeader address); store as
-            // i64 since the underlying memory is 8 bytes either way.
-            let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "24")]);
-            // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
-            blk.store(I64, &keys_ptr, &oh_addr_3);
-
-            // #6759 Phase B: null the `meta` record pointer — the LAST header
-            // field, at header offset (object_header_size - pointer_size).
-            // Pointer-width store: on ILP32 the field is 4 bytes at a
-            // 4-aligned offset, and an i64 store there would violate the
-            // arm64_32 `i64:64` ABI alignment (and spill into slot 0).
-            let meta_off = GC_HEADER_SIZE + object_header_size - meta_ptr_size;
-            let meta_addr = blk.gep(I8, &raw, &[(I64, &meta_off.to_string())]);
-            // GC_STORE_AUDIT(INIT): fresh inline object starts with no per-object meta record (#6759 B).
-            let meta_store_ty = if meta_ptr_size == 4 { I32 } else { I64 };
-            blk.store(meta_store_ty, "0", &meta_addr);
-
-            // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
-            // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately
-            // initializes ALL `max(field_count, 8)` slots "to prevent stale data from
-            // previously freed GC objects from bleeding through." This inline bump path
-            // wrote only the headers and left the slots uninitialized, so a field
-            // read-before-write — or a GC that scans the still-constructing instance —
-            // observed stale arena bytes. When those bytes were a previously-freed
-            // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
-            // crashed with "Cannot read properties of undefined". Slots start at
-            // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
-            for i in 0..alloc_field_count {
-                let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
-                let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
-                // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
-                blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
-            }
-
-            // User pointer = raw + 8 (the ObjectHeader address — what the
-            // function-call path returned). Convert to i64 to match what
-            // the existing nanbox_pointer_inline expects.
-            let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
-            blk.ptrtoint(&user_ptr, I64)
-        }
-    } else {
-        // Fallback: build the packed-keys string at this site and
-        // call the slower SHAPE_CACHE-aware allocator. Used when the
-        // class isn't in `class_keys_globals` (e.g. anonymous /
-        // synthetic classes that compile_module doesn't pre-emit a
-        // global for).
-        let mut packed_keys = String::new();
-        let mut parent_chain: Vec<&perry_hir::Class> = Vec::new();
-        let mut p = class.extends_name.as_deref();
-        while let Some(parent_name) = p {
-            if let Some(pc) = ctx.classes.get(parent_name).copied() {
-                parent_chain.push(pc);
-                p = pc.extends_name.as_deref();
-            } else {
-                break;
-            }
-        }
-        // Skip computed-key fields: their key is an expression evaluated at
-        // construction time, not a stable string, so they don't get an inline
-        // slot. The runtime stores them via IndexSet → js_object_set_field /
-        // js_object_set_symbol_property paths in `apply_field_initializers_recursive`.
-        // Including their synthetic `__computed_field_*` names in packed_keys
-        // would surface them as enumerable own properties on Object.keys().
-        for pc in parent_chain.iter().rev() {
-            for f in &pc.fields {
-                if f.key_expr.is_some() {
-                    continue;
-                }
-                packed_keys.push_str(&f.name);
-                packed_keys.push('\0');
-            }
-        }
-        for f in &class.fields {
-            if f.key_expr.is_some() {
-                continue;
-            }
-            packed_keys.push_str(&f.name);
-            packed_keys.push('\0');
-        }
-        let keys_idx = ctx.strings.intern(&packed_keys);
-        let keys_entry = ctx.strings.entry(keys_idx);
-        let keys_global = format!("@{}", keys_entry.bytes_global);
-        let keys_len_str = keys_entry.byte_len.to_string();
-
-        ctx.block().call(
-            I64,
-            "js_object_alloc_class_with_keys",
-            &[
-                (I32, &cid_str),
-                (I32, &parent_cid_str),
-                (I32, &n_str),
-                (PTR, &keys_global),
-                (I32, &keys_len_str),
-            ],
-        )
-    };
+    // #7615 slice 8: the field-count computation and the three-arm instance
+    // allocation moved verbatim to `new_alloc.rs` (see its header for why).
+    let obj_handle = super::new_alloc::emit_instance_alloc(ctx, class_name, class);
     // #7154: root the instance for the duration of the constructor body.
     //
     // Until now the instance existed ONLY as an SSA register while that body
@@ -935,15 +530,20 @@ fn lower_new_impl_inner(
     // intact-bit guard (#7512). Gated and suppressed as one — see
     // `layout_declared_at_allocation`.
     //
-    // Before the temp-root push, so the handle this names is the one the
+    // Before the instance root's push, so the handle this names is the one the
     // allocator returned: nothing between here and there can collect.
     emit_typed_shape_layout_declare(ctx, class_name, &obj_handle);
-    let instance_root = construction_runs_user_code(ctx, class_name)
-        .then(|| temp_root::temp_root_push_i64(ctx, &obj_handle));
+    let instance = {
+        let protected = construction_runs_user_code(ctx, class_name);
+        Instance {
+            root: group.adopt_emitted(ctx, Repr::Ptr, &obj_handle, protected),
+            protected,
+        }
+    };
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);
     // #6969: the instance allocation has run, so refresh every argument before
     // the constructor consumes them.
-    refresh_rooted_args(ctx, args, &mut lowered_args, &arg_roots)?;
+    lowered_args = refresh_rooted_args(ctx, group)?;
 
     // Constructor bodies may contain terminating recursive construction
     // shapes such as `if (typeof opts === "function") return new C(...)`.
@@ -1014,15 +614,15 @@ fn lower_new_impl_inner(
         // ponytail: a throw inside the ctor skips the restore, leaving the cell
         // set — same edge case the runtime construct paths already have; fix
         // holistically if it bites.
+        // #7664: `prev` is saved across the WHOLE constructor body, and the
+        // cell it comes out of is a registered mutable root that evacuation
+        // rewrites — so it goes in a temp root, not a bare register.
         let saved_new_target = if ctor_chain_uses_new_target(ctx, class) {
-            ctx.class_ids.get(class_name).map(|&cid| {
-                let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
+            ctx.class_ids.get(class_name).copied().map(|cid| {
                 let class_ref = double_literal(f64::from_bits(
                     crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF),
                 ));
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &class_ref)]);
-                prev
+                crate::rooting::new_target_save(ctx, &class_ref)
             })
         } else {
             None
@@ -1034,9 +634,8 @@ fn lower_new_impl_inner(
             &lowered_args,
             caps_absent_from_args,
         ) {
-            if let Some(prev) = &saved_new_target {
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
+            if let Some(save) = &saved_new_target {
+                crate::rooting::new_target_restore(ctx, save);
             }
             // #7154: the constructor body has run, so every register holding
             // the instance is potentially pre-move. Re-read it from its root
@@ -1044,7 +643,8 @@ fn lower_new_impl_inner(
             // would otherwise install the layout descriptor on the abandoned
             // from-space copy, and `js_ctor_return_override` would hand the
             // caller that copy's address.
-            let (obj_handle, obj_box) = reload_instance(ctx, &instance_root, &obj_handle, &obj_box);
+            let (obj_handle, obj_box) =
+                reload_instance(ctx, group, &instance, &obj_handle, &obj_box);
             // The constructor body has run and set the declared fields; register
             // the typed raw-f64/pointer slot layout so class-field accesses hit
             // the slot-direct fast path instead of the by-name hashmap fallback.
@@ -1081,9 +681,8 @@ fn lower_new_impl_inner(
             );
             return Ok(final_box);
         }
-        if let Some(prev) = &saved_new_target {
-            ctx.block()
-                .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
+        if let Some(save) = &saved_new_target {
+            crate::rooting::new_target_restore(ctx, save);
         }
         // #6921: `call_local_constructor_symbol` returned `None` — this module
         // has no `<Class>_constructor` entry, so no constructor ran and the
@@ -1136,7 +735,7 @@ fn lower_new_impl_inner(
     // it, and every `this.x = …` after that collection stores into abandoned
     // from-space memory.
     //
-    // #7192 rooted the instance for the *caller* (`instance_root` above,
+    // #7192 rooted the instance for the *caller* (`instance.root` above,
     // re-read by `reload_instance` at the tail) precisely because this window
     // collects — so the object survives and MOVES. That made the caller's copy
     // correct and left this one behind: the same address, taken one line later,
@@ -1146,7 +745,7 @@ fn lower_new_impl_inner(
     // Reachability is the default, not an opt-in: `force_ctor_call` requires
     // `class.constructor.is_some()`, so `class C { payload = mk() }` and
     // `class C extends B {}` take this path with `PERRY_INLINE_CTOR` unset —
-    // and `construction_runs_user_code` (which gates `instance_root`) is true
+    // and `construction_runs_user_code` (which gates `instance.root`) is true
     // for exactly those, i.e. the code already asserts this window collects.
     //
     // Binding it — rather than routing `Expr::This` through a temp root —
@@ -1156,14 +755,14 @@ fn lower_new_impl_inner(
     // contract: the bind is hoisted to entry setup, so the slot is live to the
     // collector before this store executes.
     //
-    // Gated on `instance_root.is_some()`, i.e. on the very same
+    // Gated on `instance.protected`, i.e. on the very same
     // `construction_runs_user_code` predicate that decided the instance needed
     // a temp root at all. When it is false no user code runs between this store
     // and the pop, so nothing in the window can collect and the slot cannot go
     // stale — and a class with no constructor, no fields and no heritage keeps
     // its previous IR exactly, frame size included. One predicate, one place:
     // forking a second one here is how #7114's two predicates diverged.
-    if instance_root.is_some() {
+    if instance.protected {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         ctx.func
             .entry_allocas_push_store(DOUBLE, &undef, &this_slot);
@@ -1733,7 +1332,7 @@ fn lower_new_impl_inner(
                 // for the final slot (mirrors method_has_rest, #672).
                 // Field initializers / an inlined constructor body were lowered
                 // between the instance allocation and here, so refresh again.
-                refresh_rooted_args(ctx, args, &mut lowered_args, &arg_roots)?;
+                lowered_args = refresh_rooted_args(ctx, group)?;
                 let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args);
                 let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
                     Vec::with_capacity(1 + marshalled.len());
@@ -1760,20 +1359,17 @@ fn lower_new_impl_inner(
                 // 'type')`, or silently set `type = undefined` → the auth error
                 // was mis-categorized and the login redirect fell back to
                 // `?error=Configuration`.
-                let nt_prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
                 let nt_ref = double_literal(f64::from_bits(new_target_bits));
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_ref)]);
+                let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_prev)]);
+                crate::rooting::new_target_restore(ctx, &nt_save);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
                 // doesn't read garbage from stale registers, and pack the rest
                 // slot into an array when the ctor's last param is `...rest`.
                 // Field initializers / an inlined constructor body were lowered
                 // between the instance allocation and here, so refresh again.
-                refresh_rooted_args(ctx, args, &mut lowered_args, &arg_roots)?;
+                lowered_args = refresh_rooted_args(ctx, group)?;
                 let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args);
                 // Pass `this` as NaN-boxed double (same as compile_method's this_arg).
                 let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
@@ -1798,13 +1394,10 @@ fn lower_new_impl_inner(
                 // new.target cross-module: bind the runtime cell to the leaf
                 // class ref around the imported ctor call (see the ANCESTOR arm
                 // above for why). This is the direct `new ImportedClass()` case.
-                let nt_prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
                 let nt_ref = double_literal(f64::from_bits(new_target_bits));
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_ref)]);
+                let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
-                ctx.block()
-                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_prev)]);
+                crate::rooting::new_target_restore(ctx, &nt_save);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
                 found_inherited_ctor = true;
             }
@@ -1862,7 +1455,7 @@ fn lower_new_impl_inner(
                 );
                 // Same here: the dynamic-parent `super(...)` buffer is filled long
                 // after the allocation, behind further lowering.
-                refresh_rooted_args(ctx, args, &mut lowered_args, &arg_roots)?;
+                lowered_args = refresh_rooted_args(ctx, group)?;
                 let (args_ptr, args_len) = if lowered_args.is_empty() {
                     ("null".to_string(), "0".to_string())
                 } else {
@@ -1952,7 +1545,7 @@ fn lower_new_impl_inner(
     // constructor body (field initializers, `super(...)`, nested `new`s) can
     // reach a back-edge poll, and the evacuating minor there relocates the
     // instance out from under `obj_handle`/`obj_box`.
-    let (obj_handle, obj_box) = reload_instance(ctx, &instance_root, &obj_handle, &obj_box);
+    let (obj_handle, obj_box) = reload_instance(ctx, group, &instance, &obj_handle, &obj_box);
     emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
 
     // Close the inline-constructor return: fall through (or branch) to the

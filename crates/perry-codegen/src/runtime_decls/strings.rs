@@ -1275,6 +1275,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // allocators register on every alloc; the inline allocator skips
     // the alloc-site call and relies on this one-time registration.
     module.declare_function("js_register_class_parent", VOID, &[I32, I32]);
+    // #7575: specialization -> generic edge for monomorphized generic classes.
+    // A SEPARATE edge from the parent one: the parent chain also resolves
+    // `super()`, static-method lookup and vtable dispatch, so only `instanceof`
+    // may follow this one.
+    module.declare_function("js_register_class_generic_origin", VOID, &[I32, I32]);
     // Issue #711: dynamic parent registration for `class X extends fn(...)`
     // shapes. Codegen emits at the class-declaration source position in
     // module.init (lower.rs); the runtime helper extracts the parent
@@ -1528,6 +1533,20 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_path_to_namespaced_path_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_path_matches_glob", I32, &[I64, I64]);
     module.declare_function("js_path_resolve_join", I64, &[I64, I64]);
+    // #7621 — SSO-safe operand entries. `js_path_arg_header` replaces the
+    // `unbox_to_i64` mask on every single-operand arm; the `_value` pair
+    // entries unbox BOTH operands inside the runtime so the first one can be
+    // rooted across the second's materialisation. See
+    // perry-runtime/src/path/value_args.rs.
+    module.declare_function("js_path_arg_header", I64, &[DOUBLE]);
+    module.declare_function("js_path_join_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_path_win32_join_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_path_resolve_join_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_path_win32_resolve_join_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_path_basename_ext_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_path_win32_basename_ext_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_path_matches_glob_value", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_path_win32_matches_glob_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_from_entries", DOUBLE, &[DOUBLE]);
     module.declare_function("js_string_match", I64, &[I64, I64]);
     module.declare_function("js_string_match_all", I64, &[I64, I64]);

@@ -100,3 +100,73 @@ function holesSurviveGrowth(): string {
   return probe + " len=" + a.length;
 }
 console.log(holesSurviveGrowth());
+
+// 6) GROWTH ACROSS A COLLECTION (#7016).
+//
+// Sections 1-5 above are the correctness content of this file, and they are
+// deliberately untouched. They are also, measurably, unable to collect: the
+// whole file allocates inside one 1 MB arena block and makes no `gc_malloc`
+// calls, so `PERRY_GC_DIAG=1` printed NOTHING and every GC arm of
+// `scripts/gc_repsel_matrix.sh` scored the file UNVER — 19 of 19 cells
+// asserting a `Ptr<NumArray>` property about a collector that never ran.
+// Lowering `PERRY_GC_HEAP_LIMIT` could not fix it: `gc_trigger_absolute_
+// ceiling_bytes` is budget/4 with a floor, so 2 MB is already the bottom.
+//
+// So the churn is added here rather than folded into the functions above,
+// which keeps their "fully contained, therefore promoted" shape exactly as it
+// was. The shape below is `test_gap_repsel_gc_stress`'s: an escaping,
+// module-level sink that is grown and dropped, so the arena genuinely grows and
+// genuinely produces garbage — with the numeric-array local initialized BEFORE
+// the churn, grown by `push` past several capacity doublings WHILE the churn
+// runs, and read AFTER the churn in the same iteration. A collection landing at
+// any allocation point must therefore find the local's storage live, and a
+// stale head cached across the relocation surfaces in the checksum.
+let churnSink: unknown[] = [];
+let churnEpochs = 0;
+
+function churn(i: number): void {
+  churnSink.push({ i: i, s: "g" + (i & 511), a: [i, i + 1] });
+  if (churnSink.length > 2048) {
+    churnEpochs = (churnEpochs + 1) | 0;
+    churnSink = [];
+  }
+}
+
+// The numeric-array local is grown by `push` across the churn, and both the
+// ORIGINAL slot (index 0, written before any growth) and the newest slot are
+// read after every churn call.
+function growAcrossCollections(n: number): number {
+  const a: number[] = [];
+  a.push(0.25);
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    churn(i);
+    a.push(i * 0.5);
+    acc += a[0] || 0; // pre-growth slot, after a relocation may have happened
+    acc += a[a.length - 1] || 0; // the slot just pushed
+  }
+  let tail = 0;
+  for (let i = 0; i < a.length; i++) {
+    tail += a[i] || 0;
+  }
+  return acc + tail + a.length;
+}
+
+// A second shape: `new Array(n)` provenance, statically in-bounds reads of the
+// pre-allocated region kept correct across churn-driven collections.
+function allocGrowAcrossCollections(n: number): number {
+  const a: number[] = new Array(4);
+  a[0] = 1.5;
+  a[3] = 2.5;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    churn(i);
+    a.push(i * 0.125);
+    acc += (a[0] || 0) + (a[3] || 0); // same slots, possibly relocated
+  }
+  return acc + a.length;
+}
+
+console.log(growAcrossCollections(20000));
+console.log(allocGrowAcrossCollections(20000));
+console.log("churn epochs " + churnEpochs);

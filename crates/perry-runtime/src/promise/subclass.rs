@@ -27,6 +27,17 @@ use super::Promise;
 /// `Promise` cell pointer.
 pub(crate) const BACKING_KEY: &[u8] = b"__perry_promise_backing__";
 
+/// Has any `class X extends Promise` instance EVER stashed a backing cell in
+/// this process? `subclass_backing_promise` costs a key-string alloc plus a
+/// full recursive `js_object_get_field_by_name_f64` per call, and it is
+/// consulted from `js_object_get_field_by_name`'s miss path — which every
+/// `await` of a plain object reaches via the spec thenable check
+/// (`Get(v, "then")`). A program that never subclasses `Promise` should pay a
+/// relaxed load, not an allocation. Set at the single stash site
+/// (`js_promise_subclass_init`, the only writer of `BACKING_KEY`). (#7795)
+pub(crate) static PROMISE_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn raw_ptr_from_value(value: f64) -> usize {
     let bits = value.to_bits();
     let jsval = JSValue::from_bits(bits);
@@ -66,6 +77,11 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
 /// real `Promise` cells, ordinary objects, and non-objects — so callers fall
 /// through to their existing handling.
 pub(crate) fn subclass_backing_promise(value: f64) -> Option<*mut Promise> {
+    // #7795: no `class X extends Promise` instance exists, so this cannot
+    // return `Some`. Answer from the monotone flag.
+    if !PROMISE_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
     unsafe {
         let obj = instance_object_ptr(value)?;
         let backing = js_object_get_field_by_name_f64(
@@ -132,6 +148,9 @@ pub extern "C" fn js_promise_subclass_init(this: f64, executor: f64) -> f64 {
         crate::closure::js_closure_call1(reject_closure, reason);
     }
 
+    // #7795: arm the probe gate before the field exists, so no reader can
+    // observe a stashed backing cell while the flag still says "never".
+    PROMISE_SUBCLASS_EVER.store(true, std::sync::atomic::Ordering::Relaxed);
     let key = crate::string::js_string_from_bytes(BACKING_KEY.as_ptr(), BACKING_KEY.len() as u32);
     let backing_bits = JSValue::pointer(promise as *const u8).bits();
     js_object_set_field_by_name(obj, key, f64::from_bits(backing_bits));

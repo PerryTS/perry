@@ -18,14 +18,86 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
+use crate::rooting::{self, RootedGroup};
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{build_headers_from_object, extract_options_fields, get_raw_string_ptr};
 
-pub(super) fn lower_builtin_new(
+/// Lower `args[idx]` into `group`, rooted across everything from
+/// `args[idx + 1..]` — the same #6969/#6986 discipline `new.rs`'s
+/// `adopt_constructor_args` uses: adopt **as the value is produced**, not
+/// after the fact (a group holding an already-dangling operand turns a
+/// silent wrong answer into a SIGSEGV), and hand back only an index for
+/// [`RootedGroup::reread`] at the point of use. `None` when the argument is
+/// absent — callers supply their own default in that case, and it never
+/// needs rooting: slice indexing guarantees every argument after an absent
+/// one is absent too, so there is nothing left to hold it across.
+fn adopt_optional_arg<'a>(
+    ctx: &mut FnCtx<'_>,
+    args: &'a [Expr],
+    idx: usize,
+    group: &mut RootedGroup<'a>,
+) -> Result<Option<usize>> {
+    let Some(a) = args.get(idx) else {
+        return Ok(None);
+    };
+    let collects = rooting::any_operand_may_collect(ctx, args[idx + 1..].iter());
+    Ok(Some(group.lower(ctx, a, collects)?))
+}
+
+/// The single-leading-options-argument shape repeated by more than a dozen
+/// arms below: lower `args[0]` (defaulting to `undefined` when absent), then
+/// lower every remaining argument for its side effects only, then hand back
+/// `args[0]`'s value. Pre-#6986 the discard loop ran with `args[0]`'s value
+/// sitting in a bare SSA register — any of those side-effect expressions can
+/// allocate.
+fn adopt_leading_arg_discard_rest<'a>(
+    ctx: &mut FnCtx<'_>,
+    args: &'a [Expr],
+    group: &mut RootedGroup<'a>,
+) -> Result<String> {
+    let idx = adopt_optional_arg(ctx, args, 0, group)?;
+    for a in args.iter().skip(1) {
+        let _ = lower_expr(ctx, a)?;
+    }
+    Ok(match idx {
+        Some(i) => group.reread(ctx, i)?,
+        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+    })
+}
+
+/// The two-leading-arguments shape (`Event`/`CustomEvent`/`DOMException`
+/// below): lower `args[0]` then `args[1]` (each defaulting to `undefined`),
+/// then lower every remaining argument for its side effects only, then hand
+/// both values back in argument order. Pre-#6986 `args[0]`'s value sat in a
+/// bare SSA register across `args[1]`'s lowering AND the discard loop.
+fn adopt_two_leading_args_discard_rest<'a>(
+    ctx: &mut FnCtx<'_>,
+    args: &'a [Expr],
+    group: &mut RootedGroup<'a>,
+) -> Result<(String, String)> {
+    let idx0 = adopt_optional_arg(ctx, args, 0, group)?;
+    let idx1 = adopt_optional_arg(ctx, args, 1, group)?;
+    for a in args.iter().skip(2) {
+        let _ = lower_expr(ctx, a)?;
+    }
+    let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let v0 = match idx0 {
+        Some(i) => group.reread(ctx, i)?,
+        None => undef(),
+    };
+    let v1 = match idx1 {
+        Some(i) => group.reread(ctx, i)?,
+        None => undef(),
+    };
+    Ok((v0, v1))
+}
+
+pub(super) fn lower_builtin_new<'a>(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
-    args: &[Expr],
+    args: &'a [Expr],
+    group: &mut RootedGroup<'a>,
 ) -> Result<Option<String>> {
     // Issue #602: ambiguously-named built-in constructors (Client / Pool /
     // Database / Redis / MongoClient / Decimal) collide with bindings from
@@ -66,14 +138,16 @@ pub(super) fn lower_builtin_new(
                 .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")
                 .unwrap_or(false) =>
         {
-            let options = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
+            // #6986: `options` was live across the discard loop below, which
+            // lowers arbitrary user expressions for their side effects.
+            let options_idx = adopt_optional_arg(ctx, args, 0, group)?;
             for arg in args.iter().skip(1) {
                 let _ = lower_expr(ctx, arg)?;
             }
+            let options = match options_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
             Ok(Some(ctx.block().call(
                 DOUBLE,
                 "js_fs_utf8_stream_new",
@@ -81,14 +155,17 @@ pub(super) fn lower_builtin_new(
             )))
         }
         "EvalError" | "URIError" => {
-            let msg_box = if let Some(message) = args.first() {
-                lower_expr(ctx, message)?
-            } else {
-                lower_expr(ctx, &Expr::String(String::new()))?
-            };
+            // #6986: `msg_box` was live across the discard loop below. The
+            // `None` fallback needs no rooting — an absent first argument
+            // means `args` is empty, so the loop is empty too.
+            let msg_idx = adopt_optional_arg(ctx, args, 0, group)?;
             for arg in args.iter().skip(1) {
                 let _ = lower_expr(ctx, arg)?;
             }
+            let msg_box = match msg_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => lower_expr(ctx, &Expr::String(String::new()))?,
+            };
             let blk = ctx.block();
             let msg_handle = unbox_to_i64(blk, &msg_box);
             let runtime = if class_name == "EvalError" {
@@ -145,12 +222,21 @@ pub(super) fn lower_builtin_new(
             // the spec's post-coercion detached/bounds checks. The old
             // `fptosi` cast silently turned object arguments into garbage
             // without ever running their coercion.
-            let source = lower_expr(ctx, &args[0])?;
-            let offset_box = lower_expr(ctx, &args[1])?;
-            let length_box = if args.len() >= 3 {
-                lower_expr(ctx, &args[2])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            // #6986: `source` (and `offset_box`) were held in bare SSA
+            // registers across the later operands' lowering — each an
+            // arbitrary expression (ToIndex can run user `valueOf`).
+            // `args.len() >= 2` is this arm's guard, so args[0]/args[1] are
+            // always present.
+            let source_collects = rooting::any_operand_may_collect(ctx, args[1..].iter());
+            let source_idx = group.lower(ctx, &args[0], source_collects)?;
+            let offset_collects = rooting::any_operand_may_collect(ctx, args[2..].iter());
+            let offset_idx = group.lower(ctx, &args[1], offset_collects)?;
+            let length_idx = adopt_optional_arg(ctx, args, 2, group)?;
+            let source = group.reread(ctx, source_idx)?;
+            let offset_box = group.reread(ctx, offset_idx)?;
+            let length_box = match length_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
             let handle = ctx.block().call(
                 I64,
@@ -174,12 +260,17 @@ pub(super) fn lower_builtin_new(
             if args.len() >= 2 =>
         {
             let kind = typed_array_view_kind(name);
-            let source = lower_expr(ctx, &args[0])?;
-            let offset_box = lower_expr(ctx, &args[1])?;
-            let length_box = if args.len() >= 3 {
-                lower_expr(ctx, &args[2])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            // #6986: same hazard as the Uint8Array view arm above.
+            let source_collects = rooting::any_operand_may_collect(ctx, args[1..].iter());
+            let source_idx = group.lower(ctx, &args[0], source_collects)?;
+            let offset_collects = rooting::any_operand_may_collect(ctx, args[2..].iter());
+            let offset_idx = group.lower(ctx, &args[1], offset_collects)?;
+            let length_idx = adopt_optional_arg(ctx, args, 2, group)?;
+            let source = group.reread(ctx, source_idx)?;
+            let offset_box = group.reread(ctx, offset_idx)?;
+            let length_box = match length_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
             let handle = ctx.block().call(
                 I64,
@@ -201,20 +292,24 @@ pub(super) fn lower_builtin_new(
             // Pass the raw NaN-boxed arguments (undefined when absent) so the
             // runtime can apply the spec's ToIndex/range validation and throw
             // TypeError/RangeError where required (#3657).
-            let view_box = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            //
+            // #6986: `view_box` (and `offset_box`) were held in bare SSA
+            // registers across the later operands' lowering.
+            let view_idx = adopt_optional_arg(ctx, args, 0, group)?;
+            let offset_idx = adopt_optional_arg(ctx, args, 1, group)?;
+            let length_idx = adopt_optional_arg(ctx, args, 2, group)?;
+            let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let view_box = match view_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
-            let offset_box = if args.len() >= 2 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let offset_box = match offset_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
-            let length_box = if args.len() >= 3 {
-                lower_expr(ctx, &args[2])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let length_box = match length_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
             Ok(Some(ctx.block().call(
                 DOUBLE,
@@ -232,15 +327,17 @@ pub(super) fn lower_builtin_new(
             // or an object `flags` (ToString → SyntaxError) are all handled per
             // spec. Defaults are `undefined` (NOT 0.0) so `new RegExp()` builds
             // an empty source.
-            let pattern_box = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            // #6986: `pattern_box` was held in a bare SSA register across
+            // `flags_box`'s lowering (an arbitrary user expression).
+            let pattern_idx = adopt_optional_arg(ctx, args, 0, group)?;
+            let flags_idx = adopt_optional_arg(ctx, args, 1, group)?;
+            let pattern_box = match pattern_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
-            let flags_box = if args.len() > 1 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let flags_box = match flags_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
             let blk = ctx.block();
             let handle = blk.call(
@@ -270,14 +367,8 @@ pub(super) fn lower_builtin_new(
         // every .on/.emit call dispatched against a junk pointer and
         // silently registered nothing / fired nothing.
         "EventEmitter" => {
-            let opts = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `opts` was held across the discard loop's lowering.
+            let opts = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let handle = blk.call(I64, "js_event_emitter_new_with_options", &[(DOUBLE, &opts)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
@@ -292,14 +383,8 @@ pub(super) fn lower_builtin_new(
             Ok(Some(ctx.block().call(DOUBLE, "js_child_process_new", &[])))
         }
         "EventEmitterAsyncResource" => {
-            let opts = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `opts` was held across the discard loop's lowering.
+            let opts = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let handle = blk.call(
                 I64,
@@ -317,14 +402,8 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "SocketAddress" => {
-            let options = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `options` was held across the discard loop's lowering.
+            let options = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let handle = blk.call(I64, "js_net_socket_address_new", &[(DOUBLE, &options)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
@@ -356,14 +435,8 @@ pub(super) fn lower_builtin_new(
             )))
         }
         "BroadcastChannel" => {
-            let name = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `name` was held across the discard loop's lowering.
+            let name = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             Ok(Some(blk.call(
                 DOUBLE,
@@ -372,19 +445,9 @@ pub(super) fn lower_builtin_new(
             )))
         }
         "Event" => {
-            let event_type = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let options = if let Some(a) = args.get(1) {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(2) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `event_type` was held across `options`' lowering AND the
+            // discard loop.
+            let (event_type, options) = adopt_two_leading_args_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let argc = args.len().to_string();
             let handle = blk.call(
@@ -395,19 +458,9 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "CustomEvent" => {
-            let event_type = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let options = if let Some(a) = args.get(1) {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(2) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `event_type` was held across `options`' lowering AND the
+            // discard loop.
+            let (event_type, options) = adopt_two_leading_args_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let argc = args.len().to_string();
             let handle = blk.call(
@@ -418,19 +471,9 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "DOMException" => {
-            let message = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let name = if let Some(a) = args.get(1) {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(2) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `message` was held across `name`'s lowering AND the
+            // discard loop.
+            let (message, name) = adopt_two_leading_args_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let handle = blk.call(
                 I64,
@@ -440,16 +483,10 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Console" => {
-            let opts = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            if let Some(stderr_arg) = args.get(1) {
-                let stderr = lower_expr(ctx, stderr_arg)?;
-                for a in args.iter().skip(2) {
-                    let _ = lower_expr(ctx, a)?;
-                }
+            // #6986: `opts` was held across `stderr`'s lowering AND the
+            // discard loop in the two-argument branch.
+            let (opts, stderr) = adopt_two_leading_args_discard_rest(ctx, args, group)?;
+            if args.get(1).is_some() {
                 return Ok(Some(ctx.block().call(
                     DOUBLE,
                     "js_console_new2",
@@ -486,14 +523,8 @@ pub(super) fn lower_builtin_new(
         // arg is passed through so future non-UTF-8 backends can switch on it;
         // the current impl only tracks the UTF-8 partial-codepoint state.
         "StringDecoder" => {
-            let enc_box = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `enc_box` was held across the discard loop's lowering.
+            let enc_box = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let enc_handle = unbox_to_i64(blk, &enc_box);
             let handle = blk.call(I64, "js_string_decoder_new", &[(I64, &enc_handle)]);
@@ -510,15 +541,8 @@ pub(super) fn lower_builtin_new(
         // `.on(...).on(...).pipe(...)` calls return `this` so the chain
         // doesn't lose identity. Stub semantics only: no real data pump.
         "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" => {
-            let opts_box = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            // Lower any extra args for side effects.
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `opts_box` was held across the discard loop's lowering.
+            let opts_box = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let runtime_fn = match class_name {
                 "Readable" => "js_node_stream_readable_new",
                 "Writable" => "js_node_stream_writable_new",
@@ -538,17 +562,11 @@ pub(super) fn lower_builtin_new(
         // argument passes `undefined`, which the runtime rejects with the
         // same `TypeError` npm's constructor destructuring raises.
         "LRUCache" => {
-            let opts_val = if let Some(opts_arg) = args.first() {
-                lower_expr(ctx, opts_arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
             // npm's constructor ignores everything past the options object,
-            // but the arguments are still evaluated — lower the tail for its
-            // side effects so `new LRUCache(opts, f())` still calls `f`.
-            for arg in args.iter().skip(1) {
-                let _ = lower_expr(ctx, arg)?;
-            }
+            // but the arguments are still evaluated — the tail is lowered
+            // for its side effects so `new LRUCache(opts, f())` still calls
+            // `f`. #6986: `opts_val` was held across that lowering.
+            let opts_val = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let handle = blk.call(I64, "js_lru_cache_new", &[(DOUBLE, &opts_val)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
@@ -610,15 +628,18 @@ pub(super) fn lower_builtin_new(
         // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
         // options so the runtime can preserve Node-shaped validation errors.
         "DatabaseSync" => {
-            let path_value = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            // #6986: `path_value` was held in a bare SSA register across
+            // `options_value`'s lowering (an arbitrary user expression).
+            let path_idx = adopt_optional_arg(ctx, args, 0, group)?;
+            let options_idx = adopt_optional_arg(ctx, args, 1, group)?;
+            let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let path_value = match path_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
-            let options_value = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let options_value = match options_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
             let blk = ctx.block();
             let handle = blk.call(
@@ -629,15 +650,18 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "StatementSync" => {
-            let arg0 = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            // #6986: `arg0` was held in a bare SSA register across `arg1`'s
+            // lowering (an arbitrary user expression).
+            let idx0 = adopt_optional_arg(ctx, args, 0, group)?;
+            let idx1 = adopt_optional_arg(ctx, args, 1, group)?;
+            let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let arg0 = match idx0 {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
-            let arg1 = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let arg1 = match idx1 {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
             let blk = ctx.block();
             let handle = blk.call(
@@ -648,15 +672,18 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Session" => {
-            let arg0 = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            // #6986: `arg0` was held in a bare SSA register across `arg1`'s
+            // lowering (an arbitrary user expression).
+            let idx0 = adopt_optional_arg(ctx, args, 0, group)?;
+            let idx1 = adopt_optional_arg(ctx, args, 1, group)?;
+            let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let arg0 = match idx0 {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
-            let arg1 = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let arg1 = match idx1 {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
             let blk = ctx.block();
             let handle = blk.call(
@@ -708,14 +735,8 @@ pub(super) fn lower_builtin_new(
         // (consume/get/delete/block/penalty/reward) are wired in
         // NATIVE_MODULE_TABLE for module "rate-limiter-flexible".
         "RateLimiterMemory" => {
-            let options = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for arg in args.iter().skip(1) {
-                let _ = lower_expr(ctx, arg)?;
-            }
+            // #6986: `options` was held across the discard loop's lowering.
+            let options = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
             let options_bits = blk.bitcast_double_to_i64(&options);
             let handle = blk.call(
@@ -737,29 +758,53 @@ pub(super) fn lower_builtin_new(
         // start/stop/isRunning/nextDate dispatch via the existing
         // ("cron", true, …) NATIVE_MODULE_TABLE rows.
         "CronJob" => {
-            let expr_ptr = if let Some(arg) = args.first() {
-                get_raw_string_ptr(ctx, arg)?
-            } else {
-                "0".to_string()
-            };
-            let on_tick = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
+            // #6986: `expr_ptr` (via `get_raw_string_ptr`, itself a
+            // lower_expr + immediate derive with no window of its own) and
+            // `on_tick` were both held across every later argument's
+            // lowering. Adopt each boxed operand into `group` as it is
+            // produced — argument order preserved — then re-read right
+            // before use. `expr_ptr`'s derivation (`js_get_string_pointer_unified`)
+            // can itself allocate (SSO materialize, nanbox.rs), so it runs
+            // FIRST among the final derivations: `on_tick`'s `unbox_to_i64`
+            // is pure bitwise (no collect) and `start` needs no further
+            // derivation, so re-reading them after is safe.
+            let cron_time_idx = adopt_optional_arg(ctx, args, 0, group)?;
+            let on_tick_idx = adopt_optional_arg(ctx, args, 1, group)?;
             if let Some(arg) = args.get(2) {
                 let _ = lower_expr(ctx, arg)?;
             }
-            let start = if let Some(arg) = args.get(3) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
+            let start_idx = adopt_optional_arg(ctx, args, 3, group)?;
             for arg in args.iter().skip(4) {
                 let _ = lower_expr(ctx, arg)?;
             }
+            let expr_ptr = match cron_time_idx {
+                Some(i) => {
+                    let cron_time = group.reread(ctx, i)?;
+                    ctx.block().call(
+                        I64,
+                        "js_get_string_pointer_unified",
+                        &[(DOUBLE, &cron_time)],
+                    )
+                }
+                None => "0".to_string(),
+            };
+            let cb_ptr = match on_tick_idx {
+                Some(i) => {
+                    let on_tick = group.reread(ctx, i)?;
+                    let blk = ctx.block();
+                    unbox_to_i64(blk, &on_tick)
+                }
+                None => {
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let blk = ctx.block();
+                    unbox_to_i64(blk, &undef)
+                }
+            };
+            let start = match start_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
             let blk = ctx.block();
-            let cb_ptr = unbox_to_i64(blk, &on_tick);
             let handle = blk.call(
                 I64,
                 "js_cron_job_new",
@@ -801,15 +846,18 @@ pub(super) fn lower_builtin_new(
             )))
         }
         "AsyncResource" => {
-            let type_value = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            // #6986: `type_value` was held in a bare SSA register across
+            // `options_value`'s lowering (an arbitrary user expression).
+            let type_idx = adopt_optional_arg(ctx, args, 0, group)?;
+            let options_idx = adopt_optional_arg(ctx, args, 1, group)?;
+            let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let type_value = match type_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
-            let options_value = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            let options_value = match options_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
             let blk = ctx.block();
             let handle = blk.call(
@@ -846,21 +894,23 @@ pub(super) fn lower_builtin_new(
         // extending Error (once) so `instanceof Error` holds; the property
         // reads flow through the ordinary by-name object getter.
         "SuppressedError" => {
-            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let error = if let Some(a) = args.first() {
-                lower_expr(ctx, a)?
-            } else {
-                undef.clone()
+            // #6986: `error` (and `suppressed`) were held in bare SSA
+            // registers across the later operands' lowering.
+            let error_idx = adopt_optional_arg(ctx, args, 0, group)?;
+            let suppressed_idx = adopt_optional_arg(ctx, args, 1, group)?;
+            let message_idx = adopt_optional_arg(ctx, args, 2, group)?;
+            let undef = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let error = match error_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
-            let suppressed = if let Some(a) = args.get(1) {
-                lower_expr(ctx, a)?
-            } else {
-                undef.clone()
+            let suppressed = match suppressed_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
-            let message = if let Some(a) = args.get(2) {
-                lower_expr(ctx, a)?
-            } else {
-                undef.clone()
+            let message = match message_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => undef(),
             };
             let blk = ctx.block();
             Ok(Some(blk.call(
@@ -1487,19 +1537,9 @@ pub(super) fn lower_builtin_new(
         }
 
         "TextDecoderStream" => {
-            let label = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let options = if args.len() >= 2 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(2) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `label` was held across `options`' lowering AND the
+            // discard loop.
+            let (label, options) = adopt_two_leading_args_discard_rest(ctx, args, group)?;
             let h = ctx.block().call(
                 DOUBLE,
                 "js_stream_web_text_decoder_stream_new",
@@ -1509,14 +1549,8 @@ pub(super) fn lower_builtin_new(
         }
 
         "CompressionStream" | "DecompressionStream" => {
-            let format = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `format` was held across the discard loop's lowering.
+            let format = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let runtime = if class_name == "CompressionStream" {
                 "js_stream_web_compression_stream_new"
             } else {
@@ -1531,14 +1565,8 @@ pub(super) fn lower_builtin_new(
         // the argument is a byte stream (TypeError otherwise) and returns a
         // reader handle whose `read(view)` fills the caller's buffer.
         "ReadableStreamBYOBReader" => {
-            let stream = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `stream` was held across the discard loop's lowering.
+            let stream = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let h = ctx.block().call(
                 DOUBLE,
                 "js_readable_stream_get_byob_reader",
@@ -1554,14 +1582,8 @@ pub(super) fn lower_builtin_new(
         // returns chunk.byteLength. Pass the whole options expression through so
         // both literal (`{ highWaterMark: 5 }`) and dynamic option objects work.
         "CountQueuingStrategy" | "ByteLengthQueuingStrategy" => {
-            let opts = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            for a in args.iter().skip(1) {
-                let _ = lower_expr(ctx, a)?;
-            }
+            // #6986: `opts` was held across the discard loop's lowering.
+            let opts = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let func = if class_name == "CountQueuingStrategy" {
                 "js_count_queuing_strategy_new"
             } else {
@@ -1589,40 +1611,58 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &p)))
         }
         "WeakMap" => {
-            let lowered_args = args
-                .iter()
-                .map(|a| lower_expr(ctx, a))
-                .collect::<Result<Vec<_>>>()?;
+            // #6986: the iterable was lowered into a bare SSA register and
+            // held across `js_weakmap_new`'s allocation — the eager
+            // `.map(lower_expr)` computed every argument up front, then the
+            // allocating call ran, then `lowered_args.first()` was read back
+            // from that now-possibly-stale register. `collects: true`
+            // unconditionally — the allocation always follows, regardless of
+            // how many extra arguments there are.
+            let iterable_idx = match args.first() {
+                Some(a) => Some(group.lower(ctx, a, true)?),
+                None => None,
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
             let handle = ctx.block().call(I64, "js_weakmap_new", &[]);
             // js_weakmap_new returns a raw `*mut ObjectHeader` — NaN-box
             // with POINTER_TAG so subsequent `js_weakmap_*` calls can
             // `js_nanbox_get_pointer` on the f64.
             let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-            if let Some(iterable) = lowered_args.first() {
-                Ok(Some(ctx.block().call(
-                    DOUBLE,
-                    "js_weakmap_init_iterable",
-                    &[(DOUBLE, &boxed), (DOUBLE, iterable)],
-                )))
-            } else {
-                Ok(Some(boxed))
+            match iterable_idx {
+                Some(i) => {
+                    let iterable = group.reread(ctx, i)?;
+                    Ok(Some(ctx.block().call(
+                        DOUBLE,
+                        "js_weakmap_init_iterable",
+                        &[(DOUBLE, &boxed), (DOUBLE, &iterable)],
+                    )))
+                }
+                None => Ok(Some(boxed)),
             }
         }
         "WeakSet" => {
-            let lowered_args = args
-                .iter()
-                .map(|a| lower_expr(ctx, a))
-                .collect::<Result<Vec<_>>>()?;
+            // #6986: same hazard as WeakMap above.
+            let iterable_idx = match args.first() {
+                Some(a) => Some(group.lower(ctx, a, true)?),
+                None => None,
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
             let handle = ctx.block().call(I64, "js_weakset_new", &[]);
             let boxed = nanbox_pointer_inline(ctx.block(), &handle);
-            if let Some(iterable) = lowered_args.first() {
-                Ok(Some(ctx.block().call(
-                    DOUBLE,
-                    "js_weakset_init_iterable",
-                    &[(DOUBLE, &boxed), (DOUBLE, iterable)],
-                )))
-            } else {
-                Ok(Some(boxed))
+            match iterable_idx {
+                Some(i) => {
+                    let iterable = group.reread(ctx, i)?;
+                    Ok(Some(ctx.block().call(
+                        DOUBLE,
+                        "js_weakset_init_iterable",
+                        &[(DOUBLE, &boxed), (DOUBLE, &iterable)],
+                    )))
+                }
+                None => Ok(Some(boxed)),
             }
         }
         "AbortController" => {

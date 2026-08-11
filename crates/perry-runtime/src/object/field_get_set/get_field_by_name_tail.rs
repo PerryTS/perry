@@ -257,9 +257,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 // An own property on the Buffer shadows the same-named prototype
                 // method; both reads live in `buffer_own_prop`.
-                if let Some(v) = super::buffer_own_prop::buffer_own_prop_or_method(
-                    obj, key_bytes, key_ptr, key_len,
-                ) {
+                if let Some(v) = super::buffer_own_prop::buffer_own_prop_or_method(obj, key_bytes) {
                     return v;
                 }
                 // ArrayBuffer.prototype `resizable` / `maxByteLength` getters.
@@ -453,12 +451,19 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             return JSValue::undefined();
         }
-        // Sets: SetHeader is allocated via raw `alloc()` (no GcHeader),
-        // so we can't safely read the byte preceding the pointer to
-        // determine its type. Detect via the SET_REGISTRY first. Route
-        // `.size` to `js_set_size` and synthesize method values for
-        // prototype functions such as `.has`, which Node exposes through
-        // ordinary property reads.
+        // Sets: detect via the SET_REGISTRY, which is authoritative and
+        // dereference-free. Route `.size` to `js_set_size` and synthesize
+        // method values for prototype functions such as `.has`, which Node
+        // exposes through ordinary property reads.
+        //
+        // (This used to say a `SetHeader` comes from a raw `alloc()` with no
+        // `GcHeader`, so the preceding byte could not be read. That has not
+        // been true since `js_set_alloc` moved to
+        // `arena_alloc_gc(_, _, GC_TYPE_SET)`: a registered Set IS a GC
+        // allocation and its `obj_type` classifies it. `js_array_get_f64` and
+        // `js_array_length` gate their probes on exactly that byte (#7765);
+        // this receiver is not proven to carry a header at this point, so it
+        // still asks the registry.)
         if crate::set::is_registered_set(obj as usize) {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -1596,7 +1601,7 @@ pub(crate) fn get_field_by_name_object_tail(
         if let Some(field_idx) = cached {
             let idx = field_idx as usize;
             let cache_hit_valid = if idx < key_count {
-                let key_val = crate::array::js_array_get(keys, field_idx);
+                let key_val = crate::array::keys_array_slot(keys, field_idx);
                 // #1781: SSO-aware match — pre-fix the `is_string()` here
                 // false-invalidated cache hits for ≤5-byte keys stored
                 // as SHORT_STRING_TAG values.
@@ -1671,7 +1676,7 @@ pub(crate) fn get_field_by_name_object_tail(
         }
 
         for i in 0..key_count {
-            let key_val = crate::array::js_array_get(keys, i as u32);
+            let key_val = crate::array::keys_array_slot(keys, i as u32);
             // #1781: accept inline SSO short keys here too — the
             // slow-path lookup is what backs `obj[k]` for ≤5-byte
             // keys after a field-cache miss.

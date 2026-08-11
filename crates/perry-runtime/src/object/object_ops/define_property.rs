@@ -516,6 +516,66 @@ pub extern "C" fn js_object_define_property(
                     let value_field =
                         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
                     if !value_field.is_undefined() {
+                        // #7190: `C` and `C.prototype` both answer
+                        // `class_ref_id` with the SAME class id — the arm this
+                        // sits in exists because `C.prototype` maps back to the
+                        // class in Perry. So the two receivers were
+                        // indistinguishable here, and every define took the
+                        // prototype route. That is right for
+                        // `Object.defineProperty(C.prototype, …)` (the drizzle
+                        // `applyMixins` case this arm was written for) and wrong
+                        // for `Object.defineProperty(C, …)`, which is a STATIC
+                        // own property: `C.zzz` came back `undefined`, and so
+                        // did `new C().zzz`, so the value went nowhere at all.
+                        //
+                        // `class_prototype_ref_id` is the discriminator — it
+                        // answers only for the prototype ref — and it is what
+                        // `descriptors.rs` already uses to tell the two apart
+                        // when reporting descriptors.
+                        if super::super::class_prototype_ref_id(obj_value).is_none() {
+                            // A static own property lands in CLASS_DYNAMIC_PROPS,
+                            // the same table `static x = …` and
+                            // `js_class_register_static_field` write to, so the
+                            // existing static read path finds it with no new
+                            // lookup.
+                            super::super::class_registry::class_dynamic_prop_root_store(
+                                target_cid,
+                                name.clone(),
+                                f64::from_bits(value_field.bits()),
+                            );
+                            // A data descriptor is non-enumerable unless it
+                            // says otherwise; a `static x = …` field IS
+                            // enumerable, and both share CLASS_DYNAMIC_PROPS.
+                            // Record which this was, or `Object.keys(C)` gains
+                            // a key node does not report.
+                            // ECMA-262 [[DefineOwnProperty]]: a field the
+                            // descriptor omits DEFAULTS to false on a new
+                            // property but is RETAINED on an existing one. The
+                            // built-in `name`/`length` slots are
+                            // `configurable: true`, which is why redefining
+                            // `name` without saying `configurable` must stay
+                            // configurable — while a brand-new key must not.
+                            let has_cfg = desc_has_field(descriptor_value, b"configurable");
+                            let configurable = if has_cfg {
+                                crate::value::js_is_truthy(f64::from_bits(
+                                    desc_read_field(descriptor_value, b"configurable").bits(),
+                                )) != 0
+                            } else {
+                                super::super::class_registry::class_static_defined_attrs(
+                                    target_cid, &name,
+                                )
+                                .map(|(_, _, cfg)| cfg)
+                                .unwrap_or(matches!(name.as_str(), "name" | "length"))
+                            };
+                            super::super::class_registry::class_static_set_defined_attrs(
+                                target_cid,
+                                &name,
+                                descriptor_writable(descriptor_value),
+                                descriptor_enumerable(descriptor_value),
+                                configurable,
+                            );
+                            return obj_value;
+                        }
                         // #5024 followup: a `defineProperty` data descriptor is
                         // non-enumerable unless it explicitly sets
                         // `enumerable: true`. Record that so the prototype-object

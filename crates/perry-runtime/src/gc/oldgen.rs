@@ -119,6 +119,11 @@ pub(super) struct SweepTraceStats {
     pub(super) deallocated_bytes: usize,
     pub(super) retained_forwarded_stub_objects: usize,
     pub(super) retained_forwarded_stub_bytes: usize,
+    /// #7598: bytes this walk classified live / dead in the general (Eden)
+    /// blocks. Consumed by `tenuring::seed_promote_lock_from_sweep`, which
+    /// documents the policy and why the signal is not self-referential.
+    pub(super) eden_live_bytes: u64,
+    pub(super) eden_dead_bytes: u64,
 }
 
 pub(super) fn evacuation_policy_initial_decision(
@@ -1056,6 +1061,10 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
         deallocated_bytes: reset.deallocated_bytes,
         retained_forwarded_stub_objects,
         retained_forwarded_stub_bytes,
+        // Legacy unbudgeted path, not reached in production and not wired to
+        // the #7598 seed.
+        eden_live_bytes: 0,
+        eden_dead_bytes: 0,
     }
 }
 
@@ -1225,6 +1234,8 @@ impl IncrementalSweepState {
                         deallocated_bytes: reset.deallocated_bytes,
                         retained_forwarded_stub_objects: self.arena.retained_forwarded_stub_objects,
                         retained_forwarded_stub_bytes: self.arena.retained_forwarded_stub_bytes,
+                        eden_live_bytes: self.arena.eden_live_bytes,
+                        eden_dead_bytes: self.arena.eden_dead_bytes,
                     };
                     self.subphase = SweepCycleSubphase::Done;
                     return true;
@@ -1286,6 +1297,9 @@ struct ArenaSweepObjectsState {
     freed_bytes: u64,
     retained_forwarded_stub_objects: usize,
     retained_forwarded_stub_bytes: usize,
+    /// #7598 Eden census: see `SweepTraceStats`.
+    eden_live_bytes: u64,
+    eden_dead_bytes: u64,
 }
 
 impl ArenaSweepObjectsState {
@@ -1315,6 +1329,8 @@ impl ArenaSweepObjectsState {
             freed_bytes: 0,
             retained_forwarded_stub_objects: 0,
             retained_forwarded_stub_bytes: 0,
+            eden_live_bytes: 0,
+            eden_dead_bytes: 0,
         }
     }
 
@@ -1444,6 +1460,9 @@ impl ArenaSweepObjectsState {
         if block_idx < self.block_has_live.len() {
             self.block_has_live[block_idx] = true;
         }
+        if block_idx < self.resettable_general_n {
+            self.eden_live_bytes = self.eden_live_bytes.saturating_add((*header).size as u64);
+        }
         if age_bump_this && flags & GC_FLAG_TENURED == 0 {
             if flags & GC_FLAG_HAS_SURVIVED != 0 {
                 (*header).gc_flags =
@@ -1507,6 +1526,9 @@ impl ArenaSweepObjectsState {
         }
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
         self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
+        if block_idx < self.resettable_general_n {
+            self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(total_size as u64);
+        }
         finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
         if self.reclaim_dead_old_blocks && dead_old {
             invalidate_dead_old_arena_header(header, total_size);

@@ -38,6 +38,10 @@ mod builtin_table_gate;
 mod capture_writeback;
 mod closure_analysis;
 mod console_promise;
+/// Rooting and evaluation-order coverage for the `console.*` arms slice 6
+/// repaired (#7649) — see the module header for why these assert on IR.
+#[cfg(test)]
+mod console_rooting_tests;
 mod dataview_intrinsic;
 mod early_branches;
 mod event_target;
@@ -52,12 +56,21 @@ mod native;
 mod native_module_dispatch;
 mod native_table;
 mod new;
+mod new_alloc;
 mod new_ctor_args;
 mod new_helpers;
 mod omitted_native_params;
 mod options;
-mod property_get;
+/// `pub(crate)` so `type_analysis` can reuse the exact receiver/method
+/// predicates that decide whether a `PropertyGet` call takes the static
+/// String lowering — a static type claim about such a call must be gated on
+/// the same condition that routes it (#7592).
+pub(crate) mod property_get;
 mod scalar_method;
+/// Rooting coverage for the two-argument timer arms slice 5 repaired — see the
+/// module header for why the default build cannot fault on them.
+#[cfg(test)]
+mod timer_rooting_tests;
 /// #7510: which of the two typed-shape layout entry points a `new` site emits,
 /// and where. Split out of `new.rs` to keep it under the 2000-line cap.
 mod typed_shape_init;
@@ -162,24 +175,37 @@ pub(crate) use native_table::iter_native_module_table;
 /// global held the post-move address, the register held the retired from-space
 /// one.
 ///
-/// [`temp_root::lower_exprs_rooted`] gates each argument on
-/// `any_later_ref_may_trigger_gc`, so an argument list nothing allocating
-/// follows emits exactly the IR it emitted before.
+/// Each argument's window is "everything after it", so an argument list
+/// nothing allocating follows emits exactly the IR it emitted before —
+/// `operand_protection` routes it to `Reuse` and nothing is pushed.
 ///
-/// Returns the values to pass and the guard for [`emit_rooted_call`].
+/// Returns the values to pass and the scope for [`emit_rooted_call`].
 ///
-/// [`OperandProtection::Reload`]: crate::expr::temp_root
-/// [`temp_root::lower_exprs_rooted`]: crate::expr::temp_root::lower_exprs_rooted
-pub(crate) fn lower_call_args_rooted(
+/// The scope ESCAPES rather than being owned by a closure, and the reason is
+/// `func_ref.rs` rather than this function: its four specialized-ABI dispatch
+/// arms split the block, so the release must sit in a merge that post-dominates
+/// all of them, ~450 lines below. [`crate::rooting::open_rooted_group`] states
+/// what escaping does and does not leave writable.
+///
+/// [`OperandProtection::Reload`]: crate::rooting
+pub(crate) fn lower_call_args_rooted<'a>(
     ctx: &mut FnCtx<'_>,
-    args: &[Expr],
-) -> Result<(Vec<String>, Option<String>)> {
-    let refs: Vec<&Expr> = args.iter().collect();
-    crate::expr::temp_root::lower_exprs_rooted(ctx, &refs)
+    args: &'a [Expr],
+) -> Result<(Vec<String>, crate::rooting::RootedGroup<'a>)> {
+    let mut group = crate::rooting::open_rooted_group(args.len());
+    for (i, arg) in args.iter().enumerate() {
+        // The window is "can anything between this argument and the consuming
+        // call collect?", which for a plain direct call is the arguments that
+        // follow it.
+        let collects = crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+        group.lower(ctx, arg, collects)?;
+    }
+    let values = group.reread_all(ctx)?;
+    Ok((values, group))
 }
 
 /// Emit a direct call over an already-lowered argument list, then release the
-/// [`lower_call_args_rooted`] guard.
+/// [`lower_call_args_rooted`] scope.
 ///
 /// The release has to sit BELOW the call, not above it: the callee allocates
 /// while reading these arguments, so the slots have to outlive the call itself.
@@ -187,14 +213,14 @@ pub(crate) fn emit_rooted_call(
     ctx: &mut FnCtx<'_>,
     fname: &str,
     lowered: &[String],
-    guard: Option<String>,
+    group: crate::rooting::RootedGroup<'_>,
 ) -> String {
     let arg_slices: Vec<(crate::types::LlvmType, &str)> = lowered
         .iter()
         .map(|s| (crate::types::DOUBLE, s.as_str()))
         .collect();
     let result = ctx.block().call(crate::types::DOUBLE, fname, &arg_slices);
-    crate::expr::temp_root::temp_root_release(ctx, guard);
+    group.release(ctx);
     result
 }
 
@@ -224,75 +250,73 @@ pub(crate) struct RestBundle {
 ///     window does not end when the last argument is lowered. The rest array
 ///     is materialized *afterwards*, and materializing it runs
 ///     `js_array_alloc` plus one `js_array_push_f64` per trailing argument,
-///     every one of which allocates. So `lower_exprs_rooted` is the wrong tool
-///     here: it re-reads immediately, and the collection point it must re-read
-///     below is a step it never sees. [`RootedOperands`] exists for precisely
-///     that, and the caller picking the re-read point is the whole difference.
+///     every one of which allocates. So a combinator that re-reads once, at the
+///     end of the operand list, is the wrong tool here: the collection points
+///     it must re-read below are a step it never sees.
 ///
 ///  2. **The accumulator itself** — and this is the one with no analogue in
-///     the non-rest arm. `current` is a RAW `*mut ArrayHeader` in a bare SSA
+///     the non-rest arm. `current` was a RAW `*mut ArrayHeader` in a bare SSA
 ///     register, threaded through the push loop, holding the ONLY reference to
 ///     every argument pushed so far while the NEXT argument's expression is
-///     lowered — arbitrary user code. Nothing roots it, so a minor in that
-///     window does not merely move the array, it is free to sweep it.
-///     [`temp_root::rooted_array_begin`]'s doc names this exact shape as "the
-///     shape behind every variadic / spread / rest argument list"; the helper
-///     has existed since #6951 and this path never adopted it.
+///     lowered — arbitrary user code. Nothing rooted it, so a minor in that
+///     window did not merely move the array, it was free to sweep it.
+///     [`crate::rooting::RootedGroup::begin_array`] is that shape, and it lives
+///     in the same scope as the operands so one release covers both.
 ///
 /// `collects` is unconditionally true for the fixed parameters, and that is a
 /// statement about the code rather than a conservative shrug: the rest array
 /// is materialized on every path (a callee's rest binding must be `[]` even
 /// when nothing trailing was passed), so `js_array_alloc` is always between a
 /// fixed parameter and the call that consumes it. Scalar arguments still cost
-/// nothing — [`temp_root::operand_protection`] routes anything
+/// nothing — the protection decision routes anything
 /// `expr_is_known_non_pointer_shadow_value` proves is not a heap reference to
 /// `Reuse`, so `f(1, 2, ...rest)` emits the IR it emitted before.
 ///
 /// Returns the values to pass — fixed parameters first, re-read from their
-/// roots, then one boxed array per [`RestBundle`] — and the guard for
+/// roots, then one boxed array per [`RestBundle`] — and the scope for
 /// [`emit_rooted_call`].
 ///
-/// [`RootedOperands`]: crate::expr::temp_root::RootedOperands
-/// [`temp_root::rooted_array_begin`]: crate::expr::temp_root::rooted_array_begin
-/// [`temp_root::operand_protection`]: crate::expr::temp_root::operand_protection
-pub(crate) fn lower_rest_call_args_rooted(
+/// This is the shape that named the missing combinator (#7615 slice 5): the
+/// operands and the accumulator arrays are ONE temp-root scope, and the
+/// per-element re-reads are a loop rather than a point. Both live in the
+/// [`crate::rooting::RootedGroup`] now, so one release drops the whole stack —
+/// which is what the hand-rolled version was doing by hand, via the
+/// `rooted.guard().or_else(accs.first())` cut it no longer has to compute.
+pub(crate) fn lower_rest_call_args_rooted<'a>(
     ctx: &mut FnCtx<'_>,
-    args: &[Expr],
+    args: &'a [Expr],
     fixed_count: usize,
     bundles: &[RestBundle],
-) -> Result<(Vec<String>, Option<String>)> {
-    use crate::expr::temp_root;
+) -> Result<(Vec<String>, crate::rooting::RootedGroup<'a>)> {
     use crate::types::I64;
 
-    let refs: Vec<&Expr> = args.iter().collect();
+    let mut group = crate::rooting::open_rooted_group(args.len());
     // Incrementally, one argument at a time: root each BEFORE the next is
     // lowered. Lowering the whole list and rooting it afterwards is not merely
     // late, it is worse than doing nothing — by then an earlier value may
     // already have been swept and the push publishes a dangling pointer into a
-    // slot the collector scans. See `root_operands_begin`.
-    let mut rooted = temp_root::root_operands_begin(refs.len());
-    for expr in &refs {
-        let value = crate::expr::lower_expr(ctx, expr)?;
-        rooted.push(ctx, expr, &value, true);
+    // slot the collector scans.
+    for arg in args {
+        group.lower(ctx, arg, true)?;
     }
 
     let mut lowered: Vec<String> = Vec::with_capacity(fixed_count + bundles.len());
 
-    // Build every array FIRST and leave each one in its temp-root slot, then
-    // read them all back at the end. Building array 2 allocates, so array 1's
-    // pointer must not be sitting in a bare register while it happens — #1816's
-    // shape wants both a `...rest` and an `arguments` bundle over the same
-    // list, and that second `js_array_alloc` is a collection point for the
-    // first array exactly as the push loop is for its elements.
-    let mut accs: Vec<String> = Vec::with_capacity(bundles.len());
+    // Build every array FIRST and leave each one in its slot, then read them
+    // all back at the end. Building array 2 allocates, so array 1's pointer
+    // must not be sitting in a bare register while it happens — #1816's shape
+    // wants both a `...rest` and an `arguments` bundle over the same list, and
+    // that second `js_array_alloc` is a collection point for the first array
+    // exactly as the push loop is for its elements.
+    let mut accs: Vec<crate::rooting::AccArray> = Vec::with_capacity(bundles.len());
     for bundle in bundles {
         let cap = (args.len().saturating_sub(bundle.from) as u32).to_string();
-        let acc = temp_root::rooted_array_begin(ctx, &cap);
-        for i in bundle.from..refs.len() {
+        let acc = group.begin_array(ctx, &cap);
+        for i in bundle.from..group.len() {
             // Re-read per element: the previous push allocated, so the register
             // this argument was lowered into is already stale.
-            let value = rooted.reread_one(ctx, &refs, i)?;
-            temp_root::temp_rooted_array_push(ctx, &acc, &value);
+            let value = group.reread(ctx, i)?;
+            group.push_array(ctx, acc, &value);
         }
         accs.push(acc);
     }
@@ -302,7 +326,7 @@ pub(crate) fn lower_rest_call_args_rooted(
     // is safe between the slot read and the box.
     let mut boxed_bundles: Vec<String> = Vec::with_capacity(bundles.len());
     for (bundle, acc) in bundles.iter().zip(accs.iter()) {
-        let mut current = temp_root::rooted_array_read(ctx, acc);
+        let mut current = group.read_array(ctx, *acc);
         if bundle.mark_arguments_object {
             current = ctx
                 .block()
@@ -313,19 +337,15 @@ pub(crate) fn lower_rest_call_args_rooted(
 
     let undefined_lit = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     for i in 0..fixed_count {
-        lowered.push(if i < refs.len() {
-            rooted.reread_one(ctx, &refs, i)?
+        lowered.push(if i < group.len() {
+            group.reread(ctx, i)?
         } else {
             undefined_lit.clone()
         });
     }
     lowered.extend(boxed_bundles);
 
-    // The operand group was pushed BEFORE the accumulators, so its guard is the
-    // lower index and one truncate at it drops both. When nothing needed a real
-    // root the first accumulator is the lowest slot and becomes the guard.
-    let guard = rooted.guard().or_else(|| accs.first().cloned());
-    Ok((lowered, guard))
+    Ok((lowered, group))
 }
 
 /// Lower a `Call` expression. Two shapes are supported:

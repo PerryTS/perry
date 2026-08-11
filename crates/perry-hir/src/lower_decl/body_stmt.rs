@@ -901,6 +901,9 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             });
         }
         ast::Stmt::ForOf(for_of_stmt) => {
+            // #7760: where this arm's own statements begin, so the guard below
+            // can splice them back out as the index arm.
+            let result_mark = result.len();
             // `for (… of m.values()/keys()/entries())` on a statically-proven
             // Map/Set is the direct-collection loop written another way; see
             // `for_head::rewrite_collection_view_for_of`.
@@ -1431,7 +1434,18 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 return lower_runtime_for_await_iterator_body(ctx, for_of_stmt, arr_expr);
             }
             // Lazy iterator protocol for generic iterables (see stmt_loops.rs).
-            let use_lazy_iter = needs_runtime_iterator;
+            // #7760: the guard emission below lowers this same statement twice.
+            let use_lazy_iter = needs_runtime_iterator || ctx.for_of_force_lazy;
+            // Guarded exactly when this would otherwise be a plain array index
+            // loop, which ignores a patched `Array.prototype[Symbol.iterator]`.
+            let guard_with_lazy_arm = !ctx.for_of_force_lazy
+                && proven_array
+                && !needs_runtime_iterator
+                && !is_string_iter
+                && !is_iterable_map
+                && !is_iterable_set
+                && !is_iterable_typed_array
+                && !for_of_stmt.is_await;
             let arr_expr = if is_iterable_map {
                 if map_kv_fastpath {
                     arr_expr
@@ -1826,13 +1840,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 }
             };
             // Create the for loop
+            //
+            // #7766: `Integer(0)`, not `Number(0.0)` — same shape as a
+            // user-written `let i = 0`, and the same change as the module-init
+            // for-of desugar (`lower/stmt_loops.rs`). The integer-local
+            // collector seeds on the literal kind, so a `Number(0.0)` counter
+            // never gets a canonical i32 slot and every i32-counter loop
+            // optimization silently declines the `for…of` spelling.
             result.push(Stmt::For {
                 init: Some(Box::new(Stmt::Let {
                     id: idx_id,
                     name: format!("__idx_{}", idx_id),
                     ty: Type::Number,
                     mutable: true,
-                    init: Some(Expr::Number(0.0)),
+                    init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(condition),
                 update: Some(Expr::Update {
@@ -1843,6 +1864,21 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 body: loop_body,
             });
             ctx.pop_block_scope(for_scope_mark);
+            if guard_with_lazy_arm {
+                // Splice out the index form just emitted, lower the same
+                // statement again in lazy mode, and branch between them on the
+                // runtime flag. Re-lowering rather than cloning keeps the two
+                // arms from drifting and gives the lazy arm its own locals.
+                let index_arm: Vec<Stmt> = result.split_off(result_mark);
+                ctx.for_of_force_lazy = true;
+                let lazy_arm = lower_body_stmt(ctx, stmt);
+                ctx.for_of_force_lazy = false;
+                result.push(Stmt::If {
+                    condition: Expr::ArrayIterationPatched,
+                    then_branch: lazy_arm?,
+                    else_branch: Some(index_arm),
+                });
+            }
         }
         ast::Stmt::ForIn(for_in_stmt) => {
             // Desugar for-in to a for-of over Object.keys(obj) (same as in lower_stmt).

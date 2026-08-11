@@ -37,6 +37,7 @@ pub use super::class_handles::{
 };
 use super::*;
 
+mod builtin_alias_construct;
 mod class_meta;
 mod construct;
 pub(crate) use construct::scan_current_new_target_root_mut;
@@ -58,9 +59,11 @@ pub(crate) use state::{
     class_object_value_root_store, class_own_enumerable_field_names, class_own_static_field_value,
     class_parent_closure, class_parent_closure_root_store, class_prototype_method_is_enumerable,
     class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
-    class_prototype_object_root_store, global_object_prototype_bits,
-    is_bound_native_method_closure_value, is_non_constructable_builtin_function_value,
-    parent_closure_in_chain, throw_non_constructable_builtin_function,
+    class_prototype_object_root_store, class_static_defined_attrs,
+    class_static_key_is_non_enumerable, class_static_set_defined_attrs,
+    global_object_prototype_bits, is_bound_native_method_closure_value,
+    is_non_constructable_builtin_function_value, parent_closure_in_chain,
+    throw_non_constructable_builtin_function,
 };
 pub use state::{
     ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_DYNAMIC_PARENT_VALUE,
@@ -101,8 +104,7 @@ pub(crate) use prototype_methods::CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED;
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{
     class_prototype_fast_guards_invalidated, class_prototype_method_root_store,
-    invalidate_class_prototype_fast_guards, mirror_prototype_method_on_object,
-    synthetic_class_id_for_function,
+    mirror_prototype_method_on_object, synthetic_class_id_for_function,
 };
 pub use prototype_methods::{
     js_class_register_static_field, js_get_function_prototype_method,
@@ -153,8 +155,8 @@ pub use registration::{
 #[cfg(test)]
 pub(crate) use dispatch::test_bump_vtable_generation;
 pub(crate) use dispatch::{
-    call_vtable_method, fetch_parent_kind_in_chain, vtable_generation, vtable_ic_insert,
-    vtable_ic_lookup, VTABLE_GEN,
+    call_vtable_method, fetch_parent_kind_in_chain, obj_dispatch_ic_insert, obj_dispatch_ic_lookup,
+    vtable_generation, vtable_ic_insert, vtable_ic_lookup, VTABLE_GEN,
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────

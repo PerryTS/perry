@@ -21,7 +21,18 @@ use crate::{JSValue, StringHeader};
 
 /// Cached shape template for a homogeneous array of objects.
 pub(crate) struct ShapeTemplate {
-    pub(crate) keys_arr: *mut crate::ArrayHeader,
+    /// The shape identity: the shared `keys_array` of every element that
+    /// matches this template. A **GC-managed pointer**, visited (marked and
+    /// rewritten) by `json::scan_parse_roots_mut` — see `SHAPE_CACHE`.
+    ///
+    /// `Cell`, not a bare pointer, and the choice is load-bearing rather than
+    /// stylistic. `try_emit_shape_element` holds `&ShapeTemplate` across
+    /// `stringify_value_depth`, which can run a user `toJSON` and therefore a
+    /// collection that rewrites this slot. A plain field behind a shared
+    /// reference is `noalias` + immutable to LLVM, so the read after the call
+    /// could legally be folded into the read before it — the fix would compile
+    /// away. `Cell`'s `UnsafeCell` withdraws exactly that permission.
+    pub(crate) keys_arr: std::cell::Cell<*mut crate::ArrayHeader>,
     pub(crate) prefixes: Vec<String>,
     pub(crate) shape_fields: u32,
     /// True when element 0's fields are all primitives (no POINTER_TAG /
@@ -45,33 +56,42 @@ pub(crate) unsafe fn shape_template_for(obj_ptr: *const u8) -> Option<*const Sha
         return None;
     }
 
-    SHAPE_CACHE.with(|c| {
-        // Fast path: linear scan from the back — recently-used entries
-        // cluster there for typical traversal orders (shape A's elements
-        // recurse into shape B repeatedly).
-        {
-            let cache = c.borrow();
-            for entry in cache.iter().rev() {
-                if entry.0 == keys_arr {
-                    return Some(&*entry.1 as *const ShapeTemplate);
-                }
-            }
-            if cache.len() >= SHAPE_CACHE_CAP {
-                return None;
+    // Fast path: linear scan from the back — recently-used entries
+    // cluster there for typical traversal orders (shape A's elements
+    // recurse into shape B repeatedly).
+    //
+    // #7268: the cache key is read out of the `Cell` rather than stored
+    // alongside the template. There used to be TWO copies of this pointer per
+    // entry — the tuple key and `ShapeTemplate::keys_arr` — which is one more
+    // slot for a root scanner to miss than the design needs. One copy cannot
+    // drift from itself.
+    let hit = with_shape_cache_frame(|frame| {
+        for template in frame.iter().rev() {
+            if template.keys_arr.get() == keys_arr {
+                return Some(&**template as *const ShapeTemplate);
             }
         }
+        None
+    });
+    if hit.is_some() {
+        return hit;
+    }
+    if with_shape_cache_frame(|frame| frame.len() >= SHAPE_CACHE_CAP) {
+        return None;
+    }
 
-        // Miss — build, insert, return raw pointer to the boxed template.
-        let elem_bits = make_pointer_bits(obj_ptr);
-        let template = build_shape_prefix_template(elem_bits)?;
-        let mut cache = c.borrow_mut();
-        // Re-check cap after the borrow round-trip (a recursive call
-        // during template build could have filled the cache).
-        if cache.len() >= SHAPE_CACHE_CAP {
+    // Miss — build, insert, return raw pointer to the boxed template. The
+    // build runs OUTSIDE the cache borrow: it allocates and can recurse.
+    let elem_bits = make_pointer_bits(obj_ptr);
+    let template = build_shape_prefix_template(elem_bits)?;
+    with_shape_cache_frame(|frame| {
+        // Re-check the cap after the build (a recursive call during the build
+        // could have filled the frame).
+        if frame.len() >= SHAPE_CACHE_CAP {
             return None;
         }
-        cache.push((keys_arr, Box::new(template)));
-        Some(&*cache.last().unwrap().1 as *const ShapeTemplate)
+        frame.push(Box::new(template));
+        Some(&**frame.last().unwrap() as *const ShapeTemplate)
     })
 }
 
@@ -206,7 +226,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     }
 
     Some(ShapeTemplate {
-        keys_arr,
+        keys_arr: std::cell::Cell::new(keys_arr),
         prefixes,
         shape_fields,
         primitive_only,
@@ -246,9 +266,19 @@ unsafe fn template_field_bits(obj: *const crate::ObjectHeader, f: u32) -> u64 {
 /// `keys_arr`) as the pending `toJSON` key before recursing into that field
 /// (#5909). Mirrors the key decode in `build_shape_prefix_template`.
 #[inline]
-unsafe fn set_to_json_key_for_template_field(template: &ShapeTemplate, f: usize) {
-    let keys_elements = (template.keys_arr as *const u8)
-        .add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+unsafe fn set_to_json_key_for_template_field(keys_arr: *mut crate::ArrayHeader, f: usize) {
+    // #7268: `keys_arr` is passed in from the caller's ROOTED handle, freshly
+    // read. It used to be `template.keys_arr` — a copy captured before
+    // `stringify_value_depth` ran a user `toJSON`, i.e. before the collection
+    // that moved the array. This function dereferences it (`str_from_header` on
+    // each key), so a stale value is a read of retired from-space, not merely a
+    // wrong identity.
+    if keys_arr.is_null() {
+        set_to_json_key_str("");
+        return;
+    }
+    let keys_elements =
+        (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let key_bits = (*keys_elements.add(f)).to_bits();
     let key_tag = key_bits & 0xFFFF_0000_0000_0000;
     let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
@@ -282,22 +312,65 @@ pub(crate) unsafe fn try_emit_shape_element(
         return false;
     }
     let obj = elem_ptr as *const crate::ObjectHeader;
-    if (*obj).keys_array != template.keys_arr {
+    if (*obj).keys_array != template.keys_arr.get() {
         return false;
     }
 
-    let fields_ptr =
-        (elem_ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+    // ★ #7268: ROOT THE ELEMENT. The emit loops below call
+    // `stringify_value_depth` for every pointer-valued field, and that can run
+    // a user `toJSON` — allocating, reaching a safepoint, and taking an
+    // evacuating minor with it. `elem_ptr` is a bare Rust local: no shadow
+    // slot, no temp root, no registered scanner, and production resolves the
+    // conservative native-stack scan to `SkipDisabled`. So every later
+    // `fields_ptr.add(f)` in the SAME loop was a read of a forwarded or swept
+    // address.
+    //
+    // `stringify_object_inner` (json/stringify.rs) has done this correctly
+    // since #6519's rework — handle + a `cur_obj()` re-derivation on every
+    // access. The template path never got the same treatment; this is that
+    // treatment.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let elem_handle = scope.root_raw_const_ptr(elem_ptr);
+    let cur_obj = || elem_handle.get_raw_const_ptr::<crate::ObjectHeader>();
+
+    // ★ #7268, second holder: the TEMPLATE'S OWN `keys_arr`.
+    //
+    // Rooting the shape cache is not sufficient, because not every template
+    // lives in the cache: `stringify_array_depth` builds one into a plain
+    // `Option<ShapeTemplate>` Rust local and holds it across the whole element
+    // loop. That local is invisible to every scanner. Rooting the pointer HERE
+    // covers both holders with one mechanism, and writing the refreshed address
+    // back into the `Cell` keeps whichever holder owns this template correct
+    // for the next element too.
+    //
+    // `set_to_json_key_for_template_field` reads the property-name strings out
+    // of this array AFTER `stringify_value_depth` has run — that read is the
+    // one that dereferences retired from-space.
+    let keys_handle = scope.root_raw_mut_ptr(template.keys_arr.get());
+    let cur_keys = || {
+        let keys = keys_handle.get_raw_mut_ptr::<crate::ArrayHeader>();
+        template.keys_arr.set(keys);
+        keys
+    };
+
     let shape_fields = template.shape_fields;
     let prefixes = template.prefixes.as_slice();
     // Per ELEMENT, not per template: two objects can share a `keys_array`
     // (same shape) while one was pre-sized and the other grown by name, so the
     // inline/overflow split has to be re-derived from this element's own
-    // header. Hoisted out of the emit loops — the common case is
-    // `shape_fields <= alloc_limit` and the branch never taken.
+    // header. Still hoisted out of the emit loops — the common case is
+    // `shape_fields <= alloc_limit` and the branch is never taken. Hoisting it
+    // stays sound across a collection because it is a COUNT, not an address:
+    // `field_count` is copied verbatim when the object moves.
     let alloc_limit = object_alloc_limit(obj);
     let field_bits_at = |f: usize| -> u64 {
+        // Re-derived per access, deliberately. The pre-#7268 code hoisted
+        // `fields_ptr` above the loop, which is exactly the address a `toJSON`
+        // in an earlier field invalidates.
+        let obj = cur_obj();
         if (f as u32) < alloc_limit {
+            let fields_ptr =
+                (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
             (*fields_ptr.add(f)).to_bits()
         } else {
             crate::object::js_object_get_field(obj, f as u32).bits()
@@ -359,13 +432,13 @@ pub(crate) unsafe fn try_emit_shape_element(
                     buf.push_str("null");
                 }
             } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
-                set_to_json_key_for_template_field(template, f);
+                set_to_json_key_for_template_field(cur_keys(), f);
                 stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
             } else {
                 // A BigInt field reaches `serialize_bigint` via `write_number`,
                 // which reads the pending `toJSON` key — record it first (#5909).
                 if vtag == BIGINT_TAG {
-                    set_to_json_key_for_template_field(template, f);
+                    set_to_json_key_for_template_field(cur_keys(), f);
                 }
                 write_number(buf, field_val);
             }
@@ -391,7 +464,10 @@ pub(crate) unsafe fn try_emit_shape_element(
         }
     }
     if has_pointer_fields {
-        if let Some(to_json_val) = object_get_to_json(elem_ptr) {
+        // Through the handle: the pre-scan above is allocation-free today, but
+        // `elem_ptr` is the pre-collection address and there is no reason for a
+        // second name for this object to exist (#7268).
+        if let Some(to_json_val) = object_get_to_json(cur_obj() as *const u8) {
             arm_to_json_result_guard(to_json_val);
             stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
             SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
@@ -426,13 +502,13 @@ pub(crate) unsafe fn try_emit_shape_element(
                 buf.push_str("null");
             }
         } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
-            set_to_json_key_for_template_field(template, f);
+            set_to_json_key_for_template_field(cur_keys(), f);
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
         } else {
             // A BigInt field reaches `serialize_bigint` via `write_number`,
             // which reads the pending `toJSON` key — record it first (#5909).
             if vtag == BIGINT_TAG {
-                set_to_json_key_for_template_field(template, f);
+                set_to_json_key_for_template_field(cur_keys(), f);
             }
             write_number(buf, field_val);
         }

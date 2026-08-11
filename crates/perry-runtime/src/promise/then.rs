@@ -1361,7 +1361,7 @@ extern "C" fn spec_catch_finally_fn(
 }
 
 fn ensure_spec_finally_arities_registered() {
-    thread_local! {
+    crate::perry_thread_local! {
         static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     DONE.with(|d| {

@@ -175,12 +175,12 @@ pub use with_env::*;
 // named re-exports keep existing `crate::object::X` / bare-name call sites in
 // the object submodules resolving unchanged.
 pub(crate) use class_meta_registry::{
-    extends_builtin_error, fetch_parent_kind, lookup_has_instance_hook, lookup_to_string_tag_hook,
-    register_fetch_parent_kind, CLASS_REGISTRY,
+    class_generic_origin, extends_builtin_error, fetch_parent_kind, lookup_has_instance_hook,
+    lookup_to_string_tag_hook, register_fetch_parent_kind, CLASS_REGISTRY,
 };
 pub use class_meta_registry::{
-    js_register_class_extends_error, js_register_class_has_instance,
-    js_register_class_to_string_tag,
+    js_register_class_extends_error, js_register_class_generic_origin,
+    js_register_class_has_instance, js_register_class_to_string_tag,
 };
 pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
@@ -207,33 +207,49 @@ pub(crate) use this_binding::{
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 
-static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
-static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_SIGNALS_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
-static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
-static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
-static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
-// `%TypedArray%` intrinsic constructor/prototype roots used by per-kind typed
-// array constructors and scanned by `scan_object_cache_roots_mut`.
-pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-// #3664: the generator / async-generator intrinsic prototype towers.
-// `*_FUNCTION_INTRINSIC_PTR` = `%GeneratorFunction%` / `%AsyncGeneratorFunction%`
-// (the constructor closures); `*_INTRINSIC_PROTO_PTR` = `%Generator%` /
-// `%AsyncGenerator%` (a.k.a. `<Ctor>.prototype`), the object
-// `Object.getPrototypeOf(function*(){})` resolves to; `*_PROTOTYPE_PTR` =
-// `%Generator.prototype%` / `%AsyncGenerator.prototype%` (a.k.a.
-// `<Ctor>.prototype.prototype`), carrying `next`/`return`/`throw`. All six are
-// GC roots scanned by `scan_object_cache_roots_mut`.
-pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
-pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
+per_test_global! {
+    static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
+    static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_SIGNALS_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_ERRNO_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_PRIORITY_CACHE: AtomicU64 = AtomicU64::new(0);
+    static OS_CONSTANTS_DLOPEN_CACHE: AtomicU64 = AtomicU64::new(0);
+    static GLOBAL_THIS_PTR: AtomicI64 = AtomicI64::new(0);
+    static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
+    // `%TypedArray%` intrinsic constructor/prototype roots used by per-kind
+    // typed array constructors and scanned by `scan_object_cache_roots_mut`.
+    pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
+    pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+    // #3664: the generator / async-generator intrinsic prototype towers.
+    // `*_FUNCTION_INTRINSIC_PTR` = `%GeneratorFunction%` / `%AsyncGeneratorFunction%`
+    // (the constructor closures); `*_INTRINSIC_PROTO_PTR` = `%Generator%` /
+    // `%AsyncGenerator%` (a.k.a. `<Ctor>.prototype`), the object
+    // `Object.getPrototypeOf(function*(){})` resolves to; `*_PROTOTYPE_PTR` =
+    // `%Generator.prototype%` / `%AsyncGenerator.prototype%` (a.k.a.
+    // `<Ctor>.prototype.prototype`), carrying `next`/`return`/`throw`. All six are
+    // GC roots scanned by `scan_object_cache_roots_mut`.
+    //
+    // #7251: these six are `per_test_global!` (not a bare `static`) SPECIFICALLY
+    // so a test can observe "this tower has never been built" reliably. Before
+    // this they were plain process-global `AtomicI64`s, built exactly once per
+    // *process* — so whichever test happened to run first (order is
+    // libtest-nondeterministic) built them for every OTHER test on the same
+    // binary, and a gate trying to arm a collection around
+    // `ensure_generator_intrinsics()` / `ensure_typed_array_intrinsic()` found
+    // the tower already cached and measured nothing (see #7251's second and
+    // third failed gate attempts). `per_test_global!` gives each libtest THREAD
+    // — and libtest runs one thread per test — its own zeroed instance, so
+    // `crates/perry-runtime/src/gc/tests/lazy_intrinsic_towers.rs` sees a
+    // guaranteed-first-touch tower with no dependence on test execution order.
+    // Non-test builds expand to the identical plain `static` this replaced.
+    pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
+    pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+    pub(crate) static GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
+    pub(crate) static ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR: AtomicI64 = AtomicI64::new(0);
+    pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: AtomicI64 = AtomicI64::new(0);
+    pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: AtomicI64 = AtomicI64::new(0);
+}
 pub(crate) static LOCAL_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 
@@ -250,7 +266,7 @@ pub(crate) static SESSION_STORAGE_PTR: AtomicI64 = AtomicI64::new(0);
 //
 // This handles cases like Object.assign() adding many fields to an object
 // that was allocated with only 8 slots (e.g., @noble/curves Fp field with 21 properties).
-thread_local! {
+crate::perry_thread_local! {
     static CLASS_PROTOTYPE_METHOD_VALUES: RefCell<HashMap<(u32, String), u64>> =
         RefCell::new(HashMap::new());
 }
@@ -401,7 +417,7 @@ fn keys_index_insert(
 
 // Recursion depth guard for js_native_call_method to prevent stack overflow
 // from circular module dependencies during initialization.
-thread_local! {
+crate::perry_thread_local! {
     static CALL_METHOD_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 const MAX_CALL_METHOD_DEPTH: u32 = 512;
@@ -537,7 +553,7 @@ pub(crate) struct ShapeCacheEntry {
     keys_array: *mut ArrayHeader,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Issue #618-followup / drizzle SQL.Aliased: dynamic properties added
     /// via the IIFE pattern `((SQL2) => { SQL2.Aliased = Aliased; })(SQL)`
     /// to imported classes (which Perry stores as INT32-tagged class ids).
@@ -550,6 +566,15 @@ thread_local! {
     /// `name`). Mirrors the closure deleted-key side table for ClassRef values,
     /// which are tagged integers rather than ObjectHeader/ClosureHeader values.
     pub(crate) static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// #7190: `(writable, enumerable)` for static own keys installed by
+    /// `Object.defineProperty(C, k, desc)`. They live in `CLASS_DYNAMIC_PROPS`
+    /// next to `static x = …` fields, which are writable AND enumerable by
+    /// CreateDataPropertyOrThrow — a data descriptor defaults to neither. An
+    /// ABSENT entry therefore means "declared static field", and keeps the
+    /// previous `(true, true)` reporting untouched.
+    pub(crate) static CLASS_STATIC_DEFINED_ATTRS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashMap<String, (bool, bool, bool)>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -1664,6 +1689,26 @@ pub(crate) unsafe fn store_object_field_slot(
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     let slot = fields_ptr.add(field_index);
     crate::gc::runtime_store_jsvalue_slot(obj as usize, slot as usize, field_index, value_bits);
+}
+
+/// #7630: `store_object_field_slot` without the per-slot layout note, for the
+/// JSON materialiser's construction loops. Returns whether the value carries a
+/// heap pointer; the caller accumulates that and settles the object's layout
+/// state once via `layout_finish_deferred_boxed_object`.
+#[inline]
+pub(crate) unsafe fn store_object_field_slot_layout_deferred(
+    obj: *mut ObjectHeader,
+    field_index: usize,
+    value_bits: u64,
+) -> bool {
+    let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    let slot = fields_ptr.add(field_index);
+    crate::gc::runtime_store_jsvalue_slot_layout_deferred(
+        obj as usize,
+        slot as usize,
+        field_index,
+        value_bits,
+    )
 }
 
 #[inline]

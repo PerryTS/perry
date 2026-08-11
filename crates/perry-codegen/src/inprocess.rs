@@ -29,6 +29,62 @@ use inkwell::targets::{
 };
 use inkwell::OptimizationLevel;
 
+/// The pass string that inserts every statepoint, relocation and
+/// downstream-use rewrite — i.e. the whole native-roots lowering, after
+/// codegen has retyped its root allocas to `ptr addrspace(1)`.
+///
+/// Named rather than spelled inline because `native_root_coverage` (#7502)
+/// runs it too, and a coverage suite that spelled its own pass list would keep
+/// passing against a pipeline production had stopped using. `mem2reg` is not
+/// incidental company: RS4GC tracks `addrspace(1)` **SSA values**, not memory,
+/// so a root alloca that survives promotion is a root the collector never sees.
+pub(crate) const STATEPOINT_REWRITE_PASSES: &str = "function(mem2reg),rewrite-statepoints-for-gc";
+
+/// Test seam (#7502): parse `ll_text`, run [`STATEPOINT_REWRITE_PASSES`] for
+/// `effective_target`, and return the rewritten IR.
+///
+/// Everything about the target machine — triple, CPU, data layout — comes from
+/// the same helpers `optimize_and_emit` uses, so an assertion here is about the
+/// lowering that ships rather than about a pipeline assembled for the test.
+/// Both verifies are load-bearing: the first rejects IR codegen should never
+/// have emitted, the second rejects a statepoint form LLVM would refuse to
+/// codegen (that is how the Itanium landing-pad shape was found).
+#[cfg(test)]
+pub(crate) fn statepoint_rewritten_ir(
+    ll_text: &str,
+    effective_target: &str,
+    module_name: &str,
+) -> Result<String> {
+    global_init(&[]);
+    let context = Context::create();
+    let module = parse_ir_text(&context, ll_text, module_name)?;
+    let triple = TargetTriple::create(effective_target);
+    let target = Target::from_triple(&triple)
+        .map_err(|e| anyhow!("no LLVM target for `{effective_target}`: {e}"))?;
+    let tm = target
+        .create_target_machine(
+            &triple,
+            default_cpu_for_triple(effective_target),
+            "",
+            OptimizationLevel::None,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| anyhow!("failed to create TargetMachine for `{effective_target}`"))?;
+    module.set_triple(&triple);
+    module.set_data_layout(&tm.get_target_data().get_data_layout());
+    module
+        .verify()
+        .map_err(|e| anyhow!("LLVM verifier rejected pre-statepoint module:\n{}", e))?;
+    module
+        .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
+        .map_err(|e| anyhow!("`{STATEPOINT_REWRITE_PASSES}` failed:\n{}", e))?;
+    module
+        .verify()
+        .map_err(|e| anyhow!("LLVM verifier rejected the statepoint module:\n{}", e))?;
+    Ok(module.print_to_string().to_string())
+}
+
 /// One-time process-global LLVM setup: target registration and `-mllvm`
 /// pass-through flags. Both are process-global in LLVM itself, which is why
 /// they are applied under a `Once` and not per compile. The `-mllvm` value is
@@ -320,11 +376,7 @@ fn optimize_and_emit(
     // which the explicit bridge refuses outright (#7327/#7330).
     if crate::codegen::helpers::rs4gc_enabled() {
         module
-            .run_passes(
-                "function(mem2reg),rewrite-statepoints-for-gc",
-                &tm,
-                PassBuilderOptions::create(),
-            )
+            .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
             .map_err(|e| {
                 anyhow!(
                     "in-process rewrite-statepoints-for-gc failed:\n{}",

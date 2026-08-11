@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Tagged-template `.raw` side-table — maps a cooked-strings array
     /// pointer to its corresponding raw-strings array pointer. Populated
     /// by `js_tagged_template_register_raw` at the tagged-call site; read
@@ -65,6 +65,55 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
         } else {
             0
         }
+    }
+}
+
+/// The `obj_type` and flag word of the `GcHeader` that precedes `arr`, read
+/// once, for a receiver [`clean_arr_ptr`] has already resolved. `(0, 0)` when
+/// `arr` is too low to carry a header — `0` is not a legal `obj_type`, so it
+/// reads as "unknown" at every call site.
+///
+/// A non-zero tag is NOT proof that a real header exists. `Buffer` and
+/// `TypedArray` payloads are `std::alloc`-backed, so the eight bytes below them
+/// are allocator bookkeeping and can read as any value. Use the answer only
+/// where a wrong tag is harmless:
+///
+/// * to *skip* a registry probe whose answer for that receiver would have been
+///   `false` anyway — the caller must already have routed real buffers and
+///   typed arrays elsewhere; or
+/// * as the `GC_TYPE_ARRAY` test [`array_object_flags`] already performs on
+///   this very byte, where those bookkeeping bytes are allowed to be wrong
+///   today.
+///
+/// What makes the tag *authoritative* for the collection receivers is that
+/// every GC allocation carries a header, `Map` and `Set` included:
+/// `js_map_alloc` / `js_set_alloc` stamp `GC_TYPE_MAP` / `GC_TYPE_SET` through
+/// `arena_alloc_gc`, and that is the single registration site for each. Several
+/// comments in the tree still say Map/Set headers come from a bare `alloc()`
+/// with no `GcHeader` and that only the registry can classify them; that
+/// stopped being true when they moved into the managed arena.
+#[inline]
+pub(crate) fn array_receiver_gc_tag(arr: *const ArrayHeader) -> (u8, u16) {
+    // `try_read_gc_header` rather than this file's usual
+    // `>= GC_HEADER_SIZE + 0x1000` floor: that floor sits BELOW the handle
+    // band, and `js_array_length` reaches here before its proxy/handle
+    // receivers have been routed. The canonical predicate rejects the bands
+    // without touching memory, and rejecting an address the old floor would
+    // have read costs nothing — a handle is not a Map either way.
+    match unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) } {
+        Some(header) => (header.obj_type, header._reserved),
+        None => (0, 0),
+    }
+}
+
+/// [`array_object_flags`] answered from a tag [`array_receiver_gc_tag`]
+/// already read, for a receiver `clean_arr_ptr` already resolved.
+#[inline]
+pub(crate) fn array_object_flags_from_tag(tag: (u8, u16)) -> u16 {
+    if tag.0 == crate::gc::GC_TYPE_ARRAY {
+        tag.1
+    } else {
+        0
     }
 }
 
@@ -620,11 +669,49 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         if (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            let obj_type = (*gc_header).obj_type;
+            if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let lazy = cleaned as *mut crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
                     let materialized = crate::json_tape::force_materialize_lazy(lazy);
                     return materialized as *const ArrayHeader;
+                }
+            }
+            // #7574: a `GC_TYPE_OBJECT` / `GC_TYPE_CLOSURE` allocation is NOT
+            // an `ArrayHeader`, and the two layouts overlay field for field —
+            // `ArrayHeader.length` reads `ObjectHeader.object_type` (= 1),
+            // `.capacity` reads `class_id`, and the element slots at +8/+16/+24
+            // are `parent_class_id ‖ field_count`, `keys_array` and `meta`. The
+            // sanity check below waves that through (1 <= class_id <= 100M), so
+            // an element WRITE overwrites two live GC child edges with
+            // arbitrary doubles and the collector then traces them: `class X
+            // extends Array` in a `T[]`-annotated binding SIGSEGVs on its
+            // second `.push()`.
+            //
+            // A declared TypeScript type is a hint, never a layout fact
+            // (CLAUDE.md, *Known Limitations*), so this is reachable from every
+            // binding form. Refusing it here makes ALL ~190 `clean_arr_ptr`
+            // call sites fail-closed at once — each degrades through its
+            // existing null branch instead of dereferencing a forged header —
+            // and it is the same "resolve at the shared runtime funnel, not at
+            // one codegen predicate at a time" shape #7573 used for Map/Set.
+            //
+            // Correctness (rather than mere safety) for the entry points the
+            // declared-type tiers actually reach is layered on top: those null
+            // branches re-enter through `array::subclass::array_object_*`,
+            // which runs the operation on the spec-generic array-like engine.
+            //
+            // Costs one compare on a byte this block already loaded. Buffers
+            // and typed arrays are `std::alloc`-backed with no `GcHeader`, so
+            // their preceding bytes are allocator bookkeeping that can read as
+            // any value — confirm against the registries before nulling, in the
+            // cold arm only.
+            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+                let addr = cleaned as usize;
+                if !crate::buffer::is_registered_buffer(addr)
+                    && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+                {
+                    return std::ptr::null();
                 }
             }
         }
@@ -1663,10 +1750,13 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
     }
-    // #7480: this is the post-hoc funnel every bulk element mutator uses —
-    // `shift`, `unshift`, `splice`, `fill`, `copyWithin`, `reverse`, and the
-    // dense `sort` write-back all mutate slots with bare `ptr::write` /
-    // `ptr::copy` and then land here. They are permutations or arbitrary
+    // #7480: this is the post-hoc funnel most bulk element mutators use —
+    // `shift`, `unshift`, `splice`, `fill`, `copyWithin`, and `reverse` all
+    // mutate slots with bare `ptr::write` / `ptr::copy` and then land here.
+    // NOT `sort`: its default path writes the rank permutation back through
+    // `RootedArrayElems::set`, so it revokes through the STORE funnel
+    // (`layout_note_slot`) instead — established by sabotage in #7608's
+    // matrix (removing the revoke here leaves the sort test green). They are permutations or arbitrary
     // rewrites, so the element-shape proof is dropped conservatively; a
     // still-homogeneous array re-earns it on the next `ensure`.
     super::element_shape::clear_element_shape(arr);

@@ -404,25 +404,31 @@ struct JsonSummary<'a> {
 }
 
 fn rule_buckets(entries: &[Entry]) -> Vec<JsonRuleBucket<'_>> {
-    let mut out: BTreeMap<(&str, &str), (Option<Tier>, usize)> = BTreeMap::new();
+    // #7234: the key carries the TIER.
+    //
+    // This used to be keyed on `(analysis, rule)` and `debug_assert`ed that a
+    // rule never carries two tiers, on the reasoning that "rule-to-tier is 1:1
+    // because both come from one `ShapeDenial` constant". That reads the
+    // relation backwards: MANY constants share one rule NAME, and they do not
+    // agree on tier. `rule 2 (containment)` alone spans both — `ESC_REASSIGNED`
+    // and `ESC_CLOSURE_CAPTURE` are `Fixable`, while `ESC_CALL_ARGUMENT`,
+    // `ESC_RETURN` and `ESC_ELEMENT` are `CompilerLimitation`, each with its
+    // own `#7034` issue reference. So the invariant was false by construction,
+    // and any module denying through both halves of rule 2 — ordinary
+    // dependency JS — aborted the compiler in a debug-assertions build.
+    //
+    // The assertion's CONCERN was right: a scheduler-facing bucket must not
+    // mean two things at once. Keying on the tier resolves that instead of
+    // asserting it away — a rule spanning two tiers now reports two buckets,
+    // each meaning exactly one thing, and no count is silently merged into a
+    // tier it does not belong to.
+    let mut out: BTreeMap<(&str, &str, Option<Tier>), usize> = BTreeMap::new();
     for e in entries.iter().filter(|e| e.outcome == Outcome::Denied) {
         let rule = e.rule.as_deref().unwrap_or("<unnamed>");
-        let slot = out
-            .entry((e.analysis.as_str(), rule))
-            .or_insert((e.tier, 0));
-        // Rule-to-tier is 1:1 because both come from one `ShapeDenial`
-        // constant — but nothing HERE enforces that, and silently keeping the
-        // first tier seen would let a scheduler-facing bucket mean two things
-        // at once, which is the defect this PR exists to remove. Assert the
-        // invariant rather than resolving it.
-        debug_assert_eq!(
-            slot.0, e.tier,
-            "rule {rule} carries two tiers; the bucket would report only one"
-        );
-        slot.1 += 1;
+        *out.entry((e.analysis.as_str(), rule, e.tier)).or_insert(0) += 1;
     }
     out.into_iter()
-        .map(|((analysis, rule), (tier, denied))| JsonRuleBucket {
+        .map(|((analysis, rule, tier), denied)| JsonRuleBucket {
             analysis,
             rule,
             tier,
@@ -1030,20 +1036,39 @@ mod r0_bucket_tests {
         assert_eq!(json["summary"]["masked_by_dedup"], 7);
     }
 
-    /// The rule-to-tier invariant is asserted, not resolved silently — and the
-    /// assertion is exercised, so it is not a guard nobody has watched fire.
+    /// #7234: a rule that carries two tiers is REPORTED, not asserted away.
     ///
-    /// `debug_assert` is compiled out in release, which is the right trade for
-    /// a report-only invariant: the cost of being wrong is one mislabelled
-    /// bucket, not a miscompile. This test runs in the debug profile where the
-    /// assertion is live.
+    /// This test used to be `#[should_panic(expected = "carries two tiers")]`
+    /// and `#[cfg(debug_assertions)]`, pinning an invariant the shipped denial
+    /// table does not satisfy — so it passed while the compiler aborted on
+    /// ordinary dependency JS. It now runs in every profile, because the
+    /// behaviour it pins no longer depends on whether assertions are compiled
+    /// in.
     #[test]
-    #[should_panic(expected = "carries two tiers")]
-    #[cfg(debug_assertions)]
-    fn one_rule_carrying_two_tiers_is_a_hard_error() {
+    fn one_rule_carrying_two_tiers_reports_two_buckets() {
+        // #7234: this used to assert a PANIC. `rule 2 (containment)` carries
+        // both tiers in the shipped denial table, so the panic fired on real
+        // dependency JS in any debug-assertions build. Two tiers is a fact
+        // about the table, not a defect; reporting them as one bucket would
+        // be. Each tier gets its own bucket, and the counts stay separate.
         let a = alloc_site("return", RULE1, Tier::CompilerLimitation, 0);
         let b = alloc_site("return", RULE1, Tier::Fixable, 1);
-        let _ = render_json_with(&[a, b], 0);
+        let json: serde_json::Value = serde_json::from_str(&render_json_with(&[a, b], 0)).unwrap();
+        let buckets = json["summary"]["by_rule"].as_array().unwrap();
+        assert_eq!(buckets.len(), 2, "one bucket per (rule, tier): {buckets:?}");
+        let mut tiers: Vec<&str> = buckets
+            .iter()
+            .map(|b| b["tier"].as_str().unwrap_or("<none>"))
+            .collect();
+        tiers.sort_unstable();
+        assert_eq!(tiers, vec!["compiler-limitation", "fixable"]);
+        for bucket in buckets {
+            assert_eq!(
+                bucket["denied"].as_u64(),
+                Some(1),
+                "each tier keeps its own count: {bucket:?}"
+            );
+        }
     }
 
     /// An entry that is not an allocation site contributes to `by_rule` and to

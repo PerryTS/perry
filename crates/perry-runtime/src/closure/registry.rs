@@ -23,7 +23,7 @@ use std::cell::RefCell;
 // rest-param-bearing closure body in the program; worker threads (issue
 // #29 `perry/thread`) currently don't see the table because they aren't
 // supposed to invoke arbitrary user closures across the boundary anyway.
-thread_local! {
+crate::perry_thread_local! {
     /// (fixed_arity, kind) — kind describes whether the function has an
     /// ordinary user rest param, a synthesized `arguments` rest param, or
     /// both a user rest param plus a hidden raw-arguments slot.
@@ -134,7 +134,7 @@ pub enum RestDispatchKind {
     UserRestAndArguments,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Last-resolved (func_ptr, strategy) tuple — single-slot direct cache.
     /// Avoids the per-call HashMap::get + RefCell::borrow when the same
     /// closure body is invoked back-to-back, which is the steady-state

@@ -1304,6 +1304,7 @@ pub fn lower_class_decl(
         // initializers must run on class evaluation, not at module init.
         is_nested: ctx.scope_depth > 0 || ctx.inside_block_scope > 0,
         alloc_width_hint: 0,
+        specialized_from: None,
     })
 }
 
@@ -1911,5 +1912,6 @@ pub fn lower_class_from_ast(
         // initializers must run on class evaluation, not at module init.
         is_nested: ctx.scope_depth > 0 || ctx.inside_block_scope > 0,
         alloc_width_hint: 0,
+        specialized_from: None,
     })
 }

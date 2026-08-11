@@ -8,6 +8,11 @@ pub(super) enum CopyingPointerKind {
     Longlived,
     Old,
     Malloc,
+    /// On a block this cycle is promoting whole, in place (#7742). Generation
+    /// is already `Old` — so every barrier predicate reads old-gen semantics —
+    /// but the object was young when the cycle began and therefore still owes
+    /// the collector exactly one field scan.
+    PromotedYoung,
 }
 
 #[derive(Clone, Copy)]
@@ -81,18 +86,34 @@ impl CopyingPointerSet {
         if addr < GC_HEADER_SIZE {
             return None;
         }
-        let space = crate::arena::classify_heap_space(addr);
-        if matches!(space, crate::arena::HeapSpace::Unknown) {
+        // ONE range lookup answers both classifications this needs. The header
+        // sits `GC_HEADER_SIZE` below the user pointer and a block always
+        // begins with a header, so a real object's header is on the same
+        // registered range as its user pointer; `range_base` is the guard that
+        // keeps a garbage candidate sitting at the very start of a range from
+        // becoming a read of the unmapped page below it. Before #7742 this was
+        // two `classify_heap_space` calls for addresses 8 bytes apart, on
+        // EVERY visited slot.
+        let Some((space, range_base)) = crate::arena::classify_heap_space_in_range(addr) else {
+            return None;
+        };
+        let header_addr = addr - GC_HEADER_SIZE;
+        if header_addr < range_base {
             return None;
         }
-        let header_addr = addr - GC_HEADER_SIZE;
-        if !matches!(
+        debug_assert_eq!(
             crate::arena::classify_heap_space(header_addr),
+            space,
+            "an object's header and user pointer must classify identically"
+        );
+        if !matches!(
+            space,
             crate::arena::HeapSpace::NurseryEden
                 | crate::arena::HeapSpace::Survivor0
                 | crate::arena::HeapSpace::Survivor1
                 | crate::arena::HeapSpace::Longlived
                 | crate::arena::HeapSpace::Old
+                | crate::arena::HeapSpace::PromotedYoung
         ) {
             return None;
         }
@@ -100,14 +121,21 @@ impl CopyingPointerSet {
         if unsafe { !plausible_gc_header(header, true) } {
             return None;
         }
-        let active_survivor = crate::arena::active_survivor_space();
-        let inactive_survivor = crate::arena::inactive_survivor_space();
+        // The two survivor-space readings are TLS loads, and Darwin has no
+        // local-exec TLS — each is a real `_tlv_get_addr` call. Reading them
+        // eagerly cost two per classified pointer on workloads that never touch
+        // a survivor at all (`retain.ts` classifies Eden / PromotedYoung / Old
+        // and nothing else). They can only ever answer `Survivor0`, `Survivor1`
+        // or `Unknown`, and `space` is already narrowed to the six accepted
+        // spaces, so hoisting the non-survivor arms above them changes no
+        // verdict — it just stops paying for an answer the arm does not use.
         let kind = match space {
             crate::arena::HeapSpace::NurseryEden => CopyingPointerKind::Eden,
-            s if s == active_survivor => CopyingPointerKind::FromSurvivor,
-            s if s == inactive_survivor => CopyingPointerKind::ToSurvivor,
+            crate::arena::HeapSpace::PromotedYoung => CopyingPointerKind::PromotedYoung,
             crate::arena::HeapSpace::Longlived => CopyingPointerKind::Longlived,
             crate::arena::HeapSpace::Old => CopyingPointerKind::Old,
+            s if s == crate::arena::active_survivor_space() => CopyingPointerKind::FromSurvivor,
+            s if s == crate::arena::inactive_survivor_space() => CopyingPointerKind::ToSurvivor,
             _ => return None,
         };
         Some(CopyingPointer { header, kind })
@@ -404,6 +432,26 @@ pub(super) struct CopyingNurseryCollector {
     /// address-dependent — the gc-ratchet's bit-identical-counters contract
     /// caught it as a ±2-object jitter on the first heavy cycle.
     pub(super) tenuring_survivals: u8,
+    /// #7742: every remembered-set insertion this cycle could make is provably
+    /// impossible, so the passes that make them are skipped.
+    ///
+    /// A remembered-set entry is only ever created when
+    /// `remembered_child_needs_tracking(child)` says yes, and that is yes for
+    /// exactly two child populations: nursery-generation objects, and
+    /// malloc-registry objects. On a whole-block promoting cycle the first
+    /// population is EMPTY by construction — `retag_young_for_in_place_promotion`
+    /// takes every in-use Eden and survivor block, so after the retag nothing in
+    /// the heap classifies as `Nursery`. When the malloc registry was also empty
+    /// at cycle start the second population is empty too, and no mutator runs
+    /// mid-cycle to create one.
+    ///
+    /// So this is a proof, not a heuristic: three whole passes over the
+    /// surviving cohort's slots (`visit_slot_with_parent`'s re-decode +
+    /// remember, `rebuild_evacuated_old_to_young_remembered_set`, and
+    /// `restore_surviving_dirty_coverage`) can only insert nothing, and are
+    /// skipped. `debug_assert_no_remembering_possible` re-derives the premise at
+    /// runtime in debug builds.
+    pub(super) skip_remembering: bool,
     /// Weak target slots (WeakRef referent / WeakMap-WeakSet entry key /
     /// FinalizationRegistry record target) seen during the copy scan. The
     /// scan must NOT evacuate through them (that would strengthen the weak
@@ -433,6 +481,7 @@ impl CopyingNurseryCollector {
             },
             live_from_bytes: 0,
             tenuring_survivals,
+            skip_remembering: false,
             weak_slots: Vec::new(),
         }
     }
@@ -561,7 +610,47 @@ impl CopyingNurseryCollector {
                 }
                 Some(addr)
             }
+            CopyingPointerKind::PromotedYoung => Some(unsafe { self.mark_promoted_young(ptr) }),
         }
+    }
+
+    /// #7742: the object's block is being promoted whole, in place. It does not
+    /// move, so this is a pure mark — the address it is already at is its final
+    /// address, and every slot in the heap that points at it is already
+    /// correct.
+    ///
+    /// It still goes on the worklist, and on `moved_headers`: it was young when
+    /// the cycle began, so it owes exactly one field scan (to evacuate any
+    /// child that is NOT on a promoted block, and to record the old→young and
+    /// old→malloc remembered-set edges its new generation implies), and the
+    /// mark has to be cleared at the end like any other.
+    pub(super) unsafe fn mark_promoted_young(&mut self, ptr: CopyingPointer) -> usize {
+        let header = ptr.header;
+        let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+        let flags = (*header).gc_flags;
+        if flags & GC_FLAG_FORWARDED != 0 {
+            // Array growth leaves a forwarding stub at the pre-grow address;
+            // follow it exactly as `move_young` does.
+            let forwarded = forwarding_address(header) as usize;
+            return self.mark_addr(forwarded).unwrap_or(forwarded);
+        }
+        if flags & GC_FLAG_MARKED == 0 {
+            (*header).gc_flags = flags | GC_FLAG_MARKED;
+            let total = (*header).size as usize;
+            self.worklist.push(header);
+            self.moved_headers.push(header);
+            self.stats.promoted_objects += 1;
+            self.stats.promoted_bytes += total;
+            self.stats.in_place_promoted_objects += 1;
+            self.live_from_bytes += total;
+            // Survivor-influx accounting: an in-place promotion consumes the
+            // whole young generation at once, so the split the adaptive
+            // tenuring loop reads has no meaning here. Everything is credited
+            // as Eden influx, which is what keeps `tenuring_survivals` pinned
+            // low for the workloads this path fires on.
+            self.stats.eden_live_bytes += total;
+        }
+        user
     }
 
     pub(super) unsafe fn move_young(&mut self, ptr: CopyingPointer) -> usize {
@@ -576,6 +665,20 @@ impl CopyingNurseryCollector {
             // enough because the current array can still be in from-space and
             // must itself be marked, moved, and scanned.
             return self.mark_addr(forwarded).unwrap_or(forwarded);
+        }
+
+        // #7645: on a cycle that skipped the eligibility preflight, this is the
+        // exact instant an incomplete young-pin latch turns into a
+        // use-after-move: the collector is about to relocate a pinned object
+        // whose holder (the cross-thread promise queue, an AppKit string
+        // return) keeps a raw address no scanner will rewrite. `flags` is
+        // already loaded, so the check is one `and` and a never-taken branch.
+        // It is deliberately NOT applied when the preflight ran: that path is
+        // unchanged from before this issue, and a divergence between the
+        // preflight's traversal and the copier's is a separate bug that should
+        // not newly abort a program.
+        if self.stats.preflight_skipped && flags & GC_FLAG_PINNED != 0 {
+            pinned_young_move_under_skipped_preflight(header);
         }
 
         let total = (*header).size as usize;
@@ -703,7 +806,7 @@ impl CopyingNurseryCollector {
         if let Some(new_bits) = self.visit_value_bits(bits) {
             *slot = new_bits;
         }
-        if !parent_header.is_null() {
+        if !parent_header.is_null() && !self.skip_remembering {
             let parent_user = (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize;
             if barrier_parent_needs_remembering(parent_user, external) {
                 if let Some((child_addr, _, _)) = self.ptrs.decode_bits(*slot) {
@@ -838,6 +941,32 @@ pub(super) fn scan_remembered_dirty_slots_copying(
     stats
 }
 
+/// The young-pin latch was clear, the preflight was skipped on that proof, and
+/// the copier then met a pinned young object anyway — so the latch is
+/// incomplete and a pin site exists that does not go through `gc::pin_object`.
+///
+/// There is no recovery: leaving the object in from-space strands the
+/// referring slot on memory `copying_reset_from_spaces_and_flip` is about to
+/// retire, and moving it invalidates a raw address nothing will rewrite. Abort
+/// loudly at the faulting site instead of corrupting the heap silently.
+#[cold]
+#[inline(never)]
+unsafe fn pinned_young_move_under_skipped_preflight(header: *mut GcHeader) -> ! {
+    eprintln!(
+        "[gc-pin-latch] FATAL: copying minor is about to relocate a PINNED young \
+         object on a preflight-skipped cycle. header={:#x} obj_type={} size={} \
+         flags={:#04x}\n\
+         The young-pin latch (gc/pin.rs) is incomplete: some site sets \
+         GC_FLAG_PINNED without going through gc::pin_object. Find it with \
+         `python3 scripts/gc_pin_sites.py` and route it through pin_object (#7645).",
+        header as usize,
+        (*header).obj_type,
+        (*header).size,
+        (*header).gc_flags,
+    );
+    std::process::abort()
+}
+
 pub(super) struct CopiedMinorEligibility {
     pub(super) eligible: bool,
     pub(super) fallback_reason: CopiedMinorFallbackReason,
@@ -845,6 +974,10 @@ pub(super) struct CopiedMinorEligibility {
     pub(super) malloc_validation_lookups: usize,
     pub(super) malloc_registry_rebuilds: u64,
     pub(super) legacy_root_stats: LegacyRootTraceStats,
+    /// #7645: both eligibility preflight walks were provably no-ops and were
+    /// skipped. Carried into the collector so `move_young` can abort rather
+    /// than relocate a pinned object on a cycle that took the unproven path.
+    pub(super) preflight_skipped: bool,
     pub(super) ptrs: Option<CopyingPointerSet>,
 }
 
@@ -880,21 +1013,42 @@ impl CopiedMinorEligibility {
                 legacy_root_stats,
             );
         }
-        if let Some(reason) = Self::mutable_root_preflight_reason(&ptrs) {
-            return Self::fallback_with_ptrs_and_legacy(
-                reason,
-                malloc_sweep_due,
-                ptrs,
-                legacy_root_stats,
-            );
-        }
-        if let Some(reason) = Self::dirty_slot_preflight_reason(&ptrs) {
-            return Self::fallback_with_ptrs_and_legacy(
-                reason,
-                malloc_sweep_due,
-                ptrs,
-                legacy_root_stats,
-            );
+        // #7645: both walks below are a transitive traversal of the whole live
+        // young graph that answers two booleans and produces no collection
+        // result. When both booleans are already decided the traversal is
+        // provably a no-op, so skip it — see `preflight_walks_decided`.
+        let preflight_skipped = Self::preflight_walks_decided(&ptrs);
+        if preflight_skipped {
+            // The ONE side effect the skipped walks carried, kept at its
+            // original point in the cycle. `dirty_slot_preflight_reason` took
+            // a `remembered_dirty_snapshot()`, whose first call on a thread
+            // arms the barrier and rebuilds the remembered set from the heap
+            // — a walk that assumes "nothing is marked yet". Letting it fall
+            // through to the copy phase's snapshot would run it AFTER
+            // `visit_mutable_root_slots` had already evacuated root-reachable
+            // young objects, i.e. against a half-moved heap. It is a one-shot
+            // per thread (`REMEMBERED_SET_RECONSTRUCTED`), so on every later
+            // cycle this is a thread-local flag read.
+            arm_and_reconstruct_remembered_set_if_unarmed();
+            note_preflight_skipped();
+        } else {
+            note_preflight_walked();
+            if let Some(reason) = Self::mutable_root_preflight_reason(&ptrs) {
+                return Self::fallback_with_ptrs_and_legacy(
+                    reason,
+                    malloc_sweep_due,
+                    ptrs,
+                    legacy_root_stats,
+                );
+            }
+            if let Some(reason) = Self::dirty_slot_preflight_reason(&ptrs) {
+                return Self::fallback_with_ptrs_and_legacy(
+                    reason,
+                    malloc_sweep_due,
+                    ptrs,
+                    legacy_root_stats,
+                );
+            }
         }
 
         Self {
@@ -904,8 +1058,36 @@ impl CopiedMinorEligibility {
             malloc_validation_lookups: ptrs.malloc_validation_lookups(),
             malloc_registry_rebuilds: ptrs.malloc_registry_rebuilds(),
             legacy_root_stats,
+            preflight_skipped,
             ptrs: Some(ptrs),
         }
+    }
+
+    /// Are both of the preflight walks' outputs already known?
+    ///
+    /// The walks can only produce three verdicts, and each has an O(1) proof
+    /// of absence:
+    ///
+    /// * `PinnedYoungRoot` / `PinnedYoungDirtySlot` / `PinnedYoungTransitive`
+    ///   come from `CopyingNurseryPreflight::check_ptr_with_reason`, which
+    ///   trips only on an `Eden`/`FromSurvivor` object carrying
+    ///   `GC_FLAG_PINNED`. `gc::pin` records every creation of such a pin in a
+    ///   monotone latch, so a clear latch means no such object exists — which
+    ///   is strictly stronger than "none is reachable".
+    /// * `MallocRegistryUnavailable` comes from
+    ///   `CopyingPointerSet::classify_for_preflight`, which returns it only
+    ///   when a non-arena candidate is met while the malloc registry is both
+    ///   unavailable *and* was non-empty at cycle start. If the registry is
+    ///   available, or was empty at start, no candidate can produce it.
+    ///
+    /// When either proof is unavailable the walk runs exactly as before, so
+    /// the decision this function guards is never *changed* — only skipped
+    /// when its outcome is already determined.
+    fn preflight_walks_decided(ptrs: &CopyingPointerSet) -> bool {
+        if young_pin_latch_armed() {
+            return false;
+        }
+        ptrs.malloc_registry_available.get() || ptrs.malloc_registry_empty_at_start
     }
 
     pub(super) fn fallback(reason: CopiedMinorFallbackReason, malloc_sweep_due: bool) -> Self {
@@ -916,6 +1098,7 @@ impl CopiedMinorEligibility {
             malloc_validation_lookups: 0,
             malloc_registry_rebuilds: 0,
             legacy_root_stats: LegacyRootTraceStats::default(),
+            preflight_skipped: false,
             ptrs: None,
         }
     }
@@ -933,6 +1116,7 @@ impl CopiedMinorEligibility {
             malloc_validation_lookups: ptrs.malloc_validation_lookups(),
             malloc_registry_rebuilds: ptrs.malloc_registry_rebuilds(),
             legacy_root_stats,
+            preflight_skipped: false,
             ptrs: Some(ptrs),
         }
     }
@@ -944,6 +1128,7 @@ impl CopiedMinorEligibility {
             malloc_sweep_due: self.malloc_sweep_due,
             malloc_validation_lookups: self.malloc_validation_lookups,
             malloc_registry_rebuilds: self.malloc_registry_rebuilds,
+            preflight_skipped: self.preflight_skipped,
             ..CopyingNurseryTraceStats::default()
         }
     }
@@ -1001,6 +1186,28 @@ impl CopiedMinorEligibility {
     }
 }
 
+/// Re-derive `skip_remembering`'s premise from the heap itself, in debug
+/// builds: no in-use young block survived the retag, and the malloc registry is
+/// empty. Either being false would make three skipped passes non-empty and turn
+/// a dropped remembered-set entry into a swept-live-object crash a cycle later,
+/// so it is worth re-deriving rather than trusting the argument.
+fn debug_assert_no_remembering_possible() {
+    #[cfg(debug_assertions)]
+    {
+        let young_in_use = crate::arena::young_in_use_bytes_after_retag();
+        debug_assert_eq!(
+            young_in_use, 0,
+            "in-place promotion left {young_in_use} bytes of young generation in use; \
+             `skip_remembering` would drop real old->young remembered-set entries"
+        );
+        let malloc_objects = MALLOC_STATE.with(|s| s.borrow().objects.len());
+        debug_assert_eq!(
+            malloc_objects, 0,
+            "malloc registry is non-empty; `skip_remembering` would drop old->malloc edges"
+        );
+    }
+}
+
 pub(super) fn gc_collect_minor_copying_fast_path(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
@@ -1037,13 +1244,18 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             CopiedMinorFallbackReason::PinnedYoungTransitive => "pinned_young_transitive",
         };
         eprintln!(
-            "[gc-copy-minor] eligible={} fallback={}",
-            eligibility.eligible, reason
+            "[gc-copy-minor] eligible={} fallback={} preflight_skipped={} (skips={} walks={})",
+            eligibility.eligible,
+            reason,
+            eligibility.preflight_skipped,
+            super::copied_minor_preflight_skips(),
+            super::copied_minor_preflight_walks(),
         );
     }
     if !eligibility.eligible {
         return None;
     }
+    let preflight_skipped = eligibility.preflight_skipped;
     let malloc_sweep_due = eligibility.malloc_sweep_due;
     let ptrs = eligibility
         .ptrs
@@ -1051,10 +1263,34 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
 
     let phase_start = trace_phase_start(trace);
     let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
+    // #7742: decide BEFORE anything classifies, then retag the young blocks so
+    // every classification for the rest of this cycle already reads the
+    // generation those objects will have when it ends. The eligibility
+    // preflight above ran against the pre-retag labels, which is correct — it
+    // answers "may this cycle move objects at all", a question the retag does
+    // not change.
+    let promotion = if super::should_promote_young_in_place() {
+        crate::arena::retag_young_for_in_place_promotion()
+    } else {
+        crate::arena::InPlacePromotion::default()
+    };
+    // An empty plan (nothing in use to promote) falls back to the ordinary
+    // path, so the from-space reset still runs.
+    let promoting_in_place = !promotion.is_empty();
     let mut collector = CopyingNurseryCollector::new(ptrs);
     collector.stats.eligible = true;
     collector.stats.fallback_reason = CopiedMinorFallbackReason::None;
     collector.stats.malloc_sweep_due = malloc_sweep_due;
+    collector.stats.preflight_skipped = preflight_skipped;
+    collector.stats.in_place_promotion = promoting_in_place;
+    collector.stats.in_place_promoted_blocks = promotion.block_count();
+    // See `CopyingNurseryCollector::skip_remembering` for the proof.
+    collector.skip_remembering =
+        promoting_in_place && collector.ptrs.malloc_registry_empty_at_start;
+    if collector.skip_remembering {
+        debug_assert_no_remembering_possible();
+    }
+    collector.stats.remembering_skipped = collector.skip_remembering;
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
 
     let native_stack_walk = visit_mutable_root_slots(|slot| unsafe {
@@ -1132,9 +1368,12 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     if let Some(trace) = trace.as_mut() {
         trace.remembered_set = remembered_stats;
     }
-    let promoted_sticky = rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
-    promoted_sticky.restore();
-    collector.sticky.extend(promoted_sticky);
+    if !collector.skip_remembering {
+        let promoted_sticky =
+            rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
+        promoted_sticky.restore();
+        collector.sticky.extend(promoted_sticky);
+    }
     if gc_verify_evacuation_enabled() {
         let phase_start = trace_phase_start(trace);
         let old_young_edge_verifier = verify_old_to_young_edges_covered();
@@ -1235,14 +1474,44 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
 
     crate::promise::cleanup_copied_minor_promise_contexts_for_gc();
     finalize_dead_copied_minor_from_space_side_allocations();
-    let reset = crate::arena::copying_reset_from_spaces_and_flip();
+    // #7742: on a promoting cycle the young blocks are handed to old-gen
+    // instead of being reset. This MUST stay before `clear_marks` — the finish
+    // walk reads `GC_FLAG_MARKED` to decide which objects to index — and it
+    // takes the place of, never runs alongside, the from-space reset: the
+    // blocks the reset would recycle are the blocks this keeps.
+    let (reset, promotion_stats) = if promoting_in_place {
+        let phase_start = trace_phase_start(trace);
+        super::note_promoted_young_capacity(promotion.reserved_bytes());
+        let promotion_stats = crate::arena::finish_in_place_promotion(promotion);
+        trace_phase_record(trace, "in_place_promotion", phase_start);
+        (
+            crate::arena::ArenaResetStats {
+                reset_blocks: 0,
+                reusable_bytes: 0,
+                deallocated_blocks: 0,
+                deallocated_bytes: 0,
+            },
+            promotion_stats,
+        )
+    } else {
+        (
+            crate::arena::copying_reset_from_spaces_and_flip(),
+            crate::arena::InPlacePromotionStats::default(),
+        )
+    };
     collector.stats.reset_blocks += reset.reset_blocks;
+    collector.stats.in_place_dead_bytes = promotion_stats
+        .bytes
+        .saturating_sub(promotion_stats.live_bytes);
+    collector.stats.in_place_sparse_blocks = promotion_stats.sparse_blocks;
     if let Some(trace) = trace.as_mut() {
         trace.old_pages = crate::arena::old_page_summary();
     }
     remembered_set_clear();
     collector.sticky.restore();
-    restore_surviving_dirty_coverage(&snapshot);
+    if !collector.skip_remembering {
+        restore_surviving_dirty_coverage(&snapshot);
+    }
     let malloc_freed_bytes = if malloc_sweep_due {
         let phase_start = trace_phase_start(trace);
         let freed = sweep_malloc_objects();
@@ -1256,7 +1525,26 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     }
 
     CONS_PINNED.with(|s| s.borrow_mut().clear());
-    let nursery_freed_bytes = from_space_bytes.saturating_sub(collector.live_from_bytes) as u64;
+    // #7742: feed the policy its measurement. This runs on EVERY copying minor
+    // — promoting ones included, which is the whole reason a promoting cycle
+    // still traces — so the ratio the next decision reads is never stale.
+    super::note_young_survival(from_space_bytes, collector.live_from_bytes);
+    collector.stats.young_survival_permille =
+        super::last_young_survival_permille().unwrap_or_default();
+    // A promoting cycle frees NOTHING: the dead young bytes were promoted
+    // along with the live ones and are reclaimable only by a full collection.
+    // Reporting them as freed would tell the pacer it had made progress it had
+    // not made.
+    let nursery_freed_bytes = if promoting_in_place {
+        super::note_in_place_promotion(
+            from_space_bytes,
+            collector.live_from_bytes,
+            collector.stats.in_place_promoted_objects,
+        );
+        0
+    } else {
+        from_space_bytes.saturating_sub(collector.live_from_bytes) as u64
+    };
     let freed_bytes = nursery_freed_bytes.saturating_add(malloc_freed_bytes);
     collector.stats.malloc_validation_lookups = collector.ptrs.malloc_validation_lookups();
     collector.stats.malloc_registry_rebuilds = collector.ptrs.malloc_registry_rebuilds();
@@ -1272,10 +1560,35 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             deallocated_bytes: reset.deallocated_bytes,
             retained_forwarded_stub_objects: 0,
             retained_forwarded_stub_bytes: 0,
+            // The copying minor's Eden census is `stats.eden_live_bytes`, fed
+            // to `retune_after_scavenge` directly; the #7598 sweep seed covers
+            // the collections that run NO copying minor.
+            eden_live_bytes: 0,
+            eden_dead_bytes: 0,
         };
         trace.pause_us = start.elapsed().as_micros() as u64;
         trace.capture_layout_scans();
     }
+    // #7592: this is the promotion the survivor-promotion handoff exists to
+    // enable, so it releases the latch that suppressed a repeat handoff.
+    note_copying_minor_completed();
+    // #7604: the process-wide liveness counters. A copying minor ran, and this
+    // is how much it actually relocated -- the only evidence that distinguishes
+    // "the instrument was armed" from "the instrument fired".
+    super::instruments::note_copying_minor_moved(
+        collector.stats.copied_objects,
+        collector.stats.promoted_objects,
+    );
+    // #7592: promoted bytes are live by construction — credit them to the
+    // old-reclaim baseline BEFORE the pressure check below, or the check reads
+    // the stale baseline and schedules a full that is guaranteed to free
+    // nothing (see `credit_promoted_bytes_to_old_baseline`).
+    credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
+    // The same argument one trigger over: a young generation that did not die
+    // is a heap growing by LIVE data, so arena-growth pacing must not read that
+    // growth as garbage accumulating. Fed here, after the reset, so the
+    // re-baseline sees post-collection occupancy.
+    note_copying_minor_young_survival(collector.stats.young_survival_permille);
     maybe_schedule_old_reclaim_after_copied_minor();
     retune_after_scavenge(
         collector.stats.eden_live_bytes,
@@ -1284,7 +1597,12 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     );
     if std::env::var_os("PERRY_GC_DIAG").is_some() {
         eprintln!(
-            "[gc-copy-minor] ran copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} trigger={:?} declared_safepoint={}",
+            "[gc-copy-minor] ran in_place={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} trigger={:?} declared_safepoint={}",
+            collector.stats.in_place_promotion,
+            collector.stats.in_place_promoted_blocks,
+            collector.stats.in_place_dead_bytes,
+            collector.stats.in_place_sparse_blocks,
+            collector.stats.young_survival_permille,
             collector.stats.copied_objects,
             collector.stats.copied_bytes,
             collector.stats.promoted_objects,

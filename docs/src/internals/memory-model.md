@@ -113,7 +113,6 @@ Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the O
 | Env var | Effect |
 |---|---|
 | `PERRY_GEN_GC=0` / `off` / `false` | Disable generational mode; fall back to full mark-sweep (intended for bisection only). |
-| `PERRY_GEN_GC_EVACUATE=0` / `off` / `false` | Disable policy evacuation. `=1` / `on` / `true` is accepted as "allow the auto-policy", not as unconditional evacuation. |
 | `PERRY_GC_FORCE_EVACUATE=1` | With generated write barriers active and policy evacuation allowed, stress-copy every marked non-pinned nursery object instead of only tenured survivors. |
 | `PERRY_GC_VERIFY_EVACUATION=1` | After an evacuation that actually forwards objects, panic if any mutable live slot still points at a forwarded nursery object after rewrite. |
 | `PERRY_WRITE_BARRIERS=0` / `off` / `false` | Disable codegen-emitted write barriers at compile time and runtime exact helper barriers at runtime for benchmark/debug bisection. Unset, `=1`, `=on`, and `=true` keep barriers enabled. |
@@ -133,8 +132,9 @@ to collapse that detection latency. **All are default-off and inert when off.**
 | `PERRY_GC_PROTECT_FROMSPACE=1` | After an **evacuating (copying) minor**, do not recycle from-space. Retired Eden and active-survivor blocks are detached into a bounded quarantine, filled with a poison pattern whose first byte reads as an invalid `obj_type` (`0xDE`), and `mprotect(PROT_NONE)`'d over their page-aligned interior. A stale dereference then SIGSEGVs **at the faulting instruction**, with the holder still on the stack. The installed reporter prints the faulting address, which minor retired it, and the last-known object that lived there (`obj_type`, size) plus a native backtrace, then restores `SIG_DFL` and returns so the instruction re-faults — a core file or debugger still sees the real crash site. |
 | `PERRY_GC_PROTECT_FROMSPACE=poison` | As above without `mprotect`: poison only. Use where a fault is unwanted, or for the sub-page block edges `mprotect` cannot cover (those are always poison-filled and counted separately). |
 | `PERRY_GC_PROTECT_FROMSPACE_DEPTH=N` | How many retired page-sets stay quarantined (default `4`, minimum `1`). Expired sets are restored to read/write and **recycled back into Eden**, never freed, so the quarantine is a ring: steady-state footprint is bounded by `N × from-space bytes` and no `mprotect`'d page is ever handed to the system allocator. |
-| `PERRY_GC_ZEAL=1` | Force an evacuating minor at **every GC safepoint** — loop back-edge polls and the outermost microtask-pump boundary — instead of only when nursery pressure is due. Implies `PERRY_GC_FORCE_EVACUATE`, so survivors actually move — but an explicit `PERRY_GEN_GC_EVACUATE=0` still wins, and with it set zeal moves nothing and therefore surfaces nothing. Zeal also does **not** bypass `gc_safepoint_moving_minor`'s entry guards (in-allocation, suppressed, unsafe FFI zone, non-zero root-lock depth, budgeted cycle): a safepoint reached in any of those states still declines to collect. Modelled on V8 `--stress-scavenge` / SpiderMonkey `gcZeal`. Composes with the two above; that pairing is what turns a rooting bug into an immediate precise fault. |
 | `PERRY_GC_FROMSPACE_SCAN_ABORT=1` | Abort on the **first** offending slot the whole-heap from-space scan finds, printing slot, holder, target (including the target's `obj_type`) and a collector backtrace. Now implies `PERRY_GC_FROMSPACE_SCAN=1`; previously it was silently inert on its own. |
+| `PERRY_GC_SCHEDULE_SEED=<u64>` | **Seeded GC-schedule fuzzing** — when nursery pressure is not due, add a minor collection at a handled safepoint when a deterministic pseudo-random function of the seed and a per-thread safepoint ordinal selects it. It never *suppresses* a pressure-driven collection; the rate is additional density on top of normal pacing. The collection schedule as a knob: enough extra collections to turn a rare "what was live when the collector ran" bug into a frequent one, and — because the schedule is a pure function of `(seed, counter)` — **a failing seed is a reproducer**. Implies forced evacuation **unconditionally**, so survivors actually move — `PERRY_GEN_GC_EVACUATE`, whose `=0` used to veto that, was deleted in #7611 precisely because an ambient veto silently turned a #7154 instrument into a no-op. It does **not** bypass `gc_safepoint_moving_minor`'s entry guards (in-allocation, suppressed, unsafe FFI zone, non-zero root-lock depth, budgeted cycle): a safepoint reached in any of those states still declines to collect, and does not consume a schedule slot. A value that does not parse as a `u64` reads as OFF, not as seed 0. Composes with the two above; that pairing is what turns a rooting bug into an immediate precise fault. |
+| `PERRY_GC_SCHEDULE_RATE=<0..1>` | Expected fraction of eligible handled safepoints that receive an *additional* schedule-triggered collection (default `0.05`). Inert without a seed. `0` selects nothing but still installs the banner and reporters, so it is a clean control arm; `1` collects at every handled safepoint — maximum pressure, in the spirit of V8's `--stress-scavenge`, and the point where the seed stops mattering because every ordinal is selected. Out-of-range values clamp. |
 
 These instruments have explicit caveats, because each has burned a prior
 investigation:
@@ -144,17 +144,42 @@ investigation:
   for a `[gc-fromspace-protect] retired_set=#N` line under `PERRY_GC_DIAG=1`.
 - **Depth is the knob to raise when a suspected bug does not fault.** A stale
   pointer is only caught while the page-set it names is still quarantined, and
-  under zeal a value can cross hundreds of collections between its last valid
-  observation and its stale use — one per loop back-edge poll. On #7154's
+  at `PERRY_GC_SCHEDULE_SEED=<u64> PERRY_GC_SCHEDULE_RATE=1
+  PERRY_GC_SCHEDULE_ALLOC_KB=0` a value can cross hundreds of collections between
+  its last valid observation and its stale use — one per loop back-edge poll.
+  (`ALLOC_KB=0` is what makes that literally per-poll: rate 1 selects every
+  *candidate*, and the default 4 KB stride only makes a poll a candidate once
+  that much new nursery material has accumulated.) On #7154's
   `new C(…)` reproducer the constructor body runs 600 polls, so the caller's
   stale register is 600 retirements old by the time the return-override
   publishes it: the default depth of 4 misses it silently, and
   `PERRY_GC_PROTECT_FROMSPACE_DEPTH=800` faults on the first use. Rule of thumb:
   depth ≥ the number of safepoints the suspect value survives.
-- `PERRY_GC_ZEAL` cannot emit loop back-edge polls that codegen never produced.
-  Those require the **compile-time** `PERRY_GC_MOVING_LOOP_POLLS=1` (default off
-  since #7161). Without it, zeal only fires at event-loop boundaries and a
-  compute-only loop never collects at all. Compile *and* run with the poll opt-in.
+- `PERRY_GC_SCHEDULE_SEED` cannot select loop back-edge polls that codegen never
+  produced. Those are a **compile-time** property (`PERRY_GC_MOVING_LOOP_POLLS`, default
+  ON since #7721; a binary compiled with `=0` has none). Without them, a seeded
+  run only fires at event-loop boundaries and a compute-only loop never
+  collects at all — check the exit summary's `loop_polls=` before trusting a
+  clean sweep. At `PERRY_GC_SCHEDULE_RATE=1` you no longer have to remember:
+  the run prints a `[gc-schedule]` verdict at exit and **exits 70** when it
+  forced or moved nothing, so a vacuous run is a red run rather than a green
+  one. Sub-endpoint rates get the summary line but no hard verdict (a sparse
+  seed legitimately forcing nothing is not a broken instrument).
+- **`PERRY_GC_SCHEDULE_SEED`'s determinism is per-thread, and that is the honest
+  scope.** The safepoint counter is thread-local: no wall clock, no address, no
+  thread identity enters the decision, so a **single-threaded** program replays
+  a seed exactly. A `perry/thread` program gets a deterministic schedule *per
+  thread given that thread's own safepoint sequence*, but nothing makes the OS
+  schedule that sequence identically twice, so a multi-threaded reproducer is
+  only as reproducible as its threading. A global counter would be strictly
+  worse — it would make even a single thread's schedule depend on interleaving.
+  Report which case you measured.
+- **A clean sweep means nothing without a safepoint count.** The mode prints
+  `[gc-schedule] done: seed=… safepoints=… scheduled_collections=…` at exit, and
+  `scripts/gc_schedule_fuzz.sh` refuses to call a sweep clean when every run
+  reported zero safepoints — the usual cause being a binary compiled without
+  `PERRY_GC_MOVING_LOOP_POLLS=1`, which has no in-loop safepoints for a schedule
+  to select.
 - **Page protection is Unix-only.** `mprotect` / `sigaction` / `sysconf` are not
   exposed by the `libc` crate on `x86_64-pc-windows-msvc`, a target
   `perry-runtime` is genuinely built for. On non-Unix hosts `=1` degrades to

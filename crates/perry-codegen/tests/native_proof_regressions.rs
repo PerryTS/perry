@@ -19,7 +19,10 @@ use perry_hir::{
 
 #[path = "native_proof_support/mod.rs"]
 mod native_proof_support;
-use native_proof_support::{artifact_env_lock, artifact_for_module, NativeRepsEnv};
+use native_proof_support::{
+    artifact_env_lock, artifact_for_module, assert_native_buffer_element_access, probe_body,
+    NativeRepsEnv,
+};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -39,6 +42,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -236,6 +240,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
@@ -679,16 +684,11 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
     for_loop_with_start_and_update(counter_id, int(0), bound, Some(increment(counter_id)), body)
 }
 
-fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
-    assert!(
-        ir.contains("call void @js_buffer_set"),
-        "stale-proof case should keep the checked Buffer store fallback:\n{ir}"
-    );
-    assert!(
-        !ir.contains("getelementptr inbounds i8"),
-        "stale-proof case must not emit an inbounds native buffer GEP:\n{ir}"
-    );
-}
+// `assert_buffer_store_uses_dynamic_fallback` lives in `native_proof_support`
+// since #7505 — it used to prove "no native buffer GEP" with a MODULE-WIDE
+// `!ir.contains("getelementptr inbounds i8")`, which any unrelated `inbounds
+// i8` in the module satisfied.
+use native_proof_support::assert_buffer_store_uses_dynamic_fallback;
 
 #[test]
 fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
@@ -11688,6 +11688,7 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     let public = "perry_method_typed_f64_receiver_method_ts__Point__score";
     let generic_body = "perry_method_typed_f64_receiver_method_ts__Point__score$generic";
     let typed = "perry_method_typed_f64_receiver_method_ts__Point__score$typed_f64_recv";
+    let pshape_body = "perry_method_typed_f64_receiver_method_ts__Point__score$pshape";
     let caller = "perry_fn_typed_f64_receiver_method_ts__probe";
     let typed_ir = defined_function_ir_section(&ir, typed);
     let caller_ir = defined_function_ir_section(&ir, caller);
@@ -11725,10 +11726,51 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
         method_guard < field_guard && field_guard < typed_call,
         "receiver clone must run only after method-direct and raw-f64 field guards:\n{caller_ir}"
     );
+    // #7506: this used to assert the guard-failure edge calls `$generic` BY
+    // NAME, and it drifted — the edge now calls `$pshape`, a Ptr<Shape> clone.
+    // That is a refinement, not a miscompile, but only for a reason a
+    // symbol-presence check cannot express, so the assertion is re-pointed at
+    // the PROPERTY the composition has to preserve (the #7492 shape).
+    //
+    // The three outcomes must stay three:
+    //
+    //   1. method-direct guard fails  -> fully dynamic `js_native_call_method_by_id`
+    //   2. raw-f64 field guard passes -> `$typed_f64_recv`, which raw-loads the
+    //      receiver's slots with NO coercion
+    //   3. raw-f64 field guard FAILS  -> a clone that may use the shape's slot
+    //      offsets but must NOT assume the slots hold canonical raw f64
+    //
+    // What makes (3) sound is not which symbol it is, it is that the callee
+    // coerces what it loads. `$pshape` does: it emits `inttoptr` +
+    // `getelementptr` + `load double` — the shape guarantees the OFFSETS — and
+    // then routes every loaded slot through `js_number_coerce`, which is
+    // exactly the right handling for a slot that may hold a NaN-boxed value.
+    // `$generic` is also acceptable here; what must never appear on this edge
+    // is `$typed_f64_recv`, whose whole premise is the guard that just failed.
+    let failure_edge_callee = [generic_body, pshape_body]
+        .into_iter()
+        .find(|sym| caller_ir.contains(&format!("call double @{sym}(")))
+        .unwrap_or_else(|| {
+            panic!(
+                "raw-f64 field guard failure must reach a clone that does not \
+                 assume raw-f64 slots (`$generic` or `$pshape`):\n{caller_ir}"
+            )
+        });
     assert!(
-        caller_ir.contains(&format!("call double @{generic_body}(")),
-        "receiver field or numeric arg guard failure should call the generic method body:\n{caller_ir}"
+        !caller_ir.contains(&format!("call double @{typed}(double ")),
+        "the guard-failure edge must not reach the raw-f64 receiver clone \
+         (that clone is only valid when the guard PASSED):\n{caller_ir}"
     );
+    if failure_edge_callee == pshape_body {
+        let pshape_ir = defined_function_ir_section(&ir, pshape_body);
+        assert!(
+            pshape_ir.contains("call double @js_number_coerce("),
+            "the Ptr<Shape> clone reached on raw-f64 guard FAILURE must coerce \
+             every slot it loads — without that it is the typed clone under \
+             another name, and a receiver whose fields are not raw f64 would \
+             take raw loads anyway:\n{pshape_ir}"
+        );
+    }
     assert!(
         caller_ir.contains("call double @js_native_call_method_by_id"),
         "method-direct guard failure should retain dynamic method fallback:\n{caller_ir}"
@@ -14059,6 +14101,108 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         strict.contains("class_field_set.fast"),
         "the strict arm must still take the class-field store fast path — if \
          this fails the test is measuring nothing (#7288):\n{strict}"
+    );
+}
+
+/// P1 (#5094): the sibling of the test above for a POINTER-typed field.
+///
+/// #7288 took only the raw-f64 slots, so `node.next = other` in a sloppy script
+/// — the shape of every linked structure — stayed on the `PutValue` write IC
+/// whose miss is `js_put_value_set` → `js_object_set_field_by_name`: by-name
+/// dispatch and a `RuntimeHandleScope` for a store whose slot index is a
+/// compile-time constant.
+///
+/// Asserts the codegen decision AND that the GC bookkeeping survived, because
+/// that is the half where a mistake is a use-after-free rather than a slowdown:
+/// a pointer store into a boxed slot must still reach the write barrier. The
+/// value here is an opaque parameter read, so none of the three value-side
+/// elisions (`expr_produces_non_pointer_bits_by_construction` and friends) can
+/// fire and the emitted bookkeeping block must be present.
+#[test]
+fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
+    fn probe_body(ir: &str) -> &str {
+        let start = ir
+            .find("define double @perry_fn_sloppy_class_field_ptr_store_ts__probe")
+            .expect("probe function must be emitted");
+        let rest = &ir[start..];
+        let end = rest[1..]
+            .find("\ndefine ")
+            .map(|offset| offset + 1)
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    fn ir_for(strict: bool) -> String {
+        let node = class(
+            218,
+            "LNode",
+            vec![class_field("next", Type::Named("LNode".to_string()))],
+        );
+        let module = module_with_classes_and_params(
+            "sloppy_class_field_ptr_store.ts",
+            vec![node],
+            vec![
+                param(1, "node", Type::Named("LNode".to_string())),
+                param(2, "other", Type::Named("LNode".to_string())),
+            ],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PutValueSet {
+                    target: Box::new(local(1)),
+                    key: Box::new(Expr::String("next".to_string())),
+                    value: Box::new(local(2)),
+                    receiver: Box::new(local(1)),
+                    strict,
+                }),
+                Stmt::Return(Some(int(0))),
+            ],
+        );
+        compile_ir_for_module_with_opts(module, empty_opts()).unwrap()
+    }
+
+    let sloppy_module = ir_for(false);
+    let sloppy = probe_body(&sloppy_module);
+    assert!(
+        sloppy.contains("class_field_sloppy_set.boxed_fast"),
+        "a sloppy pointer-field store must reach the inline class-field boxed \
+         store (#5094 P1):\n{sloppy}"
+    );
+    assert!(
+        sloppy.contains("class_field_inline.deref"),
+        "the boxed arm must be fronted by the #5093 shape/flags precheck — it \
+         is what rejects the frozen / descriptor-bearing receivers sloppy and \
+         strict disagree about:\n{sloppy}"
+    );
+    let miss_call = sloppy
+        .lines()
+        .find(|line| line.contains("call double @js_put_value_set("))
+        .unwrap_or_else(|| {
+            panic!("the boxed arm's miss must CALL `js_put_value_set` (#5094):\n{sloppy}")
+        });
+    assert!(
+        miss_call.trim_end().ends_with("i32 0)"),
+        "the sloppy miss must pass strict = 0 (#5094):\n  {miss_call}"
+    );
+    // The GC half. An opaque parameter can carry a heap pointer, so the store
+    // must be followed by the pointer-tested bookkeeping block that reaches the
+    // remembered set. Without this assertion the test would pass just as
+    // happily on a lowering that dropped the barrier outright.
+    assert!(
+        sloppy.contains("class_field_set.gc_bookkeeping"),
+        "a boxed slot store of a possibly-pointer value must keep the \
+         pointer-tested write barrier / layout note (#5094):\n{sloppy}"
+    );
+    assert!(
+        !sloppy.contains("call void @js_class_field_set_fallback"),
+        "the sloppy arm must not CALL the throwing strict fallback:\n{sloppy}"
+    );
+
+    // Negative control: the strict arm keeps its own (unchanged) lowering.
+    let strict_module = ir_for(true);
+    let strict = probe_body(&strict_module);
+    assert!(
+        !strict.contains("class_field_sloppy_set"),
+        "the strict arm must keep its existing lowering:\n{strict}"
     );
 }
 

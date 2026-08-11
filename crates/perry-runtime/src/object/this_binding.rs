@@ -23,7 +23,7 @@ use std::cell::Cell;
 //
 // Defaults to `TAG_UNDEFINED`. JS spec says top-level `this` is undefined
 // in strict mode, which matches.
-thread_local! {
+crate::perry_thread_local! {
     pub(crate) static IMPLICIT_THIS: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
     pub(crate) static NEW_TARGET: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
     // One-shot receiver override for STATIC method bodies. A compiled static

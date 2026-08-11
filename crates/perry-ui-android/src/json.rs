@@ -315,20 +315,33 @@ const TYPE_UNKNOWN: u32 = 0;
 const TYPE_OBJECT: u32 = 1;
 const TYPE_ARRAY: u32 = 2;
 
-#[inline]
-fn is_raw_pointer(bits: u64) -> bool {
-    let exponent = (bits >> 52) & 0x7FF;
-    let mantissa = bits & 0x000F_FFFF_FFFF_FFFF;
-    let sign = bits >> 63;
-    exponent == 0 && mantissa != 0 && sign == 0
-}
-
+/// #7448: an UNTAGGED heap pointer that reached a type-erased JSON walk.
+///
+/// This used to be a hand-rolled bit test:
+///
+/// ```ignore
+/// exponent == 0 && mantissa != 0 && sign == 0
+/// ```
+///
+/// which is bit-for-bit the IEEE-754 POSITIVE-SUBNORMAL predicate, so every
+/// positive denormal `Number` was classified as a pointer and dereferenced. In
+/// the main runtime the identical code SIGSEGV'd on `JSON.stringify(1e-317)`
+/// and returned a silent `null` for `5e-324`, both reachable from untrusted
+/// input through `JSON.stringify(JSON.parse(text))` (#7447).
+///
+/// No bit test can fix it: a raw pointer and a positive subnormal occupy the
+/// same bit patterns by construction, which is why the runtime's version went
+/// through two failed narrowings (`top16 < 0x7FF8`, then `top16 == 0`) before
+/// landing on allocation membership. So this asks the runtime instead of
+/// keeping a third divergent copy — `ptr_is_tracked_heap_object` decides from
+/// the page map and the malloc registry, both dereference-free, so a forged or
+/// unmapped address is rejected before any field is read.
 #[inline]
 unsafe fn extract_pointer(bits: u64) -> Option<*const u8> {
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag == POINTER_TAG {
         Some((bits & POINTER_MASK) as *const u8)
-    } else if is_raw_pointer(bits) {
+    } else if perry_runtime::json::ptr_is_tracked_heap_object(bits as *const u8) {
         Some(bits as *const u8)
     } else {
         None

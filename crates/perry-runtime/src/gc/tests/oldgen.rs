@@ -237,7 +237,7 @@ fn test_old_page_sweep_accounting_pinned_is_live_and_not_evacuation_eligible() {
     let pinned = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
     let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
     unsafe {
-        (*pinned_header).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(pinned_header);
     }
 
     let _sweep = sweep_with_age_bump(false);
@@ -251,7 +251,7 @@ fn test_old_page_sweep_accounting_pinned_is_live_and_not_evacuation_eligible() {
     assert_eq!(summary.evacuation_eligible_pages, 0);
 
     unsafe {
-        (*pinned_header).gc_flags &= !GC_FLAG_PINNED;
+        crate::gc::unpin_object(pinned_header);
     }
 }
 
@@ -388,7 +388,7 @@ fn test_old_page_sweep_accounting_trace_json_includes_summary() {
     let pinned = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
     let (pinned_header, pinned_total) = old_test_header_and_size(pinned);
     unsafe {
-        (*pinned_header).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(pinned_header);
     }
 
     let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
@@ -423,7 +423,7 @@ fn test_old_page_sweep_accounting_trace_json_includes_summary() {
     );
 
     unsafe {
-        (*pinned_header).gc_flags &= !GC_FLAG_PINNED;
+        crate::gc::unpin_object(pinned_header);
     }
 }
 
@@ -651,7 +651,8 @@ fn test_old_page_defrag_skips_pinned_old_objects() {
         selected_pages.insert(page);
     }
     unsafe {
-        (*pinned_header).gc_flags |= GC_FLAG_MARKED | GC_FLAG_PINNED;
+        (*pinned_header).gc_flags |= GC_FLAG_MARKED;
+        crate::gc::pin_object(pinned_header);
     }
 
     let mut new_headers = Vec::new();
@@ -671,7 +672,8 @@ fn test_old_page_defrag_skips_pinned_old_objects() {
             0,
             "pinned old object address must remain stable"
         );
-        (*pinned_header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_PINNED);
+        (*pinned_header).gc_flags &= !GC_FLAG_MARKED;
+        crate::gc::unpin_object(pinned_header);
     }
     CONS_PINNED.with(|s| s.borrow_mut().clear());
 }
@@ -1094,7 +1096,7 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
         let (obj, _fields) = unsafe { alloc_old_test_object(2) };
         let header = unsafe { header_from_user_ptr(obj as *const u8) };
         unsafe {
-            (*header).gc_flags |= GC_FLAG_PINNED;
+            crate::gc::pin_object(header);
         }
         old_headers.push(header);
     }
@@ -1131,7 +1133,7 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
 
     for header in old_headers {
         unsafe {
-            (*header).gc_flags &= !GC_FLAG_PINNED;
+            crate::gc::unpin_object(header);
         }
     }
     clear_marks();
@@ -1168,7 +1170,7 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
     let parent_user = parent as usize;
     let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
     unsafe {
-        (*parent_header).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(parent_header);
     }
     // Unrelated large old-gen set with no young children (makes the old gen
     // big enough that a whole-heap rebuild would be visibly costly).
@@ -1177,7 +1179,7 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
         let (obj, _f) = unsafe { alloc_old_test_object(1) };
         let h = unsafe { header_from_user_ptr(obj as *const u8) };
         unsafe {
-            (*h).gc_flags |= GC_FLAG_PINNED;
+            crate::gc::pin_object(h);
         }
         other_old.push(h);
     }
@@ -1279,9 +1281,9 @@ fn test_minor_preserves_old_to_young_edge_across_minors() {
     );
 
     unsafe {
-        (*parent_header).gc_flags &= !GC_FLAG_PINNED;
+        crate::gc::unpin_object(parent_header);
         for h in other_old {
-            (*h).gc_flags &= !GC_FLAG_PINNED;
+            crate::gc::unpin_object(h);
         }
     }
     clear_marks();

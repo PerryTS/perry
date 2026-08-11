@@ -116,13 +116,15 @@ pub(crate) fn ensure_function_prototype_object(
     proto
 }
 
-/// Synthetic class id allocator for prototype-object classes. High bit
-/// set (0x8000_0000+) to keep them separate from codegen-assigned ids
-/// (which start from 1 and grow by module). u32 wraparound is not a
-/// concern in practice — would require ~2 billion `Function.prototype = X`
-/// statements at module init.
-pub static NEXT_SYNTHETIC_CLASS_ID: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0x8000_0000);
+per_test_global! {
+    /// Synthetic class id allocator for prototype-object classes. High bit
+    /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
+    /// (which start from 1 and grow by module). u32 wraparound is not a
+    /// concern in practice — would require ~2 billion `Function.prototype = X`
+    /// statements at module init.
+    pub static NEXT_SYNTHETIC_CLASS_ID: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0x8000_0000);
+}
 
 /// Register a function's prototype object. Called by codegen-emitted
 /// init code whenever the HIR detects `<expr>.prototype = <expr>` at
@@ -275,6 +277,13 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
 /// object pointer for a synthetic class id, or null if none.
 #[inline]
 pub(crate) fn class_prototype_object(class_id: u32) -> *mut ObjectHeader {
+    // #7757: a monomorphized specialization shares its GENERIC's prototype
+    // object — there is exactly one `Gen.prototype` at runtime, since
+    // TypeScript erases the type arguments. This is the second of the two
+    // prototype registries (the other is `CLASS_DECL_PROTOTYPE_OBJECTS`); both
+    // must redirect or `x.constructor` and `Object.getPrototypeOf` disagree
+    // about whether the specialization is `Gen`.
+    let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
     if let Ok(read) = CLASS_PROTOTYPE_OBJECTS.read() {
         if let Some(map) = read.as_ref() {
             return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;

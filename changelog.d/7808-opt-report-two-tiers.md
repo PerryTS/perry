@@ -1,0 +1,11 @@
+**`--opt-report` no longer aborts the compiler when one rule spans two actionability tiers** (#7234).
+
+`rule_buckets` keyed on `(analysis, rule)` and `debug_assert`ed that a rule never carries two tiers, reasoning that "rule-to-tier is 1:1 because both come from one `ShapeDenial` constant". That reads the relation backwards: **many constants share one rule NAME**, and they do not agree on tier. `rule 2 (containment)` alone spans both — `ESC_REASSIGNED` and `ESC_CLOSURE_CAPTURE` are `Fixable`; `ESC_CALL_ARGUMENT`, `ESC_RETURN` and `ESC_ELEMENT` are `CompilerLimitation`, each carrying its own `#7034` reference. So the invariant was false by construction, and any module denying through both halves of rule 2 — ordinary dependency JS — panicked in a debug-assertions build.
+
+The assertion's *concern* was right: a scheduler-facing bucket must not mean two things at once. Keying the bucket on the tier resolves that instead of asserting it away. A rule spanning two tiers now reports two buckets, each meaning exactly one thing, with counts kept separate rather than one tier's total silently absorbed into the other's label.
+
+The #7176 S20 guard test is updated rather than deleted, and it is worth being precise about what it used to prove. It was `#[should_panic(expected = "carries two tiers")]` plus `#[cfg(debug_assertions)]` — so it passed, permanently and by design, while the behaviour it pinned was aborting the compiler on real input. It now asserts the reporting behaviour (two buckets, one per tier, `denied` counts intact) and runs in every profile, because what it pins no longer depends on whether assertions are compiled in.
+
+Verified by sabotage rather than assertion: dropping the tier from the bucket key makes the updated test fail with `one bucket per (rule, tier): [… "tier": Null …]`, and restoring it passes. `cargo test -p perry-codegen --lib` is 851 passed / 0 failed.
+
+One honest limitation: I could not get `--opt-report=json` to render at all from a debug binary on this host — the report simply did not print, cache-disabled or not — so the before/after is demonstrated at the unit level, on the exact `rule_buckets` path, rather than as a live end-to-end panic. The old test asserting the panic is itself the "before" evidence.

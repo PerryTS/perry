@@ -20,23 +20,37 @@
 # DO NOT add an entry to make a table green. An arm that went quiet without
 # anyone deciding it should is the defect this file was created to surface.
 
-# --- #7161's stopgap: the shipped default's minor is NON-MOVING -------------
+# --- RETIRED 2026-08-09: #7161's four entries, deleted because they bit ------
 #
-# #7019 made the evacuating young-gen minor the default and #7024 made it
-# reachable under the pressure knob; `PERRY_GC_MOVING_LOOP_POLLS` is the gate for
-# BOTH halves of that route — perry-codegen's `moving_safepoint_polls_enabled`
-# decides whether `js_gc_loop_safepoint` back-edge polls are emitted at all, and
-# perry-runtime's `gc_moving_loop_polls_enabled` decides whether the alloc-point
-# nursery trigger defers to them. #7161 flipped it default-OFF pending #7154
-# (a use-after-free that corrupts the heap in the DEFAULT config). #7154 itself
-# is closed, but its last measurement says the stopgap stays until the
-# from-space protector is clean, so a default binary has no back-edge polls and
-# its alloc-point minor runs behind a forced conservative scan, which makes the
-# copying minor ineligible by construction.
+# `default`, `verify_evac`, `cons_scan_off` and `cons_scan_off_force` were
+# registered here on the ground that `PERRY_GC_MOVING_LOOP_POLLS` is default-OFF
+# (#7161's stopgap for #7154), so a default binary has no back-edge polls and its
+# alloc-point minor runs behind a forced conservative scan, making the copying
+# minor "ineligible by construction".
 #
-# DELETE ALL FOUR when `PERRY_GC_MOVING_LOOP_POLLS` goes default-ON again. The
-# liveness gate will demand it: the entries go stale the moment the arms bite.
-default             | #7161 | Shipped config + pressure. No back-edge polls are emitted into a default binary and the runtime does not defer to them, so the #7024 route (alloc-point trigger -> js_gc_loop_safepoint -> gc_safepoint_moving_minor) does not exist. It still COLLECTS; it cannot scavenge. `safepoint_minor` carries the relocating claim while this is listed.
-verify_evac         | #7161 | Same route as `default`, plus PERRY_GC_VERIFY_EVACUATION=1. A verifier that runs over zero relocations verifies nothing — which is exactly what it does today.
-cons_scan_off       | #7161 | Precise-roots-only (PERRY_CONSERVATIVE_STACK_SCAN=off) beats the alloc-point `force_full_scan`, but with the incremental stepper at its default the nursery trigger never reaches the direct arm: `registered_root_scanners_block_budgeted_gc()` reduces to "any copy-only scanner" under `gc_incremental_enabled()`, and a compiled program has none, so the trigger is handed to the budgeted stepper, which is non-moving by construction (`low_pause_non_moving = is_budgeted()`). With polls off there is no deferral to a safepoint either. Adding PERRY_GC_INCREMENTAL=0 is what turns it live — that arm is `evac_minor`.
-cons_scan_off_force | #7161 | Same as `cons_scan_off`, plus force/verify. PERRY_GC_FORCE_EVACUATE is read on the minor path the arm never reaches (#6942/#6946), so the force knob does not rescue it.
+# ***THAT MECHANISM NO LONGER HOLDS, AND THE POLL FLAG DID NOT CHANGE.*** All
+# four arms now scavenge. Measured three ways, on files nobody edited to make it
+# so:
+#
+#   * CI, `gc-stress` on `main`, run 31240304595 (2026-08-08): each of the four
+#     satisfied `requires=scavenge` on **41 of 58 cells**, `default` at
+#     `counter=1384046`. The gate has been reporting STALE-REGISTRY, and
+#     `gc-stress` has been red for it, since at least that run.
+#   * locally, `--arms default,verify_evac,cons_scan_off,cons_scan_off_force
+#     --filter test_gap_repsel_gc_stress`: 1/1 live on every arm,
+#     copy-minor 1/1, `default` copying 228,181 objects.
+#   * `shipped_default` (requires=none, no pressure knob, no GC env at all)
+#     scavenges 340,956 objects on the same file. The SHIPPED configuration
+#     relocates today.
+#
+# What changed is not the poll flag but the collector around it (statepoint root
+# lowering became the default in #7370; #7432's adaptive tenuring; #7657's seed;
+# #7666's escalation floor). The entries' stated cause outlived its truth by the
+# same mechanism the header above describes for the prose it replaced — which is
+# precisely why the gate is bidirectional, and why these are deleted rather than
+# re-worded.
+#
+# All four are already in PR_ARMS except `cons_scan_off_force`; none needed to be
+# put back. If the copying minor ever stops running in the shipped configuration
+# again, the gate fails in the OTHER direction and says so on the same line.
+

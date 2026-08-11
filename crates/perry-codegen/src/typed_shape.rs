@@ -108,16 +108,25 @@ pub(crate) fn type_is_raw_f64_candidate(ty: &Type) -> bool {
 ///    require **every** raw-f64 field to be in that set — one field assigned
 ///    later would still be exposed.
 ///
-/// 2. **The collector's view must be true at birth.** We require the pointer
-///    mask to be EMPTY, which makes the declared state `GC_LAYOUT_POINTER_FREE`
-///    — byte-identical to what `layout_init_pointer_free` already sets on every
-///    fresh instance. So the only delta this emits is the intact bit and the
-///    shape-shared descriptor install; the collector sees exactly what it saw
-///    before. A class with pointer fields would install `SIDE_MASK` and hand the
-///    collector slots holding the allocator's fill — sound on the
-///    `js_object_alloc_class_inline_keys` path, which pre-fills with
-///    `undefined`, but it would rest on that pre-fill rather than on nothing,
-///    so it is out of scope here.
+/// 2. **The collector's view must be true at birth.** The declared state is
+///    `GC_LAYOUT_POINTER_FREE` for an empty pointer mask and `SIDE_MASK`
+///    otherwise, and in both cases the collector is handed slots that still
+///    hold the allocator's fill. That fill is `TAG_UNDEFINED` on **every**
+///    allocation path a `new` site can take — `js_object_alloc_class_inline_keys`
+///    writes `max(field_count, INLINE_SLOT_FLOOR)` slots (`object/alloc.rs`,
+///    #4717) and codegen's inline bump path writes the same range with the same
+///    constant (`lower_call/new_alloc.rs`) — so a pointer-masked slot the tracer
+///    visits before its first write yields `undefined`, which
+///    `mark_field_into_worklist` rejects at its tag check. A raw-f64-masked slot
+///    is not visited at all. Neither can strand a child, because neither holds
+///    one yet.
+///
+///    This is the one obligation the original #7510 rule discharged by *avoiding*
+///    it (pointer mask required empty) rather than by proving it, which cost
+///    every pointer-bearing class its at-allocation declaration — and with it
+///    every store in its constructor, since the post-constructor install arrives
+///    after them all. `tree_wide`'s eight `number` fields were on the by-name
+///    fallback for exactly this reason: two `Tree | null` siblings.
 ///
 /// Nothing rests on the *values* being numbers. A constructor that stores a
 /// string into a `number`-declared field is rejected by the store guard
@@ -131,26 +140,40 @@ pub(crate) fn class_layout_declarable_at_allocation(
     if prologue.is_empty() {
         return false;
     }
-    let mut has_raw_f64 = false;
+    // The declaration costs one call per construction, so it must buy at least
+    // one mask bit. A class whose every field is `boolean` declares two empty
+    // masks: the boxed store arm does not read the intact bit at all
+    // (`require_raw_f64 = false`), and the collector's view is already
+    // `POINTER_FREE` from `layout_init_pointer_free`. Nothing to unlock.
+    let mut worth_declaring = false;
     for field in &class.fields {
         if field.key_expr.is_some() {
             continue;
         }
-        // An untyped field lands on `Any`/`Unknown`, which
-        // `type_is_pointer_bearing` answers `true` for — so it is rejected
-        // here, by the same condition and for the same reason as a declared
-        // `string`.
         if type_is_pointer_bearing(&field.ty) {
-            return false;
+            worth_declaring = true;
         }
+        // Obligation 1 applies to raw-f64 slots ONLY. A pointer-masked slot
+        // read before its first write yields `undefined`, which is the correct
+        // answer; a raw-f64 slot read before its first write reinterprets
+        // `undefined`'s NaN-box bits as a double and yields NaN. So only the
+        // latter needs the prologue's write-before-anything-else guarantee.
+        //
+        // It also covers the field-init phase's own `undefined` write: that
+        // write lands in a raw-f64-masked slot, fails `layout_raw_f64_bits`,
+        // and would downgrade the descriptor on the spot — but a
+        // prologue-assigned field has that write ELIDED
+        // (`ctor_prologue_param_assigned_fields`, the same set), so it never
+        // happens. The two consumers of `prologue` have to agree here, and
+        // they agree because it is literally one set.
         if type_is_raw_f64_candidate(&field.ty) {
-            has_raw_f64 = true;
+            worth_declaring = true;
             if !prologue.contains(&field.name) {
                 return false;
             }
         }
     }
-    has_raw_f64
+    worth_declaring
 }
 
 #[derive(Clone, Debug, Default)]
@@ -246,6 +269,36 @@ fn typed_layout_from_fields<'a>(
         raw_f64_mask_words: trim_mask_words(raw_f64_mask_words),
         pointer_mask_words: trim_mask_words(pointer_mask_words),
     }
+}
+
+/// Does `layout`'s **pointer** mask declare `slot`?
+///
+/// The masks are word-packed exactly as `typed_layout_from_fields` builds them
+/// and as `js_gc_{init,declare}_typed_shape_layout` consumes them, so a `true`
+/// here is the same bit the runtime's `TypedLayoutDescriptor::pointer_mask`
+/// will carry for this shape.
+pub(crate) fn layout_declares_pointer_slot(layout: &TypedShapeLayout, slot: u32) -> bool {
+    let slot = slot as usize;
+    if slot >= layout.slot_count as usize {
+        return false;
+    }
+    let word = slot / 64;
+    // A pointer-masked slot may not also be raw-f64-masked. `init_typed_shape_layout`
+    // rejects an intersecting pair outright (`words_intersect` -> UNKNOWN), so a
+    // shape that reaches an installed descriptor has disjoint masks — but this
+    // predicate licenses eliding a store's layout note, so it re-establishes
+    // disjointness locally rather than importing it.
+    let raw_f64_here = layout
+        .raw_f64_mask_words
+        .get(word)
+        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0);
+    if raw_f64_here {
+        return false;
+    }
+    layout
+        .pointer_mask_words
+        .get(word)
+        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0)
 }
 
 pub(crate) fn mask_global_name_from_keys_global(keys_global_name: &str) -> String {

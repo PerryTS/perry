@@ -8,6 +8,9 @@ pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
     // Parent linking changes what a class chain can intercept — flush cached
     // store plans (`object::prop_plan`).
     crate::object::prop_plan::prop_plan_epoch_bump();
+    // Publish into the dense mirror BEFORE the map, so no reader can observe
+    // the edge through the map without it also being visible densely.
+    crate::object::class_meta_registry::parent_dense_store(class_id, parent_class_id);
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(HashMap::new());
@@ -1523,6 +1526,48 @@ pub unsafe extern "C" fn js_class_static_method_call(
             return result;
         }
     }
+    // #7541: `class X extends Array` — inherited builtin static
+    // (`X.from(...)`, `X.of(...)`, `X.isArray(...)`).
+    //
+    // `Array.from` / `Array.of` are folded in the HIR on the LITERAL identifier
+    // `Array` (`lower/expr_call/array_only_methods.rs`), so a subclass receiver
+    // never matched and `MyArr.from([1, 2, 3])` resolved to nothing. The
+    // fallback at the end of this function returns the RECEIVER unchanged, so
+    // the call evaluated to the class ref — and `[...MyArr.from([1,2,3])]` threw
+    // `TypeError: value is not iterable` (#7541's report), which looked like a
+    // spread bug but is a missing static.
+    //
+    // Both spec statics are already implemented constructor-aware
+    // (`array::{array_from_full, array_of_full}` run `Construct(C, …)` when
+    // `IsConstructor(this)`, and `class_ref_id` makes a class ref answer true),
+    // so passing the subclass receiver as `this` builds a subclass instance —
+    // matching `Array.from.call(MyArr, …)`. Mirrors the Promise arm above.
+    if crate::array::is_array_subclass_class_id(class_id) {
+        let arg = |i: usize| -> f64 {
+            if i < args_len && !args_ptr.is_null() {
+                *args_ptr.add(i)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            }
+        };
+        match name {
+            "from" => {
+                return crate::array::array_from_full(receiver, arg(0), arg(1), arg(2));
+            }
+            "of" => {
+                let vals: &[f64] = if args_ptr.is_null() || args_len == 0 {
+                    &[]
+                } else {
+                    std::slice::from_raw_parts(args_ptr, args_len)
+                };
+                return crate::array::array_of_full(receiver, vals);
+            }
+            "isArray" => {
+                return crate::array::js_array_is_array(arg(0));
+            }
+            _ => {}
+        }
+    }
     // #6475: `class X extends <function value>() {}` — a static member
     // INHERITED from the parent FUNCTION's own properties, invoked as a call
     // (`X.use(f)`, effect's `HttpRouter.Tag(id)().use`/`unwrap`/`serve`). The
@@ -1571,11 +1616,9 @@ pub unsafe extern "C" fn js_class_static_method_call(
     receiver
 }
 
-/// Look up parent class ID from the registry
-pub(crate) fn get_parent_class_id(class_id: u32) -> Option<u32> {
-    let registry = CLASS_REGISTRY.read().unwrap();
-    registry.as_ref().and_then(|r| r.get(&class_id).copied())
-}
+// `get_parent_class_id` now lives in `object::class_meta_registry` next to the
+// dense mirror it reads; it is re-exported through `object::mod` unchanged.
+pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 
 /// Look up a method by name in the class vtable, walking the parent chain.
 /// Returns `Some((func_ptr, param_count, has_synthetic_arguments, has_rest))`

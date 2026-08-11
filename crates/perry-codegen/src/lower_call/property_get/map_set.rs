@@ -1,11 +1,34 @@
 //! Map / Set method dispatch + Map/Set/URLSearchParams `.forEach`.
 //! Pure code move from `property_get.rs` — no behavior change.
+//!
+//! # Layer 1 migrated module (#7615, slice 2)
+//!
+//! Nothing here names `expr::temp_root`. Every arm whose receiver is live
+//! across the lowering of an argument goes through
+//! [`crate::rooting::with_operands_rooted`], which lowers the group left to
+//! right with each already-evaluated value rooted across the ones that follow,
+//! re-reads them below the last collection point, and owns the release on every
+//! path out including `?`. `crate::rooting::migration_ledger` fails the build if
+//! this module reaches back into the raw API.
+//!
+//! This module was already hand-rooted end to end (#6970), so the migration is
+//! a translation and not a repair: the emitted IR is unchanged. What it buys is
+//! that the release stops being a statement a later edit can move into a branch
+//! — the shape #7462 shipped in `URLSearchParams.delete`, which is the direct
+//! sibling of these arms.
+//!
+//! The zero-argument arms (`clear`, `entries` / `keys` / `values`) keep their
+//! plain `lower_expr`: with nothing lowered after the receiver there is no
+//! window, `operand_protection` would answer `Reuse`, and wrapping them would
+//! emit the same IR through more machinery. Same rule the template module
+//! (`expr/url_main.rs`, #7617) states.
 
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, temp_root, unbox_to_i64, FnCtx};
+use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
+use crate::rooting;
 use crate::type_analysis::{is_map_expr, is_set_expr, is_url_search_params_expr};
 use crate::types::{DOUBLE, I64};
 
@@ -24,39 +47,41 @@ pub(crate) fn try_lower_map_set_methods(
             "set" if args.len() == 2 => {
                 // #6970: each finished operand is live in an SSA register
                 // across the ones that follow, and those can collect.
-                let (vals, guard) =
-                    temp_root::lower_exprs_rooted(ctx, &[object, &args[0], &args[1]])?;
-                let (m_box, k_box, v_box) = (vals[0].clone(), vals[1].clone(), vals[2].clone());
-                {
-                    let blk = ctx.block();
-                    let m_handle = unbox_to_i64(blk, &m_box);
-                    blk.call_void(
-                        "js_map_set",
-                        &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
-                    );
-                }
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(m_box));
+                return rooting::with_operands_rooted(
+                    ctx,
+                    &[object, &args[0], &args[1]],
+                    |ctx, vals| {
+                        let (m_box, k_box, v_box) =
+                            (vals[0].clone(), vals[1].clone(), vals[2].clone());
+                        let blk = ctx.block();
+                        let m_handle = unbox_to_i64(blk, &m_box);
+                        blk.call_void(
+                            "js_map_set",
+                            &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
+                        );
+                        Ok(Some(m_box))
+                    },
+                );
             }
             "get" if args.len() == 1 => {
                 // #6970: the argument's lowering can collect while the
                 // receiver is live only in an SSA register.
-                let (m_box, k_box, guard) =
-                    temp_root::lower_operand_pair_rooted(ctx, object, &args[0])?;
-                let value = {
+                return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+                    let (m_box, k_box) = (vals[0].clone(), vals[1].clone());
                     let blk = ctx.block();
                     let m_handle = unbox_to_i64(blk, &m_box);
-                    blk.call(DOUBLE, "js_map_get", &[(I64, &m_handle), (DOUBLE, &k_box)])
-                };
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(value));
+                    Ok(Some(blk.call(
+                        DOUBLE,
+                        "js_map_get",
+                        &[(I64, &m_handle), (DOUBLE, &k_box)],
+                    )))
+                });
             }
             "has" if args.len() == 1 => {
                 // #6970: the argument's lowering can collect while the
                 // receiver is live only in an SSA register.
-                let (m_box, k_box, guard) =
-                    temp_root::lower_operand_pair_rooted(ctx, object, &args[0])?;
-                let result = {
+                return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+                    let (m_box, k_box) = (vals[0].clone(), vals[1].clone());
                     let blk = ctx.block();
                     let m_handle = unbox_to_i64(blk, &m_box);
                     let i32_v = blk.call(
@@ -64,17 +89,14 @@ pub(crate) fn try_lower_map_set_methods(
                         "js_map_has",
                         &[(I64, &m_handle), (DOUBLE, &k_box)],
                     );
-                    crate::expr::i32_bool_to_nanbox(blk, &i32_v)
-                };
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(result));
+                    Ok(Some(crate::expr::i32_bool_to_nanbox(blk, &i32_v)))
+                });
             }
             "delete" if args.len() == 1 => {
                 // #6970: the argument's lowering can collect while the
                 // receiver is live only in an SSA register.
-                let (m_box, k_box, guard) =
-                    temp_root::lower_operand_pair_rooted(ctx, object, &args[0])?;
-                let result = {
+                return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+                    let (m_box, k_box) = (vals[0].clone(), vals[1].clone());
                     let blk = ctx.block();
                     let m_handle = unbox_to_i64(blk, &m_box);
                     let i32_v = blk.call(
@@ -82,10 +104,8 @@ pub(crate) fn try_lower_map_set_methods(
                         "js_map_delete",
                         &[(I64, &m_handle), (DOUBLE, &k_box)],
                     );
-                    crate::expr::i32_bool_to_nanbox(blk, &i32_v)
-                };
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(result));
+                    Ok(Some(crate::expr::i32_bool_to_nanbox(blk, &i32_v)))
+                });
             }
             "clear" if args.is_empty() => {
                 let m_box = lower_expr(ctx, object)?;
@@ -133,22 +153,19 @@ pub(crate) fn try_lower_map_set_methods(
             "add" if args.len() == 1 => {
                 // #6970: the argument's lowering can collect while the
                 // receiver is live only in an SSA register.
-                let (s_box, v_box, guard) =
-                    temp_root::lower_operand_pair_rooted(ctx, object, &args[0])?;
-                {
+                return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+                    let (s_box, v_box) = (vals[0].clone(), vals[1].clone());
                     let blk = ctx.block();
                     let s_handle = unbox_to_i64(blk, &s_box);
                     blk.call_void("js_set_add", &[(I64, &s_handle), (DOUBLE, &v_box)]);
-                }
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(s_box));
+                    Ok(Some(s_box))
+                });
             }
             "has" if args.len() == 1 => {
                 // #6970: the argument's lowering can collect while the
                 // receiver is live only in an SSA register.
-                let (s_box, v_box, guard) =
-                    temp_root::lower_operand_pair_rooted(ctx, object, &args[0])?;
-                let result = {
+                return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+                    let (s_box, v_box) = (vals[0].clone(), vals[1].clone());
                     let blk = ctx.block();
                     let s_handle = unbox_to_i64(blk, &s_box);
                     let i32_v = blk.call(
@@ -156,17 +173,14 @@ pub(crate) fn try_lower_map_set_methods(
                         "js_set_has",
                         &[(I64, &s_handle), (DOUBLE, &v_box)],
                     );
-                    crate::expr::i32_bool_to_nanbox(blk, &i32_v)
-                };
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(result));
+                    Ok(Some(crate::expr::i32_bool_to_nanbox(blk, &i32_v)))
+                });
             }
             "delete" if args.len() == 1 => {
                 // #6970: the argument's lowering can collect while the
                 // receiver is live only in an SSA register.
-                let (s_box, v_box, guard) =
-                    temp_root::lower_operand_pair_rooted(ctx, object, &args[0])?;
-                let result = {
+                return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+                    let (s_box, v_box) = (vals[0].clone(), vals[1].clone());
                     let blk = ctx.block();
                     let s_handle = unbox_to_i64(blk, &s_box);
                     let i32_v = blk.call(
@@ -174,10 +188,8 @@ pub(crate) fn try_lower_map_set_methods(
                         "js_set_delete",
                         &[(I64, &s_handle), (DOUBLE, &v_box)],
                     );
-                    crate::expr::i32_bool_to_nanbox(blk, &i32_v)
-                };
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(result));
+                    Ok(Some(crate::expr::i32_bool_to_nanbox(blk, &i32_v)))
+                });
             }
             "clear" if args.is_empty() => {
                 let s_box = lower_expr(ctx, object)?;
@@ -222,9 +234,8 @@ pub(crate) fn try_lower_map_set_methods(
             "union" | "intersection" | "difference" | "symmetricDifference" if args.len() == 1 => {
                 // #6970: the argument's lowering can collect while the
                 // receiver is live only in an SSA register.
-                let (s_box, other_box, guard) =
-                    temp_root::lower_operand_pair_rooted(ctx, object, &args[0])?;
-                let boxed = {
+                return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+                    let (s_box, other_box) = (vals[0].clone(), vals[1].clone());
                     let blk = ctx.block();
                     let s_handle = unbox_to_i64(blk, &s_box);
                     let runtime_fn = match property {
@@ -236,17 +247,14 @@ pub(crate) fn try_lower_map_set_methods(
                     };
                     let result =
                         blk.call(I64, runtime_fn, &[(I64, &s_handle), (DOUBLE, &other_box)]);
-                    crate::expr::nanbox_pointer_inline_pub(blk, &result)
-                };
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(boxed));
+                    Ok(Some(crate::expr::nanbox_pointer_inline_pub(blk, &result)))
+                });
             }
             "isSubsetOf" | "isSupersetOf" | "isDisjointFrom" if args.len() == 1 => {
                 // #6970: the argument's lowering can collect while the
                 // receiver is live only in an SSA register.
-                let (s_box, other_box, guard) =
-                    temp_root::lower_operand_pair_rooted(ctx, object, &args[0])?;
-                let result = {
+                return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+                    let (s_box, other_box) = (vals[0].clone(), vals[1].clone());
                     let blk = ctx.block();
                     let s_handle = unbox_to_i64(blk, &s_box);
                     let runtime_fn = match property {
@@ -260,10 +268,8 @@ pub(crate) fn try_lower_map_set_methods(
                         runtime_fn,
                         &[(I64, &s_handle), (DOUBLE, &other_box)],
                     );
-                    crate::expr::i32_bool_to_nanbox(blk, &i32_v)
-                };
-                temp_root::temp_root_release(ctx, guard);
-                return Ok(Some(result));
+                    Ok(Some(crate::expr::i32_bool_to_nanbox(blk, &i32_v)))
+                });
             }
             _ => {}
         }
@@ -294,25 +300,24 @@ pub(crate) fn try_lower_collection_foreach(
             if args.len() >= 2 {
                 operands.push(&args[1]);
             }
-            let (vals, guard) = temp_root::lower_exprs_rooted(ctx, &operands)?;
-            let m_box = vals[0].clone();
-            let cb_box = vals[1].clone();
-            let this_arg = vals
-                .get(2)
-                .cloned()
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            {
-                let blk = ctx.block();
-                let m_handle = unbox_to_i64(blk, &m_box);
-                blk.call_void(
-                    "js_map_foreach",
-                    &[(I64, &m_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
-                );
-            }
-            temp_root::temp_root_release(ctx, guard);
-            return Ok(Some(double_literal(f64::from_bits(
-                crate::nanbox::TAG_UNDEFINED,
-            ))));
+            return rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let m_box = vals[0].clone();
+                let cb_box = vals[1].clone();
+                let this_arg = vals.get(2).cloned().unwrap_or_else(|| {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                });
+                {
+                    let blk = ctx.block();
+                    let m_handle = unbox_to_i64(blk, &m_box);
+                    blk.call_void(
+                        "js_map_foreach",
+                        &[(I64, &m_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
+                    );
+                }
+                Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))))
+            });
         }
         if is_set_expr(ctx, object) {
             // #6970: the callback (a closure allocation) and the optional
@@ -322,25 +327,24 @@ pub(crate) fn try_lower_collection_foreach(
             if args.len() >= 2 {
                 operands.push(&args[1]);
             }
-            let (vals, guard) = temp_root::lower_exprs_rooted(ctx, &operands)?;
-            let s_box = vals[0].clone();
-            let cb_box = vals[1].clone();
-            let this_arg = vals
-                .get(2)
-                .cloned()
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            {
-                let blk = ctx.block();
-                let s_handle = unbox_to_i64(blk, &s_box);
-                blk.call_void(
-                    "js_set_foreach",
-                    &[(I64, &s_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
-                );
-            }
-            temp_root::temp_root_release(ctx, guard);
-            return Ok(Some(double_literal(f64::from_bits(
-                crate::nanbox::TAG_UNDEFINED,
-            ))));
+            return rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let s_box = vals[0].clone();
+                let cb_box = vals[1].clone();
+                let this_arg = vals.get(2).cloned().unwrap_or_else(|| {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                });
+                {
+                    let blk = ctx.block();
+                    let s_handle = unbox_to_i64(blk, &s_box);
+                    blk.call_void(
+                        "js_set_foreach",
+                        &[(I64, &s_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
+                    );
+                }
+                Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))))
+            });
         }
         // URLSearchParams.forEach((value, key, this) => …). The HIR
         // variant `Expr::UrlSearchParamsForEach` only fires when the
@@ -357,23 +361,22 @@ pub(crate) fn try_lower_collection_foreach(
             if args.len() >= 2 {
                 operands.push(&args[1]);
             }
-            let (vals, guard) = temp_root::lower_exprs_rooted(ctx, &operands)?;
-            let p_box = vals[0].clone();
-            let cb_box = vals[1].clone();
-            let this_arg = vals
-                .get(2)
-                .cloned()
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            {
-                let blk = ctx.block();
-                let p_handle = unbox_to_i64(blk, &p_box);
-                blk.call_void(
-                    "js_url_search_params_for_each",
-                    &[(I64, &p_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
-                );
-            }
-            temp_root::temp_root_release(ctx, guard);
-            return Ok(Some(double_literal(0.0)));
+            return rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let p_box = vals[0].clone();
+                let cb_box = vals[1].clone();
+                let this_arg = vals.get(2).cloned().unwrap_or_else(|| {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                });
+                {
+                    let blk = ctx.block();
+                    let p_handle = unbox_to_i64(blk, &p_box);
+                    blk.call_void(
+                        "js_url_search_params_for_each",
+                        &[(I64, &p_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
+                    );
+                }
+                Ok(Some(double_literal(0.0)))
+            });
         }
     }
     Ok(None)

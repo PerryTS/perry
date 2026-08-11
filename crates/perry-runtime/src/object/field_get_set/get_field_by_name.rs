@@ -175,7 +175,7 @@ pub extern "C" fn js_object_get_field_by_name(
                                     crate::array::keys_array_len_capped_to_capacity(keys);
                                 if key_count <= 4096 {
                                     for i in 0..key_count {
-                                        let kv = crate::array::js_array_get(keys, i as u32);
+                                        let kv = crate::array::keys_array_slot(keys, i as u32);
                                         if crate::string::js_string_key_matches(kv, key) {
                                             super::super::prop_plan::read_plan_record(
                                                 keys as usize,

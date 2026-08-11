@@ -167,6 +167,8 @@
 - [`perry audit --sbom`](cli/perry-audit-sbom.md)
 - [Host Allowlist (nativeLibrary, compilePackages)](cli/allow-perry-features.md)
 - [perry.toml Reference](cli/perry-toml.md)
+- [Updates](cli/updates.md)
+- [Update Checks in Your Apps](cli/app-updates.md)
 - [Privacy & Telemetry](cli/telemetry.md)
 
 ---

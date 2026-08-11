@@ -418,6 +418,16 @@ pub(crate) unsafe fn descriptor_enumerable(descriptor_value: f64) -> bool {
         )) != 0
 }
 
+/// #7190: same rule for `writable`. A data descriptor that omits the field
+/// defines a non-writable property, so absence is `false` rather than "keep the
+/// default" — the caller records this alongside `enumerable` for class statics.
+pub(crate) unsafe fn descriptor_writable(descriptor_value: f64) -> bool {
+    desc_has_field(descriptor_value, b"writable")
+        && crate::value::js_is_truthy(f64::from_bits(
+            desc_read_field(descriptor_value, b"writable").bits(),
+        )) != 0
+}
+
 /// Validate a property descriptor object per ES `ToPropertyDescriptor`
 /// invariants that Node surfaces as `TypeError`s (#2817). Assumes
 /// `descriptor_value` is already known to be an object. Throws on:

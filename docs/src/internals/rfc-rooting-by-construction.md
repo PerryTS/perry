@@ -1,6 +1,12 @@
 # RFC: rooting by construction
 
-**Status:** proposal. Nothing in this document is implemented.
+**Status:** adopted, migrating. The design below is the *borrow* formulation and
+it is executed as `compile_fail` doctests in `crates/perry-codegen/src/rooting.rs`
+— but it is **not what runs**. `FnCtx` has no interior mutability, so what runs
+is the combinator formulation in the second half of that file, and the gap
+between the two is measured rather than asserted: see
+["What the combinator form does NOT catch"](#what-the-combinator-form-does-not-catch)
+below. Campaign map and per-module ledger: **#7615**.
 **Problem:** [The GC rooting invariant](gc-rooting-invariant.md) — #7154, #7184,
 #7192, #7206, #7211.
 
@@ -19,7 +25,7 @@ the mistake:
 |---|---|---|
 | code review | what a reviewer happens to notice | minutes, unreliable |
 | `gc_root_dominance_check.py` | dominance violations in emitted IR | one CI run |
-| `PERRY_GC_ZEAL` / from-space protect | the *consequence*, if timing cooperates | a test run, flaky |
+| `PERRY_GC_SCHEDULE_SEED` / from-space protect | the *consequence*, if timing cooperates | a test run, flaky |
 | a user's crash | everything, eventually | days |
 
 The static checker is a genuine improvement and should stay. But it is still a
@@ -222,7 +228,10 @@ The honest number is large but the distribution is favourable.
 2. Migrate one family at a time, highest-risk first: `expr/temp_root.rs`'s
    clients, then `lower_call/*`, then the literal paths. Each is its own PR.
 3. `#[deny]` the escape hatch per-module as each module finishes, so migrated
-   code cannot regress.
+   code cannot regress. **Done, as a test rather than an attribute**: Rust has
+   no `#[deny]` for "do not call this `pub(crate)` function from this module",
+   so `rooting::migration_ledger` `include_str!`s each finished module and
+   fails the build if it names `expr::temp_root`.
 4. Keep `gc_root_dominance_check.py` in CI permanently as the backstop for
    whatever still goes through the escape hatch — and as the check on the
    `NON_COLLECTING` table itself, which the type system trusts and cannot
@@ -249,6 +258,42 @@ a half-migrated tree is worse than today's.
   is the bug this document exists about, that is the right trade — but it should
   be measured on the benchmark suite after the first family migrates, not waved
   through.
+
+## What the combinator form does NOT catch
+
+**This section supersedes the next one for anything actually shipping**, because
+the `Raw<'e>`/`Rooted` design above cannot be built on `FnCtx` — `ctx.block()`
+needs `&mut`, so a handle that carries a shared reborrow of the emitter cannot
+exist (#7459 found the same `E0499` in this document's own constructor; #7461
+settled the shape that does work). What runs is the combinator form: never hand
+out an unrooted register at all.
+
+Measured on the first fully migrated module (`expr/url_main.rs`, #7615's slice 0)
+by reintroducing a historic bug shape four ways and recording each outcome:
+
+| reintroduced shape | compiles? | caught by |
+|---|---|---|
+| #7192 in the **borrow** form (`RootingEmitter`) | **no — `E0499`** | rustc, via `compile_fail` doctest |
+| hold the `call_with_roots` result across a later lowering | yes | nothing |
+| the **verbatim pre-#7453 code**, via a bare `ctx.block().call` | yes | **nothing** — including all three `gc_root_dominance_check.py` modes (#7616) |
+| reach back into `expr::temp_root` | yes | the ledger test |
+| hold the operand guard so it can be released on one arm (#7462) | yes | the ledger test |
+
+So the honest claim is narrower than "the mistake fails to compile":
+
+- The API **produces no unrooted register**, so the correct form is the only one
+  it can express and the wrong one requires leaving it.
+- `RootedSlot` has **no `read`**. Fusing the re-read into the consuming call is
+  what makes "load early, use late" — the second half of #7114/#7375 —
+  unwritable rather than merely discouraged.
+- `with_operands_rooted` **owns the release on every path including `?`**, so
+  #7462's release-on-one-arm is not a program.
+- The escape hatch is **denied per module** by a `cargo test` ledger, which is
+  the checkable form of this document's step 3.
+
+Getting an actual compile error for the ordering mistake still requires step 1's
+`RefCell`'d emitter. That is a real, separable piece of work and nothing below
+should be read as claiming it is done.
 
 ## What it cannot catch
 
@@ -378,8 +423,17 @@ own emitted calls. No amount of care or review reliably catches that. A type
 that makes the value unusable after the call does, and it does so at the moment
 the mistake is made rather than five GC cycles later in someone else's program.
 
-**Not prototyped here.** `crates/perry-codegen/src/expr/` and `lower_call/` are
-under concurrent edit (#7206 and the `js_closure_callN` work), and a
-proof-of-concept worth anything has to touch exactly those files. The right
-sequencing is: land the CI gate, let the in-flight lowering fixes merge, then
-open step 1 as its own PR against a quiet tree.
+**Prototyped and adopted since.** The design is in
+`crates/perry-codegen/src/rooting.rs`, its `compile_fail` doctests are executed
+by `cargo test`, and `expr/url_main.rs` is migrated end to end as the template
+every subsequent slice copies. Steps 3 and 4 of the incremental path above are
+in place: the escape hatch is denied per module by the ledger test, and
+`gc_root_dominance_check.py` stays as the backstop — though #7616 records that
+it is blind to precisely the shape this RFC exists for, which is an argument for
+finishing the migration rather than for trusting the checker.
+
+Step 1 is *not* done and should not be assumed: the greppable escape-hatch
+types were never needed, because the combinator form migrates one call site at a
+time without them. The `RefCell`'d emitter that would make the ordering mistake
+a compile error remains unbuilt. **#7615 is the campaign map** — 88 modules,
+694 raw-pointer sites, 262 hazard sites, ten slices.

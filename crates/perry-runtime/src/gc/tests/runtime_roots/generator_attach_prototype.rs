@@ -1,5 +1,11 @@
 //! #7577: the generator-instance prototype wiring must survive a copying minor
-//! that lands **inside** its own call.
+//! that lands **inside** its own call, at an ALLOCATION POINT.
+//!
+//! The two witnesses below run under the `PERRY_GC_MOVING_LOOP_POLLS=0` kill
+//! switch, which is what `force_alloc_point_minor_pacing()` names. Under the
+//! shipped default the callee's window does not exist at all — see
+//! `the_shipped_default_defers_the_trigger_out_of_the_callees_window`, which
+//! asserts that positively rather than leaving it as an argument.
 //!
 //! `js_generator_attach_prototype` and its closure-identity sibling are the
 //! last thing generator construction does, and codegen drops the caller's root
@@ -21,7 +27,7 @@
 //! Both tests here force the collection into that window deterministically —
 //! `force_next_general_arena_alloc_slow` + `make_arena_trigger_due` make the
 //! next arena block allocation collect, and the next one is the callee's own —
-//! so neither depends on `PERRY_GC_ZEAL` or on the timing luck the #7577
+//! so neither depends on `PERRY_GC_SCHEDULE_SEED` or on the timing luck the #7577
 //! reproducer needs. Each asserts its subject was live (the receiver actually
 //! moved), per CLAUDE.md's "a gate must assert its subject was live": a run in
 //! which nothing moved proves nothing, and says so rather than passing.
@@ -38,11 +44,29 @@ extern "C" fn fake_generator_body(_c: *const crate::closure::ClosureHeader, _a: 
 /// the first `generator_prototype_ptr` call and costs dozens of allocations;
 /// paying it here keeps the call under test down to its own two, so the
 /// injected trigger lands where we intend.
+///
+/// **Must call the builder directly.** This used to go through
+/// `js_generator_attach_prototype(TAG_UNDEFINED, 0)`, banking on that helper
+/// reaching `generator_prototype_ptr` and lazily building the tower as a side
+/// effect. It never did: `js_generator_attach_prototype` returns at its very
+/// first line for any non-pointer `obj` (`!jv.is_pointer()`), so the "warm-up"
+/// call was a no-op that touched nothing. That went unnoticed only because
+/// `GENERATOR_FUNCTION_INTRINSIC_PTR` & co. were plain process-global statics
+/// pre-#7723 — some earlier test in the same binary had almost always already
+/// built the tower, so the *real* call under test found it cached regardless
+/// of what this function did. #7723 converted those statics to
+/// `per_test_global!` so each test starts from a guaranteed first-touch state
+/// (its whole point, for `gc::tests::lazy_intrinsic_towers`), which took away
+/// the accidental cross-test priming and exposed this helper as dead code:
+/// with nothing pre-built, the real call now pays the dozens-of-allocations
+/// tower build itself, inside `GcSuppressScope` (#7251's no-move window for
+/// that build), which swallows the injected arena trigger for the rest of the
+/// call and no copying minor ever runs — "subject not live" in the two
+/// alloc-point tests, and the deferral witness never seeing its trigger armed
+/// in the third. Call the builder directly so this function does what its
+/// name and doc always claimed.
 fn warm_generator_intrinsics() {
-    let _ = crate::object::js_generator_attach_prototype(
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-        0,
-    );
+    crate::object::ensure_generator_intrinsics();
 }
 
 /// A shadow-rooted, freshly allocated object standing in for a generator
@@ -103,12 +127,80 @@ fn assert_wiring_followed_the_move(returned: f64, before: usize, label: &str) {
     );
 }
 
+/// Pin the conservative native-stack scan OFF for the duration, restoring the
+/// previous override on drop (including on a panicking assert, so a failure
+/// here cannot leak the mode into the next test on this thread).
+///
+/// **REQUIRED SINCE #7682, together with the legacy-pacing guard beside it.**
+/// Both tests below inject their collection at an ALLOCATION POINT — the
+/// callee's own `js_object_alloc` — and #7682 changed that point twice over.
+/// Each change alone is enough to make the injected collection stop relocating,
+/// and the two need different levers:
+///
+///  1. **It no longer moves.** `gc_check_trigger` now always takes
+///     `ManualGcScanGuard::force_full_scan`, which makes the copying minor
+///     ineligible, because a NaN-boxed operand in an LLVM register at an
+///     allocation point is named by neither root lowering. THIS guard is the
+///     answer: `force_full_scan` is a no-op while an override is already
+///     pinned, so pinning `Disabled` here leaves the minor eligible. It is the
+///     same lever `gc_repsel_matrix.sh`'s `%E%` arms use to force relocation at
+///     an allocation point.
+///  2. **It no longer happens here at all.** With back-edge polls default-ON
+///     the nursery trigger DEFERS to the next precise safepoint and returns
+///     without collecting, so the callee's allocation runs no cycle whatsoever.
+///     `force_alloc_point_minor_pacing()` is the answer to that one — polls
+///     off, no deferral, the direct minor runs at the allocation point as
+///     before.
+///
+///     It must be THAT guard and not `force_legacy_gc_pacing()`, which also
+///     turns scavenge off. Scavenge is the disjunct that routes nursery
+///     pressure to the direct arm in the first place: the neighbouring
+///     `registered_root_scanners_block_budgeted_gc()` reduces to "any COPY-ONLY
+///     scanner" under `gc_incremental_enabled()`, and this test's registry
+///     holds only a mutable one. With scavenge off the trigger goes to the
+///     budgeted stepper, which is non-moving by construction, and the symptom
+///     is once again "subject not live" — a third way to reach the same
+///     message, which is why the assertion names the arming rather than the
+///     cause.
+///
+/// Diagnosing this needs both symptoms told apart, and they present
+/// identically — the receiver simply does not move and the live-subject
+/// assertion fires. That assertion is why these tests reported the change
+/// instead of silently passing.
+///
+/// What the tests assert is unchanged and still worth asserting: a runtime
+/// helper must not bind a receiver's ADDRESS across its own allocation. #7682
+/// removes two routes to that hazard in the shipped default; it does not make
+/// the helper correct, and `PERRY_CONSERVATIVE_STACK_SCAN=off` /
+/// `PERRY_GC_MOVING_LOOP_POLLS=0` are supported configurations in which the
+/// routes are open again.
+struct AllocPointRelocationGuard(Option<crate::gc::roots::ConservativeStackScanMode>);
+
+impl AllocPointRelocationGuard {
+    fn new() -> Self {
+        Self(crate::gc::roots::set_conservative_stack_scan_override(
+            Some(crate::gc::roots::ConservativeStackScanMode::Disabled),
+        ))
+    }
+}
+
+impl Drop for AllocPointRelocationGuard {
+    fn drop(&mut self) {
+        crate::gc::roots::set_conservative_stack_scan_override(self.0);
+    }
+}
+
 /// SABOTAGE CHECK: bind `obj_ptr` at the top of `js_generator_attach_prototype`
 /// again and use it at the tail (the pre-#7577 shape). Both the returned
 /// address and the prototype link go to the dead object and this fails.
 #[test]
-fn attach_prototype_survives_a_copying_minor_inside_the_call() {
+fn attach_prototype_survives_an_alloc_point_copying_minor_inside_the_call() {
     let _guard = CopyingNurseryTestGuard::new(4);
+    // Polls off so the alloc-point trigger COLLECTS here instead of deferring,
+    // scavenge on so it reaches the direct arm at all, scan off so it may MOVE.
+    // See `AllocPointRelocationGuard` for all three.
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let _relocation = AllocPointRelocationGuard::new();
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     // Without this the `RuntimeHandleScope` inside the function under test is
     // decorative — the guard above took the thread's mutable-root scanners with
@@ -131,8 +223,13 @@ fn attach_prototype_survives_a_copying_minor_inside_the_call() {
 /// SABOTAGE CHECK: restore the entry-bound `obj_ptr` in
 /// `js_generator_attach_closure_prototype` and this goes red.
 #[test]
-fn attach_closure_prototype_survives_a_copying_minor_inside_the_call() {
+fn attach_closure_prototype_survives_an_alloc_point_copying_minor_inside_the_call() {
     let _guard = CopyingNurseryTestGuard::new(4);
+    // Polls off so the alloc-point trigger COLLECTS here instead of deferring,
+    // scavenge on so it reaches the direct arm at all, scan off so it may MOVE.
+    // See `AllocPointRelocationGuard` for all three.
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let _relocation = AllocPointRelocationGuard::new();
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
     warm_generator_intrinsics();
@@ -152,4 +249,60 @@ fn attach_closure_prototype_survives_a_copying_minor_inside_the_call() {
     );
 
     assert_wiring_followed_the_move(returned, before, "js_generator_attach_closure_prototype");
+}
+
+/// The shipped default's answer to the same hazard, asserted rather than argued.
+///
+/// Under the default (back-edge polls ON since #7690) an allocation-point
+/// trigger does not collect where it fires: it sets `GC_SAFEPOINT_PENDING` and
+/// returns, and the copying minor runs later at a precise loop safepoint — by
+/// which time the callee has returned and its `let` is gone. So the #7577
+/// window is not merely survivable in the default configuration, it is
+/// **closed**, and that is why the two witnesses above must pin the kill switch
+/// to keep testing anything.
+///
+/// This is the honest shape for "add a default-pacing witness". A default-paced
+/// test that tried to relocate the receiver INSIDE the call would be vacuous —
+/// it would report "subject not live" forever, because there is no longer a
+/// collection there to move anything. What is testable, and what this asserts,
+/// is the routing that removed it: no collection, and a pending safepoint.
+#[test]
+fn the_shipped_default_defers_the_trigger_out_of_the_callees_window() {
+    let _guard = CopyingNurseryTestGuard::new(4);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // Polls ON + scavenge ON + nursery cap live: the shipped default since #7690.
+    let _pacing = crate::gc::policy::force_moving_gc_pacing();
+    register_runtime_handle_root_scanner_for_tests();
+    warm_generator_intrinsics();
+    crate::gc::set_safepoint_pending(false);
+
+    let (obj_value, before) = rooted_instance();
+    let collections_before = gc_collection_count();
+    arm_collection_on_next_block(&trigger_guard);
+
+    let returned = crate::object::js_generator_attach_prototype(obj_value, 0);
+
+    assert_eq!(
+        gc_collection_count(),
+        collections_before,
+        "the default must NOT collect at the allocation point — that is the \
+         register-imprecise site #7682 closed"
+    );
+    assert!(
+        GC_SAFEPOINT_PENDING.with(std::cell::Cell::get),
+        "LIVE SUBJECT: the trigger must actually have been due and deferred. \
+         Without this the test also passes when nothing was armed at all."
+    );
+    assert_eq!(
+        current_addr(),
+        before,
+        "nothing may move inside the callee under the default"
+    );
+    assert_eq!(
+        crate::value::js_nanbox_get_pointer(returned) as usize,
+        before,
+        "and the receiver handed back is still the one that went in"
+    );
+
+    crate::gc::set_safepoint_pending(false);
 }

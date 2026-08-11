@@ -4,6 +4,17 @@
 //! Pure mechanical move — the items below are verbatim copies (only the
 //! visibility of the three entry points is widened to `pub(super)` so the
 //! trunk's call sites keep compiling).
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Listed in `crate::rooting`'s `MIGRATED_MODULES`, and the listing is
+//! **vacuous on the committed source**: this module has never named an
+//! `expr::temp_root` symbol, so only the sabotage arm makes the line an
+//! assertion. The audit that earned it: every entry point here takes operands
+//! its caller has already lowered, and lowers no user expression of its own, so
+//! there is no window for a root to span. `js_array_refresh_local_head` and the
+//! `*_index_get_guard` helpers are the only calls in the receiver's live range,
+//! and neither re-enters user code.
 
 use anyhow::Result;
 

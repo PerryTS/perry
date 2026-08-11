@@ -77,6 +77,25 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     // whole window: ~1.15 MB allocated, ~410 KB of it live afterwards, once per
     // thread.
     let _no_move = crate::gc::GcSuppressScope::new();
+    // Every object this bootstrap builds is reachable from `globalThis` for the
+    // life of the process (the `_no_move` comment above measures the graph:
+    // ~1.15 MB allocated, ~410 KB live afterwards). That makes each of them a
+    // permanent tenant of the per-object GC slot-layout side tables — and ONE
+    // permanent tenant is enough to disable `PER_OBJECT_LAYOUTS_NONEMPTY`,
+    // the global emptiness proof that keeps `layout_forget_object` off the
+    // allocation / death / relocation paths, for the rest of the run.
+    //
+    // Since a single plain-object property miss forces this bootstrap, that
+    // made the armed regime universal: measured on the quiet mini, adding one
+    // `for (const _x of [1]) {}` to `main()` cost `churn` +28% and `tree` +29%,
+    // with `layout_forget_object` self time going 112 → 916 ms and 194 → 740 ms
+    // respectively. The scope makes these objects declare
+    // `GC_LAYOUT_UNKNOWN` (the tag-checked scan — the universally safe state)
+    // instead of minting a mask nothing will ever remove. See
+    // `gc::ImmortalLayoutScope` for the soundness argument and for why it is
+    // deliberately NOT applied to typed-shape layouts.
+    let _immortal = crate::gc::ImmortalLayoutScope::new();
+    let bootstrap_started = crate::gc::gc_diag_enabled().then(std::time::Instant::now);
     let scope = crate::gc::RuntimeHandleScope::new();
     let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
     let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
@@ -740,6 +759,20 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     // same function object as `Array.prototype.toString`. Alias it now that
     // both the Array constructor and the TypedArray intrinsic are set up.
     alias_typed_array_proto_to_string(singleton());
+    // The bootstrap's own cost, and the evidence that the `ImmortalLayoutScope`
+    // above actually did its job. `slot_masks`/`typed` are the live entry
+    // counts of the two per-object layout side tables: they must still read
+    // `0 0` here, because a non-zero count is exactly what disables
+    // `PER_OBJECT_LAYOUTS_NONEMPTY` for the rest of the process.
+    if let Some(started) = bootstrap_started {
+        let (slot_masks, typed) = crate::gc::per_object_layout_table_sizes();
+        eprintln!(
+            "[gc-globalthis-bootstrap] elapsed_us={} per_object_slot_masks={} per_object_typed_layouts={}",
+            started.elapsed().as_micros(),
+            slot_masks,
+            typed
+        );
+    }
 }
 
 /// Install `%TypedArray%.prototype.toString` as the same closure object as
@@ -848,7 +881,7 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
     );
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Raw address of THIS thread's `Error` constructor closure, captured at
     /// install. Read by `error::error_prepare_stack_trace_override` so
     /// `captureStackTrace` / `error.stack` can honor a user-set

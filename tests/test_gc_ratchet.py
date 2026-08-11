@@ -16,10 +16,12 @@ import json
 import stat
 import sys
 import tempfile
+import subprocess
 import unittest
 from pathlib import Path
 
 from benchmarks.gc_ratchet.gc_ratchet import (
+    code_tree_hash,
     ALL_METRICS,
     DEFAULT_ARTIFACT,
     DETERMINISTIC_METRICS,
@@ -32,10 +34,14 @@ from benchmarks.gc_ratchet.gc_ratchet import (
     distribution,
     evaluate,
     gated_anywhere,
+    inspect_artifact,
+    main,
+    measure,
     parse_gc_diag,
     parse_gcmetrics,
     parse_scan_fallbacks,
     probe_overrides_from_json,
+    probe_run_env,
     render,
     render_classification,
     tolerances_from_json,
@@ -298,7 +304,7 @@ class GateFailTests(unittest.TestCase):
     def test_a_probe_that_stopped_collecting_fails(self):
         """The bands alone could not catch this, which is why it is asserted.
 
-        Six of the twelve shipped probes pin ``minor_cycles`` at 1 and the
+        Six of the fourteen shipped probes pin ``minor_cycles`` at 1 and the
         allowance floor is also 1, so a collapse from 1 to 0 lands exactly on
         ``delta == -allowance`` and scored "ok". A collector that stopped
         running copying minors — the largest regression this ratchet exists to
@@ -313,10 +319,56 @@ class GateFailTests(unittest.TestCase):
         )
 
     def test_a_probe_that_evacuated_nothing_fails(self):
+        """Nothing moved AT ALL — neither copied nor promoted — is the failure.
+
+        #7558 narrowed this from ``copied_objects`` to
+        ``copied_objects + promoted_objects``. Both are parsed from the same
+        ``[gc-copy-minor] ran`` line, so either alone names a *destination*;
+        only the sum answers "did the copying minor move anything".
+        """
         baseline = _baseline()
-        current = _measurement(_probe(overrides={"copied_objects": 0.0}))
+        current = _measurement(
+            _probe(overrides={"copied_objects": 0.0, "promoted_objects": 0.0})
+        )
         _, failures = evaluate(baseline, current, profile="shared_ci")
         self.assertTrue(any("evacuated nothing" in failure for failure in _hard(failures)))
+
+    def test_copying_that_became_promotion_is_a_fingerprint_breach_not_a_liveness_one(self):
+        """The #7558 shape, and the reason the liveness probe had to change.
+
+        Removing explicit ``gc()``'s conservative stack scan re-enabled the
+        adaptive-tenuring seed on ``gc()``-driven workloads, ``tenuring_survivals``
+        fell 4 -> 1 on two probes, and every survivor went straight to old-gen:
+        ``copied_objects`` 5,823 -> 0 with ``promoted_objects`` 0 -> 6,077. That
+        is a copying minor that moved MORE, so it must not be reported as one
+        that did not run — while still being a two-sided band breach on
+        ``copied_objects``, because it IS a change in the collector's
+        behavioural fingerprint and must be re-pinned deliberately.
+        """
+        baseline = _baseline()
+        current = _measurement(
+            _probe(overrides={"copied_objects": 0.0, "promoted_objects": 24_000.0})
+        )
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        hard = _hard(failures)
+        self.assertFalse(
+            any("evacuated nothing" in failure for failure in hard),
+            "a minor that promoted every survivor still evacuated them; calling "
+            "that 'the collector did not run' would misdirect the next reader",
+        )
+        rows, _ = evaluate(baseline, current, profile="shared_ci")
+        copied = [
+            row
+            for row in rows
+            if row.probe == "01_probe" and row.metric == "copied_objects"
+        ]
+        self.assertEqual(len(copied), 1)
+        self.assertEqual(
+            copied[0].status,
+            "REGRESSION",
+            "the evacuation counters are a two-sided fingerprint: a collapse to "
+            "zero copies must still turn the job red and force a deliberate re-pin",
+        )
 
     def test_missing_probe_fails_instead_of_being_skipped(self):
         baseline = _baseline()
@@ -850,5 +902,493 @@ class ClassifyTests(unittest.TestCase):
         self.assertIn(f'std::env::var("{SCAN_MODE_ENV}")', runtime)
 
 
+class FailOpenPerCellTests(unittest.TestCase):
+    """One unfit cell must cost one cell, not the whole gate's coverage (#7554).
+
+    The failure this class exists to prevent already happened, and it is the
+    most expensive kind: not a gate that passed when it should have failed, but
+    a gate that *measured nothing at all* while looking busy. One cell of the
+    pinned artifact — ``12_large_live_set.heap_used_bytes``, spread 6,768 bytes —
+    failed the artifact-validation step, that step runs before the measurement
+    step, and so for three days none of the twelve probes executed on any
+    branch. Two GC pacing changes (#7594, #7596) merged inside that window and
+    each had to hand-run a both-arms A/B in place of the gate.
+
+    So the assertions here are about **blast radius**, and the load-bearing one
+    is ``test_an_unfit_cell_does_not_hide_a_regression_elsewhere``: it plants a
+    real, gating regression on a *different* probe in the same run and requires
+    that it still be named. Under the old behaviour that regression was
+    invisible, because nothing ran.
+    """
+
+    def _unfit_cell_baseline(self):
+        """Two probes; ``01_probe``'s retention cell carries the #7554 defect."""
+        probes = _pair()
+        base = BASE_VALUES["heap_used_bytes"]
+        probes["01_probe"]["metrics"]["heap_used_bytes"] = distribution([base] * 6 + [base + 6768])
+        return _baseline(probes)
+
+    def test_an_unfit_cell_is_demoted_rather_than_aborting_the_run(self):
+        baseline = self._unfit_cell_baseline()
+        rows, failures = evaluate(baseline, _measurement(_pair()), profile="shared_ci")
+        # Every cell of both probes was still evaluated.
+        self.assertEqual(len(rows), 2 * len(ALL_METRICS))
+        row = next(r for r in rows if r.probe == "01_probe" and r.metric == "heap_used_bytes")
+        self.assertFalse(row.gating, "an unfit cell must not stay in the gating family")
+        self.assertIn("unfit", row.status)
+        # Demoted, but NOT waved through: the defect is still a hard failure.
+        self.assertTrue(
+            any("UNFIT PINNED CELL" in failure for failure in _hard(failures)),
+            f"the defect must still fail the job, got {failures}",
+        )
+
+    def test_an_unfit_cell_does_not_hide_a_regression_elsewhere(self):
+        """The #7554 assertion. A bad cell must not cost the rest of the matrix."""
+        baseline = self._unfit_cell_baseline()
+        # A real, gating regression on the OTHER probe: half the heap reclaimed.
+        current = _measurement(_pair(other_overrides={"freed_bytes": 50_000_000.0}))
+        _, failures = evaluate(baseline, current, profile="shared_ci")
+        hard = _hard(failures)
+        self.assertTrue(
+            any("02_other: freed_bytes" in failure for failure in hard),
+            f"the unrelated regression must still be named, got {hard}",
+        )
+        self.assertTrue(any("UNFIT PINNED CELL" in failure for failure in hard))
+
+    def test_an_unfit_probe_demotes_only_that_probe(self):
+        probes = _pair()
+        probes["01_probe"]["correctness"]["status"] = "unchecked"
+        baseline = _baseline(probes)
+        current = _measurement(_pair(other_overrides={"copied_objects": 1.0}))
+        rows, failures = evaluate(baseline, current, profile="shared_ci")
+        for row in rows:
+            if row.probe == "01_probe":
+                self.assertFalse(row.gating, f"{row.metric} on an unfit probe must be demoted")
+        self.assertTrue(
+            any("02_other" in failure for failure in _hard(failures)),
+            "the fit probe must still be able to fail the job",
+        )
+
+    def test_structural_preflight_defers_every_defect_it_waves_through(self):
+        """`--scope structural` may DEFER a defect; it may never DROP one.
+
+        This is the test that keeps the flag from being suppression. For each
+        non-fatal defect shape, preflight passes (so the probes get to run) and
+        ``check`` then fails on that same defect (so the job still goes red).
+        A change that made ``check`` forgiving would break this, not just make
+        the gate quieter.
+        """
+        shapes = {
+            "nondeterministic cell": self._unfit_cell_baseline(),
+        }
+        probes = _pair()
+        probes["01_probe"]["correctness"]["status"] = "unchecked"
+        shapes["unverified probe"] = _baseline(probes)
+        probes = _pair()
+        probes["01_probe"]["metrics"]["minor_cycles"] = distribution([0.0] * 7)
+        shapes["probe that never collected"] = _baseline(probes)
+
+        for label, baseline in shapes.items():
+            with self.subTest(shape=label):
+                defects = inspect_artifact(baseline)
+                self.assertTrue(defects, "the shape must actually be a defect")
+                self.assertFalse(
+                    any(defect.fatal for defect in defects),
+                    "this shape is meant to be non-fatal",
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "artifact.json"
+                    path.write_text(json.dumps(baseline), encoding="utf-8")
+                    # Preflight lets it through, so the probes run...
+                    self.assertEqual(
+                        main(["validate", "--artifact", str(path), "--scope", "structural"]),
+                        0,
+                        "structural preflight must not zero the run's coverage",
+                    )
+                    # ...and the maintainer default still refuses it outright.
+                    self.assertEqual(
+                        main(["validate", "--artifact", str(path), "--scope", "all"]), 1
+                    )
+                # ...but check still turns the job red on the very same defect.
+                _, failures = evaluate(baseline, _measurement(_pair()), profile="shared_ci")
+                self.assertTrue(
+                    any("UNFIT PINNED" in failure for failure in _hard(failures)),
+                    f"{label}: deferred by preflight and then dropped by check",
+                )
+
+    def test_a_tampered_artifact_is_still_fatal_at_structural_scope(self):
+        """Integrity is not fitness. A tampered artifact must still stop everything."""
+        probes = _probe()
+        probes["01_probe"]["metrics"]["heap_used_bytes"]["median"] = 1
+        baseline = _baseline(probes)
+        self.assertTrue(any(defect.fatal for defect in inspect_artifact(baseline)))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.json"
+            path.write_text(json.dumps(baseline), encoding="utf-8")
+            self.assertEqual(
+                main(["validate", "--artifact", str(path), "--scope", "structural"]),
+                2,
+                "a tampered artifact must not be deferred to check",
+            )
+        with self.assertRaises(RatchetError):
+            evaluate(baseline, _measurement(), profile="shared_ci")
+
+    def test_validate_defaults_to_the_strict_scope(self):
+        # The lenient scope must be opt-in. A maintainer running `validate` by
+        # hand gets the full refusal; only the CI preflight asks for less.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.json"
+            path.write_text(json.dumps(self._unfit_cell_baseline()), encoding="utf-8")
+            self.assertEqual(main(["validate", "--artifact", str(path)]), 1)
+
+    def test_pinning_an_unfit_artifact_is_still_refused(self):
+        # `assemble` calls validate_artifact, which is raise-on-any-defect. The
+        # fail-open path is for artifacts already in the tree; it must not make
+        # it possible to freeze a new one that is unfit.
+        with self.assertRaises(RatchetError) as caught:
+            validate_artifact(self._unfit_cell_baseline())
+        self.assertIn("bit-identity", str(caught.exception))
+
+    def test_the_shipped_artifact_has_no_deferred_defects(self):
+        # The fail-open path exists for emergencies. If the artifact in the tree
+        # is relying on it, the ratchet is running degraded and someone should
+        # know.
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [defect.describe() for defect in inspect_artifact(artifact)],
+            [],
+            "the pinned artifact should be fit, not merely tolerated",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Per-probe run environment — the large-Eden arm (#7481)
+# ---------------------------------------------------------------------------
+
+#: A stand-in for `perry` that also records the environment it was *compiled*
+#: under, so a test can assert the probe's declared knobs did not leak into the
+#: compile step. Perry's object cache keys on every codegen env var (#6394), so
+#: a runtime knob passed at compile time would change the cache key without
+#: changing a byte of emitted code.
+_STUB_PERRY_RECORDING_COMPILE_ENV = """#!{python}
+import json, os, stat, sys
+source = sys.argv[1]
+out = sys.argv[sys.argv.index("-o") + 1]
+here = os.path.dirname(os.path.abspath(source)) or "."
+with open(os.path.join(here, "compile-env.json"), "w") as handle:
+    json.dump({{k: v for k, v in os.environ.items() if k.startswith("PERRY_")}}, handle)
+body = open(os.path.join(here, source)).read()
+with open(out, "w") as handle:
+    handle.write("#!{python}\\n" + body)
+os.chmod(out, os.stat(out).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+"""
+
+#: A stub probe whose retention depends on the arm. This is what makes the
+#: delivery testable: if the harness merely *recorded* `run_env` without passing
+#: it to the child, `heap_used_bytes` would come back at the unarmed value and
+#: the assertion below would fail. A test that only checked the recorded dict
+#: would pass in exactly that broken state.
+_STUB_ARMED_PROBE = """
+import os, sys
+armed = os.environ.get("PERRY_GC_SCAVENGE_NURSERY_MB") == "64"
+sys.stdout.write("probe:stub\\nchecksum:1\\n")
+sys.stderr.write("#gcmetric heap_used_bytes=%d\\n" % (6000000 if armed else 5000000))
+sys.stderr.write("#gcmetric heap_total_bytes=20971520\\n")
+sys.stderr.write("#gcmetric rss_bytes=30000000\\n")
+if os.environ.get("PERRY_GC_DIAG"):
+    sys.stderr.write(
+        "[gc-copy-minor] ran copied_objects=%d copied_bytes=64 promoted_objects=0 "
+        "promoted_bytes=0 freed_bytes=128\\n" % (11 if armed else 7)
+    )
+"""
+
+#: The directive, wrapped in a module docstring so the stub probe — which is
+#: Python, because these tests must run without a compiler — stays executable
+#: while carrying a line the harness reads as TypeScript.
+_ARM_DIRECTIVE = '"""\n// gc-ratchet-env: PERRY_GC_SCAVENGE_NURSERY_MB=64\n"""\n'
+
+
+class ProbeRunEnvParsingTests(unittest.TestCase):
+    """A probe declares the collector configuration it is a probe *of*."""
+
+    def _source(self, tmp, text):
+        path = Path(tmp) / "13_stub.ts"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_a_probe_with_no_directive_declares_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(probe_run_env(self._source(tmp, "// just a comment\n")), {})
+
+    def test_directives_are_read_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = self._source(
+                tmp,
+                "// header\n"
+                "// gc-ratchet-env: PERRY_GC_SCAVENGE_NURSERY_MB=64\n"
+                "// gc-ratchet-env: PERRY_GC_SCAVENGE=1\n"
+                "const x = 1;\n",
+            )
+            self.assertEqual(
+                probe_run_env(source),
+                {"PERRY_GC_SCAVENGE_NURSERY_MB": "64", "PERRY_GC_SCAVENGE": "1"},
+            )
+
+    def test_a_non_perry_variable_is_refused(self):
+        # The probe set is reviewed as workloads. It must not double as a way to
+        # change the process the harness runs.
+        with tempfile.TemporaryDirectory() as tmp:
+            source = self._source(tmp, "// gc-ratchet-env: PATH=/tmp/evil\n")
+            with self.assertRaises(RatchetError) as caught:
+                probe_run_env(source)
+        self.assertIn("PERRY_*", str(caught.exception))
+
+    def test_a_variable_the_harness_owns_is_refused(self):
+        for name, value in (
+            ("PERRY_CONSERVATIVE_STACK_SCAN", "off"),
+            ("PERRY_GC_DIAG", "1"),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                source = self._source(tmp, f"// gc-ratchet-env: {name}={value}\n")
+                with self.assertRaises(RatchetError) as caught:
+                    probe_run_env(source)
+                self.assertIn("harness", str(caught.exception))
+
+    def test_a_repeated_variable_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = self._source(
+                tmp,
+                "// gc-ratchet-env: PERRY_GC_SCAVENGE_NURSERY_MB=64\n"
+                "// gc-ratchet-env: PERRY_GC_SCAVENGE_NURSERY_MB=32\n",
+            )
+            with self.assertRaises(RatchetError) as caught:
+                probe_run_env(source)
+        self.assertIn("twice", str(caught.exception))
+
+    def test_the_shipped_large_eden_probe_still_declares_its_arm(self):
+        # The subject of `13_large_eden_survivors` is the large-Eden cadence.
+        # Without the directive it is a healthy probe of something else, and
+        # nothing else in the tree would say so. Same discipline as
+        # `gc_root_dominance_allowlist.json`: the claim has to keep matching.
+        source = (
+            REPO_ROOT
+            / "benchmarks"
+            / "gc_ratchet"
+            / "probes"
+            / "13_large_eden_survivors.ts"
+        )
+        self.assertEqual(probe_run_env(source), {"PERRY_GC_SCAVENGE_NURSERY_MB": "64"})
+
+    def test_the_shipped_grow_then_churn_probe_still_declares_its_arm(self):
+        # `14_grow_then_churn` is a probe of the major-pacing backoff's
+        # TRANSITION, and the mechanism is a ratio: the shift climbs per
+        # unproductive full and the boundary is `baseline << (1 + shift)`. Its
+        # two directives are what set the ABSOLUTE scale — the nursery cap
+        # decides how early the first collection lands and therefore how small
+        # the first post-full baseline is, and the pacing floor sets where the
+        # first escalation can happen at all. At the shipped 16 MB / 32 MB the
+        # same three escalations need a live set in the hundreds of MB. So
+        # losing either line leaves a probe that still passes, still collects,
+        # and no longer reaches the cap it exists to hold.
+        source = (
+            REPO_ROOT / "benchmarks" / "gc_ratchet" / "probes" / "14_grow_then_churn.ts"
+        )
+        self.assertEqual(
+            probe_run_env(source),
+            {
+                "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+                "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1",
+            },
+        )
+
+
+class ProbeRunEnvDeliveryTests(unittest.TestCase):
+    """The declared arm must reach the child process, not merely the artifact.
+
+    #7024 and #7025 are the shape this guards against: a knob that disabled the
+    path it was measuring, and a counter that summed two collectors so a cell
+    could pass having run zero copying minors. A `run_env` the harness records
+    but never exports would be exactly that — an arm that is documented, gated,
+    and inert.
+    """
+
+    def _fixture(self, tmp, *, armed):
+        root = Path(tmp)
+        perry = root / "stub-perry"
+        perry.write_text(
+            _STUB_PERRY_RECORDING_COMPILE_ENV.format(python=sys.executable), encoding="utf-8"
+        )
+        perry.chmod(perry.stat().st_mode | stat.S_IEXEC)
+        probes_dir = root / "probes"
+        probes_dir.mkdir()
+        (probes_dir / "13_stub.ts").write_text(
+            (_ARM_DIRECTIVE if armed else "") + _STUB_ARMED_PROBE, encoding="utf-8"
+        )
+        return perry, probes_dir
+
+    def test_the_declared_arm_reaches_the_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp, armed=True)
+            payload = measure(perry=perry, probes_dir=probes_dir, repeats=3, node=None, warmup=0)
+        entry = payload["probes"]["13_stub"]
+        self.assertEqual(entry["run_env"], {"PERRY_GC_SCAVENGE_NURSERY_MB": "64"})
+        self.assertEqual(entry["metrics"]["heap_used_bytes"]["median"], 6_000_000)
+        self.assertEqual(entry["metrics"]["copied_objects"]["median"], 11)
+
+    def test_removing_the_directive_moves_the_numbers(self):
+        # The perturbation that proves the arm is load-bearing rather than
+        # decorative: same workload, directive deleted, different collector,
+        # different numbers.
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp, armed=False)
+            payload = measure(perry=perry, probes_dir=probes_dir, repeats=3, node=None, warmup=0)
+        entry = payload["probes"]["13_stub"]
+        self.assertEqual(entry["run_env"], {})
+        self.assertEqual(entry["metrics"]["heap_used_bytes"]["median"], 5_000_000)
+        self.assertEqual(entry["metrics"]["copied_objects"]["median"], 7)
+
+    def test_the_arm_does_not_leak_into_the_compile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp, armed=True)
+            measure(perry=perry, probes_dir=probes_dir, repeats=3, node=None, warmup=0)
+            seen = json.loads((probes_dir / "compile-env.json").read_text(encoding="utf-8"))
+        self.assertNotIn("PERRY_GC_SCAVENGE_NURSERY_MB", seen)
+
+    def test_classify_runs_both_scan_modes_under_the_declared_arm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            perry, probes_dir = self._fixture(tmp, armed=True)
+            payload = classify(perry=perry, probes_dir=probes_dir, repeats=3, warmup=0)
+        (row,) = payload["probes"]
+        self.assertEqual(row["run_env"], {"PERRY_GC_SCAVENGE_NURSERY_MB": "64"})
+        # Both arms saw the armed value, so the split is 6,000,000 / 6,000,000
+        # and the residue is zero — not 6,000,000 against an unarmed 5,000,000,
+        # which is what a `classify` that dropped the arm would report as a
+        # 1 MB false-root excess that does not exist.
+        self.assertEqual(row["heap_used_bytes"], 6_000_000)
+        self.assertEqual(row["heap_used_precise_bytes"], 6_000_000)
+        self.assertEqual(row["false_root_excess_bytes"], 0)
+
+
+class ProbeRunEnvGateTests(unittest.TestCase):
+    """A run under a different arm is not a comparison."""
+
+    def _armed_pair(self):
+        baseline = _baseline(_pair())
+        baseline["probes"]["01_probe"]["run_env"] = {"PERRY_GC_SCAVENGE_NURSERY_MB": "64"}
+        current = _measurement(copy.deepcopy(_pair()))
+        current["probes"]["01_probe"]["run_env"] = {"PERRY_GC_SCAVENGE_NURSERY_MB": "64"}
+        return baseline, current
+
+    def test_matching_arms_pass(self):
+        baseline, current = self._armed_pair()
+        _, failures = evaluate(baseline, current, profile="pinned_host")
+        self.assertEqual(_hard(failures), [])
+
+    def test_a_dropped_arm_fails_even_though_every_band_is_satisfied(self):
+        # This is the failure mode the check exists for. Every metric is
+        # byte-identical to the baseline; the only thing that changed is which
+        # collector produced them.
+        baseline, current = self._armed_pair()
+        current["probes"]["01_probe"]["run_env"] = {}
+        _, failures = evaluate(baseline, current, profile="pinned_host")
+        self.assertTrue(
+            any("different collector configuration" in failure for failure in _hard(failures)),
+            _hard(failures),
+        )
+
+    def test_a_changed_arm_value_fails(self):
+        baseline, current = self._armed_pair()
+        current["probes"]["01_probe"]["run_env"] = {"PERRY_GC_SCAVENGE_NURSERY_MB": "32"}
+        _, failures = evaluate(baseline, current, profile="pinned_host")
+        self.assertTrue(
+            any("different collector configuration" in failure for failure in _hard(failures)),
+            _hard(failures),
+        )
+
+    def test_an_added_arm_fails(self):
+        # The mirror image: the baseline pinned the default and the run armed
+        # itself. Also a comparison of two collectors.
+        baseline, current = self._armed_pair()
+        current["probes"]["02_other"]["run_env"] = {"PERRY_GC_SCAVENGE_NURSERY_MB": "64"}
+        _, failures = evaluate(baseline, current, profile="pinned_host")
+        self.assertTrue(
+            any("02_other" in failure and "different collector" in failure for failure in _hard(failures)),
+            _hard(failures),
+        )
+
+    def test_an_unreadable_run_env_is_a_fatal_artifact_defect(self):
+        baseline, current = self._armed_pair()
+        baseline["probes"]["01_probe"]["run_env"] = {"PERRY_GC_SCAVENGE_NURSERY_MB": 64}
+        self.assertTrue(any(defect.fatal for defect in inspect_artifact(baseline)))
+        with self.assertRaises(RatchetError):
+            evaluate(baseline, current, profile="pinned_host")
+
+    def test_the_rendered_table_names_the_armed_probes(self):
+        baseline, current = self._armed_pair()
+        rows, _ = evaluate(baseline, current, profile="pinned_host")
+        text = render(rows, baseline, "pinned_host")
+        self.assertIn("non-default collector configuration", text)
+        self.assertIn("PERRY_GC_SCAVENGE_NURSERY_MB=64", text)
+
+    def test_the_shipped_artifact_pins_the_large_eden_arm(self):
+        artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            artifact["probes"]["13_large_eden_survivors"]["run_env"],
+            {"PERRY_GC_SCAVENGE_NURSERY_MB": "64"},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
+
+class RebaseStableProvenanceTests(unittest.TestCase):
+    """#7666 follow-up: `commit` alone does not survive the merge that ships it.
+
+    A gc-ratchet re-pin is written on a branch and REBASED at merge time (the
+    maintainer adds the version bump), which orphans the commit the pin
+    recorded. #7666's artifact named `a8f73122d`; that object still resolves
+    locally but is NOT an ancestor of `main`, so a future reader attributing a
+    moved cell looks up a commit that is not in the history. This recurs on
+    every pin, so the artifact also records the tree hash of `crates/` — the
+    code whose behaviour a probe measures, stable across both the rebase and
+    the version bump (which touches only Cargo.toml / Cargo.lock / CLAUDE.md).
+    """
+
+    def test_the_shipped_baseline_records_a_code_tree(self):
+        baseline = Path(__file__).resolve().parents[1] / "benchmarks" / "gc_ratchet" / "baseline" / "gc-ratchet-v1.json"
+        artifact = json.loads(baseline.read_text())
+        self.assertIn(
+            "code_tree",
+            artifact,
+            "the pinned artifact must carry a rebase-stable provenance field; "
+            "`commit` alone is orphaned by the merge that ships the pin",
+        )
+        self.assertRegex(
+            artifact["code_tree"],
+            r"^[0-9a-f]{40}$",
+            "code_tree must be a full git tree hash",
+        )
+
+    def test_code_tree_hash_is_a_tree_not_a_commit(self):
+        """It must name `HEAD:crates`, not `HEAD`.
+
+        A commit hash here would be exactly the field it replaces, and would
+        change on every version bump — which is half of what makes `commit`
+        useless for this.
+        """
+        value = code_tree_hash()
+        if value == "unknown":
+            self.skipTest("git unavailable")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        self.assertNotEqual(
+            value, head, "code_tree must be a TREE hash, not the commit hash"
+        )
+        expected = subprocess.run(
+            ["git", "rev-parse", "HEAD:crates"],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        self.assertEqual(value, expected)
+

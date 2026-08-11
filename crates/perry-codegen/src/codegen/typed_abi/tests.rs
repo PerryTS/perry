@@ -61,6 +61,7 @@ fn class(id: u32, name: &str, extends: Option<u32>, extends_name: Option<&str>) 
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 

@@ -2331,6 +2331,19 @@ pub enum Expr {
     /// `operand[Symbol.iterator]()` when iterable, else the operand itself (a
     /// generator object already *is* its iterator). Lowers to `js_get_iterator`.
     GetIterator(Box<Expr>),
+    /// #7760: is `Array.prototype[Symbol.iterator]` currently replaced?
+    ///
+    /// Reads the runtime's `PERRY_ARRAY_PROTO_ITERATOR_PATCHED` flag. Emitted
+    /// once at the ENTRY of a `for…of` over a statically-proven array, to pick
+    /// between the index loop (`__i < __arr.length`) and the lazy
+    /// iterator-protocol loop. Checking once is what the spec wants — `for…of`
+    /// performs GetIterator exactly once — and it keeps the cost off the
+    /// per-iteration path.
+    ///
+    /// A dedicated node rather than a call so codegen emits a single volatile
+    /// `i8` load (the `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED` shape) instead
+    /// of an opaque FFI call that would block hoisting around the loop.
+    ArrayIterationPatched,
     /// Resolve the iterator for generic `for await...of`: use
     /// `operand[Symbol.asyncIterator]()` when present, otherwise wrap the
     /// synchronous iterator from `operand[Symbol.iterator]()` in Perry's

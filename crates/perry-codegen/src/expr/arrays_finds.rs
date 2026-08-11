@@ -3,6 +3,49 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Layer 1 migrated module (#7615, slice 1b)
+//!
+//! Nothing in here names `expr::temp_root`; every operand that is live across
+//! the lowering of a sibling goes through [`crate::rooting`], which lowers the
+//! group left to right with each already-evaluated value rooted across the ones
+//! that follow, re-reads them below the last collection point, and owns the
+//! release on every path out including `?`.
+//! `crate::rooting::migration_ledger` fails the build if this module reaches
+//! back into the raw API.
+//!
+//! A single-operand arm keeps its plain `lower_expr` call, as the template
+//! module (`expr/url_main.rs`, #7617) does: with nothing lowered after it there
+//! is no window and `operand_protection` would answer `Reuse`.
+//!
+//! ## What the migration found
+//!
+//! The marquee window is `arr.find(cb)` and its three siblings
+//! (`findIndex`/`findLast`/`findLastIndex`): the array was lowered first and
+//! held in a register while the callback was lowered, and a callback literal is
+//! a `js_closure_new` — an allocation, in the single most common shape this
+//! family is written in. Same for `Object.is(a, b)`, `Object.hasOwn(o, k)`,
+//! `path.matchesGlob(p, pat)`, the `Map`/`Set` positional readers, the
+//! multi-argument `new Date(...)` (each component live across the next), the
+//! three-operand `NativeArenaView` / `NativePodView` and the polymorphic
+//! `u8[k] = v` store.
+//!
+//! ## The index arms need a re-read point this module controls
+//!
+//! `u8[i]` and `buf[i]` lower the receiver with `lower_expr` and the index with
+//! [`lower_index_i32`], which picks between an `i32` fast path and a `double`
+//! plus `fptosi`. The receiver is live across that choice, but handing the index
+//! to `with_operands_rooted` would force every such read back onto the NaN-boxed
+//! path. [`crate::rooting::with_operands_rooted_across`] exists for exactly this
+//! shape and arrived with these callers: the group is rooted before the
+//! caller-controlled lowering and re-read after it.
+//!
+//! ## Not claimed
+//!
+//! `lower_buffer_load` / `lower_buffer_store` / `lower_expr_as_i32` lower their
+//! own operands, in modules this slice does not migrate; the arms here call them
+//! with no GC-managed register live, which is why they are left alone rather
+//! than wrapped.
 
 use anyhow::{anyhow, bail, Result};
 use perry_hir::types::Type as HirType;
@@ -13,6 +56,7 @@ use crate::native_value::{
     layout_runtime_id, BoundsState, BufferAccessMode, LoweredValue, MaterializationReason,
     NativeRep, PodLayoutManifest, SemanticKind,
 };
+use crate::rooting;
 use crate::type_analysis::is_numeric_expr;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
@@ -71,15 +115,17 @@ pub(crate) fn lower_uint8array_get_i32(
     // numeric keys to the byte read and string keys to the property path); the
     // proven-numeric fast paths above are untouched.
     if !is_numeric_expr(ctx, index) {
-        let a = lower_expr(ctx, array)?;
-        let key = lower_expr(ctx, index)?;
-        let blk = ctx.block();
-        let handle = unbox_to_i64(blk, &a);
-        let result = blk.call(
-            DOUBLE,
-            "js_object_get_index_polymorphic",
-            &[(I64, &handle), (DOUBLE, &key)],
-        );
+        let result = rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
+            let a = vals[0].clone();
+            let key = vals[1].clone();
+            let blk = ctx.block();
+            let handle = unbox_to_i64(blk, &a);
+            Ok(blk.call(
+                DOUBLE,
+                "js_object_get_index_polymorphic",
+                &[(I64, &handle), (DOUBLE, &key)],
+            ))
+        })?;
         return Ok(LoweredValue::js_value(result));
     }
 
@@ -117,29 +163,33 @@ pub(crate) fn lower_native_pod_view_with_layout(
     count: &Expr,
     layout: &PodLayoutManifest,
 ) -> Result<String> {
-    let owner_value = lower_expr(ctx, owner)?;
-    let byte_offset = lower_expr(ctx, byte_offset)?;
-    let count = lower_expr(ctx, count)?;
-    let blk = ctx.block();
-    let owner_handle = unbox_to_i64(blk, &owner_value);
-    let byte_offset_i64 = blk.fptosi(DOUBLE, &byte_offset, I64);
-    let count_i64 = blk.fptosi(DOUBLE, &count, I64);
-    let stride_i64 = layout.size.to_string();
-    let alignment_i64 = layout.alignment.to_string();
-    let layout_id = (layout_runtime_id(&layout.layout_id) as i64).to_string();
-    let view = blk.call(
-        I64,
-        "js_native_pod_view",
-        &[
-            (I64, &owner_handle),
-            (I64, &byte_offset_i64),
-            (I64, &count_i64),
-            (I64, &stride_i64),
-            (I64, &alignment_i64),
-            (I64, &layout_id),
-        ],
-    );
-    Ok(nanbox_pointer_inline(blk, &view))
+    // The arena owner is live across both the offset's and the count's
+    // lowering, and the byte offset across the count's.
+    rooting::with_operands_rooted(ctx, &[owner, byte_offset, count], |ctx, vals| {
+        let owner_value = vals[0].clone();
+        let byte_offset = vals[1].clone();
+        let count = vals[2].clone();
+        let blk = ctx.block();
+        let owner_handle = unbox_to_i64(blk, &owner_value);
+        let byte_offset_i64 = blk.fptosi(DOUBLE, &byte_offset, I64);
+        let count_i64 = blk.fptosi(DOUBLE, &count, I64);
+        let stride_i64 = layout.size.to_string();
+        let alignment_i64 = layout.alignment.to_string();
+        let layout_id = (layout_runtime_id(&layout.layout_id) as i64).to_string();
+        let view = blk.call(
+            I64,
+            "js_native_pod_view",
+            &[
+                (I64, &owner_handle),
+                (I64, &byte_offset_i64),
+                (I64, &count_i64),
+                (I64, &stride_i64),
+                (I64, &alignment_i64),
+                (I64, &layout_id),
+            ],
+        );
+        Ok(nanbox_pointer_inline(blk, &view))
+    })
 }
 
 pub(crate) fn lower_native_pod_view(
@@ -217,6 +267,21 @@ pub(crate) fn lower_buffer_index_get_i32(
     Ok(slow)
 }
 
+/// The `(array_handle, callback_handle)` pair the four `arr.find*` runtime
+/// entry points take, derived from an already-re-read operand group.
+///
+/// One helper rather than four copies, because the emission ORDER is the thing
+/// under test: the receiver's unbox must be below the group's re-read, and
+/// `js_validate_array_callback` (#4091, a non-callable callback must raise the
+/// spec TypeError before any iteration) must still be emitted between the unbox
+/// and the consuming call, exactly where it was.
+fn unbox_array_and_callback(ctx: &mut FnCtx<'_>, vals: &[String]) -> (String, String) {
+    let blk = ctx.block();
+    let arr_handle = unbox_to_i64(blk, &vals[0]);
+    let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &vals[1])]);
+    (arr_handle, cb_handle)
+}
+
 pub(crate) fn lower(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
@@ -270,91 +335,92 @@ pub(crate) fn lower(
                 // minute?, second?, ms?)` in local time. dayjs's parseDate
                 // takes this branch with regex-captured string args — see
                 // js_date_new_local_components for the coercion path.
-                let mut vals: Vec<String> = Vec::with_capacity(7);
-                for a in args.iter().take(7) {
-                    vals.push(lower_expr(ctx, a)?);
-                }
-                // Pad *absent* trailing components with their ECMA-262 default
-                // literal (slot 2 `day` → 1, time slots 3-6 → 0) rather than
-                // `undefined`, so the runtime can run a plain ToNumber on every
-                // forwarded slot: a *present* `undefined` then coerces to NaN
-                // (Invalid Date), while a truly-omitted arg uses its default.
-                // Slots: 0 year, 1 month, 2 day, 3 hour, 4 min, 5 sec, 6 ms.
-                while vals.len() < 7 {
-                    let default = if vals.len() == 2 { 1.0 } else { 0.0 };
-                    vals.push(double_literal(default));
-                }
-                let blk = ctx.block();
-                let call_args: Vec<(crate::types::LlvmType, &str)> =
-                    vals.iter().map(|v| (DOUBLE, v.as_str())).collect();
-                Ok(blk.call(DOUBLE, "js_date_new_local_components", &call_args))
+                //
+                // Those regex-captured components are heap strings, and each one
+                // sat in a register while the components after it were lowered.
+                let operands: Vec<&Expr> = args.iter().take(7).collect();
+                rooting::with_operands_rooted(ctx, &operands, |ctx, rooted| {
+                    let mut vals: Vec<String> = rooted.to_vec();
+                    // Pad *absent* trailing components with their ECMA-262
+                    // default literal (slot 2 `day` → 1, time slots 3-6 → 0)
+                    // rather than `undefined`, so the runtime can run a plain
+                    // ToNumber on every forwarded slot: a *present* `undefined`
+                    // then coerces to NaN (Invalid Date), while a truly-omitted
+                    // arg uses its default. Slots: 0 year, 1 month, 2 day,
+                    // 3 hour, 4 min, 5 sec, 6 ms.
+                    while vals.len() < 7 {
+                        let default = if vals.len() == 2 { 1.0 } else { 0.0 };
+                        vals.push(double_literal(default));
+                    }
+                    let blk = ctx.block();
+                    let call_args: Vec<(crate::types::LlvmType, &str)> =
+                        vals.iter().map(|v| (DOUBLE, v.as_str())).collect();
+                    Ok(blk.call(DOUBLE, "js_date_new_local_components", &call_args))
+                })
             }
         },
 
         // -------- arr.find(cb) / findIndex(cb) / findLast(cb) / findLastIndex(cb) --------
+        //
+        // All four have the same skeleton, and had the same window: the array
+        // was lowered first and left in an SSA register while the callback was
+        // lowered. A callback literal lowers to `js_closure_new`, so the window
+        // allocates in the shape these are almost always written in
+        // (`xs.find(x => x.id === id)`). The receiver is now rooted across it and
+        // the unbox happens below the re-read.
         Expr::ArrayFind { array, callback } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
-            let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            // #4091: throw TypeError for a non-callable callback before iterating.
-            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            Ok(blk.call(
-                DOUBLE,
-                "js_array_find",
-                &[(I64, &arr_handle), (I64, &cb_handle)],
-            ))
+            rooting::with_operands_rooted(ctx, &[array, callback], |ctx, vals| {
+                let (arr_handle, cb_handle) = unbox_array_and_callback(ctx, vals);
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_array_find",
+                    &[(I64, &arr_handle), (I64, &cb_handle)],
+                ))
+            })
         }
         Expr::ArrayFindIndex { array, callback } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
-            let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            // #4091: throw TypeError for a non-callable callback before iterating.
-            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            let i32_v = blk.call(
-                I32,
-                "js_array_findIndex",
-                &[(I64, &arr_handle), (I64, &cb_handle)],
-            );
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            rooting::with_operands_rooted(ctx, &[array, callback], |ctx, vals| {
+                let (arr_handle, cb_handle) = unbox_array_and_callback(ctx, vals);
+                let blk = ctx.block();
+                let i32_v = blk.call(
+                    I32,
+                    "js_array_findIndex",
+                    &[(I64, &arr_handle), (I64, &cb_handle)],
+                );
+                Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            })
         }
         Expr::ArrayFindLast { array, callback } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
-            let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            // #4091: throw TypeError for a non-callable callback before iterating.
-            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            Ok(blk.call(
-                DOUBLE,
-                "js_array_find_last",
-                &[(I64, &arr_handle), (I64, &cb_handle)],
-            ))
+            rooting::with_operands_rooted(ctx, &[array, callback], |ctx, vals| {
+                let (arr_handle, cb_handle) = unbox_array_and_callback(ctx, vals);
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_array_find_last",
+                    &[(I64, &arr_handle), (I64, &cb_handle)],
+                ))
+            })
         }
         Expr::ArrayFindLastIndex { array, callback } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
-            let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            // #4091: throw TypeError for a non-callable callback before iterating.
-            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            let i32_v = blk.call(
-                I32,
-                "js_array_find_last_index",
-                &[(I64, &arr_handle), (I64, &cb_handle)],
-            );
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            rooting::with_operands_rooted(ctx, &[array, callback], |ctx, vals| {
+                let (arr_handle, cb_handle) = unbox_array_and_callback(ctx, vals);
+                let blk = ctx.block();
+                let i32_v = blk.call(
+                    I32,
+                    "js_array_find_last_index",
+                    &[(I64, &arr_handle), (I64, &cb_handle)],
+                );
+                Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            })
         }
 
         // -------- Object.is, Number.isInteger, etc. --------
-        Expr::ObjectIs(a, b) => {
-            let av = lower_expr(ctx, a)?;
-            let bv = lower_expr(ctx, b)?;
+        Expr::ObjectIs(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
+            let av = vals[0].clone();
+            let bv = vals[1].clone();
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_object_is", &[(DOUBLE, &av), (DOUBLE, &bv)]))
-        }
+        }),
         Expr::NumberIsInteger(operand) => {
             // Runtime already returns NaN-tagged TAG_TRUE/TAG_FALSE.
             let v = lower_expr(ctx, operand)?;
@@ -396,17 +462,19 @@ pub(crate) fn lower(
         // entries straight out of the Map's internal buffer instead of
         // calling `js_map_entries` (which materializes N+1 small Arrays).
         Expr::MapEntryKeyAt { map, idx } | Expr::MapEntryValueAt { map, idx } => {
-            let m_box = lower_expr(ctx, map)?;
-            let i_dbl = lower_expr(ctx, idx)?;
-            let blk = ctx.block();
-            let m_handle = unbox_to_i64(blk, &m_box);
-            let i_i32 = blk.fptosi(DOUBLE, &i_dbl, I32);
             let runtime_fn = match expr {
                 Expr::MapEntryKeyAt { .. } => "js_map_entry_key_at",
                 Expr::MapEntryValueAt { .. } => "js_map_entry_value_at",
                 _ => unreachable!(),
             };
-            Ok(blk.call(DOUBLE, runtime_fn, &[(I64, &m_handle), (I32, &i_i32)]))
+            rooting::with_operands_rooted(ctx, &[map, idx], |ctx, vals| {
+                let m_box = vals[0].clone();
+                let i_dbl = vals[1].clone();
+                let blk = ctx.block();
+                let m_handle = unbox_to_i64(blk, &m_box);
+                let i_i32 = blk.fptosi(DOUBLE, &i_dbl, I32);
+                Ok(blk.call(DOUBLE, runtime_fn, &[(I64, &m_handle), (I32, &i_i32)]))
+            })
         }
 
         // -------- Set direct-element fast path --------
@@ -414,16 +482,18 @@ pub(crate) fn lower(
         // without materializing the buffer into an Array. Used by the
         // `for (const x of setExpr)` HIR fast path.
         Expr::SetValueAt { set, idx } => {
-            let s_box = lower_expr(ctx, set)?;
-            let i_dbl = lower_expr(ctx, idx)?;
-            let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
-            let i_i32 = blk.fptosi(DOUBLE, &i_dbl, I32);
-            Ok(blk.call(
-                DOUBLE,
-                "js_set_value_at",
-                &[(I64, &s_handle), (I32, &i_i32)],
-            ))
+            rooting::with_operands_rooted(ctx, &[set, idx], |ctx, vals| {
+                let s_box = vals[0].clone();
+                let i_dbl = vals[1].clone();
+                let blk = ctx.block();
+                let s_handle = unbox_to_i64(blk, &s_box);
+                let i_i32 = blk.fptosi(DOUBLE, &i_dbl, I32);
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_set_value_at",
+                    &[(I64, &s_handle), (I32, &i_i32)],
+                ))
+            })
         }
 
         // -------- Set.values (set → array conversion for iteration) --------
@@ -486,7 +556,12 @@ pub(crate) fn lower(
         Expr::PathExtname(p) => {
             let p_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
+            // #7621: `js_path_arg_header`, not `unbox_to_i64` — the plain mask
+            // hands an SSO string's inline CHARACTERS to a `*StringHeader`
+            // consumer. Single-operand arms need no rooting: the materialising
+            // call is immediately followed by the consumer, with nothing
+            // between them that can collect.
+            let p_handle = blk.call(I64, "js_path_arg_header", &[(DOUBLE, &p_box)]);
             let result = blk.call(I64, "js_path_extname", &[(I64, &p_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -517,44 +592,51 @@ pub(crate) fn lower(
             ))
         }
         Expr::PathMatchesGlob(p, pat) => {
-            let p_box = lower_expr(ctx, p)?;
-            let pat_box = lower_expr(ctx, pat)?;
-            let blk = ctx.block();
-            let p_handle = unbox_to_i64(blk, &p_box);
-            let pat_handle = unbox_to_i64(blk, &pat_box);
-            let i32_v = blk.call(
-                I32,
-                "js_path_matches_glob",
-                &[(I64, &p_handle), (I64, &pat_handle)],
-            );
-            Ok(i32_bool_to_nanbox(blk, &i32_v))
+            rooting::with_operands_rooted(ctx, &[p, pat], |ctx, vals| {
+                let p_box = vals[0].clone();
+                let pat_box = vals[1].clone();
+                let blk = ctx.block();
+                let i32_v = blk.call(
+                    I32,
+                    "js_path_matches_glob_value",
+                    &[(DOUBLE, &p_box), (DOUBLE, &pat_box)],
+                );
+                Ok(i32_bool_to_nanbox(blk, &i32_v))
+            })
         }
-        Expr::PathResolveJoin(a, b) => {
-            let a_box = lower_expr(ctx, a)?;
-            let b_box = lower_expr(ctx, b)?;
+        // #7621: both operands go to the runtime NaN-BOXED. Unboxing them here
+        // would mean two `js_path_arg_header` calls, and the first one
+        // ALLOCATES for an SSO operand — a collection point with the second
+        // operand still live in a bare register. This API cannot close that
+        // window (`with_operands_rooted` yields registers, not slots, and
+        // `RootedSlot` has no `read` by design), so the pair is unboxed inside
+        // one runtime call that roots across its own materialisation.
+        Expr::PathResolveJoin(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
+            let a_box = vals[0].clone();
+            let b_box = vals[1].clone();
             let blk = ctx.block();
-            let a_handle = unbox_to_i64(blk, &a_box);
-            let b_handle = unbox_to_i64(blk, &b_box);
             let result = blk.call(
                 I64,
-                "js_path_resolve_join",
-                &[(I64, &a_handle), (I64, &b_handle)],
+                "js_path_resolve_join_value",
+                &[(DOUBLE, &a_box), (DOUBLE, &b_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
-        }
+        }),
         Expr::ProcessVersion => {
             let blk = ctx.block();
             let handle = blk.call(I64, "js_process_version", &[]);
             Ok(nanbox_string_inline(blk, &handle))
         }
         Expr::ObjectHasOwn(obj, key) => {
-            let obj_box = lower_expr(ctx, obj)?;
-            let key_box = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_object_has_own",
-                &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
-            ))
+            rooting::with_operands_rooted(ctx, &[obj, key], |ctx, vals| {
+                let obj_box = vals[0].clone();
+                let key_box = vals[1].clone();
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_object_has_own",
+                    &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
+                ))
+            })
         }
         Expr::NumberIsNaN(operand) => {
             // Number.isNaN is strict: only returns true for actual
@@ -721,13 +803,17 @@ pub(crate) fn lower(
             // `@@iterator`). The dynamic-index helper below stringifies the key
             // and would miss them.
             if matches!(index.as_ref(), Expr::SymbolFor(_)) {
-                let a = lower_expr(ctx, array)?;
-                let key = lower_expr(ctx, index)?;
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_object_get_symbol_property",
-                    &[(DOUBLE, &a), (DOUBLE, &key)],
-                ));
+                // `Symbol.for(k)` interns — it allocates a SymbolHeader on
+                // first use — so the receiver was live across an allocation.
+                return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
+                    let a = vals[0].clone();
+                    let key = vals[1].clone();
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_object_get_symbol_property",
+                        &[(DOUBLE, &a), (DOUBLE, &key)],
+                    ))
+                });
             }
             if let Some(value) =
                 lower_buffer_load(ctx, array, index, BufferAccessSpec::uint8array_get())?
@@ -736,15 +822,17 @@ pub(crate) fn lower(
                 return Ok(materialize_js_value(ctx, value, reason));
             }
             if !numeric_index_has_integer_array_index_proof(ctx, index) {
-                let a = lower_expr(ctx, array)?;
-                let key = lower_expr(ctx, index)?;
-                let blk = ctx.block();
-                let handle = unbox_to_i64(blk, &a);
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_typed_array_index_get_dynamic",
-                    &[(I64, &handle), (DOUBLE, &key)],
-                ));
+                return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
+                    let a = vals[0].clone();
+                    let key = vals[1].clone();
+                    let blk = ctx.block();
+                    let handle = unbox_to_i64(blk, &a);
+                    Ok(blk.call(
+                        DOUBLE,
+                        "js_typed_array_index_get_dynamic",
+                        &[(I64, &handle), (DOUBLE, &key)],
+                    ))
+                });
             }
             // #6088: a proven non-negative integer key whose value is NOT
             // proven in bounds (the inline load above bailed). The native i32
@@ -752,15 +840,26 @@ pub(crate) fn lower(
             // a JS-value `u8[i]` must instead read `undefined` (ECMAScript
             // IntegerIndexedExotic `[[Get]]`). In-range reads still return the
             // byte as a number.
-            let a = lower_expr(ctx, array)?;
-            let idx_i32 = lower_index_i32(ctx, index)?;
-            let blk = ctx.block();
-            let handle = unbox_to_i64(blk, &a);
-            Ok(blk.call(
-                DOUBLE,
-                "js_uint8array_index_get_value",
-                &[(I64, &handle), (I32, &idx_i32)],
-            ))
+            //
+            // The receiver is lowered first (spec order: the MemberExpression's
+            // base before its key) and was live across `lower_index_i32`, which
+            // lowers arbitrary user code. See the module header for why the
+            // index cannot simply join the operand list.
+            rooting::with_operands_rooted_across(
+                ctx,
+                &[array],
+                &[index],
+                |ctx| lower_index_i32(ctx, index),
+                |ctx, vals, idx_i32| {
+                    let blk = ctx.block();
+                    let handle = unbox_to_i64(blk, &vals[0]);
+                    Ok(blk.call(
+                        DOUBLE,
+                        "js_uint8array_index_get_value",
+                        &[(I64, &handle), (I32, &idx_i32)],
+                    ))
+                },
+            )
         }
         Expr::BufferIndexGet { buffer, index } => {
             // Proven-bounds inline load keeps the native fast path.
@@ -772,15 +871,24 @@ pub(crate) fn lower(
             }
             // #6088: out-of-range → `undefined`, not the `0` byte-sentinel the
             // native `js_buffer_get` accessor is forced to return.
-            let a = lower_expr(ctx, buffer)?;
-            let idx_i32 = lower_index_i32(ctx, index)?;
-            let blk = ctx.block();
-            let handle = unbox_to_i64(blk, &a);
-            Ok(blk.call(
-                DOUBLE,
-                "js_buffer_index_get_value",
-                &[(I64, &handle), (I32, &idx_i32)],
-            ))
+            //
+            // Same shape as `Uint8ArrayGet`'s tail above: receiver live across
+            // the caller-controlled index lowering.
+            rooting::with_operands_rooted_across(
+                ctx,
+                &[buffer],
+                &[index],
+                |ctx| lower_index_i32(ctx, index),
+                |ctx, vals, idx_i32| {
+                    let blk = ctx.block();
+                    let handle = unbox_to_i64(blk, &vals[0]);
+                    Ok(blk.call(
+                        DOUBLE,
+                        "js_buffer_index_get_value",
+                        &[(I64, &handle), (I32, &idx_i32)],
+                    ))
+                },
+            )
         }
         Expr::Uint8ArraySet {
             array,
@@ -808,24 +916,30 @@ pub(crate) fn lower(
                 // store; the polymorphic setter dispatches numeric keys to the
                 // byte write and string keys to the own-prop table.
                 let key_maybe_string = !is_numeric_expr(ctx, index);
-                let a = lower_expr(ctx, array)?;
-                let key = lower_expr(ctx, index)?;
-                let val = lower_expr(ctx, value)?;
-                let blk = ctx.block();
-                let handle = unbox_to_i64(blk, &a);
-                let result = if key_maybe_string {
-                    blk.call_void(
-                        "js_object_set_index_polymorphic",
-                        &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
-                    );
-                    val.clone()
-                } else {
-                    blk.call(
-                        DOUBLE,
-                        "js_typed_array_index_set_dynamic",
-                        &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
-                    )
-                };
+                // Receiver live across BOTH the key's and the value's lowering,
+                // key live across the value's — the `m.set(k, v)` shape
+                // `RootedOperands::push` documents.
+                let result =
+                    rooting::with_operands_rooted(ctx, &[array, index, value], |ctx, vals| {
+                        let a = vals[0].clone();
+                        let key = vals[1].clone();
+                        let val = vals[2].clone();
+                        let blk = ctx.block();
+                        let handle = unbox_to_i64(blk, &a);
+                        Ok(if key_maybe_string {
+                            blk.call_void(
+                                "js_object_set_index_polymorphic",
+                                &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
+                            );
+                            val.clone()
+                        } else {
+                            blk.call(
+                                DOUBLE,
+                                "js_typed_array_index_set_dynamic",
+                                &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
+                            )
+                        })
+                    })?;
                 if value_discarded {
                     return Ok(double_literal(0.0));
                 }
@@ -1073,25 +1187,28 @@ pub(crate) fn lower(
             byte_offset,
             length,
         } => {
-            let owner_value = lower_expr(ctx, owner)?;
-            let byte_offset = lower_expr(ctx, byte_offset)?;
-            let length = lower_expr(ctx, length)?;
-            let blk = ctx.block();
-            let owner_handle = unbox_to_i64(blk, &owner_value);
-            let kind_i32 = (*kind as i32).to_string();
-            let byte_offset_i64 = blk.fptosi(DOUBLE, &byte_offset, I64);
-            let length_i64 = blk.fptosi(DOUBLE, &length, I64);
-            let view = blk.call(
-                I64,
-                "js_native_arena_view",
-                &[
-                    (I64, &owner_handle),
-                    (I32, &kind_i32),
-                    (I64, &byte_offset_i64),
-                    (I64, &length_i64),
-                ],
-            );
-            Ok(nanbox_pointer_inline(blk, &view))
+            let kind = *kind;
+            rooting::with_operands_rooted(ctx, &[owner, byte_offset, length], |ctx, vals| {
+                let owner_value = vals[0].clone();
+                let byte_offset = vals[1].clone();
+                let length = vals[2].clone();
+                let blk = ctx.block();
+                let owner_handle = unbox_to_i64(blk, &owner_value);
+                let kind_i32 = (kind as i32).to_string();
+                let byte_offset_i64 = blk.fptosi(DOUBLE, &byte_offset, I64);
+                let length_i64 = blk.fptosi(DOUBLE, &length, I64);
+                let view = blk.call(
+                    I64,
+                    "js_native_arena_view",
+                    &[
+                        (I64, &owner_handle),
+                        (I32, &kind_i32),
+                        (I64, &byte_offset_i64),
+                        (I64, &length_i64),
+                    ],
+                );
+                Ok(nanbox_pointer_inline(blk, &view))
+            })
         }
 
         Expr::NativePodView {

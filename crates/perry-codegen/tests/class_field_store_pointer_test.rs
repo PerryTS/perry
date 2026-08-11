@@ -36,6 +36,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -156,6 +157,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>, constructor: Option<Funct
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
@@ -228,20 +230,84 @@ fn compile_ir(module: &Module) -> String {
 /// the name — that is the `br i1 …, label %class_field_set.gc_bookkeeping.N,
 /// label %class_field_set.gc_bookkeeping.done.M` a line above, and starting
 /// there yields an empty slice that passes nothing and fails everything.
+/// The guarded REGION: every block reachable from the `gc_bookkeeping` entry
+/// without passing through `gc_bookkeeping.done`, i.e. exactly the blocks the
+/// pointer-bearing guard dominates.
+///
+/// This used to be a text slice -- from the `gc_bookkeeping.N:` label to the
+/// first `br` -- which is the same thing only while the region is ONE block.
+/// #5094 made it three (`gc_bookkeeping` -> `layout_note` / `layout_note.done`
+/// -> `gc_bookkeeping.done`), and the slice then returned only the prefix, so
+/// `@js_write_barrier_slot` "left the guarded block" without moving at all.
+///
+/// A wider text slice would not do either: LLVM emits `gc_bookkeeping.done.5`
+/// **between** `gc_bookkeeping.4` and `layout_note.6`, so the region is not
+/// textually contiguous and "everything up to the done label" is still just
+/// the first block.
+///
+/// Following the CFG also makes the assertion strictly stronger than the one
+/// it replaces: a call hoisted onto the guard's NOT-taken edge, or past the
+/// join into `merge`, is absent from the region and fails -- whereas the old
+/// slice only ever proved a call was not in the first block.
 fn gc_bookkeeping_block(ir: &str) -> Option<String> {
-    let mut lines = ir.lines().skip_while(|line| {
-        let label = line.trim_end_matches(':');
-        !(line.ends_with(':')
-            && label.starts_with("class_field_set.gc_bookkeeping.")
-            && !label.starts_with("class_field_set.gc_bookkeeping.done"))
-    });
-    lines.next()?;
-    Some(
-        lines
-            .take_while(|line| !line.trim_start().starts_with("br "))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+    // label -> (body lines, successor labels)
+    let mut blocks: Vec<(String, Vec<&str>, Vec<String>)> = Vec::new();
+    for line in ir.lines() {
+        let trimmed = line.trim_end();
+        if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
+            blocks.push((
+                trimmed.trim_end_matches(':').to_string(),
+                Vec::new(),
+                Vec::new(),
+            ));
+            continue;
+        }
+        let Some((_, body, succs)) = blocks.last_mut() else {
+            continue;
+        };
+        body.push(line);
+        if trimmed.trim_start().starts_with("br ") {
+            for token in trimmed.split("label %").skip(1) {
+                succs.push(
+                    token
+                        .split(|c: char| c == ',' || c.is_whitespace())
+                        .next()
+                        .unwrap_or("")
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    let entry = blocks.iter().position(|(label, _, _)| {
+        label.starts_with("class_field_set.gc_bookkeeping.")
+            && !label.starts_with("class_field_set.gc_bookkeeping.done")
+    })?;
+
+    let mut region = String::new();
+    let mut stack = vec![entry];
+    let mut seen = vec![false; blocks.len()];
+    while let Some(idx) = stack.pop() {
+        if seen[idx] {
+            continue;
+        }
+        seen[idx] = true;
+        let (_, body, succs) = &blocks[idx];
+        for line in body {
+            region.push_str(line);
+            region.push('\n');
+        }
+        for succ in succs {
+            // The join is the region's exit, not part of it.
+            if succ.starts_with("class_field_set.gc_bookkeeping.done") {
+                continue;
+            }
+            if let Some(next) = blocks.iter().position(|(label, _, _)| label == succ) {
+                stack.push(next);
+            }
+        }
+    }
+    Some(region)
 }
 
 /// An `any`-typed field is the case the whole ticket is about: it takes the

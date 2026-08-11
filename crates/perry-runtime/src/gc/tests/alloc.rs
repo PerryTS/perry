@@ -260,7 +260,7 @@ fn test_gc_pinned_flag() {
         let header = header_from_user_ptr(ptr);
 
         // Pin it
-        (*header).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(header);
 
         // Run GC - pinned objects should survive
         gc_collect_inner();
@@ -274,7 +274,7 @@ fn test_gc_pinned_flag() {
         assert!(tracked, "pinned object should survive GC");
 
         // Unpin
-        (*header).gc_flags &= !GC_FLAG_PINNED;
+        crate::gc::unpin_object(header);
     }
 }
 

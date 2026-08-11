@@ -375,6 +375,26 @@ pub(super) fn compile_module_entry(
                 .filter(|s| !s.is_empty())
                 .map(|suite| llmod.add_string_constant(suite))
         };
+        // The `perry.update` blob (Phase B): one string constant plus one
+        // `perry_update_notify_startup(ptr, len)` call at the top of `main`, so
+        // a configured app checks for its own updates without its author
+        // writing a version check. Emitted ONLY when the project configures the
+        // block — a binary with no update settings must be byte-identical to
+        // one built before this existed, which `entry.rs`'s absence test pins.
+        //
+        // Skipped for a dylib for the same reason `app_group` is: there is no
+        // `main` to put a prelude in, so the call would reference a startup
+        // path that does not exist here.
+        let update_init: Option<(String, usize)> = if is_dylib {
+            None
+        } else {
+            cross_module
+                .app_metadata
+                .update_config
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|blob| llmod.add_string_constant(blob))
+        };
         // i18n startup init: when the project configures `[i18n]`, bake the
         // configured locale-code list (and the optional `[i18n.currencies]`
         // map) into `main`'s prelude as a single `perry_i18n_init` call —
@@ -492,6 +512,17 @@ pub(super) fn compile_module_entry(
                 blk.call_void(
                     "perry_app_group_init",
                     &[(PTR, suite_ptr.as_str()), (I32, len_str.as_str())],
+                );
+            }
+            // The update check runs before user code, so an app that exits
+            // early still gets its notice, and so the per-app state directory
+            // is resolved before anything can change the working directory.
+            if let Some((const_name, byte_len)) = update_init.as_ref() {
+                let blob_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                blk.call_void(
+                    "perry_update_notify_startup",
+                    &[(PTR, blob_ptr.as_str()), (I32, len_str.as_str())],
                 );
             }
             // i18n: register the configured locale list + resolve the runtime
@@ -756,6 +787,7 @@ pub(super) fn compile_module_entry(
             object_literal_locals: HashSet::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
+            namespace_member_nested: &cross_module.namespace_member_nested,
             namespace_member_origin_names: &cross_module.namespace_member_origin_names,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
@@ -781,7 +813,7 @@ pub(super) fn compile_module_entry(
             not_bigint_locals: main_native_facts.not_bigint_locals(),
             unsigned_i32_locals: main_native_facts.unsigned_i32_locals(),
             shadow_slots_bound: main_shadow_slot_map.values().copied().collect(),
-            temp_roots: crate::expr::temp_root::TempRootPool::default(),
+            temp_roots: crate::rooting::TempRootPool::default(),
             shadow_slot_map: main_shadow_slot_map,
             persistent_shadow_slots: std::collections::HashSet::new(),
             shadow_slot_clears_after_stmt: main_shadow_slot_clears_after_stmt,
@@ -794,6 +826,7 @@ pub(super) fn compile_module_entry(
             masked_region_scalar_locals: std::collections::HashSet::new(),
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
             class_field_loop_facts: Vec::new(),
+            element_shape_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             local_slot_reps: HashMap::new(),
             // #7109: this entry body selects canonical i32/u32/Str on the same
@@ -1174,8 +1207,9 @@ pub(super) fn compile_module_entry(
         }
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(
-                "@{} = private global [8 x i64] zeroinitializer",
-                ic_name
+                "@{} = private global [{} x i64] zeroinitializer",
+                ic_name,
+                crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
             ));
         }
         for raw in &typed_parse_rodata {
@@ -1422,6 +1456,7 @@ pub(super) fn compile_module_entry(
             object_literal_locals: HashSet::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
+            namespace_member_nested: &cross_module.namespace_member_nested,
             namespace_member_origin_names: &cross_module.namespace_member_origin_names,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
@@ -1447,7 +1482,7 @@ pub(super) fn compile_module_entry(
             not_bigint_locals: init_native_facts.not_bigint_locals(),
             unsigned_i32_locals: init_native_facts.unsigned_i32_locals(),
             shadow_slots_bound: init_shadow_slot_map.values().copied().collect(),
-            temp_roots: crate::expr::temp_root::TempRootPool::default(),
+            temp_roots: crate::rooting::TempRootPool::default(),
             shadow_slot_map: init_shadow_slot_map,
             persistent_shadow_slots: std::collections::HashSet::new(),
             shadow_slot_clears_after_stmt: init_shadow_slot_clears_after_stmt,
@@ -1460,6 +1495,7 @@ pub(super) fn compile_module_entry(
             masked_region_scalar_locals: std::collections::HashSet::new(),
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
             class_field_loop_facts: Vec::new(),
+            element_shape_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             local_slot_reps: HashMap::new(),
             // #7109: this entry body selects canonical i32/u32/Str on the same
@@ -1635,8 +1671,9 @@ pub(super) fn compile_module_entry(
         // three symbols must be defined exactly once per shared library.
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(
-                "@{} = private global [8 x i64] zeroinitializer",
-                ic_name
+                "@{} = private global [{} x i64] zeroinitializer",
+                ic_name,
+                crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
             ));
         }
         for raw in &typed_parse_rodata {

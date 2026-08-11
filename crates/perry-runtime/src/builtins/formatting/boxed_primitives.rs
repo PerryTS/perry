@@ -299,6 +299,15 @@ pub extern "C" fn js_boxed_number_new(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_boxed_string_new(value: f64, has_arg: i32) -> f64 {
     let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_STRING, 0);
+    // #6949(b): both branches below allocate — `js_string_from_bytes` for the
+    // empty-string case and `js_string_coerce` otherwise, the latter running a
+    // user `toString`/`valueOf` for a POINTER_TAG value — so either can collect
+    // and EVACUATE while `obj` sits in a raw Rust local. Every use below
+    // (`register_boxed_primitive_payload`, the two `install_string_wrapper_*`
+    // calls, `attach_boxed_primitive_prototype`, and the returned NaN-box)
+    // dereferences or keys on it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
     // `new String()` (no args) is spec'd to box "", not "undefined".
     let ptr = if has_arg == 0 {
         crate::string::js_string_from_bytes(std::ptr::null(), 0)
@@ -309,6 +318,7 @@ pub extern "C" fn js_boxed_string_new(value: f64, has_arg: i32) -> f64 {
         }
         js_string_coerce(value)
     };
+    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
     let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());
     register_boxed_primitive_payload(obj, boxed);
     install_string_wrapper_indices(obj, ptr);

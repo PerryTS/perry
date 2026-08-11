@@ -460,6 +460,14 @@ for raw in sys.stdin:
     echo "$decoded" | \
         # Normalize line endings
         tr -d '\r' | \
+        # Strip the seeded GC schedule's diagnostics. A test carrying
+        # `parity-env: … PERRY_GC_SCHEDULE_SEED=…` gets a startup banner and an
+        # exit summary on stderr, which this harness merges into the compared
+        # stream; Node prints no such thing, so every one of those tests would
+        # diff as an output mismatch. Instrument noise, not program output.
+        # A crash under the instrument is still caught: abnormal exits are
+        # detected from the exit status, before either comparison runs.
+        sed -E '/^\[gc-schedule\]/d' | \
         # Strip Node v22+ MODULE_TYPELESS_PACKAGE_JSON warnings (4 lines
         # printed to stderr when running .ts files without "type":
         # "module" in package.json — pure environmental noise that

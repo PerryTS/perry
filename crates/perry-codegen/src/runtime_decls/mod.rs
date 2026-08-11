@@ -50,6 +50,10 @@ pub fn declare_phase1(module: &mut LlModule) {
     // the runtime always provides the symbol; main only emits the call
     // when `app_metadata.app_group` is `Some`.
     module.declare_function("perry_app_group_init", VOID, &[PTR, I32]);
+    // Phase B: the embedded `perry.update` blob's startup entry point. Declared
+    // unconditionally, like every other runtime symbol here — the CALL is what
+    // `entry.rs` emits only for a configured project.
+    module.declare_function("perry_update_notify_startup", VOID, &[PTR, I32]);
     // macOS asset-CWD fix: a macOS `.app` launched from Finder starts with
     // CWD=`/`, but the worker bundles assets into `Contents/Resources/`. The
     // `main` prelude calls this unconditionally; the runtime symbol no-ops on

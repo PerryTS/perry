@@ -50,7 +50,7 @@
 //!
 //! # Why re-loading is sound, and when it is not
 //!
-//! Re-reading a slot is NOT unconditionally safe, and `expr/temp_root.rs`'s
+//! Re-reading a slot is NOT unconditionally safe, and `rooting/temp_root.rs`'s
 //! [`operand_is_reloadable`] documents exactly why: re-lowering a local reads
 //! its value *now*, and "now" is after the later arguments have run — any of
 //! which may have reassigned it. `new C(g, bump())` where `bump()` assigns `g`
@@ -85,12 +85,75 @@
 //! the intervening call is opaque, LLVM must keep the load, and that is the
 //! whole point. So the pass is close to free exactly where it is redundant.
 //!
+//! # Two things a slot load is not, and both are the same bug (#7664)
+//!
+//! `--statepoints` (#7663) pointed this rule at the NATIVE root lowering — the
+//! one that actually ships — and reported 21 `unrooted` hazards. Seventeen were
+//! shapes this pass looked straight through, because the rule above is stated
+//! over *the load's own register* and both shapes hold the value elsewhere:
+//!
+//! 1. **The root is a global, not an alloca.** A string literal lowers to
+//!    `load double, ptr @<mod>_.str.N.handle`. That global IS a registered root
+//!    (`js_gc_register_global_root`, `codegen/string_pool.rs`), so the string is
+//!    never swept — and an evacuating cycle REWRITES it while a register loaded
+//!    beforehand keeps the pre-move address. Same property-(2) failure as a
+//!    shadow slot, same one-load fix. `expr/temp_root.rs` already calls this
+//!    `OperandProtection::Reload` and its soundness argument carries verbatim:
+//!    the only writer of a handle global in generated code is
+//!    `__perry_init_strings_*`, so re-reading cannot observe a later
+//!    assignment. (The store side-condition below still runs, so the init
+//!    function is excluded by the analysis rather than by that argument.)
+//!
+//! 2. **The register that goes stale is DERIVED from the load, not the load.**
+//!    `this.count++` lowers to
+//!
+//!    ```llvm
+//!      %r8  = load double, ptr %r7           ; the root slot
+//!      %r9  = bitcast double %r8 to i64
+//!      %r10 = and i64 %r9, 281474976710655   ; the unmasked receiver
+//!      %r14 = call double @js_object_get_field_by_name_f64(i64 %r10, i64 %r13)
+//!      call void @js_object_set_field_by_name(i64 %r10, i64 %r13, double %r16)
+//!    ```
+//!
+//!    `%r8`'s only use is the `bitcast`, which is ABOVE the collecting call, so
+//!    the rule as originally stated had nothing to rewrite and this function
+//!    took zero reloads. The value that crosses the GET is `%r10`. Under the
+//!    native lowering the same shape reads
+//!    `%rN.rs4i = ptrtoint ptr addrspace(1) %s to i64`: LLVM relocates the
+//!    `addrspace(1)` pointer and rewrites its uses, but it cannot touch an
+//!    `i64` copy, so the unmask is where the value leaves the tracked domain
+//!    for good. #7280's zod-`clone` shape and #7240's literal shape, meeting in
+//!    one function.
+//!
+//! So the rule is restated over the value's *derivation* rather than its
+//! register:
+//!
+//! > For a value read out of a collector-rewritten location — a shadow slot or
+//! > a string-handle global — and any value derived from it by pure bit ops,
+//! > every use that a collection point can reach re-materialises the whole
+//! > derivation instead.
+//!
+//! A derivation ("recipe") is only extended through instructions that are pure
+//! functions of their operands (`TRANSPARENT_BIN`, `TRANSPARENT_CAST`) and
+//! whose every register operand is already in the same single root's recipe.
+//! That makes a recipe self-contained — a load plus bit ops on constants — so
+//! it materialises at any point in the function with no dominance question, and
+//! re-executing it is by construction the same function of the same root
+//! evaluated against the address the collector wrote back. Anything else (a
+//! phi, a call, an operand from a second root) is not extended through and is
+//! left exactly as it is today.
+//!
+//! Cost is unchanged in kind: where the window is empty nothing is inserted;
+//! where it is not, the intervening call is opaque so LLVM must keep the
+//! reload — and the re-derived `bitcast`/`and` above it are pure and fold.
+//!
 //! [`operand_is_reloadable`]: crate::expr::temp_root
+//! [`operand_is_reloadable`]: crate::rooting
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::function::LlFunction;
-use crate::inst::{LlInst, LoadFlavor};
+use crate::inst::LlInst;
 use crate::types::LlvmType;
 
 /// Runtime helpers that provably cannot allocate, run user code, or poll, and
@@ -166,6 +229,62 @@ const NON_COLLECTING: &[&str] = &[
 /// magnitude under this.
 const MAX_BLOCK_LOAD_PRODUCT: usize = 8_000_000;
 
+/// How long a derivation may get before the pass declines to re-materialise it.
+///
+/// The masks this exists for are two steps (`bitcast` then `and`); the NaN-box
+/// re-tag adds an `or`. Eight is well clear of that and bounds both the
+/// fixpoint below and the instructions any one rewrite can insert.
+const MAX_RECIPE: usize = 8;
+
+/// Integer bit ops that are pure functions of their operands, so re-executing
+/// one reproduces the derivation against whatever the collector last wrote.
+///
+/// Deliberately NOT arithmetic. `and`/`or`/`xor` are the NaN-box mask and
+/// re-tag, which is the entire population this pass needs; admitting `add`
+/// would be sound by the same argument but buys nothing today and widens what
+/// a reader has to check.
+const TRANSPARENT_BIN: &[&str] = &["and", "or", "xor"];
+
+/// Conversions that are pure re-interpretations of a bit pattern.
+const TRANSPARENT_CAST: &[&str] = &["bitcast", "ptrtoint", "inttoptr", "trunc", "zext", "sext"];
+
+/// The runtime accessor a closure-capture READ lowers to: `js_closure_get_capture_bits(ptr,
+/// idx)`. Every call site (#7725) reads its `ptr` from `try_current_closure_ptr_value` — itself
+/// a load-of-a-shadow-slot recipe when `current_closure_slot` is bound (`codegen/closure.rs`) —
+/// so a call whose `ptr` operand already belongs to a reloadable recipe is itself a reloadable
+/// derivation of that SAME recipe, exactly like the `and`-mask step that already extends it.
+/// Re-CALLING it below a collection point is sound under the same argument #7664's string-handle
+/// reload uses: the closure struct is a first-class root (rooted at `current_closure_slot`,
+/// relocated/rewritten on evacuation), so re-reading its capture array returns the
+/// post-relocation value — UNLESS a `js_closure_set_capture_bits` to the same index ran in the
+/// window, which is the store side-condition below.
+const CAPTURE_GET_CALLEE: &str = "js_closure_get_capture_bits";
+/// The write half. Not itself collecting (`NON_COLLECTING` above), but its side effect on the
+/// closure's capture slot must invalidate a [`CAPTURE_GET_CALLEE`] reload the same way a `store`
+/// invalidates a shadow-slot one — `stores_to` carries a synthetic per-index key for exactly
+/// that (#7725).
+const CAPTURE_SET_CALLEE: &str = "js_closure_set_capture_bits";
+
+/// A synthetic "location" key for capture-slot index `idx` — never a real pointer token (no `%`
+/// / `@` sigil), so it cannot collide with an actual shadow-slot register or handle-global name.
+/// One key per (function, index): every capture read in a given function reads the SAME
+/// closure's SAME index, since `current_closure_ptr_value` always re-derives from this
+/// function's own `%this_closure`.
+fn capture_slot_key(idx: &str) -> String {
+    format!("$closure_capture:{idx}")
+}
+
+/// The literal capture-slot index from `js_closure_{get,set}_capture_bits`'s second argument, if
+/// it is a compile-time constant. Every real emission site (`literals_vars.rs`, `closure.rs`,
+/// `array_push.rs`, `instance_misc1.rs`, `lower_array_method.rs`, `expr/mod.rs`) formats a `u32`
+/// directly, so this always succeeds in practice — but a register operand there would name no
+/// fixed location, so `None` leaves the call opaque exactly like any other call whose result is
+/// not a reloadable derivation, rather than guessing.
+fn literal_capture_idx(args: &[(LlvmType, String)]) -> Option<&str> {
+    let (_, idx) = args.get(1)?;
+    (!idx.is_empty() && !idx.starts_with('%')).then_some(idx.as_str())
+}
+
 fn is_collecting(callee: &str) -> bool {
     if callee.starts_with("llvm.") {
         return false;
@@ -173,20 +292,65 @@ fn is_collecting(callee: &str) -> bool {
     !NON_COLLECTING.contains(&callee)
 }
 
+/// Is `name` (no `@`) a string-literal handle global — `<mod>_.str.<N>.handle`?
+///
+/// Kept in step with `REWRITTEN_LOAD_RE`'s `strhandle` alternative in
+/// `scripts/gc_root_dominance_check.py`, which is what reports the hazard this
+/// recognises. Narrow on purpose: `@perry_global_*` is a module-level variable
+/// the PROGRAM assigns, so re-reading it could observe a later assignment
+/// instead of the value the call was given — that population needs rooting, not
+/// reloading, and is deliberately not matched here.
+fn is_string_handle_global(name: &str) -> bool {
+    let rest = match name.strip_suffix(".handle") {
+        Some(r) => r,
+        None => return false,
+    };
+    match rest.rsplit_once("_.str.") {
+        Some((head, digits)) => {
+            !head.is_empty() && !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
+/// A load's pointer operand, if it names a location whose current value may be
+/// re-read anywhere in the function. Returns the operand token unchanged
+/// (sigil included) so a slot and a global are one currency from here on —
+/// which is also what makes the store side-condition cover both.
+fn reloadable_ptr(ptr: &str, slots: &HashSet<String>) -> Option<String> {
+    if let Some(reg) = ptr.strip_prefix('%') {
+        return slots.contains(reg).then(|| ptr.to_string());
+    }
+    if let Some(name) = ptr.strip_prefix('@') {
+        return is_string_handle_global(name).then(|| ptr.to_string());
+    }
+    None
+}
+
 /// One instruction, in the vocabulary this pass needs.
 struct Facts {
-    /// Register this instruction defines, without the `%`. Kept even though
-    /// only `load_of` reads it today: `Facts` is the pass's whole vocabulary,
-    /// and a def map is the first thing a follow-up (a dead-load sweep, say)
-    /// needs.
-    #[allow(dead_code)]
+    /// Register this instruction defines, without the `%`. Read by the
+    /// derivation fixpoint (#7664), which needs the def side of the graph.
     result: Option<String>,
     /// Registers it reads, without the `%`. Only operands — never `result`.
     uses: Vec<String>,
-    /// `Some((dst, ty, slot))` for `dst = load ty, ptr %slot`.
+    /// `Some((dst, ty, ptr))` for `dst = load ty, ptr <ptr>` where `<ptr>` is a
+    /// reloadable location. `ptr` keeps its sigil: `%r7` for a shadow slot,
+    /// `@…_.str.N.handle` for a string-literal handle global (#7664).
     load_of: Option<(String, LlvmType, String)>,
-    /// Alloca this instruction stores into, without the `%`.
+    /// Location this instruction stores into, sigil included — the same
+    /// currency as `load_of`'s third field, so a store to a handle global
+    /// disqualifies a reload exactly as a store to a slot does.
     stores_to: Option<String>,
+    /// A pure bit op a derivation may be extended through (#7664).
+    transparent: bool,
+    /// `Some(key)` when this instruction is a [`CAPTURE_GET_CALLEE`] call with a literal index
+    /// — `transparent` is also true, and `key` (from [`capture_slot_key`]) REPLACES the recipe's
+    /// inherited `root_ptr` from this step onward, so the group's invalidation condition becomes
+    /// "was this index SET in the window" rather than "was the closure-ptr slot stored to"
+    /// (#7725). Kept separate from `transparent` because every other transparent op inherits its
+    /// root unchanged; this is the one case that doesn't.
+    capture_get_key: Option<String>,
     collecting: bool,
     /// A `phi` cannot have an instruction inserted before it. Neither can an
     /// inline block label (#7305's `invoke` continuation, emitted as a `Raw`
@@ -208,17 +372,32 @@ pub(crate) fn apply_to_module(module: &mut crate::module::LlModule) -> usize {
     total
 }
 
+/// A value the pass can re-materialise: a load out of a collector-rewritten
+/// location, or anything derived from one by pure bit ops (#7664).
+struct Reloadable {
+    /// Where the defining instruction is, which is where its window starts.
+    pos: (usize, usize),
+    /// The register it defines, without the `%`.
+    reg: String,
+    /// The location whose store invalidates the recipe, sigil included.
+    root_ptr: String,
+    /// The defining instructions to re-emit, in order. `recipe.last()` is
+    /// always `pos`; `recipe[0]` is always the root load.
+    recipe: Vec<(usize, usize)>,
+}
+
 pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
-    let slots: HashSet<String> = {
-        let bound = func.reg_counter().shadow_slot_allocas();
-        if bound.is_empty() {
-            return 0;
-        }
-        bound
-            .iter()
-            .map(|s| s.trim_start_matches('%').to_string())
-            .collect()
-    };
+    // NOT an early return on an empty bind set. A function with no shadow slot
+    // can still load a string-handle global, and #7664's `main` cases are
+    // exactly that; returning here is how the whole `strhandle` population
+    // stayed invisible to a pass that was already computing everything it
+    // needed to see it.
+    let slots: HashSet<String> = func
+        .reg_counter()
+        .shadow_slot_allocas()
+        .iter()
+        .map(|s| s.trim_start_matches('%').to_string())
+        .collect();
 
     let blocks = func.blocks_mut();
     if blocks.is_empty() {
@@ -236,19 +415,107 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
         .map(|(i, b)| (b.label.as_str(), i))
         .collect();
 
-    // Slot loads, and where they are.
-    let mut loads: Vec<(usize, usize)> = Vec::new();
+    // ── The reloadable values ───────────────────────────────────────────────
+    // Seeded with the root loads, then closed forward over pure bit ops. The
+    // fixpoint is bounded by MAX_RECIPE rather than run to convergence: a
+    // recipe longer than that is declined anyway, so a further round could not
+    // admit anything.
+    let mut values: Vec<Reloadable> = Vec::new();
+    let mut by_reg: HashMap<String, usize> = HashMap::new();
     for (bi, fb) in facts.iter().enumerate() {
         for (ii, f) in fb.iter().enumerate() {
-            if f.load_of.is_some() {
-                loads.push((bi, ii));
+            if let Some((dst, _, ptr)) = &f.load_of {
+                // A register defined twice is not SSA; if it happened, keep the
+                // first and leave the rest alone rather than guessing.
+                if by_reg.contains_key(dst) {
+                    continue;
+                }
+                by_reg.insert(dst.clone(), values.len());
+                values.push(Reloadable {
+                    pos: (bi, ii),
+                    reg: dst.clone(),
+                    root_ptr: ptr.clone(),
+                    recipe: vec![(bi, ii)],
+                });
             }
         }
     }
-    if loads.is_empty() {
+    if values.is_empty() {
         return 0;
     }
-    if blocks.len().saturating_mul(loads.len()) > MAX_BLOCK_LOAD_PRODUCT {
+    for _ in 1..MAX_RECIPE {
+        let mut grew = false;
+        for (bi, fb) in facts.iter().enumerate() {
+            for (ii, f) in fb.iter().enumerate() {
+                if !f.transparent {
+                    continue;
+                }
+                let dst = match &f.result {
+                    Some(d) => d,
+                    None => continue,
+                };
+                if by_reg.contains_key(dst) || f.uses.is_empty() {
+                    continue;
+                }
+                // EVERY register operand must already be reloadable, and from
+                // the SAME root. Anything else — an operand this pass cannot
+                // reproduce, or a second root with its own store
+                // side-condition — is left alone. One-sided by construction.
+                let mut root: Option<&str> = None;
+                let mut recipe: Vec<(usize, usize)> = Vec::new();
+                let mut ok = true;
+                for u in &f.uses {
+                    let src = match by_reg.get(u) {
+                        Some(&i) => &values[i],
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    };
+                    match root {
+                        None => root = Some(&src.root_ptr),
+                        Some(r) if r == src.root_ptr => {}
+                        Some(_) => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    for step in &src.recipe {
+                        if !recipe.contains(step) {
+                            recipe.push(*step);
+                        }
+                    }
+                }
+                let root = match (ok, root) {
+                    (true, Some(r)) => r.to_string(),
+                    _ => continue,
+                };
+                // #7725: a capture-GET call whose ptr operand is already reloadable extends the
+                // SAME recipe, but its own store side-condition is "was THIS INDEX set", not
+                // "was the closure-ptr slot stored to" — the ptr slot never is (it is written
+                // once, at closure entry). Swap the key here so every step from this call
+                // onward — including a further transparent cast like `bitcast i64 to double` —
+                // is invalidated by the right condition.
+                let root = f.capture_get_key.clone().unwrap_or(root);
+                recipe.push((bi, ii));
+                if recipe.len() > MAX_RECIPE {
+                    continue;
+                }
+                by_reg.insert(dst.clone(), values.len());
+                values.push(Reloadable {
+                    pos: (bi, ii),
+                    reg: dst.clone(),
+                    root_ptr: root,
+                    recipe,
+                });
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    if blocks.len().saturating_mul(values.len()) > MAX_BLOCK_LOAD_PRODUCT {
         return 0;
     }
 
@@ -269,21 +536,67 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
         })
         .collect();
 
-    // Where a use must be rewritten: (block, insn, old register, new register,
-    // slot, type). Collected first so the instruction vectors are not mutated
-    // while `facts` still indexes them.
+    // Where a use must be rewritten, and with what. The recipe instructions are
+    // CLONED here rather than referenced: they are re-read from `blocks` while
+    // `facts` still indexes them, and the application phase below mutates those
+    // very vectors.
     struct Rewrite {
         blk: usize,
         insn: usize,
         from: String,
-        slot: String,
-        ty: LlvmType,
+        recipe: Vec<LlInst>,
     }
     let mut rewrites: Vec<Rewrite> = Vec::new();
 
-    for (lb, li) in loads {
-        let (dst, ty, slot) = facts[lb][li].load_of.clone().expect("load site");
-        // Forward reachability from the load, never re-entering the load's own
+    // ★ The walk is anchored at the ROOT LOAD, and every value derived from it
+    // shares that one walk — including values DEFINED BELOW a store to the root.
+    //
+    // Anchoring a derived value at its own definition looks more precise and is
+    // WRONG, because the recipe's validity is a property of the window since the
+    // ROOT LOAD, not since the derivation. `main` in this shape:
+    //
+    //     %r22 = load ptr addrspace(1), ptr %r14   ; the root load
+    //     %r23 = or  i64 %r22, POINTER_TAG
+    //     store ptr addrspace(1) null, ptr %r14    ; ← the scope-end slot CLEAR
+    //     %r25 = and i64 %r23, MASK                ; derived, defined BELOW it
+    //     …
+    //     call … @js_object_get_field_ic_miss(i64 %r25, …)
+    //
+    // A walk starting at `%r25` never sees the clear, so it re-materialised
+    // `load %r14` at the use — reading a slot the program had just nulled, and
+    // turning a class object's static read into `undefined`. Caught by an A/B
+    // against the branch point on `test_gap_class_expr_identity`, not by the
+    // dominance checker, which cannot see a value-correctness bug.
+    //
+    // Grouping by root load also puts the cost back at O(blocks × loads).
+    //
+    // Keyed on `(recipe[0], root_ptr)`, not `recipe[0]` alone — #7725's capture-GET extension is
+    // the one case where a chain's `root_ptr` CHANGES partway through (the closure-ptr slot
+    // becomes a synthetic per-index key once the derivation passes through
+    // `js_closure_get_capture_bits`), so two sub-chains sharing one root LOAD can need two
+    // different invalidation conditions. Before #7725 every member of a `recipe[0]` group had
+    // the identical `root_ptr` by construction (it was always inherited, never overridden), so
+    // this is additive: it can only split a group that would otherwise have mixed two
+    // conditions under one, never change the grouping of any existing (non-capture) chain.
+    let mut groups: HashMap<((usize, usize), String), Vec<usize>> = HashMap::new();
+    for (i, v) in values.iter().enumerate() {
+        groups
+            .entry((v.recipe[0], v.root_ptr.clone()))
+            .or_default()
+            .push(i);
+    }
+    let mut group_keys: Vec<((usize, usize), String)> = groups.keys().cloned().collect();
+    group_keys.sort_unstable();
+
+    for key in group_keys {
+        let members = &groups[&key];
+        let (lb, li) = key.0;
+        let slot = key.1;
+        let by_use: HashMap<&str, usize> = members
+            .iter()
+            .map(|&m| (values[m].reg.as_str(), m))
+            .collect();
+        // Forward reachability from the root load, never re-entering its own
         // block: a back edge re-executes the load, so the value on the far side
         // is a different dynamic instance and not this one.
         //
@@ -346,14 +659,34 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
             };
             let start = if ub == lb { li + 1 } else { 0 };
             for (ui, f) in fb.iter().enumerate().skip(start) {
-                if f.uses.iter().any(|u| *u == dst) && c && !s && !f.is_phi {
-                    rewrites.push(Rewrite {
-                        blk: ub,
-                        insn: ui,
-                        from: dst.clone(),
-                        slot: slot.clone(),
-                        ty,
-                    });
+                if c && !s && !f.is_phi {
+                    // One instruction can read several values of the same root
+                    // — `js_object_set_field_by_name(recv, key, …)` when both
+                    // came out of one slot. Each gets its own recipe; the
+                    // application phase renames every operand of an instruction
+                    // before inserting any of them.
+                    let mut seen_here: Vec<&str> = Vec::new();
+                    for u in &f.uses {
+                        let m = match by_use.get(u.as_str()) {
+                            Some(&m) => m,
+                            None => continue,
+                        };
+                        if seen_here.contains(&u.as_str()) {
+                            continue;
+                        }
+                        seen_here.push(u.as_str());
+                        let recipe: Vec<LlInst> = values[m]
+                            .recipe
+                            .iter()
+                            .map(|&(rb, ri)| blocks[rb].insts()[ri].clone())
+                            .collect();
+                        rewrites.push(Rewrite {
+                            blk: ub,
+                            insn: ui,
+                            from: values[m].reg.clone(),
+                            recipe,
+                        });
+                    }
                 }
                 c |= f.collecting;
                 s |= f.stores_to.as_deref() == Some(slot.as_str());
@@ -376,13 +709,17 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
     // lands after every `js_shadow_slot_bind` in the body. See
     // `LlFunction::note_entry_block_insertions`; the symptom is indistinguishable
     // from the bug this pass exists to fix, which is how it was found.
+    //
+    // A rewrite inserts its whole RECIPE, not one load, so the count is in
+    // instructions rather than in rewrites (#7664).
     let boundary = func.entry_init_boundary();
     let entry_inserts = match boundary {
         None => 0,
         Some(b) => rewrites
             .iter()
             .filter(|r| r.blk == 0 && r.insn <= b)
-            .count(),
+            .map(|r| r.recipe.len())
+            .sum(),
     };
     {
         let blocks = func.blocks_mut();
@@ -402,20 +739,15 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
                 j += 1;
             }
             let insts = blocks[blk].insts_mut();
-            let mut reloads = Vec::with_capacity(j - i);
+            let mut reloads: Vec<LlInst> = Vec::new();
             for r in &rewrites[i..j] {
-                let fresh = format!("%r{}", counter.next());
+                let (steps, fresh) = materialize(&r.recipe, &counter);
                 rename_operand(&mut insts[insn], &r.from, fresh.trim_start_matches('%'));
-                reloads.push(LlInst::Load {
-                    dst: fresh,
-                    ty: r.ty,
-                    ptr: format!("%{}", r.slot),
-                    flavor: LoadFlavor::Plain,
-                });
+                reloads.extend(steps);
             }
             // Insert after renaming, so every operand was addressed against the
-            // original instruction. Order among the reloads is immaterial: each
-            // defines a distinct register and they are independent loads.
+            // original instruction. Order among the recipes is immaterial: each
+            // defines its own fresh registers and reads only the root location.
             for reload in reloads.into_iter().rev() {
                 insts.insert(insn, reload);
             }
@@ -426,6 +758,87 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
     n
 }
 
+/// Re-emit a derivation with fresh registers, returning the instructions in
+/// order and the register the last one defines.
+///
+/// A recipe is self-contained by construction — a load from the root location
+/// plus pure bit ops whose every register operand is an earlier step — so the
+/// only rewriting needed is step-to-step: each step's operands are renamed to
+/// the fresh names of the steps it consumed. The root pointer (`%slot` or
+/// `@…handle`) is not a step, is never in the map, and is therefore carried
+/// through untouched, which is exactly what makes this a RE-READ.
+fn materialize(
+    recipe: &[LlInst],
+    counter: &std::rc::Rc<crate::block::RegCounter>,
+) -> (Vec<LlInst>, String) {
+    let mut out: Vec<LlInst> = Vec::with_capacity(recipe.len());
+    let mut renames: Vec<(String, String)> = Vec::with_capacity(recipe.len());
+    let mut last = String::new();
+    for step in recipe {
+        let mut step = step.clone();
+        for (old, new) in &renames {
+            rename_operand(&mut step, old, new);
+        }
+        let old_dst = match inst_result(&step) {
+            Some(d) => d,
+            // Only loads and pure bit ops become recipe steps, and all three
+            // define a register. Bail rather than emit a step whose result
+            // nothing can name.
+            None => return (Vec::new(), last),
+        };
+        let fresh = format!("%r{}", counter.next());
+        set_inst_result(&mut step, &fresh);
+        renames.push((old_dst, fresh.trim_start_matches('%').to_string()));
+        last = fresh;
+        out.push(step);
+    }
+    (out, last)
+}
+
+/// The register an instruction defines, without the `%`. Recipe-shaped
+/// instructions only; everything else answers `None` and is declined.
+fn inst_result(inst: &LlInst) -> Option<String> {
+    let dst = match inst {
+        LlInst::Raw(text) => {
+            let (lhs, _) = text.split_once(" = ")?;
+            let lhs = lhs.trim();
+            if !lhs.starts_with('%') || lhs.contains(char::is_whitespace) {
+                return None;
+            }
+            lhs
+        }
+        LlInst::Bin { dst, .. } | LlInst::Cast { dst, .. } | LlInst::Load { dst, .. } => dst,
+        // #7725: a capture-GET call can now be a recipe step (see `CAPTURE_GET_CALLEE`), so
+        // `materialize` needs to name and rename its result exactly like a load or a bit op.
+        // `dst` is `None` only for a void call, which is never `transparent` and so never
+        // reaches here.
+        LlInst::Call { dst: Some(dst), .. } => dst,
+        _ => return None,
+    };
+    Some(dst.trim_start_matches('%').to_string())
+}
+
+/// Point an instruction's result at `fresh` (which carries its `%`).
+fn set_inst_result(inst: &mut LlInst, fresh: &str) {
+    match inst {
+        LlInst::Raw(text) => {
+            if let Some((lhs, rhs)) = text.split_once(" = ") {
+                let indent: String = lhs.chars().take_while(|c| c.is_whitespace()).collect();
+                *text = format!("{indent}{fresh} = {rhs}");
+            }
+        }
+        LlInst::Bin { dst, .. } | LlInst::Cast { dst, .. } | LlInst::Load { dst, .. } => {
+            *dst = fresh.to_string();
+        }
+        LlInst::Call {
+            dst: dst @ Some(_), ..
+        } => {
+            *dst = Some(fresh.to_string());
+        }
+        _ => {}
+    }
+}
+
 fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
     let mut uses = Vec::new();
     let mut result = None;
@@ -433,6 +846,8 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
     let mut stores_to = None;
     let mut collecting = false;
     let mut is_phi = false;
+    let mut transparent = false;
+    let mut capture_get_key = None;
     let mut succs = Vec::new();
 
     let reg = |s: &str| -> Option<String> {
@@ -448,10 +863,11 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
 
     match inst {
         LlInst::Raw(text) => return raw_facts(text, slots),
-        LlInst::Bin { dst, a, b, .. } => {
+        LlInst::Bin { dst, op, a, b, .. } => {
             result = reg(dst);
             use_op(&mut uses, a);
             use_op(&mut uses, b);
+            transparent = TRANSPARENT_BIN.contains(op);
         }
         LlInst::FNeg { dst, a, .. } => {
             result = reg(dst);
@@ -466,20 +882,19 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
         LlInst::Load { dst, ty, ptr, .. } => {
             result = reg(dst);
             use_op(&mut uses, ptr);
-            if let (Some(d), Some(p)) = (reg(dst), reg(ptr)) {
-                if slots.contains(&p) {
-                    load_of = Some((d, *ty, p));
-                }
+            if let (Some(d), Some(p)) = (reg(dst), reloadable_ptr(ptr, slots)) {
+                load_of = Some((d, *ty, p));
             }
         }
         LlInst::Store { val, ptr, .. } => {
             use_op(&mut uses, val);
             use_op(&mut uses, ptr);
-            stores_to = reg(ptr);
+            stores_to = Some(ptr.clone());
         }
-        LlInst::Cast { dst, v, .. } => {
+        LlInst::Cast { dst, op, v, .. } => {
             result = reg(dst);
             use_op(&mut uses, v);
+            transparent = TRANSPARENT_CAST.contains(op);
         }
         LlInst::Select {
             dst, cond, a, b, ..
@@ -497,6 +912,20 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
                 use_op(&mut uses, v);
             }
             collecting = is_collecting(callee);
+            // #7725: the two capture-bits halves. GET extends a derivation like a transparent
+            // bit op (see CAPTURE_GET_CALLEE); SET's side effect on the capture slot has to
+            // invalidate that derivation the way a store does, via the shared `stores_to`
+            // machinery.
+            if callee == CAPTURE_GET_CALLEE {
+                if let Some(idx) = literal_capture_idx(args) {
+                    transparent = true;
+                    capture_get_key = Some(capture_slot_key(idx));
+                }
+            } else if callee == CAPTURE_SET_CALLEE {
+                if let Some(idx) = literal_capture_idx(args) {
+                    stores_to = Some(capture_slot_key(idx));
+                }
+            }
         }
         LlInst::CallIndirect {
             dst, fptr, args, ..
@@ -538,6 +967,8 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
         uses,
         load_of,
         stores_to,
+        transparent,
+        capture_get_key,
         collecting,
         is_phi,
         succs,
@@ -574,20 +1005,16 @@ fn raw_facts(text: &str, slots: &HashSet<String>) -> Facts {
     let is_phi = rhs.starts_with("phi ") || is_label;
 
     if rhs.starts_with("load ") && !rhs.contains("volatile") && !rhs.contains("atomic") {
-        // `load <ty>, ptr %slot[, …]`
+        // `load <ty>, ptr %slot[, …]` or `load <ty>, ptr @…handle[, …]`
         if let Some((ty, rest)) = rhs["load ".len()..].split_once(", ptr ") {
             let ty = ty.trim();
             let ptr = rest
                 .split(|c: char| c == ',' || c.is_whitespace())
                 .next()
                 .unwrap_or("");
-            if let (Some(d), Some(p)) =
-                (result.clone(), ptr.strip_prefix('%').map(|s| s.to_string()))
-            {
-                if slots.contains(&p) {
-                    if let Some(t) = static_llvm_type(ty) {
-                        load_of = Some((d, t, p));
-                    }
+            if let (Some(d), Some(p)) = (result.clone(), reloadable_ptr(ptr, slots)) {
+                if let Some(t) = static_llvm_type(ty) {
+                    load_of = Some((d, t, p));
                 }
             }
         }
@@ -598,9 +1025,18 @@ fn raw_facts(text: &str, slots: &HashSet<String>) -> Facts {
                 .split(|c: char| c == ',' || c.is_whitespace())
                 .next()
                 .unwrap_or("");
-            stores_to = ptr.strip_prefix('%').map(|s| s.to_string());
+            if !ptr.is_empty() {
+                stores_to = Some(ptr.to_string());
+            }
         }
     }
+    // A pure bit op, in rendered form. Opcode-anchored at the start of the RHS
+    // so `and`/`or` inside a callee name or a type cannot be mistaken for one.
+    let mut transparent = rhs
+        .split_once(' ')
+        .map(|(op, _)| TRANSPARENT_BIN.contains(&op) || TRANSPARENT_CAST.contains(&op))
+        .unwrap_or(false);
+    let mut capture_get_key = None;
     // ★ `invoke` (#7305) is BOTH a call and a two-successor terminator, and it
     // has to be modelled as both. Missing the call half would classify a
     // throwing runtime helper's window as non-collecting and silently drop the
@@ -638,6 +1074,32 @@ fn raw_facts(text: &str, slots: &HashSet<String>) -> Facts {
                     .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.' || *c == '$')
                     .collect();
+                // #7725: neither capture-bits helper is in the EH nothrow allowlist (nothing
+                // proves it can't reach `js_throw`), so a call inside a `try` lowers to `invoke`
+                // and lands here rather than in `facts_of`'s typed `LlInst::Call` arm.
+                //
+                // The SET side is recorded regardless: it only feeds the invalidation
+                // (`stores_to`) check, which is a fact about a real side effect and is sound
+                // whether or not the call happens to be wrapped in `invoke`.
+                //
+                // The GET side is gated on `!is_invoke`: `materialize` re-emits a recipe step as
+                // a plain mid-block instruction, and an `invoke` is a terminator — cloning one
+                // in would both be invalid IR and re-target the ORIGINAL call's `%cont`/`%lpad`
+                // labels from a second predecessor they don't expect. (In practice this call is
+                // never seen here at all EXCEPT as an invoke, since every real emission site
+                // goes through `LlBlock::call`'s typed `LlInst::Call` arm otherwise — so the
+                // practical effect of this guard is "never", not "sometimes"; it is kept so a
+                // future emit_raw call to this name stays correct rather than relying on that.)
+                if name == CAPTURE_GET_CALLEE && !is_invoke {
+                    if let Some(idx) = raw_call_literal_arg(rhs, &name, 1) {
+                        transparent = true;
+                        capture_get_key = Some(capture_slot_key(&idx));
+                    }
+                } else if name == CAPTURE_SET_CALLEE {
+                    if let Some(idx) = raw_call_literal_arg(rhs, &name, 1) {
+                        stores_to = Some(capture_slot_key(&idx));
+                    }
+                }
                 is_collecting(&name)
             }
             // An indirect call, or inline asm. `asm sideeffect ""` emits
@@ -651,10 +1113,43 @@ fn raw_facts(text: &str, slots: &HashSet<String>) -> Facts {
         uses,
         load_of,
         stores_to,
+        transparent,
+        capture_get_key,
         collecting,
         is_phi,
         succs,
     }
+}
+
+/// [`literal_capture_idx`]'s analogue for a rendered `call`/`invoke` line: the value token of
+/// `@callee(...)`'s argument at `index`, if it is a compile-time literal. `rhs` is the trimmed
+/// instruction text (so `@callee(` always appears at most once — a nested call cannot appear as
+/// a bare operand in this IR). Balanced-paren scanned rather than split on the first `)`, since a
+/// function-pointer type operand elsewhere on the line can itself contain parens; returns `None`
+/// on anything that does not confidently parse rather than guessing.
+fn raw_call_literal_arg(rhs: &str, callee: &str, index: usize) -> Option<String> {
+    let marker = format!("@{callee}(");
+    let start = rhs.find(&marker)? + marker.len();
+    let mut depth = 1usize;
+    let mut end = None;
+    for (i, c) in rhs[start..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let args_text = &rhs[start..end?];
+    let arg = args_text.split(',').nth(index)?;
+    let (_, val) = arg.trim().split_once(' ')?;
+    let val = val.trim();
+    (!val.is_empty() && !val.starts_with('%')).then(|| val.to_string())
 }
 
 /// The `LlvmType` alphabet is `&'static str`, so a `Raw` load can only be
@@ -797,494 +1292,9 @@ fn rename_in_text(text: &str, from: &str, to: &str) -> String {
     out
 }
 
+/// Coverage for the reload/re-derivation rule (#7280/#7664/#7725). A
+/// sibling file only because of the 2,000-line cap; `use super::*` gives it
+/// the same view of this module as the block above.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::function::LlFunction;
-    use crate::types::{DOUBLE, I64, PTR};
-
-    /// Render a function the way `to_ir` does, minus the header, so a test can
-    /// assert on instruction text.
-    fn body(func: &LlFunction) -> String {
-        let mut out = String::new();
-        func.for_each_final_line::<std::convert::Infallible>(&mut |line| {
-            out.push_str(line);
-            out.push('\n');
-            Ok(())
-        })
-        .unwrap_or_else(|e| match e {});
-        out
-    }
-
-    /// `%slot` is a bound shadow slot holding a parameter; `mid` runs between
-    /// the load and the use.
-    ///
-    /// This is #7280's zod object-spread frame, reduced: load the root, call
-    /// something, hand the LOADED REGISTER to a consumer that dereferences it.
-    fn one_block(mid: &str) -> LlFunction {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let v = b.load(DOUBLE, &slot);
-        b.call(DOUBLE, mid, &[]);
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, &r);
-        f
-    }
-
-    #[test]
-    fn the_planted_hazard_is_rewritten_to_a_reload() {
-        let mut f = one_block("js_object_alloc");
-        assert_eq!(apply_to_function(&mut f), 1, "one stale operand to rewrite");
-        let ir = body(&f);
-        // The consumer must no longer read the pre-call register, and the
-        // register it does read must be defined by a load of the same slot
-        // immediately above it.
-        let lines: Vec<&str> = ir.lines().map(str::trim).collect();
-        let use_idx = lines
-            .iter()
-            .position(|l| l.contains("@js_object_assign_one"))
-            .expect("the consumer survived the pass");
-        let reload = lines[use_idx - 1];
-        assert!(
-            reload.starts_with("%r") && reload.contains("= load double, ptr %r1"),
-            "the instruction above the consumer must re-read the slot, got {reload:?}\n{ir}"
-        );
-        let fresh = reload.split_whitespace().next().unwrap();
-        assert!(
-            lines[use_idx].contains(&format!("double {fresh},")),
-            "the consumer must read the reloaded register, got {:?}",
-            lines[use_idx]
-        );
-        assert!(
-            !lines[use_idx].contains("double %r2,"),
-            "the consumer must NOT still read the pre-call load"
-        );
-    }
-
-    #[test]
-    fn a_non_collecting_window_is_left_byte_for_byte_alone() {
-        // The ONLY difference from the planted case is which helper sits in the
-        // window. `js_write_barrier` cannot allocate, so nothing can move and
-        // the register is still valid — a pass that fires here is firing on the
-        // code shape rather than on the hazard, and would put a reload between
-        // every pair of instructions in the compiler's output.
-        let before = body(&one_block("js_write_barrier"));
-        let mut f = one_block("js_write_barrier");
-        assert_eq!(apply_to_function(&mut f), 0);
-        assert_eq!(body(&f), before);
-    }
-
-    #[test]
-    fn a_slot_the_program_reassigns_in_the_window_is_not_reloaded() {
-        // ★ The soundness half. `f(x, (x = other, 1))` must pass the ORIGINAL
-        // `x`; re-reading the slot below the assignment would hand the consumer
-        // the new value, which is a miscompile and not a rooting fix. See
-        // `expr::temp_root::operand_is_reloadable`.
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let v = b.load(DOUBLE, &slot);
-        let other = b.call(DOUBLE, "js_object_alloc", &[]);
-        b.store(DOUBLE, &other, &slot); // the reassignment
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, &r);
-        assert_eq!(
-            apply_to_function(&mut f),
-            0,
-            "a slot the program itself stores to in the window must be left alone"
-        );
-    }
-
-    #[test]
-    fn the_window_is_a_cfg_path_not_a_line_range() {
-        // Load in the entry block, collection point in one arm, use in the
-        // merge. A line-order scan sees the same thing a path-based one does
-        // here; the point of the test is that the merge block IS considered at
-        // all, since the dominant population in both corpora is cross-block.
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let entry = f.create_block("entry").label.clone();
-        let then = f.create_block("then").label.clone();
-        let merge = f.create_block("merge").label.clone();
-        let _ = entry;
-        let slot;
-        let v;
-        {
-            let b = f.block_mut(0).unwrap();
-            slot = b.alloca(DOUBLE);
-            b.store(DOUBLE, "%arg", &slot);
-            b.call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, "0"), (PTR, &slot)],
-            );
-            v = b.load(DOUBLE, &slot);
-            b.cond_br("%c", &then, &merge);
-        }
-        {
-            let b = f.block_mut(1).unwrap();
-            b.call(DOUBLE, "js_object_alloc", &[]);
-            b.br(&merge);
-        }
-        {
-            let b = f.block_mut(2).unwrap();
-            let r = b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "0.0")],
-            );
-            b.ret(DOUBLE, &r);
-        }
-        assert_eq!(apply_to_function(&mut f), 1);
-        let ir = body(&f);
-        assert!(
-            ir.matches("= load double, ptr %r1").count() == 2,
-            "the merge block must re-read the slot:\n{ir}"
-        );
-    }
-
-    #[test]
-    fn a_back_edge_round_trip_is_not_an_intra_iteration_path() {
-        // The load is INSIDE the loop, so every iteration re-executes it and the
-        // register is fresh when the use runs. Counting the back edge would make
-        // the pass reload on every loop body in the program.
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        f.create_block("entry");
-        let looplbl = f.create_block("loop").label.clone();
-        let done = f.create_block("done").label.clone();
-        let slot;
-        {
-            let b = f.block_mut(0).unwrap();
-            slot = b.alloca(DOUBLE);
-            b.store(DOUBLE, "%arg", &slot);
-            b.call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, "0"), (PTR, &slot)],
-            );
-            b.br(&looplbl);
-        }
-        {
-            let b = f.block_mut(1).unwrap();
-            let v = b.load(DOUBLE, &slot);
-            b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "0.0")],
-            );
-            b.call(DOUBLE, "js_object_alloc", &[]); // collects, but AFTER the use
-            b.cond_br("%c", &looplbl, &done);
-        }
-        {
-            let b = f.block_mut(2).unwrap();
-            b.ret(DOUBLE, "0.0");
-        }
-        assert_eq!(apply_to_function(&mut f), 0);
-    }
-
-    /// ★ #7305 turned every throwing call into an `invoke` with TWO successors,
-    /// and perry emits the continuation label INLINE in the same builder block.
-    /// Both halves have to be modelled:
-    ///
-    /// * the call half — an `invoke` of a collecting helper opens a window, so
-    ///   a use below it must reload. Missing this drops every reload inside a
-    ///   `try`, silently.
-    /// * the terminator half — the unwind edge is a real path, so a use in the
-    ///   landing pad is reached from the load and must reload too.
-    ///
-    /// The unwind edge is also why the rule is "reload at the USE" rather than
-    /// "reload after the call": a load from the slot reads whatever the
-    /// collector last wrote and is valid wherever it sits, so it is correct on
-    /// the unwind edge and the normal edge alike. There is no "after the call"
-    /// position that would have to be chosen correctly for two successors.
-    #[test]
-    fn an_invoke_opens_a_window_on_both_of_its_edges() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        f.create_block("entry");
-        let cont = f.create_block("cont").label.clone();
-        let lpad = f.create_block("lpad").label.clone();
-        let slot;
-        let v;
-        {
-            let b = f.block_mut(0).unwrap();
-            slot = b.alloca(DOUBLE);
-            b.store(DOUBLE, "%arg", &slot);
-            b.call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, "0"), (PTR, &slot)],
-            );
-            v = b.load(DOUBLE, &slot);
-            b.emit_raw(format!(
-                "invoke double @js_object_alloc(i32 4) to label %{cont} unwind label %{lpad}"
-            ));
-        }
-        {
-            let b = f.block_mut(1).unwrap();
-            b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "0.0")],
-            );
-            b.ret(DOUBLE, "0.0");
-        }
-        {
-            let b = f.block_mut(2).unwrap();
-            b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "1.0")],
-            );
-            b.ret(DOUBLE, "0.0");
-        }
-        assert_eq!(
-            apply_to_function(&mut f),
-            2,
-            "both the normal and the unwind successor use the stale register"
-        );
-        let ir = body(&f);
-        assert_eq!(
-            ir.matches("= load double, ptr %r1").count(),
-            3,
-            "the original load plus one reload on each edge:\n{ir}"
-        );
-    }
-
-    #[test]
-    fn a_function_with_no_bound_slot_is_untouched() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%arg", &slot);
-        let v = b.load(DOUBLE, &slot);
-        b.call(DOUBLE, "js_object_alloc", &[]);
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, &r);
-        assert_eq!(apply_to_function(&mut f), 0);
-    }
-
-    #[test]
-    fn the_bind_is_recorded_through_the_inline_form_too() {
-        // #7088's inline slot store emits the SAME `js_shadow_slot_bind` call on
-        // its slow arm, which is why the recording hook lives in `call_void`
-        // rather than at the thirteen sites that build a bind. If a future bind
-        // form stops going through `call_void`, this is the assertion that has
-        // to be updated with it.
-        let mut f = LlFunction::new("t", DOUBLE, vec![]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(DOUBLE);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "3"), (PTR, &slot)],
-        );
-        b.ret(DOUBLE, "0.0");
-        assert!(f
-            .reg_counter()
-            .shadow_slot_allocas()
-            .contains(slot.as_str()));
-    }
-
-    #[test]
-    fn a_raw_operand_is_renamed_by_token_not_by_substring() {
-        // `%r1` must not rewrite inside `%r10`. This is the reason the Raw arm
-        // does not use `str::replace`.
-        let line = "  %r99 = fadd double %r1, %r10";
-        assert_eq!(
-            rename_in_text(line, "r1", "r42"),
-            "  %r99 = fadd double %r42, %r10"
-        );
-        // And the LHS is never a use.
-        assert_eq!(
-            rename_in_text("  %r1 = fadd double %r2, %r3", "r1", "r42"),
-            "  %r1 = fadd double %r2, %r3"
-        );
-    }
-
-    /// ★ The regression that cost the acceptance arm 30/30 -> 0/30.
-    ///
-    /// `entry_post_init_setup` is spliced into block 0 at `entry_init_boundary`,
-    /// and for a function built by `enable_post_init_shadow_frame` that region
-    /// contains the `js_shadow_frame_enter` call itself. Bumping the boundary by
-    /// EVERY insertion into block 0 — rather than only the ones at or above it —
-    /// pushes the index past the block, `to_ir` clamps it with
-    /// `.min(instruction_count())`, and the frame push lands after every
-    /// `js_shadow_slot_bind` in the body. Nothing is rooted, and the symptom is
-    /// `TypeError: value is not a function` — the bug this pass fixes, wearing
-    /// its own fix as a disguise.
-    #[test]
-    fn an_insertion_below_the_post_init_splice_does_not_move_it() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
-        {
-            let b = f.create_block("entry");
-            // The "init prelude": everything before mark_entry_init_boundary.
-            b.call_void("js_gc_init", &[]);
-        }
-        f.mark_entry_init_boundary();
-        let boundary_before = f.entry_init_boundary();
-        assert_eq!(boundary_before, Some(1));
-        {
-            let b = f.block_mut(0).unwrap();
-            let slot = b.alloca(DOUBLE);
-            b.store(DOUBLE, "%arg", &slot);
-            b.call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, "0"), (PTR, &slot)],
-            );
-            let v = b.load(DOUBLE, &slot);
-            b.call(DOUBLE, "js_object_alloc", &[]);
-            let r = b.call(
-                DOUBLE,
-                "js_object_assign_one",
-                &[(DOUBLE, &v), (DOUBLE, "0.0")],
-            );
-            b.ret(DOUBLE, &r);
-        }
-        let n_insts = f.blocks()[0].instruction_count();
-        assert_eq!(apply_to_function(&mut f), 1);
-        assert_eq!(
-            f.entry_init_boundary(),
-            boundary_before,
-            "the reload went in BELOW the splice, so the splice must not move"
-        );
-        assert!(
-            f.entry_init_boundary().unwrap() <= f.blocks()[0].instruction_count(),
-            "a boundary past the block gets clamped to the END by to_ir, which \
-             relocates the whole post-init region including the frame push"
-        );
-        assert_eq!(f.blocks()[0].instruction_count(), n_insts + 1);
-    }
-
-    #[test]
-    fn an_i64_slot_reloads_at_its_own_width() {
-        let mut f = LlFunction::new("t", DOUBLE, vec![]);
-        let b = f.create_block("entry");
-        let slot = b.alloca(I64);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &slot)],
-        );
-        let v = b.load(I64, &slot);
-        b.call(DOUBLE, "js_object_alloc", &[]);
-        b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(I64, &v), (DOUBLE, "0.0")],
-        );
-        b.ret(DOUBLE, "0.0");
-        assert_eq!(apply_to_function(&mut f), 1);
-        assert!(body(&f).contains("= load i64, ptr %r1"), "{}", body(&f));
-    }
-
-    /// A fixture where ONE instruction reads two registers loaded from two
-    /// different shadow slots — `js_object_assign_one(receiver, value)`, which
-    /// `index_set.rs` lowers `object`-before-`value`, so both really can be
-    /// slot loads.
-    fn two_slots_one_consumer() -> LlFunction {
-        let mut f = LlFunction::new(
-            "t",
-            DOUBLE,
-            vec![(DOUBLE, "%obj".into()), (DOUBLE, "%val".into())],
-        );
-        let b = f.create_block("entry");
-        let s0 = b.alloca(DOUBLE);
-        let s1 = b.alloca(DOUBLE);
-        b.store(DOUBLE, "%obj", &s0);
-        b.store(DOUBLE, "%val", &s1);
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "0"), (PTR, &s0)],
-        );
-        b.call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, "1"), (PTR, &s1)],
-        );
-        let a = b.load(DOUBLE, &s0);
-        let c = b.load(DOUBLE, &s1);
-        b.call(DOUBLE, "js_object_alloc", &[]);
-        let r = b.call(
-            DOUBLE,
-            "js_object_assign_one",
-            &[(DOUBLE, &a), (DOUBLE, &c)],
-        );
-        b.ret(DOUBLE, &r);
-        f
-    }
-
-    /// #7311 follow-up: BOTH stale operands of one instruction must be
-    /// reloaded. The original apply loop renamed-then-inserted per rewrite, so
-    /// the first insert shifted the consumer down and the second rename
-    /// addressed the freshly-inserted reload instead — leaving one operand
-    /// stale (the exact defect this pass exists to close) and emitting a load
-    /// nothing consumes.
-    #[test]
-    fn both_stale_operands_of_one_instruction_are_reloaded() {
-        let mut f = two_slots_one_consumer();
-        assert_eq!(
-            apply_to_function(&mut f),
-            2,
-            "two stale operands on one instruction, not one"
-        );
-        let ir = body(&f);
-        let lines: Vec<&str> = ir.lines().map(str::trim).collect();
-        let use_idx = lines
-            .iter()
-            .position(|l| l.contains("@js_object_assign_one"))
-            .expect("the consumer survived");
-        let consumer = lines[use_idx];
-
-        // The two instructions above the consumer must both be slot reloads,
-        // and the consumer must read BOTH of their registers.
-        let r1 = lines[use_idx - 1];
-        let r2 = lines[use_idx - 2];
-        for r in [r1, r2] {
-            assert!(
-                r.contains("= load double, ptr %r"),
-                "expected a slot reload above the consumer, got {r:?}\n{ir}"
-            );
-        }
-        for r in [r1, r2] {
-            let fresh = r.split_whitespace().next().unwrap();
-            assert!(
-                consumer.contains(fresh),
-                "reload {fresh} is dead — the consumer does not read it: {consumer:?}\n{ir}"
-            );
-        }
-        // And neither PRE-call load may survive in the consumer. Derive those
-        // registers rather than hard-coding them: they are the loads that sit
-        // above the collecting call, not the reloads inserted below it.
-        let call_idx = lines
-            .iter()
-            .position(|l| l.contains("@js_object_alloc"))
-            .expect("the collecting call survived");
-        for l in &lines[..call_idx] {
-            if let Some(dst) = l.split_whitespace().next() {
-                if l.contains("= load double, ptr %r") {
-                    assert!(
-                        !consumer.contains(&format!("double {dst},"))
-                            && !consumer.contains(&format!("double {dst})")),
-                        "stale operand {dst} survived in {consumer:?}\n{ir}"
-                    );
-                }
-            }
-        }
-    }
-}
+#[path = "root_reload_tests.rs"]
+mod tests;
