@@ -1399,21 +1399,7 @@ pub(crate) fn relocate_copied_old_object_dirty_pages(
     {
         return true;
     }
-    // ★ The premise is "the SOURCE already satisfied the invariant", and that is
-    // only true if the source was itself an old-gen parent — the barrier does
-    // not dirty pages for a YOUNG parent, because a young parent's children are
-    // found by the ordinary trace.
-    //
-    // Growth routinely crosses that line: a nursery array whose new backing
-    // store is big enough to be born old-gen has NO dirty coverage to inherit,
-    // and translating its empty set leaves every young child unremembered — the
-    // minor then sweeps live objects. Caught by `gc-handoff/apps/shapes.ts`,
-    // which printed 1277282 where node prints 1176000 (deterministically, three
-    // runs). A young source must re-derive from values.
-    if !matches!(
-        crate::arena::classify_heap_generation(old_base),
-        crate::arena::HeapGeneration::Old
-    ) {
+    if !growth_source_can_donate_dirty_pages(old_base) {
         return false;
     }
     const PAGE_SIZE: usize = 1 << 12; // crate::arena::GENERATION_PAGE_SHIFT
@@ -1448,6 +1434,27 @@ pub(crate) fn relocate_copied_old_object_dirty_pages(
 #[inline]
 fn dirty_old_page_is_marked(page: usize) -> bool {
     DIRTY_OLD_PAGES.with(|s| s.borrow().contains(&page))
+}
+
+/// ★ May the dirty-page coverage of the copy SOURCE be inherited by the copy?
+///
+/// Only if the source was itself an old-gen parent. The barrier does not dirty
+/// pages for a YOUNG parent — a young parent's children are found by the
+/// ordinary trace instead — so a young source's empty coverage is not evidence
+/// that it has no young children, it is evidence that nobody was recording.
+///
+/// Array growth crosses that line routinely: a nursery array whose new backing
+/// store is big enough to be born old-gen has nothing to inherit. Translating
+/// its empty set left every young child unremembered and the next minor swept
+/// live objects — `gc-handoff/apps/shapes.ts` printed 1277282 where node prints
+/// 1176000, deterministically, exit 0. A young source must re-derive from the
+/// slot values, which is self-correcting.
+#[inline]
+pub(super) fn growth_source_can_donate_dirty_pages(old_base: usize) -> bool {
+    matches!(
+        crate::arena::classify_heap_generation(old_base),
+        crate::arena::HeapGeneration::Old
+    )
 }
 
 /// Which stored children must an old parent's slot be remembered for?
