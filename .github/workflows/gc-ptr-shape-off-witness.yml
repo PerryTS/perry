@@ -74,8 +74,16 @@ name: GC Ptr<Shape> OFF-arm witness
 
 on:
   pull_request:
+  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
+  # `push: branches: [main]` starved this gate and nine others for two days
+  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
+  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
+  # measured. ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "47 */6 * * *"
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:

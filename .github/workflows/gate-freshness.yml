@@ -1,0 +1,81 @@
+name: Gate Freshness
+
+# Alerts when a post-merge gate stops producing successful `main` runs.
+#
+# THE FAILURE THIS EXISTS FOR (#7856): every heavy gate in this repo produced zero
+# results on `main` for over two days. They were not failing and not cancelled --
+# they never reached a runner, because fourteen workflows enqueued ~29 jobs on every
+# one of 58 daily merges against a repo that runs ~9 jobs at a time. Five
+# collector-touching PRs merged inside that window and #7843's seven genuinely-red
+# rows landed unseen.
+#
+# What made it last two days is the part worth engineering against: **an empty result
+# set looks exactly like a healthy one that nobody has looked at.** Rescheduling the
+# gates (docs/src/testing/ci-gate-scheduling.md) does not fix that on its own -- a
+# cron that quietly stops firing fails in precisely the same way. This workflow is the
+# detector for both, and it is the reason the next occurrence should be noticed in
+# hours rather than days.
+#
+# DELIBERATELY NOT A REQUIRED CONTEXT. It reports on the health of other gates; it
+# must never be able to block a PR. It is also deliberately cheap -- one short
+# ubuntu job -- so that the alarm cannot be starved by the condition it is alarming
+# about.
+
+on:
+  schedule:
+    # Every two hours, off the top of the hour (GitHub's scheduler is most contended
+    # at :00 and most likely to delay a run there). The tightest budget in
+    # scripts/gate_freshness.json is 12h, so this samples ~6x per budget window.
+    - cron: "5 */2 * * *"
+  # Validate the checker itself when it changes. Self-test only -- see the step
+  # guards below; a PR must not go red merely because `main`'s gates are behind.
+  pull_request:
+    paths:
+      - scripts/check_gate_freshness.py
+      - scripts/gate_freshness.json
+      - .github/workflows/gate-freshness.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One sweep at a time. Unlike the gates this watches, coalescing is correct here:
+  # the freshness verdict is a function of "now", so a superseded run had nothing
+  # unique to say. PR runs supersede themselves; scheduled runs queue.
+  group: gate-freshness-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate-freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Listing workflow runs, and maintaining the single sticky alert issue.
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Structural failure first, and unconditionally: prove the detector can still
+      # say no before trusting a green verdict from it. This plants a stale gate, a
+      # gate with no successful run at all, and -- the trap that made
+      # `gc-root-dominance` look healthy in #7856 -- a gate whose only recent
+      # successes are `pull_request` runs, then asserts the verdict for each.
+      #
+      # A green self-test means the detector works, not that nothing was tried.
+      - name: Self-test the freshness checker (can this gate still fail?)
+        run: python3 scripts/check_gate_freshness.py --self-test
+
+      # The live check does not run on pull requests. A PR that merely touches this
+      # checker must not go red because `main`'s gates are behind -- that would make
+      # the alarm a merge blocker, which it is explicitly not.
+      - name: Check post-merge gate freshness
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/check_gate_freshness.py

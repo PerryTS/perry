@@ -54,8 +54,18 @@ name: TLS Budget
 
 on:
   pull_request:
+  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
+  # `push: branches: [main]` starved this gate and nine others for two days
+  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
+  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
+  # measured. The macOS arm below is irreducible (`_tlv_get_addr` is a Mach-O
+  # artefact), so moving it to Linux was never an option; cutting demand was.
+  # ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "27 */6 * * *"
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:

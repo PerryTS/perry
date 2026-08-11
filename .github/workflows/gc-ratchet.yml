@@ -15,8 +15,35 @@ name: GC Ratchet
 
 on:
   pull_request:
+  # POST-MERGE ARM: a staggered six-hourly sweep of `main`, NOT one run per merge.
+  #
+  # `push: branches: [main]` is what took this gate dark for two days (#7856).
+  # Fourteen workflows fired on every merge, ~29 jobs each time, against a repo
+  # that runs ~9 jobs concurrently; at 58 merges/day demand outran drain and the
+  # queue grew without bound. On 2026-08-11 this workflow had 22 of its 25 most
+  # recent `main` runs sitting `queued` (oldest 9h18m) and its last successful
+  # `main` run was 2026-08-09 -- two days and five collector-touching merges
+  # earlier (#7799, #7809, #7812, #7834, #7839). #7843's seven genuinely-red rows
+  # landed inside that blind window.
+  #
+  # This is the THIRD variant of CLAUDE.md's "four ways a gate can be unable to
+  # fail": not `continue-on-error`, not missing from required contexts, not
+  # cancelled -- STARVED. A gate that runs four times a day and COMPLETES is
+  # worth more than one that runs on every merge and never does.
+  #
+  # It is NOT the `concurrency:` block below (already correct, twice-repaired --
+  # see its comment) and it is NOT macOS capacity: at the moment of measurement
+  # the queue held 45 `ubuntu-latest` jobs against 14 `macos-14`. Rebalancing
+  # pools cannot help; only cutting total job demand can.
+  #
+  # ***DO NOT RESTORE `push: branches: [main]` HERE.*** Full measurement, the two
+  # #7856 claims that did not survive checking, and the cost this trades away:
+  # docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "7 */6 * * *"
   push:
-    branches: [main]
+    # Releases stay individually gated; tags are rare, so this costs nothing.
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
