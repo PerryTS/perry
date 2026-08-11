@@ -115,6 +115,9 @@ thread_local! {
     /// never entered it proves nothing about it.
     static UNTRACED_PROMOTION_CYCLES: Cell<u64> = const { Cell::new(0) };
     static UNTRACED_PROMOTED_OBJECTS: Cell<u64> = const { Cell::new(0) };
+    /// Old-gen occupancy when the last real measurement landed — the base the
+    /// untraced budget's relative half is taken against.
+    static OLD_GEN_AT_LAST_MEASUREMENT: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Record that `bytes` of young capacity became old-gen, so the next
@@ -191,14 +194,18 @@ pub(super) fn should_promote_young_in_place() -> bool {
 /// How many untraced-promoted bytes may accumulate before a cycle has to
 /// measure again.
 ///
-/// `max(floor, old-gen in use)`: an untraced run may never more than double the
-/// old generation between measurements. The relative half is what lets a
-/// program with a large genuinely-live old generation keep running free cycles
-/// (its exposure is proportional to a heap it already holds), and the absolute
-/// floor is what keeps the rule from re-measuring every cycle while old-gen is
+/// `max(floor, old-gen as it stood at the last MEASUREMENT)`: an untraced run
+/// may not more than double the old generation it started from. The relative
+/// half lets a program with a large genuinely-live old heap keep running free
+/// cycles — its exposure is proportional to memory it already holds — and the
+/// absolute floor keeps the rule from re-measuring constantly while old-gen is
 /// still small.
+///
+/// It has to be the size at the last measurement, not the size now: the
+/// untraced bytes ARE old-gen bytes, so comparing against the current figure
+/// compares a quantity with itself and the relative half can never fire.
 fn untraced_promotion_budget_bytes() -> usize {
-    UNTRACED_PROMOTION_FLOOR_BYTES.max(crate::arena::old_gen_in_use_bytes())
+    UNTRACED_PROMOTION_FLOOR_BYTES.max(OLD_GEN_AT_LAST_MEASUREMENT.with(Cell::get))
 }
 
 /// Should this promoting cycle also skip the trace?
@@ -255,8 +262,10 @@ pub(crate) fn untraced_promoted_bytes_since_measurement() -> usize {
 /// recording its assumption as a measurement would turn the feedback loop into
 /// a mirror.
 pub(super) fn note_young_survival(young_bytes: usize, live_bytes: usize) {
-    // A real measurement landed, so the untraced run it ends is settled.
+    // A real measurement landed, so the untraced run it ends is settled and the
+    // next run's budget is taken against the heap this one leaves behind.
     UNTRACED_PROMOTED_BYTES.with(|c| c.set(0));
+    OLD_GEN_AT_LAST_MEASUREMENT.with(|c| c.set(crate::arena::old_gen_in_use_bytes()));
     if young_bytes == 0 {
         return;
     }
@@ -288,6 +297,7 @@ pub(super) fn note_in_place_promotion(
 pub(super) fn note_full_collection_reclaimed_old_gen() {
     PROMOTED_DEAD_BYTES.with(|c| c.set(0));
     UNTRACED_PROMOTED_BYTES.with(|c| c.set(0));
+    OLD_GEN_AT_LAST_MEASUREMENT.with(|c| c.set(crate::arena::old_gen_in_use_bytes()));
 }
 
 /// How many cycles promoted in place, and how many objects they promoted.
@@ -326,6 +336,7 @@ pub(super) struct InPlacePromotionTestGuard {
     previous_dead: usize,
     previous_untraced: usize,
     previous_untraced_opt_in: bool,
+    previous_old_gen_base: usize,
 }
 
 #[cfg(test)]
@@ -337,7 +348,9 @@ impl InPlacePromotionTestGuard {
             previous_dead: PROMOTED_DEAD_BYTES.get(),
             previous_untraced: UNTRACED_PROMOTED_BYTES.get(),
             previous_untraced_opt_in: TEST_UNTRACED_OPT_IN.get(),
+            previous_old_gen_base: OLD_GEN_AT_LAST_MEASUREMENT.get(),
         };
+        OLD_GEN_AT_LAST_MEASUREMENT.with(|c| c.set(0));
         LAST_YOUNG_SURVIVAL_PERMILLE.with(|c| c.set(Some(survival_permille)));
         PROMOTED_DEAD_BYTES.with(|c| c.set(0));
         guard
@@ -361,6 +374,7 @@ impl Drop for InPlacePromotionTestGuard {
         PROMOTED_DEAD_BYTES.with(|c| c.set(self.previous_dead));
         UNTRACED_PROMOTED_BYTES.with(|c| c.set(self.previous_untraced));
         TEST_UNTRACED_OPT_IN.with(|c| c.set(self.previous_untraced_opt_in));
+        OLD_GEN_AT_LAST_MEASUREMENT.with(|c| c.set(self.previous_old_gen_base));
     }
 }
 
