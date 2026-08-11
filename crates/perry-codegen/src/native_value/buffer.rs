@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::rep::LoweredValue;
+use super::{materialize::MaterializationReason, rep::LoweredValue};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +110,18 @@ pub(crate) enum BufferAccessMode {
     DynamicFallback,
 }
 
+/// Whether the data pointer cached for a tracked buffer view still names the
+/// receiver's current storage. This is distinct from aliasing: a pointer may
+/// safely alias another view, while exposing an inline typed array's `.buffer`
+/// can make the cached pointer stale by rebinding the receiver to materialized
+/// backing storage.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(crate) enum BufferViewPointerState {
+    Stable,
+    Invalidated { reason: MaterializationReason },
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) struct BufferViewRep {
@@ -183,6 +195,7 @@ pub(crate) struct BufferViewSlot {
     pub alias: AliasState,
     pub length_source: Option<LengthSource>,
     pub native_owned: Option<NativeOwnedViewSlot>,
+    pub pointer_state: BufferViewPointerState,
     /// Representation-selection Phase 2: `true` when the receiver is PROVEN to
     /// be a freshly-constructed inline-storage (non-view) typed array /
     /// buffer — the construction form was a length or plain-array source,

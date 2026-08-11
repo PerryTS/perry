@@ -12,8 +12,8 @@ pub(crate) use artifact::{
 };
 pub(crate) use buffer::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
-    BufferAccessProof, BufferElem, BufferEndian, BufferIndexUnit, BufferViewSlot,
-    GuardedBufferIndex, LengthSource, NativeOwnedViewFact, NativeOwnedViewSlot,
+    BufferAccessProof, BufferElem, BufferEndian, BufferIndexUnit, BufferViewPointerState,
+    BufferViewSlot, GuardedBufferIndex, LengthSource, NativeOwnedViewFact, NativeOwnedViewSlot,
 };
 pub(crate) use materialize::{
     materialize_js_value, materialize_js_value_bits, materialize_js_value_without_record,

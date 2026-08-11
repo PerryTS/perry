@@ -42,9 +42,9 @@ use crate::types::{DOUBLE, I32, I64};
 use super::index_set_typed_array::lower_inline_dyn_typed_array_set;
 use super::{
     array_kind_fact, array_store_needs_layout_note, array_store_needs_write_barrier,
-    buffer_access_materialization_reason, emit_array_numeric_write_note_on_block,
-    emit_jsvalue_slot_store_on_block, emit_root_nanbox_store_on_block,
-    emit_typed_feedback_register_site, emit_write_barrier,
+    attach_buffer_view_pointer_state_for_expr, buffer_access_materialization_reason,
+    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
+    emit_root_nanbox_store_on_block, emit_typed_feedback_register_site, emit_write_barrier,
     expr_has_numeric_pointer_free_array_layout, int_range_expr, lower_buffer_store, lower_expr,
     lower_expr_as_i32, lower_expr_native, lower_index_set_fast, lower_typed_array_store,
     materialize_js_value, nanbox_pointer_inline, raw_f64_layout_fact, unbox_str_handle,
@@ -881,6 +881,7 @@ pub(crate) fn lower(
                         false,
                         vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                     );
+                    attach_buffer_view_pointer_state_for_expr(ctx, object);
                     return Ok(result);
                 }
 
@@ -911,6 +912,7 @@ pub(crate) fn lower(
                     false,
                     vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                 );
+                attach_buffer_view_pointer_state_for_expr(ctx, object);
                 return Ok(val_double);
             }
             if is_uint8array_receiver(ctx, object) && is_numeric_expr(ctx, index) {

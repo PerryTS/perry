@@ -63,8 +63,9 @@ pub(crate) use buffer_access::{
     lower_typed_array_store, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
-    alias_buffer_view_slot, attach_native_owned_view_fact, buffer_access_materialization_reason,
-    buffer_view_lowered_value, downgrade_buffer_alias, downgrade_buffer_aliases_in_expr,
+    alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
+    buffer_access_materialization_reason, buffer_view_lowered_value, downgrade_buffer_alias,
+    downgrade_buffer_aliases_in_expr, invalidate_buffer_view_pointer,
     invalidate_native_owned_views_for_dispose, native_arena_canonical_owner_id,
     record_native_arena_owner_assignment, update_buffer_view_for_assignment,
 };

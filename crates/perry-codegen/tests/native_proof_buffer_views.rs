@@ -27,6 +27,9 @@ use native_proof_support::{
     NativeRepsEnv,
 };
 
+#[path = "native_proof_buffer_views/pointer_lifetime.rs"]
+mod pointer_lifetime;
+
 fn empty_opts() -> CompileOptions {
     CompileOptions {
         target: None,

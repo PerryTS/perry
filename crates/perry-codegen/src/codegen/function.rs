@@ -9,7 +9,9 @@ use perry_hir::Function;
 
 use crate::expr::FnCtx;
 use crate::module::LlModule;
-use crate::native_value::{AliasState, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource};
+use crate::native_value::{
+    AliasState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
+};
 use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
@@ -957,6 +959,7 @@ pub(super) fn compile_function(
                 alias: AliasState::Unknown,
                 length_source: Some(LengthSource::Unknown),
                 native_owned: None,
+                pointer_state: BufferViewPointerState::Stable,
                 // Declared-type hoist only — the construction form is unknown,
                 // so no inline-storage proof.
                 storage_inline_proven: false,
@@ -1026,6 +1029,7 @@ pub(super) fn compile_function(
                         None => LengthSource::Unknown,
                     }),
                     native_owned: None,
+                    pointer_state: BufferViewPointerState::Stable,
                     storage_inline_proven: true,
                 },
             );

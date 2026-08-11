@@ -95,7 +95,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         if property == "buffer" {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if ctx.buffer_view_slots.contains_key(id) {
-                    super::downgrade_buffer_alias(
+                    super::invalidate_buffer_view_pointer(
                         ctx,
                         *id,
                         crate::native_value::MaterializationReason::MutableAlias,

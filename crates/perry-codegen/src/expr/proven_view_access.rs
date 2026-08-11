@@ -36,7 +36,9 @@
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
-use super::{can_lower_expr_as_i32, lower_expr_as_i32, lower_expr_native, FnCtx};
+use super::{
+    attach_buffer_view_facts, can_lower_expr_as_i32, lower_expr_as_i32, lower_expr_native, FnCtx,
+};
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::native_value::{
     BoundsState, BufferAccessMode, BufferElem, BufferIndexUnit, ExpectedNativeRep, LoweredValue,
@@ -302,6 +304,7 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
         false,
         vec!["proven_view=checked_inline; guards=none".to_string()],
     );
+    attach_buffer_view_facts(ctx, &view);
     Ok(Some(result))
 }
 
@@ -438,5 +441,6 @@ pub(crate) fn try_lower_proven_view_checked_store(
         false,
         vec!["proven_view=checked_inline; guards=none".to_string()],
     );
+    attach_buffer_view_facts(ctx, &view);
     Ok(Some(value_native))
 }

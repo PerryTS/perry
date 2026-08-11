@@ -9,7 +9,7 @@ use crate::native_value::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::{
-    attach_native_owned_view_fact, buffer_access_materialization_reason, buffer_view_lowered_value,
+    attach_buffer_view_facts, buffer_access_materialization_reason, buffer_view_lowered_value,
     effective_alias_state_for_access, lower_expr, lower_expr_native, unbox_to_i64, FnCtx,
 };
 
@@ -290,7 +290,7 @@ fn record_bulk_view(
         false,
         Vec::new(),
     );
-    attach_native_owned_view_fact(ctx, view);
+    attach_buffer_view_facts(ctx, view);
 }
 
 fn record_runtime_fallback(

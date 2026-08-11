@@ -8,7 +8,7 @@ use crate::native_value::{
 use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
 
 use super::{
-    attach_native_owned_view_fact, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
+    attach_buffer_view_facts, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
     buffer_view_lowered_value, can_lower_expr_as_i32, effective_alias_state_for_access,
     int_range_expr, is_numeric_expr, lower_expr_native, FnCtx,
 };
@@ -386,7 +386,7 @@ fn record_buffer_view(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
 }
 
 pub(crate) fn lower_buffer_load(
@@ -423,7 +423,7 @@ pub(crate) fn lower_buffer_load(
         proof.may_emit_noalias,
         vec![format!("zext_to={}", result_i32)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
     let result = LoweredValue::i32(result_i32);
     if let Some(consumer) = spec.result_consumer {
         let facts = access_facts_for_spec(spec, &proof.view, Some(&emission.len_i32));
@@ -442,7 +442,7 @@ pub(crate) fn lower_buffer_load(
             false,
             Vec::new(),
         );
-        attach_native_owned_view_fact(ctx, &proof.view);
+        attach_buffer_view_facts(ctx, &proof.view);
     }
     Ok(Some(result))
 }
@@ -482,7 +482,7 @@ pub(crate) fn lower_buffer_store(
         proof.may_emit_noalias,
         vec![format!("source_i32={}", val_i32)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
     let result = LoweredValue::i32(val_i32.clone());
     Ok(Some(StoreResult { result }))
 }
@@ -612,7 +612,7 @@ pub(crate) fn lower_typed_array_load(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
     Ok(Some(result))
 }
 
@@ -765,6 +765,6 @@ pub(crate) fn lower_typed_array_store(
         proof.may_emit_noalias,
         vec![format!("elem={:?}", proof.view.elem)],
     );
-    attach_native_owned_view_fact(ctx, &proof.view);
+    attach_buffer_view_facts(ctx, &proof.view);
     Ok(Some(StoreResult { result }))
 }

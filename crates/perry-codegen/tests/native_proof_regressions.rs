@@ -700,7 +700,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -733,7 +733,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -780,7 +780,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -1278,7 +1278,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert!(
         artifact["records"]
             .as_array()
@@ -1515,7 +1515,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -1567,7 +1567,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(

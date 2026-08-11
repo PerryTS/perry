@@ -31,7 +31,8 @@ use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, recei
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::{
-    array_kind_fact, buffer_access_materialization_reason, emit_typed_feedback_register_site,
+    array_kind_fact, attach_buffer_view_pointer_state_for_expr,
+    buffer_access_materialization_reason, emit_typed_feedback_register_site,
     expr_has_numeric_pointer_free_array_layout, int_range_expr, lower_buffer_load, lower_expr,
     lower_expr_as_i32, lower_typed_array_load, materialize_js_value, raw_f64_layout_fact,
     try_lower_flat_const_index_get, typed_feedback_emission_enabled, unbox_str_handle,
@@ -849,6 +850,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         false,
                         vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                     );
+                    attach_buffer_view_pointer_state_for_expr(ctx, object);
                     return Ok(result);
                 }
 
@@ -893,6 +895,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     false,
                     vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                 );
+                attach_buffer_view_pointer_state_for_expr(ctx, object);
                 return Ok(result);
             }
             if is_uint8array_receiver(ctx, object) && is_numeric_expr(ctx, index) {
