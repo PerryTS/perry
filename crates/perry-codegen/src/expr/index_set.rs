@@ -1566,10 +1566,59 @@ pub(crate) fn lower(
                             }
                         }
                     } else {
+                        let idx_i32 = {
+                            let blk = ctx.block();
+                            blk.fptosi(DOUBLE, &idx_double, I32)
+                        };
+                        // The receiver is not a stack local (`this.vals[i] = v`,
+                        // `obj.arr[i] = v`), so `lower_index_set_fast` cannot
+                        // serve it — it needs a slot to write a realloc'd head
+                        // back to. A STRICTLY in-bounds store changes no head
+                        // and no length, so it needs no writeback and can be
+                        // inlined here; everything else still goes to the
+                        // extend helper below. Feedback-emission builds keep
+                        // the out-of-line call so observation stays complete.
+                        if !super::typed_feedback_emission_enabled() {
+                            let arr_box = arr_box.clone();
+                            let val_double = val_double.clone();
+                            let idx_i32c = idx_i32.clone();
+                            let feedback_site_id = feedback_site_id.clone();
+                            super::index_set_guarded::emit_guarded_inbounds_array_store(
+                                ctx,
+                                &arr_box,
+                                &idx_i32,
+                                &val_double,
+                                "idxset.recv_prop",
+                                layout_note_needed,
+                                write_barrier_needed,
+                                value_is_numeric,
+                                |ctx| {
+                                    let blk = ctx.block();
+                                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                                    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                                    blk.call(
+                                        I64,
+                                        "js_typed_feedback_array_set_f64_extend",
+                                        &[
+                                            (I64, &feedback_site_id),
+                                            (I64, &arr_handle),
+                                            (I32, &idx_i32c),
+                                            (DOUBLE, &val_double),
+                                        ],
+                                    );
+                                    if write_barrier_needed {
+                                        let val_bits =
+                                            ctx.block().bitcast_double_to_i64(&val_double);
+                                        emit_write_barrier(ctx, &arr_bits, &val_bits);
+                                    }
+                                    Ok(())
+                                },
+                            )?;
+                            return Ok(val_double);
+                        }
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
                         // Issue #637 followup / hono r2: use the extend variant
                         // so `arr[i] = X` for i >= length grows the array per
                         // JS spec, instead of silently no-op'ing (which the
