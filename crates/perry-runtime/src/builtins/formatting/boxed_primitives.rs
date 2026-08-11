@@ -308,17 +308,20 @@ pub extern "C" fn js_boxed_string_new(value: f64, has_arg: i32) -> f64 {
     // dereferences or keys on it.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
-    // `new String()` (no args) is spec'd to box "", not "undefined".
-    let ptr = if has_arg == 0 {
-        crate::string::js_string_from_bytes(std::ptr::null(), 0)
-    } else {
-        // ECMA-262 §22.1.1 step 2b: ToString(value) — throws TypeError for Symbol.
-        if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
-            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
+    let (ptr, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+        // `new String()` (no args) is spec'd to box "", not "undefined".
+        if has_arg == 0 {
+            crate::string::js_string_from_bytes(std::ptr::null(), 0)
+        } else {
+            // ECMA-262 §22.1.1 step 2b: ToString(value) — throws TypeError for Symbol.
+            if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+                crate::collection_iter::throw_type_error(
+                    "Cannot convert a Symbol value to a string",
+                );
+            }
+            js_string_coerce(value)
         }
-        js_string_coerce(value)
-    };
-    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+    });
     let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());
     register_boxed_primitive_payload(obj, boxed);
     install_string_wrapper_indices(obj, ptr);
