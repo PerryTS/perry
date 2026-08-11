@@ -308,6 +308,18 @@ fn class_field_fast_contract(
             && (*obj).class_id == expected_class_id
             && std::ptr::eq((*obj).keys_array as *const ArrayHeader, expected_keys)
             && expected_field_index < (*obj).field_count;
+        if super::guard_counters::enabled() && !shape_ok {
+            use super::guard_counters::bump;
+            if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+                bump(5);
+            } else if (*obj).class_id != expected_class_id {
+                bump(6);
+            } else if !std::ptr::eq((*obj).keys_array as *const ArrayHeader, expected_keys) {
+                bump(7);
+            } else {
+                bump(8);
+            }
+        }
         // #5093 self-check: the codegen-inlined fast path concludes "slot K is
         // raw-f64" purely from the per-object intact bit (plus a class_id/keys
         // match). Under PERRY_VERIFY_TYPED_INTACT=1, assert that whenever this
@@ -329,12 +341,17 @@ fn class_field_fast_contract(
                 std::process::abort();
             }
         }
+        if shape_ok
+            && require_raw_f64
+            && !crate::gc::layout_typed_raw_f64_slot_for_user(
+                object_addr,
+                expected_field_index as usize,
+            )
+        {
+            super::guard_counters::bump(9);
+            return false;
+        }
         shape_ok
-            && (!require_raw_f64
-                || crate::gc::layout_typed_raw_f64_slot_for_user(
-                    object_addr,
-                    expected_field_index as usize,
-                ))
     }
 }
 
@@ -378,14 +395,19 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     expected_field_index: u32,
     require_raw_f64: i32,
 ) -> i32 {
+    super::guard_counters::bump(2);
     if !typed_feedback_enabled() && !crate::object::descriptors_in_use() {
-        return class_field_fast_contract(
+        let r = class_field_fast_contract(
             receiver,
             expected_class_id,
             expected_keys,
             expected_field_index,
             require_raw_f64 != 0,
         ) as i32;
+        if r != 0 {
+            super::guard_counters::bump(3);
+        }
+        return r;
     }
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_get_contract(
         receiver,
@@ -441,10 +463,15 @@ fn class_field_set_fast_contract(
             return false;
         };
         if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            super::guard_counters::bump(10);
             return false;
         }
     }
-    !require_raw_f64 || is_plain_number_bits(value_bits)
+    if require_raw_f64 && !is_plain_number_bits(value_bits) {
+        super::guard_counters::bump(11);
+        return false;
+    }
+    true
 }
 
 fn descriptor_blocks_class_field_set(obj_addr: usize, class_id: u32, key_name: &str) -> bool {
@@ -550,8 +577,9 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     require_raw_f64: i32,
 ) -> i32 {
     let value_bits = value.to_bits();
+    super::guard_counters::bump(0);
     if !typed_feedback_enabled() && !crate::object::descriptors_in_use() {
-        return class_field_set_fast_contract(
+        let r = class_field_set_fast_contract(
             receiver,
             expected_class_id,
             expected_keys,
@@ -559,6 +587,10 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
             require_raw_f64 != 0,
             value_bits,
         ) as i32;
+        if r != 0 {
+            super::guard_counters::bump(1);
+        }
+        return r;
     }
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_set_contract(
         receiver,
