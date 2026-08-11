@@ -442,6 +442,23 @@ fn coerce_concat_body(
     // js_jsvalue_to_string + js_string_concat into a single allocation
     // for number operands (the common `"item_" + i` pattern).
     if l_is_string && !r_is_string {
+        // #7837: `l_is_string` may be nothing more than `let l: string`, and a
+        // declared type is not enforced at runtime. This arm chooses the
+        // OPERATOR, not just a representation — `s + 7` on a slot holding `42`
+        // must answer `49`, not `"427"` — and the strict lowering below cannot
+        // recover: it unboxes to a `StringHeader*` first, so the tag the
+        // decision needs is gone before the helper sees it. Hand the box over
+        // instead and let the helper pick. One predictable compare inside a
+        // call that already allocates; no codegen diamond, so the honest
+        // shape's fused single-allocation concat is untouched.
+        if crate::type_analysis::string_proof_is_declared_only(ctx, left) {
+            let blk = ctx.block();
+            return Ok(blk.call(
+                DOUBLE,
+                "js_string_add_value",
+                &[(DOUBLE, l_box), (DOUBLE, r_box)],
+            ));
+        }
         // Issue #214: SSO-safe unbox; repsel Phase 3a: inline `bitcast+and`
         // for proven-heap operands (string literals — the `"user_" + i`
         // shape) and tag-dispatch for canonical-Str locals.
@@ -456,6 +473,15 @@ fn coerce_concat_body(
     }
 
     if !l_is_string && r_is_string {
+        // #7837, mirrored: see the left-string arm above.
+        if crate::type_analysis::string_proof_is_declared_only(ctx, right) {
+            let blk = ctx.block();
+            return Ok(blk.call(
+                DOUBLE,
+                "js_value_add_string",
+                &[(DOUBLE, l_box), (DOUBLE, r_box)],
+            ));
+        }
         // Issue #214: SSO-safe unbox; repsel Phase 3a: see above.
         let r_handle = str_operand_handle_tag_dispatched(ctx, right, r_box);
         let blk = ctx.block();

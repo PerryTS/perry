@@ -329,9 +329,12 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// - the `Map` string-key fast paths in `expr::math_simple` key a lookup on
 ///   the claim.
 ///
-/// Each of those keeps [`is_definitely_string_expr`], which answers only for
-/// expressions whose string-ness is structural (a literal, `String(x)`,
-/// `.toString()`, `JSON.stringify`, …).
+/// Each of those keeps [`is_definitely_string_expr`] — but note that predicate
+/// is NOT purely structural either, which is #7837: its `LocalGet` arm trusts
+/// `let s: string`, and its `.toString()` / `.slice()` / … arm matches on the
+/// method NAME with no look at the receiver. Use
+/// [`string_value_is_runtime_guaranteed`] below when what you need is a claim
+/// about the bits.
 pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     if is_definitely_string_expr(ctx, e) {
         return true;
@@ -343,6 +346,149 @@ pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         static_type_of(ctx, e),
         Some(HirType::String) | Some(HirType::StringLiteral(_))
     )
+}
+
+/// Does this expression's string-ness say something about the BITS, or is it
+/// just an erased TypeScript annotation repeated back? (#7837)
+///
+/// `is_definitely_string_expr` mixes two very different kinds of evidence.
+/// Most of its arms name a runtime entry point that CONSTRUCTS a string —
+/// a literal, `String(x)`, `JSON.stringify`, `path.join`, `os.arch()`. Those
+/// are proofs. Two are not:
+///
+/// * **`LocalGet`** trusts `let s: string`, and Perry does not enforce
+///   declared types at runtime (CLAUDE.md, Known Limitations). `const s:
+///   string = (42 as any)` type-checks and puts a number in the slot.
+/// * **the `.toString()` / `.slice()` / `.replace()` … arm** matches on the
+///   METHOD NAME alone, with no look at the receiver. `Array.prototype.slice`
+///   returns an array; `({toString(){return 5}}).toString()` returns a number.
+///
+/// This answers `true` only for the first kind, so `+` can keep the concat
+/// lowering where the string is real and dispatch on the tag where it is a
+/// claim. The whitelist is deliberately **closed**: an arm nobody has thought
+/// about answers `false` and gets guarded, which costs one predictable
+/// compare, whereas defaulting the other way costs a silent wrong answer.
+pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::String(_)
+        | Expr::WtfString(_)
+        | Expr::StringCoerce(_)
+        | Expr::TypeOf(_)
+        | Expr::ArrayJoin { .. }
+        | Expr::JsonStringify(_)
+        | Expr::JsonStringifyPretty { .. }
+        | Expr::JsonStringifyFull(..)
+        | Expr::StringFromCodePoint(_)
+        | Expr::StringFromCharCode(_)
+        | Expr::StringFromCharCodeSpread(_)
+        | Expr::StringRaw { .. }
+        | Expr::FsReadFileSync(_)
+        | Expr::FsReadFileBinary(_)
+        | Expr::PathSep
+        | Expr::PathDelimiter
+        | Expr::PathJoin(..)
+        | Expr::PathDirname(_)
+        | Expr::PathBasename(_)
+        | Expr::PathExtname(_)
+        | Expr::PathResolve(_)
+        | Expr::PathNormalize(_)
+        | Expr::PathResolveJoin(..)
+        | Expr::PathWin32Join(..)
+        | Expr::PathToNamespacedPath(_)
+        | Expr::PathWin32 {
+            method:
+                perry_hir::PathWin32Method::ToNamespacedPath
+                | perry_hir::PathWin32Method::Dirname
+                | perry_hir::PathWin32Method::Basename
+                | perry_hir::PathWin32Method::BasenameExt
+                | perry_hir::PathWin32Method::Extname
+                | perry_hir::PathWin32Method::Normalize
+                | perry_hir::PathWin32Method::Format
+                | perry_hir::PathWin32Method::Relative
+                | perry_hir::PathWin32Method::Resolve
+                | perry_hir::PathWin32Method::ResolveJoin,
+            ..
+        }
+        | Expr::ProcessVersion
+        | Expr::ProcessCwd
+        | Expr::ProcessTitle
+        | Expr::OsArch
+        | Expr::OsType
+        | Expr::OsPlatform
+        | Expr::OsRelease
+        | Expr::OsHostname
+        | Expr::OsEOL
+        | Expr::OsDevNull
+        | Expr::OsEndianness
+        | Expr::OsMachine
+        | Expr::OsVersion => true,
+        // A string METHOD is a proof only when the receiver is one: every name
+        // in `is_definitely_string_expr`'s list also exists on `Array` or on a
+        // user object, where it returns something else entirely.
+        Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(
+                property.as_str(),
+                "toString"
+                    | "toLowerCase"
+                    | "toUpperCase"
+                    | "trim"
+                    | "trimStart"
+                    | "trimEnd"
+                    | "slice"
+                    | "substring"
+                    | "substr"
+                    | "charAt"
+                    | "repeat"
+                    | "replace"
+                    | "replaceAll"
+                    | "padStart"
+                    | "padEnd"
+                    | "concat"
+                    | "normalize"
+                    | "toFixed"
+                    | "toPrecision"
+                    | "toExponential"
+            ) =>
+            {
+                string_value_is_runtime_guaranteed(ctx, object)
+            }
+            _ => false,
+        },
+        // `a + b` really is a string whenever ONE side really is: the spec's
+        // `+` concatenates on either operand being a string, whatever the
+        // other holds.
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } => {
+            string_value_is_runtime_guaranteed(ctx, left)
+                || string_value_is_runtime_guaranteed(ctx, right)
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            string_value_is_runtime_guaranteed(ctx, then_expr)
+                && string_value_is_runtime_guaranteed(ctx, else_expr)
+        }
+        Expr::PropertyGet {
+            object, property, ..
+        } if is_process_namespace_version_property(object, property) => true,
+        _ => false,
+    }
+}
+
+/// The expression reads as a string to `is_definitely_string_expr`, but the
+/// only evidence is a declared type or a receiver-blind name guess (#7837).
+///
+/// The string mirror of `numeric_proof_is_declared_only` (#7773/#7831), and
+/// the same policy: **a static type selects a lowering, never an answer.**
+pub(crate) fn string_proof_is_declared_only(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    is_definitely_string_expr(ctx, e) && !string_value_is_runtime_guaranteed(ctx, e)
 }
 
 /// Resolve the declared type of `<object>.<field>` when `object` is a

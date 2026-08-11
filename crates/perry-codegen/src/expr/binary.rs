@@ -211,6 +211,27 @@ fn rebuild_add_tree(
     value
 }
 
+/// May the flattened `p1 + p2 + … + pN` chain be handed to
+/// `js_string_concat_chain`, which formats EVERY part as a string? (#7837)
+///
+/// The fold reproduces the source tree `(((p1 + p2) + p3) …)` only when that
+/// tree really is all-concat. Exactly one node can fail that: `p1 + p2`. If
+/// either of those is genuinely a string the node concatenates, its result is
+/// a string, and every later `+` concatenates too, whatever the later parts
+/// hold. If neither is, the node may be a numeric ADD — and then
+/// `const a: string = (42 as any), b: string = (99 as any); a + b + "x"` is
+/// `"141x"` in Node while the fold prints `"4299x"`.
+///
+/// So the head pair needs a proof, not an annotation. A chain that fails this
+/// simply falls through to the pairwise lowering, where `js_string_concat_box`
+/// resolves each node from the runtime tags.
+fn chain_fold_is_sound(ctx: &FnCtx<'_>, parts: &[&Expr]) -> bool {
+    parts
+        .iter()
+        .take(2)
+        .any(|p| crate::type_analysis::string_value_is_runtime_guaranteed(ctx, p))
+}
+
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
     // #6884: a statically typed numeric TypedArray read is Number|undefined,
     // not an unconditional raw f64. In arithmetic context the OOB `undefined`
@@ -624,7 +645,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // shapes go through the existing pairwise paths.
                 if l_is_str && r_is_str {
                     if let Some(parts) = flatten_string_add_chain(ctx, left, right) {
-                        if parts.len() >= 3 {
+                        if parts.len() >= 3 && chain_fold_is_sound(ctx, &parts) {
                             return lower_string_concat_chain(ctx, &parts);
                         }
                     }

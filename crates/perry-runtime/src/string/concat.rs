@@ -765,6 +765,58 @@ pub extern "C" fn js_value_concat_string(
     js_string_concat(value_str, suffix_handle.get_raw_const_ptr::<StringHeader>())
 }
 
+/// Resolve a value the caller has already established `is_any_string()` to a
+/// raw `StringHeader*`, materialising SSO bits exactly the way the codegen's
+/// `unbox_str_handle` does.
+///
+/// The caller must pass the result straight into a helper that roots it —
+/// nothing may allocate between the SSO materialisation and that root.
+#[inline]
+fn string_handle_of(value: f64) -> *const StringHeader {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_string() {
+        return unsafe { jsval.as_string_ptr() };
+    }
+    crate::value::js_get_string_pointer_unified(value) as *const StringHeader
+}
+
+/// `l + r` where the codegen's only evidence that `l` is a string is a
+/// DECLARED type (or a receiver-blind method-name guess) — #7837 defect 1.
+///
+/// The fused `js_string_concat_value` cannot make this decision itself,
+/// because codegen hands it an already-unboxed `StringHeader*` and the tag is
+/// gone by then. So a declared-only operand is passed NaN-BOXED instead, and
+/// the operator is chosen from the bits:
+///
+/// * `l` really is a string → the identical fused single-allocation concat the
+///   strict path emits, so an honest program pays one predictable compare
+///   inside a call it was already making, and no codegen diamond at all;
+/// * `l` is anything else → the spec's `+`, which is what
+///   `const s: string = (42 as any); s + 7` must answer (`49`, not `"427"`).
+///
+/// See [`js_value_add_string`] for the mirrored operand order.
+#[no_mangle]
+pub unsafe extern "C" fn js_string_add_value(l_value: f64, r_value: f64) -> f64 {
+    if crate::value::JSValue::from_bits(l_value.to_bits()).is_any_string() {
+        let handle = string_handle_of(l_value);
+        let out = js_string_concat_value(handle, r_value);
+        return crate::value::js_nanbox_string(out as i64);
+    }
+    crate::value::js_dynamic_string_or_number_add(l_value, r_value)
+}
+
+/// `l + r` where the declared-only string operand is on the RIGHT — the mirror
+/// of [`js_string_add_value`], guarding `js_value_concat_string` the same way.
+#[no_mangle]
+pub unsafe extern "C" fn js_value_add_string(l_value: f64, r_value: f64) -> f64 {
+    if crate::value::JSValue::from_bits(r_value.to_bits()).is_any_string() {
+        let handle = string_handle_of(r_value);
+        let out = js_value_concat_string(l_value, handle);
+        return crate::value::js_nanbox_string(out as i64);
+    }
+    crate::value::js_dynamic_string_or_number_add(l_value, r_value)
+}
+
 /// Fast integer-to-ASCII formatting into a provided buffer.
 /// Returns the number of bytes written. Digits are written to the END
 /// of the buffer and then shifted to the front.

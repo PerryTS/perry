@@ -33,6 +33,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_concat_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_value_concat_string", I64, &[DOUBLE, I64]);
 
+    // #7837: the same two fused concats, but with the STRING side passed
+    // NaN-boxed instead of pre-unboxed, so the helper can tell a real string
+    // from a `let s: string` that holds a number and pick the spec's operator.
+    // `js_string_add_value(l_box, r_box) -> box`  (string believed on the left)
+    // `js_value_add_string(l_box, r_box) -> box`  (string believed on the right)
+    module.declare_function("js_string_add_value", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_value_add_string", DOUBLE, &[DOUBLE, DOUBLE]);
+
     // N-way string concat (v0.5.769): collapses a left-spine of pairwise
     // string-typed Add nodes (`a + b + c + ...`) into a single allocation.
     // First arg is a stack-allocated array of N NaN-boxed `f64` values;

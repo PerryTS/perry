@@ -53,6 +53,8 @@ mod function;
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 #[cfg(test)]
 mod clone_suffix_tests;
+#[cfg(test)]
+mod declared_string_add_tests;
 pub(crate) mod helpers;
 mod method;
 mod method_registry;

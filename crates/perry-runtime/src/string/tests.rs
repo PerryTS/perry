@@ -573,3 +573,56 @@ fn concat_box_delegates_a_non_string_operand_to_the_dynamic_add() {
         "a 2-byte ASCII result must still be assembled inline as SSO"
     );
 }
+
+// ---------------------------------------------------------------- #7837
+
+/// NaN-box a heap string, the way codegen's `nanbox_string_inline` does.
+fn boxed_heap(s: &str) -> f64 {
+    let h = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    crate::value::js_nanbox_string(h as i64)
+}
+
+fn boxed_text(v: f64) -> String {
+    let p = crate::value::js_jsvalue_to_string(v);
+    string_as_str(p).to_string()
+}
+
+#[test]
+fn string_add_value_picks_the_operator_from_the_bits() {
+    // #7837 defect 1. `js_string_concat_value` takes an already-unboxed
+    // `StringHeader*`, so it cannot tell a lie from a string; these two take
+    // the NaN-box precisely so they can.
+    unsafe {
+        // A real string on the declared side concatenates, whatever the other
+        // operand holds — including a heap string, an SSO string and a number.
+        assert_eq!(
+            boxed_text(js_string_add_value(boxed_heap("ab"), 5.0)),
+            "ab5"
+        );
+        assert_eq!(
+            boxed_text(js_value_add_string(5.0, boxed_heap("ab"))),
+            "5ab"
+        );
+        let sso = js_string_new_sso(b"ab".as_ptr(), 2);
+        assert_eq!(boxed_text(js_string_add_value(sso, 5.0)), "ab5");
+        assert_eq!(boxed_text(js_value_add_string(5.0, sso)), "5ab");
+        assert_eq!(
+            boxed_text(js_string_add_value(boxed_heap("ab"), boxed_heap("cd"))),
+            "abcd"
+        );
+
+        // A LIE on the declared side is a numeric add, not a concatenation:
+        // `const s: string = (42 as any); s + 7` is 49 in Node, and was "427".
+        assert_eq!(js_string_add_value(42.0, 7.0), 49.0);
+        assert_eq!(js_value_add_string(7.0, 42.0), 49.0);
+        // ...and still concatenates when the OTHER operand is a real string.
+        assert_eq!(
+            boxed_text(js_string_add_value(42.0, boxed_heap("x"))),
+            "42x"
+        );
+        assert_eq!(
+            boxed_text(js_value_add_string(boxed_heap("x"), 42.0)),
+            "x42"
+        );
+    }
+}
