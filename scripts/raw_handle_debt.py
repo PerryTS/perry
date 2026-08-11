@@ -16,11 +16,26 @@ This is a DEBT COUNTER, not a soundness proof. Rust has no effect system to mark
 every bare read is a bug -- many are the final read in a scope with nothing
 after them. The number is meaningful because it can only be paid down.
 
+THE RECORDED NUMBER IS ITSELF A RATCHET
+=======================================
+
+`--update` refuses to raise the baseline, but nothing made CI *run* `--update`.
+A pull request could add bare reads, raise `raw_handle_debt_baseline.txt` and
+the per-module ceilings to match, and the plain check would compare the new
+count against the new baseline and pass. The ratchet measured the diff against
+a number the same diff was allowed to move (#7659).
+
+`--no-raise-vs <ref>` closes that: it reads both recorded files out of the pull
+request's merge base and fails if the checked-out copies are larger anywhere --
+the total, an existing module's ceiling, or a module that was not listed at all.
+Unchanged and lower both pass, so paying debt down stays a one-step change.
+
 Usage:
     scripts/raw_handle_debt.py            # report, fail if above the baseline
     scripts/raw_handle_debt.py --update   # rewrite the baseline (must go DOWN)
+    scripts/raw_handle_debt.py --no-raise-vs <ref>   # ...and vs. the merge base
 """
-import re, sys, pathlib
+import re, subprocess, sys, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "crates" / "perry-runtime" / "src"
@@ -87,6 +102,98 @@ def check_per_module(per_file):
     return bad
 
 
+def parse_ceilings(text):
+    """`{path: ceiling}` from the per-module file's TEXT (any revision of it)."""
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        n, path = line.split(None, 1)
+        out[path.strip()] = int(n)
+    return out
+
+
+def compare_across_base(base_total, base_ceilings, head_total, head_ceilings):
+    """Violations for a diff that RAISES recorded debt relative to its base.
+
+    A module absent from the base's ceilings counts as 0, so adding a line is a
+    raise from zero rather than a fresh start. Removals and decreases are
+    silent: the ratchet exists to stop the number going up.
+    """
+    bad = []
+    if base_total is None and not base_ceilings:
+        # The merge base recorded nothing at all -- the gate did not exist yet
+        # on that side. There is no number to ratchet against, so every head
+        # entry would read as "newly listed". Note this is NOT the unfetchable
+        # case: `git_show` refuses to resolve a bad ref rather than reporting an
+        # empty one, so reaching here means the base genuinely had no records.
+        return bad
+    if base_total is not None and head_total > base_total:
+        bad.append(
+            f"baseline raised {base_total} -> {head_total} relative to the merge "
+            f"base. The ratchet only goes down; convert the new sites to "
+            f"RuntimeHandle::across_{{mut,const,nanbox}} instead of recording them."
+        )
+    for path, ceiling in sorted(head_ceilings.items()):
+        was = base_ceilings.get(path, 0)
+        if ceiling > was:
+            where = "was not listed" if path not in base_ceilings else f"ceiling was {was}"
+            bad.append(f"{path}: ceiling raised to {ceiling} ({where} at the merge base)")
+    return bad
+
+
+def git_show(ref, path):
+    """`<ref>:<path>`'s text, or None when that revision has no such file.
+
+    The ref is RESOLVED FIRST, and an unresolvable one raises. That order is the
+    whole point: a merge base the runner never fetched otherwise reports every
+    file as absent, which reads as "the base recorded nothing" -- a comparison
+    that did not happen, reported as a pass. It must be a RED build instead.
+    """
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if resolved.returncode != 0:
+        raise SystemExit(
+            f"::error::cannot resolve {ref}. The merge base was not fetched, so "
+            f"the raw-handle ratchet cannot compare against it -- failing rather "
+            f"than passing on a comparison that did not happen. Fetch it with "
+            f"`git fetch --no-tags --depth=1 origin <sha>`."
+        )
+    proc = subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if proc.returncode == 0:
+        return proc.stdout
+    return None
+
+
+def no_raise_vs(ref):
+    """Fail if the CHECKED-OUT recorded debt is higher than `ref`'s."""
+    base_baseline = git_show(ref, "scripts/raw_handle_debt_baseline.txt")
+    base_total = int(base_baseline.split()[0]) if base_baseline else None
+    base_files = git_show(ref, "scripts/raw_handle_debt_files.txt")
+    base_ceilings = parse_ceilings(base_files) if base_files else {}
+
+    head_total = int(BASELINE.read_text().split()[0])
+    head_ceilings = load_ceilings()
+
+    bad = compare_across_base(base_total, base_ceilings, head_total, head_ceilings)
+    if bad:
+        print(f"::error::recorded raw-handle debt rose vs. {ref}: {len(bad)} violation(s)")
+        for b in bad:
+            print(f"  {b}")
+        return 1
+    print(
+        f"recorded debt vs. {ref}: baseline {base_total} -> {head_total}, "
+        f"{len(base_ceilings)} -> {len(head_ceilings)} module ceiling(s), none raised"
+    )
+    return 0
+
+
 def self_test():
     """Guard the gate against its own regressions.
 
@@ -140,13 +247,57 @@ def self_test():
     finally:
         globals()["load_ceilings"] = saved
 
+    # #7659: the merge-base rule. Its whole job is to reject a diff that moves
+    # the number it is measured against, so each way of moving it is asserted
+    # to fire -- and both ways of NOT moving it to stay silent, since a rule
+    # that fires on an unchanged baseline would block every honest PR.
+    base_ceilings = {"a.rs": 2, "b.rs": 1}
+    raises = [
+        ("total raised", 998, base_ceilings, 999, base_ceilings, "baseline raised"),
+        ("ceiling raised", 998, base_ceilings, 998, {"a.rs": 3, "b.rs": 1}, "ceiling raised to 3"),
+        ("module newly listed", 998, base_ceilings, 998,
+         dict(base_ceilings, **{"c.rs": 1}), "was not listed"),
+    ]
+    for label, bt, bc, ht, hc, needle in raises:
+        if not any(needle in v for v in compare_across_base(bt, bc, ht, hc)):
+            print(f"self-test FAILED: merge-base rule did not fire: {label}")
+            return 1
+    holds = [
+        ("unchanged", 998, base_ceilings, 998, base_ceilings),
+        ("total lowered", 998, base_ceilings, 990, {"a.rs": 1}),
+        ("module cleaned away", 998, base_ceilings, 997, {"a.rs": 2}),
+        ("gate did not exist at the merge base", None, {}, 998, base_ceilings),
+    ]
+    for label, bt, bc, ht, hc in holds:
+        if compare_across_base(bt, bc, ht, hc):
+            print(f"self-test FAILED: merge-base rule fired on a legal diff: {label}")
+            return 1
+    # The failure mode this rule is most likely to die of: an unfetched merge
+    # base makes every file read as absent, which is indistinguishable from
+    # "the gate did not exist there" -- i.e. a silent pass. Resolving the ref
+    # first is what separates them, so assert the bad ref still raises.
+    try:
+        git_show("0000000000000000000000000000000000000000", "scripts/raw_handle_debt_baseline.txt")
+    except SystemExit:
+        pass
+    else:
+        print("self-test FAILED: an unresolvable merge base did not fail the check")
+        return 1
+
     print(f"self-test ok ({total} sites across {len(per_file)} files); "
-          f"all three per-module rules fire, clean case silent")
+          f"all three per-module rules fire, clean case silent; "
+          f"merge-base rule rejects all three raises and passes four legal diffs")
     return 0
 
 def main():
     if "--self-test" in sys.argv:
         return self_test()
+    if "--no-raise-vs" in sys.argv:
+        i = sys.argv.index("--no-raise-vs")
+        if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
+            print("--no-raise-vs needs a git ref (the pull request's merge base)")
+            return 1
+        return no_raise_vs(sys.argv[i + 1])
     total, per_file = count()
     if "--update" in sys.argv:
         prev = int(BASELINE.read_text().split()[0]) if BASELINE.exists() else None

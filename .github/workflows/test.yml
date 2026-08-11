@@ -247,6 +247,25 @@ jobs:
           python3 scripts/raw_handle_debt.py --self-test
           python3 scripts/raw_handle_debt.py
 
+      # #7659: the step above compares the count against a baseline the SAME
+      # DIFF is free to move -- add bare reads, raise the recorded number to
+      # match, and it passes. `--update` refuses to raise, but nothing made CI
+      # run `--update`. This compares the recorded files against the pull
+      # request's merge base, so the number can only fall across a PR boundary.
+      #
+      # Gated on the event rather than on an empty variable: a `push` build has
+      # no merge base, but a `pull_request` build with an unresolvable one is a
+      # comparison that did not happen, and the script fails on that rather
+      # than passing (see `git_show`).
+      - name: Raw-handle debt ratchet vs. merge base
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/raw_handle_debt.py --no-raise-vs "$BASE_SHA"
+
       # The gap-suite ratchet decides whether conformance-smoke goes red, so
       # its own logic is unit-checked on the cheap job rather than only being
       # exercised 8 shards deep.
