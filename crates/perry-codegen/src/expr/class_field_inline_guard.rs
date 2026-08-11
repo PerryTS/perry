@@ -528,25 +528,36 @@ pub(crate) fn emit_class_field_inline_precheck(
         let keys_array = blk.load(I64, &ka_ptr);
         let ka_ok = blk.icmp_eq(I64, &keys_array, expected_keys);
 
-        // The declared class's own (class id, keys) pair, OR any subclass arm's.
-        // Each arm is a full pair — matching a class id without its canonical
-        // keys array would accept an instance that has since grown a property
-        // and no longer has the packed layout this slot index describes.
-        let mut shape_ok = blk.and(I1, &cid_ok, &ka_ok);
-        for arm in subclass_arms {
-            let arm_cid_ok = blk.icmp_eq(I32, &class_id, &arm.class_id.to_string());
-            let arm_keys = blk.load(I64, &format!("@{}", arm.keys_global));
-            let arm_ka_ok = blk.icmp_eq(I64, &keys_array, &arm_keys);
-            let arm_ok = blk.and(I1, &arm_cid_ok, &arm_ka_ok);
-            shape_ok = blk.or(I1, &shape_ok, &arm_ok);
-        }
-
         // (The process-global enable flag was already checked at the gate above,
         // before this dereference.)
         let mut acc = blk.and(I1, &gtype_ok, &not_fwd);
         acc = blk.and(I1, &acc, &ot_ok);
-        acc = blk.and(I1, &acc, &shape_ok);
-        acc = blk.and(I1, &acc, &fc_ok);
+        if subclass_arms.is_empty() {
+            // Byte-for-byte the pre-widening and-chain. A class with no
+            // eligible subclass must emit IDENTICAL IR, so the corpus-wide
+            // `cmp` stays a usable no-regression instrument (a reordered
+            // and-chain alone made 17 of 19 corpus binaries differ for no
+            // behavioural reason).
+            acc = blk.and(I1, &acc, &cid_ok);
+            acc = blk.and(I1, &acc, &fc_ok);
+            acc = blk.and(I1, &acc, &ka_ok);
+        } else {
+            // The declared class's own (class id, keys) pair, OR any subclass
+            // arm's. Each arm is a full pair — matching a class id without its
+            // canonical keys array would accept an instance that has since
+            // grown a property and no longer has the packed layout this slot
+            // index describes.
+            let mut shape_ok = blk.and(I1, &cid_ok, &ka_ok);
+            for arm in subclass_arms {
+                let arm_cid_ok = blk.icmp_eq(I32, &class_id, &arm.class_id.to_string());
+                let arm_keys = blk.load(I64, &format!("@{}", arm.keys_global));
+                let arm_ka_ok = blk.icmp_eq(I64, &keys_array, &arm_keys);
+                let arm_ok = blk.and(I1, &arm_cid_ok, &arm_ka_ok);
+                shape_ok = blk.or(I1, &shape_ok, &arm_ok);
+            }
+            acc = blk.and(I1, &acc, &shape_ok);
+            acc = blk.and(I1, &acc, &fc_ok);
+        }
 
         // #5654: a receiver that has ever had a property / accessor descriptor
         // installed on it (Object.defineProperty / freeze / seal) needs the
