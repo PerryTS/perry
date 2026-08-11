@@ -130,7 +130,7 @@ fn survivor_reclaim_resets_dead_blocks() {
 
         assert_eq!(survivor_after, 0);
         assert!(stats.reset_blocks > 0);
-        assert!(stats.reusable_bytes > 0 || stats.deallocated_bytes > 0);
+        assert!(stats.reusable_bytes > 0 || stats.removed_bytes > 0);
         assert!(
             after_reclaim.total_reserved_bytes <= after_alloc.total_reserved_bytes,
             "dead survivor blocks should become reusable or be returned"
@@ -554,6 +554,8 @@ fn generation_metadata_arena_reset_stats_reports_reusable_bytes_for_retained_res
         assert_eq!(stats.reusable_bytes, before_offset);
         assert_eq!(stats.deallocated_blocks, 0);
         assert_eq!(stats.deallocated_bytes, 0);
+        assert_eq!(stats.pooled_blocks, 0);
+        assert_eq!(stats.pooled_bytes, 0);
         ARENA.with(|a| unsafe {
             let arena = &*a.get();
             assert!(!arena.blocks[idx].data.is_null());
@@ -567,8 +569,8 @@ fn generation_metadata_removed_on_nursery_block_deallocation() {
     run_with_fresh_arenas(|| {
         let (idx, base, _size, stats) = reset_old_nursery_block(1);
         assert!(
-            stats.deallocated_blocks >= 1,
-            "test setup should deallocate at least one nursery block"
+            stats.removed_blocks >= 1,
+            "test setup should remove at least one nursery block"
         );
         ARENA.with(|a| unsafe {
             let arena = &*a.get();
@@ -581,13 +583,17 @@ fn generation_metadata_removed_on_nursery_block_deallocation() {
 }
 
 #[test]
-fn generation_metadata_arena_reset_stats_reports_deallocated_blocks_as_returned_not_reusable() {
+fn generation_metadata_arena_reset_stats_distinguishes_pooled_from_deallocated_blocks() {
     run_with_fresh_arenas(|| {
         let (idx, base, size, _before_offset, stats) = reset_single_reclaimable_nursery_block(1);
         assert_eq!(stats.reset_blocks, 1);
         assert_eq!(stats.reusable_bytes, 0);
-        assert_eq!(stats.deallocated_blocks, 1);
-        assert_eq!(stats.deallocated_bytes, size);
+        assert_eq!(stats.removed_blocks, 1);
+        assert_eq!(stats.removed_bytes, size);
+        assert_eq!(stats.pooled_blocks, 1);
+        assert_eq!(stats.pooled_bytes, size);
+        assert_eq!(stats.deallocated_blocks, 0);
+        assert_eq!(stats.deallocated_bytes, 0);
         ARENA.with(|a| unsafe {
             let arena = &*a.get();
             assert!(arena.blocks[idx].data.is_null());
@@ -602,7 +608,7 @@ fn generation_metadata_registered_on_tombstone_reuse() {
     run_with_fresh_arenas(|| {
         let (idx, _base, _size, stats) = reset_old_nursery_block(1);
         assert!(
-            stats.deallocated_blocks >= 1,
+            stats.removed_blocks >= 1,
             "test setup should create a nursery tombstone"
         );
 
@@ -1167,6 +1173,76 @@ fn block_pool_is_per_thread_and_drops_with_its_thread() {
         .expect("spawned thread must exit cleanly, not double-free");
     // The other thread's pool never touched ours.
     assert_eq!(block_pool_bytes_for_test(), before);
+}
+
+/// #7875: per-thread LIFO ownership must not multiply the allowance by the
+/// number of simultaneously-live `perry/thread` agents. Four threads race to
+/// reserve 8 MiB against the same process counter under a 2 MiB cap; the
+/// census reaches the cap, never four copies of it, and returns to zero after
+/// the simulated owners release their shares. The production wrapper passes
+/// `BLOCK_POOL_PROCESS_BYTES` to this exact reservation primitive.
+#[test]
+fn block_pool_cap_is_process_wide_across_live_threads() {
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(5));
+    let release = std::sync::Arc::new(std::sync::Barrier::new(5));
+    let mut threads = Vec::new();
+
+    for _ in 0..4 {
+        let counter = counter.clone();
+        let ready = ready.clone();
+        let release = release.clone();
+        threads.push(std::thread::spawn(move || {
+            let mut reserved = 0;
+            for _ in 0..2 {
+                if super::block::block_pool_counter_try_reserve(
+                    &counter,
+                    BLOCK_SIZE,
+                    2 * BLOCK_SIZE,
+                ) {
+                    reserved += BLOCK_SIZE;
+                }
+            }
+            ready.wait();
+            release.wait();
+            counter.fetch_sub(reserved, std::sync::atomic::Ordering::Relaxed);
+        }));
+    }
+
+    ready.wait();
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Relaxed),
+        2 * BLOCK_SIZE,
+        "all live threads together must share one process-wide cap"
+    );
+    release.wait();
+    for thread in threads {
+        thread.join().expect("pool worker must exit cleanly");
+    }
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "each owner must release its share of the process census"
+    );
+}
+
+#[test]
+fn allocation_failure_recovery_drains_mismatched_pooled_blocks() {
+    let layout = std::alloc::Layout::from_size_align(BLOCK_SIZE, 16).unwrap();
+    let raw = unsafe { std::alloc::alloc(layout) };
+    assert!(!raw.is_null());
+    assert!(block_pool_put(raw, BLOCK_SIZE));
+
+    force_next_block_alloc_failure();
+    let block = crate::arena::block::reserve_arena_block(BLOCK_SIZE + 1);
+    assert_eq!(
+        block_pool_bytes_for_test(),
+        0,
+        "emergency full collection must drain blocks unusable for the failed size"
+    );
+
+    let returned_layout = std::alloc::Layout::from_size_align(block.size, 16).unwrap();
+    unsafe { std::alloc::dealloc(block.data, returned_layout) };
 }
 
 // ---------------------------------------------------------------------------

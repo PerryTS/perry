@@ -389,8 +389,33 @@ pub(crate) struct ArenaTelemetrySnapshot {
 pub struct ArenaResetStats {
     pub reset_blocks: usize,
     pub reusable_bytes: usize,
+    /// Blocks removed from arena reservation accounting, whether retained in
+    /// the recycled pool or actually returned to the allocator.
+    pub removed_blocks: usize,
+    pub removed_bytes: usize,
+    /// Removed blocks retained as discarded, reusable mappings.
+    pub pooled_blocks: usize,
+    pub pooled_bytes: usize,
+    /// Removed blocks actually handed to `dealloc` in production.
     pub deallocated_blocks: usize,
     pub deallocated_bytes: usize,
+}
+
+impl ArenaResetStats {
+    pub(crate) fn record_block_release(&mut self, size: usize, release: ArenaBlockRelease) {
+        self.removed_blocks = self.removed_blocks.saturating_add(1);
+        self.removed_bytes = self.removed_bytes.saturating_add(size);
+        match release {
+            ArenaBlockRelease::Pooled => {
+                self.pooled_blocks = self.pooled_blocks.saturating_add(1);
+                self.pooled_bytes = self.pooled_bytes.saturating_add(size);
+            }
+            ArenaBlockRelease::Deallocated => {
+                self.deallocated_blocks = self.deallocated_blocks.saturating_add(1);
+                self.deallocated_bytes = self.deallocated_bytes.saturating_add(size);
+            }
+        }
+    }
 }
 
 fn arena_region_telemetry(arena: &Arena) -> ArenaRegionTelemetry {

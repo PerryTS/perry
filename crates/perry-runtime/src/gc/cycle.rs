@@ -1840,6 +1840,26 @@ impl GcCycleState {
                 }
                 ReclaimSubphase::MallocTrim => {
                     let reclaim_start = trace_phase_start(&self.trace);
+                    // #7875: a critical-pressure / allocation-failure request
+                    // drains only after a FULL sweep has released all idle
+                    // arena blocks, and before allocator pressure relief so
+                    // the newly-deallocated mappings participate in the trim.
+                    if self.minor.is_none() {
+                        let drained: crate::arena::BlockPoolDrainStats =
+                            crate::arena::drain_block_pool_if_requested();
+                        if let Some(trace) = self.trace.as_mut() {
+                            trace.sweep.pool_drained_blocks = drained.blocks;
+                            trace.sweep.pool_drained_bytes = drained.bytes;
+                            trace.sweep.returned_bytes =
+                                trace.sweep.returned_bytes.saturating_add(drained.bytes);
+                            trace.sweep.deallocated_blocks = trace
+                                .sweep
+                                .deallocated_blocks
+                                .saturating_add(drained.blocks);
+                            trace.sweep.deallocated_bytes =
+                                trace.sweep.deallocated_bytes.saturating_add(drained.bytes);
+                        }
+                    }
                     let trim = run_malloc_trim(self.progress_kind);
                     if let Some(trace) = self.trace.as_mut() {
                         if trim.status == AllocatorMaintenanceStatus::Executed {

@@ -114,6 +114,14 @@ pub(super) struct SweepTraceStats {
     pub(super) reusable_bytes: usize,
     pub(super) returned_bytes: usize,
     pub(super) reset_blocks: usize,
+    pub(super) removed_blocks: usize,
+    pub(super) removed_bytes: usize,
+    pub(super) pooled_blocks: usize,
+    pub(super) pooled_bytes: usize,
+    /// Pooled mappings explicitly deallocated after a critical-pressure or
+    /// allocation-failure full cycle. Included in returned/deallocated totals.
+    pub(super) pool_drained_blocks: usize,
+    pub(super) pool_drained_bytes: usize,
     pub(super) deallocated_blocks: usize,
     // Compatibility alias for returned_bytes.
     pub(super) deallocated_bytes: usize,
@@ -1054,6 +1062,22 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
             .reusable_bytes
             .saturating_add(survivor_reset.reusable_bytes)
             .saturating_add(old_reset.reusable_bytes),
+        removed_blocks: nursery_reset
+            .removed_blocks
+            .saturating_add(survivor_reset.removed_blocks)
+            .saturating_add(old_reset.removed_blocks),
+        removed_bytes: nursery_reset
+            .removed_bytes
+            .saturating_add(survivor_reset.removed_bytes)
+            .saturating_add(old_reset.removed_bytes),
+        pooled_blocks: nursery_reset
+            .pooled_blocks
+            .saturating_add(survivor_reset.pooled_blocks)
+            .saturating_add(old_reset.pooled_blocks),
+        pooled_bytes: nursery_reset
+            .pooled_bytes
+            .saturating_add(survivor_reset.pooled_bytes)
+            .saturating_add(old_reset.pooled_bytes),
         deallocated_blocks: nursery_reset
             .deallocated_blocks
             .saturating_add(survivor_reset.deallocated_blocks)
@@ -1070,6 +1094,12 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
         reusable_bytes: reset.reusable_bytes,
         returned_bytes: reset.deallocated_bytes,
         reset_blocks: reset.reset_blocks,
+        removed_blocks: reset.removed_blocks,
+        removed_bytes: reset.removed_bytes,
+        pooled_blocks: reset.pooled_blocks,
+        pooled_bytes: reset.pooled_bytes,
+        pool_drained_blocks: 0,
+        pool_drained_bytes: 0,
         deallocated_blocks: reset.deallocated_blocks,
         deallocated_bytes: reset.deallocated_bytes,
         retained_forwarded_stub_objects,
@@ -1244,6 +1274,12 @@ impl IncrementalSweepState {
                         reusable_bytes: reset.reusable_bytes,
                         returned_bytes: reset.deallocated_bytes,
                         reset_blocks: reset.reset_blocks,
+                        removed_blocks: reset.removed_blocks,
+                        removed_bytes: reset.removed_bytes,
+                        pooled_blocks: reset.pooled_blocks,
+                        pooled_bytes: reset.pooled_bytes,
+                        pool_drained_blocks: 0,
+                        pool_drained_bytes: 0,
                         deallocated_blocks: reset.deallocated_blocks,
                         deallocated_bytes: reset.deallocated_bytes,
                         retained_forwarded_stub_objects: self.arena.retained_forwarded_stub_objects,
@@ -1655,6 +1691,10 @@ fn add_reset_stats(
     crate::arena::ArenaResetStats {
         reset_blocks: lhs.reset_blocks.saturating_add(rhs.reset_blocks),
         reusable_bytes: lhs.reusable_bytes.saturating_add(rhs.reusable_bytes),
+        removed_blocks: lhs.removed_blocks.saturating_add(rhs.removed_blocks),
+        removed_bytes: lhs.removed_bytes.saturating_add(rhs.removed_bytes),
+        pooled_blocks: lhs.pooled_blocks.saturating_add(rhs.pooled_blocks),
+        pooled_bytes: lhs.pooled_bytes.saturating_add(rhs.pooled_bytes),
         deallocated_blocks: lhs
             .deallocated_blocks
             .saturating_add(rhs.deallocated_blocks),

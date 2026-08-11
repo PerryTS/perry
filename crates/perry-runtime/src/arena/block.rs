@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Size of each arena block (1 MB — issue #179 tier 1 #1).
 ///
@@ -79,7 +80,7 @@ fn block_size_for(min_size: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Owns the pooled blocks, so that a thread exiting with a non-empty pool
-/// releases them instead of leaking up to [`BLOCK_POOL_CAP_BYTES`].
+/// releases them instead of leaking up to the process-wide pool cap.
 ///
 /// The ownership has to live *here* rather than in a drain called from
 /// `Arena::drop`: both are TLS destructors, their relative order is not
@@ -91,11 +92,20 @@ fn block_size_for(min_size: usize) -> usize {
 /// arena and GC, so each exiting agent thread would otherwise strand its
 /// pooled blocks — unbounded growth across repeated spawns, in the one change
 /// whose purpose is lowering RSS.
-struct BlockPool(Vec<(*mut u8, usize)>);
+struct BlockPool {
+    blocks: Vec<(*mut u8, usize)>,
+    drain_requested: bool,
+}
 
 impl Drop for BlockPool {
     fn drop(&mut self) {
-        for &(data, size) in &self.0 {
+        let bytes = self
+            .blocks
+            .iter()
+            .map(|&(_, size)| size)
+            .fold(0usize, usize::saturating_add);
+        block_pool_process_bytes_sub(bytes);
+        for &(data, size) in &self.blocks {
             if data.is_null() || size == 0 {
                 continue;
             }
@@ -113,18 +123,73 @@ impl Drop for BlockPool {
 }
 
 thread_local! {
-    static BLOCK_POOL: RefCell<BlockPool> = const { RefCell::new(BlockPool(Vec::new())) };
+    static BLOCK_POOL: RefCell<BlockPool> = const { RefCell::new(BlockPool {
+        blocks: Vec::new(),
+        drain_requested: false,
+    }) };
     static BLOCK_POOL_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Cap on pooled bytes: 64 MB, matching the young cap ceiling. Measured on
+/// Process-wide cap on pooled bytes. It remains 64 MiB on unconstrained
+/// desktop/server processes and scales to one eighth of a device/container
+/// heap budget. A single global reservation closes the N-live-agents × 64 MiB
+/// shape while retaining per-thread LIFO reuse.
+///
+/// The original 64 MiB choice was measured on
 /// tree.ts (Mac mini M1, quiet): no pool -> 225 MB peak RSS; 64 MB pool ->
 /// 190 MB; 128 MB pool -> 210 MB. Bigger is NOT better — pooled pages are
 /// MADV_FREE'd but stay resident until the OS wants them, so an oversized
 /// pool trades fresh-segment growth for held free pages past the optimum.
 /// This is a cap, not a floor — the pool holds only blocks that were
 /// actually released, and the OS can take every pooled page under pressure.
-const BLOCK_POOL_CAP_BYTES: usize = 64 * 1024 * 1024;
+static BLOCK_POOL_PROCESS_BYTES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static BLOCK_POOL_EXPLICIT_DRAINED_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BlockPoolDrainStats {
+    pub(crate) blocks: usize,
+    pub(crate) bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ArenaBlockRelease {
+    Pooled,
+    Deallocated,
+}
+
+fn block_pool_process_bytes_sub(bytes: usize) {
+    if bytes == 0 {
+        return;
+    }
+    BLOCK_POOL_PROCESS_BYTES
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_sub(bytes)
+        })
+        .unwrap_or_else(|current| {
+            panic!("process block-pool byte accounting underflow: {current} < {bytes}")
+        });
+}
+
+fn block_pool_process_try_reserve(size: usize) -> bool {
+    block_pool_counter_try_reserve(&BLOCK_POOL_PROCESS_BYTES, size, block_pool_cap_bytes())
+}
+
+pub(super) fn block_pool_counter_try_reserve(
+    counter: &AtomicUsize,
+    size: usize,
+    cap: usize,
+) -> bool {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(size).filter(|&next| next <= cap)
+        })
+        .is_ok()
+}
+
+fn block_pool_cap_bytes() -> usize {
+    crate::gc::gc_block_pool_cap_bytes()
+}
 
 /// Offer a released block to the pool. Returns false (caller deallocs) when
 /// the pool is full or the block is null.
@@ -132,14 +197,17 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
     if data.is_null() || size == 0 {
         return false;
     }
-    if BLOCK_POOL_BYTES.with(Cell::get).saturating_add(size) > BLOCK_POOL_CAP_BYTES {
+    let cap = block_pool_cap_bytes();
+    if BLOCK_POOL_BYTES.with(Cell::get).saturating_add(size) > cap
+        || !block_pool_process_try_reserve(size)
+    {
         return false;
     }
     #[cfg(unix)]
     unsafe {
         libc::madvise(data as *mut libc::c_void, size, libc::MADV_FREE);
     }
-    BLOCK_POOL.with(|p| p.borrow_mut().0.push((data, size)));
+    BLOCK_POOL.with(|p| p.borrow_mut().blocks.push((data, size)));
     BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_add(size)));
     true
 }
@@ -147,16 +215,93 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
 fn block_pool_take(size: usize) -> Option<*mut u8> {
     let taken = BLOCK_POOL.with(|p| {
         let mut pool = p.borrow_mut();
-        let idx = pool.0.iter().rposition(|&(_, s)| s == size)?;
-        Some(pool.0.swap_remove(idx).0)
+        let idx = pool.blocks.iter().rposition(|&(_, s)| s == size)?;
+        Some(pool.blocks.swap_remove(idx).0)
     })?;
     BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_sub(size)));
+    block_pool_process_bytes_sub(size);
     Some(taken)
+}
+
+/// Release an arena block through the one pool-or-deallocate funnel. The
+/// disposition is returned so GC telemetry can distinguish idle mappings kept
+/// for reuse from bytes actually handed to the allocator.
+pub(crate) fn release_arena_block(data: *mut u8, size: usize) -> ArenaBlockRelease {
+    if block_pool_put(data, size) {
+        return ArenaBlockRelease::Pooled;
+    }
+    if !data.is_null() && size != 0 {
+        let layout = Layout::from_size_align(size, 16).unwrap();
+        unsafe {
+            // #4665: test builds retain otherwise-freed mappings so stale raw
+            // GC pointers remain readable. The production disposition is still
+            // Deallocated; focused pool tests observe the explicit drain census.
+            if !cfg!(test) {
+                std::alloc::dealloc(data, layout);
+            }
+        }
+    }
+    ArenaBlockRelease::Deallocated
+}
+
+/// Drain the current thread's retained blocks through real allocator
+/// deallocation in production. Logical removal is still performed under
+/// `cfg(test)`; #4665 suppresses the final `dealloc` there.
+pub(crate) fn drain_block_pool() -> BlockPoolDrainStats {
+    let entries = BLOCK_POOL.with(|pool| std::mem::take(&mut pool.borrow_mut().blocks));
+    let bytes = entries
+        .iter()
+        .map(|&(_, size)| size)
+        .fold(0usize, usize::saturating_add);
+    let tracked = BLOCK_POOL_BYTES.with(|cell| cell.replace(0));
+    debug_assert_eq!(tracked, bytes, "thread block-pool byte accounting drifted");
+    block_pool_process_bytes_sub(bytes);
+
+    for &(data, size) in &entries {
+        if data.is_null() || size == 0 {
+            continue;
+        }
+        let layout = Layout::from_size_align(size, 16).unwrap();
+        unsafe {
+            if !cfg!(test) {
+                std::alloc::dealloc(data, layout);
+            }
+        }
+    }
+    #[cfg(test)]
+    BLOCK_POOL_EXPLICIT_DRAINED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    BlockPoolDrainStats {
+        blocks: entries.len(),
+        bytes,
+    }
+}
+
+pub(crate) fn request_block_pool_drain() {
+    BLOCK_POOL.with(|pool| pool.borrow_mut().drain_requested = true);
+}
+
+/// Called only from full-cycle publication. A critical-pressure request stays
+/// sticky through unsafe/deferred periods and is retired after the owed full
+/// collection has completed all arena reclamation.
+pub(crate) fn drain_block_pool_if_requested() -> BlockPoolDrainStats {
+    let requested = BLOCK_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        std::mem::replace(&mut pool.drain_requested, false)
+    });
+    if !requested {
+        return BlockPoolDrainStats::default();
+    }
+    drain_block_pool()
 }
 
 #[cfg(test)]
 pub(crate) fn block_pool_bytes_for_test() -> usize {
     BLOCK_POOL_BYTES.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn block_pool_explicit_drained_bytes_for_test() -> usize {
+    BLOCK_POOL_EXPLICIT_DRAINED_BYTES.load(Ordering::Relaxed)
 }
 
 fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
@@ -189,7 +334,8 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
 }
 
 /// Reserve a block, running one emergency full collection if the OS refuses
-/// memory — idle-block dealloc and the malloc sweep can return real pages.
+/// memory — idle-block release, pool draining, and the malloc sweep can return
+/// real pages.
 ///
 /// **NO `&mut Arena` BORROW MAY BE LIVE ACROSS THIS CALL (#7022).** The
 /// emergency collection allocates into the arenas exactly like the
@@ -332,7 +478,7 @@ impl Drop for Arena {
     fn drop(&mut self) {
         for block in &self.blocks {
             // Skip tombstoned slots (gen-GC Phase C4b-δ): C4b-δ
-            // deallocates fully-idle nursery blocks back to the OS
+            // releases fully-idle nursery blocks through the pool/allocator
             // and leaves a `data = null, size = 0` tombstone in the
             // Vec to keep block-index semantics stable across GC
             // cycles. `dealloc(null, …)` is UB.
@@ -369,7 +515,7 @@ impl Arena {
     /// (`data = null, size = 0`) instead of an eagerly-mapped 1 MB
     /// block, so JS-touching threads that never allocate in this
     /// region (spawn workers, tokio callers) don't pay the block.
-    /// The tombstone shape is exactly the one C4b-δ dealloc leaves
+    /// The tombstone shape is exactly the one C4b-δ block release leaves
     /// behind, so every walker/reset/alloc path already handles it:
     /// the first `alloc` misses the tombstone, and the slow path's
     /// `install_fresh_block` replaces the tombstone slot in place.
@@ -520,9 +666,9 @@ impl Arena {
             return ptr;
         }
         // Still no room anywhere — need a fresh block. C4b-δ:
-        // prefer reusing a tombstoned slot (a block deallocated by
+        // prefer reusing a tombstoned slot (a block released by
         // `arena_reset_empty_blocks` after staying idle past the
-        // dealloc threshold) over growing the Vec, so block_idx
+        // release threshold) over growing the Vec, so block_idx
         // semantics stay bounded even on workloads that churn
         // through nursery blocks.
         self.alloc_fresh_block(size, align)
@@ -762,9 +908,9 @@ thread_local! {
     /// `gc_check_trigger()` calls it on every `gc_malloc`, so for an
     /// 80-block working set the per-allocation overhead was ~250 ns
     /// just to recompute a total that almost never changes (only on
-    /// fresh-block alloc and tombstone dealloc). Maintained via deltas
+    /// fresh-block alloc and tombstone release). Maintained via deltas
     /// at the four mutation sites (Arena::new initial block, fresh
-    /// alloc into a tombstone slot or the end, and dealloc inside
+    /// alloc into a tombstone slot or the end, and release inside
     /// `arena_reset_empty_blocks`).
     pub(crate) static ARENA_TOTAL_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 
@@ -785,8 +931,8 @@ thread_local! {
     ///     `old_arena_reclaim_selected_dead_blocks`,
     ///     `OldArenaReclaimDeadBlocksState::process_block`) which zero
     ///     old block offsets on sweep/defrag.
-    /// Block install/dealloc paths don't touch it: fresh blocks start
-    /// at offset 0 and blocks are only deallocated after their offset
+    /// Block install/release paths don't touch it: fresh blocks start
+    /// at offset 0 and blocks are only released after their offset
     /// was already zeroed. `old_gen_in_use_bytes()` (stats.rs)
     /// debug-asserts this cache against the O(blocks) recompute so a
     /// missed mutation site fails tests instead of silently skewing
@@ -838,7 +984,7 @@ thread_local! {
     /// (same lifetime contract as longlived blocks from the nursery
     /// reset path), and never feed the inline bump allocator. Full
     /// mark-sweep can reclaim completely dead old blocks through the
-    /// dedicated old-arena reset/deallocation path.
+    /// dedicated old-arena reset/release path.
     pub(crate) static OLD_ARENA: UnsafeCell<Arena> =
         UnsafeCell::new(Arena::new_lazy(HeapGeneration::Old, HeapSpace::Old));
 

@@ -955,10 +955,18 @@ fn test_old_page_defrag_trace_json_distinguishes_moved_from_reclaimable() {
     trace.evacuation.old_page_moved_bytes = 64;
     trace.evacuation.released_original_objects = 1;
     trace.evacuation.released_original_bytes = 64;
+    trace.old_pages.pooled_bytes = 48;
     trace.sweep.dead_bytes = 192;
     trace.sweep.freed_bytes = 192;
     trace.sweep.reusable_bytes = 128;
     trace.sweep.returned_bytes = 32;
+    trace.sweep.removed_blocks = 2;
+    trace.sweep.removed_bytes = 96;
+    trace.sweep.pooled_blocks = 1;
+    trace.sweep.pooled_bytes = 64;
+    trace.sweep.pool_drained_blocks = 1;
+    trace.sweep.pool_drained_bytes = 16;
+    trace.sweep.deallocated_blocks = 1;
     trace.sweep.deallocated_bytes = 32;
 
     let event = trace.into_json(GcStepSnapshot::current());
@@ -987,10 +995,18 @@ fn test_old_page_defrag_trace_json_distinguishes_moved_from_reclaimable() {
         event["evacuation"]["released_original_returned_bytes"].as_u64(),
         Some(0)
     );
+    assert_eq!(event["old_pages"]["pooled_bytes"].as_u64(), Some(48));
     assert_eq!(event["sweep"]["dead_bytes"].as_u64(), Some(192));
     assert_eq!(event["sweep"]["freed_bytes"].as_u64(), Some(192));
     assert_eq!(event["sweep"]["reusable_bytes"].as_u64(), Some(128));
     assert_eq!(event["sweep"]["returned_bytes"].as_u64(), Some(32));
+    assert_eq!(event["sweep"]["removed_blocks"].as_u64(), Some(2));
+    assert_eq!(event["sweep"]["removed_bytes"].as_u64(), Some(96));
+    assert_eq!(event["sweep"]["pooled_blocks"].as_u64(), Some(1));
+    assert_eq!(event["sweep"]["pooled_bytes"].as_u64(), Some(64));
+    assert_eq!(event["sweep"]["pool_drained_blocks"].as_u64(), Some(1));
+    assert_eq!(event["sweep"]["pool_drained_bytes"].as_u64(), Some(16));
+    assert_eq!(event["sweep"]["deallocated_blocks"].as_u64(), Some(1));
     assert_eq!(event["sweep"]["deallocated_bytes"].as_u64(), Some(32));
 }
 

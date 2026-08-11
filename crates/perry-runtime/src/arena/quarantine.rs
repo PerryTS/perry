@@ -586,8 +586,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
     ArenaResetStats {
         reset_blocks,
         reusable_bytes,
-        deallocated_blocks: 0,
-        deallocated_bytes: 0,
+        ..ArenaResetStats::default()
     }
 }
 

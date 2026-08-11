@@ -620,6 +620,9 @@ pub(crate) fn gc_try_emergency_reclaim() -> bool {
         return false;
     }
     IN_EMERGENCY.with(|c| c.set(true));
+    // A failed reservation can coexist with differently-sized pooled blocks.
+    // Make the emergency full return those mappings before the one retry.
+    crate::arena::request_block_pool_drain();
     let _scan = roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::EmergencyReclaim);
     let _ = gc_collect_emergency_full();
     IN_EMERGENCY.with(|c| c.set(false));

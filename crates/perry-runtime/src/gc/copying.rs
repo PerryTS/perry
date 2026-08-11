@@ -1649,8 +1649,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             crate::arena::ArenaResetStats {
                 reset_blocks: 0,
                 reusable_bytes: 0,
-                deallocated_blocks: 0,
-                deallocated_bytes: 0,
+                ..crate::arena::ArenaResetStats::default()
             },
             promotion_stats,
         )
@@ -1747,6 +1746,12 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             reusable_bytes: reset.reusable_bytes,
             returned_bytes: reset.deallocated_bytes,
             reset_blocks: reset.reset_blocks,
+            removed_blocks: reset.removed_blocks,
+            removed_bytes: reset.removed_bytes,
+            pooled_blocks: reset.pooled_blocks,
+            pooled_bytes: reset.pooled_bytes,
+            pool_drained_blocks: 0,
+            pool_drained_bytes: 0,
             deallocated_blocks: reset.deallocated_blocks,
             deallocated_bytes: reset.deallocated_bytes,
             retained_forwarded_stub_objects: 0,

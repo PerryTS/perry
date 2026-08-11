@@ -370,6 +370,21 @@ fn test_budget_scaled_clamps_only_under_budget() {
     assert_eq!(budget_scaled_with(Some(MB), 128 * MB, 1, 4, 2 * MB), 2 * MB);
 }
 
+#[test]
+fn test_block_pool_allowance_scales_below_small_heap_budgets() {
+    use super::super::heap_budget::gc_block_pool_cap_with_budget;
+    const MB: usize = 1024 * 1024;
+
+    assert_eq!(gc_block_pool_cap_with_budget(None), 64 * MB);
+    assert_eq!(gc_block_pool_cap_with_budget(Some(64 * MB)), 8 * MB);
+    assert_eq!(gc_block_pool_cap_with_budget(Some(32 * MB)), 4 * MB);
+    assert_eq!(gc_block_pool_cap_with_budget(Some(8 * MB)), MB);
+    assert!(
+        gc_block_pool_cap_with_budget(Some(32 * MB)) < 32 * MB,
+        "a small PERRY_GC_HEAP_LIMIT cannot coexist with the fixed 64 MiB reserve"
+    );
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // #7024: the alloc-point deferral must be REACHABLE at the moment a nursery
 // trigger becomes due, at every heap budget.

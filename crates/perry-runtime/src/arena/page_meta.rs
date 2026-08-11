@@ -294,6 +294,7 @@ pub(crate) struct OldPageSummary {
     pub(crate) live_bytes: usize,
     pub(crate) dead_bytes: usize,
     pub(crate) reusable_bytes: usize,
+    pub(crate) pooled_bytes: usize,
     pub(crate) returned_bytes: usize,
     pub(crate) pinned_bytes: usize,
     pub(crate) object_count: usize,
@@ -326,6 +327,7 @@ thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
     pub(crate) static OLD_GEN_RECLAIM_REUSABLE_BYTES: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static OLD_GEN_RECLAIM_POOLED_BYTES: Cell<usize> = const { Cell::new(0) };
     pub(crate) static OLD_GEN_RECLAIM_RETURNED_BYTES: Cell<usize> = const { Cell::new(0) };
 
     /// Monotonic per-cycle epoch for old-page `dirty_slots` (#6181). Bumped
@@ -1011,6 +1013,7 @@ pub(crate) fn old_pages_begin_gc_cycle() {
     // it on first touch this cycle (`old_page_account_dirty_slot`).
     OLD_GEN_PAGE_DIRTY_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
     OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.set(0));
+    OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.set(0));
     OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.set(0));
 }
 
@@ -1168,6 +1171,7 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
             }
         }
         summary.reusable_bytes = OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.get());
+        summary.pooled_bytes = OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.get());
         summary.returned_bytes = OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.get());
         summary
     })

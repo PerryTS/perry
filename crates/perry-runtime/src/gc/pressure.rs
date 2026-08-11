@@ -73,6 +73,14 @@ pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
         }
     });
 
+    // Critical pressure owes both a full collection and a post-reclaim drain.
+    // Arm these before every deferral guard so an unsafe callback cannot return
+    // `deferred` while remembering only the nursery-sized trigger clamp.
+    if level >= 2 {
+        GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
+        crate::arena::request_block_pool_drain();
+    }
+
     let blocked = GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
         || gc_blocked_by_unsafe_zone()
         || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
@@ -89,9 +97,6 @@ pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
     // the sticky "a full old-gen reclaim is owed" flag `gc_budgeted_due_trigger`
     // reads, so the safepoint drain runs a full mark-sweep rather than a minor.
     if roots::shadow_stack_has_active_frame() {
-        if level >= 2 {
-            GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
-        }
         if !GC_SAFEPOINT_PENDING.with(std::cell::Cell::get) {
             GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(total));
             // Through the helper, never the `Cell`: it also arms the global
