@@ -26,6 +26,20 @@ predicted branch and returns the same answer — the deal #7854 already records
 for element reads, and the same guard #6132 relies on to make a
 typed-array-valued member receiver safe on this path.
 
+The claim is restricted to a **non-string, non-symbol key**, and that
+restriction is load-bearing rather than tidy. The array arm's static-string-key
+route is `js_array_get_index_or_string` → `array_get_property_by_key` →
+`js_object_get_field_by_name`, which has no string-receiver index arm and
+answers `undefined` for `s["0"]` where JS answers the character — a *pre-existing*
+wrong answer on `main`, reachable today through a plain non-union declared
+receiver, filed as **#7891** with a minimal repro (not checked in as a gap test:
+it would be red by construction, and `test-parity/gap_snapshot.json` is generated
+on Linux and must not be hand-edited). The numeric
+route has no such hole (`js_array_get_f64` classifies the receiver through
+`clean_arr_ptr` / `array_object_receiver`). So the two key routes of the same arm
+have different receiver-validation strength, and only the numeric one is
+claim-safe. A string or symbol key keeps exactly the path it has today.
+
 Measured share on `gc-handoff/apps/interp.ts` before the change (xctrace time
 profile, `PERRY_DEBUG_SYMBOLS=1` build): `js_dyn_index_get` 5.0%,
 `js_array_length` 4.6% — the latter reached from `js_dyn_index_get`'s and the
@@ -58,3 +72,20 @@ tower: `test-files/test_gap_7853_declared_array_length_runtime_value.ts` and
 with a numeric `length`, an array-like object with a *non-numeric* `length`, a
 function, a typed array, `null` and `undefined`, through an alias, an interface
 and a class, and require node-identical output on every row.
+
+#### Coverage
+
+`test-files/test_gap_7890_declared_array_receiver_element_read.ts` is new. #7854's
+own test always routes through an intermediate local (`const items = e.items`), so
+nothing covered a `PropertyGet` used **directly** as the receiver — which is
+exactly what half A adds. The new file reads `e.items[i]` / `e.items.length`
+through a `type` alias, an `interface`, a class, a nullable reassigned cursor and a
+nested chain, handed an array, a string, a number, an array-like object with
+numeric and non-numeric `length`, a typed array, a function, `null` and
+`undefined`, plus negative / fractional / out-of-range indexes, a store through the
+same shape, and static string keys (which this change deliberately leaves on the
+generic path). Live rather than decorative: on that file the
+new arm's `arr.fast` guarded-read blocks go **11 → 15** and its
+`js_dyn_index_get` calls go **5 → 1**.
+
+Writing it is what found #7891.
