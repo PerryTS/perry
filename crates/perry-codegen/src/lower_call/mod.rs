@@ -44,6 +44,9 @@ mod console_promise;
 /// repaired (#7649) — see the module header for why these assert on IR.
 #[cfg(test)]
 mod console_rooting_tests;
+#[cfg(test)]
+mod ctor_prologue_store_tests;
+mod ctor_prologue_stores;
 mod dataview_intrinsic;
 mod early_branches;
 mod event_target;

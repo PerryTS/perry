@@ -220,7 +220,7 @@ fn two_field_class(name: &str, f1_ty: Type) -> Class {
 /// bump allocator, and only the inline bump has a packed header constant to
 /// fold the layout into. An outlined `js_object_alloc_class_inline_keys` site
 /// keeps the runtime declare, by design.
-fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
+pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
     let mut m = Module::new("typed_shape_bake.ts");
     m.classes = vec![two_field_class(name, f1_ty)];
     m.init = vec![Stmt::For {
@@ -307,7 +307,7 @@ fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
     m
 }
 
-fn emit(m: &Module) -> String {
+pub(super) fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
 
