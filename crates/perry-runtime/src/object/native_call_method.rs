@@ -19,6 +19,8 @@ mod string_methods;
 
 #[cfg(test)]
 mod dispatch_arg_coercion_tests;
+#[cfg(test)]
+mod gc_pointer_probe_tests;
 mod typed_array;
 
 use disposal::{
@@ -903,6 +905,60 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
         return None;
     }
     let addr = ptr as usize;
+
+    // #7850: current runtime-owned values are arena allocations with a real
+    // `GcHeader`: ordinary objects/arrays/strings, Maps, Sets, RegExps,
+    // Buffers, typed arrays, and fresh Symbols. The arena range lookup proves
+    // that `addr - GC_HEADER_SIZE` stays inside a registered allocation range,
+    // so classify those values from the header before touching any address-
+    // keyed kind registry. This matters once a program has created a Symbol:
+    // the old tail asked `is_registered_symbol` about every ordinary object,
+    // taking a process-global mutex and hashing the address on every dynamic
+    // method call.
+    //
+    // Header-less values still exist: persistent boxed Symbols and
+    // process-global SharedArrayBuffer backings. They are outside this
+    // runtime's arena ranges and deliberately fall through to the unchanged
+    // side-table tower below. The range-base check is load-bearing for a
+    // garbage candidate at the first byte of a registered range (#7742).
+    if let Some((_space, range_base)) = crate::arena::classify_heap_space_in_range(addr) {
+        if addr < range_base.saturating_add(crate::gc::GC_HEADER_SIZE) {
+            return None;
+        }
+        let gc_header =
+            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let gc_type = (*gc_header).obj_type;
+
+        // Map and Set have unambiguous dedicated GC types. Preserve the old
+        // helper contract (these native collection headers are not returned as
+        // generic GC pointers) without consulting their registries.
+        if matches!(gc_type, crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET) {
+            return None;
+        }
+        // RegExp shares GC_TYPE_OBJECT with ordinary objects, but every
+        // current RegExp carries a bounds-checked payload magic. Use that
+        // self-identifying header rather than falling through to REGEX_POINTERS.
+        if gc_type == crate::gc::GC_TYPE_OBJECT && crate::regex::regex_header_has_magic(ptr.cast())
+        {
+            return None;
+        }
+        // Fresh Symbols share GC_TYPE_STRING with strings. Arena membership
+        // makes the payload readable; the fixed-size symbol allocation plus
+        // its magic distinguishes it without the global SYMBOL_POINTERS lock.
+        if gc_type == crate::gc::GC_TYPE_STRING
+            && (*gc_header).size as usize
+                >= crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::symbol::SymbolHeader>()
+        {
+            let symbol = ptr as *const crate::symbol::SymbolHeader;
+            if (*symbol).magic == crate::symbol::SYMBOL_MAGIC && (*symbol).registered <= 1 {
+                return None;
+            }
+        }
+        return Some((ptr, gc_type));
+    }
+
+    #[cfg(test)]
+    TEST_SIDE_REGISTRY_TOWER_ENTRIES.with(|count| count.set(count.get().wrapping_add(1)));
     if crate::buffer::is_any_array_buffer(addr) {
         return Some((ptr, crate::gc::GC_TYPE_BUFFER));
     }
@@ -924,6 +980,16 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     }
     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     Some((ptr, (*gc_header).obj_type))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SIDE_REGISTRY_TOWER_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn test_side_registry_tower_entries() -> u64 {
+    TEST_SIDE_REGISTRY_TOWER_ENTRIES.with(std::cell::Cell::get)
 }
 
 #[inline]
