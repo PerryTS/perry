@@ -179,6 +179,10 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         VOID,
         &[I64, I32, PTR, I32, PTR, I32],
     );
+    // #7834: the address-dependent half of the declare, on its own. Emitted
+    // behind a `PERRY_PER_OBJECT_LAYOUTS_ANY` test by a construction site whose
+    // shape half is already baked into the inline-bump header constant.
+    module.declare_function("js_gc_forget_object_layout", VOID, &[I64]);
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)
     // - js_array_join(arr, sep) -> *mut StringHeader (i64)

@@ -426,6 +426,12 @@ pub(super) fn compile_function(
     // functions (the hint would be redundant) and async/generator forms.
     // Try-containing functions are ordinary inline candidates since #7302
     // (invoke-EH removed the setjmp-era noinline requirement).
+    // #7834: record the raw admission, before the `inline_hint` window narrows
+    // it. `lower_call/new_alloc.rs` uses this to decide the inline-bump
+    // allocation, which wants "is this code hot" and not "may LLVM's inline
+    // threshold move" — an `alwaysinline` callee is excluded from the latter
+    // and is the hottest possible case for the former.
+    lf.hot_loop_callee = cross_module.hot_loop_callees.contains(&f.id);
     if !lf.force_inline
         && inline_hot_small_enabled()
         && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())

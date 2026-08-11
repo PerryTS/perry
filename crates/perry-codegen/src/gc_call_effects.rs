@@ -83,6 +83,9 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_gc_note_slot_layout_aware"
         | "js_gc_init_typed_shape_layout"
         | "js_gc_declare_typed_shape_layout"
+        // #7834: `layout_forget_object` behind a null check — two thread-local
+        // side-table removals, no allocation and no re-entry.
+        | "js_gc_forget_object_layout"
         // `typed_feedback.rs`: counters/registries only. This intentionally
         // does not include feedback wrappers that perform the actual object
         // get/set operation.

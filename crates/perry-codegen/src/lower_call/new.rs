@@ -500,7 +500,8 @@ fn lower_new_impl_inner<'a>(
 
     // #7615 slice 8: the field-count computation and the three-arm instance
     // allocation moved verbatim to `new_alloc.rs` (see its header for why).
-    let obj_handle = super::new_alloc::emit_instance_alloc(ctx, class_name, class);
+    let alloc = super::new_alloc::emit_instance_alloc(ctx, class_name, class);
+    let obj_handle = alloc.handle;
     // #7154: root the instance for the duration of the constructor body.
     //
     // Until now the instance existed ONLY as an SSA register while that body
@@ -532,7 +533,7 @@ fn lower_new_impl_inner<'a>(
     //
     // Before the instance root's push, so the handle this names is the one the
     // allocator returned: nothing between here and there can collect.
-    emit_typed_shape_layout_declare(ctx, class_name, &obj_handle);
+    emit_typed_shape_layout_declare(ctx, class_name, &obj_handle, alloc.typed_layout_baked);
     let instance = {
         let protected = construction_runs_user_code(ctx, class_name);
         Instance {
@@ -669,16 +670,8 @@ fn lower_new_impl_inner<'a>(
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
                 || class.extends_expr.is_some();
-            let is_derived_lit = if is_derived { "1" } else { "0" };
-            let final_box = ctx.block().call(
-                DOUBLE,
-                "js_ctor_return_override",
-                &[
-                    (DOUBLE, &obj_box),
-                    (DOUBLE, &ctor_ret),
-                    (crate::types::I32, is_derived_lit),
-                ],
-            );
+            let final_box =
+                super::new_helpers::emit_ctor_return_override(ctx, &obj_box, &ctor_ret, is_derived);
             return Ok(final_box);
         }
         if let Some(save) = &saved_new_target {
@@ -1560,16 +1553,7 @@ fn lower_new_impl_inner<'a>(
         }
         ctx.current_block = after_idx;
         let raw = ctx.block().load(DOUBLE, &ret.result_slot);
-        let is_derived = if ret.is_derived { "1" } else { "0" };
-        ctx.block().call(
-            DOUBLE,
-            "js_ctor_return_override",
-            &[
-                (DOUBLE, &obj_box),
-                (DOUBLE, &raw),
-                (crate::types::I32, is_derived),
-            ],
-        )
+        super::new_helpers::emit_ctor_return_override(ctx, &obj_box, &raw, ret.is_derived)
     } else {
         obj_box
     };

@@ -42,9 +42,42 @@ use crate::types::{I32, I64, I8, PTR};
 /// scan-outward-past-switch-frames logic uses. A `new` inside a bare `switch`
 /// is therefore correctly treated as not-in-a-loop.
 fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
-    ctx.loop_targets
+    if ctx
+        .loop_targets
         .iter()
         .any(|(continue_label, _, _)| !continue_label.is_empty())
+    {
+        return true;
+    }
+    // #7834: a `new` in a function the hot-loop-callee pre-pass admitted is a
+    // `new` in a loop, one frame out.
+    //
+    // The gate below this comment is about SPEED-vs-SIZE, and
+    // `collect_hot_loop_callees` answers exactly the question the loop test
+    // does — is this site hot enough to be worth ~268 bytes — with the
+    // anti-bloat backstop already attached: it admits only a function that
+    // (a) has a direct call site inside a loop and (b) has at most
+    // `inline_hot_small_max_call_sites` (4) direct call sites in the whole
+    // module. So the added code is bounded by 4 × (news in the function),
+    // which is the same order the loop arm already accepts.
+    //
+    // Deliberately NOT `func.inline_hint`: that is this set intersected with a
+    // 9..=20-statement window and with "not already `alwaysinline`", and the
+    // functions this needs most fall out of BOTH. `makeCycle` is 5 statements,
+    // so it is `alwaysinline` and never hinted — while being the single
+    // hottest function in the program.
+    //
+    // `cycles.ts` is the shape that needs it: `makeCycle` is called 10M times
+    // from `main`'s loop and allocates two `Cell`s, but its own body has no
+    // loop, so both allocations took the outlined
+    // `js_object_alloc_class_inline_keys` — 22% of the program's samples, plus
+    // a further 5% in `arena_alloc`'s inline-state sync, for work the inline
+    // bump does in eight stores.
+    //
+    // Reading `func.hot_loop_callee` here is well-ordered: `codegen/function.rs`
+    // sets it from `cross_module.hot_loop_callees` before the entry block is
+    // created and before any expression is lowered.
+    ctx.func.hot_loop_callee
 }
 
 /// Emit the instance allocation for `new <class_name>(...)` and return the raw
@@ -62,7 +95,37 @@ fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
 /// emission, which is the `RootedGroup::adopt_emitted` push that roots it for
 /// the constructor body; nothing between the allocator call and that push can
 /// collect.
-pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: &Class) -> String {
+/// What [`emit_instance_alloc`] produced: the instance's user pointer, plus
+/// whether the allocation already stamped this class's canonical typed-shape
+/// layout into the object's `GcHeader` constant (#7834).
+pub(super) struct InstanceAlloc {
+    pub(super) handle: String,
+    /// `true` ⟹ the header already reads `GC_LAYOUT_POINTER_FREE |
+    /// GC_OBJ_TYPED_LAYOUT_INTACT`, so the construction site owes the runtime
+    /// only the address-dependent half of `js_gc_declare_typed_shape_layout`
+    /// (clearing a recycled address's stale per-object record).
+    pub(super) typed_layout_baked: bool,
+}
+
+pub(super) fn emit_instance_alloc(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    class: &Class,
+) -> InstanceAlloc {
+    let mut typed_layout_baked = false;
+    let handle = emit_instance_alloc_inner(ctx, class_name, class, &mut typed_layout_baked);
+    InstanceAlloc {
+        handle,
+        typed_layout_baked,
+    }
+}
+
+fn emit_instance_alloc_inner(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    class: &Class,
+    typed_layout_baked: &mut bool,
+) -> String {
     // Compute total field count including inherited parent fields.
     // The runtime allocates at least 8 inline slots regardless, so this
     // mostly matters for shapes >8 fields.
@@ -296,7 +359,40 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
             // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
             // slots regardless of this initial tag.
             const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+            /// `GC_OBJ_TYPED_LAYOUT_INTACT` — the bit
+            /// `class_field_inline_guard` requires before it will read or write
+            /// a raw-f64 slot directly. Runtime-side name:
+            /// `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`.
+            const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
             const OBJECT_TYPE_REGULAR: u64 = 1;
+
+            // #7834: when this class's canonical layout is declarable at
+            // allocation AND its pointer mask is statically empty, the state
+            // this header already carries (`GC_LAYOUT_POINTER_FREE`) is the
+            // FINAL one, and the only thing `js_gc_declare_typed_shape_layout`
+            // would add per instance is the intact bit. Stamping it into the
+            // same constant store removes the call: on `churn_alloc` /
+            // `push_cls` that call was ~30% of the program, almost all of it
+            // re-deriving per object a fact that is a property of the SHAPE
+            // (see `gc::shape_install`'s module docs — the memo already reduced
+            // the map round-trip to a direct-mapped probe, and what is left is
+            // that probe, the type-table lookup, and the call itself).
+            //
+            // Requires `field_count == slot_count`: that mismatch is the one
+            // case `init_typed_shape_layout` answers by DOWNGRADING
+            // (`layout_set_typed_unknown`), and a constant cannot express "it
+            // depends". Computed here, before `ctx.block()` takes its mutable
+            // borrow.
+            *typed_layout_baked = super::typed_shape_init::layout_pointer_free_at_allocation(
+                ctx,
+                class_name,
+                field_count,
+            );
+            let typed_intact_bits = if *typed_layout_baked {
+                GC_OBJ_TYPED_LAYOUT_INTACT
+            } else {
+                0
+            };
 
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
             let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
@@ -410,7 +506,7 @@ pub(super) fn emit_instance_alloc(ctx: &mut FnCtx<'_>, class_name: &str, class: 
             //   bits 32..63  = size (u32)
             let gc_packed: u64 = GC_TYPE_OBJECT
                 | (GC_FLAG_ARENA << 8)
-                | (GC_LAYOUT_POINTER_FREE << 16)
+                | ((GC_LAYOUT_POINTER_FREE | typed_intact_bits) << 16)
                 | ((total_size as u64) << 32);
             // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
             blk.store(I64, &gc_packed.to_string(), &raw);

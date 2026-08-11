@@ -71,6 +71,8 @@ mod scalar_method;
 /// module header for why the default build cannot fault on them.
 #[cfg(test)]
 mod timer_rooting_tests;
+#[cfg(test)]
+mod typed_shape_bake_tests;
 /// #7510: which of the two typed-shape layout entry points a `new` site emits,
 /// and where. Split out of `new.rs` to keep it under the 2000-line cap.
 mod typed_shape_init;

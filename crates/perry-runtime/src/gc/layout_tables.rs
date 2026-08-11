@@ -380,7 +380,76 @@ pub(in crate::gc) fn per_object_layouts_maybe_nonempty() -> bool {
 /// through the wrappers below.
 #[inline(always)]
 pub(in crate::gc) fn mark_per_object_layouts_nonempty() {
-    hot_per_object_layout_hint().nonempty.set(true);
+    let hint = hot_per_object_layout_hint();
+    if !hint.nonempty.replace(true) {
+        per_object_layouts_global_arm();
+    }
+}
+
+/// Process-global mirror of [`PER_OBJECT_LAYOUTS_NONEMPTY`], ORed over every
+/// thread, exported so **generated code** can test it with one load (#7834).
+///
+/// `layout_forget_object` is a runtime call on every inline-bump construction,
+/// and on a monomorphic workload every one of those calls returns immediately
+/// having proved emptiness. The proof itself is thread-local, so codegen could
+/// not read it: a `_tlv_get_addr` from generated code costs more than the call
+/// it would replace. This byte is the same proof in a plain `static`, so the
+/// construction site becomes `load i8` + a never-taken branch.
+///
+/// `0` is a proof that **no thread** holds a per-object layout record, and so
+/// that no recycled address can carry a stale one. `1` is only a hint — the
+/// call it gates re-tests the thread-local flag and the address filter, exactly
+/// as it always did.
+///
+/// Maintained by a count of *armed threads* rather than a sticky set, so a
+/// workload that arms the regime transiently (a `tree`-shaped phase that later
+/// drops every per-object record) returns to the cheap path. A thread that
+/// exits while armed leaks its count, which can only leave this stuck at `1` —
+/// the conservative direction, costing the pre-#7834 call and nothing else.
+#[no_mangle]
+pub static PERRY_PER_OBJECT_LAYOUTS_ANY: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
+
+/// How many threads currently have a non-empty per-object layout table.
+static PER_OBJECT_LAYOUT_ARMED_THREADS: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+
+#[inline(never)]
+fn per_object_layouts_global_arm() {
+    use std::sync::atomic::Ordering;
+    PER_OBJECT_LAYOUT_ARMED_THREADS.fetch_add(1, Ordering::Relaxed);
+    PERRY_PER_OBJECT_LAYOUTS_ANY.store(1, Ordering::Release);
+}
+
+#[inline(never)]
+fn per_object_layouts_global_disarm() {
+    use std::sync::atomic::Ordering;
+    if PER_OBJECT_LAYOUT_ARMED_THREADS.fetch_sub(1, Ordering::Relaxed) <= 1 {
+        // Re-read rather than trusting the returned value: another thread may
+        // have armed between the decrement and here, and the store must not
+        // clear a live arm. A lost race leaves the byte at `1` with the count
+        // at `0`, which is the conservative direction (see the doc above).
+        if PER_OBJECT_LAYOUT_ARMED_THREADS.load(Ordering::Relaxed) <= 0 {
+            PERRY_PER_OBJECT_LAYOUTS_ANY.store(0, Ordering::Release);
+        }
+    }
+}
+
+/// The generated-code entry point for [`layout_forget_object`] (#7834).
+///
+/// An inline-bump `new` site that baked its layout state into the header
+/// constant still has to clear whatever a previous tenant of the recycled
+/// address left in the per-object tables — that is the one part of
+/// `js_gc_declare_typed_shape_layout` which depends on the address rather than
+/// on the shape. Codegen emits this call behind a
+/// [`PERRY_PER_OBJECT_LAYOUTS_ANY`] test, so it runs only in the armed regime.
+#[no_mangle]
+pub extern "C" fn js_gc_forget_object_layout(obj: u64) {
+    let user_ptr = super::layout::strip_nanbox_user_ptr(obj);
+    if user_ptr == 0 {
+        return;
+    }
+    layout_forget_object(user_ptr);
 }
 
 /// Re-establish the flag after a removal emptied one map: clear it once the
@@ -396,7 +465,9 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
         return;
     }
     if hot_layout_slot_masks().borrow().is_empty() && hot_typed_layouts().borrow().is_empty() {
-        hot_per_object_layout_hint().nonempty.set(false);
+        if hot_per_object_layout_hint().nonempty.replace(false) {
+            per_object_layouts_global_disarm();
+        }
         // Both maps are empty, so every bit is now stale. Clearing here is what
         // makes the filter's occupancy track LIVE entries rather than every
         // entry the program has ever created.
@@ -534,6 +605,16 @@ pub(in crate::gc) fn transfer_per_object_slot_mask(old_user: usize, new_user: us
 /// pre-#7510 path unchanged, and re-arms the flag on the way out.
 #[inline]
 pub(in crate::gc) fn layout_forget_object(user_ptr: usize) {
+    // #7834: the process-global mirror first, because reading it is a plain
+    // static load while `hot_per_object_layout_hint()` is a thread-local — and
+    // on Darwin a thread-local access is an out-of-line `_tlv_get_addr` call.
+    // `0` proves every thread's tables are empty, which is the steady state of
+    // every monomorphic workload, so the disarmed path now costs one load and
+    // one branch instead of a call. (Measured as 6% of `cycles`, whose
+    // pointer-bearing shape keeps the full runtime declare.)
+    if PERRY_PER_OBJECT_LAYOUTS_ANY.load(std::sync::atomic::Ordering::Acquire) == 0 {
+        return;
+    }
     // ONE hot-slot resolution for both halves of the guard: the flag (cheap,
     // and false for the overwhelming majority of workloads) and then the
     // address filter (what rescues a workload with an immortal record).

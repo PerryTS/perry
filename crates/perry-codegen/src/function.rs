@@ -36,6 +36,18 @@ pub struct LlFunction {
     /// inline-hot-small heuristic in `codegen/function.rs`. `alwaysinline`
     /// already implies the hint, so the two are never emitted together.
     pub inline_hint: bool,
+    /// #7834: `collectors::collect_hot_loop_callees` admitted this function —
+    /// it has at least one direct call site inside a LOOP and at most
+    /// `inline_hot_small_max_call_sites` call sites in the whole module.
+    ///
+    /// Not the same question as [`Self::inline_hint`], which is that set
+    /// INTERSECTED with a body-length window and with "not already
+    /// `alwaysinline`". A ≤8-statement function is `alwaysinline` and therefore
+    /// never hinted, yet it is exactly the shape whose body ends up executing
+    /// once per loop iteration — `cycles.ts`'s `makeCycle`. Sites that want
+    /// "is this code hot?" rather than "should LLVM's threshold move?" read
+    /// this.
+    pub hot_loop_callee: bool,
     /// Invoke-EH (#7302): this function contains landing pads (Itanium) or
     /// funclet pads (SEH), so its `define` line must carry
     /// `personality ptr @<name>` — `perry_eh_personality` on Mach-O/ELF,
@@ -215,6 +227,7 @@ impl LlFunction {
             linkage: String::new(),
             force_inline: false,
             inline_hint: false,
+            hot_loop_callee: false,
             personality: None,
             blocks: Vec::new(),
             block_counter: 0,
