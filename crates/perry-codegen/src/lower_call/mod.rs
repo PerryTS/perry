@@ -31,6 +31,8 @@ use crate::expr::{variant_name, FnCtx};
 //   `native_module_dispatch.rs` (#1105 followup): per-branch
 //   extraction of the original `lower_call.rs`'s 4.3k-LOC body so
 //   every file in this directory stays under 2000 lines.
+#[cfg(test)]
+mod alloc_hot_tests;
 mod atomics;
 pub(crate) mod buffer_intrinsic;
 mod builtin;
