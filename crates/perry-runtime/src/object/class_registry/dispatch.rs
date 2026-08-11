@@ -526,18 +526,34 @@ mod obj_dispatch_ic_tests {
 
     const CID: u32 = 61_001;
 
-    /// Run `body` on a stable vtable generation.
+    /// Run `body` on a stable vtable generation, retrying if it straddled a bump.
     ///
     /// Entries are keyed on `VTABLE_GEN`, and the whole point of that key is
-    /// that ANY class registration anywhere retires the cache. Sibling tests in
-    /// this crate register classes concurrently, so an insert/lookup pair can
-    /// straddle a bump and miss for a reason that has nothing to do with what
-    /// is being asserted. Retry until the pair runs inside one generation.
-    fn with_stable_gen(body: &dyn Fn()) {
+    /// that ANY class registration anywhere retires the cache. Sibling tests
+    /// register classes concurrently — `a_class_registration_invalidates_every_entry`
+    /// in THIS module calls `test_bump_vtable_generation()` on purpose — so an
+    /// insert/lookup pair can straddle a bump and miss for a reason that has
+    /// nothing to do with what is being asserted.
+    ///
+    /// #7365: the retry existed but could not fire. `body` asserted internally,
+    /// so a straddled pair **panicked on the setup assertion** before the loop
+    /// got to re-check the generation, and the retry budget was never spent.
+    /// That is why the failure rate INVERTED with scope: running just this
+    /// module (`--lib obj_dispatch_ic_tests`) put its five tests — including
+    /// the deliberate bumper — on threads together and failed 10 of 12 runs,
+    /// while the full 2000-test suite spread them out and failed about 1 in 6.
+    /// A filtered re-run, the standard triage move, therefore made an
+    /// intermittent test look reliably broken.
+    ///
+    /// So `body` now REPORTS whether its observations were valid instead of
+    /// asserting them: `false` means "a bump landed mid-pair, nothing was
+    /// learned", which is a retry rather than a failure. The assertions the
+    /// tests actually exist for stay assertions.
+    fn with_stable_gen(body: &dyn Fn() -> bool) {
         for _ in 0..64 {
             let before = VTABLE_GEN.load(Ordering::Acquire);
-            body();
-            if VTABLE_GEN.load(Ordering::Acquire) == before {
+            let observed = body();
+            if observed && VTABLE_GEN.load(Ordering::Acquire) == before {
                 return;
             }
         }
@@ -557,11 +573,11 @@ mod obj_dispatch_ic_tests {
             // different name through the SAME backing storage.
             let mut scratch = *b"area\0\0\0\0";
             obj_dispatch_ic_insert(CID, &scratch[..4], 0xAAAA, 1, false, false);
-            assert_eq!(
-                obj_dispatch_ic_lookup(CID, &scratch[..4]),
-                Some((0xAAAA, 1, false, false)),
-                "the entry we just inserted must be findable"
-            );
+            // Setup, not the subject: a miss here means a sibling bumped the
+            // generation between insert and lookup. Report it and retry.
+            if obj_dispatch_ic_lookup(CID, &scratch[..4]) != Some((0xAAAA, 1, false, false)) {
+                return false;
+            }
 
             scratch[..4].copy_from_slice(b"perim"[..4].try_into().unwrap());
             assert_eq!(
@@ -569,6 +585,7 @@ mod obj_dispatch_ic_tests {
                 None,
                 "a different name at the same address must MISS"
             );
+            true
         });
     }
 
@@ -576,11 +593,11 @@ mod obj_dispatch_ic_tests {
     fn a_hit_requires_the_matching_class_id() {
         with_stable_gen(&|| {
             obj_dispatch_ic_insert(CID, b"describe", 0xBBBB, 1, false, false);
-            assert_eq!(
-                obj_dispatch_ic_lookup(CID, b"describe"),
-                Some((0xBBBB, 1, false, false))
-            );
+            if obj_dispatch_ic_lookup(CID, b"describe") != Some((0xBBBB, 1, false, false)) {
+                return false;
+            }
             assert_eq!(obj_dispatch_ic_lookup(CID + 1, b"describe"), None);
+            true
         });
     }
 
@@ -605,6 +622,7 @@ mod obj_dispatch_ic_tests {
                 "an over-long name must fall through to the tower, not alias a \
              truncated key"
             );
+            true
         });
     }
 
@@ -615,6 +633,7 @@ mod obj_dispatch_ic_tests {
         with_stable_gen(&|| {
             obj_dispatch_ic_insert(CID, b"describe", 0xEEEE, 1, false, false);
             assert_eq!(obj_dispatch_ic_lookup(CID, b"describ"), None);
+            true
         });
     }
 }
