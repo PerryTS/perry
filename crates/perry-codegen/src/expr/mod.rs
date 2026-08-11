@@ -123,6 +123,7 @@ pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
     emit_jsvalue_slot_store_pointer_tested, emit_jsvalue_slot_store_scalar_aware_on_block,
     emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
+    emit_layout_note_slot_on_block, emit_may_carry_heap_pointer_check,
     emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block, emit_write_barrier,
     emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
     lower_array_super_init, lower_event_emitter_subclass_init, lower_node_stream_super_init,
@@ -133,6 +134,8 @@ pub(crate) use write_barrier::{
 // bulky `record_lowered_value*` method family, the shadow-slot free helpers,
 // and the `lower_expr` dispatch table moved into siblings to keep this file
 // under 2000 lines. Inherent methods (`record_value`) need no re-export.
+#[cfg(test)]
+mod array_push_guard_tests;
 mod dispatch;
 mod record_value;
 mod repsel_gates;
