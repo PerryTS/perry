@@ -6,6 +6,10 @@ fn probes() -> (u64, u64) {
     super::test_collection_registry_probe_count()
 }
 
+fn header_reads() -> u64 {
+    super::test_receiver_gc_header_read_count()
+}
+
 fn arm_both_registries() -> (*mut crate::map::MapHeader, *mut crate::set::SetHeader) {
     let map = crate::map::js_map_alloc(4);
     crate::map::js_map_set(map, 1.0, 10.0);
@@ -75,7 +79,17 @@ fn unmapped_legacy_raw_i64_is_rejected_before_the_gc_header_read() {
         crate::arena::HeapSpace::Unknown
     ));
 
-    let before = probes();
+    let probes_before = probes();
+    assert_eq!(header_reads(), 0);
+
+    assert_eq!(
+        js_dyn_index_get(raw_receiver, 0.0).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+    assert_eq!(probes(), probes_before);
+    assert_eq!(header_reads(), 0);
+
     assert_eq!(js_dyn_index_set(raw_receiver, 0.0, 42.0), 42.0);
-    assert_eq!(probes(), before);
+    assert_eq!(probes(), probes_before);
+    assert_eq!(header_reads(), 0);
 }

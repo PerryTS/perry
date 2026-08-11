@@ -4,21 +4,29 @@ use super::*;
 
 #[cfg(test)]
 thread_local! {
-    static TEST_COLLECTION_REGISTRY_PROBES: std::cell::Cell<(u64, u64)> =
-        const { std::cell::Cell::new((0, 0)) };
+    static TEST_DYN_INDEX_DISPATCH_COUNTS: std::cell::Cell<(u64, u64, u64)> =
+        const { std::cell::Cell::new((0, 0, 0)) };
 }
 
 #[cfg(test)]
 fn test_collection_registry_probe_count() -> (u64, u64) {
-    TEST_COLLECTION_REGISTRY_PROBES.with(std::cell::Cell::get)
+    TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| {
+        let (maps, sets, _) = counts.get();
+        (maps, sets)
+    })
+}
+
+#[cfg(test)]
+fn test_receiver_gc_header_read_count() -> u64 {
+    TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| counts.get().2)
 }
 
 #[inline(always)]
 fn probe_set_registry(addr: usize) -> bool {
     #[cfg(test)]
-    TEST_COLLECTION_REGISTRY_PROBES.with(|counts| {
-        let (maps, sets) = counts.get();
-        counts.set((maps, sets.wrapping_add(1)));
+    TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| {
+        let (maps, sets, header_reads) = counts.get();
+        counts.set((maps, sets.wrapping_add(1), header_reads));
     });
     crate::set::is_registered_set(addr)
 }
@@ -26,9 +34,9 @@ fn probe_set_registry(addr: usize) -> bool {
 #[inline(always)]
 fn probe_map_registry(addr: usize) -> bool {
     #[cfg(test)]
-    TEST_COLLECTION_REGISTRY_PROBES.with(|counts| {
-        let (maps, sets) = counts.get();
-        counts.set((maps.wrapping_add(1), sets));
+    TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| {
+        let (maps, sets, header_reads) = counts.get();
+        counts.set((maps.wrapping_add(1), sets, header_reads));
     });
     crate::map::is_registered_map(addr)
 }
@@ -39,8 +47,14 @@ fn probe_map_registry(addr: usize) -> bool {
 #[inline(always)]
 fn receiver_gc_tag(addr: usize) -> Option<(u8, u8)> {
     unsafe {
-        crate::value::addr_class::try_read_gc_header(addr)
-            .map(|header| (header.obj_type, header.gc_flags))
+        crate::value::addr_class::try_read_gc_header(addr).map(|header| {
+            #[cfg(test)]
+            TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| {
+                let (maps, sets, header_reads) = counts.get();
+                counts.set((maps, sets, header_reads.wrapping_add(1)));
+            });
+            (header.obj_type, header.gc_flags)
+        })
     }
 }
 
