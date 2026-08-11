@@ -1607,6 +1607,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // branches straight to the fast slot load, skipping the
                         // cross-crate guard call; on a miss it leaves the current
                         // block at the guard-call path below (unchanged).
+                        let subclass_arms =
+                            crate::expr::class_field_inline_guard::class_field_subclass_arms(
+                                ctx,
+                                &class_name,
+                                property,
+                                field_index,
+                                requires_raw_f64,
+                            );
                         let _guardcall_label =
                             crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
                                 ctx,
@@ -1618,6 +1626,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 requires_raw_f64,
                                 None,
                                 &fast_label,
+                                &subclass_arms,
                             );
                         let guard_ok = ctx.block().call(
                             I32,

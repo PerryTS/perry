@@ -736,6 +736,13 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
 
+    let subclass_arms = crate::expr::class_field_inline_guard::class_field_subclass_arms(
+        ctx,
+        &class_name,
+        property,
+        field_index,
+        true,
+    );
     let _guardcall_label = crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
         ctx,
         &obj_bits,
@@ -746,6 +753,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         true,
         None,
         &fast_label,
+        &subclass_arms,
     );
     let guard_ok = ctx.block().call(
         I32,
