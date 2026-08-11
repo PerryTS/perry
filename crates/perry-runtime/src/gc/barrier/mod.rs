@@ -841,6 +841,20 @@ pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
     push_mark_seed(header);
 }
 
+/// Is an incremental mark cycle in progress anywhere, or is this thread
+/// currently birthing objects black?
+///
+/// #7880 uses this to refuse the untraced promotion path. An allocate-black
+/// birth puts `GC_FLAG_MARKED` on a NURSERY object, and a cycle that neither
+/// reads nor clears marks would carry that bit into old-gen, where a stale
+/// mark reads as "live" to the next full sweep. The untraced path makes no
+/// liveness claim, so it must not be running while anything else is making one
+/// through the mark bit.
+#[inline]
+pub(super) fn incremental_mark_in_progress() -> bool {
+    !incremental_mark_barrier_globally_idle() || gc_birth_extra_flags() != 0
+}
+
 #[inline]
 pub(super) fn incremental_mark_barrier_active() -> bool {
     if incremental_mark_barrier_globally_idle() {

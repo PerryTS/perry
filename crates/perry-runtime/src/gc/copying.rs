@@ -961,6 +961,7 @@ fn untraced_promotion_instrument_veto() -> bool {
     gc_verify_evacuation_enabled()
         || super::fromspace_scan::fromspace_scan_enabled()
         || std::env::var_os("PERRY_GC_VERIFY_MARK").is_some()
+        || super::barrier::incremental_mark_in_progress()
 }
 
 pub(super) fn scan_remembered_dirty_slots_copying(
