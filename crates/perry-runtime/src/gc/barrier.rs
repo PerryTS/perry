@@ -1399,6 +1399,23 @@ pub(crate) fn relocate_copied_old_object_dirty_pages(
     {
         return true;
     }
+    // ★ The premise is "the SOURCE already satisfied the invariant", and that is
+    // only true if the source was itself an old-gen parent — the barrier does
+    // not dirty pages for a YOUNG parent, because a young parent's children are
+    // found by the ordinary trace.
+    //
+    // Growth routinely crosses that line: a nursery array whose new backing
+    // store is big enough to be born old-gen has NO dirty coverage to inherit,
+    // and translating its empty set leaves every young child unremembered — the
+    // minor then sweeps live objects. Caught by `gc-handoff/apps/shapes.ts`,
+    // which printed 1277282 where node prints 1176000 (deterministically, three
+    // runs). A young source must re-derive from values.
+    if !matches!(
+        crate::arena::classify_heap_generation(old_base),
+        crate::arena::HeapGeneration::Old
+    ) {
+        return false;
+    }
     const PAGE_SIZE: usize = 1 << 12; // crate::arena::GENERATION_PAGE_SHIFT
     let page_size = PAGE_SIZE;
     let first = crate::arena::generation_page_for_addr(old_base);
