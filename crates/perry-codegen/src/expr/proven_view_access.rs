@@ -118,7 +118,8 @@ pub(crate) fn local_is_proven_int_store_view(ctx: &FnCtx<'_>, id: u32) -> bool {
         return false;
     }
     ctx.buffer_view_slots.get(&id).is_some_and(|view| {
-        view.storage_inline_proven
+        view.pointer_state.is_stable()
+            && view.storage_inline_proven
             && view.native_owned.is_none()
             && view.index_unit == BufferIndexUnit::Element
             && view.alias.allows_noalias()
@@ -148,7 +149,8 @@ fn proven_view_for(
         return None;
     };
     let view = ctx.buffer_view_slots.get(id)?.clone();
-    if !view.storage_inline_proven
+    if !view.pointer_state.is_stable()
+        || !view.storage_inline_proven
         || view.native_owned.is_some()
         || view.index_unit != BufferIndexUnit::Element
     {

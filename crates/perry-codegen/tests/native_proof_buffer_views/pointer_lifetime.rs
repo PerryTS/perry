@@ -155,3 +155,54 @@ fn backing_buffer_exposure_invalidates_copied_view_alias_group() {
          data slot:\n{artifact:#}"
     );
 }
+
+#[test]
+fn native_memory_bulk_access_rejects_invalidated_cached_pointer() {
+    let body = vec![
+        typed_array_let(
+            1,
+            "words",
+            "Uint32Array",
+            perry_hir::TYPED_ARRAY_KIND_UINT32,
+            int(4),
+        ),
+        Stmt::Expr(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(local(1)),
+            property: "buffer".to_string(),
+        }),
+        Stmt::Expr(Expr::NativeMemoryFillU32 {
+            view: Box::new(local(1)),
+            value: Box::new(int(0)),
+        }),
+        Stmt::Return(Some(index_get(1, int(0)))),
+    ];
+
+    let mut opts = empty_opts();
+    opts.verify_native_regions = true;
+    let artifact = compile_artifact_json_for_module_with_opts(
+        module("native_memory_buffer_pointer_lifetime_7220.ts", body),
+        opts,
+    );
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NativeMemoryFillU32"
+                && record["consumer"] == "NativeMemoryFillU32.runtime_fallback"
+                && record["access_mode"] == "dynamic_fallback"
+        }),
+        "bulk access through an invalidated cached pointer must use the runtime fallback:\n\
+         {artifact:#}"
+    );
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "NativeMemoryFillU32"
+                && matches!(
+                    record["consumer"].as_str(),
+                    Some("NativeMemoryFillU32.memset_zero" | "NativeMemoryFillU32.store_loop")
+                )
+        }),
+        "bulk access through an invalidated cached pointer must not emit native writes:\n\
+         {artifact:#}"
+    );
+}

@@ -180,6 +180,9 @@ fn proven_view(
         return None;
     }
     let slot = ctx.buffer_view_slots.get(local_id)?.clone();
+    if !slot.pointer_state.is_stable() {
+        return None;
+    }
     if slot.index_unit != BufferIndexUnit::Element {
         return None;
     }

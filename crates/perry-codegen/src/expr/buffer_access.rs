@@ -248,6 +248,9 @@ pub(crate) fn lower_buffer_access_proof(
         },
         _ => return Ok(None),
     };
+    if !view.pointer_state.is_stable() {
+        return Ok(None);
+    }
 
     // A closure-captured buffer local is hazardous even before any escape
     // walk stamped `buffer_hazard_reasons` — the closure may mutate/realloc

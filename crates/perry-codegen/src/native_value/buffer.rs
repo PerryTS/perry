@@ -122,6 +122,12 @@ pub(crate) enum BufferViewPointerState {
     Invalidated { reason: MaterializationReason },
 }
 
+impl BufferViewPointerState {
+    pub(crate) fn is_stable(&self) -> bool {
+        matches!(self, Self::Stable)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) struct BufferViewRep {
