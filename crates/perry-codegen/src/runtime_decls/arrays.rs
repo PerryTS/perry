@@ -97,6 +97,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // for the inline PropertyGet length path when the GC-type check
     // can't prove the receiver is an Array/String.
     module.declare_function("js_value_length_f64", DOUBLE, &[DOUBLE]);
+    // #7853: property-semantic sibling used when a static Array/String/Named
+    // claim fails its runtime layout guard. Unlike the numeric helper above,
+    // it preserves `undefined` and non-numeric property values and throws for
+    // nullish receivers.
+    module.declare_function("js_value_length_property_f64", DOUBLE, &[DOUBLE]);
 
     // Shadow stack for precise root tracking (gen-GC Phase A per
     // docs/generational-gc-plan.md). Declared now so codegen can

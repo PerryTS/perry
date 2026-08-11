@@ -132,8 +132,9 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // callback-type validators (type check + static-message throw; their
         // throw path is the audited noreturn funnel). Deliberately NOT
         // admitted: js_value_length_f64 — its plain-object arm calls
-        // js_object_get_field_by_name_f64, a transitive getter path; and
-        // js_array_get_f64 — hole/accessor paths.
+        // js_object_get_field_by_name_f64, a transitive getter path;
+        // js_value_length_property_f64 deliberately delegates the full
+        // property/getter path; and js_array_get_f64 has hole/accessor paths.
         | "js_ctor_return_override"
         | "js_array_indexOf_jsvalue"
         | "js_validate_array_comparator"
@@ -245,9 +246,13 @@ mod tests {
             );
         }
         // Transitive re-entry paths found by the body audit must stay out:
-        // js_value_length_f64 reaches js_object_get_field_by_name_f64 for
+        // Both length helpers can reach js_object_get_field_by_name_f64 for
         // plain objects; js_array_get_f64 has hole/accessor paths.
-        for name in ["js_value_length_f64", "js_array_get_f64"] {
+        for name in [
+            "js_value_length_f64",
+            "js_value_length_property_f64",
+            "js_array_get_f64",
+        ] {
             assert_eq!(
                 classify_direct_callee(name),
                 GcCallEffect::Unknown,

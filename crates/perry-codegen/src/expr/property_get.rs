@@ -277,9 +277,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .is_some_and(is_numeric_typed_array_class) =>
         {
             let recv_box = lower_expr(ctx, object)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &recv_box)],
+            ))
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and
@@ -342,8 +344,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (`lshr 40; and 0xFF`, matching `js_value_length_f64`'s SSO
             // branch), heap STRING_TAG → `load i32` of `utf16_len` at
             // offset 0, anything else (annotation lie, nullable-union
-            // receiver) → the same `js_value_length_f64` slow call the
-            // generic tower's slow arm uses.
+            // receiver) → the property-semantic slow call used by the
+            // generic tower's slow arm.
             {
                 if crate::expr::static_string_lowering_enabled()
                     && is_string_expr(ctx, object)
@@ -388,9 +390,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.block().br(&merge_label);
 
                     ctx.current_block = slow_idx;
-                    let slow_len =
-                        ctx.block()
-                            .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]);
+                    let slow_len = ctx.block().call(
+                        DOUBLE,
+                        "js_value_length_property_f64",
+                        &[(DOUBLE, &recv_box)],
+                    );
                     let slow_pred = ctx.block().label.clone();
                     ctx.block().br(&merge_label);
 
@@ -517,14 +521,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let fast_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
 
-            // Runtime slow path: handles Buffer / TypedArray via side-
-            // table registries, returns 0 for non-length-bearing
-            // receivers (Closure / BigInt / Promise / Error / plain
-            // Object) and for non-pointer NaN-boxes.
+            // Runtime slow path: preserve ordinary property semantics when the
+            // annotation lies. It handles Buffer / TypedArray / Closure and
+            // objects through their normal dispatch, returns `undefined` for
+            // a missing property, preserves a non-numeric property value, and
+            // throws for a nullish receiver.
             ctx.current_block = slow_idx;
-            let slow_len = ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]);
+            let slow_len = ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &recv_box)],
+            );
             let slow_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
 

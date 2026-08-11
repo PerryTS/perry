@@ -235,6 +235,49 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     0.0
 }
 
+/// Read `.length` with ordinary JavaScript property semantics.
+///
+/// [`js_value_length_f64`] is deliberately numeric: array internals feed its
+/// result through `ToLength`, so a missing property historically collapses to
+/// zero there.  A source-level `receiver.length` read cannot use that sentinel
+/// when its inline layout guard misses.  TypeScript annotations are erased, so
+/// a receiver declared as an array may hold a number (whose `length` is
+/// `undefined`), an object with a non-numeric `length`, or a nullish value
+/// (which must throw).
+///
+/// Keep the SSO case here because the general dynamic property getter has no
+/// heap pointer to dispatch through.  Everything else delegates to that getter
+/// so Proxy traps, native handles, accessors, inherited properties, functions,
+/// buffers, typed arrays, and ordinary objects all share the normal property
+/// lookup rather than a second `.length` implementation.
+#[no_mangle]
+pub extern "C" fn js_value_length_property_f64(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        crate::error::js_throw_type_error_property_access(
+            jsval.is_null() as u32,
+            b"length".as_ptr(),
+            6,
+        );
+    }
+
+    if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
+        if matches!(
+            crate::builtins::boxed_primitive_to_string_tag(value),
+            Some("String")
+        ) {
+            return js_value_length_property_f64(payload);
+        }
+    }
+
+    if jsval.is_short_string() {
+        let string = crate::string::js_string_materialize_to_heap(value);
+        return crate::string::js_string_length(string) as f64;
+    }
+
+    unsafe { js_dynamic_object_get_property(value, b"length".as_ptr() as *const i8, 6) }
+}
+
 /// Unified object property access that handles both JS handle objects and native objects.
 /// Also handles strings for property access like `.length`.
 #[no_mangle]
@@ -759,6 +802,28 @@ mod length_handle_band_tests {
                 &mut cache,
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn property_length_preserves_missing_and_non_numeric_values() {
+        assert_eq!(
+            js_value_length_property_f64(42.0).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "a number has no length property"
+        );
+
+        let obj = crate::object::js_object_alloc(0, 1);
+        let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let seven = crate::string::js_string_from_bytes(b"seven".as_ptr(), 5);
+        let seven_value = crate::value::js_nanbox_string(seven as i64);
+        crate::object::js_object_set_field_by_name(obj, length_key, seven_value);
+        let boxed_obj = crate::value::js_nanbox_pointer(obj as i64);
+
+        assert_eq!(
+            js_value_length_property_f64(boxed_obj).to_bits(),
+            seven_value.to_bits(),
+            "a source-level property read must not coerce its value"
         );
     }
 }
