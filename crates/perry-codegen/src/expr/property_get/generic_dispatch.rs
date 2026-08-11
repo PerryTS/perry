@@ -128,21 +128,19 @@ pub(crate) fn lower_generic_property_get(
     // `js_object_get_field_by_name_f64` runtime entry (which
     // handles `.length` directly from the NaN-box length
     // byte and returns `undefined` for other keys).
-    let is_sso = ctx.block().icmp_eq(I64, &obj_tag, "32761"); // 0x7FF9
-                                                              // v0.5.747: INT32-tagged class refs (top16 == 0x7FFE) used
-                                                              // as PropertyGet receivers. Pre-fix these fell through to
-                                                              // the invalid-recv path (returning undefined) because the
-                                                              // 0xFFFD-masked tag check (0x7FFE & 0xFFFD = 0x7FFC, not
-                                                              // 0x7FFD) treated them as non-pointer values. Drizzle's
-                                                              // `is(value, type)` chain depends on `Cls.kind` reads through
-                                                              // an Any-typed local. Refs #420 / #618 followup.
-                                                              //
-                                                              // Note: this also catches plain int32 numeric values (e.g.
-                                                              // `(42).property`). The runtime helper's INT32-tag arm at
-                                                              // js_object_get_field_by_name returns undefined for any
-                                                              // class_id not registered in CLASS_DYNAMIC_PROPS, matching
-                                                              // the previous behavior — pure ints have no static fields.
-    let is_int32_class = ctx.block().icmp_eq(I64, &obj_tag, "32766"); // 0x7FFE
+    // v0.5.747: INT32-tagged class refs (top16 == 0x7FFE) used
+    // as PropertyGet receivers. Pre-fix these fell through to
+    // the invalid-recv path (returning undefined) because the
+    // 0xFFFD-masked tag check (0x7FFE & 0xFFFD = 0x7FFC, not
+    // 0x7FFD) treated them as non-pointer values. Drizzle's
+    // `is(value, type)` chain depends on `Cls.kind` reads through
+    // an Any-typed local. Refs #420 / #618 followup.
+    //
+    // Note: this also catches plain int32 numeric values (e.g.
+    // `(42).property`). The runtime helper's INT32-tag arm at
+    // js_object_get_field_by_name returns undefined for any
+    // class_id not registered in CLASS_DYNAMIC_PROPS, matching
+    // the previous behavior — pure ints have no static fields.
     let obj_tag_masked = ctx.block().and(I64, &obj_tag, "65533"); // 0xFFFD
     let is_valid = ctx.block().icmp_eq(I64, &obj_tag_masked, "32765"); // 0x7FFD
     let sso_idx = ctx.new_block("pget.recv_sso");
@@ -155,19 +153,28 @@ pub(crate) fn lower_generic_property_get(
     let invalid_label = ctx.block_label(invalid_idx);
     let class_ref_label = ctx.block_label(class_ref_idx);
     let final_merge_label = ctx.block_label(final_merge_idx);
-    // Three-step branch: first check SSO, then class-ref, then
-    // pointer-validity. Inverse branches funnel into invalid_idx.
-    let pic_or_invalid_idx = ctx.new_block("pget.check_ptr");
-    let pic_or_invalid_label = ctx.block_label(pic_or_invalid_idx);
+    // #7883: the POINTER/STRING test goes FIRST, and the two rare tags are
+    // discriminated in a cold block off its false edge. The three tag classes
+    // are pairwise disjoint — `is_valid` is `(tag & 0xFFFD) == 0x7FFD`, true
+    // only for 0x7FFD/0x7FFF, while SSO is 0x7FF9 and an INT32 class ref is
+    // 0x7FFE — so testing them in any order gives the same routing. The old
+    // order (SSO, then class-ref, then pointer) put two 16-bit constant
+    // materialisations, two compares and two branches in front of every real
+    // object receiver: 13 instructions before the PIC on the path that is
+    // taken essentially always. Now it is `lshr` + `and` + `cmp` + branch.
+    let other_idx = ctx.new_block("pget.recv_other");
+    let other_label = ctx.block_label(other_idx);
     let check_class_ref_idx = ctx.new_block("pget.check_class_ref");
     let check_class_ref_label = ctx.block_label(check_class_ref_idx);
+    ctx.block().cond_br(&is_valid, &pic_label, &other_label);
+    ctx.current_block = other_idx;
+    let is_sso = ctx.block().icmp_eq(I64, &obj_tag, "32761"); // 0x7FF9
     ctx.block()
         .cond_br(&is_sso, &sso_label, &check_class_ref_label);
     ctx.current_block = check_class_ref_idx;
+    let is_int32_class = ctx.block().icmp_eq(I64, &obj_tag, "32766"); // 0x7FFE
     ctx.block()
-        .cond_br(&is_int32_class, &class_ref_label, &pic_or_invalid_label);
-    ctx.current_block = pic_or_invalid_idx;
-    ctx.block().cond_br(&is_valid, &pic_label, &invalid_label);
+        .cond_br(&is_int32_class, &class_ref_label, &invalid_label);
 
     // Class-ref dispatch: route through the runtime helper which
     // detects INT32 class-ref bits and consults CLASS_DYNAMIC_PROPS
@@ -265,29 +272,48 @@ pub(crate) fn lower_generic_property_get(
     //
     // Threshold matches `js_native_call_method`'s small-handle
     // detection (raw_ptr < 0x100000).
+    let cache_ref = format!("@{}", cache_name);
     let is_real_ptr = ctx.block().icmp_ugt(I64, &obj_handle, "1048575"); // 0x100000
 
-    // Sentinel address: the per-site cache global itself —
-    // always valid, 16-byte aligned, and its bytes don't
-    // match GC_TYPE_OBJECT (=2) or an active keys_array, so
-    // the IC will cleanly miss when we substitute it for a
-    // small handle.
-    let cache_ref = format!("@{}", cache_name);
-    let cache_addr = ctx.block().ptrtoint(&cache_ref, I64);
-    let safe_obj_handle = ctx
-        .block()
-        .select(I1, &is_real_ptr, I64, &obj_handle, &cache_addr);
+    // #7883: the hit/miss/merge blocks are minted here so the guard chain
+    // below can BRANCH OUT to the miss on the first failing predicate
+    // instead of AND-ing eight of them into one flat `hit`. LLVM if-converts
+    // a flat predicate, so every receiver paid every load and every compare —
+    // including the two epoch loads — even after the very first one had
+    // already decided the answer. Each group now ends in its own `cond_br`;
+    // the miss block reconstructs what the polymorphic-way compares need
+    // through phis (`false`/`0` on the early-exit edges, which is exactly
+    // what the flat predicate computed there).
+    let hit_idx = ctx.new_block("pic.hit");
+    let miss_idx = ctx.new_block("pic.miss");
+    let merge_idx = ctx.new_block("pic.merge");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let hdr_idx = ctx.new_block("pic.recv_hdr");
+    let hdr_label = ctx.block_label(hdr_idx);
+    let tok_idx = ctx.new_block("pic.token");
+    let tok_label = ctx.block_label(tok_idx);
+    // Small-handle receivers (native-module registry ids) must never be
+    // dereferenced. Pre-#7883 they were kept out of the loads by selecting a
+    // sentinel address and AND-ing `is_real_ptr` into `hit`; the branch does
+    // the same job without putting a `select` (and the sentinel's address
+    // materialisation) in front of every real object read. The miss path
+    // still substitutes the sentinel, because the way compares below load
+    // `field_count` unconditionally.
+    // (edge labels are no longer needed: the miss block recomputes.)
+    ctx.block().cond_br(&is_real_ptr, &hdr_label, &miss_label);
+    ctx.current_block = hdr_idx;
 
     // GcHeader sits 8 bytes before the user pointer; obj_type is the
     // first u8 (GC_TYPE_OBJECT=2). Cost: 1 sub + 1 load i8 + 1 cmp
     // i8 + 1 and i1 — the cond_br's `is_object` operand is folded
     // into the existing branch instruction by LLVM. Branch-predicted
     // taken since real PropertyGet receivers are objects.
-    let gc_type_addr = ctx.block().sub(I64, &safe_obj_handle, "8");
+    let gc_type_addr = ctx.block().sub(I64, &obj_handle, "8");
     let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
     let gc_type = ctx.block().load(I8, &gc_type_ptr);
-    let gc_type_ok = ctx.block().icmp_eq(I8, &gc_type, "2");
-    let is_object = ctx.block().and(I1, &is_real_ptr, &gc_type_ok);
+    let is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
 
     // Issue #618: closures share GC_TYPE_OBJECT but their offset+16
     // is a capture slot, not `keys_array`. The PIC's keys_val ==
@@ -299,7 +325,7 @@ pub(crate) fn lower_generic_property_get(
     // `js_object_get_field_ic_miss` → `js_object_get_field_by_name`,
     // which dispatches closure dynamic-prop reads via the
     // `CLOSURE_DYNAMIC_PROPS` side-table.
-    let magic_addr = ctx.block().add(I64, &safe_obj_handle, "12");
+    let magic_addr = ctx.block().add(I64, &obj_handle, "12");
     let magic_ptr = ctx.block().inttoptr(I64, &magic_addr);
     let magic_val = ctx.block().load(I32, &magic_ptr);
     // CLOSURE_MAGIC = 0x434C4F53 (4 bytes "CLOS" little-endian).
@@ -321,7 +347,7 @@ pub(crate) fn lower_generic_property_get(
     // Specific repro: `function f(): any { ... return new
     // RegExp(...) } const r = f(); r.source` — fast path returns
     // garbage f64 instead of routing through `js_regexp_get_source`.
-    let object_type_ptr = ctx.block().inttoptr(I64, &safe_obj_handle);
+    let object_type_ptr = ctx.block().inttoptr(I64, &obj_handle);
     let object_type = ctx.block().load(I32, &object_type_ptr);
     let object_type_ok = ctx.block().icmp_eq(I32, &object_type, "1");
     let is_object = ctx.block().and(I1, &is_object, &object_type_ok);
@@ -338,15 +364,25 @@ pub(crate) fn lower_generic_property_get(
     // descriptors) whenever it is set. Mirrors the guard in
     // `class_field_inline_guard.rs`. Cost: 1 sub + load i16 + and + cmp,
     // folded into the existing `hit` cond_br.
-    let reserved_addr = ctx.block().sub(I64, &safe_obj_handle, "6");
+    let reserved_addr = ctx.block().sub(I64, &obj_handle, "6");
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(crate::types::I16, &reserved_ptr);
     let has_desc = ctx.block().and(crate::types::I16, &reserved, "2048"); // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
     let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
     let is_object = ctx.block().and(I1, &is_object, &no_desc);
 
+    // #7883: first exit. The four header predicates above are kept as one
+    // flat `and` on purpose — they are four loads from the SAME two cache
+    // lines and LLVM fuses their compares into a `ccmp` chain, which is
+    // cheaper than four branches. What was NOT worth folding is everything
+    // below: the keys load, the token select and the two epoch loads all
+    // hang off the same predicate, so a non-object receiver used to execute
+    // them before the flat `hit` could reject it.
+    ctx.block().cond_br(&is_object, &tok_label, &miss_label);
+    ctx.current_block = tok_idx;
+
     // Load obj->keys_array at offset 16 of ObjectHeader.
-    let keys_addr = ctx.block().add(I64, &safe_obj_handle, "16");
+    let keys_addr = ctx.block().add(I64, &obj_handle, "16");
     let keys_ptr_p = ctx.block().inttoptr(I64, &keys_addr);
     let keys_val = ctx.block().load(I64, &keys_ptr_p);
 
@@ -361,7 +397,7 @@ pub(crate) fn lower_generic_property_get(
     // two token kinds can never collide numerically — one compare, no
     // discriminant word. `parent_class_id` is a u32 at offset 8 on every
     // target (the four leading u32s precede the pointer fields).
-    let pcid_addr = ctx.block().add(I64, &safe_obj_handle, "8");
+    let pcid_addr = ctx.block().add(I64, &obj_handle, "8");
     let pcid_ptr = ctx.block().inttoptr(I64, &pcid_addr);
     let pcid = ctx.block().load(I32, &pcid_ptr);
     // In-range test via wrapping add + ult: (pcid - 0x8000_0000) < 0x4000_0000.
@@ -389,8 +425,7 @@ pub(crate) fn lower_generic_property_get(
     // (which resolves inherited props correctly). Id tokens always
     // carry bit 62, so they are never zero.
     let token_nonnull = ctx.block().icmp_ne(I64, &token, "0");
-    let hit_token = ctx.block().and(I1, &is_object, &token_eq);
-    let hit = ctx.block().and(I1, &hit_token, &token_nonnull);
+    let hit = ctx.block().and(I1, &token_eq, &token_nonnull);
 
     // #6080a: pointer tokens are only trustworthy within the GC epoch they
     // were primed in. The `@perry_ic_N` global is invisible to every GC
@@ -412,12 +447,6 @@ pub(crate) fn lower_generic_property_get(
     let epoch_ok = ctx.block().or(I1, &is_stamp, &epoch_eq);
     let hit = ctx.block().and(I1, &hit, &epoch_ok);
 
-    let hit_idx = ctx.new_block("pic.hit");
-    let miss_idx = ctx.new_block("pic.miss");
-    let merge_idx = ctx.new_block("pic.merge");
-    let hit_label = ctx.block_label(hit_idx);
-    let miss_label = ctx.block_label(miss_idx);
-    let merge_label = ctx.block_label(merge_idx);
     ctx.block().cond_br(&hit, &hit_label, &miss_label);
 
     // PIC hit: bounds-check the cached slot, then direct field load.
@@ -434,7 +463,7 @@ pub(crate) fn lower_generic_property_get(
     // rule; an out-of-bounds slot falls to the miss path, which reads
     // the overflow map correctly (and records the guard failure —
     // `record_guard_pass` only fires after the bounds check passes).
-    let fc_addr = ctx.block().add(I64, &safe_obj_handle, "12");
+    let fc_addr = ctx.block().add(I64, &obj_handle, "12");
     let fc_ptr = ctx.block().inttoptr(I64, &fc_addr);
     let fc = ctx.block().load(I32, &fc_ptr);
     let fc64 = ctx.block().zext(I32, &fc, I64);
@@ -486,6 +515,61 @@ pub(crate) fn lower_generic_property_get(
     // it was a real miss — the feedback heuristics see an unchanged signal
     // (the site IS polymorphic; only the cost of that changed).
     ctx.current_block = miss_idx;
+    // #7883: the guard chain now branches out at three points, so the values
+    // the polymorphic way compares consult are no longer live on every edge
+    // into this block — and phi-ing them would drag their materialisation
+    // (`cset`/`csinc` per value) back onto the hot path, which is the whole
+    // point of branching. They are recomputed here instead, from the SAME
+    // memory with no intervening store, so every one is bit-identical to
+    // what the pre-#7883 flat predicate computed. This block is cold — every
+    // path out of it either loads a way slot or calls the miss handler.
+    //
+    // The small-handle sentinel substitution lives here for the same reason:
+    // the way compares load `field_count` unconditionally, and a native
+    // registry-id receiver reaches this block without ever being a pointer.
+    let cache_addr = ctx.block().ptrtoint(&cache_ref, I64);
+    let safe_obj_handle = ctx
+        .block()
+        .select(I1, &is_real_ptr, I64, &obj_handle, &cache_addr);
+    let m_gc_type_addr = ctx.block().sub(I64, &safe_obj_handle, "8");
+    let m_gc_type_ptr = ctx.block().inttoptr(I64, &m_gc_type_addr);
+    let m_gc_type = ctx.block().load(I8, &m_gc_type_ptr);
+    let m_gc_type_ok = ctx.block().icmp_eq(I8, &m_gc_type, "2");
+    let is_object = ctx.block().and(I1, &is_real_ptr, &m_gc_type_ok);
+    let m_magic_addr = ctx.block().add(I64, &safe_obj_handle, "12");
+    let m_magic_ptr = ctx.block().inttoptr(I64, &m_magic_addr);
+    let m_magic = ctx.block().load(I32, &m_magic_ptr);
+    let m_is_closure = ctx.block().icmp_eq(I32, &m_magic, "1129268819");
+    let m_not_closure = ctx.block().xor(I1, &m_is_closure, "true");
+    let is_object = ctx.block().and(I1, &is_object, &m_not_closure);
+    let m_ot_ptr = ctx.block().inttoptr(I64, &safe_obj_handle);
+    let m_ot = ctx.block().load(I32, &m_ot_ptr);
+    let m_ot_ok = ctx.block().icmp_eq(I32, &m_ot, "1");
+    let is_object = ctx.block().and(I1, &is_object, &m_ot_ok);
+    let m_res_addr = ctx.block().sub(I64, &safe_obj_handle, "6");
+    let m_res_ptr = ctx.block().inttoptr(I64, &m_res_addr);
+    let m_res = ctx.block().load(crate::types::I16, &m_res_ptr);
+    let m_has_desc = ctx.block().and(crate::types::I16, &m_res, "2048");
+    let m_no_desc = ctx.block().icmp_eq(crate::types::I16, &m_has_desc, "0");
+    let is_object = ctx.block().and(I1, &is_object, &m_no_desc);
+    let m_keys_addr = ctx.block().add(I64, &safe_obj_handle, "16");
+    let m_keys_ptr = ctx.block().inttoptr(I64, &m_keys_addr);
+    let m_keys = ctx.block().load(I64, &m_keys_ptr);
+    let m_pcid_addr = ctx.block().add(I64, &safe_obj_handle, "8");
+    let m_pcid_ptr = ctx.block().inttoptr(I64, &m_pcid_addr);
+    let m_pcid = ctx.block().load(I32, &m_pcid_ptr);
+    let m_pcid_rel = ctx.block().add(I32, &m_pcid, "-2147483648");
+    let m_is_stamp = ctx.block().icmp_ult(I32, &m_pcid_rel, "1073741824");
+    let m_pcid64 = ctx.block().zext(I32, &m_pcid, I64);
+    let m_id_token = ctx.block().or(I64, &m_pcid64, "4611686018427387904");
+    let token = ctx
+        .block()
+        .select(I1, &m_is_stamp, I64, &m_id_token, &m_keys);
+    let token_nonnull = ctx.block().icmp_ne(I64, &token, "0");
+    let m_cache_epoch_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
+    let m_cache_epoch = ctx.block().load(I64, &m_cache_epoch_ptr);
+    let m_live_epoch = ctx.block().load(I64, "@PERRY_IC_EPOCH");
+    let epoch_eq = ctx.block().icmp_eq(I64, &m_cache_epoch, &m_live_epoch);
     crate::expr::emit_typed_feedback_record_call(
         ctx.block(),
         "js_typed_feedback_record_guard_fail",

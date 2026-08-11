@@ -360,3 +360,172 @@ mod nested_namespace_members {
         );
     }
 }
+
+/// #7883: the inline PIC's guard chain is a chain of BRANCHES, not one flat
+/// `and`, so a presence assertion on the individual predicates is no longer
+/// evidence of anything — hard-wiring any of the branches to `true` leaves
+/// every predicate in the IR as dead code and a "the mask is emitted" test
+/// stays green (round 5's first sabotage failed exactly this way).
+///
+/// This walks the CFG **backwards** from the block that performs the raw
+/// inline slot load to the PIC entry, and requires that
+///
+///   1. every edge on that path is the **true** edge of a `cond_br`
+///      (so swapping a branch's successors turns it red), and
+///   2. the transitive def chain of those branch conditions contains every
+///      guard the raw load depends on for safety (so replacing any condition
+///      with a constant, or deleting a predicate, turns it red).
+#[test]
+fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
+    let ir = emit(false, None);
+
+    // Register names restart at %r1 in every function, so the walk MUST be
+    // scoped to one function or the def map silently resolves a condition to
+    // an identically-named register in a different body (this test read a
+    // string-handle `ptrtoint` as the receiver-tag test before it was fixed).
+    let func = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("pic.hit.load"))
+        .unwrap_or_else(|| panic!("no function contains a PIC hit load:\n{ir}"))
+        .to_string();
+
+    let mut blocks: Vec<(String, Vec<String>)> = Vec::new();
+    let mut cur: Option<(String, Vec<String>)> = None;
+    for line in func.lines() {
+        let t = line.trim_end();
+        if let Some(lbl) = t.strip_suffix(':') {
+            if !lbl.is_empty() && !t.starts_with(' ') && !t.starts_with('\t') {
+                if let Some(b) = cur.take() {
+                    blocks.push(b);
+                }
+                cur = Some((lbl.to_string(), Vec::new()));
+                continue;
+            }
+        }
+        if let Some((_, body)) = cur.as_mut() {
+            body.push(t.to_string());
+        }
+    }
+    if let Some(b) = cur.take() {
+        blocks.push(b);
+    }
+    let load_label = blocks
+        .iter()
+        .find(|(l, _)| l.starts_with("pic.hit.load"))
+        .map(|(l, _)| l.clone())
+        .unwrap_or_else(|| panic!("no `pic.hit.load` block:\n{func}"));
+
+    let mut defs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (_, body) in &blocks {
+        for l in body {
+            if let Some((lhs, rhs)) = l.trim().split_once(" = ") {
+                if lhs.starts_with('%') {
+                    defs.insert(lhs.to_string(), rhs.to_string());
+                }
+            }
+        }
+    }
+
+    // Backwards walk to the entry block, collecting the condition of every
+    // `cond_br` whose TRUE edge we arrived on.
+    let mut conds: Vec<String> = Vec::new();
+    let mut at = load_label.clone();
+    let mut steps = 0;
+    loop {
+        steps += 1;
+        assert!(steps < 32, "runaway CFG walk at `{at}`:\n{func}");
+        let preds: Vec<&(String, Vec<String>)> = blocks
+            .iter()
+            .filter(|(_, body)| {
+                body.iter().any(|l| {
+                    l.trim_start().starts_with("br ") && l.contains(&format!("label %{at}"))
+                })
+            })
+            .collect();
+        if preds.is_empty() {
+            break; // reached the entry block
+        }
+        assert_eq!(
+            preds.len(),
+            1,
+            "the guard chain must be a chain — `{at}` has {} predecessors:\n{func}",
+            preds.len()
+        );
+        let (pred_label, pred_body) = preds[0];
+        let term = pred_body
+            .iter()
+            .rev()
+            .find(|l| l.trim_start().starts_with("br "))
+            .unwrap_or_else(|| panic!("`{pred_label}` has no terminator:\n{func}"));
+        let t = term.trim();
+        if let Some(rest) = t.strip_prefix("br i1 ") {
+            let parts: Vec<&str> = rest.split(", ").collect();
+            assert_eq!(parts.len(), 3, "malformed cond_br in `{pred_label}`: {t}");
+            let cond = parts[0].to_string();
+            let true_target = parts[1].trim_start_matches("label %").to_string();
+            assert_eq!(
+                true_target, at,
+                "`{pred_label}` must reach `{at}` on its TRUE edge — a swapped \
+                 cond_br would run the inline slot load when the guard FAILS:\n{t}"
+            );
+            assert!(
+                cond.starts_with('%'),
+                "`{pred_label}`'s branch condition is the constant `{cond}` — the \
+                 guard decides nothing:\n{func}"
+            );
+            conds.push(cond);
+        }
+        at = pred_label.clone();
+    }
+    assert!(
+        conds.len() >= 5,
+        "expected at least five guard branches between the PIC entry and the \
+         inline slot load, found {}: {conds:?}\n{func}",
+        conds.len()
+    );
+
+    // Transitive def closure of every collected condition.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut reached: Vec<String> = Vec::new();
+    let mut work = conds.clone();
+    while let Some(v) = work.pop() {
+        if !seen.insert(v.clone()) {
+            continue;
+        }
+        let Some(rhs) = defs.get(&v) else { continue };
+        reached.push(rhs.clone());
+        let chars: Vec<char> = rhs.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '%' {
+                let mut j = i + 1;
+                while j < chars.len()
+                    && (chars[j].is_alphanumeric() || chars[j] == '.' || chars[j] == '_')
+                {
+                    j += 1;
+                }
+                work.push(chars[i..j].iter().collect());
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let chain = reached.join("\n");
+    for (needle, what) in [
+        ("32765", "the POINTER/STRING receiver-tag test"),
+        ("1048575", "the small-handle (native registry id) test"),
+        ("icmp eq i8", "the GcHeader obj_type == GC_TYPE_OBJECT test"),
+        ("1129268819", "the CLOSURE_MAGIC test"),
+        ("2048", "the OBJ_FLAG_HAS_DESCRIPTORS test"),
+        ("@PERRY_IC_EPOCH", "the read-PIC epoch gate"),
+        ("@perry_ic_", "the per-site cached shape-token compare"),
+    ] {
+        assert!(
+            chain.contains(needle),
+            "the inline slot load must be gated on {what}, but no branch \
+             condition on the path to `{load_label}` depends on it.\n\
+             conditions: {conds:?}\nreached def chain:\n{chain}\n\nIR:\n{func}"
+        );
+    }
+}
