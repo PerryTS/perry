@@ -133,6 +133,61 @@ pub(crate) fn type_is_raw_f64_candidate(ty: &Type) -> bool {
 /// (`is_plain_number_bits`, and the inline path's finite-exponent test), falls
 /// back to the boxed setter, and downgrades the descriptor through
 /// `layout_note_slot` — the same path any post-install contradiction takes.
+/// [`class_layout_declarable_at_allocation`] for a whole inheritance chain.
+///
+/// The single-class rule refuses every class with heritage, which is #7512
+/// one level up: a `Rect extends Shape extends Node2D` instance never gets an
+/// at-allocation declaration, so every raw-f64 store in *every* constructor on
+/// its chain — `Node2D`'s own `this.x = x` included, though `Node2D` itself
+/// extends nothing — misses `GC_OBJ_TYPED_LAYOUT_INTACT` and falls back to
+/// `js_put_value_set`. Counted on `shapes.ts`: 528 000 by-name field stores per
+/// run. A two-class probe measures **2.0x** against the hand-flattened class.
+///
+/// `chain` is `chain_prologue_assigned_fields`' root → leaf answer, which is
+/// `None` unless every class on the chain is individually analysable. The
+/// obligations are the single-class ones, restated over the chain:
+///
+/// 1. **Every raw-f64 field ANYWHERE on the chain is prologue-assigned** — by
+///    its own class, since that is the only constructor that writes it. One
+///    uncovered field would be read as a double while it still holds
+///    `undefined`'s NaN-box bits, yielding `NaN` instead of `undefined`.
+/// 2. **Nothing during construction can read a field before its write.** Each
+///    class's prologue RHS and `super()` arguments are `This`-free by
+///    `prologue_rhs_cannot_observe_this`, and everything after a class's
+///    prologue run is `This`-free by `stmt_is_this_free_expr` — which matters
+///    precisely because a *non-leaf* constructor's trailing statements run
+///    before the leaf assigns its own fields.
+/// 3. **The collector's view is true at birth** — unchanged from the
+///    single-class case: every allocation path prefills `TAG_UNDEFINED`, a
+///    pointer-masked slot holding it is rejected at `mark_field_into_worklist`'s
+///    tag check, and a raw-f64-masked slot is not visited at all.
+pub(crate) fn class_chain_layout_declarable_at_allocation(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    chain: &[(String, std::collections::HashSet<String>)],
+) -> bool {
+    let mut worth_declaring = false;
+    for (class_name, prologue) in chain {
+        let Some(class) = classes.get(class_name).copied() else {
+            return false;
+        };
+        for field in &class.fields {
+            if field.key_expr.is_some() {
+                continue;
+            }
+            if type_is_pointer_bearing(&field.ty) {
+                worth_declaring = true;
+            }
+            if type_is_raw_f64_candidate(&field.ty) {
+                worth_declaring = true;
+                if !prologue.contains(&field.name) {
+                    return false;
+                }
+            }
+        }
+    }
+    worth_declaring
+}
+
 pub(crate) fn class_layout_declarable_at_allocation(
     class: &perry_hir::Class,
     prologue: &std::collections::HashSet<String>,

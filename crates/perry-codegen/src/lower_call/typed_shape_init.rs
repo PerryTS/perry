@@ -38,10 +38,22 @@ pub(super) fn layout_declared_at_allocation(ctx: &FnCtx<'_>, class_name: &str) -
     if !ctx.class_keys_globals.contains_key(class_name) {
         return false;
     }
-    ctx.classes.get(class_name).is_some_and(|class| {
+    let single = ctx.classes.get(class_name).is_some_and(|class| {
         let prologue = super::field_init::ctor_prologue_param_assigned_fields(class);
         crate::typed_shape::class_layout_declarable_at_allocation(class, &prologue)
-    })
+    });
+    if single {
+        return true;
+    }
+    // #7512-followup: the single-class rule refuses every class with heritage,
+    // which denies an at-allocation declaration to every subclass instance and
+    // puts every constructor store on the whole chain — the base class's own
+    // included — on the by-name fallback. Try the chain form.
+    super::field_init::chain_prologue_assigned_fields(ctx.classes, class_name).is_some_and(
+        |chain| {
+            crate::typed_shape::class_chain_layout_declarable_at_allocation(ctx.classes, &chain)
+        },
+    )
 }
 
 /// #7834: is `class_name`'s at-allocation declaration expressible as a
