@@ -307,3 +307,99 @@ fn a_pointer_push_keeps_the_historical_unguarded_shape() {
          predicate for a test whose answer is always yes:\n{ir}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #7831/#7837 collision: an erased annotation is a hint, not a runtime proof.
+// ---------------------------------------------------------------------------
+
+/// `arr.push(<element read off a `number[]`>)` — a declared-type LIE vehicle.
+///
+/// A `number[]` can hold heap strings at runtime; Perry does not validate
+/// declared types, and `gc-handoff/m0810/numarr_lie.ts` builds exactly such an
+/// array. `is_numeric_expr` DOES admit this read (it consults the declared
+/// element type, #7810), so the annotation alone would put a heap string on a
+/// numeric push path.
+///
+/// What keeps it off #7839's guard is a second, independent test:
+/// `expr_produces_canonical_raw_f64` excludes every READ ("cold fallbacks
+/// return boxed bits"), so `keep_guarded_numeric_push` stays true and the push
+/// takes the pre-existing RUNTIME numeric tier — `js_array_numeric_push_f64_
+/// unboxed` behind its feedback guard — which validates the value at runtime.
+/// #7839's inline guard is reached only when the value is canonical raw f64 BY
+/// CONSTRUCTION, i.e. produced by a machine FP op that cannot yield a pointer
+/// except through NaN-payload propagation, which is precisely what its
+/// live-bits test catches.
+///
+/// This test pins that routing. If `expr_produces_canonical_raw_f64` ever
+/// widened to admit a read, a declared-type lie would start arriving at the
+/// inline guard, and this fails instead of the guard silently resting on an
+/// erased annotation.
+fn element_read_push_module() -> Module {
+    let mut m = push_module(Type::Number, Expr::Number(0.0), Vec::new());
+    let f = &mut m.functions[0];
+    let Some(Stmt::For { body, .. }) = f.body.get_mut(1) else {
+        panic!("push_module's second statement should be the `for`");
+    };
+    body[0] = Stmt::Expr(Expr::ArrayPush {
+        array_id: ARRAY_ID,
+        value: Box::new(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(ARRAY_ID)),
+            index: Box::new(Expr::LocalGet(COUNTER_ID)),
+        }),
+    });
+    m
+}
+
+#[test]
+fn a_declared_type_lie_is_routed_to_the_runtime_tier_not_the_guard() {
+    let ir = ir_for(element_read_push_module());
+    // Non-vacuity: the push must actually have been lowered on the tier this
+    // test names. Without this the assertion below would also pass for a push
+    // that was not lowered at all.
+    assert!(
+        ir.contains("js_array_numeric_push_f64_unboxed"),
+        "expected the runtime numeric tier for an element-read value; this          test is not observing the tier it claims to:\n{ir}"
+    );
+    assert!(
+        !ir.contains(GUARD_BLOCK),
+        "an element read off a `number[]` reached the #7839 inline guard. That          array can hold heap strings at runtime (numarr_lie.ts), so the guard          would be resting on an erased annotation instead of on the value's          construction:\n{ir}"
+    );
+}
+
+#[test]
+fn the_guard_branches_on_the_live_bits_not_on_a_constant() {
+    let ir = ir_for(push_module(Type::Number, numeric_add_push(), Vec::new()));
+    let inbounds = inbounds_block(&ir);
+    let branch = inbounds
+        .lines()
+        .find(|l| l.contains("br i1") && l.contains(GUARD_BLOCK))
+        .unwrap_or_else(|| panic!("no branch into the guarded arm:\n{inbounds}"));
+    let cond = branch
+        .trim()
+        .strip_prefix("br i1 ")
+        .and_then(|r| r.split(',').next())
+        .expect("br i1 <cond>, ...");
+    // A constant condition is the exact shape a "simplification" of the guard
+    // collapses to, and it is invisible to every output-equality test: a
+    // sabotaged build with `br i1 false` still prints the right answer on every
+    // probe, because the elided bookkeeping is a GC-liveness fact, not an
+    // arithmetic one. Pin the condition to a computed register.
+    assert!(
+        cond.starts_with('%'),
+        "the guard branches on the constant `{cond}` — the bookkeeping arm is \
+         unreachable and the guard proves nothing:\n{inbounds}"
+    );
+    assert!(
+        inbounds.contains(&format!("{cond} = or i1 ")),
+        "the guard's condition {cond} is not the `or` of the live-bits tests:\n{inbounds}"
+    );
+    // ...and the live-bits tests themselves: POINTER_TAG / STRING_TAG /
+    // BIGINT_TAG top-16 comparands, plus the bare-heap-address floor.
+    for needle in ["lshr i64", "32765", "32767", "32762", "4096"] {
+        assert!(
+            inbounds.contains(needle),
+            "the live-bits predicate lost `{needle}`, so it no longer covers \
+             every heap tag `layout_pointer_bearing_bits` accepts:\n{inbounds}"
+        );
+    }
+}

@@ -41,3 +41,26 @@ every_call_it_moved` asserts the calls are still emitted, precisely so a future
 Gated on `is_numeric_expr`, so a pointer-pushing loop (`churn`, `tree`,
 `push_cls`) emits byte-identical IR and pays nothing for a test it would always
 fail.
+
+**Why an erased annotation cannot reach this guard (#7831/#7837 collision).**
+A `number[]` really can hold heap strings at runtime, so it matters exactly
+which values arrive at the live-bits test. Two independent predicates decide,
+and only the second is load-bearing here. `is_numeric_expr` DOES admit a read
+off a `number[]` (#7810), so an annotation alone would put a heap string on a
+numeric push path — but `expr_produces_canonical_raw_f64` excludes every READ
+("cold fallbacks return boxed bits"), which keeps `keep_guarded_numeric_push`
+true and routes those pushes to the pre-existing RUNTIME numeric tier
+(`js_array_numeric_push_f64_unboxed` behind its feedback guard), never to this
+inline guard. The inline guard is reached only for values that are canonical
+raw f64 BY CONSTRUCTION — a machine FP op, which cannot produce a pointer
+except by ARM NaN-payload propagation from a NaN-boxed operand, and that is
+precisely the case the live-bits test catches.
+
+Verified rather than asserted: `gc-handoff/m0810/numarr_lie.ts` and four more
+declared-type-lie shapes (a `number` parameter, a `number` object field, a
+module-level `number` global, an element read off a `number[]`) emit **zero**
+guard blocks. `a_declared_type_lie_is_routed_to_the_runtime_tier_not_the_guard`
+pins that routing, and `the_guard_branches_on_the_live_bits_not_on_a_constant`
+pins the guard's condition to a computed register. Both are sabotage-verified:
+hard-wiring the branch to `false` fails the second, and widening
+`expr_produces_canonical_raw_f64` to admit a read fails the first.
