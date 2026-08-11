@@ -1988,7 +1988,7 @@ pub(crate) fn lookup_prototype_method(class_id: u32, name: &str) -> Option<f64> 
                 return Some(f64::from_bits(bits));
             }
         }
-        match get_parent_class_id(cid) {
+        match crate::object::class_generic_origin(cid).or_else(|| get_parent_class_id(cid)) {
             Some(p) if p != 0 && p != cid => {
                 cid = p;
                 depth += 1;
