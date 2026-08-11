@@ -461,6 +461,23 @@ pub(super) struct CopyingNurseryCollector {
     /// to-space copies or non-moving objects, which don't move again within
     /// the cycle.
     pub(super) weak_slots: Vec<*mut u64>,
+    /// One-entry memo for [`CopyingNurseryCollector::mark_addr`]: the last
+    /// address it classified successfully, and the address it returned.
+    ///
+    /// `mark_addr` is idempotent with a stable result for the whole cycle —
+    /// a second call finds `GC_FLAG_MARKED` (or `GC_FLAG_FORWARDED`) already
+    /// set and returns the same address — so replaying the answer is exact,
+    /// not approximate. What it buys: an object's SHAPE-SHARED children are
+    /// the same addresses for every instance, so the mark drain classifies
+    /// one `keys_array` pointer once per surviving object. On
+    /// `gc-handoff/bench/retain.ts` that is ~750 k classifications of a
+    /// single address per cycle, each a page-map lookup plus a
+    /// `plausible_gc_header` read.
+    ///
+    /// `0` is the empty state: `classify_arena` rejects every address below
+    /// `GC_HEADER_SIZE`, so it can never be a memoized key.
+    memo_addr: usize,
+    memo_result: usize,
 }
 
 impl CopyingNurseryCollector {
@@ -483,6 +500,8 @@ impl CopyingNurseryCollector {
             tenuring_survivals,
             skip_remembering: false,
             weak_slots: Vec::new(),
+            memo_addr: 0,
+            memo_result: 0,
         }
     }
 
@@ -587,12 +606,18 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) fn mark_addr(&mut self, addr: usize) -> Option<usize> {
+        // See `memo_addr`: replaying the previous answer is exact. Only
+        // successful classifications are memoized — a `None` must stay a
+        // `None`, and re-deriving it costs one page-map probe.
+        if addr == self.memo_addr {
+            return Some(self.memo_result);
+        }
         let ptr = self.ptrs.classify(addr)?;
-        match ptr.kind {
-            CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor => {
-                Some(unsafe { self.move_young(ptr) })
-            }
-            CopyingPointerKind::ToSurvivor => Some(addr),
+        let result = match ptr.kind {
+            CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor => unsafe {
+                self.move_young(ptr)
+            },
+            CopyingPointerKind::ToSurvivor => addr,
             CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
                 unsafe {
                     let flags = (*ptr.header).gc_flags;
@@ -602,16 +627,19 @@ impl CopyingNurseryCollector {
                         self.marked_headers.push(ptr.header);
                     }
                 }
-                Some(addr)
+                addr
             }
             CopyingPointerKind::Old => {
                 unsafe {
                     self.record_large_excluded(ptr.header);
                 }
-                Some(addr)
+                addr
             }
-            CopyingPointerKind::PromotedYoung => Some(unsafe { self.mark_promoted_young(ptr) }),
-        }
+            CopyingPointerKind::PromotedYoung => unsafe { self.mark_promoted_young(ptr) },
+        };
+        self.memo_addr = addr;
+        self.memo_result = result;
+        Some(result)
     }
 
     /// #7742: the object's block is being promoted whole, in place. It does not
@@ -825,6 +853,14 @@ impl CopyingNurseryCollector {
     pub(super) unsafe fn drain(&mut self) {
         let mut i = 0usize;
         while i < self.worklist.len() {
+            // The worklist is a list of COLD headers: on a promotion-heavy
+            // cycle the marking pass that filled it has since walked tens of
+            // MB, so every `(*header).gc_flags` read below is a DRAM round
+            // trip. The addresses are known `PREFETCH_DISTANCE` iterations
+            // ahead, so overlap the round trips instead of serialising them.
+            if let Some(&ahead) = self.worklist.get(i + super::prefetch::PREFETCH_DISTANCE) {
+                super::prefetch::prefetch_read(ahead as usize);
+            }
             let header = self.worklist[i];
             i += 1;
             if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
@@ -865,12 +901,21 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) unsafe fn clear_marks(&mut self) {
-        for &header in &self.marked_headers {
-            (*header).gc_flags &= !GC_FLAG_MARKED;
+        // Same cold-header problem as `drain`, and the same fix: this is a
+        // read-modify-write of one byte per survivor, in mark order, over a
+        // cohort far larger than any cache.
+        clear_marks_in(&self.marked_headers);
+        clear_marks_in(&self.moved_headers);
+    }
+}
+
+/// Clear `GC_FLAG_MARKED` across a header list, prefetching ahead.
+unsafe fn clear_marks_in(headers: &[*mut GcHeader]) {
+    for (i, &header) in headers.iter().enumerate() {
+        if let Some(&ahead) = headers.get(i + super::prefetch::PREFETCH_DISTANCE) {
+            super::prefetch::prefetch_read(ahead as usize);
         }
-        for &header in &self.moved_headers {
-            (*header).gc_flags &= !GC_FLAG_MARKED;
-        }
+        (*header).gc_flags &= !GC_FLAG_MARKED;
     }
 }
 

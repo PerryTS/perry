@@ -558,19 +558,57 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 }
             }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                // Three per-slot costs hoisted out of this loop, which is the
+                // copying minor's hottest (750 k iterations per cycle on
+                // `gc-handoff/bench/retain.ts`):
+                //
+                // * `is_weak_target_trace_slot` asks a question about the
+                //   PARENT — only a `WeakRef` / weak-entry / finalization-record
+                //   object has weak slots at all. Deciding that once per
+                //   descriptor instead of once per slot is exact, because a
+                //   parent that is not one of those three classes answers
+                //   `false` for every slot it owns.
+                // * `old_page_account_dirty_slot` is a page-keyed counter
+                //   reached through a hash map. Slots here are contiguous and
+                //   ascending, so 512 consecutive slots share one page: batch
+                //   the increment and pay one map probe per page.
+                // * the value in slot `i` is about to be classified, which
+                //   reads its target's (cold) GC header — prefetch ahead.
+                let parent_has_weak_slots =
+                    crate::weakref::header_may_hold_weak_target_slots(header);
                 for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
                     stats.dirty_slot_ranges_scanned += 1;
+                    let mut acct_page = usize::MAX;
+                    let mut acct_slots = 0usize;
                     for i in start..end {
                         let slot = range.slot(i);
-                        if crate::weakref::is_weak_target_trace_slot(header, slot) {
+                        if let Some(ahead) = (i + super::prefetch::PREFETCH_DISTANCE < end)
+                            .then(|| range.slot(i + super::prefetch::PREFETCH_DISTANCE))
+                        {
+                            super::prefetch::prefetch_boxed_child(*ahead);
+                        }
+                        if parent_has_weak_slots
+                            && crate::weakref::is_weak_target_trace_slot(header, slot)
+                        {
                             continue;
                         }
                         if let Some(layout_kind) = layout_kind {
                             record_layout_child_slot_read(layout_kind);
                         }
                         stats.dirty_slots_scanned += 1;
-                        crate::arena::old_page_account_dirty_slot(slot as usize);
+                        let page = crate::arena::generation_page_for_addr(slot as usize);
+                        if page != acct_page {
+                            if acct_slots != 0 {
+                                crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
+                            }
+                            acct_page = page;
+                            acct_slots = 0;
+                        }
+                        acct_slots += 1;
                         visit_slot(slot, stats);
+                    }
+                    if acct_slots != 0 {
+                        crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
                     }
                 }
             }
@@ -1229,6 +1267,93 @@ pub(super) fn write_barrier_decoded_parent(
     };
     if inserted {
         bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+    }
+}
+
+/// Re-establish the old→young remembered-set invariant over a contiguous run
+/// of `count` slots belonging to the single old-gen parent `parent_addr`.
+///
+/// This is the array-growth barrier replay (`replay_array_growth_write_barriers`)
+/// and it is the one barrier caller that is a LOOP over one parent, so three
+/// things the per-store entry point must re-derive every call are loop
+/// invariants here:
+///
+/// * the incremental-shading decision (one static probe, hoisted into a
+///   separate pass so the common "no cycle anywhere" case pays nothing per
+///   slot),
+/// * `barrier_parent_addr_is_dereferenceable` + `barrier_parent_needs_remembering`,
+///   which is a page-map classification of the same address `count` times,
+/// * and — the big one — the remembered set is PAGE granular, so once a page
+///   has been dirtied the remaining ~511 slots on it can be skipped outright.
+///   The invariant they would each re-assert ("this slot's page is dirty") is
+///   already true.
+///
+/// Measured motivation: `gc-handoff/bench/retain.ts` grows one array to 3 M
+/// elements, so the geometric growth replays ~6 M barriers, and the replay was
+/// 2.6× the cost of the `memcpy` it follows (11% of the whole program in a
+/// symbolicated profile).
+///
+/// The skip costs trace-counter fidelity: `calls` / `child_not_young_skips` /
+/// `old_to_young_slow_hits` no longer count the slots this proves redundant.
+/// That is a diagnostic, not a semantic — the remembered set built is the same
+/// set of pages.
+pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, count: usize) {
+    if slots.is_null() || count == 0 {
+        return;
+    }
+    // SATB / insertion shading is never skippable while a cycle is live: a
+    // page already dirty says nothing about whether an in-progress mark has
+    // seen this value. Only the "no cycle anywhere" proof lets it be hoisted.
+    if !incremental_mark_barrier_globally_idle() {
+        for i in 0..count {
+            incremental_mark_barrier_value(unsafe { *slots.add(i) });
+        }
+    }
+    if !write_barriers_enabled() || !barrier_remembering_active() {
+        return;
+    }
+    if !barrier_parent_addr_is_dereferenceable(parent_addr) {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
+        return;
+    }
+    if !barrier_parent_needs_remembering(parent_addr, false) {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
+        return;
+    }
+    let mut dirtied_page = usize::MAX;
+    for i in 0..count {
+        let slot_addr = slots as usize + i * std::mem::size_of::<u64>();
+        let page = crate::arena::generation_page_for_addr(slot_addr);
+        if page == dirtied_page {
+            continue;
+        }
+        let child = unsafe { *(slot_addr as *const u64) };
+        let child_addr = decode_heap_addr(child);
+        bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
+        if child_addr == 0 {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerChildSkips);
+            continue;
+        }
+        if !remembered_child_needs_tracking(child_addr) {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::ChildNotYoungSkips);
+            continue;
+        }
+        bump_write_barrier_trace_counter(BarrierTraceCounter::OldToYoungSlowHits);
+        bump_write_barrier_trace_counter(BarrierTraceCounter::RememberedSetInsertAttempts);
+        // Only a slot that classifies Old is described by its own page; the
+        // fallback (`mark_dirty_parent_span`) covers the parent's whole span
+        // and gives no single page to latch, so it must not arm the skip.
+        if matches!(
+            crate::arena::classify_heap_generation(slot_addr),
+            crate::arena::HeapGeneration::Old
+        ) {
+            if mark_dirty_old_page(page) {
+                bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+            }
+            dirtied_page = page;
+        } else if remember_old_to_young_slot(parent_addr, slot_addr) {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+        }
     }
 }
 

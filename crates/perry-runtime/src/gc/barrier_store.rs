@@ -10,6 +10,16 @@ use super::barrier::{
 };
 use super::*;
 
+/// Loop form of [`runtime_write_barrier_slot`] for one old-gen parent and a
+/// contiguous slot run — see [`super::barrier::replay_old_parent_slot_range`].
+pub(crate) fn replay_old_parent_slot_range_barriers(
+    parent_addr: usize,
+    slots: *mut u64,
+    count: usize,
+) {
+    super::barrier::replay_old_parent_slot_range(parent_addr, slots, count);
+}
+
 pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, child_bits: u64) {
     if !write_barriers_enabled() {
         incremental_mark_barrier_value(child_bits);

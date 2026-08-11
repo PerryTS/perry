@@ -1822,10 +1822,11 @@ pub(crate) unsafe fn replay_array_growth_write_barriers(arr: *mut ArrayHeader) {
         return;
     }
 
-    for i in 0..length {
-        let slot = slots.add(i);
-        crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
-    }
+    // One parent, one contiguous slot run — the loop form of the barrier, whose
+    // per-store entry point would re-derive the parent classification `length`
+    // times and re-assert a page-granular fact ~512 times per page. See
+    // `gc::barrier::replay_old_parent_slot_range`.
+    crate::gc::replay_old_parent_slot_range_barriers(arr as usize, slots, length);
 }
 
 #[inline]

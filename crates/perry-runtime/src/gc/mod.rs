@@ -123,6 +123,10 @@ pub use pin::{
     unpin_object,
 };
 use pin::{note_preflight_skipped, note_preflight_walked, young_pin_latch_armed};
+/// Software prefetch helpers for the collector's pointer-chasing loops
+/// (drain, `clear_marks`, the remembered-set dirty scan).
+mod prefetch;
+
 mod copying;
 use copying::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry

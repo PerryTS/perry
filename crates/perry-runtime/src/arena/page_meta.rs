@@ -1096,18 +1096,30 @@ pub(crate) fn old_page_account_dirty_slot(slot_addr: usize) {
     if slot_addr == 0 {
         return;
     }
-    let page = generation_page_for_addr(slot_addr);
+    old_page_account_dirty_slots(generation_page_for_addr(slot_addr), 1);
+}
+
+/// Batched form of [`old_page_account_dirty_slot`] for a run of `count` slots
+/// already known to lie on `page`.
+///
+/// The dirty scan walks contiguous, ascending slot ranges, so ~512 consecutive
+/// slots share one 4 KiB page. Per-slot this was one hash-map probe each; the
+/// counter it maintains is per-page, so the run can be folded into a single
+/// probe. Same epoch semantics as the per-slot form — the first run seen this
+/// cycle re-stamps and starts the count over, later runs on the same page
+/// accumulate (#6181).
+pub(crate) fn old_page_account_dirty_slots(page: usize, count: usize) {
+    if count == 0 {
+        return;
+    }
     let current_epoch = old_gen_page_dirty_epoch();
     OLD_GEN_PAGE_META.with(|meta| {
         if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
-            // First dirty slot seen this cycle re-stamps and starts from 1
-            // (the lazy equivalent of the old per-cycle reset-to-zero);
-            // subsequent slots on the same page accumulate (#6181).
             if page_meta.dirty_slots_epoch == current_epoch {
-                page_meta.dirty_slots = page_meta.dirty_slots.saturating_add(1);
+                page_meta.dirty_slots = page_meta.dirty_slots.saturating_add(count);
             } else {
                 page_meta.dirty_slots_epoch = current_epoch;
-                page_meta.dirty_slots = 1;
+                page_meta.dirty_slots = count;
             }
         }
     });

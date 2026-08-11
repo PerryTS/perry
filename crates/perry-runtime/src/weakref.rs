@@ -336,6 +336,25 @@ fn weak_target_should_clear(
     }
 }
 
+/// Parent-only half of [`is_weak_target_trace_slot`]: can `header` own a weak
+/// target slot at all?
+///
+/// Exactly the three classes the slot predicate recognises. A `false` here
+/// proves `is_weak_target_trace_slot` is `false` for EVERY slot of this
+/// object, which lets a scan that walks hundreds of slots per parent decide it
+/// once instead of per slot.
+#[inline]
+pub(crate) unsafe fn header_may_hold_weak_target_slots(header: *mut crate::gc::GcHeader) -> bool {
+    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
+    matches!(
+        (*obj).class_id,
+        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY | CLASS_ID_FINALIZATION_RECORD
+    )
+}
+
 /// True when `slot` is a weak target edge and must not be treated as a
 /// strong child during mark/remembered-set scans. Rewrite/copy passes should
 /// still visit these slots so live weak targets get moved addresses repaired.

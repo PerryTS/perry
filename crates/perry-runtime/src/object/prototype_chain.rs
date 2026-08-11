@@ -394,6 +394,19 @@ pub(crate) fn visit_object_static_prototype_slot_mut(
     if owner == 0 {
         return;
     }
+    // The residual registry is EMPTY until a non-meta-capable owner records a
+    // prototype, and the latch is stored (`Release`) *before* that insert, so
+    // a `false` read proves there is nothing here to visit. Its siblings
+    // (`object_static_prototype`, `object_static_prototype_owner_moved`,
+    // `prune_dead_object_prototype_owners`) already gate on it; THIS one is
+    // the collector's per-object rewrite hook, so without the gate every
+    // traced object took a process-global `Mutex<HashMap>` and paid a SipHash
+    // probe against an empty map. Measured on `gc-handoff/bench/retain.ts`:
+    // `pthread_mutex_lock` and `RandomState::hash_one` were both visible under
+    // the mark drain in a single-threaded profile.
+    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
+        return;
+    }
     // Take the entry OUT and run the visit with the lock RELEASED: a
     // copying-minor rewrite visitor can move the prototype object, and
     // move fixup re-enters `object_static_prototype_owner_moved`, which

@@ -444,9 +444,24 @@ thread_local! {
         const { Cell::new(LayoutScanTraceStats::zero()) };
 }
 
+/// Has ANY thread ever armed the layout-scan trace?
+///
+/// `layout_scan_trace_active()` is read once per traced object
+/// (`heap_payload_slot_selection`) and once per pointer slot
+/// (`record_layout_child_slot_read`), and on Darwin a `thread_local!` read is
+/// an out-of-line `_tlv_get_addr` call — so a facility that is OFF for the
+/// entire process still cost two calls per promoted object. This is the #7834
+/// `PERRY_PER_OBJECT_LAYOUTS_ANY` pattern: a monotone process-global that
+/// proves the thread-local is `false` without resolving it. It is never
+/// cleared, which is sound because it only ever short-circuits to the
+/// thread-local answer.
+static LAYOUT_SCAN_TRACE_ARMED_ANY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[inline]
 pub(super) fn begin_layout_scan_trace() {
     LAYOUT_SCAN_TRACE_STATS.with(|stats| stats.set(LayoutScanTraceStats::zero()));
+    LAYOUT_SCAN_TRACE_ARMED_ANY.store(true, std::sync::atomic::Ordering::Release);
     LAYOUT_SCAN_TRACE_ACTIVE.with(|active| active.set(true));
 }
 
@@ -467,6 +482,11 @@ pub(super) fn finish_layout_scan_trace() -> LayoutScanTraceStats {
 
 #[inline]
 pub(super) fn layout_scan_trace_active() -> bool {
+    // Store-before-arm (`Release` in `begin_layout_scan_trace`) makes a `false`
+    // read a proof that this thread's `LAYOUT_SCAN_TRACE_ACTIVE` is false too.
+    if !LAYOUT_SCAN_TRACE_ARMED_ANY.load(std::sync::atomic::Ordering::Acquire) {
+        return false;
+    }
     LAYOUT_SCAN_TRACE_ACTIVE.with(Cell::get)
 }
 
