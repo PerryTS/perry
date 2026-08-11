@@ -246,8 +246,14 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 record.function, record.block_label, record.consumer
             ));
         }
+        let uses_cached_buffer_view_pointer = matches!(record.native_rep, NativeRep::BufferView(_))
+            || record.buffer_access.is_some()
+            || record
+                .notes
+                .iter()
+                .any(|note| note.starts_with("proven_view=checked_inline"));
         if uses_native_buffer_pointer
-            && matches!(record.native_rep, NativeRep::BufferView(_))
+            && uses_cached_buffer_view_pointer
             && record.buffer_view_pointer_state.is_none()
         {
             errors.push(format!(

@@ -485,6 +485,22 @@ fn rejects_native_access_through_invalidated_buffer_view_pointer() {
 }
 
 #[test]
+fn rejects_scalar_cached_view_access_without_pointer_lifetime_evidence() {
+    let mut r = record();
+    r.access_mode = Some(BufferAccessMode::CheckedNative);
+    r.bounds_state = Some(BoundsState::Proven {
+        proof: BoundsProof::ExplicitGuard,
+    });
+    r.notes = vec!["proven_view=checked_inline; guards=none".to_string()];
+
+    let err = verify_native_rep_records(&[r])
+        .expect_err("scalar access through a cached view must carry pointer-lifetime evidence");
+    assert!(err
+        .to_string()
+        .contains("native buffer-view access omitted pointer-lifetime evidence"));
+}
+
+#[test]
 fn accepts_runtime_fallback_after_buffer_view_pointer_invalidation() {
     let mut r = record();
     r.access_mode = Some(BufferAccessMode::DynamicFallback);

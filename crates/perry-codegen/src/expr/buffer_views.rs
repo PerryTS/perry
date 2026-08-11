@@ -119,12 +119,26 @@ pub(crate) fn invalidate_buffer_view_pointer(
     id: u32,
     reason: MaterializationReason,
 ) {
-    if let Some(view) = ctx.buffer_view_slots.get_mut(&id) {
-        view.pointer_state = BufferViewPointerState::Invalidated {
-            reason: reason.clone(),
-        };
+    let affected_ids = if let Some(data_slot) = ctx
+        .buffer_view_slots
+        .get(&id)
+        .map(|view| view.data_slot.clone())
+    {
+        ctx.buffer_view_slots
+            .iter()
+            .filter_map(|(view_id, view)| (view.data_slot == data_slot).then_some(*view_id))
+            .collect::<Vec<_>>()
+    } else {
+        vec![id]
+    };
+    for affected_id in affected_ids {
+        if let Some(view) = ctx.buffer_view_slots.get_mut(&affected_id) {
+            view.pointer_state = BufferViewPointerState::Invalidated {
+                reason: reason.clone(),
+            };
+        }
+        downgrade_buffer_alias(ctx, affected_id, reason.clone());
     }
-    downgrade_buffer_alias(ctx, id, reason);
 }
 
 fn owner_alias_invalidation_reason(reason: &MaterializationReason) -> MaterializationReason {

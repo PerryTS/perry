@@ -33,11 +33,11 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 use super::{
     array_kind_fact, attach_buffer_view_pointer_state_for_expr,
     buffer_access_materialization_reason, emit_typed_feedback_register_site,
-    expr_has_numeric_pointer_free_array_layout, int_range_expr, lower_buffer_load, lower_expr,
-    lower_expr_as_i32, lower_typed_array_load, materialize_js_value, raw_f64_layout_fact,
-    try_lower_flat_const_index_get, typed_feedback_emission_enabled, unbox_str_handle,
-    unbox_to_i64, BufferAccessSpec, FnCtx, PackedF64LoopFact, TypedFeedbackContract,
-    TypedFeedbackKind,
+    expr_has_numeric_pointer_free_array_layout, int_range_expr, invalidate_buffer_view_pointer,
+    lower_buffer_load, lower_expr, lower_expr_as_i32, lower_typed_array_load, materialize_js_value,
+    raw_f64_layout_fact, try_lower_flat_const_index_get, typed_feedback_emission_enabled,
+    unbox_str_handle, unbox_to_i64, BufferAccessSpec, FnCtx, PackedF64LoopFact,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
 mod guarded_array;
@@ -216,6 +216,15 @@ fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr)
 fn typed_array_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
     !numeric_index_has_integer_array_index_proof(ctx, index)
         && !numeric_index_has_loop_array_index_proof(ctx, object, index)
+}
+
+fn runtime_key_may_expose_typed_array_backing_buffer(index: &Expr) -> bool {
+    match index {
+        Expr::String(key) => key == "buffer",
+        Expr::WtfString(key) => key == b"buffer",
+        Expr::Integer(_) | Expr::Number(_) => false,
+        _ => true,
+    }
 }
 
 fn lower_array_index_get_via_runtime_key(
@@ -826,6 +835,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(v);
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
+                    if runtime_key_may_expose_typed_array_backing_buffer(index) {
+                        if let Expr::LocalGet(id) = object.as_ref() {
+                            if ctx.buffer_view_slots.contains_key(id) {
+                                invalidate_buffer_view_pointer(
+                                    ctx,
+                                    *id,
+                                    MaterializationReason::MutableAlias,
+                                );
+                            }
+                        }
+                    }
                     let arr_box = lower_expr(ctx, object)?;
                     let key_box = lower_expr(ctx, index)?;
                     let blk = ctx.block();
