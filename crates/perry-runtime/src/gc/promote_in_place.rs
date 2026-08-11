@@ -66,10 +66,35 @@ pub(super) const PROMOTE_SURVIVAL_THRESHOLD_PERMILLE: u64 = 950;
 /// promoting cycle that still traces knows exactly which objects are garbage
 /// and pays only footprint for a misprediction, while an untraced one assumes
 /// the whole young generation is live. Only the regime the measurement calls
-/// *fully* live earns that, and 999‰ is what `retain`/`retain_wide`/`deeplist`
-/// measure on every cycle (the bimodal population's live mode sits at
-/// 999–1000; the garbage mode at 0–4).
-pub(super) const UNTRACED_PROMOTION_SURVIVAL_PERMILLE: u64 = 999;
+/// *fully* live earns that; the bimodal population's live mode sits at
+/// **992–1000** and its garbage mode at 0–4, three orders of magnitude apart.
+///
+/// # Why this is 990 and not the 999 it was introduced at (#7888)
+///
+/// 999 was read off `retain`/`retain_wide`/`deeplist`, whose every cycle
+/// measured exactly 999 or 1000 — and **that reading was partly an artifact of
+/// the flat 16 KB born-tenured threshold.** `all.push(rec)` grows its backing
+/// store by doubling, and every intermediate store over 16 KB was born in
+/// old-gen, so the garbage those growths abandon was never in the young
+/// generation to be counted. With pointer-bearing objects nursery-resident up
+/// to 128 KB the abandoned stores land where they belong, and `retain`'s FIRST
+/// cycle now measures **992** — deterministically, on all four `retain*`
+/// variants and on `phase_flip`. Every LATER cycle measures 1000 rather than
+/// 999, i.e. the estimator is strictly more confident once the startup garbage
+/// has actually been collected.
+///
+/// At 999 that one permille costs exactly one traced cycle per program, worth
+/// `retain1` +15.7% and `retain_wide1` +11.3% on the quiet mini. The threshold
+/// was over-fitted to a measurement that has since become more accurate.
+///
+/// The exposure this widens is small and already bounded twice.
+/// [`note_untraced_promotion`] charges `promoted × (1000 − permille) / 1000`
+/// against [`PROMOTED_DEAD_BUDGET_BYTES`], so an untraced run capped at
+/// [`UNTRACED_PROMOTION_FLOOR_BYTES`] (128 MB) carries at most **1.28 MB** of
+/// assumed-live-but-dead bytes here against 0.128 MB at 999 — both far under
+/// the 32 MB cap, which means the binding bound is the untraced-bytes budget in
+/// either case, and that is unchanged.
+pub(super) const UNTRACED_PROMOTION_SURVIVAL_PERMILLE: u64 = 990;
 
 /// Floor for the untraced-promotion budget — see
 /// [`untraced_promotion_budget_bytes`].

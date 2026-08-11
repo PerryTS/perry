@@ -244,9 +244,21 @@ fn an_untraced_cycle_charges_the_dead_bytes_its_last_measurement_implies() {
     // ...and it is the SAME cap: enough implied dead bytes stop in-place
     // promotion until a full collection reclaims them, exactly as a measured
     // collapse would.
+    //
+    // The cap is read by `should_promote_young_in_place` alone.
+    // `should_promote_young_untraced` is a SUB-decision — `copying.rs`
+    // evaluates it only after the promoting decision has said yes AND the
+    // retag came back non-empty — so what the cap closes is the composite, and
+    // that is what this asserts. Asserting the sub-decision on its own would
+    // read as a stronger statement than the code makes; it passed before only
+    // because the seeded ratio was under the then-999 untraced threshold, i.e.
+    // for a reason that had nothing to do with the cap.
     seed_promoted_dead_bytes_for_tests(PROMOTED_DEAD_BUDGET_BYTES);
     assert!(!should_promote_young_in_place());
-    assert!(!should_promote_young_untraced());
+    assert!(
+        !(should_promote_young_in_place() && should_promote_young_untraced()),
+        "an exhausted dead-bytes budget must close the untraced path too"
+    );
 }
 
 #[test]

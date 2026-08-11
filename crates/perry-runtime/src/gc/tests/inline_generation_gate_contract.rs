@@ -70,7 +70,7 @@ fn codegen_tenured_comparand_matches_the_runtime_flag() {
 ///
 /// * the size-independent born-old wrapper (`arena_alloc_gc_old_born_tenured`),
 /// * the large-object arm of the ordinary nursery allocator, which diverts
-///   anything over `LARGE_OBJECT_THRESHOLD_BYTES` straight into old-gen,
+///   anything over `large_object_threshold_for_type` straight into old-gen,
 /// * `buffer_alloc`, which is old-gen because its bytes are handed to FFI.
 ///
 /// The survivor/evacuation paths (`gc/copying.rs`, `gc/oldgen.rs`) set the bit
@@ -82,8 +82,12 @@ fn every_old_gen_birth_path_sets_tenured() {
 
     let born_tenured =
         crate::arena::arena_alloc_gc_old_born_tenured(64, 8, GC_TYPE_OBJECT) as usize;
+    // Sized from the SAME function the allocator consults, so the fixture
+    // follows a future retune of either threshold instead of silently ceasing
+    // to be an old-gen birth (which is how this assertion would stop covering
+    // its invariant rather than fail).
     let large = crate::arena::arena_alloc_gc(
-        crate::gc::LARGE_OBJECT_THRESHOLD_BYTES + 64,
+        crate::gc::large_object_threshold_for_type(GC_TYPE_OBJECT) + 64,
         8,
         GC_TYPE_OBJECT,
     ) as usize;
