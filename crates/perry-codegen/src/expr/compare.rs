@@ -256,6 +256,181 @@ fn lower_string_literal_strict_eq(
     ctx.block().phi(I1, &incoming)
 }
 
+/// Magnitude comparands for the inline heap-address test in
+/// [`lower_strict_eq_inline_any`]. These mirror
+/// `perry-runtime::value::addr_class::{HANDLE_BAND_MAX, is_valid_obj_ptr}`:
+/// a `POINTER_TAG` payload below `HANDLE_BAND_MAX` is a registry id
+/// (net.Socket, fetch, zlib, revocable Proxy, UI widget), NOT an address, and
+/// dereferencing one reads unmapped low memory. Anything outside the window
+/// takes the runtime call instead of a header load.
+const HANDLE_BAND_MAX_I64: &str = "1048576";
+const HEAP_ADDR_CEILING_I64: &str = "140737488355328";
+
+/// Inline prefix for the generic `===`/`!==` tail — the arm where BOTH
+/// operands are statically unconstrained, which emitted one
+/// `js_eq` → `js_jsvalue_equals` call per comparison and nothing else.
+///
+/// The motivating shape is a linear scan over a generic container's key
+/// array: `this.keys[i] === k` in `gc-handoff/apps/pipeline.ts`'s
+/// `Registry<K, V>`, measured at 8.4% of that program. A scan is dominated by
+/// **misses**, so a fast path that settles only the hit is worth nothing —
+/// each case below settles one direction of the real traffic.
+///
+/// Four cases leave without a call. Each is an exact restatement of what
+/// `js_jsvalue_equals` computes for that input, not an approximation:
+///
+/// * **identical bits** ⇒ equal, *unless* the value is a plain (untagged)
+///   IEEE NaN. Perry's tags occupy top16 `0x7FF9..=0x7FFF`, so a tagged
+///   immediate (`undefined`, a pointer, an SSO string) stays equal to itself
+///   even though it *is* a NaN double, while canonical `0x7FF8…` NaN and the
+///   negative `0xFFF8…` NaN libm returns fall outside the band and take the
+///   call, which answers `false` (`NaN !== NaN`).
+/// * **both SSO strings, different bits** ⇒ different content. The SSO
+///   encoding is canonical — same bytes and same length give the same bit
+///   pattern — which is the argument `lower_string_strict_eq_inline` and the
+///   runtime's own both-short-string arm already rely on.
+/// * **both INT32, different bits** ⇒ different integers, same argument.
+/// * **both `POINTER_TAG`, different payloads, and neither header carries
+///   `GC_FLAG_FORWARDED`** ⇒ distinct objects. The runtime's pointer arm is
+///   `resolve_forwarding(a) == resolve_forwarding(b)`, and
+///   `resolve_forwarding` returns its argument unchanged when the forwarding
+///   bit is clear — so two *unforwarded* distinct addresses are exactly its
+///   `0` case. Anything forwarded (a post-`js_array_grow` alias, a stale
+///   pre-evacuation pointer) takes the call and gets the full walk. The
+///   header read is the same one `expr/array_push.rs` emits — `gc_flags` at
+///   `ptr - 7`, mask `GC_FLAG_FORWARDED` (0x80) — behind the same magnitude
+///   guard the runtime applies before any `GcHeader` dereference.
+///
+/// Everything else — a raw-bits module-level object slot (top16 zero), a heap
+/// string, a bigint, a mixed pair, a boxed wrapper — falls through to
+/// `js_eq`, which is what this site emitted unconditionally before.
+///
+/// Returns an i64 holding `TAG_TRUE`/`TAG_FALSE` (or `js_eq`'s own tagged
+/// boolean), i.e. the same value the bare call produced.
+fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
+    let l_bits = ctx.block().bitcast_double_to_i64(l);
+    let r_bits = ctx.block().bitcast_double_to_i64(r);
+
+    let same_idx = ctx.new_block("anyeq.same");
+    let diff_idx = ctx.new_block("anyeq.diff");
+    let canon_idx = ctx.new_block("anyeq.canon");
+    let band_idx = ctx.new_block("anyeq.band");
+    let fwd_idx = ctx.new_block("anyeq.fwd");
+    let slow_idx = ctx.new_block("anyeq.slow");
+    let true_idx = ctx.new_block("anyeq.true");
+    let false_idx = ctx.new_block("anyeq.false");
+    let merge_idx = ctx.new_block("anyeq.merge");
+    let same_l = ctx.block_label(same_idx);
+    let diff_l = ctx.block_label(diff_idx);
+    let canon_l = ctx.block_label(canon_idx);
+    let band_l = ctx.block_label(band_idx);
+    let fwd_l = ctx.block_label(fwd_idx);
+    let slow_l = ctx.block_label(slow_idx);
+    let true_l = ctx.block_label(true_idx);
+    let false_l = ctx.block_label(false_idx);
+    let merge_l = ctx.block_label(merge_idx);
+
+    let same = ctx.block().icmp_eq(I64, &l_bits, &r_bits);
+    ctx.block().cond_br(&same, &same_l, &diff_l);
+
+    // Identical bits. Equal for every Perry tag and every non-NaN double.
+    ctx.current_block = same_idx;
+    let stag = ctx.block().lshr(I64, &l_bits, "48");
+    let tag_lo = ctx
+        .block()
+        .icmp_uge(I64, &stag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let tag_hi = ctx
+        .block()
+        .icmp_ule(I64, &stag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let tagged = ctx.block().and(I1, &tag_lo, &tag_hi);
+    let is_nan = ctx.block().fcmp("uno", l, l);
+    let not_nan = ctx.block().xor(I1, &is_nan, "true");
+    let same_ok = ctx.block().or(I1, &tagged, &not_nan);
+    ctx.block().cond_br(&same_ok, &true_l, &slow_l);
+
+    // Different bits: only a same-tag pair whose encoding is canonical, or a
+    // pair of unforwarded heap pointers, is decidable here.
+    ctx.current_block = diff_idx;
+    let l_tag = ctx.block().lshr(I64, &l_bits, "48");
+    let r_tag = ctx.block().lshr(I64, &r_bits, "48");
+    let l_ptr = ctx
+        .block()
+        .icmp_eq(I64, &l_tag, crate::nanbox::POINTER_TAG_TOP16_I64);
+    let r_ptr = ctx
+        .block()
+        .icmp_eq(I64, &r_tag, crate::nanbox::POINTER_TAG_TOP16_I64);
+    let both_ptr = ctx.block().and(I1, &l_ptr, &r_ptr);
+    ctx.block().cond_br(&both_ptr, &band_l, &canon_l);
+
+    ctx.current_block = canon_idx;
+    let l_sso = ctx
+        .block()
+        .icmp_eq(I64, &l_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let r_sso = ctx
+        .block()
+        .icmp_eq(I64, &r_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let both_sso = ctx.block().and(I1, &l_sso, &r_sso);
+    let l_i32 = ctx
+        .block()
+        .icmp_eq(I64, &l_tag, crate::nanbox::INT32_TAG_TOP16_I64);
+    let r_i32 = ctx
+        .block()
+        .icmp_eq(I64, &r_tag, crate::nanbox::INT32_TAG_TOP16_I64);
+    let both_i32 = ctx.block().and(I1, &l_i32, &r_i32);
+    let canonical = ctx.block().or(I1, &both_sso, &both_i32);
+    ctx.block().cond_br(&canonical, &false_l, &slow_l);
+
+    // Both POINTER_TAG. Classify by magnitude before touching a header.
+    ctx.current_block = band_idx;
+    let l_addr = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
+    let r_addr = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
+    let l_above = ctx.block().icmp_uge(I64, &l_addr, HANDLE_BAND_MAX_I64);
+    let l_below = ctx.block().icmp_ult(I64, &l_addr, HEAP_ADDR_CEILING_I64);
+    let r_above = ctx.block().icmp_uge(I64, &r_addr, HANDLE_BAND_MAX_I64);
+    let r_below = ctx.block().icmp_ult(I64, &r_addr, HEAP_ADDR_CEILING_I64);
+    let l_heap = ctx.block().and(I1, &l_above, &l_below);
+    let r_heap = ctx.block().and(I1, &r_above, &r_below);
+    let both_heap = ctx.block().and(I1, &l_heap, &r_heap);
+    ctx.block().cond_br(&both_heap, &fwd_l, &slow_l);
+
+    ctx.current_block = fwd_idx;
+    let l_flags_addr = ctx.block().sub(I64, &l_addr, "7");
+    let l_flags_ptr = ctx.block().inttoptr(I64, &l_flags_addr);
+    let l_flags = ctx.block().load(I8, &l_flags_ptr);
+    let r_flags_addr = ctx.block().sub(I64, &r_addr, "7");
+    let r_flags_ptr = ctx.block().inttoptr(I64, &r_flags_addr);
+    let r_flags = ctx.block().load(I8, &r_flags_ptr);
+    let either = ctx.block().or(I8, &l_flags, &r_flags);
+    // GC_FLAG_FORWARDED = 0x80; LLVM i8 literals are signed.
+    let fwd_bits = ctx.block().and(I8, &either, "-128");
+    let no_fwd = ctx.block().icmp_eq(I8, &fwd_bits, "0");
+    ctx.block().cond_br(&no_fwd, &false_l, &slow_l);
+
+    ctx.current_block = slow_idx;
+    let slow_res = ctx
+        .block()
+        .call(I64, "js_eq", &[(I64, &l_bits), (I64, &r_bits)]);
+    let slow_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = true_idx;
+    let true_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = false_idx;
+    let false_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        I64,
+        &[
+            (crate::nanbox::TAG_TRUE_I64, &true_pred),
+            (crate::nanbox::TAG_FALSE_I64, &false_pred),
+            (&slow_res, &slow_pred),
+        ],
+    )
+}
+
 /// Inline prefix for the `===`/`!==` string arms that have **no** literal
 /// operand — `names[i] === name` in an environment lookup, say.
 ///
@@ -655,17 +830,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if either_non_numeric && only_eq && unknown_l && unknown_r {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
-                let blk = ctx.block();
                 // Use js_loose_eq for == / != (handles null==undefined,
-                // cross-type coercion). Use js_eq for === / !==.
-                let eq_fn = if matches!(op, CompareOp::LooseEq | CompareOp::LooseNe) {
-                    "js_loose_eq"
+                // cross-type coercion). STRICT `===`/`!==` gets the inline
+                // prefix instead: the operands that reach here are
+                // unconstrained, and a generic-container key scan
+                // (`this.keys[i] === k`) spends its whole cost on this one
+                // call. Loose `==`'s cross-type coercions are not
+                // bit-decidable, so it keeps the bare call.
+                let result_bits = if matches!(op, CompareOp::LooseEq | CompareOp::LooseNe) {
+                    let blk = ctx.block();
+                    let l_bits = blk.bitcast_double_to_i64(&l);
+                    let r_bits = blk.bitcast_double_to_i64(&r);
+                    blk.call(I64, "js_loose_eq", &[(I64, &l_bits), (I64, &r_bits)])
                 } else {
-                    "js_eq"
+                    lower_strict_eq_inline_any(ctx, &l, &r)
                 };
-                let l_bits = blk.bitcast_double_to_i64(&l);
-                let r_bits = blk.bitcast_double_to_i64(&r);
-                let result_bits = blk.call(I64, eq_fn, &[(I64, &l_bits), (I64, &r_bits)]);
+                let blk = ctx.block();
                 let result = blk.bitcast_i64_to_double(&result_bits);
                 if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
                     let cmp = blk.icmp_eq(I64, &result_bits, crate::nanbox::TAG_TRUE_I64);
