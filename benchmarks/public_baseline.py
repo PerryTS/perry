@@ -130,10 +130,46 @@ def _is_resolved_path(value: Any) -> bool:
     return bool(text) and (os.path.isabs(text) or os.sep in text)
 
 
+def _cargo_profile_tables(data: bytes) -> bytes:
+    """The `[profile.*]` tables of a Cargo manifest, and nothing else.
+
+    #7282: `Cargo.toml` was fingerprinted whole-file (modulo the version line,
+    which #7264's normalization already neutralized). Everything else in it —
+    a new `perry-ext-*` workspace member, a dependency bump, a `[workspace]`
+    restructure — invalidated the published baseline without being able to
+    change a measured number. #6758/#6761's restructuring tripped it with the
+    `.ts` kernels untouched, and the artifact then sat 40+ commits stale on a
+    REQUIRED check, so every later `lint` step never ran at all and every merge
+    needed an `--admin` bypass.
+
+    What genuinely can move a number is the build profile: `opt-level`, `lto`,
+    `codegen-units`, `panic`. So only those tables participate.
+
+    Extraction is deliberately textual and conservative — a TOML parser is not
+    guaranteed available in the CI Python, and this must agree byte-for-byte
+    between the generator and the checker. A section header ends the capture
+    unless it is itself a `[profile...` header, so `[profile.release.package.x]`
+    subtables are kept.
+    """
+    kept: list[bytes] = []
+    capturing = False
+    for line in data.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith(b"[") and stripped.endswith(b"]"):
+            capturing = stripped.startswith(b"[profile")
+        if capturing:
+            kept.append(line)
+    return b"".join(kept)
+
+
 def _fingerprint_bytes(name: str) -> bytes:
     data = (ROOT / name).read_bytes()
     if name == "Cargo.toml":
+        # The version normalization stays: `[workspace.package] version` is not
+        # in a profile table, but keeping the substitution makes the intent
+        # explicit if the extraction below is ever widened.
         data = _CARGO_VERSION_RE.sub(b'version = "0.0.0"', data)
+        data = _cargo_profile_tables(data)
     return data
 
 
