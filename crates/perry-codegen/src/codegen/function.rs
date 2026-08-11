@@ -434,6 +434,10 @@ pub(super) fn compile_function(
     // threshold move" — an `alwaysinline` callee is excluded from the latter
     // and is the hottest possible case for the former.
     lf.hot_loop_callee = cross_module.hot_loop_callees.contains(&f.id);
+    // #7864: the allocator's hotness set. Set from the same well-ordered point
+    // as `hot_loop_callee` (before the entry block exists and before any
+    // expression is lowered), for the same reason.
+    lf.alloc_hot = cross_module.alloc_hot_functions.contains(&f.id);
     if !lf.force_inline
         && inline_hot_small_enabled()
         && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())

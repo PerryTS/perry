@@ -99,6 +99,90 @@ pub fn collect_hot_loop_callees(hir: &Module, max_call_sites: u32) -> HashSet<u3
         .collect()
 }
 
+/// #7864: the set of `FuncId`s whose bodies should be treated as **hot enough
+/// to inline the bump allocator** at their `new` sites
+/// (`lower_call/new_alloc.rs::new_site_is_in_loop`).
+///
+/// ## Why this is not [`collect_hot_loop_callees`]
+///
+/// It is the same "is this code hot" question **without the
+/// `max_call_sites` cap**, because the cap answers a question the allocator
+/// does not ask. `inlinehint` duplicates the whole callee body at every one of
+/// its call sites, so its cost scales with call-site count and the cap is the
+/// only thing bounding it. The inline bump allocator emits ~268 bytes **per
+/// `new` site in the function itself**, once, whatever the call-site count —
+/// so capping on call sites prices a cost that does not exist and, worse,
+/// excludes precisely the functions that earn it.
+///
+/// `gc-handoff/apps/interp.ts`'s `evalNode` is the shape: it is *the* hot
+/// function of the program (~20M invocations), it allocates a `Value` per
+/// invocation, and it has 11 direct call sites — 10 of them its own recursion —
+/// so the ≤4 cap excluded it and all eight of its object literals took the
+/// outlined `js_object_alloc_class_inline_keys` call. Measured on the whole
+/// 19-program corpus with `PERRY_INLINE_NEW=1` (which forces the inline form
+/// everywhere): `interp` −16.2%, `iso_miss` −10.4%, `pipeline` −8.4%, and the
+/// other 16 within a ±1.6% noise floor established by the 15 binaries that
+/// come out byte-identical.
+///
+/// ## The two admission rules
+///
+/// 1. **≥1 direct call site inside a loop** — the existing proxy for "runs many
+///    times", now uncapped.
+/// 2. **Directly self-recursive** — a function that calls itself IS a loop, and
+///    the existing lexical test cannot see it. `parseExpr`/`evalNode` are both;
+///    a recursive descent whose entry call happens to sit in straight-line code
+///    would otherwise pay the outlined allocator at every level of the
+///    recursion.
+///
+/// Direction of error is unchanged from the sibling: under-inclusion forgoes
+/// speed, never correctness — the outlined call performs the identical bump
+/// alloc + header init and returns the identical user pointer.
+pub fn collect_alloc_hot_functions(hir: &Module) -> HashSet<u32> {
+    let mut scan = HotCalleeScan::default();
+    walk_stmts(&hir.init, false, &mut scan);
+    for f in &hir.functions {
+        walk_stmts(&f.body, false, &mut scan);
+    }
+    for c in &hir.classes {
+        if let Some(ctor) = &c.constructor {
+            walk_stmts(&ctor.body, false, &mut scan);
+        }
+        for m in c.methods.iter().chain(c.static_methods.iter()) {
+            walk_stmts(&m.body, false, &mut scan);
+        }
+        for (_, g) in &c.getters {
+            walk_stmts(&g.body, false, &mut scan);
+        }
+        for (_, s) in &c.setters {
+            walk_stmts(&s.body, false, &mut scan);
+        }
+        for cm in &c.computed_members {
+            walk_expr(&cm.key_expr, false, &mut scan);
+            walk_stmts(&cm.function.body, false, &mut scan);
+        }
+        for field in c.fields.iter().chain(c.static_fields.iter()) {
+            if let Some(key) = &field.key_expr {
+                walk_expr(key, false, &mut scan);
+            }
+            if let Some(init) = &field.init {
+                walk_expr(init, false, &mut scan);
+            }
+        }
+    }
+    let mut hot = scan.in_loop;
+    // Rule 2: a direct self-call. Scanned per function so the recursion is
+    // attributed to the caller it actually appears in, which a whole-module
+    // call-count table cannot express.
+    for f in &hir.functions {
+        let mut self_scan = HotCalleeScan::default();
+        walk_stmts(&f.body, false, &mut self_scan);
+        if self_scan.call_counts.contains_key(&f.id) {
+            hot.insert(f.id);
+        }
+    }
+    hot
+}
+
 fn record_callee(callee: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
     if let Expr::FuncRef(id) = callee {
         *scan.call_counts.entry(*id).or_insert(0) += 1;

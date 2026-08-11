@@ -63,7 +63,7 @@ pub(crate) use hir_facts::{
     collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_lens,
     NativeRegionFactGraph,
 };
-pub(crate) use hot_callees::collect_hot_loop_callees;
+pub(crate) use hot_callees::{collect_alloc_hot_functions, collect_hot_loop_callees};
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_stmts, is_strictly_i32_bounded_expr,
     is_ushr_zero,

@@ -976,4 +976,10 @@ pub(crate) struct CrossModuleCtx {
     /// `PERRY_INLINE_HOT_SMALL` is off (the flag is checked at the decision
     /// site, so the set is still populated but simply not consulted).
     pub hot_loop_callees: std::collections::HashSet<u32>,
+    /// #7864: `FuncId`s in THIS module whose `new` sites earn the inline bump
+    /// allocator — `collectors::collect_alloc_hot_functions`. Deliberately a
+    /// SECOND set rather than a widening of `hot_loop_callees`: that one gates
+    /// `inlinehint`, whose cost scales with call sites, and the two must not
+    /// share an admission rule. See the collector's doc comment.
+    pub alloc_hot_functions: std::collections::HashSet<u32>,
 }

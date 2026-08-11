@@ -1706,6 +1706,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             hir,
             crate::codegen::helpers::inline_hot_small_max_call_sites(),
         ),
+        // #7864: the allocator's own "is this hot" set — same in-loop proxy,
+        // no call-site cap (the cap prices `inlinehint`'s duplication, which
+        // the inline bump allocator does not incur), plus direct recursion.
+        alloc_hot_functions: crate::collectors::collect_alloc_hot_functions(hir),
         clamp3_functions: hir
             .functions
             .iter()

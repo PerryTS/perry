@@ -48,6 +48,12 @@ pub struct LlFunction {
     /// "is this code hot?" rather than "should LLVM's threshold move?" read
     /// this.
     pub hot_loop_callee: bool,
+    /// #7864: `collectors::collect_alloc_hot_functions` admitted this function
+    /// — it has an in-loop direct call site (uncapped) or calls itself. Read
+    /// ONLY by `lower_call/new_alloc.rs::new_site_is_in_loop`; it must not be
+    /// used to widen `inline_hint`, whose anti-bloat cap is the whole reason
+    /// the two sets are separate.
+    pub alloc_hot: bool,
     /// Invoke-EH (#7302): this function contains landing pads (Itanium) or
     /// funclet pads (SEH), so its `define` line must carry
     /// `personality ptr @<name>` — `perry_eh_personality` on Mach-O/ELF,
@@ -228,6 +234,7 @@ impl LlFunction {
             force_inline: false,
             inline_hint: false,
             hot_loop_callee: false,
+            alloc_hot: false,
             personality: None,
             blocks: Vec::new(),
             block_counter: 0,

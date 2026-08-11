@@ -77,7 +77,28 @@ fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
     // Reading `func.hot_loop_callee` here is well-ordered: `codegen/function.rs`
     // sets it from `cross_module.hot_loop_callees` before the entry block is
     // created and before any expression is lowered.
-    ctx.func.hot_loop_callee
+    if ctx.func.hot_loop_callee {
+        return true;
+    }
+    // #7864: the same question, asked with the right cost model.
+    //
+    // `hot_loop_callee` above carries `inline_hot_small_max_call_sites` (4),
+    // which is `inlinehint`'s anti-bloat backstop — it bounds a cost that
+    // scales with CALL SITES because LLVM duplicates the callee body at each
+    // one. The inline bump allocator's cost is ~268 bytes per `new` SITE in
+    // this function, paid once regardless of how many callers there are. So
+    // the cap prices a cost that does not exist here, and it excludes exactly
+    // the functions that earn the inline form: a recursive-descent evaluator's
+    // hot function has one call site per recursion arm.
+    //
+    // `gc-handoff/apps/interp.ts`'s `evalNode` had 11 (10 of them its own
+    // recursion) and allocated a `Value` per invocation through the outlined
+    // call, ~20M times. Whole-corpus A/B with `PERRY_INLINE_NEW=1` (the
+    // force-everywhere knob, i.e. a strict superset of this rule): `interp`
+    // −16.2%, `iso_miss` −10.4%, `pipeline` −8.4%, zero regressions outside a
+    // ±1.6% floor — and 15 of 19 binaries came out byte-identical, so the
+    // widening reaches four programs, not the corpus.
+    ctx.func.alloc_hot
 }
 
 /// Emit the instance allocation for `new <class_name>(...)` and return the raw

@@ -137,6 +137,8 @@ pub(crate) use write_barrier::{
 // under 2000 lines. Inherent methods (`record_value`) need no re-export.
 #[cfg(test)]
 mod array_push_guard_tests;
+#[cfg(test)]
+mod class_field_barrier_tests;
 mod dispatch;
 mod record_value;
 mod repsel_gates;
