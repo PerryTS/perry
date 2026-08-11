@@ -32,6 +32,9 @@
 use crate::value::JSValue;
 use std::cell::Cell;
 
+mod iterative;
+pub(crate) use iterative::materialize_iterative;
+
 /// One tape entry. Kind + byte offset + (for container kinds) a
 /// parent/sibling pointer that lets materialization skip over
 /// already-traversed subtrees.
@@ -190,10 +193,8 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
         }
     }
 
-    // Helper: skip a JSON string in place (past the closing quote).
-    // Returns `true` on success, `false` on EOF before closing quote.
-    // Honors `\"`, `\\`, and other escapes by swallowing the character
-    // after a backslash. Does NOT decode — just finds the boundary.
+    // Helper: validate and skip a JSON string in place (past the closing
+    // quote). Decoding remains deferred to materialization.
     #[inline(always)]
     fn skip_string(bytes: &[u8], pos: &mut usize) -> bool {
         debug_assert_eq!(bytes[*pos], b'"');
@@ -209,7 +210,21 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
                 if *pos >= bytes.len() {
                     return false;
                 }
-                *pos += 1;
+                match bytes[*pos] {
+                    b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => *pos += 1,
+                    b'u' => {
+                        *pos += 1;
+                        if *pos + 4 > bytes.len()
+                            || !bytes[*pos..*pos + 4].iter().all(u8::is_ascii_hexdigit)
+                        {
+                            return false;
+                        }
+                        *pos += 4;
+                    }
+                    _ => return false,
+                }
+            } else if c < 0x20 {
+                return false;
             } else {
                 *pos += 1;
             }
@@ -217,19 +232,30 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
         false
     }
 
-    // Helper: skip a JSON number (past its last digit/exponent).
+    // Helper: validate and skip a JSON number (past its last digit/exponent).
     #[inline(always)]
-    fn skip_number(bytes: &[u8], pos: &mut usize) {
+    fn skip_number(bytes: &[u8], pos: &mut usize) -> bool {
         if *pos < bytes.len() && bytes[*pos] == b'-' {
             *pos += 1;
         }
-        while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
-            *pos += 1;
+        match bytes.get(*pos) {
+            Some(b'0') => *pos += 1,
+            Some(b'1'..=b'9') => {
+                *pos += 1;
+                while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
+                    *pos += 1;
+                }
+            }
+            _ => return false,
         }
         if *pos < bytes.len() && bytes[*pos] == b'.' {
             *pos += 1;
+            let fraction_start = *pos;
             while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
                 *pos += 1;
+            }
+            if *pos == fraction_start {
+                return false;
             }
         }
         if *pos < bytes.len() && (bytes[*pos] == b'e' || bytes[*pos] == b'E') {
@@ -237,10 +263,15 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
             if *pos < bytes.len() && (bytes[*pos] == b'+' || bytes[*pos] == b'-') {
                 *pos += 1;
             }
+            let exponent_start = *pos;
             while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
                 *pos += 1;
             }
+            if *pos == exponent_start {
+                return false;
+            }
         }
+        true
     }
 
     // Driver: expecting-value state. After emitting a value, the
@@ -378,7 +409,9 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
                         state = State::AfterValue;
                     }
                     c if c == b'-' || c.is_ascii_digit() => {
-                        skip_number(bytes, &mut pos);
+                        if !skip_number(bytes, &mut pos) {
+                            return false;
+                        }
                         entries.push(TapeEntry {
                             offset: tok_off,
                             kind: KIND_NUMBER,
@@ -453,9 +486,10 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
         }
     }
 
-    if !stack.is_empty() {
+    skip_ws(bytes, &mut pos);
+    if pos != bytes.len() || !stack.is_empty() {
         return false;
-    } // unclosed container
+    }
     if entries.is_empty() {
         return false;
     }

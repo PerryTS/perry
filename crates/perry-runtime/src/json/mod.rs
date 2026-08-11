@@ -824,7 +824,7 @@ mod tests {
         }
     }
 
-    /// #7792 — deeply nested input must throw, not take the process out.
+    /// #7792 / #7817 — deeply nested input must not take the process out.
     ///
     /// Both parsers that read the document recurse once per nesting level, so
     /// a deep enough document exhausted the stack: SIGSEGV, exit 139, no
@@ -833,7 +833,17 @@ mod tests {
     /// document is unusual.
     mod nesting_depth {
         use super::*;
-        use crate::json::parser::{nesting_depth_exceeds, MAX_NESTING_DEPTH};
+        use crate::json::parser::{
+            nesting_depth_exceeds, MAX_ITERATIVE_NESTING_DEPTH, MAX_RECURSIVE_NESTING_DEPTH,
+        };
+
+        fn nested_arrays(depth: usize, leaf: u8) -> Vec<u8> {
+            let mut input = Vec::with_capacity(depth * 2 + 1);
+            input.extend(std::iter::repeat_n(b'[', depth));
+            input.push(leaf);
+            input.extend(std::iter::repeat_n(b']', depth));
+            input
+        }
 
         #[test]
         fn the_scan_counts_only_structural_brackets() {
@@ -855,27 +865,78 @@ mod tests {
             assert!(!nesting_depth_exceeds(b"", 0));
         }
 
-        /// The limit is the point of the change, so pin the boundary itself:
-        /// one level under passes, one level over is refused.
+        /// Pin the parser handoff boundary: both sides produce a value.
         #[test]
-        fn parse_refuses_input_past_the_limit_and_accepts_input_under_it() {
-            let ok_depth = MAX_NESTING_DEPTH - 1;
-            let mut ok = vec![b'['; ok_depth];
-            ok.extend(std::iter::repeat(b']').take(ok_depth));
+        fn parse_switches_to_the_iterative_path_past_the_recursive_threshold() {
+            let ok_depth = MAX_RECURSIVE_NESTING_DEPTH - 1;
+            let ok = nested_arrays(ok_depth, b'0');
             let text = js_string_from_bytes(ok.as_ptr(), ok.len() as u32);
             assert!(
                 unsafe { js_json_parse_result(text) }.is_ok(),
-                "input inside the limit must still parse"
+                "input below the handoff must parse"
             );
 
-            let deep_depth = MAX_NESTING_DEPTH + 1;
-            let mut deep = vec![b'['; deep_depth];
-            deep.extend(std::iter::repeat(b']').take(deep_depth));
+            let deep_depth = MAX_RECURSIVE_NESTING_DEPTH + 1;
+            let deep = nested_arrays(deep_depth, b'0');
             let text = js_string_from_bytes(deep.as_ptr(), deep.len() as u32);
             assert!(
-                unsafe { js_json_parse_result(text) }.is_err(),
-                "input past the limit must be refused rather than descended into"
+                unsafe { js_json_parse_result(text) }.is_ok(),
+                "input above the handoff must parse through the heap-stack path"
             );
+        }
+
+        #[test]
+        fn parses_three_hundred_thousand_levels_on_a_small_worker_stack() {
+            const DEPTH: usize = 300_000;
+            std::thread::Builder::new()
+                .name("json-deep-worker".into())
+                .stack_size(2 * 1024 * 1024)
+                .spawn(|| {
+                    let input = nested_arrays(DEPTH, b'7');
+                    let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+                    let mut value = unsafe { js_json_parse_result(text) }
+                        .expect("deep JSON must parse on a worker-sized stack");
+
+                    for level in 0..DEPTH {
+                        assert!(value.is_pointer(), "level {level} must be an array");
+                        let array = (value.bits() & POINTER_MASK) as *const crate::ArrayHeader;
+                        assert_eq!(unsafe { (*array).length }, 1, "level {level}");
+                        value = crate::array::js_array_get(array, 0);
+                    }
+                    assert_eq!(f64::from_bits(value.bits()), 7.0);
+                })
+                .expect("worker thread starts")
+                .join()
+                .expect("worker parse does not panic");
+        }
+
+        #[test]
+        fn rejects_nesting_beyond_the_iterative_resource_budget() {
+            let input = nested_arrays(MAX_ITERATIVE_NESTING_DEPTH + 1, b'0');
+            let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+            let error = unsafe { js_json_parse_result(text) }
+                .expect_err("the iterative path must keep a finite resource budget");
+            let error = (error.to_bits() & POINTER_MASK) as *const crate::error::ErrorHeader;
+            assert_eq!(
+                unsafe { (*error).error_kind },
+                crate::error::ERROR_KIND_RANGE_ERROR
+            );
+        }
+
+        #[test]
+        fn iterative_path_still_rejects_malformed_json() {
+            let depth = MAX_RECURSIVE_NESTING_DEPTH + 1;
+            let mut trailing = nested_arrays(depth, b'0');
+            trailing.push(b'x');
+            let mut invalid_number = Vec::with_capacity(depth * 2 + 2);
+            invalid_number.extend(std::iter::repeat_n(b'[', depth));
+            invalid_number.extend_from_slice(b"01");
+            invalid_number.extend(std::iter::repeat_n(b']', depth));
+
+            for input in [trailing, invalid_number] {
+                let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+                assert!(unsafe { js_json_parse_result(text) }.is_err());
+            }
         }
     }
 

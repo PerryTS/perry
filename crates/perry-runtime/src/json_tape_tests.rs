@@ -97,6 +97,12 @@ fn tape_malformed_returns_none() {
     assert!(build_tape(b"[").is_none(), "unclosed array");
     assert!(build_tape(b"{a:1}").is_none(), "unquoted key");
     assert!(build_tape(b"{\"a\"}").is_none(), "missing colon");
+    assert!(build_tape(b"0 trailing").is_none(), "trailing token");
+    assert!(build_tape(b"01").is_none(), "leading zero");
+    assert!(build_tape(b"1.").is_none(), "empty fraction");
+    assert!(build_tape(b"1e+").is_none(), "empty exponent");
+    assert!(build_tape(br#""\q""#).is_none(), "invalid escape");
+    assert!(build_tape(b"\"line\nfeed\"").is_none(), "raw control byte");
     assert!(build_tape(b"").is_none(), "empty input");
 }
 
@@ -107,6 +113,27 @@ fn tape_top_level_scalars() {
     assert_eq!(build_tape(b"true").unwrap().entries.len(), 1);
     assert_eq!(build_tape(br#""hi""#).unwrap().entries.len(), 1);
     assert_eq!(build_tape(b"null").unwrap().entries.len(), 1);
+}
+
+#[test]
+fn iterative_materializer_preserves_nested_objects_arrays_and_duplicate_keys() {
+    let input = br#"{"a":[1,true,"x"],"a":{"b":2}}"#;
+    let tape = build_tape(input).expect("valid tape");
+    let saved_roots = crate::json::parse_root_save_len();
+    crate::gc::gc_suppress();
+    let value = unsafe { materialize_iterative(&tape.entries, input) }.expect("materializes");
+    crate::json::parse_root_push(value);
+    crate::gc::gc_unsuppress();
+
+    let object = (value.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    let key_a = crate::string::js_string_from_bytes(b"a".as_ptr(), 1);
+    let key_b = crate::string::js_string_from_bytes(b"b".as_ptr(), 1);
+    let nested = crate::object::js_object_get_field_by_name(object, key_a);
+    let nested = (nested.bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    let b = crate::object::js_object_get_field_by_name(nested, key_b);
+    assert_eq!(f64::from_bits(b.bits()), 2.0);
+
+    crate::json::parse_root_restore(saved_roots);
 }
 
 /// `TapeEntry` is 12 bytes (u32 + u8 + padding + u32). Keeping
