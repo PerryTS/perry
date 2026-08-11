@@ -177,6 +177,7 @@
 # Internals
 
 - [Memory Model](internals/memory-model.md)
+- [Garbage Collector](internals/garbage-collector.md)
 - [Explicit Memory Control](internals/explicit-memory.md)
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)
 - [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)

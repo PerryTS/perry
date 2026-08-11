@@ -2,11 +2,13 @@
 
 **Goal (owner):** best performance, best RSS footprint, minimal binary size.
 
-**Tracker:** #7294 (routing only — this document is authoritative). **History:**
-every dated status section, incident narrative and superseded sequencing lives
-in [`engine-plan-history.md`](engine-plan-history.md); this file holds only the
-current state and the remaining work so it stays readable across context loads.
-Last synced **2026-08-08** (v0.5.1350). Since v0.5.1345: the gc-ratchet is
+**Status:** a performance worklist, not an architecture source of truth. The
+routing tracker #7294 is closed. Current collector architecture and operations
+live in [`src/internals/garbage-collector.md`](src/internals/garbage-collector.md);
+dated incident narrative and superseded sequencing live in
+[`engine-plan-history.md`](engine-plan-history.md). Last audited for GC drift
+**2026-08-11**. The status narrative below is retained as measured history:
+the gc-ratchet is
 repaired, re-pinned, and liveness-proven (#7609 — fail open per cell, fail
 closed on the verdict; owner action: promote to required after its first green
 `main` run); the element-shape invariant gained a real revocation matrix
@@ -396,10 +398,10 @@ already working, on a workload that happens to reach it through `JSON.parse`.
 - ~~#7477 DirectParser float divergence~~ — **fixed** (#7483, single
   correctly-rounded division per Clinger; all three of `PERRY_JSON_TAPE=0`,
   `=1` and node produce the same checksum). #7478 is unblocked.
-- **The statepoint lowering has no static root-dominance checker.** The
-  restored gates (#7452, #7460) verify the shadow-stack lowering only; the
-  checker anchors on `@js_shadow_slot_bind`, which statepoint IR does not
-  emit. Named at the call sites rather than papered over with a lowered floor.
+- ~~The statepoint lowering has no static root-dominance checker.~~ **Closed by
+  #7663.** `gc-root-dominance-statepoints` reads the production statepoint
+  rewrite and checks `gc.statepoint` `"gc-live"` bundles. The shadow and native
+  arms remain separate contexts because they inspect different IR contracts.
 - **Ratchet probe coverage gap**: all GC-ratchet probes run at the default
   nursery cap; a large-Eden arm would have caught both #7472 and the #7481
   residual.

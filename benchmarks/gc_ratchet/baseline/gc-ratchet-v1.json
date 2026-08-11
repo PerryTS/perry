@@ -32,7 +32,6 @@
     "env": {
       "PERRY_NO_AUTO_OPTIMIZE": null,
       "PERRY_GEN_GC": null,
-      "PERRY_GEN_GC_EVACUATE": null,
       "PERRY_WRITE_BARRIERS": null
     },
     "binaries": {

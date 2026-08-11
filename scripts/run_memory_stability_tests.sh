@@ -35,8 +35,7 @@
 #   - mark-sweep (PERRY_GEN_GC=0 — bisection escape hatch)
 #   - explicit generational GC (PERRY_GEN_GC=1)
 #   - force-evac+verify (default write barriers + forced evacuation verifier:
-#     PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1
-#     PERRY_GC_VERIFY_EVACUATION=1)
+#     PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1)
 # so a regression in any mode is caught.
 #
 # Usage:  scripts/run_memory_stability_tests.sh
@@ -386,7 +385,7 @@ run_test() {
         "default||"
         "mark-sweep||PERRY_GEN_GC=0"
         "gen-gc-explicit||PERRY_GEN_GC=1"
-        "force-evac+verify||PERRY_GEN_GC=1 PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
+        "force-evac+verify||PERRY_GEN_GC=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
     )
 
     for spec in "${mode_specs[@]}"; do
@@ -1566,7 +1565,7 @@ run_target_collector_architecture_gates() {
         "default_copying|4852|$workloads_dir/default_copying.ts"
         "string_heavy|17028|$workloads_dir/string_heavy.ts"
         "closure_heavy|243150|$workloads_dir/closure_heavy.ts"
-        "async_promise_closures|18540|$workloads_dir/async_promise_closures.ts|PERRY_GEN_GC_EVACUATE=0 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
+        "async_promise_closures|18540|$workloads_dir/async_promise_closures.ts|PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
         "large_object_barriers|36052|$workloads_dir/large_object_barriers.ts"
         "raw_numeric_layouts|71|benchmarks/compiler_output/fixtures/raw_numeric_layout_smoke.ts"
     )

@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Freshness budgets for the post-merge gate sweeps. Checked by",
-    "scripts/check_gate_freshness.py, run hourly by .github/workflows/gate-freshness.yml.",
+    "scripts/check_gate_freshness.py, run every two hours by .github/workflows/gate-freshness.yml.",
     "",
     "WHY THIS FILE EXISTS: #7856. Every heavy gate produced zero results on `main`",
     "for over two days and nobody noticed, because an empty result set is",

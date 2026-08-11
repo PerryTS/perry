@@ -234,6 +234,16 @@ jobs:
           python3 scripts/gc_runtime_root_holders.py --self-test
           python3 scripts/gc_runtime_root_holders.py
 
+      # #7877. A deleted GC knob left executable CI arms that still looked
+      # distinct but selected the same collector. Derive the accepted names
+      # from live runtime/codegen parsers; historical journals are path-exact
+      # exemptions and cannot license a current script or reference page.
+      - name: GC environment-knob drift audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_gc_env_knobs.py --self-test
+          python3 scripts/check_gc_env_knobs.py
+
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
       # in the quarantine sweep had rooting ALREADY -- what was missing was
@@ -2279,10 +2289,10 @@ jobs:
       # of allocate-and-discard (would catch a future block-pinning /
       # cache-leak / tenuring-trap regression in the gen-GC work), and
       # (2) crashes when gc() is forced aggressively during JSON parse,
-      # deep recursion, or closure init. Each test runs under default,
-      # PERRY_GEN_GC=1, and PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1 so a
-      # regression in any GC mode is caught. Linux-only because /usr/bin/time
-      # availability + RSS reporting differs on Windows runners.
+      # deep recursion, or closure init. Each test runs under the default,
+      # full mark-sweep, explicit generational, and forced-evacuation verifier
+      # configurations. Linux/macOS only because /usr/bin/time availability +
+      # RSS reporting differs on Windows runners.
       - name: Memory stability tests
         if: runner.os == 'Linux' || runner.os == 'macOS'
         env:

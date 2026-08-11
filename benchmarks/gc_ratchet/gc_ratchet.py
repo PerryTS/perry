@@ -381,7 +381,6 @@ def toolchain_description(perry: Path) -> dict[str, Any]:
         "env": {
             "PERRY_NO_AUTO_OPTIMIZE": os.environ.get("PERRY_NO_AUTO_OPTIMIZE"),
             "PERRY_GEN_GC": os.environ.get("PERRY_GEN_GC"),
-            "PERRY_GEN_GC_EVACUATE": os.environ.get("PERRY_GEN_GC_EVACUATE"),
             "PERRY_WRITE_BARRIERS": os.environ.get("PERRY_WRITE_BARRIERS"),
         },
         "binaries": binary_fingerprints(perry),

@@ -152,7 +152,7 @@ The starvation was silent *by construction*: an empty result set looks exactly l
 a healthy one nobody checked. Rescheduling the gates does not fix that — a cron that
 silently stops firing fails the same way.
 
-`gate-freshness.yml` runs hourly on `ubuntu-latest` and calls
+`gate-freshness.yml` runs every two hours on `ubuntu-latest` and calls
 `scripts/check_gate_freshness.py`, which asks the Actions API for each gate's most
 recent **successful** non-PR run on the default branch and fails when it is older
 than that gate's budget in `scripts/gate_freshness.json`. On failure it opens — or

@@ -4,6 +4,10 @@ Perry compiles TypeScript directly to native code via LLVM, but JavaScript is a 
 
 If you've ever wondered "does Perry use reference counting?" — no. There is no `Rc` at runtime. Perry has a real tracing GC, described below.
 
+For the dated source of truth on shipped collection paths, target-specific
+root lowerings, memory pressure, block pooling, supported knobs, and CI, see
+[Garbage collector: current architecture and operations](garbage-collector.md).
+
 ## Value representation: NaN-boxing
 
 Every JavaScript value in Perry is a single 64-bit word. The encoding piggy-backs on IEEE 754: any `f64` whose exponent is all-ones and whose mantissa is non-zero is a NaN, and there are ~2⁵² distinct NaN bit patterns. Perry uses the high 16 bits as a type tag and the low 48 (or 32) bits as the payload.
@@ -37,7 +41,8 @@ Within a thread, the heap is two arenas:
 - **`ARENA`** — the nursery. New allocations land here. Carved into 1 MB blocks (since v0.5.196).
 - **`OLD_ARENA`** — the old generation. Holds objects that have survived enough minor GCs to be tenured.
 
-Every allocation, in either arena, is prefixed by an 8-byte `GcHeader` (`crates/perry-runtime/src/gc.rs:14`):
+Every allocation, in either arena, is prefixed by an 8-byte `GcHeader`
+(`crates/perry-runtime/src/gc/types.rs`):
 
 ```rust
 #[repr(C)]
@@ -51,35 +56,50 @@ pub struct GcHeader {
 
 Callers receive a pointer **after** the header (`ptr + 8`), so from TypeScript code's perspective the header is invisible. The collector finds the header by subtracting 8.
 
-Allocation goes through `gc_malloc(size, obj_type)` (`gc.rs:606`). LLVM-generated code emits calls to this for every object literal, array literal, closure capture, string concat, BigInt operation, etc. There is no allocation primitive in the IR that bypasses this — going through `gc_malloc` is how the GC accounts for live memory and decides when to collect.
+Allocation goes through `gc_malloc(size, obj_type)` in the `gc/` module tree.
+LLVM-generated code emits calls to this for every object literal, array
+literal, closure capture, string concat, BigInt operation, etc. Going through
+the GC allocation funnel is how the collector accounts for memory and decides
+when to collect.
 
 ## How the GC finds roots
 
 This is the part most people are surprised by: if Perry compiles through LLVM, the optimizer is free to keep values in registers, spill them to stack slots, rematerialize them — none of which the collector can introspect. So how does the collector know which JS values are live?
 
-Three mechanisms, used together:
+Three mechanisms cover different storage locations:
 
-### 1. Precise shadow stack (codegen-emitted)
+### 1. Target-aware precise roots (codegen-emitted)
 
-Codegen emits, at function entry, a call to `js_shadow_frame_push(slot_count)` (`gc.rs:493`). This reserves a frame in a thread-local shadow stack. Every JS-level local variable in the function gets a slot, and every assignment to that local emits a paired `js_shadow_slot_set(idx, value)` call. On function exit, codegen emits `js_shadow_frame_pop`.
+One pointer-local analysis feeds two correct lowerings. On supported 64-bit
+AArch64/arm64 and x86-64 targets, native RS4GC statepoints plus Perry's compact
+stack map are the default. `arm64_32` watchOS, ARM64 Windows, and unsupported
+architectures use Perry's heap-backed shadow frames. The fallback is a root
+lowering, not an unrooted mode; see [the current GC page](garbage-collector.md#roots-by-target).
 
-The result: at any GC safepoint, the collector can walk the shadow stack and see the live NaN-boxed value of every TS-level local in every active frame, regardless of what LLVM did with registers. This is the "precise" half of the root scan — `shadow_stack_root_scanner` (`gc.rs:3860`).
+At a safepoint the selected map describes each live managed local regardless of
+whether LLVM kept it in a register, spilled it, or relocated it.
 
-### 2. Conservative native-stack scan
+### 2. Conservative native-stack diagnostic
 
-Some values are not on the shadow stack — most importantly, anything currently in a CPU register or in a Rust runtime frame at the moment GC fires. For these, the collector scans the native stack word-by-word and, for each word, checks whether it looks like a pointer into one of the arenas. Anything that does is **conservatively pinned** for that cycle (`is_conservatively_pinned`, `gc.rs:3747`).
-
-Pinning means: the object isn't freed, and isn't moved (the evacuation pass skips it). False positives are acceptable — they just keep a dead object alive for one more cycle. False negatives would be catastrophic — they'd free a live object — and the shadow stack + scanner registration below ensure they don't happen for known roots.
+The production default does not scan the native stack conservatively: `Auto`
+resolves to `SkipDisabled`. `PERRY_CONSERVATIVE_STACK_SCAN=full` is a diagnostic
+sensitivity arm that scans words which look like arena pointers and pins the
+corresponding objects for that cycle. Because an ambiguous root cannot be
+rewritten safely, this arm makes the copying minor ineligible.
 
 ### 3. Registered runtime root scanners
 
-Some roots live in the runtime itself, not in user code: pending Promises, timer callbacks, exception state, async-context stacks, async-hooks state, shape caches, transition caches, overflow fields, JSON-parse scratch tables, the string intern table. Each is registered with the collector via `gc_register_root_scanner(scanner_fn)` (`gc.rs:807`), and the collector invokes each scanner during the mark phase. There are 9 such scanners currently registered (`gc.rs:3232`–`3940`).
+Some roots live in the runtime itself, not in user code: pending Promises,
+timer callbacks, exception state, async-context stacks, shape caches, overflow
+fields, parse scratch tables, and intern tables. The collector invokes the
+registered scanners during marking; `scripts/gc_runtime_root_holders.py`
+enumerates the holders and refuses unclassified or stale inventory entries.
 
 ## Generational behaviour
 
 Most JS allocations die young — object literals in a loop body, short-lived closures, intermediate strings. A generational collector exploits this by collecting the nursery frequently and the old gen rarely.
 
-Perry uses two-bit aging encoded in `gc_flags` (`gc.rs:64`):
+Perry uses two-bit aging encoded in `gc_flags` (`gc/types.rs`):
 
 - First minor GC an object survives: `GC_FLAG_HAS_SURVIVED` is set.
 - Second minor GC it survives: `GC_FLAG_TENURED` is set, and the object is logically promoted to old-gen.
@@ -94,19 +114,24 @@ Generational collectors have one fundamental problem: if an old-gen object point
 
 The fix is a **write barrier**: every time a pointer field is written, the runtime checks "is this old → young?" and, if so, records the parent in a **remembered set**. Minor GCs treat remembered-set entries as additional roots.
 
-In Perry, the runtime barrier is always present: `js_write_barrier(parent, child)` (`gc.rs:3773`). Codegen emits write-barrier calls by default so copied minor GC and evacuation can rely on exact dirty-page data. Set `PERRY_WRITE_BARRIERS=0`/`off`/`false` during compile to suppress generated barrier calls for benchmark/debug bisection; at runtime, the same setting disables runtime exact helper barriers. Copied-minor and evacuation then treat barrier data as inactive and fall back to conservative paths.
+In Perry, codegen emits write-barrier calls by default so copied minor GC and
+evacuation can rely on exact remembered-set data. Set
+`PERRY_WRITE_BARRIERS=0`/`off`/`false` during compile for bisection; at runtime,
+the same setting disables exact helper barriers. Generational minors then fall
+back to full mark-sweep rather than trusting an empty remembered set.
 
 ## Triggers and tuning
 
-`gc_check_trigger` (`gc.rs:919`) fires on three signals:
+`gc_check_trigger` in `gc/policy.rs` responds to four signal families:
 
-1. **Arena block allocation** — every time a new 1 MB block is allocated for the nursery.
-2. **Malloc count threshold** — too many malloc-tracked objects (strings, closures, …) outstanding.
-3. **Explicit `gc()` call** from user code.
+1. **Nursery pressure** — allocation growth and the adaptive nursery cap.
+2. **Malloc count pressure** — too many separately tracked allocations.
+3. **Major pacing** — unreclaimed post-collection bytes outgrow the live baseline.
+4. **Explicit/host requests** — user `gc()` and warning/critical OS memory pressure.
 
-The next-trigger calculation steps up after each cycle but is hard-capped at the initial threshold (64 MB) so that a workload which frees >90% of the nursery on each cycle can't drift peak occupancy upward through step-doubling (C4b-δ-tune, v0.5.236).
-
-Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the OS (C4b-δ, v0.5.235), so a workload's RSS shrinks once the burst is over.
+Device/container budgets scale trigger and reclaim ceilings down. Released
+blocks enter a bounded per-thread reuse pool before allocator return; see the
+current GC page for pressure-level and pool limitations.
 
 ## Escape hatches and diagnostics
 
@@ -133,7 +158,7 @@ to collapse that detection latency. **All are default-off and inert when off.**
 | `PERRY_GC_PROTECT_FROMSPACE=poison` | As above without `mprotect`: poison only. Use where a fault is unwanted, or for the sub-page block edges `mprotect` cannot cover (those are always poison-filled and counted separately). |
 | `PERRY_GC_PROTECT_FROMSPACE_DEPTH=N` | How many retired page-sets stay quarantined (default `4`, minimum `1`). Expired sets are restored to read/write and **recycled back into Eden**, never freed, so the quarantine is a ring: steady-state footprint is bounded by `N × from-space bytes` and no `mprotect`'d page is ever handed to the system allocator. |
 | `PERRY_GC_FROMSPACE_SCAN_ABORT=1` | Abort on the **first** offending slot the whole-heap from-space scan finds, printing slot, holder, target (including the target's `obj_type`) and a collector backtrace. Now implies `PERRY_GC_FROMSPACE_SCAN=1`; previously it was silently inert on its own. |
-| `PERRY_GC_SCHEDULE_SEED=<u64>` | **Seeded GC-schedule fuzzing** — when nursery pressure is not due, add a minor collection at a handled safepoint when a deterministic pseudo-random function of the seed and a per-thread safepoint ordinal selects it. It never *suppresses* a pressure-driven collection; the rate is additional density on top of normal pacing. The collection schedule as a knob: enough extra collections to turn a rare "what was live when the collector ran" bug into a frequent one, and — because the schedule is a pure function of `(seed, counter)` — **a failing seed is a reproducer**. Implies forced evacuation **unconditionally**, so survivors actually move — `PERRY_GEN_GC_EVACUATE`, whose `=0` used to veto that, was deleted in #7611 precisely because an ambient veto silently turned a #7154 instrument into a no-op. It does **not** bypass `gc_safepoint_moving_minor`'s entry guards (in-allocation, suppressed, unsafe FFI zone, non-zero root-lock depth, budgeted cycle): a safepoint reached in any of those states still declines to collect, and does not consume a schedule slot. A value that does not parse as a `u64` reads as OFF, not as seed 0. Composes with the two above; that pairing is what turns a rooting bug into an immediate precise fault. |
+| `PERRY_GC_SCHEDULE_SEED=<u64>` | **Seeded GC-schedule fuzzing** — when nursery pressure is not due, add a minor collection at a handled safepoint when a deterministic pseudo-random function of the seed and a per-thread safepoint ordinal selects it. It never *suppresses* a pressure-driven collection; the rate is additional density on top of normal pacing. A failing seed is a reproducer. The schedule implies forced evacuation unconditionally; #7611 deleted the ambient evacuation veto that could silently disarm this instrument. It does **not** bypass `gc_safepoint_moving_minor`'s entry guards (in-allocation, suppressed, unsafe FFI zone, non-zero root-lock depth, budgeted cycle): a safepoint reached in any of those states still declines to collect, and does not consume a schedule slot. A value that does not parse as a `u64` reads as OFF, not as seed 0. Composes with the two above; that pairing is what turns a rooting bug into an immediate precise fault. |
 | `PERRY_GC_SCHEDULE_RATE=<0..1>` | Expected fraction of eligible handled safepoints that receive an *additional* schedule-triggered collection (default `0.05`). Inert without a seed. `0` selects nothing but still installs the banner and reporters, so it is a clean control arm; `1` collects at every handled safepoint — maximum pressure, in the spirit of V8's `--stress-scavenge`, and the point where the seed stops mattering because every ordinal is selected. Out-of-range values clamp. |
 
 These instruments have explicit caveats, because each has burned a prior
@@ -188,9 +213,14 @@ investigation:
 
 ## Why this design
 
-The combination — NaN-boxing for cheap value representation, per-thread arenas to avoid cross-thread sync, precise shadow stack + conservative stack scan for safe root discovery under an opaque optimizer (LLVM), generational aging for nursery-friendly workloads — is what lets Perry both go through LLVM and run a managed language without a fight.
+The combination—NaN-boxing, per-thread arenas, target-aware precise roots,
+registered runtime scanners, barriers, and generational aging—is what lets
+Perry go through LLVM and still run a moving managed heap.
 
-Going to native code does not preclude having a GC. It just means the GC's relationship with the compiled code is mediated by an ABI: codegen emits calls to `gc_malloc`, `js_shadow_frame_push/pop`/`js_shadow_slot_set`, and `js_write_barrier`, and the runtime crate (linked in as native code) is a real generational mark-sweep collector. There is nothing reference-counted at runtime.
+Going to native code does not preclude having a GC. It means the collector's
+relationship with compiled code is mediated by an ABI and the selected root
+map; the linked runtime remains a real tracing collector. There is nothing
+reference-counted at runtime.
 
 ## Profiling Perry's memory on macOS
 
