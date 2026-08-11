@@ -961,7 +961,7 @@ fn lower_put_value_dyn_ic_inline(
 /// perry-runtime `object::INLINE_SLOT_FLOOR` (the runtime pads every object
 /// to at least this many physical slots; a codegen value larger than the
 /// runtime's would widen inline stores into unallocated memory).
-const INLINE_SLOT_FLOOR_LIT: &str = "4";
+const INLINE_SLOT_FLOOR_LIT: &str = crate::target_layout::INLINE_SLOT_FLOOR_LIT;
 
 fn static_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {
     match key {

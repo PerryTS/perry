@@ -1737,3 +1737,47 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // next link.
     crate::value::js_nanbox_pointer(tgt_h.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
+
+#[cfg(test)]
+mod inline_slot_floor_tests {
+    use super::*;
+
+    /// perry-codegen bakes the same floor into the inline-bump allocation size
+    /// and into the emitted inline-field bounds checks, and it deliberately
+    /// does not depend on this crate. This test and
+    /// `inline_slot_floor_matches_the_runtime` in
+    /// `perry-codegen/src/target_layout.rs` are the pairing: moving one alone
+    /// fails the other.
+    ///
+    /// The corruption direction is one-sided — a bounds check LARGER than what
+    /// was reserved writes past the allocation — so this must never exceed
+    /// codegen's `target_layout::INLINE_SLOT_FLOOR`.
+    #[test]
+    fn inline_slot_floor_matches_codegen() {
+        assert_eq!(crate::object::INLINE_SLOT_FLOOR, 2);
+    }
+
+    /// Every read/write bound in the runtime derives the inline capacity as
+    /// `max(field_count, INLINE_SLOT_FLOOR)`; every allocator reserves that
+    /// many physical slots. This pins the two halves against each other for a
+    /// shape at, below and above the floor.
+    #[test]
+    fn allocated_slots_cover_the_derived_bound() {
+        for field_count in [0u32, 1, 2, 3, 8] {
+            let obj = js_object_alloc(0, field_count);
+            assert!(!obj.is_null());
+            let bound = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+            let header = unsafe {
+                &*((obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+            };
+            let reserved = (header.size as usize
+                - crate::gc::GC_HEADER_SIZE
+                - std::mem::size_of::<ObjectHeader>())
+                / std::mem::size_of::<JSValue>();
+            assert!(
+                reserved >= bound,
+                "field_count={field_count}: reserved {reserved} slots < bound {bound}"
+            );
+        }
+    }
+}

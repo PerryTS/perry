@@ -438,8 +438,9 @@ pub(crate) fn lower_generic_property_get(
     let fc_ptr = ctx.block().inttoptr(I64, &fc_addr);
     let fc = ctx.block().load(I32, &fc_ptr);
     let fc64 = ctx.block().zext(I32, &fc, I64);
-    let fc_floor = ctx.block().icmp_ult(I64, &fc64, "4"); // INLINE_SLOT_FLOOR
-    let limit = ctx.block().select(I1, &fc_floor, I64, "4", &fc64);
+    let floor = crate::target_layout::INLINE_SLOT_FLOOR_LIT;
+    let fc_floor = ctx.block().icmp_ult(I64, &fc64, floor);
+    let limit = ctx.block().select(I1, &fc_floor, I64, floor, &fc64);
     let slot_in_bounds = ctx.block().icmp_ult(I64, &slot, &limit);
     let bounds_hit = ctx.new_block("pic.hit.load");
     let bounds_hit_label = ctx.block_label(bounds_hit);
@@ -563,8 +564,11 @@ pub(crate) fn lower_generic_property_get(
     let way_fc_ptr = ctx.block().inttoptr(I64, &way_fc_addr);
     let way_fc = ctx.block().load(I32, &way_fc_ptr);
     let way_fc64 = ctx.block().zext(I32, &way_fc, I64);
-    let way_fc_floor = ctx.block().icmp_ult(I64, &way_fc64, "4"); // INLINE_SLOT_FLOOR
-    let way_limit = ctx.block().select(I1, &way_fc_floor, I64, "4", &way_fc64);
+    let way_floor = crate::target_layout::INLINE_SLOT_FLOOR_LIT;
+    let way_fc_floor = ctx.block().icmp_ult(I64, &way_fc64, way_floor);
+    let way_limit = ctx
+        .block()
+        .select(I1, &way_fc_floor, I64, way_floor, &way_fc64);
     let way_in_bounds = ctx.block().icmp_ult(I64, &way_slot, &way_limit);
     let way_ok = ctx.block().and(I1, &way_hit, &way_in_bounds);
     let way_load_idx = ctx.new_block("pic.way.load");

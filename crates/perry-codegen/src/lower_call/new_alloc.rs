@@ -351,7 +351,7 @@ fn emit_instance_alloc_inner(
             // (they independently pad `new` objects to the same minimum; a mismatch
             // where codegen allocs fewer slots than the runtime's get/set bound-check
             // assumes is heap corruption). Lowered 8->4 to shrink small-object footprint.
-            const MIN_FIELD_SLOTS: u64 = 4;
+            const MIN_FIELD_SLOTS: u64 = crate::target_layout::INLINE_SLOT_FLOOR;
             const GC_TYPE_OBJECT: u64 = 2;
             const GC_FLAG_ARENA: u64 = 0x02;
             // PR #1146: pointer-free hint for inline-allocated regular

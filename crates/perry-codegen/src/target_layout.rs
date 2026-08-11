@@ -46,6 +46,33 @@ pub fn object_header_size_bytes(target_triple: &str) -> u64 {
     }
 }
 
+/// Minimum number of inline field slots every object is allocated with, even
+/// when it has fewer fields.
+///
+/// **Corruption-critical, and the invariant is one-sided.** Three populations
+/// have to agree: what the ALLOCATORS physically reserve (this constant on the
+/// codegen inline-bump path, `perry_runtime::object::INLINE_SLOT_FLOOR` on the
+/// runtime path), and what the BOUNDS CHECKS on the inline field region
+/// believe (`INLINE_SLOT_FLOOR_LIT` below, and the runtime's
+/// `max(field_count, INLINE_SLOT_FLOOR)`). A bounds check that is *smaller*
+/// than the reservation only costs a fall-back to the by-name path; a bounds
+/// check that is *larger* writes past the allocation. So the runtime constant
+/// must never exceed this one, and both must be moved together.
+///
+/// perry-codegen deliberately does not depend on perry-runtime, so the value is
+/// duplicated rather than imported; `inline_slot_floor_matches_runtime` in
+/// `perry-runtime/src/object/alloc.rs` pins the pair.
+///
+/// #7864 lowered it 4 -> 2. It was 8 before #6712. Every byte here is paid by
+/// EVERY object in the heap: a two-field record is
+/// `8 (GcHeader) + 32 (ObjectHeader) + 8 * floor` bytes, so the floor is 44% of
+/// a `{a, b}` at 4 and 29% at 2. The corpus's small-record benchmarks
+/// (`churn`, `push_cls`, `retain`, `tree`) allocate exactly two fields.
+pub const INLINE_SLOT_FLOOR: u64 = 2;
+
+/// [`INLINE_SLOT_FLOOR`] as the decimal literal emitted into IR bounds checks.
+pub const INLINE_SLOT_FLOOR_LIT: &str = "2";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,6 +88,23 @@ mod tests {
         // arm64_32 watchOS (Series 4–8 / SE): 4×u32 + two 4-byte pointers = 24.
         assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnux32"), 24);
         assert_eq!(object_header_size_bytes("arm64_32-apple-watchos"), 24);
+    }
+
+    #[test]
+    fn inline_slot_floor_literal_matches_the_constant() {
+        // The IR bounds checks are emitted from the string, the inline-bump
+        // allocation size from the integer. They are the same number, and the
+        // corruption mode is a bounds check LARGER than the reservation.
+        assert_eq!(INLINE_SLOT_FLOOR_LIT, INLINE_SLOT_FLOOR.to_string());
+    }
+
+    #[test]
+    fn inline_slot_floor_matches_the_runtime() {
+        // Pinned against the literal on purpose: perry-codegen does not depend
+        // on perry-runtime, so this and `inline_slot_floor_matches_codegen` in
+        // `perry-runtime/src/object/alloc.rs` hold the pair. Moving one alone
+        // fails the other.
+        assert_eq!(INLINE_SLOT_FLOOR, 2);
     }
 
     #[test]

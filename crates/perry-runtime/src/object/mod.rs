@@ -21,7 +21,7 @@ use std::sync::RwLock;
 /// SAME floor, or a write/read past the allocated slots corrupts the heap. It is
 /// centralized here so all sites move in lockstep. (Also mirrored in
 /// perry-codegen `lower_call/new.rs` MIN_FIELD_SLOTS for the PERRY_INLINE_NEW path.)
-pub(crate) const INLINE_SLOT_FLOOR: usize = 4;
+pub(crate) const INLINE_SLOT_FLOOR: usize = 2;
 
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
