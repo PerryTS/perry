@@ -346,9 +346,48 @@ unsafe fn call_primitive_builtin_prototype_method(
     if proto_ptr.is_null() {
         return None;
     }
+    if let Some(value) = builtin_proto_accessor_method(proto_ptr, method_name, receiver) {
+        return call_primitive_closure_value(receiver, value, args_ptr, args_len);
+    }
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = js_object_get_field_by_name(proto_ptr, key);
     call_primitive_closure_value(receiver, value, args_ptr, args_len)
+}
+
+/// #5901: resolve `method_name` on a builtin's prototype the way the spec's
+/// `GetV(O, P)` does when the property is an ACCESSOR.
+///
+/// `Invoke(O, "toString")` is `GetV(O, "toString")` -> `ToObject(O).[[Get]]("toString", O)`,
+/// and that third argument is the RECEIVER: the ORIGINAL primitive, not the
+/// wrapper the lookup walked to find the property. A plain
+/// `js_object_get_field_by_name(proto_ptr, key)` runs the getter with the
+/// PROTOTYPE as `this`, so
+/// `Object.defineProperty(Boolean.prototype, "toString", { get() { … } })`
+/// observed `typeof this === "object"` where the spec requires `"boolean"`
+/// (test262 `built-ins/Object/prototype/toLocaleString/primitive_this_value_getter.js`).
+///
+/// Returns `None` when the key is not an accessor — the caller then performs
+/// the ordinary data-property get, which needs no receiver fixup.
+unsafe fn builtin_proto_accessor_method(
+    proto_ptr: *const ObjectHeader,
+    method_name: &str,
+    receiver: f64,
+) -> Option<JSValue> {
+    let accessor =
+        crate::object::descriptor_state::get_accessor_descriptor(proto_ptr as usize, method_name)?;
+    if accessor.get == 0 {
+        return None;
+    }
+    // `call_primitive_closure_value` already delivers a raw primitive `this` to
+    // a strict callee and a boxed wrapper to a sloppy one, which is exactly the
+    // distinction the spec draws for the getter's own `this`.
+    let resolved = call_primitive_closure_value(
+        receiver,
+        JSValue::from_bits(accessor.get),
+        std::ptr::null(),
+        0,
+    )?;
+    Some(JSValue::from_bits(resolved.to_bits()))
 }
 
 /// A *user-installed* method on a builtin's prototype object (e.g.
@@ -356,7 +395,11 @@ unsafe fn call_primitive_builtin_prototype_method(
 /// closure value, or `None` when the property is absent / not a real closure /
 /// the no-op-backed builtin placeholder — i.e. `None` means "the native
 /// builtin behavior is still in effect".
-unsafe fn builtin_proto_user_method(builtin_name: &[u8], method_name: &str) -> Option<JSValue> {
+unsafe fn builtin_proto_user_method(
+    builtin_name: &[u8],
+    method_name: &str,
+    receiver: f64,
+) -> Option<JSValue> {
     let ctor =
         crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
     let ctor_value = JSValue::from_bits(ctor.to_bits());
@@ -373,8 +416,14 @@ unsafe fn builtin_proto_user_method(builtin_name: &[u8], method_name: &str) -> O
     if proto_ptr.is_null() {
         return None;
     }
-    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
-    let value = js_object_get_field_by_name(proto_ptr, key);
+    let value = match builtin_proto_accessor_method(proto_ptr, method_name, receiver) {
+        Some(value) => value,
+        None => {
+            let key =
+                crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+            js_object_get_field_by_name(proto_ptr, key)
+        }
+    };
     if (value.bits() & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
         return None;
     }

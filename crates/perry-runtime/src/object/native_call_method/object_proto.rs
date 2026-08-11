@@ -116,7 +116,7 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
         };
         if !builtin_name.is_empty() {
             if let Some(patched) =
-                unsafe { super::builtin_proto_user_method(builtin_name, "toString") }
+                unsafe { super::builtin_proto_user_method(builtin_name, "toString", receiver) }
             {
                 if let Some(result) =
                     unsafe { call_primitive_closure_value(receiver, patched, std::ptr::null(), 0) }
