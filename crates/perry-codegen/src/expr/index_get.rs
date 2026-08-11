@@ -218,10 +218,35 @@ fn typed_array_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &E
         && !numeric_index_has_loop_array_index_proof(ctx, object, index)
 }
 
+fn is_proven_canonical_numeric_string_literal(key: &[u8]) -> bool {
+    if matches!(key, b"-0" | b"NaN" | b"Infinity" | b"-Infinity") {
+        return true;
+    }
+
+    let digits = key.strip_prefix(b"-").unwrap_or(key);
+    if digits.is_empty()
+        || (digits.len() > 1 && digits[0] == b'0')
+        || !digits.iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+
+    // Decimal integers through Number.MAX_SAFE_INTEGER are exact, and this
+    // range is below the threshold where JS Number#toString switches to
+    // exponent notation. Their source spelling therefore proves
+    // CanonicalNumericIndexString without invoking runtime conversion.
+    digits
+        .iter()
+        .try_fold(0_u64, |value, digit| {
+            value.checked_mul(10)?.checked_add(u64::from(digit - b'0'))
+        })
+        .is_some_and(|value| value <= 9_007_199_254_740_991)
+}
+
 fn runtime_key_may_expose_typed_array_backing_buffer(index: &Expr) -> bool {
     match index {
-        Expr::String(key) => key == "buffer",
-        Expr::WtfString(key) => key == b"buffer",
+        Expr::String(key) => !is_proven_canonical_numeric_string_literal(key.as_bytes()),
+        Expr::WtfString(key) => !is_proven_canonical_numeric_string_literal(key),
         Expr::Integer(_) | Expr::Number(_) => false,
         _ => true,
     }
