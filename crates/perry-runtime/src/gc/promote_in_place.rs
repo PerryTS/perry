@@ -60,7 +60,7 @@ use super::*;
 pub(super) const PROMOTE_SURVIVAL_THRESHOLD_PERMILLE: u64 = 950;
 
 /// Young-survival ratio, in permille, at or above which a promoting cycle may
-/// skip the TRACE as well as the copy (#7880).
+/// skip the TRACE as well as the copy (#7888).
 ///
 /// Deliberately stricter than [`PROMOTE_SURVIVAL_THRESHOLD_PERMILLE`]: a
 /// promoting cycle that still traces knows exactly which objects are garbage
@@ -111,7 +111,7 @@ thread_local! {
     /// did (or the last full collection). This is the quantity the untraced
     /// budget bounds: every one of these bytes is *assumed* live.
     static UNTRACED_PROMOTED_BYTES: Cell<usize> = const { Cell::new(0) };
-    /// Live-subject counters for the untraced path (#7880). A benchmark that
+    /// Live-subject counters for the untraced path (#7888). A benchmark that
     /// never entered it proves nothing about it.
     static UNTRACED_PROMOTION_CYCLES: Cell<u64> = const { Cell::new(0) };
     static UNTRACED_PROMOTED_OBJECTS: Cell<u64> = const { Cell::new(0) };
@@ -376,7 +376,7 @@ impl InPlacePromotionTestGuard {
         guard
     }
 
-    /// Opt into the UNTRACED promotion path as well (#7880): fresh budget, and
+    /// Opt into the UNTRACED promotion path as well (#7888): fresh budget, and
     /// a survival ratio in the fully-live regime.
     pub(super) fn untraced() -> Self {
         let guard = Self::enabled(1000);

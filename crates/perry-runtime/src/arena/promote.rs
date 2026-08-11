@@ -133,7 +133,7 @@ pub(crate) enum PromotionLiveness {
     /// `GC_FLAG_MARKED | GC_FLAG_PINNED` on the still-marked headers — the
     /// cycle traced, so it knows.
     Marked,
-    /// The cycle did not trace (#7880), so it does not know and does not
+    /// The cycle did not trace (#7888), so it does not know and does not
     /// pretend to: every parseable object on the block is registered.
     ///
     /// Registering an object that is in fact dead is safe, and is strictly

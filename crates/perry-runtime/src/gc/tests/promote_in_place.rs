@@ -194,7 +194,7 @@ fn in_place_promotion_leaves_the_object_at_its_address_in_old_gen() {
 }
 
 // ---------------------------------------------------------------------------
-// #7880: promoting WITHOUT tracing
+// #7888: promoting WITHOUT tracing
 // ---------------------------------------------------------------------------
 
 #[test]

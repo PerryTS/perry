@@ -1381,7 +1381,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         debug_assert_no_remembering_possible();
     }
     collector.stats.remembering_skipped = collector.skip_remembering;
-    // #7880: the cycle promotes the WHOLE young generation in place, so the
+    // #7888: the cycle promotes the WHOLE young generation in place, so the
     // trace has no products left worth its cost — skip it too.
     //
     // What the trace does on a promoting cycle, exhaustively, and why each is
@@ -1703,7 +1703,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // still traces once its untraced budget is spent — so the ratio the next
     // decision reads is never stale.
     //
-    // #7880: an untraced cycle measured nothing. Recording its own assumption
+    // #7888: an untraced cycle measured nothing. Recording its own assumption
     // as a measurement would make the predictor a mirror — permanently 1000‰,
     // permanently armed, and unable to notice the workload changing. It charges
     // the untraced budget instead, and the cycle that spends that budget is the
