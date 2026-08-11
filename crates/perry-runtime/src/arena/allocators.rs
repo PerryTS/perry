@@ -310,8 +310,17 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // Large arena-backed GC objects are born directly in non-moving old
     // generation. The threshold applies to the actual bytes a copying nursery
     // would otherwise move: GcHeader + payload + alignment padding.
+    //
+    // It is TYPE-DEPENDENT, because the price of crossing it is: this object is
+    // also stamped `GC_FLAG_TENURED`, and a minor never sweeps old-gen — so for
+    // a POINTER-BEARING object the cost is not its own bytes, it is every
+    // object it can reach, held live through the remembered set by a container
+    // nothing refers to any more. See
+    // `gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES` for the measurement
+    // (`shapes.ts` sat 16 bytes over the flat 16 KB line and re-marked 118 006
+    // slots per minor because of it).
     let total = gc_padded_total_size(size, align);
-    if crate::gc::is_large_object_total_size(total) {
+    if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
         let user_ptr = arena_alloc_gc_old(size, align, obj_type);
         unsafe {
             let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;
