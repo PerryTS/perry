@@ -633,4 +633,44 @@ mod latch_drain_tests_7737 {
              for the rest of the process"
         );
     }
+
+    /// The collector's per-object rewrite hook now gates on the same latch.
+    ///
+    /// Both halves are asserted, because only the pair is a fix: a hook that
+    /// skips an EMPTY registry is the optimisation, and a hook that still
+    /// reaches a RECORDED entry is the thing the optimisation must not break.
+    /// Without the second assertion, `return;` at the top of the function
+    /// would also pass.
+    #[test]
+    fn the_gc_visit_hook_skips_an_empty_registry_and_still_reaches_a_recorded_one() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        prune_dead_object_prototype_owners(&|_| true);
+
+        let owner: usize = 0x5100_0000;
+        let proto_bits: u64 = 0x7FFC_0000_0000_0001;
+
+        let mut visits = 0usize;
+        visit_object_static_prototype_slot_mut(owner, |_| visits += 1);
+        assert_eq!(
+            visits, 0,
+            "an empty registry must be answered by the latch, not by a \
+             process-global mutex plus a SipHash probe — this hook runs once \
+             per TRACED object"
+        );
+
+        if let Ok(mut map) = get_object_prototypes().lock() {
+            OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
+            map.insert(owner, proto_bits);
+        }
+        let mut seen = 0u64;
+        let mut visits = 0usize;
+        visit_object_static_prototype_slot_mut(owner, |slot| {
+            visits += 1;
+            seen = unsafe { *slot };
+        });
+        assert_eq!(visits, 1, "a recorded prototype slot must still be visited");
+        assert_eq!(seen, proto_bits);
+
+        prune_dead_object_prototype_owners(&|o| o == owner);
+    }
 }

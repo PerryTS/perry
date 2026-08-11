@@ -53,10 +53,7 @@ pub(super) fn prefetch_read(addr: usize) {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: `prefetcht0` has no architectural memory effect and cannot fault.
     unsafe {
-        core::arch::x86_64::_mm_prefetch(
-            addr as *const i8,
-            core::arch::x86_64::_MM_HINT_T0,
-        );
+        core::arch::x86_64::_mm_prefetch(addr as *const i8, core::arch::x86_64::_MM_HINT_T0);
     }
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
