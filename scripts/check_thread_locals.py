@@ -32,6 +32,24 @@ THIS CHECK IS DESIGNED TO BE ABLE TO FAIL
 * `--self-test` runs both directions against synthetic trees, so the checker
   itself cannot quietly stop being able to say no.
 
+`#[cfg(test)]` DECLARATIONS ARE OUT OF SCOPE BY CONSTRUCTION
+===========================================================
+
+A `thread_local!` that only exists under `#[cfg(test)]` cannot cost
+`_tlv_get_addr` in a shipping build, because it is not in one. Recording such a
+declaration as "cold" would be recording the wrong fact — it is not cold, it is
+*absent* — and it would spend the allowlist's credibility on entries no one can
+ever act on. Three gated shapes are therefore not counted at all:
+
+* `#[cfg(test)]` immediately above the block,
+* the block nested inside a `#[cfg(test)] mod … { … }` in the same file,
+* the block's whole FILE being a test module, i.e. some `lib.rs`/`mod.rs`
+  declares it `#[cfg(test)] mod <stem>;`.
+
+This is a *static* fact the scan can see, unlike hot-vs-cold. It is also the
+direction that can go wrong quietly, so `--self-test` checks that removing the
+gate makes the same declaration fail again.
+
 WHAT IT DOES NOT DO
 ===================
 
@@ -77,6 +95,17 @@ DECL_RE = re.compile(
 # macro without infinite regress.
 EXCLUDED = {"crates/perry-runtime/src/tls_hot.rs"}
 
+# `#[cfg(test)] mod <stem>;` — the whole file is a test module.
+CFG_TEST_MOD_RE = re.compile(
+    r"(?m)^[ \t]*#\[cfg\(test\)\]\s*\n[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;"
+)
+# Any out-of-line `mod <stem>;`, gated or not — the edges of the module tree.
+ANY_MOD_RE = re.compile(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;")
+# `#[cfg(test)] mod <name> {` — an inline test module, whose body is skipped.
+CFG_TEST_INLINE_MOD_RE = re.compile(
+    r"(?m)^[ \t]*#\[cfg\(test\)\]\s*\n[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_0-9]+\s*\{"
+)
+
 
 def block_bodies(src: str, pattern: re.Pattern[str]) -> list[str]:
     """Bodies of every macro block `pattern` starts, brace-matched."""
@@ -97,10 +126,86 @@ def block_bodies(src: str, pattern: re.Pattern[str]) -> list[str]:
     return bodies
 
 
+def brace_span(src: str, start: int) -> tuple[int, int]:
+    """`(open, close)` offsets of the brace-matched block opening at/after `start`."""
+    i = src.index("{", start)
+    depth = 0
+    j = i
+    while j < len(src):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    return i, j
+
+
+def cfg_test_module_files(root: Path, crates: list[str]) -> set[str]:
+    """Files whose entire module cannot exist in a shipping build.
+
+    Seeded from every `#[cfg(test)] mod <stem>;`, then closed transitively: a
+    plain `mod y;` inside an already-test-only file is test-only too, which is
+    what makes `gc/tests/mod.rs` carry its whole subtree. A `mod x;` in `a/b.rs`
+    (or `a/b/mod.rs`) resolves to `a/b/x.rs` or `a/b/x/mod.rs`; both spellings
+    are recorded, and a miss is simply a file that stays in scope.
+    """
+    declares: dict[str, list[tuple[str, bool]]] = {}
+    for crate in crates:
+        base = root / crate
+        for dirpath, _dirs, files in os.walk(base):
+            for name in sorted(files):
+                if not name.endswith(".rs"):
+                    continue
+                path = Path(dirpath) / name
+                rel = str(path.relative_to(root))
+                src = path.read_text()
+                parent = path.parent if name in ("lib.rs", "mod.rs") else path.with_suffix("")
+                gated = set(CFG_TEST_MOD_RE.findall(src))
+                edges = []
+                for stem in set(ANY_MOD_RE.findall(src)):
+                    for candidate in (parent / f"{stem}.rs", parent / stem / "mod.rs"):
+                        if candidate.exists():
+                            edges.append((str(candidate.relative_to(root)), stem in gated))
+                declares[rel] = edges
+
+    test_only = {child for edges in declares.values() for child, gated in edges if gated}
+    changed = True
+    while changed:
+        changed = False
+        for rel in test_only & declares.keys():
+            for child, _gated in declares[rel]:
+                if child not in test_only:
+                    test_only.add(child)
+                    changed = True
+    return test_only
+
+
+def shipping_raw_blocks(src: str) -> int:
+    """Raw `thread_local!` blocks that survive into a non-test build.
+
+    Skips a block carrying `#[cfg(test)]` directly above it, and any block
+    inside an inline `#[cfg(test)] mod … { … }`.
+    """
+    gated_spans = [brace_span(src, m.start()) for m in CFG_TEST_INLINE_MOD_RE.finditer(src)]
+    count = 0
+    for m in RAW_RE.finditer(src):
+        if any(open_at < m.start() < close_at for open_at, close_at in gated_spans):
+            continue
+        preceding = src[: m.start()].rstrip()
+        line = preceding[preceding.rfind("\n") + 1 :].strip()
+        if line == "#[cfg(test)]":
+            continue
+        count += 1
+    return count
+
+
 def scan(root: Path, crates: list[str]) -> tuple[dict[str, int], int]:
     """Raw `thread_local!` blocks per file, and total hot declarations."""
     raw: dict[str, int] = {}
     hot_declarations = 0
+    test_only_files = cfg_test_module_files(root, crates)
     for crate in crates:
         base = root / crate
         for dirpath, _dirs, files in os.walk(base):
@@ -113,9 +218,9 @@ def scan(root: Path, crates: list[str]) -> tuple[dict[str, int], int]:
                 hot_declarations += sum(
                     len(DECL_RE.findall(body)) for body in block_bodies(src, HOT_RE)
                 )
-                if rel in EXCLUDED:
+                if rel in EXCLUDED or rel in test_only_files:
                     continue
-                count = len(RAW_RE.findall(src))
+                count = shipping_raw_blocks(src)
                 if count:
                     raw[rel] = count
     return raw, hot_declarations
@@ -251,12 +356,48 @@ def self_test() -> int:
         )
         if not any("HOT_SLOT_CAPACITY" in p for p in verify(root, CRATES, allowlist)):
             failures.append("exceeding HOT_SLOT_CAPACITY passed")
+        (src_dir / "hot.rs").write_text(
+            "crate::perry_thread_local! { static B: u8 = const { 0 }; }\n"
+        )
+
+        # 5. The three `#[cfg(test)]` shapes are out of scope — and, the half
+        #    that can go wrong quietly, REMOVING the gate puts them back in it.
+        (src_dir / "cold.rs").write_text("thread_local! { static A: u8 = const { 0 }; }\n")
+        write_allowlist(root, CRATES, allowlist)
+        gated = {
+            "attribute": "#[cfg(test)]\nthread_local! { static G: u8 = const { 0 }; }\n",
+            "inline mod": (
+                "#[cfg(test)]\nmod t {\n"
+                "    thread_local! { static G: u8 = const { 0 }; }\n"
+                "}\n"
+            ),
+        }
+        for shape, body in gated.items():
+            (src_dir / "gated.rs").write_text(body)
+            if verify(root, CRATES, allowlist):
+                failures.append(f"a `#[cfg(test)]` {shape} declaration was counted")
+            (src_dir / "gated.rs").write_text(body.replace("#[cfg(test)]\n", ""))
+            if not verify(root, CRATES, allowlist):
+                failures.append(f"an UNGATED {shape} declaration passed")
+        (src_dir / "gated.rs").unlink()
+
+        # 6. A whole file declared `#[cfg(test)] mod <stem>;` is out of scope,
+        #    and drops back in when the parent stops gating it.
+        (src_dir / "probes.rs").write_text(
+            "thread_local! { static G: u8 = const { 0 }; }\n"
+        )
+        (src_dir / "lib.rs").write_text("#[cfg(test)]\nmod probes;\n")
+        if verify(root, CRATES, allowlist):
+            failures.append("a `#[cfg(test)] mod <stem>;` file was counted")
+        (src_dir / "lib.rs").write_text("mod probes;\n")
+        if not verify(root, CRATES, allowlist):
+            failures.append("an ungated `mod <stem>;` file passed")
 
     for f in failures:
         print(f"SELF-TEST FAILED: {f}", file=sys.stderr)
     if failures:
         return 1
-    print("self-test: the checker can fail in all four directions")
+    print("self-test: the checker can fail in all six directions")
     return 0
 
 

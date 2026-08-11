@@ -129,7 +129,7 @@ static SCHEDULE_FORCED: AtomicU64 = AtomicU64::new(0);
 /// other test's `before + 1` flaky.
 static SCHEDULE_SAFEPOINTS: AtomicU64 = AtomicU64::new(0);
 
-thread_local! {
+crate::perry_thread_local! {
     /// The monotonically increasing safepoint ordinal this thread's schedule is
     /// a function of. Thread-local on purpose — see the determinism note above.
     static SAFEPOINT_COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -512,7 +512,7 @@ impl Drop for ScheduleStrideGuard {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// From-space high-water mark at or above which the next poll-arm candidate
     /// is due. Per-thread because the arena it measures is.
     ///
