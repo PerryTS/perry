@@ -13,6 +13,85 @@ use super::*;
 use crate::gc::layout_tables::{test_per_object_tables_are_empty, PER_OBJECT_LAYOUTS_NONEMPTY};
 use crate::gc::ImmortalLayoutScope;
 
+/// Force the exact #7873 interleaving: A has decremented the last arm and
+/// decided to publish zero, B re-arms, then A performs its delayed zero store.
+/// The exported gate must never claim emptiness after B owns a live arm.
+#[test]
+fn test_global_layout_gate_cannot_publish_false_zero_during_rearm() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    let armed_threads = Arc::new(AtomicU32::new(1));
+    let decremented = Arc::new(Barrier::new(2));
+    let rearmed = Arc::new(Barrier::new(2));
+
+    let a_count = Arc::clone(&armed_threads);
+    let a_decremented = Arc::clone(&decremented);
+    let a_rearmed = Arc::clone(&rearmed);
+    let disarm = std::thread::spawn(move || {
+        crate::gc::layout_tables::test_per_object_layouts_global_disarm_with_hook(&a_count, || {
+            a_decremented.wait();
+            a_rearmed.wait();
+        });
+    });
+
+    decremented.wait();
+    armed_threads.fetch_add(1, Ordering::SeqCst);
+    rearmed.wait();
+    disarm.join().expect("disarm thread panicked");
+
+    assert_eq!(
+        armed_threads.load(Ordering::SeqCst),
+        1,
+        "the authoritative gate published false zero after a concurrent re-arm"
+    );
+}
+
+/// Run the exit assertion in a child test process so unrelated parallel tests
+/// cannot contribute arms to this process-global count.
+#[test]
+fn test_armed_per_object_layout_thread_exit_disarms_global_count() {
+    const CHILD_ENV: &str = "PERRY_TEST_LAYOUT_ARM_EXIT_CHILD";
+    if std::env::var_os(CHILD_ENV).is_some() {
+        assert_eq!(
+            crate::gc::layout_tables::test_per_object_layout_armed_threads(),
+            0,
+            "isolated child must start with no armed layout threads"
+        );
+        std::thread::spawn(|| {
+            crate::gc::layout_tables::slot_masks_insert(
+                0x1234_0000,
+                crate::gc::layout::LayoutSlotMask::from_words(&[1]),
+            );
+            assert_eq!(
+                crate::gc::layout_tables::test_per_object_layout_armed_threads(),
+                1,
+                "installing a side-table record must arm this worker"
+            );
+        })
+        .join()
+        .expect("armed worker panicked");
+        assert_eq!(
+            crate::gc::layout_tables::test_per_object_layout_armed_threads(),
+            0,
+            "the owning TLS value must disarm the global count on thread exit"
+        );
+        return;
+    }
+
+    let status = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+        .arg(
+            "gc::tests::layout_trace::per_object_tables::\
+             test_armed_per_object_layout_thread_exit_disarms_global_count",
+        )
+        .arg("--exact")
+        .arg("--nocapture")
+        .env(CHILD_ENV, "1")
+        .status()
+        .expect("launch isolated thread-exit test");
+    assert!(status.success(), "isolated thread-exit witness failed");
+}
+
 fn flag() -> bool {
     PER_OBJECT_LAYOUTS_NONEMPTY.with(|h| h.nonempty.get())
 }
@@ -68,6 +147,47 @@ fn test_per_object_tables_flag_arms_on_install_and_clears_on_death() {
         !flag(),
         "draining the last per-object record must re-arm the empty fast path"
     );
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+/// The codegen gate protects this exact address-reuse boundary: a freshly
+/// allocated object must not inherit the previous tenant's per-object mask.
+/// The IR census pins the atomic load and call; this runtime half proves the
+/// non-zero authority lets that call find and remove the stale address key.
+#[test]
+fn test_global_gate_exposes_a_recycled_address_record_to_forget() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let previous_tenant = crate::object::js_object_alloc(0, 2);
+    let child = crate::object::js_object_alloc(0, 0);
+    crate::gc::layout_note_slot(
+        previous_tenant as usize,
+        1,
+        POINTER_TAG | (child as u64 & POINTER_MASK),
+    );
+    assert_eq!(
+        test_layout_pointer_slot_count(previous_tenant as usize, 2),
+        Some(1),
+        "test premise: the previous tenant must leave an address-keyed mask"
+    );
+    assert_ne!(
+        crate::gc::layout_tables::test_per_object_layout_armed_threads(),
+        0,
+        "the generated gate must be armed while the stale record exists"
+    );
+
+    // This is the runtime call emitted immediately after an inline-bump
+    // allocation reuses `previous_tenant`'s address.
+    crate::gc::layout_tables::js_gc_forget_object_layout(previous_tenant as u64);
+
+    assert!(
+        test_per_object_tables_are_empty(),
+        "the recycled address retained its previous tenant's layout record"
+    );
+    assert!(!flag(), "draining the stale record must disarm this thread");
 
     clear_marks();
     clear_mark_seeds();

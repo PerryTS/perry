@@ -1243,6 +1243,17 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     LF::Volatile => {
                         let _ = v.as_instruction_value().map(|i| i.set_volatile(true));
                     }
+                    LF::AtomicMonotonic(n) => {
+                        if let Some(i) = v.as_instruction_value() {
+                            unsafe {
+                                llvm_sys::core::LLVMSetOrdering(
+                                    i.as_value_ref(),
+                                    llvm_sys::LLVMAtomicOrdering::LLVMAtomicOrderingMonotonic,
+                                )
+                            };
+                            let _ = i.set_alignment(*n);
+                        }
+                    }
                     LF::AtomicSeqCst(n) => {
                         if let Some(i) = v.as_instruction_value() {
                             unsafe {

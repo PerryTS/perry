@@ -592,6 +592,19 @@ impl LlBlock {
         r
     }
 
+    /// Monotonic atomic load for an authoritative global whose value is a
+    /// fast-path gate, but which does not publish any accompanying memory.
+    pub fn load_atomic_monotonic(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {
+        let r = self.reg();
+        self.push_inst(crate::inst::LlInst::Load {
+            dst: r.clone(),
+            ty,
+            ptr: ptr.to_string(),
+            flavor: crate::inst::LoadFlavor::AtomicMonotonic(alignment),
+        });
+        r
+    }
+
     /// Sequentially-consistent atomic load for globals shared with runtime
     /// atomics. The explicit alignment is required by LLVM atomic loads.
     pub fn load_atomic_seq_cst(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {

@@ -127,11 +127,10 @@ pub(super) fn emit_typed_shape_layout_declare(
 
 /// `if (PERRY_PER_OBJECT_LAYOUTS_ANY) js_gc_forget_object_layout(obj);`
 ///
-/// The load is **volatile** for the same reason
-/// `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`'s is: the runtime flips this byte
-/// mid-execution (both ways), and LLVM must not hoist a stale `0` out of the
-/// loop this construction sits in. A never-taken branch per allocation is the
-/// entire steady-state cost.
+/// The count is the runtime's authoritative atomic state (#7873), not a mirror:
+/// a zero load proves no thread is armed, while a non-zero count conservatively
+/// takes the call. A never-taken branch per allocation is the entire
+/// steady-state cost.
 fn emit_gated_forget_object_layout(ctx: &mut FnCtx<'_>, obj_handle: &str) {
     let call_idx = ctx.new_block("layout_forget.armed");
     let done_idx = ctx.new_block("layout_forget.done");
@@ -139,8 +138,8 @@ fn emit_gated_forget_object_layout(ctx: &mut FnCtx<'_>, obj_handle: &str) {
     let done_label = ctx.block_label(done_idx);
     {
         let blk = ctx.block();
-        let any = blk.load_volatile(crate::types::I8, "@PERRY_PER_OBJECT_LAYOUTS_ANY");
-        let armed = blk.icmp_ne(crate::types::I8, &any, "0");
+        let any = blk.load_atomic_monotonic(crate::types::I32, "@PERRY_PER_OBJECT_LAYOUTS_ANY", 4);
+        let armed = blk.icmp_ne(crate::types::I32, &any, "0");
         blk.cond_br(&armed, &call_label, &done_label);
     }
     ctx.current_block = call_idx;

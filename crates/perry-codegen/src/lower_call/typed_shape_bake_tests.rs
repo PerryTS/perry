@@ -48,6 +48,8 @@ const DECLARE_CALL: &str = "call void @js_gc_declare_typed_shape_layout(";
 const FORGET_CALL: &str = "call void @js_gc_forget_object_layout(";
 /// The process-global emptiness proof the remainder is gated on.
 const ANY_GLOBAL: &str = "@PERRY_PER_OBJECT_LAYOUTS_ANY";
+const ANY_ATOMIC_LOAD: &str =
+    "load atomic i32, ptr @PERRY_PER_OBJECT_LAYOUTS_ANY monotonic, align 4";
 
 /// The packed `GcHeader` word the inline bump writes for a two-`number`-field
 /// class, WITH the baked layout:
@@ -328,7 +330,7 @@ fn a_pointer_free_shape_bakes_its_layout_into_the_header_constant() {
          ticket removes:\n{ir}"
     );
     assert!(
-        ir.contains(FORGET_CALL) && ir.contains(ANY_GLOBAL),
+        ir.contains(FORGET_CALL) && ir.contains(ANY_GLOBAL) && ir.contains(ANY_ATOMIC_LOAD),
         "the address-dependent half must survive, gated on the global \
          emptiness proof: a recycled address can carry a previous tenant's \
          per-object mask, and `layout_note_slot` would then OR the new \

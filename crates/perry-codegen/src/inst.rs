@@ -20,6 +20,7 @@ pub enum LoadFlavor {
     Plain,
     Aligned(u32),
     Volatile,
+    AtomicMonotonic(u32),
     AtomicSeqCst(u32),
     /// `!invariant.load !0` tagged (issue #52).
     Invariant,
@@ -192,6 +193,12 @@ impl LlInst {
                 }
                 LoadFlavor::Volatile => {
                     let _ = write!(out, "  {dst} = load volatile {ty}, ptr {ptr}");
+                }
+                LoadFlavor::AtomicMonotonic(n) => {
+                    let _ = write!(
+                        out,
+                        "  {dst} = load atomic {ty}, ptr {ptr} monotonic, align {n}"
+                    );
                 }
                 LoadFlavor::AtomicSeqCst(n) => {
                     let _ = write!(
