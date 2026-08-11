@@ -41,8 +41,33 @@ pub(crate) fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_b
         false,
         Vec::new(),
     );
+    // Same gate #7511 put on the class-field slot store, applied to the
+    // opaque-store wrapper. `write_barrier_slot_inner`'s FIRST action is
+    // `barrier_child_prologue(child)?` — a non-pointer child returns before it
+    // touches the incremental-mark latch, the parent decode or the remembered
+    // set — so for every numeric store this call does nothing but cost a call.
+    //
+    // An array element store pays it unconditionally today: `this.vals[i] = v`
+    // in `gc-handoff/apps/pipeline.ts`'s `Registry` emits
+    // `js_typed_feedback_array_set_f64_extend` immediately followed by a bare
+    // `js_write_barrier`, on a `number[]`.
+    //
+    // `emit_may_carry_heap_pointer_check` is a deliberate SUPERSET of the
+    // runtime predicate (its doc records why the direction is load-bearing,
+    // and `gc::tests::inline_pointer_bearing_contract` enumerates the whole
+    // 16-bit tag space against it), so this can only skip calls that would
+    // have returned immediately.
+    let maybe_idx = ctx.new_block("wb.maybe");
+    let done_idx = ctx.new_block("wb.done");
+    let maybe_l = ctx.block_label(maybe_idx);
+    let done_l = ctx.block_label(done_idx);
+    let may_carry = emit_may_carry_heap_pointer_check(ctx.block(), child_bits);
+    ctx.block().cond_br(&may_carry, &maybe_l, &done_l);
+    ctx.current_block = maybe_idx;
     ctx.block()
         .call_void("js_write_barrier", &[(I64, parent_bits), (I64, child_bits)]);
+    ctx.block().br(&done_l);
+    ctx.current_block = done_idx;
 }
 
 pub(crate) fn emit_write_barrier_slot_on_block(
