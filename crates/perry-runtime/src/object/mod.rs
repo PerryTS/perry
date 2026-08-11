@@ -27,6 +27,8 @@ pub(crate) const INLINE_SLOT_FLOOR: usize = 4;
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 mod alloc;
 mod arguments;
+#[cfg(test)]
+mod arguments_latch_tests;
 mod array_object_ops;
 mod assert;
 mod async_generator_queue;

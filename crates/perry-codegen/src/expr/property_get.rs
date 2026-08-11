@@ -292,6 +292,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PropertyGet {
             object, property, ..
         } if property == "length"
+            // #7854: a receiver whose Array/String type is a copied ANNOTATION
+            // rather than a proof must not reach this arm. The inline half is
+            // guarded, but the `js_value_length_f64` fallback answers 0 where
+            // JS answers `undefined` (and where a nullish receiver must throw),
+            // so a violated claim becomes a silent wrong answer instead of a
+            // slower path. These ids take the generic property route — exactly
+            // what the same local took before it was refined at all.
+            // See `FnCtx::declared_only_array_locals`.
+            && !matches!(object.as_ref(), Expr::LocalGet(id) if ctx.declared_only_array_locals.contains(id))
             && (is_array_expr(ctx, object)
                 || is_string_expr(ctx, object)
                 || match crate::type_analysis::static_type_of(ctx, object) {

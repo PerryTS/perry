@@ -30,6 +30,141 @@ pub(crate) fn is_process_namespace_version_property(object: &Expr, property: &st
         && matches!(object, Expr::NativeModuleRef(module) if is_process_module_ref_name(module))
 }
 
+/// Drop `null` / `undefined` / `void` from a union and return the single
+/// surviving member, if there is exactly one.
+///
+/// `type Env = { … }` + `let e: Env | null` is the ordinary way to write a
+/// linked structure in TypeScript, and it is the *only* thing standing between
+/// `const names = e.names` and a usable type: a read that returns at all had a
+/// non-nullish receiver, because reading a property off `null`/`undefined`
+/// throws. So the nullish arms contribute nothing to the RESULT type and can be
+/// dropped without weakening anything.
+fn strip_nullish_union(ty: &HirType) -> Option<&HirType> {
+    let HirType::Union(members) = ty else {
+        return Some(ty);
+    };
+    let mut live = members
+        .iter()
+        .filter(|m| !matches!(m, HirType::Null | HirType::Void));
+    let first = live.next()?;
+    if live.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+/// Resolve `<receiver>.<property>`'s type from the receiver's DECLARED
+/// annotation, through the same class / interface / object-type-alias tables
+/// [`crate::type_analysis::static_type_of`] already consults.
+///
+/// # Why this exists
+///
+/// `refine_type_from_init`'s class walk resolves the receiver with
+/// `receiver_class_name`, which answers `None` for two shapes that dominate
+/// real TypeScript:
+///
+///   * a **reassigned** local (`predicates.rs`'s first arm) — e.g. the cursor
+///     of a chain walk, `let e: Env | null = env; … e = e.parent;`
+///   * a **union** local — `receiver_class_name`'s `LocalGet` arm matches only
+///     `Named`/`Generic`, so `Env | null` resolves to nothing.
+///
+/// and its table walk then looks only in `ctx.classes`, so a `type X = { … }`
+/// alias or an `interface` resolves to nothing either — the `type`-vs-
+/// `interface` asymmetry #655 already fixed for `static_type_of` but not here.
+///
+/// Measured on `gc-handoff/apps/interp.ts`, whose `lookup` is
+/// `const names = e.names; for (i = 0; i < names.length; i++) names[i]`: with
+/// `names` left `Any`, `names[i]` lowers to `js_dyn_index_get` (4.3% of the
+/// program) and `names.length` misses the property IC into `js_array_length`
+/// (2.9%). Writing the annotation by hand — `const names: string[] = e.names` —
+/// removes both and is **-14.5%** on the whole benchmark. This infers exactly
+/// the type that hand annotation would have written.
+///
+/// # It is a CLAIM, and one consumer could not take one
+///
+/// This produces a *declared* type, so it is a claim, not a proof — the same
+/// claim the author's own `const names: string[] = e.names` would install,
+/// through the same `local_types` entry, but Perry enforces no annotation at
+/// runtime. Element READS and STORES tolerate that: both re-check
+/// `GC_TYPE_ARRAY` on the receiver and fall back, so a violated claim costs a
+/// branch and nothing else.
+///
+/// **`.length` does not.** Its inline arm is guarded, but its FALLBACK
+/// (`js_value_length_f64`) answers **0** for every value that carries no
+/// length, where JS answers `undefined` — a pre-existing degradation the
+/// runtime documents in place ("the generic PropertyGet slow path already
+/// degrades to 0 here", `value/dynamic_object.rs`) and which is therefore
+/// reachable on `main` today through a hand-written annotation (#7853). Handing it a
+/// freshly inferred claim would widen a silent wrong answer, so
+/// `refined_array_type_is_declared_only` records these ids in
+/// `FnCtx::declared_only_array_locals` and the `.length` arm in
+/// `expr/property_get.rs` refuses them — leaving them on exactly the generic
+/// path the unrefined `Any` local takes today.
+/// `test_gap_declared_field_type_refine_guarded.ts` pins all of it: the same
+/// declaration is handed strings, plain objects, numbers, `null` and
+/// `undefined`, and every row must match node.
+///
+/// Deliberately conservative: only a NON-generic receiver name whose entry is a
+/// class, an interface, or an alias to a closed object type answers, and only
+/// the property's own declared type is returned — no inheritance walk beyond
+/// what the class table already does, and no index-signature fallback.
+pub(crate) fn declared_property_type_from_annotation(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+) -> Option<HirType> {
+    let declared = match object {
+        Expr::LocalGet(id) => ctx.local_types.get(id)?,
+        _ => return None,
+    };
+    match strip_nullish_union(declared)? {
+        // `let e: Env | null` where `type Env = { … }` / `interface Env` /
+        // `class Env`.
+        HirType::Named(name) => {
+            if let Some(class) = ctx.classes.get(name) {
+                if let Some(f) = class.fields.iter().find(|f| f.name == property) {
+                    return Some(f.ty.clone());
+                }
+            }
+            if let Some(iface) = ctx.interfaces.get(name) {
+                if let Some(p) = iface.properties.iter().find(|p| p.name == property) {
+                    return Some(p.ty.clone());
+                }
+            }
+            if let Some(HirType::Object(obj)) = ctx.type_aliases.get(name) {
+                return obj.properties.get(property).map(|p| p.ty.clone());
+            }
+            None
+        }
+        // The alias was already expanded in place (`let e: { … } | null`).
+        HirType::Object(obj) => obj.properties.get(property).map(|p| p.ty.clone()),
+        _ => None,
+    }
+}
+
+/// True when `refine_type_from_init` would answer this `PropertyGet` ONLY via
+/// [`declared_property_type_from_annotation`] — i.e. the array/string type is a
+/// copied annotation and not something an initializer proved.
+///
+/// Mirrors `numeric_proof_is_declared_only` (#7773). Callers use it to record
+/// the local in `FnCtx::declared_only_array_locals`.
+pub(crate) fn refined_array_type_is_declared_only(ctx: &FnCtx<'_>, init: &Expr) -> bool {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = init
+    else {
+        return false;
+    };
+    // The pre-existing class walk is the proof-ish arm (a real `class` whose
+    // field type came from a declaration Perry itself lowered); if it answers,
+    // this is not a NEW claim and behaviour is unchanged from before #7854.
+    let via_class = receiver_class_name(ctx, object)
+        .and_then(|receiver_class| ctx.classes.get(&receiver_class))
+        .and_then(|class| class.fields.iter().find(|f| f.name == *property))
+        .is_some();
+    !via_class && declared_property_type_from_annotation(ctx, object, property).is_some()
+}
+
 /// Refine an `Any`-typed local's static type based on its initializer
 /// expression. Returns Some(Type) when we can statically prove the
 /// initializer produces a more specific type, so the `Stmt::Let`
@@ -396,13 +531,14 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
             // obj.field where obj is a known class instance → field's
             // declared type. Reuses the same walk static_type_of uses.
-            let receiver_class = receiver_class_name(ctx, object)?;
-            let class = ctx.classes.get(&receiver_class)?;
-            class
-                .fields
-                .iter()
-                .find(|f| f.name == *property)
+            if let Some(ty) = receiver_class_name(ctx, object)
+                .and_then(|receiver_class| ctx.classes.get(&receiver_class))
+                .and_then(|class| class.fields.iter().find(|f| f.name == *property))
                 .map(|f| f.ty.clone())
+            {
+                return Some(ty);
+            }
+            declared_property_type_from_annotation(ctx, object, property)
         }
         // Promise-returning expressions: `Promise.resolve(x)`,
         // `p.then(cb)`, `p.catch(cb)`, etc. Refine the local to

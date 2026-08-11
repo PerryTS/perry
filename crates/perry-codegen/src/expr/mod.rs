@@ -764,6 +764,29 @@ pub(crate) struct FnCtx<'a> {
     /// the trust into a four-instruction runtime tag test instead.
     pub declared_only_numeric_locals: std::collections::HashSet<u32>,
 
+    /// LocalIds whose `Array`/`String` type came from
+    /// `refine.rs::declared_property_type_from_annotation` — i.e. from the
+    /// RECEIVER'S ANNOTATION (`type Env = { names: string[] }`), not from an
+    /// initializer that proves an array (`[...]`, `.split()`, `Object.keys()`).
+    ///
+    /// Twin of `declared_only_numeric_locals` (#7773) and there for the same
+    /// reason: the refinement is load-bearing — without it `const names =
+    /// e.names` stays `Any` and every `names[i]` is a `js_dyn_index_get` call —
+    /// but it copies an annotation rather than proving anything, and Perry does
+    /// not enforce annotations at runtime.
+    ///
+    /// Element reads and stores are safe on a claim: they re-check
+    /// `GC_TYPE_ARRAY` on the receiver and fall back. `.length` is NOT: its
+    /// slow path (`js_value_length_f64`) answers **0** for every value that
+    /// carries no length, where JS answers `undefined` (and throws on
+    /// nullish) — a documented, pre-existing degradation
+    /// (`value/dynamic_object.rs`, "the generic PropertyGet slow path already
+    /// degrades to 0 here"). Feeding it a claim would widen a silent wrong
+    /// answer, so the `.length` arm in `expr/property_get.rs` refuses these
+    /// ids and lets them take the generic property path — exactly what the
+    /// unrefined `Any` local does today.
+    pub declared_only_array_locals: std::collections::HashSet<u32>,
+
     /// Cached pointer to this function's `InlineArenaState` slot —
     /// allocated lazily on the first `new ClassName()` site that uses
     /// the inline bump-allocator path. The slot lives in the function

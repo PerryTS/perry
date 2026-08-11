@@ -777,6 +777,7 @@ pub(super) fn compile_function(
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
         declared_only_numeric_locals: std::collections::HashSet::new(),
+        declared_only_array_locals: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         shadow_slots_bound: bound_param_slots,
         temp_roots: crate::rooting::TempRootPool::default(),
