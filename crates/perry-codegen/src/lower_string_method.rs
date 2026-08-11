@@ -126,40 +126,32 @@ pub(crate) fn lower_string_method(
     }
 
     let recv_box = lower_expr(ctx, object)?;
-    // Optimistic any-typed path: `property_get` routes `(x: any).charAt(i)` /
-    // `.split(…)` here even when `x` is not statically a string, because most
-    // such receivers ARE strings (e.g. `readFileSync(p).split('\n')`). But a
-    // boxed/object receiver — `new Boolean().charAt = String.prototype.charAt;
-    // …charAt(i)`, a `{ toString }` object — must have `ToString(this)` applied
-    // (ECMA-262 §22.1.3) before the inline string helpers run, or they would
-    // bit-cast the object pointer as a string and read garbage. A statically
-    // string-typed receiver skips this (fast path, no coercion).
-    let recv_box = if is_string_expr(ctx, object) {
-        recv_box
-    } else {
-        // A nullish receiver must throw the V8 member-access TypeError —
-        // `undefined.charAt(0)` reads `charAt` off `undefined` FIRST (ECMA-262
-        // §13.3), so it throws `Cannot read properties of undefined (reading
-        // 'charAt')` — NOT coerce `undefined`→`"undefined"` like the general
-        // `js_string_coerce`. The guarded helper does RequireObjectCoercible +
-        // ToString; pass the method name for the diagnostic.
-        let prop_idx = ctx.strings.intern(property);
-        let (prop_global, prop_len) = {
-            let entry = ctx.strings.entry(prop_idx);
-            (
-                format!("@{}", entry.bytes_global),
-                entry.byte_len.to_string(),
-            )
-        };
-        let blk = ctx.block();
-        let coerced = blk.call(
-            I64,
-            "js_string_coerce_method_this",
-            &[(DOUBLE, &recv_box), (PTR, &prop_global), (I64, &prop_len)],
-        );
-        nanbox_string_inline(blk, &coerced)
-    };
+    lower_string_method_from_box(ctx, object, property, args, recv_box)
+}
 
+/// Lower a string method after a runtime tag guard has proved that the
+/// already-evaluated receiver is a heap or short string.
+///
+/// Keeping the receiver as an SSA value is load-bearing: the non-string arm of
+/// the guard must dispatch the exact same value, rather than evaluate a
+/// side-effecting receiver expression a second time.
+pub(crate) fn lower_string_method_from_proven_box(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    recv_box: String,
+) -> Result<String> {
+    lower_string_method_from_box(ctx, object, property, args, recv_box)
+}
+
+fn lower_string_method_from_box(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    recv_box: String,
+) -> Result<String> {
     // #6971: the receiver is lowered BEFORE the arguments, and an argument's
     // lowering can collect — `fresh(k).concat("|" + churn(N))` dropped the
     // receiver, whose unboxed form is a BARE string address that only the

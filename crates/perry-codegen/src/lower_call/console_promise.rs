@@ -730,6 +730,61 @@ pub fn try_lower_promise_static_call(
     Ok(None)
 }
 
+/// Emit the universal by-id method dispatcher for an already-evaluated and
+/// rooted receiver plus already-evaluated arguments.
+///
+/// Kept separate from the eligibility tower below so a tag-guarded String
+/// fast path can use the identical non-string arm without re-evaluating its
+/// receiver (#7673).
+pub(super) fn emit_native_method_str_dispatch(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    call_byte_offset: u32,
+    recv_box: &str,
+    lowered_args: &[String],
+) -> String {
+    // Pass a tagged pointer to the immutable StringPool dispatch descriptor.
+    // A GC-backed string handle belongs to the main thread's arena and cannot
+    // be resolved safely by a `perry/thread` worker executing this closure.
+    let key_idx = ctx.strings.intern(property);
+    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+    let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+    // The alloca MUST live in the entry block. An alloca in a loop body lowers
+    // to a runtime stack adjustment which is never restored (#167).
+    let (args_ptr, args_len_str) = if lowered_args.is_empty() {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let n = lowered_args.len();
+        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+        let blk = ctx.block();
+        for (i, value) in lowered_args.iter().enumerate() {
+            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &i.to_string())]);
+            blk.store(DOUBLE, value, &slot);
+        }
+        (buf_reg, n.to_string())
+    };
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::MethodCall,
+        property,
+        TypedFeedbackContract::method_call(),
+    );
+    // Arguments are already lowered, so a nested call can no longer shadow
+    // this call's source location.
+    crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+    ctx.block().call(
+        DOUBLE,
+        "js_typed_feedback_native_call_method_by_id",
+        &[
+            (I64, &site_id),
+            (DOUBLE, recv_box),
+            (I64, &method_id),
+            (PTR, &args_ptr),
+            (I64, &args_len_str),
+        ],
+    )
+}
+
 pub fn try_lower_native_method_str_dispatch(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -970,53 +1025,12 @@ pub fn try_lower_native_method_str_dispatch(
             return with_operands_rooted(ctx, &operand_exprs, |ctx, rereads| {
                 let recv_box = rereads[0].clone();
                 let lowered_args: Vec<String> = rereads[1..].to_vec();
-                // Pass a tagged pointer to the immutable StringPool dispatch
-                // descriptor. A GC-backed string handle belongs to the main
-                // thread's arena and cannot be resolved safely by a
-                // `perry/thread` worker executing this compiled closure.
-                let key_idx = ctx.strings.intern(property);
-                let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
-                let method_id =
-                    crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
-                // Stack-allocate the args array if any. The alloca MUST live in
-                // the function entry block — emitting it into the current block
-                // (which may be a loop body) makes LLVM lower it as a runtime
-                // `sub %rsp, N` that never gets restored, eating the stack at
-                // ~16 bytes/iteration. See issue #167.
-                let (args_ptr, args_len_str) = if lowered_args.is_empty() {
-                    ("null".to_string(), "0".to_string())
-                } else {
-                    let n = lowered_args.len();
-                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-                    let blk = ctx.block();
-                    for (i, v) in lowered_args.iter().enumerate() {
-                        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                        blk.store(DOUBLE, v, &slot);
-                    }
-                    (buf_reg, n.to_string())
-                };
-                let site_id = emit_typed_feedback_register_site(
+                let result = emit_native_method_str_dispatch(
                     ctx,
-                    TypedFeedbackKind::MethodCall,
                     property,
-                    TypedFeedbackContract::method_call(),
-                );
-                // #5247: record the source location right before the dynamic
-                // dispatch so a thrown "X is not a function" TypeError carries
-                // `at <file>:<line>`. Args are already lowered above, so a nested
-                // call's location no longer shadows this one.
-                crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
-                let blk = ctx.block();
-                let result = blk.call(
-                    DOUBLE,
-                    "js_typed_feedback_native_call_method_by_id",
-                    &[
-                        (I64, &site_id),
-                        (DOUBLE, &recv_box),
-                        (I64, &method_id),
-                        (PTR, &args_ptr),
-                        (I64, &args_len_str),
-                    ],
+                    call_byte_offset,
+                    &recv_box,
+                    &lowered_args,
                 );
                 // The group is released AFTER the dispatch, not before: the
                 // dispatcher allocates while it reads these values. That is the
