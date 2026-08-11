@@ -53,6 +53,24 @@ fn is_registered_collection(addr: usize, obj_type: u8) -> bool {
     }
 }
 
+/// A legacy raw-I64 receiver has no NaN-box tag proving it came from a managed
+/// allocation. Validate membership without dereferencing it before asking for
+/// a `GcHeader`; the old magnitude-only `is_valid_obj_ptr` check admitted any
+/// aligned address in the platform heap range, including unmapped addresses.
+#[inline(always)]
+fn raw_i64_receiver_is_managed(addr: usize) -> bool {
+    if !matches!(
+        crate::arena::classify_heap_space(addr),
+        crate::arena::HeapSpace::Unknown
+    ) {
+        return true;
+    }
+    addr.checked_sub(crate::gc::GC_HEADER_SIZE)
+        .is_some_and(|header| {
+            crate::gc::gc_malloc_header_is_tracked(header as *const crate::gc::GcHeader)
+        })
+}
+
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
     let bits = index.to_bits();
     if (bits & TAG_MASK) == INT32_TAG {
@@ -591,15 +609,15 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         }
         return value;
     }
+    // A raw-I64 fallback is only a heuristic until arena/malloc membership
+    // proves it. Do this before `receiver_gc_tag`, which reads addr - 8.
+    if !jsval.is_pointer() && !raw_i64_receiver_is_managed(raw_ptr) {
+        return value;
+    }
     // #7865: reuse the header byte the array/object split below needs. Plain
     // receivers skip both registries; Map/Set tags still require confirmation.
     let receiver_tag = receiver_gc_tag(raw_ptr);
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
-        return value;
-    }
-    // Mirror the #63/#321 guard on the get side: heuristic-derived
-    // pseudo-pointers from non-pointer dataflow must not be dereferenced.
-    if !jsval.is_pointer() && !crate::object::is_valid_obj_ptr(raw_ptr as *const u8) {
         return value;
     }
     // #5579 / Issue #957 (set side): a STRING index (`obj["foo"] = v`) must

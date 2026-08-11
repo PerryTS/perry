@@ -57,3 +57,25 @@ fn collection_receivers_still_use_their_authoritative_registries() {
     assert_eq!(js_dyn_index_set(set_receiver, 0.0, 88.0), 88.0);
     assert_eq!(probes(), (before.0, before.1 + 1));
 }
+
+#[test]
+fn unmapped_legacy_raw_i64_is_rejected_before_the_gc_header_read() {
+    // An aligned, finite raw-I64 candidate inside the platform's permissive
+    // heap magnitude range, but not inside any arena or tracked malloc object.
+    // The pre-review ordering passed it to `receiver_gc_tag` and attempted to
+    // read the unmapped header at 4 GiB - 8.
+    let raw_bits = 0x0000_0001_0000_0000_u64;
+    let raw_receiver = f64::from_bits(raw_bits);
+    assert!(!raw_receiver.is_nan());
+    assert!(crate::value::addr_class::is_plausible_heap_addr(
+        raw_bits as usize
+    ));
+    assert!(matches!(
+        crate::arena::classify_heap_space(raw_bits as usize),
+        crate::arena::HeapSpace::Unknown
+    ));
+
+    let before = probes();
+    assert_eq!(js_dyn_index_set(raw_receiver, 0.0, 42.0), 42.0);
+    assert_eq!(probes(), before);
+}
