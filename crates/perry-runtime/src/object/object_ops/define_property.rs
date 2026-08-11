@@ -540,7 +540,7 @@ pub extern "C" fn js_object_define_property(
                             // lookup.
                             super::super::class_registry::class_dynamic_prop_root_store(
                                 target_cid,
-                                name.clone(),
+                                &name,
                                 f64::from_bits(value_field.bits()),
                             );
                             // A data descriptor is non-enumerable unless it

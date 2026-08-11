@@ -525,3 +525,51 @@ fn string_compare_value_heap_and_sso_mixes() {
     assert_eq!(js_string_compare_value(heap("x"), undef), 1);
     assert_eq!(js_string_compare_value(undef, undef), 0);
 }
+
+// ── js_string_concat_box's non-string operand delegates ────────────────────
+
+/// A `string`-declared operand that holds something else at runtime must get
+/// the full dynamic `+`, not silently vanish.
+///
+/// Perry does not validate declared types at runtime, so the codegen's
+/// static string proof (`is_definitely_string_expr`) is a claim about an
+/// ANNOTATION. This helper used to treat an operand it could not decode as
+/// the empty string, which made `"ab" + 42` render as `"ab"` — a silent wrong
+/// answer, and the reason the concat fast path had to be withheld from every
+/// declaration-based proof. Delegating instead is what lets the proof be a
+/// performance decision that cannot change a program's output.
+#[test]
+fn concat_box_delegates_a_non_string_operand_to_the_dynamic_add() {
+    let heap = |s: &str| {
+        let p = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(crate::value::JSValue::string_ptr(p).bits())
+    };
+    let text = |v: f64| {
+        let p = unsafe { crate::value::js_jsvalue_to_string(v) };
+        let bytes = unsafe { std::slice::from_raw_parts(string_data(p), (*p).byte_len as usize) };
+        String::from_utf8(bytes.to_vec()).expect("ascii")
+    };
+
+    // string + number → concatenation with the number's decimal form.
+    assert_eq!(text(js_string_concat_box(heap("ab"), 42.0)), "ab42");
+    // number + string → same, other order.
+    assert_eq!(text(js_string_concat_box(42.0, heap("ab"))), "42ab");
+    // Both operands lying: `+` is then plain numeric addition, and the result
+    // is a NUMBER, not a string. This is the arm the old `unwrap_or` answered
+    // with the empty string.
+    assert_eq!(js_string_concat_box(40.0, 2.0), 42.0);
+    // An int32-tagged operand must decode to its value, not to its boxed bits.
+    let int42 = f64::from_bits(crate::value::JSValue::int32(42).bits());
+    assert_eq!(text(js_string_concat_box(heap("n="), int42)), "n=42");
+    // undefined / null keep their ToString forms.
+    let undef = f64::from_bits(crate::value::JSValue::undefined().bits());
+    assert_eq!(text(js_string_concat_box(heap("v:"), undef)), "v:undefined");
+
+    // The all-strings path is untouched, including the SSO result encoding.
+    let sso_result = js_string_concat_box(heap("a"), heap("b"));
+    assert_eq!(text(sso_result), "ab");
+    assert!(
+        crate::value::JSValue::from_bits(sso_result.to_bits()).is_short_string(),
+        "a 2-byte ASCII result must still be assembled inline as SSO"
+    );
+}

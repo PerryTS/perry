@@ -626,6 +626,30 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                         }
                     }
                 }
+                // The `type X = { … }` half of #655. A TS object-type ALIAS is
+                // structurally interchangeable with an `interface` — the same
+                // declaration, the same runtime layout (a plain object), the
+                // same absence of any layout guarantee — and `type` is the form
+                // most application code reaches for. But `lower_type_alias_decl`
+                // files aliases in `module.type_aliases` while
+                // `lower_interface_decl` files interfaces in
+                // `module.interfaces`, and only the latter was consulted here.
+                // So `type Record = { kind: string; amount: number }` proved
+                // NOTHING about `r.kind` / `r.amount`: `"t:" + r.kind` lowered
+                // to `js_dynamic_string_or_number_add` and `r.amount + r.id`
+                // picked up `js_number_coerce` on both sides, purely because
+                // the author wrote `type` instead of `interface`.
+                //
+                // Only a non-generic alias whose right-hand side is a closed
+                // object type answers here. An alias to a `Named`/`Generic`
+                // type is left alone — resolving those would need the
+                // cycle-guarded chain walk the class path has, and they are not
+                // what this is for.
+                if let Some(HirType::Object(obj)) = ctx.type_aliases.get(&receiver_class) {
+                    if let Some(p) = obj.properties.get(property) {
+                        return Some(p.ty.clone());
+                    }
+                }
             }
             hir_inferred_static_type(ctx, e)
         }

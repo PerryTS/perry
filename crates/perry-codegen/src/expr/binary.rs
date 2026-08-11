@@ -460,7 +460,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
 
-                if l_is_str && r_is_str {
+                // The pairwise concat — and ONLY the pairwise concat — accepts a
+                // DECLARED `string` as well as a structurally-proven one, so
+                // `"shape:" + this.tag` and `prefix + r.kind` stop paying
+                // `js_dynamic_string_or_number_add`'s scope + four roots + two
+                // `ToPrimitive`s to rediscover what the declarations said.
+                //
+                // Sound for a LYING declaration, not merely unlikely to meet
+                // one: this arm emits `js_string_concat_box`, which
+                // tag-dispatches both operands and forwards any non-string pair
+                // to `js_dynamic_string_or_number_add` — so string+string,
+                // string+number and number+number all return exactly what the
+                // dynamic path returns. See `is_declared_string_expr` for why
+                // the chain fold above and the one-sided arm below must keep
+                // the strict predicate.
+                if crate::type_analysis::is_declared_string_expr(ctx, left)
+                    && crate::type_analysis::is_declared_string_expr(ctx, right)
+                {
                     return lower_string_concat(ctx, left, right);
                 }
                 if l_is_str || r_is_str {

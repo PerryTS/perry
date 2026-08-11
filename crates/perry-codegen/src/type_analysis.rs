@@ -55,9 +55,9 @@ pub(crate) use refine::{
     is_process_namespace_version_property, refine_type_from_init,
 };
 pub(crate) use strings::{
-    class_name_extends_url_search_params, is_definitely_string_expr, is_map_expr, is_set_expr,
-    is_string_expr, is_url_search_params_expr, is_url_search_params_subclass_expr,
-    map_static_type_args, set_static_type_args,
+    class_name_extends_url_search_params, is_declared_string_expr, is_definitely_string_expr,
+    is_map_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
+    is_url_search_params_subclass_expr, map_static_type_args, set_static_type_args,
 };
 
 #[cfg(test)]

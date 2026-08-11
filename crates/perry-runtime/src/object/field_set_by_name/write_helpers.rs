@@ -78,7 +78,7 @@ pub(super) unsafe fn mirror_class_object_static_write(
     let name_len = (*key).byte_len as usize;
     if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
         if !name.is_empty() && !name.starts_with("__perry_") {
-            class_dynamic_prop_root_store((*obj).class_id, name.to_string(), value);
+            class_dynamic_prop_root_store((*obj).class_id, name, value);
         }
     }
 }

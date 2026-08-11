@@ -115,12 +115,36 @@ fn bytes_all_ascii(data: *const u8, len: u32) -> bool {
         .all(|&b| b < 0x80)
 }
 
+/// SSO-aware pairwise `a + b` for two operands the codegen believes are
+/// strings. Both operands arrive NaN-boxed so an SSO operand stays inline, and
+/// the result is NaN-boxed too — SSO when the total fits five ASCII bytes, a
+/// heap `StringHeader` otherwise.
+///
+/// **A non-string operand is delegated, not treated as empty.** Perry does not
+/// validate declared types at runtime, so "the codegen believes these are
+/// strings" is a claim about an annotation, not about the bits. This function
+/// used to `unwrap_or((null, 0))` such an operand, which silently rendered
+/// `"ab" + 42` as `"ab"`; the codegen then had to route every possibly-lying
+/// operand around it (see the `dother`/`cold` arms of the self-append lowering
+/// in `lower_string_concat.rs`, whose comment says exactly that). Handing the
+/// pair to [`js_dynamic_string_or_number_add`] instead gives a lie the full
+/// spec answer — `ToPrimitive`, string concat when either side really is a
+/// string, numeric add when neither is — so a static string proof is now a
+/// PERFORMANCE claim that cannot change a program's output.
+///
+/// [`js_dynamic_string_or_number_add`]: crate::value::js_dynamic_string_or_number_add
 #[no_mangle]
 pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     let mut scratch_l = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut scratch_r = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let l = str_bytes_from_jsvalue(l_value, &mut scratch_l).unwrap_or((std::ptr::null(), 0));
-    let r = str_bytes_from_jsvalue(r_value, &mut scratch_r).unwrap_or((std::ptr::null(), 0));
+    let (Some(l), Some(r)) = (
+        str_bytes_from_jsvalue(l_value, &mut scratch_l),
+        str_bytes_from_jsvalue(r_value, &mut scratch_r),
+    ) else {
+        // `str_bytes_from_jsvalue` returns `None` for exactly the non-string
+        // values, so this is the annotation-lie arm and nothing else.
+        return unsafe { crate::value::js_dynamic_string_or_number_add(l_value, r_value) };
+    };
     let total_blen = l.1 + r.1;
 
     // SSO encodes its length tag as the JS `.length`, so it is only sound for

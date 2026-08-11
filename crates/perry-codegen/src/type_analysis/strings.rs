@@ -301,6 +301,50 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// True when a DECLARATION says this expression is a `string`: a `string`
+/// field on a class, interface or object-type alias (`this.tag`, `r.kind`), a
+/// method whose declared return type is `string`, an element of a `string[]`.
+///
+/// This is deliberately NOT folded into [`is_definitely_string_expr`], and the
+/// distinction is the whole point. Perry does not enforce annotations at
+/// runtime, so a declaration is evidence, not proof — the same gap #7831 is
+/// closing on the numeric side, where a declared-`number` field that actually
+/// held a string made `fadd` propagate the string's NaN payload and
+/// `typeof (v * 2)` answer `"string"`.
+///
+/// So this predicate has exactly ONE consumer: the two-operand
+/// `a + b` concat in `expr::binary`, which lowers to `js_string_concat_box`.
+/// That helper tag-dispatches both operands and hands ANY non-string pair
+/// straight to `js_dynamic_string_or_number_add`, so every combination of
+/// runtime values — string+string, string+number, number+number — produces
+/// exactly the result the dynamic path would have produced. The declaration
+/// therefore selects a *lowering*, never an *answer*.
+///
+/// The places that must NOT use it, and why:
+/// - the `l ^ r` arm of `+` lowers through `js_string_concat_value` /
+///   `js_value_concat_string`, which take an already-unboxed `StringHeader*`
+///   and cannot tell a lie from a string;
+/// - the N-way chain fold formats each part as a string, so an all-declared
+///   chain of numbers would concatenate where the spec adds;
+/// - the `Map` string-key fast paths in `expr::math_simple` key a lookup on
+///   the claim.
+///
+/// Each of those keeps [`is_definitely_string_expr`], which answers only for
+/// expressions whose string-ness is structural (a literal, `String(x)`,
+/// `.toString()`, `JSON.stringify`, …).
+pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if is_definitely_string_expr(ctx, e) {
+        return true;
+    }
+    matches!(
+        e,
+        Expr::PropertyGet { .. } | Expr::Call { .. } | Expr::IndexGet { .. }
+    ) && matches!(
+        static_type_of(ctx, e),
+        Some(HirType::String) | Some(HirType::StringLiteral(_))
+    )
+}
+
 /// Resolve the declared type of `<object>.<field>` when `object` is a
 /// known user class or interface that declares (or inherits) a field
 /// named `field`. Returns `None` when the receiver isn't a tracked
@@ -543,3 +587,6 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;

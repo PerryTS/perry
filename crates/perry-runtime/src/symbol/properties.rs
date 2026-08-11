@@ -553,7 +553,7 @@ pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64
                 crate::value::JSValue::pointer(err as *const u8).bits(),
             ));
         }
-        crate::object::class_dynamic_prop_root_store(class_id, name.to_string(), value);
+        crate::object::class_dynamic_prop_root_store(class_id, name, value);
         return;
     }
     store_class_static_symbol_root(class_id, sym_key, value.to_bits());

@@ -18,9 +18,8 @@ pub unsafe extern "C" fn js_class_register_static_field(
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-        Ok(s) => s.to_string(),
-        Err(_) => return,
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) else {
+        return;
     };
     class_dynamic_prop_root_store(class_id, name, value);
 }

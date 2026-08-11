@@ -423,7 +423,7 @@ pub extern "C" fn js_object_set_field_by_name(
                                 "ERR_INVALID_ARG_TYPE",
                             );
                         }
-                        class_dynamic_prop_root_store(class_id, name, value);
+                        class_dynamic_prop_root_store(class_id, &name, value);
                     }
                 }
                 return;

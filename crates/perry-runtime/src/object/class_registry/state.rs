@@ -54,17 +54,57 @@ pub(crate) fn class_is_key_deleted(class_id: u32, key: &str) -> bool {
     })
 }
 
-pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: f64) {
-    CLASS_DELETED_KEYS.with(|m| {
-        if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
-            keys.remove(&name);
+/// Record `C.<name> = value` in the class-ref side table that dynamic reads
+/// (`const K: any = C; K.name`, `Object.keys(C)`, `getOwnPropertyDescriptor`)
+/// consult, and shade the stored value for the incremental marker.
+///
+/// Takes `&str`, not `String`: every caller had a value it did not own, so the
+/// old signature forced an allocation on EVERY store — and then threw it away,
+/// because `HashMap::insert` keeps the original key when one is already
+/// present. That is the shape of a `static` counter: codegen emits this call
+/// after each `Expr::StaticFieldSet`, so `Shape.made = Shape.made + 1` inside a
+/// constructor runs it once per construction (144,000 times in
+/// gc-handoff/apps/shapes.ts) and the key exists after the first.
+///
+/// The in-place update also skips the `CLASS_DELETED_KEYS` probe — but only
+/// when NO class key has ever been deleted, which is the state of essentially
+/// every program (`delete C.x` on a class constructor is vanishingly rare).
+/// Once anything has been deleted the original sequence runs verbatim, so the
+/// interaction between a deleted PROTOTYPE key and a same-named static field
+/// (`class C { m() {} static m = 1 }` — both land under one class_id) keeps
+/// whatever behaviour it had.
+pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f64) {
+    let nothing_deleted = CLASS_DELETED_KEYS.with(|m| m.borrow().is_empty());
+    if nothing_deleted {
+        let updated = CLASS_DYNAMIC_PROPS.with(|m| {
+            match m
+                .borrow_mut()
+                .get_mut(&class_id)
+                .and_then(|props| props.get_mut(name))
+            {
+                Some(slot) => {
+                    *slot = value;
+                    true
+                }
+                None => false,
+            }
+        });
+        if updated {
+            crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+            return;
         }
-    });
+    } else {
+        CLASS_DELETED_KEYS.with(|m| {
+            if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
+                keys.remove(name);
+            }
+        });
+    }
     CLASS_DYNAMIC_PROPS.with(|m| {
         m.borrow_mut()
             .entry(class_id)
-            .or_insert_with(std::collections::HashMap::new)
-            .insert(name, value);
+            .or_default()
+            .insert(name.to_string(), value);
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
 }
@@ -661,5 +701,59 @@ pub(crate) fn global_object_prototype_bits() -> Option<u64> {
         Some(proto_bits)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod class_dynamic_prop_store_tests {
+    use super::*;
+
+    fn stored(class_id: u32, name: &str) -> Option<f64> {
+        class_own_static_field_value(class_id, name)
+    }
+
+    /// The in-place update arm must be observationally identical to the
+    /// insert arm — same table, same value, same key set. This is the shape
+    /// `Shape.made = Shape.made + 1` produces once per construction.
+    #[test]
+    fn repeated_store_updates_in_place_and_stays_readable() {
+        let cid = 0x7c01_0001;
+        for i in 0..5u32 {
+            class_dynamic_prop_root_store(cid, "made", f64::from(i));
+            assert_eq!(stored(cid, "made"), Some(f64::from(i)));
+        }
+        // A second key on the same class still inserts.
+        class_dynamic_prop_root_store(cid, "other", 9.0);
+        assert_eq!(stored(cid, "other"), Some(9.0));
+        assert_eq!(stored(cid, "made"), Some(4.0));
+        let mut keys = class_own_enumerable_field_names(cid);
+        keys.sort();
+        assert_eq!(keys, vec!["made".to_string(), "other".to_string()]);
+    }
+
+    /// The fast path is gated on "nothing has ever been deleted". Once a key
+    /// IS deleted, a re-store must still clear it from the deleted set — the
+    /// behaviour the unconditional probe used to provide.
+    #[test]
+    fn store_after_delete_clears_the_deleted_mark() {
+        let cid = 0x7c01_0002;
+        class_dynamic_prop_root_store(cid, "k", 1.0);
+        // Delete the way `delete C.k` does: drop the value AND mark the key.
+        class_delete_own_dynamic_prop(cid, "k");
+        class_mark_key_deleted(cid, "k");
+        assert!(class_is_key_deleted(cid, "k"));
+        assert_eq!(stored(cid, "k"), None);
+
+        class_dynamic_prop_root_store(cid, "k", 2.0);
+        assert!(
+            !class_is_key_deleted(cid, "k"),
+            "re-storing a deleted static key must un-delete it"
+        );
+        assert_eq!(stored(cid, "k"), Some(2.0));
+
+        // And a subsequent store, now on the slow arm (the deleted-keys map
+        // is non-empty for the whole process), still updates the value.
+        class_dynamic_prop_root_store(cid, "k", 3.0);
+        assert_eq!(stored(cid, "k"), Some(3.0));
     }
 }
