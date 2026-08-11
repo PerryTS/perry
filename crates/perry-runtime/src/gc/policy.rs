@@ -890,6 +890,30 @@ thread_local! {
     /// Paired with `GC_LAST_FULL_ARENA_IN_USE_BYTES` to price what that full
     /// actually reclaimed — see `GC_MAJOR_PACING_BACKOFF_SHIFT`.
     pub(super) static GC_FULL_CYCLE_PRE_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Total arena in-use bytes measured at the END of the most recent
+    /// collection of ANY kind — the reading arena-growth pacing tests against
+    /// its boundary (#7865).
+    ///
+    /// The pacing baseline (`GC_LAST_FULL_ARENA_IN_USE_BYTES`) is a *post*-full
+    /// reading, i.e. LIVE bytes. Testing it against `arena_in_use_bytes()` at
+    /// the moment a trigger fires compared it against *allocated* bytes — the
+    /// entire un-collected nursery, most of which is garbage a minor is about
+    /// to reclaim for free. On `gc-handoff/bench/tree.ts` that reading is
+    /// 37.7 MB against a 32 MB floor on **every** cycle, so all 40 collections
+    /// escalated to a whole-heap mark-sweep and the copying minor was never
+    /// even attempted (`copying_nursery.eligible: false`,
+    /// `fallback_reason: "not_attempted"`). The escalation then perpetuates
+    /// itself: `note_copying_minor_young_survival` is the only thing that can
+    /// widen the band, and it only runs when a copying minor runs.
+    ///
+    /// A post-collection reading is the same *kind* of quantity as the
+    /// baseline, and it says exactly what the escalation exists to detect:
+    /// **bytes the last minor could not reclaim.** Array-growth forwarding
+    /// stubs — the hazard `arena_growth_full_escalation_due` was written for —
+    /// pin their blocks through a non-moving minor, so they are still in this
+    /// reading and still escalate. Nursery garbage is not.
+    pub(super) static GC_LAST_COLLECTION_POST_IN_USE_BYTES: Cell<usize> =
+        const { Cell::new(0) };
     /// Yield-adaptive backoff for major-GC pacing (#7726).
     ///
     /// `arena_growth_full_escalation_due` escalates a minor to a full once the
@@ -1718,6 +1742,34 @@ fn pacing_arena_in_use_bytes() -> usize {
     crate::arena::arena_in_use_bytes()
 }
 
+/// Record the post-collection arena occupancy arena-growth pacing tests
+/// against. Called once at the end of every cycle, minor and full alike, from
+/// `GcCycle::publish_reclaim_outcome` — the single site both kinds pass
+/// through, so a future collection kind cannot forget it.
+pub(super) fn note_collection_finished_arena_occupancy() {
+    let bytes = pacing_arena_in_use_bytes();
+    GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
+}
+
+/// The arena reading [`arena_growth_full_escalation_due`] tests — see
+/// [`GC_LAST_COLLECTION_POST_IN_USE_BYTES`].
+///
+/// Zero before any collection has finished, so the very first collection of a
+/// process is never escalated: there is no evidence yet that a minor would
+/// fail to reclaim, and the whole point of the pacing is to fire on that
+/// evidence rather than on allocation volume.
+///
+/// Keeps the `#[cfg(test)]` seam in front, so the existing positive-direction
+/// tests that force a `true` verdict out of the real predicate keep working
+/// without a 32 MB live heap.
+pub(super) fn pacing_escalation_reading_bytes() -> usize {
+    #[cfg(test)]
+    if let Some(bytes) = TEST_PACING_ARENA_IN_USE.with(|cell| cell.get()) {
+        return bytes;
+    }
+    GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.get())
+}
+
 #[cfg(test)]
 thread_local! {
     /// Test-only override for [`pacing_arena_in_use_bytes`]. Thread-local, so
@@ -1767,6 +1819,17 @@ pub(super) fn test_reset_major_pacing_backoff() {
 #[cfg(test)]
 pub(super) fn test_major_pacing_pre_in_use_bytes() -> usize {
     GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.get())
+}
+
+/// Override the post-collection occupancy the escalation predicate reads.
+/// Returns the previous value so a test can restore it.
+#[cfg(test)]
+pub(super) fn test_set_collection_post_in_use_bytes(bytes: usize) -> usize {
+    GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| {
+        let previous = cell.get();
+        cell.set(bytes);
+        previous
+    })
 }
 
 #[cfg(test)]
@@ -2889,7 +2952,7 @@ fn arena_growth_full_escalation_due_inner() -> bool {
         // `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` disables the pacing: no reading
         // escalates, so there is no boundary to compare against.
         None => false,
-        Some(threshold) => pacing_arena_in_use_bytes() >= threshold,
+        Some(threshold) => pacing_escalation_reading_bytes() >= threshold,
     }
 }
 

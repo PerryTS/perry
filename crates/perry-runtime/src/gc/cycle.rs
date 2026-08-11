@@ -1898,6 +1898,10 @@ impl GcCycleState {
         if self.minor.is_none() {
             finish_full_old_reclaim_baseline();
         }
+        // #7865: arena-growth pacing tests a POST-collection occupancy, which
+        // is the same kind of quantity as its post-full baseline. Recorded here
+        // rather than per-kind because this is the one site both kinds reach.
+        super::policy::note_collection_finished_arena_occupancy();
 
         let malloc_swept = self
             .minor

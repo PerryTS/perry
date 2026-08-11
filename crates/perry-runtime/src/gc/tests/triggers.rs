@@ -1363,3 +1363,67 @@ fn retaining_rebaseline_never_lowers_the_pacing_baseline() {
         "a larger post-minor occupancy must raise it"
     );
 }
+
+/// #7865 — arena-growth pacing must escalate on **bytes a collection could not
+/// reclaim**, not on allocation volume.
+///
+/// The baseline (`GC_LAST_FULL_ARENA_IN_USE_BYTES`) is a post-full reading, so
+/// it is LIVE bytes. Testing it against `arena_in_use_bytes()` at the moment a
+/// trigger fires compared it against ALLOCATED bytes — the whole un-collected
+/// nursery. `gc-handoff/bench/tree.ts` reads 37.7 MB against the 32 MB floor on
+/// every cycle, so all 40 of its collections escalated to a whole-heap
+/// mark-sweep (1.76 s of pause on the dev host) and the copying minor that
+/// would have reclaimed the same bytes was never attempted. Worse, the
+/// escalation perpetuates itself: `note_copying_minor_young_survival` is the
+/// only thing that can widen the band, and it runs only when a copying minor
+/// runs.
+///
+/// Both directions are asserted, because only the pair distinguishes the fix
+/// from "escalation switched off": a heap the last collection LEFT full still
+/// escalates — that is the array-growth-forwarding-stub case the escalation was
+/// written for, and stubs survive a non-moving minor precisely by staying in
+/// this reading.
+#[test]
+fn escalation_reads_what_the_last_collection_failed_to_reclaim() {
+    use super::super::policy::{
+        arena_growth_full_escalation_due, major_pacing_config, test_reset_major_pacing_backoff,
+        test_set_collection_post_in_use_bytes, test_set_major_pacing_baseline,
+        test_set_pacing_arena_in_use,
+    };
+
+    let (floor_bytes, _growth_num) = major_pacing_config();
+    if floor_bytes == 0 {
+        return; // pacing disabled outright: no boundary to test
+    }
+
+    // The `#[cfg(test)]` injection seam short-circuits the real reading, so it
+    // has to be OFF for this test to exercise the path it is about.
+    let previous_seam = test_set_pacing_arena_in_use(None);
+    test_reset_major_pacing_backoff();
+    let previous_baseline = test_set_major_pacing_baseline(0); // boundary == floor
+
+    // A nursery-churn workload: the last collection emptied the arena. The
+    // program may have allocated gigabytes since; none of it is evidence that a
+    // full is needed.
+    let previous_post = test_set_collection_post_in_use_bytes(0);
+    let emptied_due = arena_growth_full_escalation_due();
+
+    // A stub-pinned workload: the last collection ran and the arena is STILL at
+    // the floor. That is the escalation's subject and it must still fire.
+    test_set_collection_post_in_use_bytes(floor_bytes);
+    let retained_due = arena_growth_full_escalation_due();
+
+    test_set_collection_post_in_use_bytes(previous_post);
+    test_set_major_pacing_baseline(previous_baseline);
+    test_set_pacing_arena_in_use(previous_seam);
+    test_reset_major_pacing_backoff();
+
+    assert!(
+        !emptied_due,
+        "a collection that emptied the arena must not escalate the next one"
+    );
+    assert!(
+        retained_due,
+        "an arena still at the floor after a collection must still escalate"
+    );
+}

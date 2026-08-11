@@ -1186,6 +1186,13 @@ impl GcCycleTrace {
             // survival-adaptive band is indistinguishable from one that did and
             // simply had nothing to skip.
             "retaining": super::policy::major_pacing_retaining(),
+            // #7865: the reading actually compared against
+            // `escalate_at_or_above_bytes`. Emitted because the two used to be
+            // different KINDS of quantity — a post-full live baseline against a
+            // pre-collection allocated reading — and nothing in the trace said
+            // so. A gate that cannot see the left-hand side cannot prove which
+            // way the comparison went.
+            "escalation_reading_bytes": super::policy::pacing_escalation_reading_bytes(),
         });
         serde_json::json!({
             "event": "gc_cycle",
