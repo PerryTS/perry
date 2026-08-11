@@ -84,7 +84,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `Tuple(_)` types short-circuit; anything Union-shaped
             // falls through to the runtime.
             let v = lower_expr(ctx, o)?;
-            if let Some(ty) = crate::type_analysis::static_type_of(ctx, o) {
+            // #7844: a local's type may have been refined from its initializer,
+            // but reassignment invalidates that proof in both directions. A
+            // number-initialized local can now hold an array, and an
+            // array-initialized local can now hold a number. Mirror
+            // `is_array_expr`/`receiver_class_name`: only fold a local whose
+            // binding has not been written after initialization.
+            let static_type_is_still_valid = !matches!(
+                o.as_ref(),
+                Expr::LocalGet(id) if ctx.reassigned_locals.contains(id)
+            );
+            if let Some(ty) = static_type_is_still_valid
+                .then_some(crate::type_analysis::static_type_of(ctx, o))
+                .flatten()
+            {
                 if matches!(
                     ty,
                     perry_hir::types::Type::Array(_) | perry_hir::types::Type::Tuple(_)

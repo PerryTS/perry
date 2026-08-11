@@ -691,6 +691,54 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
 use native_proof_support::assert_buffer_store_uses_dynamic_fallback;
 
 #[test]
+fn array_isarray_reassigned_local_uses_runtime_predicate() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "number_to_array".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(int(0)),
+        },
+        Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![int(1)])))),
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(1)))),
+        Stmt::Let {
+            id: 2,
+            name: "array_to_number".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Array(vec![int(1)])),
+        },
+        Stmt::Expr(Expr::LocalSet(2, Box::new(int(0)))),
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(2)))),
+        Stmt::Let {
+            id: 3,
+            name: "unchanged_array".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Array(vec![int(1)])),
+        },
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(3)))),
+        Stmt::Return(Some(int(0))),
+    ];
+    let ir = String::from_utf8(
+        compile_module(
+            &module("array_isarray_reassignment_7844.ts", body),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ir.matches("call double @js_array_is_array(").count(),
+        2,
+        "both reassigned locals must use the runtime predicate, while the unchanged array may \
+         retain its compile-time true fold:\n{ir}"
+    );
+}
+
+#[test]
 fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     let body = vec![
         buffer_let(1, "src", int(8)),
