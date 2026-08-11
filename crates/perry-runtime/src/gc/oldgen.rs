@@ -124,6 +124,9 @@ pub(super) struct SweepTraceStats {
     /// documents the policy and why the signal is not self-referential.
     pub(super) eden_live_bytes: u64,
     pub(super) eden_dead_bytes: u64,
+    /// Header-inclusive bytes this arena walk classified live. Unlike block
+    /// offsets, this excludes dead objects stranded beside a tiny survivor.
+    pub(super) arena_live_bytes: u64,
 }
 
 pub(super) fn evacuation_policy_initial_decision(
@@ -749,6 +752,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     };
     let mut retained_forwarded_stub_objects: usize = 0;
     let mut retained_forwarded_stub_bytes: usize = 0;
+    let mut arena_live_bytes: u64 = 0;
 
     // Sweep arena objects. Two-phase strategy:
     //
@@ -853,6 +857,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 return;
             }
             if flags & GC_FLAG_PINNED != 0 {
+                arena_live_bytes = arena_live_bytes.saturating_add((*header).size as u64);
                 if block_idx >= old_block_start {
                     crate::arena::old_page_account_swept_object(
                         header as usize,
@@ -890,6 +895,13 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     || (block_idx < resettable_general_n
                         && crate::arena::general_block_in_recent_window(block_idx));
                 if retain_stub {
+                    // A full collection can leave an unmarked stub in the
+                    // recent-block safety window without mistaking it for a
+                    // live object. Keep the block/header, but do not charge
+                    // that proven-dead stub to the live census.
+                    if do_age_bump || flags & GC_FLAG_MARKED != 0 {
+                        arena_live_bytes = arena_live_bytes.saturating_add((*header).size as u64);
+                    }
                     if block_idx >= old_block_start {
                         crate::arena::old_page_account_swept_object(
                             header as usize,
@@ -964,6 +976,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     invalidate_dead_old_arena_header(header, total_size);
                 }
             } else {
+                arena_live_bytes = arena_live_bytes.saturating_add((*header).size as u64);
                 if block_idx >= old_block_start {
                     crate::arena::old_page_account_swept_object(
                         header as usize,
@@ -1065,6 +1078,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
         // the #7598 seed.
         eden_live_bytes: 0,
         eden_dead_bytes: 0,
+        arena_live_bytes,
     }
 }
 
@@ -1236,6 +1250,7 @@ impl IncrementalSweepState {
                         retained_forwarded_stub_bytes: self.arena.retained_forwarded_stub_bytes,
                         eden_live_bytes: self.arena.eden_live_bytes,
                         eden_dead_bytes: self.arena.eden_dead_bytes,
+                        arena_live_bytes: self.arena.arena_live_bytes,
                     };
                     self.subphase = SweepCycleSubphase::Done;
                     return true;
@@ -1300,6 +1315,7 @@ struct ArenaSweepObjectsState {
     /// #7598 Eden census: see `SweepTraceStats`.
     eden_live_bytes: u64,
     eden_dead_bytes: u64,
+    arena_live_bytes: u64,
 }
 
 impl ArenaSweepObjectsState {
@@ -1331,6 +1347,7 @@ impl ArenaSweepObjectsState {
             retained_forwarded_stub_bytes: 0,
             eden_live_bytes: 0,
             eden_dead_bytes: 0,
+            arena_live_bytes: 0,
         }
     }
 
@@ -1401,7 +1418,7 @@ impl ArenaSweepObjectsState {
                 return;
             }
             if flags & GC_FLAG_PINNED != 0 {
-                self.keep_live_object(header, block_idx, flags, age_bump_this, true);
+                self.keep_live_object(header, block_idx, flags, age_bump_this, true, true);
                 return;
             }
             if flags & GC_FLAG_FORWARDED != 0 {
@@ -1411,7 +1428,7 @@ impl ArenaSweepObjectsState {
             if flags & GC_FLAG_MARKED == 0 && self.unmarked_is_provably_dead(block_idx) {
                 self.reclaim_dead_object(header, block_idx);
             } else {
-                self.keep_live_object(header, block_idx, flags, age_bump_this, false);
+                self.keep_live_object(header, block_idx, flags, age_bump_this, false, true);
             }
         }
     }
@@ -1448,6 +1465,7 @@ impl ArenaSweepObjectsState {
         flags: u8,
         age_bump_this: bool,
         pinned: bool,
+        count_in_live_census: bool,
     ) {
         if block_idx >= self.old_block_start {
             crate::arena::old_page_account_swept_object(
@@ -1462,6 +1480,9 @@ impl ArenaSweepObjectsState {
         }
         if block_idx < self.resettable_general_n {
             self.eden_live_bytes = self.eden_live_bytes.saturating_add((*header).size as u64);
+        }
+        if count_in_live_census {
+            self.arena_live_bytes = self.arena_live_bytes.saturating_add((*header).size as u64);
         }
         if age_bump_this && flags & GC_FLAG_TENURED == 0 {
             if flags & GC_FLAG_HAS_SURVIVED != 0 {
@@ -1489,7 +1510,11 @@ impl ArenaSweepObjectsState {
             || (block_idx < self.resettable_general_n
                 && crate::arena::general_block_in_recent_window(block_idx));
         if retain_stub {
-            self.keep_live_object(header, block_idx, flags, false, false);
+            // A full collection can leave an unmarked stub in the recent-block
+            // safety window. It still pins the block, but it is proven dead and
+            // therefore excluded from live-allocation accounting.
+            let count_in_live_census = self.minor_sweep || flags & GC_FLAG_MARKED != 0;
+            self.keep_live_object(header, block_idx, flags, false, false, count_in_live_census);
             if block_idx < self.resettable_general_n {
                 self.retained_forwarded_stub_objects =
                     self.retained_forwarded_stub_objects.saturating_add(1);

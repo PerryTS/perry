@@ -1,62 +1,131 @@
 use super::*;
 
-/// Get arena memory statistics: (heap_used, heap_total)
-/// heap_used = total bytes allocated across all blocks
-/// heap_total = total bytes reserved across all blocks
+/// Exact live-object census at the end of the most recent collection, plus
+/// the allocation state needed to advance it without taxing the inline bump
+/// allocator. Between collections arena offsets can only grow, while a
+/// free-list allocation consumes a hole without moving an offset; those two
+/// deltas therefore account for every new arena allocation.
+#[derive(Clone, Copy, Default)]
+struct ArenaLiveCensus {
+    live_bytes: usize,
+    high_water_bytes: usize,
+    arena_free_bytes: usize,
+    old_free_bytes: usize,
+    valid: bool,
+}
+
+crate::perry_thread_local! {
+    static ARENA_LIVE_CENSUS: Cell<ArenaLiveCensus> =
+        const { Cell::new(ArenaLiveCensus {
+            live_bytes: 0,
+            high_water_bytes: 0,
+            arena_free_bytes: 0,
+            old_free_bytes: 0,
+            valid: false,
+        }) };
+}
+
+fn arena_free_bytes() -> usize {
+    crate::gc::ARENA_FREE_LIST
+        .with(|free| free.borrow().iter().map(|&(_, slot_size)| slot_size).sum())
+}
+
+/// Record the exact header-inclusive live bytes found by a completed GC walk.
+/// This is called after block reset/reclaim, so its high-water and hole
+/// snapshots describe the same instant as `live_bytes`.
+pub(crate) fn record_arena_live_census(live_bytes: usize) {
+    let high_water_bytes = arena_in_use_bytes();
+    ARENA_LIVE_CENSUS.with(|census| {
+        census.set(ArenaLiveCensus {
+            live_bytes,
+            high_water_bytes,
+            arena_free_bytes: arena_free_bytes(),
+            old_free_bytes: crate::gc::old_free_bytes(),
+            valid: true,
+        });
+    });
+}
+
+/// Header-inclusive bytes occupied by live arena objects.
+///
+/// A GC publishes an exact object census. Until the next collection, new bump
+/// allocations are the increase in block high-water and old/general hole reuse
+/// is the decrease in free-list bytes. This keeps `heapUsed` and major-GC
+/// pacing exact after a collection without adding a counter update to the
+/// generated inline allocation fast path.
+pub fn arena_live_allocated_bytes() -> usize {
+    let high_water_bytes = arena_in_use_bytes();
+    let arena_free_bytes = arena_free_bytes();
+    let old_free_bytes = crate::gc::old_free_bytes();
+    ARENA_LIVE_CENSUS.with(|census_cell| {
+        let census = census_cell.get();
+        if !census.valid {
+            return high_water_bytes
+                .saturating_sub(arena_free_bytes)
+                .saturating_sub(old_free_bytes);
+        }
+        if high_water_bytes < census.high_water_bytes {
+            // Before the first census all bytes below the bump pointers are
+            // allocated except known holes. A decreasing high-water means a
+            // direct reset happened outside the normal collect/publish path;
+            // invalidate the stale census so later growth cannot accidentally
+            // cross its old high-water and revive it.
+            census_cell.set(ArenaLiveCensus {
+                valid: false,
+                ..ArenaLiveCensus::default()
+            });
+            return high_water_bytes
+                .saturating_sub(arena_free_bytes)
+                .saturating_sub(old_free_bytes);
+        }
+        census
+            .live_bytes
+            .saturating_add(high_water_bytes - census.high_water_bytes)
+            .saturating_add(census.arena_free_bytes.saturating_sub(arena_free_bytes))
+            .saturating_add(census.old_free_bytes.saturating_sub(old_free_bytes))
+    })
+}
+
+/// Get arena memory statistics: (heap_used, heap_total).
+/// `heap_used` is live allocated object bytes; `heap_total` is total reserved
+/// block capacity. Allocation high-water remains separately available through
+/// [`arena_in_use_bytes`].
 #[no_mangle]
 pub extern "C" fn js_arena_stats(out_used: *mut u64, out_total: *mut u64) {
-    // Sync inline state so the "used" count reflects the inline-burst
-    // high-water mark, not just the last sync point.
-    sync_inline_arena_state();
-    let mut used: u64 = 0;
+    let used = arena_live_allocated_bytes() as u64;
     let mut total: u64 = 0;
     ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
         for block in &arena.blocks {
-            used += block.offset as u64;
             total += block.size as u64;
         }
     });
     LONGLIVED_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
         for block in &arena.blocks {
-            used += block.offset as u64;
             total += block.size as u64;
         }
     });
     SURVIVOR_ARENA_0.with(|arena| {
         let arena = unsafe { &*arena.get() };
         for block in &arena.blocks {
-            used += block.offset as u64;
             total += block.size as u64;
         }
     });
     SURVIVOR_ARENA_1.with(|arena| {
         let arena = unsafe { &*arena.get() };
         for block in &arena.blocks {
-            used += block.offset as u64;
             total += block.size as u64;
         }
     });
     // Old-generation arena. Large objects (>16 KB — typed arrays, big arrays /
-    // strings) are born here, and minor-GC survivors are promoted here. Without
-    // this region `heapUsed` / `heapTotal` collapse toward 0 while RSS climbs,
-    // since the live/large heap lives entirely in old-gen. Mirrors the old-gen
-    // phase of `arena_in_use_bytes` (walk.rs) so the two accounts agree.
+    // strings) are born here, and minor-GC survivors are promoted here.
     OLD_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
         for block in &arena.blocks {
-            used += block.offset as u64;
             total += block.size as u64;
         }
     });
-    // #7437: swept old-gen holes are reusable capacity, not used heap.
-    // Block offsets cannot express a hole (the bump pointer never moves
-    // back), so without this subtraction `heapUsed` reports the scattered-
-    // survivor high-water forever — 105.6 MB for a ~1 MB live set on the
-    // 12_large_live_set ratchet probe — and looks like a leak that no
-    // amount of collecting can fix.
-    used = used.saturating_sub(crate::gc::old_free_bytes() as u64);
     unsafe {
         *out_used = used;
         *out_total = total;

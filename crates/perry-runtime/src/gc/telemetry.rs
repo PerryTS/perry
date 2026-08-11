@@ -1525,6 +1525,7 @@ pub(super) fn arena_snapshot_json(
         "longlived": arena_region_json(snapshot.longlived),
         "old": arena_region_json(snapshot.old),
         "total_in_use_bytes": snapshot.total_in_use_bytes,
+        "total_live_allocated_bytes": snapshot.total_live_allocated_bytes,
         "total_reserved_bytes": snapshot.total_reserved_bytes,
         "total_block_count": snapshot.total_block_count,
     })

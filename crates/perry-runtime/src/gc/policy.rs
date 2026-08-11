@@ -883,20 +883,22 @@ thread_local! {
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
     pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
-    /// Total arena in-use bytes measured right after the last FULL mark-sweep —
-    /// the baseline for major-GC pacing (`arena_growth_full_escalation_due`).
+    /// Live allocated arena bytes measured right after the last FULL
+    /// mark-sweep — the baseline for major-GC pacing
+    /// (`arena_growth_full_escalation_due`).
     pub(super) static GC_LAST_FULL_ARENA_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
-    /// Total arena in-use bytes measured when the last FULL mark-sweep STARTED.
+    /// Live allocated arena bytes measured when the last FULL mark-sweep STARTED.
     /// Paired with `GC_LAST_FULL_ARENA_IN_USE_BYTES` to price what that full
     /// actually reclaimed — see `GC_MAJOR_PACING_BACKOFF_SHIFT`.
     pub(super) static GC_FULL_CYCLE_PRE_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
-    /// Total arena in-use bytes measured at the END of the most recent
+    /// Live allocated arena bytes measured at the END of the most recent
     /// collection of ANY kind — the reading arena-growth pacing tests against
     /// its boundary (#7865).
     ///
     /// The pacing baseline (`GC_LAST_FULL_ARENA_IN_USE_BYTES`) is a *post*-full
-    /// reading, i.e. LIVE bytes. Testing it against `arena_in_use_bytes()` at
-    /// the moment a trigger fires compared it against *allocated* bytes — the
+    /// reading, i.e. LIVE bytes. Before #7879, testing it against
+    /// `arena_in_use_bytes()` at the moment a trigger fired compared it against
+    /// allocation high-water — the
     /// entire un-collected nursery, most of which is garbage a minor is about
     /// to reclaim for free. On `gc-handoff/bench/tree.ts` that reading is
     /// 37.7 MB against a 32 MB floor on **every** cycle, so all 40 collections
@@ -1614,7 +1616,7 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     // Record the TOTAL post-full live set for major-GC pacing (young+old): the
     // full sweep is the only collection that frees forwarding stubs, so this is
     // the "clean" size the arena returns to and the base for the K× growth gate.
-    let post_in_use = crate::arena::arena_in_use_bytes();
+    let post_in_use = crate::arena::arena_live_allocated_bytes();
     GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(post_in_use));
     update_major_pacing_backoff(post_in_use);
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
@@ -1721,8 +1723,9 @@ fn note_full_cycle_started() {
 ///
 /// `update_major_pacing_backoff`'s doc already says these are "deliberately
 /// measured on the SAME metric ... so the two cannot disagree about whether a
-/// full helped". Reading `arena_in_use_bytes()` twice made that a convention;
-/// one accessor makes it structural (#7737).
+/// full helped". The accessor now deliberately reads live allocated object
+/// bytes, not block high-water: fragmentation must not schedule a full or make
+/// one look unproductive (#7879).
 ///
 /// It is also the injection point the positive-direction test needs. Forcing a
 /// `true` verdict from the REAL predicate otherwise requires an arena above
@@ -1734,18 +1737,18 @@ fn note_full_cycle_started() {
 /// compiles out of every shipping build and is not a mode anything can be
 /// configured into (CLAUDE.md's GC knob kill-policy is about runtime knobs;
 /// this is not one).
-fn pacing_arena_in_use_bytes() -> usize {
+pub(super) fn pacing_arena_in_use_bytes() -> usize {
     #[cfg(test)]
     if let Some(bytes) = TEST_PACING_ARENA_IN_USE.with(|cell| cell.get()) {
         return bytes;
     }
-    crate::arena::arena_in_use_bytes()
+    crate::arena::arena_live_allocated_bytes()
 }
 
-/// Record the post-collection arena occupancy arena-growth pacing tests
-/// against. Called once at the end of every cycle, minor and full alike, from
-/// `GcCycle::publish_reclaim_outcome` — the single site both kinds pass
-/// through, so a future collection kind cannot forget it.
+/// Record the post-collection live arena bytes arena-growth pacing tests
+/// against. Called once at the end of every cycle, minor and full alike. The
+/// copying fast path publishes directly; non-copying cycles publish from
+/// `GcCycle::publish_reclaim_outcome` after their sweep census.
 pub(super) fn note_collection_finished_arena_occupancy() {
     let bytes = pacing_arena_in_use_bytes();
     GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
@@ -1784,7 +1787,7 @@ pub(super) fn major_pacing_backoff_shift() -> u32 {
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get())
 }
 
-/// `(post-full baseline bytes, backoff shift, arena in-use bytes at or above
+/// `(post-full baseline bytes, backoff shift, live allocated bytes at or above
 /// which the next minor escalates to a full)` — emitted in the GC trace so a
 /// gate can prove the backoff actually engaged rather than merely that nothing
 /// threw.
@@ -1842,7 +1845,7 @@ pub(super) fn test_set_major_pacing_baseline(bytes: usize) -> usize {
 }
 
 /// Override the arena reading arena-growth pacing sees, for the duration of a
-/// test. `None` restores the real `arena_in_use_bytes()`. Returns the previous
+/// test. `None` restores the real live-allocation reading. Returns the previous
 /// value so a test can restore it rather than assume it was unset.
 #[cfg(test)]
 pub(super) fn test_set_pacing_arena_in_use(bytes: Option<usize>) -> Option<usize> {
@@ -2956,7 +2959,7 @@ fn arena_growth_full_escalation_due_inner() -> bool {
     }
 }
 
-/// The smallest `arena_in_use_bytes()` reading that escalates the next minor to
+/// The smallest live-allocation reading that escalates the next minor to
 /// a full, or `None` when arena-growth pacing is disabled outright and no
 /// reading escalates.
 ///

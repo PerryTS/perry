@@ -112,10 +112,11 @@ pub(crate) use quarantine::{
 pub use quarantine::{quarantine_stats, QuarantineStats};
 
 // stats.rs
+pub(crate) use stats::record_arena_live_census;
 pub(crate) use stats::{active_survivor_space, inactive_survivor_space};
 pub use stats::{
-    js_arena_stats, longlived_in_use_bytes, old_gen_in_use_bytes, pointer_in_nursery,
-    pointer_in_old_gen,
+    arena_live_allocated_bytes, js_arena_stats, longlived_in_use_bytes, old_gen_in_use_bytes,
+    pointer_in_nursery, pointer_in_old_gen,
 };
 #[cfg(test)]
 pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_resync};

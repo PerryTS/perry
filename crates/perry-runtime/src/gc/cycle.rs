@@ -1895,13 +1895,18 @@ impl GcCycleState {
             trace.pause_us = elapsed_us;
             trace.capture_layout_scans();
         }
-        if self.minor.is_none() {
-            finish_full_old_reclaim_baseline();
-        }
+        let arena_live_bytes = self
+            .sweep
+            .map(|sweep| sweep.arena_live_bytes as usize)
+            .unwrap_or_else(crate::arena::arena_live_allocated_bytes);
+        crate::arena::record_arena_live_census(arena_live_bytes);
         // #7865: arena-growth pacing tests a POST-collection occupancy, which
         // is the same kind of quantity as its post-full baseline. Recorded here
         // rather than per-kind because this is the one site both kinds reach.
         super::policy::note_collection_finished_arena_occupancy();
+        if self.minor.is_none() {
+            finish_full_old_reclaim_baseline();
+        }
 
         let malloc_swept = self
             .minor

@@ -321,11 +321,12 @@ pub fn arena_total_bytes() -> usize {
     ARENA_TOTAL_BYTES.with(|t| t.get())
 }
 
-/// Get bytes currently in use (sum of `block.offset` across blocks).
-/// Used by adaptive GC to measure how much actual data the program is
-/// holding live, separately from how much arena space we've reserved.
-/// After a GC sweep that resets empty blocks, in-use bytes drop
-/// dramatically while reserved bytes stay constant.
+/// Get allocation high-water bytes (sum of `block.offset` across blocks).
+///
+/// This includes swept holes in partially-live blocks and is deliberately a
+/// placement/fragmentation quantity, not live heap usage. Consumers that need
+/// object occupancy (`heapUsed`, major-GC pacing) use
+/// [`arena_live_allocated_bytes`](super::arena_live_allocated_bytes).
 pub fn arena_in_use_bytes() -> usize {
     sync_inline_arena_state();
     let mut used: usize = 0;
@@ -379,6 +380,7 @@ pub(crate) struct ArenaTelemetrySnapshot {
     pub(crate) longlived: ArenaRegionTelemetry,
     pub(crate) old: ArenaRegionTelemetry,
     pub(crate) total_in_use_bytes: usize,
+    pub(crate) total_live_allocated_bytes: usize,
     pub(crate) total_reserved_bytes: usize,
     pub(crate) total_block_count: usize,
 }
@@ -432,6 +434,7 @@ pub(crate) fn arena_telemetry_snapshot() -> ArenaTelemetrySnapshot {
             + survivor1.in_use_bytes
             + longlived.in_use_bytes
             + old.in_use_bytes,
+        total_live_allocated_bytes: arena_live_allocated_bytes(),
         total_reserved_bytes: arena.reserved_bytes
             + survivor0.reserved_bytes
             + survivor1.reserved_bytes

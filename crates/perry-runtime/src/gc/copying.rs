@@ -1333,6 +1333,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
 
     let phase_start = trace_phase_start(trace);
     let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
+    let pre_collection_live_bytes = crate::arena::arena_live_allocated_bytes();
     // #7742: decide BEFORE anything classifies, then retag the young blocks so
     // every classification for the rest of this cycle already reads the
     // generation those objects will have when it ends. The eligibility
@@ -1636,6 +1637,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             // the collections that run NO copying minor.
             eden_live_bytes: 0,
             eden_dead_bytes: 0,
+            arena_live_bytes: 0,
         };
         trace.pause_us = start.elapsed().as_micros() as u64;
         trace.capture_layout_scans();
@@ -1655,10 +1657,25 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // the stale baseline and schedules a full that is guaranteed to free
     // nothing (see `credit_promoted_bytes_to_old_baseline`).
     credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
+    // Everything outside from-space retains its pre-minor accounting. Remove
+    // the entire Eden/active-survivor high-water, then add back exactly the
+    // objects that survived by copy or promotion. This also preserves objects
+    // promoted by an EARLIER minor: old-page cycle summaries do not retain a
+    // complete allocated-byte census across later cycles (#7879 A/B caught
+    // `12_large_live_set` dropping ~38 MiB of prior promotions from heapUsed).
+    // Whole-block promotion is covered too: subtracting the full from-space
+    // high-water excludes its dead bytes, while `promoted_bytes` adds back only
+    // marked objects. No second object walk is needed.
+    let arena_live_bytes = pre_collection_live_bytes
+        .saturating_sub(from_space_bytes)
+        .saturating_add(collector.stats.copied_bytes)
+        .saturating_add(collector.stats.promoted_bytes);
+    crate::arena::record_arena_live_census(arena_live_bytes);
+    note_collection_finished_arena_occupancy();
     // The same argument one trigger over: a young generation that did not die
     // is a heap growing by LIVE data, so arena-growth pacing must not read that
-    // growth as garbage accumulating. Fed here, after the reset, so the
-    // re-baseline sees post-collection occupancy.
+    // growth as garbage accumulating. Fed after publishing the census so the
+    // re-baseline sees post-collection live allocation rather than high-water.
     note_copying_minor_young_survival(collector.stats.young_survival_permille);
     maybe_schedule_old_reclaim_after_copied_minor();
     retune_after_scavenge(
