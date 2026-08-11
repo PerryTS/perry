@@ -28,6 +28,15 @@ candidacy are **re-derived per candidate subclass**, so a shadowing
 re-declaration or an accessor on the subclass chain drops that arm. Capped at 8
 arms; a class with no eligible subclass emits **byte-identical IR** to before.
 
+All five `emit_class_field_inline_precheck` sites are widened, **including the
+strict BOXED store arm #7854 un-gated**. That one matters on its own: #7854
+removed the `requires_raw_f64` gate so boxed declared fields stop paying an
+unconditional guard call, but in a base class's own constructor the precheck it
+newly emits would still have missed 100% of the time, because `this` there is
+only ever a subclass. Its arms are computed with `requires_raw_f64` rather than a
+literal, so a candidate subclass whose declared type disagrees about the slot's
+representation is dropped.
+
 Measured effect, with per-precondition counters on `shapes.ts`: the runtime get
 guard goes from being called on every inherited read to **never being entered at
 all** (`get_guard_calls=0`) — every read now takes the inline fast path.
