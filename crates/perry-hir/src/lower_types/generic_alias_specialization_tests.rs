@@ -50,6 +50,13 @@ use perry_diagnostics::SourceCache;
 use perry_parser::parse_typescript_with_cache;
 
 /// Lowering is deeply recursive; the default 2 MB test thread SIGABRTs.
+///
+/// ★ `monomorphize_module` is **not optional here**, and leaving it out is how the
+/// first version of these tests measured nothing: `lower_module` alone leaves every
+/// `Expr::New::class_name` at the generic BASE (`Reg`), because rewriting it to the
+/// specialization is `monomorph::update_call_sites`' job. Without this call all seven
+/// cases "fail" identically — including the class / interface / builtin controls that
+/// were never broken — which is the tell that the harness, not the compiler, is wrong.
 fn lower_src(src: &str) -> Module {
     let src = src.to_string();
     std::thread::Builder::new()
@@ -58,7 +65,10 @@ fn lower_src(src: &str) -> Module {
             let mut cache = SourceCache::new();
             let parsed = parse_typescript_with_cache(&src, "test.ts", &mut cache)
                 .expect("parse should succeed");
-            lower_module(&parsed, "test.ts", "test.ts").expect("lowering should succeed")
+            let mut module =
+                lower_module(&parsed.module, "test", "test.ts").expect("lowering should succeed");
+            crate::monomorphize_module(&mut module);
+            module
         })
         .expect("spawn")
         .join()
