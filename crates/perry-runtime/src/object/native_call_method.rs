@@ -19,6 +19,8 @@ mod string_methods;
 
 #[cfg(test)]
 mod dispatch_arg_coercion_tests;
+#[cfg(test)]
+mod probe_dispatch_tests;
 mod typed_array;
 
 use disposal::{
@@ -915,15 +917,58 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     if !is_valid_obj_ptr(ptr as *const u8) {
         return None;
     }
-    if crate::set::is_registered_set(addr)
-        || crate::map::is_registered_map(addr)
-        || crate::regex::is_regex_pointer(ptr as *const u8)
-        || crate::symbol::is_registered_symbol(addr)
+    // #7850. This used to run FOUR side-registry probes unconditionally before
+    // reading the `GcHeader` — and the header already records the kind that
+    // three of them are looking for. `is_registered_symbol` in particular takes
+    // a process-global `Mutex` plus a SipHash once ANY `Symbol` exists, which a
+    // single `for…of` (it materializes `Symbol.iterator`) makes true of almost
+    // every realistic program; it was 6.5% of `pipeline`'s samples, on the path
+    // of every dynamic method call.
+    //
+    // Read the header ONCE and let `obj_type` select the only probe that can
+    // possibly fire. Each implication below is enforced by the probe itself, so
+    // this is a re-ordering rather than a new assumption:
+    //
+    //   * `set::is_registered_set` ends in `obj_type == GC_TYPE_SET`;
+    //   * `map::is_registered_map` ends in `obj_type == GC_TYPE_MAP`;
+    //   * `regex::is_regex_pointer` matches the header magic of a
+    //     `gc_malloc(_, GC_TYPE_OBJECT)` allocation, and the sole
+    //     `REGEX_POINTERS` insert (`js_regexp_new`) allocates exactly that;
+    //   * a `Symbol` of any storage carries `SYMBOL_MAGIC` in its first word.
+    //
+    // The one kind the header cannot speak for is the `Box`-leaked symbol
+    // (`Symbol.for`, the well-knowns, the Intl fallback): it has no `GcHeader`
+    // at all, so `ptr - 8` is foreign allocator bytes that can coincidentally
+    // equal any `obj_type`. What every symbol DOES have, whatever its storage,
+    // is `SYMBOL_MAGIC` in its own first four bytes — so screen on the object's
+    // content, not on the header. `may_be_symbol_header` is exact in the
+    // `false` direction, and a false `true` merely pays the old probe.
+    if crate::symbol::may_be_symbol_header(ptr as *const u8)
+        && crate::symbol::is_registered_symbol(addr)
     {
         return None;
     }
     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    Some((ptr, (*gc_header).obj_type))
+    let obj_type = (*gc_header).obj_type;
+    let excluded = match obj_type {
+        crate::gc::GC_TYPE_SET => crate::set::is_registered_set(addr),
+        crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(addr),
+        crate::gc::GC_TYPE_OBJECT => crate::regex::is_regex_pointer(ptr as *const u8),
+        _ => false,
+    };
+    if excluded {
+        return None;
+    }
+    Some((ptr, obj_type))
+}
+
+/// Test hook for the header-directed probe dispatch above (#7850). Lets a unit
+/// test assert BOTH halves of the claim: that a plain-object receiver no longer
+/// moves the symbol/map/set probe counters, and that a Set/Map/RegExp/Symbol
+/// receiver is still classified the same way it was before the re-ordering.
+#[cfg(test)]
+pub(crate) unsafe fn test_gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
+    gc_pointer_and_type_from_value(value)
 }
 
 #[inline]

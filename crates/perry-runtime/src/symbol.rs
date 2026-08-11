@@ -339,6 +339,58 @@ pub fn is_well_known_symbol(ptr: usize) -> bool {
 static SYMBOL_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
     crate::registry_latch::RegistryLatch::new();
 
+/// True when the bytes at `ptr` *could* be a [`SymbolHeader`], i.e. when a
+/// classifier that has already ruled a symbol out some other way must still ask
+/// the authoritative [`is_registered_symbol`].
+///
+/// #7850. `gc_pointer_and_type_from_value` — on the path of every dynamic method
+/// call — cannot use `GcHeader.obj_type` to rule a symbol out, because three of
+/// the five registration sites (`well_known_symbol`,
+/// `intl_legacy_constructed_symbol`, `js_symbol_for`) are `Box::into_raw`:
+/// process-lifetime allocations with **no `GcHeader` at all**, so `ptr - 8` is
+/// foreign allocator bytes that can coincidentally equal any `obj_type`. Trusting
+/// the header for those is a silent wrong answer.
+///
+/// What every symbol DOES have, whatever its storage, is `SYMBOL_MAGIC` in its
+/// own first four bytes — `alloc_symbol` and all three `Box` sites set it, and
+/// the field is at offset 0 precisely so cheap discrimination is possible. So
+/// one 4-byte load of the object the caller is already about to inspect answers
+/// "definitely not a symbol" for everything else.
+///
+/// The direction of the guarantee is what makes it safe to use as a screen:
+/// **`false` is exact** — no symbol reads `false` — while `true` is merely
+/// "ask the registry". A non-symbol whose first word happens to equal
+/// `SYMBOL_MAGIC` (a `StringHeader` would need `utf16_len == 0x5359_4D42`, i.e.
+/// a 2.8 GB string; an `ObjectHeader`'s `object_type` is a small tag) simply
+/// pays the old probe and gets the old, correct answer.
+///
+/// # Safety
+/// `ptr` must be readable for 4 bytes. Every caller is one that already
+/// dereferences the allocation (or its `GcHeader` at `ptr - 8`).
+#[inline(always)]
+pub(crate) unsafe fn may_be_symbol_header(ptr: *const u8) -> bool {
+    #[cfg(test)]
+    if TEST_DISABLE_SYMBOL_MAGIC_SCREEN.with(|c| c.get()) {
+        return true;
+    }
+    std::ptr::read_unaligned(ptr as *const u32) == SYMBOL_MAGIC
+}
+
+/// Test-only override that forces [`may_be_symbol_header`] to answer `true` —
+/// i.e. removes the screen without deleting it, so a test can show the screen is
+/// what makes the fast path fast rather than dead code in front of a probe that
+/// would have answered anyway.
+#[cfg(test)]
+thread_local! {
+    static TEST_DISABLE_SYMBOL_MAGIC_SCREEN: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
+    TEST_DISABLE_SYMBOL_MAGIC_SCREEN.with(|c| c.replace(disabled))
+}
+
 pub(crate) fn register_symbol_pointer(ptr: usize) {
     // Arm before taking the lock, so the entry is never reachable while the
     // latch still reads idle.
@@ -348,6 +400,26 @@ pub(crate) fn register_symbol_pointer(ptr: usize) {
         *guard = Some(HashSet::new());
     }
     guard.as_mut().unwrap().insert(ptr);
+}
+
+/// Every entry into [`is_registered_symbol`] that got past the latch, i.e.
+/// every caller that could not rule a `Symbol` out more cheaply. Twin of
+/// `map::TEST_MAP_REGISTRY_PROBES`: #7850's header-directed dispatch in
+/// `object::native_call_method` is asserted against this, so "the probe no
+/// longer runs on a plain-object dispatch" is a test rather than a claim.
+#[cfg(test)]
+thread_local! {
+    static TEST_SYMBOL_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_symbol_registry_probe_count() -> u64 {
+    TEST_SYMBOL_REGISTRY_PROBES.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub(crate) fn test_symbol_latch_is_idle() -> bool {
+    SYMBOL_EVER_REGISTERED.is_idle()
 }
 
 // The `%Intl%.[[FallbackSymbol]]` — a single per-realm symbol whose description
@@ -393,6 +465,8 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     if SYMBOL_EVER_REGISTERED.is_idle() {
         return false;
     }
+    #[cfg(test)]
+    TEST_SYMBOL_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     is_registered_symbol_slow(ptr)
 }
 
