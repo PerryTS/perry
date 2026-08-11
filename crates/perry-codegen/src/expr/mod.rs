@@ -747,18 +747,19 @@ pub(crate) struct FnCtx<'a> {
     /// protected temporary this function lowers.
     pub temp_roots: crate::rooting::TempRootPool,
 
-    /// #7773: LocalIds whose `Number`/`Int32` type was REFINED from a read
-    /// whose own numeric answer is only a declared type — `const v = o.x` on a
-    /// `x: number` field, or `const e = arr[i]` on a `number[]`.
+    /// #7773/#7506: LocalIds whose `Number`/`Int32` value came from an
+    /// initializer whose numeric answer is only a declared type — `const v =
+    /// o.x` on an `x: number` field, or `const sum = o.x + o.y`. This includes
+    /// both `Any` locals refined by codegen and locals the HIR already typed as
+    /// numeric.
     ///
-    /// The refinement is load-bearing (an un-annotated `const` is `Any` in the
-    /// HIR, so without it every ordinary field read loses the numeric fast
-    /// path), but it copies an annotation rather than proving anything. The
-    /// local then reads as `is_numeric_expr`, which licenses a bare `fadd` /
-    /// `fmul` on whatever the slot holds — and arithmetic on a NaN-boxed value
-    /// PRESERVES ITS PAYLOAD, so a string laundered in through `as any` came
-    /// back out of a multiply still tagged as a string (`typeof (v * 2)` was
-    /// `"string"`).
+    /// The `Any` refinement remains load-bearing (without it every ordinary
+    /// field read loses the numeric fast path), but both it and an HIR numeric
+    /// type can copy a declared field type rather than prove a runtime value.
+    /// The local then reads as `is_numeric_expr`, which licenses a bare `fadd`
+    /// / `fmul` on whatever the slot holds — and arithmetic on a NaN-boxed
+    /// value PRESERVES ITS PAYLOAD, so a string laundered in through `as any`
+    /// came back out of a multiply still tagged as a string.
     ///
     /// Consumed by `type_analysis::numeric_proof_is_declared_only`, which turns
     /// the trust into a four-instruction runtime tag test instead.

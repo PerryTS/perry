@@ -327,16 +327,18 @@ fn operand_needs_residual_coerce(ctx: &FnCtx<'_>, expr: &Expr, fallback_coerced:
     !fallback_coerced
         && (!is_numeric_expr(ctx, expr)
             || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr)
-            // #7773: a local REFINED to `Number` from a declared field/element
-            // type is `is_numeric_expr`, but the hazard predicate above only
-            // knows how to look at reads, so `const v = o.x; v * 2` emitted a
-            // bare `fmul`. Arithmetic on a NaN-box preserves the payload, so
-            // that multiply returned the string unchanged — `typeof (v * 2)`
-            // answered `"string"`. Every non-`+` arithmetic operator is a plain
+            // #7773/#7506: a numeric local or compound expression initialized
+            // from a declared-only field/element expression is
+            // `is_numeric_expr`, but the hazard predicate above only knows how
+            // to look at reads. That made both `const sum = o.x + o.y; sum *
+            // scale` and `(o.x + o.y) * scale` emit a bare `fmul`. Arithmetic
+            // on a NaN-box preserves the payload, so the multiply returned the
+            // string unchanged. Every non-`+` arithmetic operator is a plain
             // `ToNumber` on its operands, so a coerce is the whole fix here;
             // `+` needs the concat dispatch and gets it from
-            // `lower_declared_only_numeric_add`.
-            || matches!(expr, Expr::LocalGet(_)) && numeric_proof_is_declared_only(ctx, expr))
+            // `lower_declared_only_numeric_add`. Proven raw-f64 tiers answer
+            // false here, so asking about every expression keeps them exempt.
+            || numeric_proof_is_declared_only(ctx, expr))
 }
 
 /// Lower an operand in number context: route through

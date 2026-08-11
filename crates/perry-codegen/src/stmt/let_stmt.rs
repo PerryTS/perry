@@ -290,22 +290,16 @@ pub(crate) fn lower_let(
         ty.clone()
     };
 
-    // #7773: the refinement above copies a DECLARED type — `const v = o.x` on a
-    // `x: number` field answers `Number` because the annotation says so, not
-    // because anything proved it. Nothing enforces annotations at runtime, so
-    // record the local as violable; `numeric_proof_is_declared_only` then makes
-    // arithmetic on it re-check the tag instead of trusting the type outright.
-    //
-    // Only the Any → numeric direction matters. A local the user DECLARED
-    // `number` is equally unenforced, but it is also the shape every honest
-    // program is made of; the refined case is the one where codegen invented
-    // the numeric claim itself, and it is the one both reported shapes need.
-    if matches!(ty, perry_hir::types::Type::Any)
-        && matches!(
-            refined_ty,
-            perry_hir::types::Type::Number | perry_hir::types::Type::Int32
-        )
-    {
+    // #7773/#7506: a numeric local inherits a DECLARED-ONLY proof from its
+    // initializer. `const v = o.x` reaches this as `Any` refined to `Number`,
+    // while TypeScript's inferred `const sum = o.x + o.y` already reaches the
+    // HIR as `Number`; neither form proves what the runtime slots contain.
+    // Record both as violable so a later arithmetic consumer re-checks the
+    // local instead of laundering a possibly boxed value through its type.
+    if matches!(
+        refined_ty,
+        perry_hir::types::Type::Number | perry_hir::types::Type::Int32
+    ) {
         if init.is_some_and(|e| crate::type_analysis::numeric_proof_is_declared_only(ctx, e)) {
             ctx.declared_only_numeric_locals.insert(id);
         }

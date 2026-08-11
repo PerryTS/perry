@@ -11710,7 +11710,9 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
             && typed_ir.contains("getelementptr i8, ptr")
             && typed_ir.matches("load double").count() >= 2
             && typed_ir.contains(" fadd ")
-            && typed_ir.contains(" fmul "),
+            && typed_ir.contains(" fmul ")
+            && !typed_ir.contains("js_number_coerce")
+            && !typed_ir.contains("js_dynamic_string_or_number_add"),
         "typed receiver clone should raw-load receiver fields and stay in f64 SSA:\n{typed_ir}"
     );
     let method_guard = caller_ir
@@ -11741,12 +11743,12 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     //      offsets but must NOT assume the slots hold canonical raw f64
     //
     // What makes (3) sound is not which symbol it is, it is that the callee
-    // coerces what it loads. `$pshape` does: it emits `inttoptr` +
-    // `getelementptr` + `load double` — the shape guarantees the OFFSETS — and
-    // then routes every loaded slot through `js_number_coerce`, which is
-    // exactly the right handling for a slot that may hold a NaN-boxed value.
-    // `$generic` is also acceptable here; what must never appear on this edge
-    // is `$typed_f64_recv`, whose whole premise is the guard that just failed.
+    // preserves coercion semantics after loading. `$pshape` may use
+    // `inttoptr` + `getelementptr` + `load double` because the shape guarantees
+    // the OFFSETS, but it must tag-dispatch the `+` and then ToNumber that
+    // possibly boxed result before the following multiply. `$generic` is also
+    // acceptable here; what must never appear on this edge is
+    // `$typed_f64_recv`, whose whole premise is the guard that just failed.
     let failure_edge_callee = [generic_body, pshape_body]
         .into_iter()
         .find(|sym| caller_ir.contains(&format!("call double @{sym}(")))
@@ -11763,12 +11765,27 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     );
     if failure_edge_callee == pshape_body {
         let pshape_ir = defined_function_ir_section(&ir, pshape_body);
+        let dynamic_add = pshape_ir
+            .find("call double @js_dynamic_string_or_number_add(")
+            .unwrap_or_else(|| {
+                panic!("the Ptr<Shape> clone must tag-dispatch declared-only `+`:\n{pshape_ir}")
+            });
+        let result_coerce = pshape_ir
+            .find("call double @js_number_coerce(")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the Ptr<Shape> clone must ToNumber the possibly boxed `+` result:\n\
+                     {pshape_ir}"
+                )
+            });
+        let multiply = pshape_ir
+            .find(" fmul ")
+            .unwrap_or_else(|| panic!("expected score's multiply in `$pshape`:\n{pshape_ir}"));
         assert!(
-            pshape_ir.contains("call double @js_number_coerce("),
-            "the Ptr<Shape> clone reached on raw-f64 guard FAILURE must coerce \
-             every slot it loads — without that it is the typed clone under \
-             another name, and a receiver whose fields are not raw f64 would \
-             take raw loads anyway:\n{pshape_ir}"
+            dynamic_add < result_coerce && result_coerce < multiply,
+            "the Ptr<Shape> clone reached on raw-f64 guard FAILURE must \
+             ToNumber the possibly boxed `+` result before multiplying it:\n\
+             {pshape_ir}"
         );
     }
     assert!(

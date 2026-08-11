@@ -547,11 +547,12 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 .as_deref()
                 .is_some_and(is_numeric_typed_array_class)
         }
-        // A local whose `Number` type was REFINED from one of the reads above
-        // inherits its violability — the refinement copied a declared type, it
-        // did not prove anything (#7773 second shape: `const v: any = o.x`
-        // typed `v` numeric, so `v * 2` became a bare `fmul` on whatever the
-        // slot held and a NaN-boxed string passed straight through it).
+        // A numeric local initialized from one of the expressions above
+        // inherits its violability — its HIR type did not prove anything
+        // (#7773's `const v: any = o.x`, and #7506's already-number-typed
+        // `const sum = o.x + o.y`). Without this bit, a later `v * 2` or
+        // `sum * scale` becomes a bare `fmul` on whatever boxed value the slot
+        // holds, and a NaN-boxed string passes straight through it.
         Expr::LocalGet(id) => ctx.declared_only_numeric_locals.contains(id),
         // `a + b` is numeric only when both sides are, so it is violable when
         // either side is; `a || b` / `a && b` / `a ?? b` pass one operand
