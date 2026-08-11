@@ -1126,6 +1126,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 recv_ty,
                 None | Some(perry_hir::types::Type::Any) | Some(perry_hir::types::Type::Unknown)
             );
+            // #5525: route every non-static-string/symbol read on an unknown
+            // receiver through `js_dyn_index_get` (numeric, runtime-string, and
+            // runtime-symbol are all triaged in the runtime). The earlier
+            // `is_numeric_expr(index)` gate missed `lr[off]`/`lr[off + 1]`
+            // (bcryptjs `_encipher`'s `off` is an `any` param, so `off + 1` is
+            // not provably numeric); statically-known string-literal / symbol
+            // keys keep their dedicated interned-handle / symbol routes below.
+            let index_is_static_string_or_symbol = matches!(
+                index.as_ref(),
+                Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+            ) || is_string_expr(ctx, index);
             // #7854 recovered a receiver's declared array type for a LOCAL
             // (`const names = e.names`), never for the read used directly as a
             // receiver (`e.vals[i]`, `p.toks[p.pos]`) — the HIR types a
@@ -1141,20 +1152,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // fallback. A violated claim costs a branch, not an answer. (#6132
             // records that the same guard is what makes a typed-array-valued
             // member receiver safe on this path.)
-            let claimed_array =
-                recv_unknown && crate::type_analysis::declared_array_property_claim(ctx, object);
+            //
+            // Restricted to a NON-string, NON-symbol key, and that restriction is
+            // load-bearing rather than tidy. The string-key arm of the array
+            // branch is `js_array_get_index_or_string`, whose string half calls
+            // `js_object_get_field_by_name` on the receiver — and that answers
+            // `undefined` for `s["0"]` on a heap STRING receiver, where JS
+            // answers the character. That is a pre-existing wrong answer on
+            // `main` — reachable today through a plain non-union declared
+            // receiver, filed as #7891 with a minimal repro — and a claim must
+            // not widen the set of shapes that reach it. With
+            // the restriction, a string or symbol key takes exactly the generic
+            // path it takes today; only the numeric read moves.
+            let claimed_array = recv_unknown
+                && !index_is_static_string_or_symbol
+                && crate::type_analysis::declared_array_property_claim(ctx, object);
             let recv_unknown = recv_unknown && !claimed_array;
-            // #5525: route every non-static-string/symbol read on an unknown
-            // receiver through `js_dyn_index_get` (numeric, runtime-string, and
-            // runtime-symbol are all triaged in the runtime). The earlier
-            // `is_numeric_expr(index)` gate missed `lr[off]`/`lr[off + 1]`
-            // (bcryptjs `_encipher`'s `off` is an `any` param, so `off + 1` is
-            // not provably numeric); statically-known string-literal / symbol
-            // keys keep their dedicated interned-handle / symbol routes below.
-            let index_is_static_string_or_symbol = matches!(
-                index.as_ref(),
-                Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
-            ) || is_string_expr(ctx, index);
             if recv_unknown && !index_is_static_string_or_symbol {
                 // #7640 section B: receiver live across an unconstrained index.
                 return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {

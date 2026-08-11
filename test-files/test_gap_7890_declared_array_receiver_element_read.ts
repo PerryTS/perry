@@ -162,3 +162,15 @@ function scan(b: Bag, needle: string): string {
 console.log(scan(mkAlias(["a", "b"]), "a"));
 console.log(scan(mkAlias([1, 2, 3] as any), "a"));
 console.log(scan(mkAlias({ length: 3 }), "a"));
+
+// A STRING-literal key on the same receiver shape is deliberately NOT admitted
+// to the array arm by #7890 — see `index_get.rs`. It stays on the generic path,
+// which is what these rows pin.
+function stringKey(b: Bag): string {
+  return (
+    "" + b.items["length"] + "/" + b.items["nope"] + "/" + typeof b.items["constructor"]
+  );
+}
+console.log(stringKey(mkAlias(["k"])));
+console.log(stringKey(mkAlias({ length: 2, 0: "obj0", nope: "here" })));
+console.log(stringKey(mkAlias(9)));
