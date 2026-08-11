@@ -59,6 +59,8 @@ pub(crate) use hot_tls::*;
 mod roots;
 pub use roots::*;
 #[cfg(test)]
+/// Rewrite runtime-handle roots only; this deliberately does not rewrite the
+/// installed `INLINE_TRAP`, whose scanner is exercised separately.
 pub(crate) fn test_rewrite_runtime_handles_for_forwarded_objects() {
     let valid_ptrs = build_valid_pointer_set();
     let mut visitor = RuntimeRootVisitor::for_rewrite(&valid_ptrs);

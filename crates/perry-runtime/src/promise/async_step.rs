@@ -940,6 +940,8 @@ fn call_async_step_body(
     let prev_step_h =
         scope.root_nanbox_f64(boxed_closure_or_undef(prev.current_step as ClosurePtr));
 
+    // `step` is needed only by this call and is never used afterward. Any
+    // future post-call use must root it and re-read its relocated address.
     let result = crate::closure::js_closure_call2(step, value, is_error);
     let result_h = scope.root_nanbox_f64(result);
     INLINE_TRAP.with(|c| {
@@ -1406,6 +1408,10 @@ mod tests {
     use super::*;
 
     crate::perry_thread_local! {
+        // Test-only pre-forwarding addresses intentionally have no mutable-root
+        // scanner: rewriting them would defeat this relocation fixture. The
+        // test also mutates INLINE_TRAP and must run in the runtime suite's
+        // required single-threaded mode (`RUST_TEST_THREADS=1`).
         static RELOCATION_CASE: std::cell::Cell<[usize; 7]> = const {
             std::cell::Cell::new([0; 7])
         };
@@ -1466,11 +1472,21 @@ mod tests {
         crate::value::js_nanbox_pointer(rejected as i64)
     }
 
-    struct TrapGuard(InlineTrap);
+    struct TrapGuard {
+        original_trap: InlineTrap,
+        forwarded_sources: [(*mut u8, usize); 3],
+    }
 
     impl Drop for TrapGuard {
         fn drop(&mut self) {
-            INLINE_TRAP.with(|slot| slot.set(self.0));
+            unsafe {
+                for (source, first_word) in self.forwarded_sources {
+                    source.cast::<usize>().write(first_word);
+                    let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                    (*header).gc_flags &= !crate::gc::GC_FLAG_FORWARDED;
+                }
+            }
+            INLINE_TRAP.with(|slot| slot.set(self.original_trap));
             RELOCATION_CASE.with(|case| case.set([0; 7]));
         }
     }
@@ -1500,7 +1516,19 @@ mod tests {
                 });
                 original
             });
-            let _guard = TrapGuard(original);
+            let forwarded_sources = [
+                captured_from as *mut u8,
+                previous_from as *mut u8,
+                previous_step_from as *mut u8,
+            ];
+            let forwarded_sources_with_words = forwarded_sources.map(|source| {
+                let first_word = source.cast::<usize>().read();
+                (source, first_word)
+            });
+            let guard = TrapGuard {
+                original_trap: original,
+                forwarded_sources: forwarded_sources_with_words,
+            };
             RELOCATION_CASE.with(|case| {
                 case.set([
                     captured_from as usize,
@@ -1529,6 +1557,21 @@ mod tests {
                 restored.current_step, previous_step_to as usize,
                 "the restored step closure must use its relocated address"
             );
+
+            drop(guard);
+            for (source, first_word) in forwarded_sources_with_words {
+                assert_eq!(
+                    source.cast::<usize>().read(),
+                    first_word,
+                    "test teardown must restore the source object's first payload word"
+                );
+                let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                assert_eq!(
+                    (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED,
+                    0,
+                    "test teardown must clear the synthetic forwarding flag"
+                );
+            }
         }
     }
 }
