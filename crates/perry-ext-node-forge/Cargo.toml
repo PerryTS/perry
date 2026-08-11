@@ -22,7 +22,7 @@ sha2 = "0.10"
 x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
 der = { version = "0.7", features = ["oid"] }
 spki = "0.7"
-const-oid = "0.9"
+const-oid = "0.10"
 pem = "3"
 rand = "0.8"
 time = { version = "0.3", features = ["parsing"] }

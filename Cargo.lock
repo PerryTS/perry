@@ -6017,7 +6017,7 @@ dependencies = [
 name = "perry-ext-node-forge"
 version = "0.5.1461"
 dependencies = [
- "const-oid 0.9.6",
+ "const-oid 0.10.2",
  "der 0.7.10",
  "pem",
  "perry-ffi",
