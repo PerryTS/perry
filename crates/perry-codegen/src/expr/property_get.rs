@@ -66,6 +66,44 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // #7219: reading `.buffer` on a tracked typed-array view HANDS OUT ITS
+    // STORAGE, so the local's inline-storage proof stops holding from here on.
+    //
+    // `js_typed_array_backing_buffer` materializes a backing `ArrayBuffer` for
+    // a typed array that owned its bytes and rebinds the array to alias it —
+    // element 0 no longer follows the header. The proven-view tiers
+    // (`proven_view_access`, `buffer_access`, `range_facts`, `i32_fast_path`)
+    // all read `header + 16 + idx*width` directly, so after
+    //
+    //     const words = new Uint32Array(1);      // storage_inline_proven
+    //     const bytes = new Uint8Array(words.buffer);
+    //     words[0] = 0x01020304;                 // <- wrote the ORPHANED bytes
+    //
+    // the write landed in the pre-materialization storage while `bytes` read
+    // the buffer, and neither direction aliased: the repro summed 0 instead of
+    // 10, and writing through `bytes` was equally invisible to `words`.
+    //
+    // The runtime side already guards its own inline reader with
+    // `PERRY_TA_VIEW_GUARD`, which `register_view_meta` bumps. These tiers are
+    // the compile-time proof that skips that check entirely, so the hazard has
+    // to be recorded where the alias is created rather than where it is used.
+    // `MutableAlias` is exactly what this is.
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if property == "buffer" {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if ctx.buffer_view_slots.contains_key(id) {
+                    super::downgrade_buffer_alias(
+                        ctx,
+                        *id,
+                        crate::native_value::MaterializationReason::MutableAlias,
+                    );
+                }
+            }
+        }
+    }
     // `split("literal")[constant].length` on a scalar-replaced split can
     // read the precomputed numeric length directly. The split part itself was
     // never observable as a string, so materializing a StringHeader would only
