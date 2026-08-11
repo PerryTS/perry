@@ -95,6 +95,21 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                     }
                     _ => {}
                 }
+            } else if matches!(init_unwrapped, ast::Expr::Call(_) | ast::Expr::Await(_)) {
+                // #7775: a name bound to a CALL result is just as ambiguous as
+                // one bound to `new <OtherClass>()`, and it was not poisoned at
+                // all. `const a = build(10)` in one function and
+                // `const a = new Proxy(raw, {})` in another made the FIRST
+                // function's `a.length` lower to `js_proxy_get` on a plain
+                // array — `undefined`, so the read loop after it ran zero
+                // iterations. The proxy function never even had to be called.
+                //
+                // Deliberately narrow: only call/await initializers, which are
+                // the opaque ones. A literal, a member read or an identifier
+                // copy stays unpoisoned, so the common `const p = new Proxy(…)`
+                // in a module that also does `const p = { … }` elsewhere is
+                // untouched by this arm.
+                poison.insert(ident.id.sym.to_string());
             } else if let ast::Expr::Member(member) = init_unwrapped {
                 // #1750: `const w = path.win32` / `const p = path.posix`.
                 // Record the alias so `w.normalize(...)` later dispatches like
@@ -344,6 +359,17 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
     for name in &poison {
         ctx.weakmap_locals.remove(name);
         ctx.weakset_locals.remove(name);
+        // #7775: `proxy_locals` was left in — the note above weighed a lost
+        // codegen fast path against "no upside", because it only considered
+        // METHOD dispatch (`.deref()`, `.register()`), where a poisoned name
+        // costs speed. A PROPERTY read is the other half and the objection does
+        // not hold there: an ambiguous name routed a NON-proxy receiver's
+        // `a.length` to `js_proxy_get`, which answers `undefined`. That is a
+        // wrong answer, not a slow one, and it is what a poisoned name buys
+        // back. A genuine proxy keeps working through the ordinary dynamic
+        // property path (asserted in
+        // `test-files/test_gap_proxy_local_name_collision_7775.ts`).
+        ctx.proxy_locals.remove(name);
     }
 }
 
