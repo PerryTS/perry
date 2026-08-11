@@ -498,7 +498,7 @@ pub(crate) fn emit_may_carry_heap_pointer_check(blk: &mut LlBlock, value_bits: &
 /// `false`; then no test and no blocks are emitted at all, and lever D's
 /// existing elision is unchanged.
 ///
-/// ## The parent's half of the same question (#7864)
+/// ## The parent's half of the same question (#7871)
 ///
 /// The value test answers "does this store publish a heap pointer at all". It
 /// does not answer "does anyone need to know" — and for the shape this emitter
@@ -610,7 +610,7 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested(
         emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
     }
     if write_barrier_emitted {
-        // #7864: the parent's half. `layout_parent_bits` is the receiver's
+        // #7871: the parent's half. `layout_parent_bits` is the receiver's
         // validated, non-forwarded GC USER POINTER — the conforming check above
         // dereferences it at `-6`, and `emit_layout_note_slot_on_block` decodes
         // it the same way — so it is exactly what

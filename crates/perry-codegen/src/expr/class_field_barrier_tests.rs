@@ -1,4 +1,4 @@
-//! #7864: the class-field store's remembered-set write barrier sits behind a
+//! #7871: the class-field store's remembered-set write barrier sits behind a
 //! LIVE test of the parent's generation.
 //!
 //! The subject is the tail of
@@ -37,7 +37,7 @@ use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
-/// The block that exists only when the #7864 gate was emitted.
+/// The block that exists only when the #7871 gate was emitted.
 const BARRIER_BLOCK: &str = "class_field_set.barrier";
 /// `GC_FLAG_TENURED` as the emitted `and i8` mask.
 const TENURED_MASK: &str = "and i8";
@@ -321,7 +321,7 @@ fn the_class_field_barrier_sits_behind_a_live_parent_generation_test() {
     let ir = ir();
     let (branch, body) = branch_into_barrier(&ir).unwrap_or_else(|| {
         panic!(
-            "no `br i1 ..., label %{BARRIER_BLOCK}` — the #7864 gate was never \
+            "no `br i1 ..., label %{BARRIER_BLOCK}` — the #7871 gate was never \
              REACHED, so every object-literal field store still pays the \
              remembered-set call from the nursery:\n{ir}"
         )

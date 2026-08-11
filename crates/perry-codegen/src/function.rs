@@ -48,7 +48,7 @@ pub struct LlFunction {
     /// "is this code hot?" rather than "should LLVM's threshold move?" read
     /// this.
     pub hot_loop_callee: bool,
-    /// #7864: `collectors::collect_alloc_hot_functions` admitted this function
+    /// #7871: `collectors::collect_alloc_hot_functions` admitted this function
     /// — it has an in-loop direct call site (uncapped) or calls itself. Read
     /// ONLY by `lower_call/new_alloc.rs::new_site_is_in_loop`; it must not be
     /// used to widen `inline_hint`, whose anti-bloat cap is the whole reason

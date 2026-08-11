@@ -1,4 +1,4 @@
-//! #7864: a self-recursive function's `new` sites take the INLINE bump
+//! #7871: a self-recursive function's `new` sites take the INLINE bump
 //! allocator.
 //!
 //! The subject is [`super::new_alloc::new_site_is_in_loop`]'s second arm and the

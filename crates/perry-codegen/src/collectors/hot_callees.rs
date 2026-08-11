@@ -99,7 +99,7 @@ pub fn collect_hot_loop_callees(hir: &Module, max_call_sites: u32) -> HashSet<u3
         .collect()
 }
 
-/// #7864: the set of `FuncId`s whose bodies should be treated as **hot enough
+/// #7871: the set of `FuncId`s whose bodies should be treated as **hot enough
 /// to inline the bump allocator** at their `new` sites
 /// (`lower_call/new_alloc.rs::new_site_is_in_loop`).
 ///

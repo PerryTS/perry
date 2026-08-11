@@ -80,7 +80,7 @@ fn new_site_is_in_loop(ctx: &FnCtx<'_>) -> bool {
     if ctx.func.hot_loop_callee {
         return true;
     }
-    // #7864: the same question, asked with the right cost model.
+    // #7871: the same question, asked with the right cost model.
     //
     // `hot_loop_callee` above carries `inline_hot_small_max_call_sites` (4),
     // which is `inlinehint`'s anti-bloat backstop — it bounds a cost that
