@@ -480,14 +480,39 @@ pub(super) struct CopyingNurseryCollector {
     memo_result: usize,
 }
 
+/// Survivor count of the previous copying minor, used only to pre-size this
+/// one's `worklist` / `moved_headers`.
+///
+/// Both grow to one entry per survivor — 750 k on a fully-live nursery — from
+/// `Vec::new()`, so each cycle paid ~20 reallocations whose `memmove` and
+/// `mi_malloc` were visible in a symbolicated profile of the MARK loop. A
+/// nursery's survivor count is strongly autocorrelated between adjacent cycles
+/// (it is the same program in the same phase), so the previous count is a good
+/// estimate; over-estimating costs only untouched reserved bytes, and
+/// under-estimating just falls back to the ordinary growth.
+static PREVIOUS_SURVIVOR_ESTIMATE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Cap the pre-size so a one-off huge cycle cannot make every later cycle
+/// reserve 100 MB of pointers.
+const SURVIVOR_ESTIMATE_CAP: usize = 1 << 21;
+
+pub(super) fn note_survivor_count_for_presizing(count: usize) {
+    PREVIOUS_SURVIVOR_ESTIMATE.store(
+        count.min(SURVIVOR_ESTIMATE_CAP),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 impl CopyingNurseryCollector {
     pub(super) fn new(ptrs: CopyingPointerSet) -> Self {
         let tenuring_survivals = tenuring_survivals();
+        let estimate = PREVIOUS_SURVIVOR_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed);
         Self {
             ptrs,
-            worklist: Vec::new(),
+            worklist: Vec::with_capacity(estimate),
             marked_headers: Vec::new(),
-            moved_headers: Vec::new(),
+            moved_headers: Vec::with_capacity(estimate),
             large_excluded_headers: crate::fast_hash::new_ptr_hash_set(),
             sticky: StickyRememberedSet::default(),
             stats: CopyingNurseryTraceStats {
@@ -1574,6 +1599,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // — promoting ones included, which is the whole reason a promoting cycle
     // still traces — so the ratio the next decision reads is never stale.
     super::note_young_survival(from_space_bytes, collector.live_from_bytes);
+    note_survivor_count_for_presizing(collector.moved_headers.len());
     collector.stats.young_survival_permille =
         super::last_young_survival_permille().unwrap_or_default();
     // A promoting cycle frees NOTHING: the dead young bytes were promoted

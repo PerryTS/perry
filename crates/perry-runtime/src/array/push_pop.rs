@@ -113,7 +113,18 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
         crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
-        replay_array_growth_write_barriers(new_ptr);
+        // #7742-adjacent: the copy above is verbatim at offset 0, so the old
+        // store's dirty-page coverage can be TRANSLATED to the new address
+        // instead of re-derived from 3 M slot values. Falls back to the full
+        // value-derived replay whenever the translation declines.
+        if !crate::gc::relocate_copied_old_object_dirty_pages(
+            new_ptr as usize,
+            arr as usize,
+            new_ptr as usize,
+            old_size,
+        ) {
+            replay_array_growth_write_barriers(new_ptr);
+        }
 
         // Issue #233: install a forwarding pointer at the OLD location
         // so any stale reference (e.g. an async function's caller still

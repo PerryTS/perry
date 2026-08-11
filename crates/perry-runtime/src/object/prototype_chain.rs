@@ -646,7 +646,12 @@ mod latch_drain_tests_7737 {
         let _lock = crate::gc::global_side_table_test_lock();
         prune_dead_object_prototype_owners(&|_| true);
 
-        let owner: usize = 0x5100_0000;
+        // A REAL old-gen allocation, not a synthetic address: on the armed
+        // path the visitor re-reads the owner's `GcHeader` to re-key a
+        // self-referential prototype, so a made-up owner segfaults there. (The
+        // #7737 test above never calls the visitor, which is why it can use
+        // one.)
+        let owner = crate::arena::arena_alloc_gc_old(64, 8, crate::gc::GC_TYPE_OBJECT) as usize;
         let proto_bits: u64 = 0x7FFC_0000_0000_0001;
 
         let mut visits = 0usize;

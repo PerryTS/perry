@@ -1357,6 +1357,82 @@ pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, 
     }
 }
 
+/// Carry an old-gen object's dirty-page coverage across a verbatim relocation.
+///
+/// `js_array_grow` allocates a new backing store and `memcpy`s the old one into
+/// it at offset 0, then has to re-establish the remembered set at the new
+/// address. Re-deriving it from the slot VALUES is O(length) and dominated by a
+/// generation classification per element — 9.7% of `gc-handoff/bench/retain.ts`,
+/// 2.6× the `memcpy` it follows.
+///
+/// It does not have to be re-derived. The barrier's standing invariant is
+/// "an old parent's slot holding a young child is on a dirty page", and the copy
+/// preserves every value at its byte offset. So old byte offset `o` holds a
+/// young child ⟹ the old page covering `o` is dirty ⟹ marking the NEW page
+/// covering `o` dirty re-establishes the invariant for it. Walking the old
+/// object's pages instead of its slots is O(bytes / 4096) — 512× less work for
+/// a `u64` slot run — and it is the SAME invariant the minor collector already
+/// trusts every cycle, not a new assumption.
+///
+/// Returns `false` when it declines (an incremental cycle is live, so the
+/// values also owe SATB shading), and the caller must fall back to the full
+/// value-derived replay.
+pub(crate) fn relocate_copied_old_object_dirty_pages(
+    new_parent_addr: usize,
+    old_base: usize,
+    new_base: usize,
+    copied_bytes: usize,
+) -> bool {
+    if copied_bytes == 0 {
+        return true;
+    }
+    // Shading is about values an in-progress mark may not have seen; a page is
+    // not an answer to it. Hand those cycles back to the full replay.
+    if !incremental_mark_barrier_globally_idle() {
+        return false;
+    }
+    if !write_barriers_enabled() || !barrier_remembering_active() {
+        return true;
+    }
+    if !barrier_parent_addr_is_dereferenceable(new_parent_addr)
+        || !barrier_parent_needs_remembering(new_parent_addr, false)
+    {
+        return true;
+    }
+    const PAGE_SIZE: usize = 1 << 12; // crate::arena::GENERATION_PAGE_SHIFT
+    let page_size = PAGE_SIZE;
+    let first = crate::arena::generation_page_for_addr(old_base);
+    let last = crate::arena::generation_page_for_addr(old_base + copied_bytes - 1);
+    for page in first..=last {
+        if !dirty_old_page_is_marked(page) {
+            continue;
+        }
+        // The byte window this page contributes, mapped to the new base.
+        let window_start = (page * page_size).max(old_base);
+        let window_end = ((page + 1) * page_size).min(old_base + copied_bytes);
+        if window_start >= window_end {
+            continue;
+        }
+        let new_start = new_base + (window_start - old_base);
+        let new_end = new_base + (window_end - old_base);
+        let new_first = crate::arena::generation_page_for_addr(new_start);
+        let new_last = crate::arena::generation_page_for_addr(new_end - 1);
+        for new_page in new_first..=new_last {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::RememberedSetInsertAttempts);
+            if mark_dirty_old_page(new_page) {
+                bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+            }
+        }
+    }
+    true
+}
+
+/// Is `page` currently in the old-gen dirty set?
+#[inline]
+fn dirty_old_page_is_marked(page: usize) -> bool {
+    DIRTY_OLD_PAGES.with(|s| s.borrow().contains(&page))
+}
+
 /// Which stored children must an old parent's slot be remembered for?
 /// Minor GCs sweep BOTH the nursery and the malloc registry, and old
 /// parents are black leaves in minors — so an unremembered old→nursery OR

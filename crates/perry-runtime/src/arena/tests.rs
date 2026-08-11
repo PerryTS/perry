@@ -1223,8 +1223,10 @@ fn deferred_registration_flush_sites() {
             "as old_page_account_swept_object — per-object, same argument",
         ),
         (
-            "old_page_account_dirty_slot",
-            "touches only dirty_slots/epoch, which no registration contributes to",
+            "old_page_account_dirty_slots",
+            "touches only dirty_slots/epoch, which no registration contributes to. \
+             The batched form of the above: the dirty scan walks ascending \
+             contiguous slots, so ~512 of them share one page and one probe",
         ),
         (
             "old_page_mark_dirty",
