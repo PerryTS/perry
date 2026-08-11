@@ -235,8 +235,28 @@ pub(super) fn should_promote_young_untraced() -> bool {
         .is_some_and(|permille| permille >= UNTRACED_PROMOTION_SURVIVAL_PERMILLE)
 }
 
-/// Charge an untraced promotion against the budget and count the subject.
+/// Charge an untraced promotion against the budgets and count the subject.
+///
+/// Two charges, against two different bounds:
+///
+/// * `UNTRACED_PROMOTED_BYTES` bounds how STALE the estimator may get before a
+///   cycle has to measure again.
+/// * `PROMOTED_DEAD_BYTES` — the footprint cap the traced path already feeds
+///   from an exact measurement — is charged the dead bytes the last measurement
+///   IMPLIES. Without this an untraced run would disarm that cap entirely
+///   (charging zero is not "no garbage", it is "no answer"), and a workload
+///   sitting just inside the survival threshold could park garbage indefinitely
+///   with each individual cycle looking fine. With it, the two paths share one
+///   footprint bound; they differ only in whether the dead figure is measured
+///   or extrapolated, and the untraced budget is what bounds the extrapolation.
 pub(super) fn note_untraced_promotion(promoted_bytes: usize, promoted_objects: usize) {
+    let dead_permille =
+        1000u64.saturating_sub(LAST_YOUNG_SURVIVAL_PERMILLE.with(Cell::get).unwrap_or(0));
+    let implied_dead = (promoted_bytes as u64)
+        .saturating_mul(dead_permille)
+        .checked_div(1000)
+        .unwrap_or(0) as usize;
+    PROMOTED_DEAD_BYTES.with(|c| c.set(c.get().saturating_add(implied_dead)));
     UNTRACED_PROMOTED_BYTES.with(|c| c.set(c.get().saturating_add(promoted_bytes)));
     UNTRACED_PROMOTION_CYCLES.with(|c| c.set(c.get().saturating_add(1)));
     UNTRACED_PROMOTED_OBJECTS.with(|c| c.set(c.get().saturating_add(promoted_objects as u64)));

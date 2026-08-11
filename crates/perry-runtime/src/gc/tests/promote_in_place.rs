@@ -13,7 +13,8 @@
 //!    swept-live-object crash one cycle later.
 
 use super::super::promote_in_place::{
-    clear_young_survival_for_tests, parse_promote_in_place, seed_promoted_dead_bytes_for_tests,
+    clear_young_survival_for_tests, note_untraced_promotion, parse_promote_in_place,
+    promoted_dead_bytes_since_full, seed_promoted_dead_bytes_for_tests,
     seed_untraced_promoted_bytes_for_tests, seed_young_survival_for_tests,
     InPlacePromotionTestGuard, PROMOTED_DEAD_BUDGET_BYTES, PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
     UNTRACED_PROMOTION_SURVIVAL_PERMILLE,
@@ -221,6 +222,31 @@ fn untraced_promotion_needs_the_fully_live_regime_not_merely_the_promoting_one()
             "{permille}‰ is NOT in the untraced band"
         );
     }
+}
+
+#[test]
+fn an_untraced_cycle_charges_the_dead_bytes_its_last_measurement_implies() {
+    // Charging zero is not "no garbage", it is "no answer" — and it would
+    // disarm the footprint cap for the whole untraced run. The two paths share
+    // one bound; they differ only in whether the dead figure is measured or
+    // extrapolated.
+    let _guard = InPlacePromotionTestGuard::untraced();
+    seed_young_survival_for_tests(990);
+    let before = promoted_dead_bytes_since_full();
+    note_untraced_promotion(100 * 1000, 1);
+    assert_eq!(
+        promoted_dead_bytes_since_full() - before,
+        1000,
+        "10 permille of 100_000 bytes is the dead figure a 990 permille \
+         measurement implies"
+    );
+
+    // ...and it is the SAME cap: enough implied dead bytes stop in-place
+    // promotion until a full collection reclaims them, exactly as a measured
+    // collapse would.
+    seed_promoted_dead_bytes_for_tests(PROMOTED_DEAD_BUDGET_BYTES);
+    assert!(!should_promote_young_in_place());
+    assert!(!should_promote_young_untraced());
 }
 
 #[test]
