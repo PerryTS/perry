@@ -744,6 +744,23 @@ pub(crate) struct FnCtx<'a> {
     /// protected temporary this function lowers.
     pub temp_roots: crate::rooting::TempRootPool,
 
+    /// #7773: LocalIds whose `Number`/`Int32` type was REFINED from a read
+    /// whose own numeric answer is only a declared type — `const v = o.x` on a
+    /// `x: number` field, or `const e = arr[i]` on a `number[]`.
+    ///
+    /// The refinement is load-bearing (an un-annotated `const` is `Any` in the
+    /// HIR, so without it every ordinary field read loses the numeric fast
+    /// path), but it copies an annotation rather than proving anything. The
+    /// local then reads as `is_numeric_expr`, which licenses a bare `fadd` /
+    /// `fmul` on whatever the slot holds — and arithmetic on a NaN-boxed value
+    /// PRESERVES ITS PAYLOAD, so a string laundered in through `as any` came
+    /// back out of a multiply still tagged as a string (`typeof (v * 2)` was
+    /// `"string"`).
+    ///
+    /// Consumed by `type_analysis::numeric_proof_is_declared_only`, which turns
+    /// the trust into a four-instruction runtime tag test instead.
+    pub declared_only_numeric_locals: std::collections::HashSet<u32>,
+
     /// Cached pointer to this function's `InlineArenaState` slot —
     /// allocated lazily on the first `new ClassName()` site that uses
     /// the inline bump-allocator path. The slot lives in the function
@@ -2390,6 +2407,26 @@ fn lower_numeric_binary_value(
         return Ok(None);
     }
     if !is_numeric_expr(ctx, left) || !is_numeric_expr(ctx, right) {
+        return Ok(None);
+    }
+
+    // #7773: `is_numeric_expr` answering `true` is not always a PROOF — for a
+    // class-field read, an array element, or a local refined from one, it is
+    // just the declared type repeated back, and nothing enforces declared types
+    // at runtime. This tier emits a bare `fadd`/`fmul` with no residual coerce
+    // at all, and arithmetic on a NaN-BOXED value propagates the payload
+    // instead of producing NaN — so a string laundered into a `x: number` slot
+    // came back out of `v * 2` still a string (`typeof` said `"string"`).
+    //
+    // Hand those to `binary::lower`, which has both remedies: the runtime tag
+    // test that keeps `+` on the spec's string-concat dispatch, and the
+    // residual `js_number_coerce` that gives every other operator its
+    // `ToNumber`. Same hand-off shape as the two Mod cases below, and for the
+    // same reason — it must run before operand lowering so an `Ok(None)` emits
+    // no dead loads or duplicate records.
+    if crate::type_analysis::numeric_proof_is_declared_only(ctx, left)
+        || crate::type_analysis::numeric_proof_is_declared_only(ctx, right)
+    {
         return Ok(None);
     }
 

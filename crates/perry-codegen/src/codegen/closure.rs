@@ -978,6 +978,7 @@ pub(super) fn compile_closure(
         temp_roots: crate::rooting::TempRootPool::default(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
+        declared_only_numeric_locals: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),

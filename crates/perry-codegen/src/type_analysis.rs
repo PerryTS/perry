@@ -38,7 +38,8 @@ pub(crate) use numeric::{
 pub(crate) use pod::{
     add_operands_have_pod_materialization_hazard,
     expr_may_return_boxed_value_from_raw_f64_fallback, expression_has_numeric_length,
-    is_fixed_width_buffer_numeric_read, is_numeric_typed_array_class, pod_record_field_is_numeric,
+    is_fixed_width_buffer_numeric_read, is_numeric_typed_array_class,
+    numeric_proof_is_declared_only, pod_record_field_is_numeric,
     scalar_replaced_array_element_is_raw_f64, scalar_replaced_field_is_raw_f64,
     scalar_replaced_field_raw_f64_store_state,
 };

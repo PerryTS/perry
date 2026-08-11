@@ -4569,7 +4569,7 @@ fn dynamic_bound_private_counter_is_safe(
     advanced_by_increment && !stmts_mutate_local(body, counter_id)
 }
 
-pub(super) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
+pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     let tag = ctx.block().and(
         I64,
