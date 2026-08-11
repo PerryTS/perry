@@ -18,9 +18,18 @@ No corpus regression: `churn` 0.4218→0.4242, `churn_alloc` 0.3733→0.3758, `p
 
 It decoded both operands with `str_bytes_from_jsvalue(...).unwrap_or((null, 0))` — so an operand that was not a string became the **empty string**. `"ab" + 42` through this helper rendered as `"ab"`.
 
-**This is latent on the pre-change compiler, not a user-visible bug.** Codegen only selected this helper when both operands satisfied the strict `is_definitely_string_expr`, so a `"ab" + 42` reaching it required a lying *`string`-declared local* — the one arm of that predicate which is already a declaration rather than a structural proof. `o.t + 7` on a `string`-declared field, and a `(string, number)` parameter pair, both routed elsewhere and answered correctly. What made the fix necessary is change (2): widening the operand test to accept a declaration is exactly what would have made the wrong answer reachable.
+**This is reachable on `1ee158d27` today — see #7837.** `is_definitely_string_expr`'s `LocalGet` arm already trusts a declared type, so a `string`-declared local holding a non-string selects this helper:
+
+```ts
+const t: string = (99 as any);
+console.log(t + "x");   // node: "99x"   perry before: "x"   <- the 99 is dropped
+```
+
+Measured on a clean `1ee158d27` build and on this branch; a `string`-declared *field* (`o.t + 7`) and a `(string, number)` parameter pair both route elsewhere and were already correct, which is why the defect survived casual probing.
 
 It was also the reason the concat fast path could never be selected from a type annotation in the first place: `lower_string_concat.rs`'s self-append lowering carries a whole `dother`/`cold` arm whose comment says, in as many words, that a lie has to be routed around this helper. It now forwards any non-string pair to `js_dynamic_string_or_number_add`, which is the full spec `+`. String+string is unchanged (including the ≤5-byte SSO result encoding); string+number concatenates with the number's decimal form; number+number **adds and returns a number**.
+
+#7837 records a **second, separate** defect of the same premise that this PR does **not** fix: `s + 7` on a `string`-declared local holding `42` prints `427` instead of `49`, because the one-sided `l ^ r` arm picks the *operator* from the annotation. That arm lowers through `js_string_concat_value`, which takes an already-unboxed `StringHeader*` and cannot detect the lie, so it needs the guarded-diamond treatment #7831 is giving the numeric side — not this PR's runtime delegation. Deciding it is deliberately left to #7837.
 
 #### 2. `+` accepts a declared `string`, but only where (1) makes that free
 
