@@ -21,6 +21,18 @@ use super::stringify_shape_template::{
 
 // ─── JSON.stringify ───────────────────────────────────────────────────────────
 
+pub(crate) const MAX_STRINGIFY_NESTING_DEPTH: usize = 1_000;
+
+#[inline]
+pub(crate) fn check_stringify_nesting_depth(depth: usize) {
+    if depth > MAX_STRINGIFY_NESTING_DEPTH {
+        let message = "JSON.stringify: value nested deeper than 1000 levels";
+        let message_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        let error = crate::error::js_rangeerror_new(message_ptr);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+    }
+}
+
 #[inline]
 /// True only when `ptr` is an address the GC actually tracks — an arena
 /// allocation (nursery/old/longlived per the page-map) or a registered malloc
@@ -896,6 +908,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
 }
 
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
+    check_stringify_nesting_depth(depth as usize);
     // #6519: a WHATWG `URL` instance is a plain `GC_TYPE_OBJECT` (class_id 0)
     // whose `searchParams` field points back at the URL — walking its fields
     // trips the circular-structure detector. Node serializes a URL via
@@ -1346,6 +1359,7 @@ pub(crate) unsafe fn stringify_array(ptr: *const u8, buf: &mut String) {
 
 /// Depth-aware variant of stringify_array for recursive calls.
 pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, depth: u32) {
+    check_stringify_nesting_depth(depth as usize);
     // Issue #2021: an array that has grown past its initial inline capacity
     // (16) was reallocated to a new block, leaving a GC_FLAG_FORWARDED stub
     // at the old address. Callers (and element decoders) hand us whatever
@@ -1370,7 +1384,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     // needs that still-open entry to trip the check.
     if let Some(to_json_val) = array_get_to_json(arr) {
         arm_to_json_result_guard(to_json_val);
-        stringify_value(to_json_val, TYPE_UNKNOWN, buf);
+        stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
         return;
     }
@@ -1459,9 +1473,9 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             // have run user code / allocated (and moved this array).
             let elem = elem_at(i as usize);
             let elem_bits = elem.to_bits();
-            if !try_emit_shape_element(elem_bits, tmpl, buf, depth) {
-                // Match the slow path: array descent does not bump depth.
-                stringify_value_depth(elem, TYPE_UNKNOWN, buf, depth);
+            if !try_emit_shape_element(elem_bits, tmpl, buf, depth + 1) {
+                // The element is one container below its enclosing array.
+                stringify_value_depth(elem, TYPE_UNKNOWN, buf, depth + 1);
             }
         }
         buf.push(']');
@@ -1544,11 +1558,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 // `stringify_value` (test262 JSON/stringify/value-tojson-result).
                 if let Some(to_json_val) = object_get_to_json(elem_ptr) {
                     arm_to_json_result_guard(to_json_val);
-                    stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth);
+                    stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
                     SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
                     continue;
                 }
-                stringify_value_depth(prim, TYPE_UNKNOWN, buf, depth);
+                stringify_value_depth(prim, TYPE_UNKNOWN, buf, depth + 1);
                 continue;
             }
             // #2089: a Date element → its toJSON() ISO string (or null),
@@ -1579,8 +1593,8 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 continue;
             }
             match gc_obj_type(elem_ptr) {
-                crate::gc::GC_TYPE_OBJECT => stringify_object_inner(elem_ptr, buf, depth),
-                crate::gc::GC_TYPE_ARRAY => stringify_array_depth(elem_ptr, buf, depth),
+                crate::gc::GC_TYPE_OBJECT => stringify_object_inner(elem_ptr, buf, depth + 1),
+                crate::gc::GC_TYPE_ARRAY => stringify_array_depth(elem_ptr, buf, depth + 1),
                 crate::gc::GC_TYPE_STRING => {
                     let str_ptr = elem_ptr as *const StringHeader;
                     if let Some(s) = str_from_header(str_ptr) {
@@ -1603,13 +1617,13 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 }
                 _ => {
                     if is_object_pointer(elem_ptr) {
-                        stringify_object_inner(elem_ptr, buf, depth);
+                        stringify_object_inner(elem_ptr, buf, depth + 1);
                     } else {
                         let arr_elem = elem_ptr as *const crate::ArrayHeader;
                         let arr_len = (*arr_elem).length;
                         let arr_cap = (*arr_elem).capacity;
                         if arr_len <= arr_cap && arr_cap > 0 && arr_cap < 10000 {
-                            stringify_array_depth(elem_ptr, buf, depth);
+                            stringify_array_depth(elem_ptr, buf, depth + 1);
                         } else {
                             let str_ptr = elem_ptr as *const StringHeader;
                             if let Some(s) = str_from_header(str_ptr) {
