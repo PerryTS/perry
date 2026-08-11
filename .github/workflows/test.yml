@@ -1065,6 +1065,17 @@ jobs:
           # (zizmor "artipacked", flagged by review on #6610).
           persist-credentials: false
 
+      - name: GC structural audits (Windows)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/gc_runtime_root_holders.py --self-test
+          python scripts/gc_runtime_root_holders.py
+          python scripts/check_thread_locals.py --self-test
+          python scripts/check_thread_locals.py
+          python -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
+          python benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/setup-llvm22

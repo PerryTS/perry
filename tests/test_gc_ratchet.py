@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import stat
 import sys
 import tempfile
 import subprocess
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from benchmarks.gc_ratchet.gc_ratchet import (
@@ -44,6 +46,7 @@ from benchmarks.gc_ratchet.gc_ratchet import (
     probe_run_env,
     render,
     render_classification,
+    run_once,
     tolerances_from_json,
     validate_artifact,
 )
@@ -168,6 +171,11 @@ def _hard(failures):
 
 
 class ParsingTests(unittest.TestCase):
+    def test_measurement_refuses_a_host_without_wait4_before_launching(self):
+        with mock.patch.object(os, "wait4", None, create=True):
+            with self.assertRaisesRegex(RatchetError, "requires os.wait4"):
+                run_once(["this-command-must-not-run"])
+
     def test_parses_gcmetric_lines_and_ignores_noise(self):
         stderr = (
             "some unrelated warning\n"
@@ -774,6 +782,7 @@ class ScanFallbackParsingTests(unittest.TestCase):
         self.assertEqual(parse_scan_fallbacks("[gc-step] pre_in_use=1 post_in_use=1"), {})
 
 
+@unittest.skipUnless(callable(getattr(os, "wait4", None)), "measurement requires os.wait4")
 class ClassifyTests(unittest.TestCase):
     """`classify` splits a retention reading into real retention and residue.
 
@@ -1202,6 +1211,7 @@ class ProbeRunEnvParsingTests(unittest.TestCase):
         )
 
 
+@unittest.skipUnless(callable(getattr(os, "wait4", None)), "measurement requires os.wait4")
 class ProbeRunEnvDeliveryTests(unittest.TestCase):
     """The declared arm must reach the child process, not merely the artifact.
 
@@ -1391,4 +1401,3 @@ class RebaseStableProvenanceTests(unittest.TestCase):
             cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False,
         ).stdout.strip()
         self.assertEqual(value, expected)
-

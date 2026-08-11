@@ -74,7 +74,7 @@ import os
 import re
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 REPO = Path(__file__).resolve().parent.parent
 ALLOWLIST = REPO / "scripts" / "thread_local_cold_allowlist.json"
@@ -94,6 +94,11 @@ DECL_RE = re.compile(
 # itself and the macro's expansion target, so they cannot be written with the
 # macro without infinite regress.
 EXCLUDED = {"crates/perry-runtime/src/tls_hot.rs"}
+
+
+def repo_relative(path: PurePath, root: PurePath) -> str:
+    """Return a stable repository-relative key on every host platform."""
+    return path.relative_to(root).as_posix()
 
 # `#[cfg(test)] mod <stem>;` — the whole file is a test module.
 CFG_TEST_MOD_RE = re.compile(
@@ -159,7 +164,7 @@ def cfg_test_module_files(root: Path, crates: list[str]) -> set[str]:
                 if not name.endswith(".rs"):
                     continue
                 path = Path(dirpath) / name
-                rel = str(path.relative_to(root))
+                rel = repo_relative(path, root)
                 src = path.read_text()
                 parent = path.parent if name in ("lib.rs", "mod.rs") else path.with_suffix("")
                 gated = set(CFG_TEST_MOD_RE.findall(src))
@@ -167,7 +172,7 @@ def cfg_test_module_files(root: Path, crates: list[str]) -> set[str]:
                 for stem in set(ANY_MOD_RE.findall(src)):
                     for candidate in (parent / f"{stem}.rs", parent / stem / "mod.rs"):
                         if candidate.exists():
-                            edges.append((str(candidate.relative_to(root)), stem in gated))
+                            edges.append((repo_relative(candidate, root), stem in gated))
                 declares[rel] = edges
 
     test_only = {child for edges in declares.values() for child, gated in edges if gated}
@@ -213,7 +218,7 @@ def scan(root: Path, crates: list[str]) -> tuple[dict[str, int], int]:
                 if not name.endswith(".rs"):
                     continue
                 path = Path(dirpath) / name
-                rel = str(path.relative_to(root))
+                rel = repo_relative(path, root)
                 src = path.read_text()
                 hot_declarations += sum(
                     len(DECL_RE.findall(body)) for body in block_bodies(src, HOT_RE)
@@ -301,6 +306,9 @@ def write_allowlist(root: Path, crates: list[str], allowlist_path: Path) -> None
 def self_test() -> int:
     """Prove the checker can say no, in both directions."""
     failures = []
+    windows_root = PureWindowsPath(r"C:\perry")
+    if repo_relative(windows_root / "crates" / "runtime.rs", windows_root) != "crates/runtime.rs":
+        failures.append("repository-relative keys are not normalized on Windows")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         src_dir = root / "crates/perry-runtime/src"
@@ -411,7 +419,7 @@ def main() -> int:
         return self_test()
     if args.update:
         write_allowlist(REPO, CRATES, ALLOWLIST)
-        print(f"wrote {ALLOWLIST.relative_to(REPO)}")
+        print(f"wrote {ALLOWLIST.relative_to(REPO).as_posix()}")
         return 0
 
     problems = verify(REPO, CRATES, ALLOWLIST)

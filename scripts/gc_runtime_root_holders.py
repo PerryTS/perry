@@ -98,12 +98,17 @@ import json
 import re
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INVENTORY_PATH = REPO_ROOT / "scripts" / "gc_runtime_root_holders.json"
 
 CRATES = ("crates/perry-runtime/src", "crates/perry-stdlib/src")
+
+
+def repo_relative(path: PurePath, root: PurePath) -> str:
+    """Return a stable repository-relative key on every host platform."""
+    return path.relative_to(root).as_posix()
 
 # Types whose NAME says "this is a pointer into the GC heap".
 HEAP_TYPE_TOKENS = (
@@ -379,7 +384,7 @@ def scan(root: Path) -> tuple[list[dict], int]:
     # 3. classify declarations
     holders: list[dict] = []
     for path, text in texts.items():
-        rel = str(path.relative_to(root))
+        rel = repo_relative(path, root)
         allocating_context = "\n".join(
             body
             for _name, body in function_bodies(text).items()
@@ -692,6 +697,9 @@ def _scan_tree(extra: dict[str, str] | None = None) -> list[dict]:
 
 def self_test() -> int:
     failures: list[str] = []
+    windows_root = PureWindowsPath(r"C:\perry")
+    if repo_relative(windows_root / "crates" / "runtime.rs", windows_root) != "crates/runtime.rs":
+        failures.append("repository-relative keys are not normalized on Windows")
     holders = _scan_tree()
     by_key = {(h["file"], h["name"]): h for h in holders}
 

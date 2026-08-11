@@ -78,7 +78,6 @@ import math
 import os
 import platform
 import re
-import resource
 import shutil
 import statistics
 import subprocess
@@ -406,6 +405,11 @@ def run_once(
     otherwise usable sandboxed macOS environments, masking a successful exit.
     Darwin reports ``ru_maxrss`` in bytes, Linux in KiB.
     """
+    if not callable(getattr(os, "wait4", None)):
+        raise RatchetError(
+            "GC ratchet measurement requires os.wait4 (Unix); "
+            "artifact validation remains supported on this host"
+        )
     import time
 
     env = dict(os.environ)
