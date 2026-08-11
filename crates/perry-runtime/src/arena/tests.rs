@@ -474,6 +474,112 @@ fn large_object_arena_alloc_gc_is_old_tenured_and_indexed() {
     });
 }
 
+/// The birth-generation threshold is TYPE-DEPENDENT, and this pins the split
+/// rather than the constants.
+///
+/// The test above allocates `LARGE_OBJECT_THRESHOLD_BYTES` of `GC_TYPE_STRING`
+/// and asserts it is born Old + `GC_FLAG_TENURED`. The *same size* of
+/// `GC_TYPE_ARRAY` must be born in the NURSERY, because being born tenured
+/// costs a pointer-bearing object far more than its own bytes: a minor never
+/// sweeps old-gen, so the container and — through the remembered set —
+/// everything it names stay live until a full mark-sweep. `shapes.ts`'s
+/// 2000-element array is 16 400 bytes, sixteen over the old flat line, and that
+/// alone made its two minors re-mark 94 000 then 118 006 slots.
+///
+/// Sabotage check: reverting `arena_alloc_gc` to the flat
+/// `is_large_object_total_size` fails the first assertion here — it is the
+/// whole of the change.
+#[test]
+fn pointer_bearing_objects_get_a_wider_born_tenured_threshold_than_pointer_free_ones() {
+    run_with_fresh_arenas(|| {
+        // Just over the pointer-FREE line, well under the pointer-bearing one.
+        let payload = LARGE_OBJECT_THRESHOLD_BYTES;
+
+        let array = arena_alloc_gc(payload, 8, GC_TYPE_ARRAY) as usize;
+        assert!(
+            pointer_in_nursery(array),
+            "a pointer-bearing object between the two thresholds must be born \
+             young, or every object it reaches is immortal until a full GC"
+        );
+        assert!(!pointer_in_old_gen(array));
+        unsafe {
+            let header = (array - GC_HEADER_SIZE) as *const GcHeader;
+            assert_eq!(
+                (*header).gc_flags & GC_FLAG_TENURED,
+                0,
+                "born-young means born untenured"
+            );
+        }
+
+        // Same size, pointer-free: unchanged, still born tenured in old-gen.
+        let string = arena_alloc_gc(payload, 8, GC_TYPE_STRING) as usize;
+        assert!(pointer_in_old_gen(string));
+        assert!(!pointer_in_nursery(string));
+
+        // Above the wider line, a pointer-bearing object is born tenured again.
+        let huge = arena_alloc_gc(
+            crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES + 64,
+            8,
+            GC_TYPE_ARRAY,
+        ) as usize;
+        assert!(pointer_in_old_gen(huge));
+        unsafe {
+            let header = (huge - GC_HEADER_SIZE) as *const GcHeader;
+            assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
+        }
+    });
+}
+
+/// Everything the widened threshold admits to the nursery must be MOVABLE.
+///
+/// Two independent ceilings, and a violation of either is silent: an object
+/// larger than `MAX_YOUNG_MOVE_BYTES` is refused by `move_young` and left
+/// behind in from-space, and one larger than a nursery block cannot be
+/// bump-allocated there at all. Neither would fail a correctness test until a
+/// collection landed on such an object, so the invariant is asserted directly
+/// on the constants.
+#[test]
+fn pointer_bearing_large_object_threshold_is_movable() {
+    assert!(
+        crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES < crate::gc::MAX_YOUNG_MOVE_BYTES,
+        "the allocator must not admit to the nursery an object move_young refuses to relocate"
+    );
+    assert!(
+        crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES <= block::BLOCK_SIZE,
+        "a nursery-resident object must fit in a nursery block"
+    );
+    assert!(
+        crate::gc::LARGE_OBJECT_THRESHOLD_BYTES
+            <= crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES,
+        "the pointer-bearing threshold is a widening, never a narrowing"
+    );
+}
+
+/// The type table, not a hardcoded type list, is what selects the threshold.
+#[test]
+fn large_object_threshold_follows_the_type_table_pointer_free_flag() {
+    use crate::gc::{
+        large_object_threshold_for_type, LARGE_OBJECT_THRESHOLD_BYTES as SMALL,
+        LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES as WIDE,
+    };
+    // pointer_free: false
+    assert_eq!(large_object_threshold_for_type(GC_TYPE_ARRAY), WIDE);
+    assert_eq!(
+        large_object_threshold_for_type(crate::gc::GC_TYPE_OBJECT),
+        WIDE
+    );
+    assert_eq!(
+        large_object_threshold_for_type(crate::gc::GC_TYPE_CLOSURE),
+        WIDE
+    );
+    // pointer_free: true
+    assert_eq!(large_object_threshold_for_type(GC_TYPE_STRING), SMALL);
+    assert_eq!(large_object_threshold_for_type(GC_TYPE_BUFFER), SMALL);
+    // An unknown type takes the conservative value: the widening is justified
+    // by the type table saying the payload is traced, and it cannot say that.
+    assert_eq!(large_object_threshold_for_type(u8::MAX), SMALL);
+}
+
 #[test]
 fn large_buffer_and_typed_array_old_objects_are_seen_by_arena_walkers() {
     run_with_fresh_arenas(|| {

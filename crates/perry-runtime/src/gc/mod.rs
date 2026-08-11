@@ -132,6 +132,9 @@ use copying::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry
 // pass in `crate::weakref` (#6182), which lives outside the gc module.
 pub(crate) use copying::CopyingPointerSet;
+// The hard ceiling every birth-generation threshold in `gc::types` must stay
+// under; asserted by `arena::tests::pointer_bearing_large_object_threshold_is_movable`.
+pub(crate) use copying::MAX_YOUNG_MOVE_BYTES;
 mod dead_owner;
 mod old_free;
 use old_free::*;

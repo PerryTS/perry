@@ -1,5 +1,12 @@
 use super::*;
 
+/// Largest object `move_young` will relocate. See its use site for the
+/// corruption-guard rationale; it doubles as the hard ceiling every
+/// birth-generation threshold in `gc::types` has to stay under, because an
+/// object the allocator admits to the nursery but this refuses to move would
+/// silently be left behind in from-space.
+pub(crate) const MAX_YOUNG_MOVE_BYTES: usize = 1 << 20; // 1 MiB, >> any real young object
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CopyingPointerKind {
     Eden,
@@ -746,7 +753,11 @@ impl CopyingNurseryCollector {
         // plausible-but-wrong *small* size; the root fix is stronger arena
         // classification / page unregistration so off-heap addresses never
         // reach here. See the copying-minor relocation issue.
-        const MAX_YOUNG_MOVE_BYTES: usize = 1 << 20; // 1 MiB, >> any real young object
+        //
+        // It is also a hard ceiling on the birth-generation thresholds in
+        // `gc::types`: an object the allocator admits to the nursery but this
+        // refuses to move would silently stay in from-space across a copying
+        // minor. `pointer_bearing_large_object_threshold_is_movable` pins that.
         if total < GC_HEADER_SIZE || total > MAX_YOUNG_MOVE_BYTES {
             if std::env::var_os("PERRY_GC_DIAG").is_some() {
                 eprintln!(
