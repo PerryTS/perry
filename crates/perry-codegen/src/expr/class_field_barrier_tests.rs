@@ -35,9 +35,7 @@
 
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{
-    Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt,
-};
+use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
 /// The block that exists only when the #7864 gate was emitted.
 const BARRIER_BLOCK: &str = "class_field_set.barrier";
@@ -292,16 +290,13 @@ fn def_of<'a>(body: &'a str, reg: &str) -> Option<&'a str> {
 
 /// The `i`th SSA operand (`%…`) of an instruction.
 fn operand(instr: &str, i: usize) -> Option<String> {
-    instr
-        .match_indices('%')
-        .nth(i)
-        .map(|(pos, _)| {
-            instr[pos..]
-                .split(|c: char| c == ',' || c.is_whitespace() || c == ')')
-                .next()
-                .unwrap()
-                .to_string()
-        })
+    instr.match_indices('%').nth(i).map(|(pos, _)| {
+        instr[pos..]
+            .split(|c: char| c == ',' || c.is_whitespace() || c == ')')
+            .next()
+            .unwrap()
+            .to_string()
+    })
 }
 
 /// (1) + (2): the gate exists, is BRANCHED INTO, and its condition **is** the
@@ -370,7 +365,9 @@ fn the_class_field_barrier_sits_behind_a_live_parent_generation_test() {
     );
     let flags_reg = operand(mask, 0).expect("and lhs");
     assert!(
-        def_of(&body, &flags_reg).unwrap_or_default().starts_with("load i8"),
+        def_of(&body, &flags_reg)
+            .unwrap_or_default()
+            .starts_with("load i8"),
         "the masked value is not loaded from the parent's GcHeader, so the \
          gate rests on something other than the live header:\n{body}"
     );
