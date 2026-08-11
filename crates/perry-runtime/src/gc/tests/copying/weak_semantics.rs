@@ -5,8 +5,8 @@
 //! entries never cleared and FinalizationRegistry never fired while
 //! copied-minor was the operative cycle. The scan now records weak slots
 //! without evacuating, `repair_weak_slots` fixes addresses of targets moved
-//! via strong edges, and `process_weak_targets_after_mark` runs on the fast
-//! path (gated on the weak-holder latch).
+//! via strong edges, and the registry-scoped weak pass runs on the fast path
+//! (gated on the weak-holder latch).
 
 use super::*;
 

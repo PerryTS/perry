@@ -21,6 +21,9 @@ use crate::value::{
 };
 use std::cell::RefCell;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -667,9 +670,9 @@ pub(crate) fn scan_pending_finalization_jobs_roots_mut(
 // shared between two passes that decide "was this weak target collected?"
 // differently:
 //
-// * The FULL / fallback cycle (`process_weak_targets_after_mark`, driven from
-//   cycle.rs `WeakProcessing`) probes the `ValidPointerSet` it already built
-//   for its main trace. UNCHANGED behavior — see `weak_target_should_clear`.
+// * The FULL / fallback cycle (`FullWeakProcessingState`, driven from cycle.rs
+//   `WeakProcessing`) probes the `ValidPointerSet` it already built for its
+//   main trace. See `weak_target_should_clear`.
 // * The copied-minor fast path (`process_weak_targets_from_registry`) probes
 //   the copy's O(1) page-metadata classifier (`CopyingPointerSet`), avoiding
 //   both the full-heap BTreeSet build and the whole-arena walk. See
@@ -816,15 +819,12 @@ unsafe fn classify_gc_type_child(
     (unsafe { (*cp.header).obj_type } == obj_type).then_some(ptr)
 }
 
-/// What the copied-minor pass should do with a registered holder address.
+/// What a registry-scoped weak pass should do with a holder address.
 enum HolderDisposition {
-    /// Live holder scanned this cycle (its weak slots are repaired): rekey the
-    /// registry to this current address and process it.
+    /// Live holder at its current address: process its weak slots.
     Process(usize),
     /// Cannot be proven dead in a minor (an unmarked OLD/longlived holder — a
-    /// minor doesn't mark old-gen) AND its weak slots may be stale/unrepaired:
-    /// leave it registered untouched and let a full GC resolve it. Mirrors the
-    /// original arena walk, which only ever processed MARKED objects.
+    /// minor doesn't mark old-gen): leave it registered for a full GC.
     Keep,
     /// Provably dead (unmarked nursery holder) or unclassifiable (stale /
     /// recycled address): remove it from the registry.
@@ -871,35 +871,102 @@ unsafe fn resolve_weak_holder_copied(
     }
 }
 
-/// Full / fallback-cycle weak processing. Walks EVERY live object in the arena
-/// to find the three weak-holder class_ids and tombstones dead weak targets
-/// using the `ValidPointerSet` the caller built for its main trace. UNCHANGED
-/// by #6182 (the registry optimization is copied-minor-only).
-pub(crate) fn process_weak_targets_after_mark(
-    valid_ptrs: &crate::gc::ValidPointerSet,
-    minor_only: bool,
-    enqueue_callbacks: bool,
-) {
-    // #6180 pause floor: the whole-heap walk below exists only to FIND weak
-    // holders (WeakRef / FinalizationRegistry / WeakMap-entry objects). The
-    // #6182 registry tracks every live holder — if none exist (the common
-    // case), the entire O(heap) pass is a no-op. This is the single largest
-    // atomic-finalize cost for weakref-free programs.
-    if !weak_target_holders_allocated() {
-        return;
+/// Resumable full/fallback weak processing. The holder registry is snapshotted
+/// once, then each call consumes at most `budget` holders. This makes the work
+/// O(registered weak holders), rather than O(all arena objects), and lets a
+/// budgeted GC return to the mutator between holders.
+///
+/// Snapshotting is intentional: budgeted cycles are non-moving, while
+/// synchronous moving cycles pass an unlimited budget and cannot expose a
+/// mutator window. Holders allocated after the snapshot are allocate-black and
+/// therefore cannot lose a target in the current cycle; the next collection
+/// processes them.
+pub(crate) struct FullWeakProcessingState {
+    holders: Vec<usize>,
+    cursor: usize,
+}
+
+impl FullWeakProcessingState {
+    pub(crate) fn new() -> Self {
+        let holders = WEAK_HOLDERS.with(|holders| holders.borrow().iter().copied().collect());
+        #[cfg(test)]
+        test_support::reset_full_weak_processing_work_units();
+        Self { holders, cursor: 0 }
     }
-    let liveness = FullCycleLiveness {
-        valid_ptrs,
-        minor_only,
-    };
-    crate::arena::arena_walk_objects(|header_ptr| unsafe {
-        let header = header_ptr as *mut crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT || !header_is_live(header) {
-            return;
+
+    /// Process up to `budget` registered holders. A FinalizationRegistry is
+    /// one holder/work unit; its record array stays atomic so unregistering
+    /// cannot interleave with and reorder an in-progress registry scan.
+    pub(crate) fn step(
+        &mut self,
+        valid_ptrs: &crate::gc::ValidPointerSet,
+        minor_only: bool,
+        enqueue_callbacks: bool,
+        budget: usize,
+    ) -> bool {
+        if budget == 0 {
+            return self.cursor == self.holders.len();
         }
-        let obj = header_ptr.add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
-        dispatch_weak_holder(obj, &liveness, enqueue_callbacks);
-    });
+        let stop = self.holders.len().min(self.cursor.saturating_add(budget));
+        let liveness = FullCycleLiveness {
+            valid_ptrs,
+            minor_only,
+        };
+        while self.cursor < stop {
+            let addr = self.holders[self.cursor];
+            self.cursor += 1;
+            #[cfg(test)]
+            test_support::note_full_weak_processing_work_unit();
+            match unsafe { resolve_weak_holder_full(valid_ptrs, addr, minor_only) } {
+                HolderDisposition::Drop => {
+                    WEAK_HOLDERS.with(|holders| {
+                        holders.borrow_mut().remove(&addr);
+                    });
+                }
+                HolderDisposition::Keep => {}
+                HolderDisposition::Process(current) => unsafe {
+                    dispatch_weak_holder(
+                        current as *mut ObjectHeader,
+                        &liveness,
+                        enqueue_callbacks,
+                    );
+                },
+            }
+        }
+        self.cursor == self.holders.len()
+    }
+}
+
+/// Validate a registry entry before dereferencing it. Full cycles can prove
+/// every unmarked holder dead. Fallback minors may only prove that for nursery
+/// holders; unmarked old holders stay registered for the next full cycle.
+unsafe fn resolve_weak_holder_full(
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    addr: usize,
+    minor_only: bool,
+) -> HolderDisposition {
+    if !valid_ptrs.contains(&addr) {
+        return HolderDisposition::Drop;
+    }
+    let header = header_from_user_addr(addr);
+    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return HolderDisposition::Drop;
+    }
+    let obj = addr as *mut ObjectHeader;
+    if !matches!(
+        (*obj).class_id,
+        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY | CLASS_ID_WEAK_ENTRY
+    ) {
+        return HolderDisposition::Drop;
+    }
+    if header_is_live(header) {
+        return HolderDisposition::Process(addr);
+    }
+    if minor_only && !crate::arena::pointer_in_nursery(addr) {
+        HolderDisposition::Keep
+    } else {
+        HolderDisposition::Drop
+    }
 }
 
 /// Copied-minor weak processing (#6182). Iterates ONLY the registered holders

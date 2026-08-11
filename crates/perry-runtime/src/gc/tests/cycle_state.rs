@@ -1085,6 +1085,71 @@ fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
 }
 
 #[test]
+fn full_atomic_finalize_slices_weak_holders_with_tiny_budget() {
+    const HOLDERS: u32 = 8;
+    let _guard = CopyingNurseryTestGuard::new(HOLDERS);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::weakref::test_support::clear_weak_holders();
+
+    for slot in 0..HOLDERS {
+        let target = crate::object::js_object_alloc(0, 0);
+        let weak_ref = crate::weakref::js_weakref_new(f64::from_bits(ptr_bits(target as usize)));
+        js_shadow_slot_set(slot, ptr_bits(weak_ref as usize));
+    }
+
+    // Recent blocks are conservatively persisted for register-held values.
+    // Move the holders/targets outside that window so weak-only targets are
+    // genuinely white at finalization.
+    let aged_from = crate::arena::general_block_count();
+    while crate::arena::general_block_count().saturating_sub(aged_from) < 7 {
+        for _ in 0..64 {
+            let _ = crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING);
+        }
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Direct));
+    run_cycle_until_phase(&mut state, GcCyclePhase::AtomicFinalize);
+    let mut setup_steps = 0usize;
+    while state.atomic_finalize_subphase_for_tests() != Some("weak_processing") {
+        state.step(GcWorkBudget::bounded(1));
+        setup_steps += 1;
+        assert!(setup_steps < 100_000, "weak processing was never reached");
+    }
+
+    let after_first_slice = crate::weakref::test_support::full_weak_processing_work_units();
+    assert_eq!(
+        after_first_slice, 1,
+        "the step that enters weak processing must consume one holder"
+    );
+    state.step(GcWorkBudget::bounded(1));
+    assert_eq!(
+        crate::weakref::test_support::full_weak_processing_work_units(),
+        2,
+        "a one-unit step must consume exactly one additional holder"
+    );
+    assert_eq!(
+        state.atomic_finalize_subphase_for_tests(),
+        Some("weak_processing"),
+        "multiple holders must keep weak processing parked across steps"
+    );
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+    assert_eq!(
+        crate::weakref::test_support::full_weak_processing_work_units(),
+        HOLDERS as usize
+    );
+    for slot in 0..HOLDERS {
+        let weak_ref = f64::from_bits(js_shadow_slot_get(slot));
+        assert_eq!(
+            crate::weakref::js_weakref_deref(weak_ref).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "weak-only target must be tombstoned"
+        );
+    }
+}
+
+#[test]
 fn bounded_full_cycle_preserves_roots_and_reclaims_unreachable_objects() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

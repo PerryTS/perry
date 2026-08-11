@@ -842,8 +842,8 @@ impl CopyingNurseryCollector {
         // never tombstoned and FinalizationRegistry never fired while
         // copied-minor was the operative cycle. Repair an already-moved
         // target's address now and queue the slot so `repair_weak_slots`
-        // fixes targets evacuated after this visit; the after-mark pass
-        // (`process_weak_targets_after_mark`) then tombstones dead ones.
+        // fixes targets evacuated after this visit; the registry pass then
+        // tombstones dead ones.
         // No remembered-set entry either — the write barrier skips weak
         // slots the same way.
         if !parent_header.is_null()
@@ -898,8 +898,8 @@ impl CopyingNurseryCollector {
     /// Second pass over the weak target slots collected during the scan:
     /// a weak target evacuated via a strong edge AFTER its slot was
     /// visited still points at the from-space original — rewrite it to
-    /// the forwarding address so `process_weak_targets_after_mark` (and
-    /// the mutator) read the live copy. Targets never forwarded are
+    /// the forwarding address so weak processing (and the mutator) read the
+    /// live copy. Targets never forwarded are
     /// either old-gen/pinned live (no rewrite needed) or dead (left for
     /// the after-mark tombstone pass).
     pub(super) unsafe fn repair_weak_slots(&mut self) {
@@ -1589,8 +1589,8 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // allocated. `process_weak_targets_from_registry` instead walks only the
     // registered holders and classifies targets with the O(1) page-metadata
     // classifier the copy already built (`collector.ptrs`) — no BTreeSet, no
-    // arena walk. The full-cycle path (cycle.rs `WeakProcessing`) is
-    // untouched and still uses the valid-pointer set it built for its trace.
+    // arena walk. The full-cycle path (cycle.rs `WeakProcessing`) now uses the
+    // same registry, with its existing valid-pointer set for liveness.
     unsafe {
         collector.repair_weak_slots();
     }

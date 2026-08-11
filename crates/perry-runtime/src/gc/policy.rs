@@ -3275,10 +3275,10 @@ fn gc_budgeted_step_work_units_inner_with_progress(
 /// the incremental sweep-parking hole (#6180): a pure compute loop that never
 /// reaches the event pump still finishes the cycle (and disables the mark
 /// barrier / reclaims memory) purely from the allocations it keeps making, so
-/// RSS stays bounded. `AtomicFinalizeSubphase::WeakProcessing` is the one
-/// phase step that is not yet internally sliced, so the assist that lands on it
-/// runs it whole — a single O(live-weak-holders) spike per cycle; slicing it is
-/// a tracked follow-up (pause-quality, not correctness).
+/// RSS stays bounded. `AtomicFinalizeSubphase::WeakProcessing` snapshots the
+/// live-holder registry and consumes at most the supplied number of holders per
+/// assist, so unrelated heap size cannot turn one assist into a whole-arena
+/// pause.
 fn gc_mutator_assist_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
