@@ -127,6 +127,27 @@ impl InPlacePromotion {
     }
 }
 
+/// Where the finish walk gets each object's liveness from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PromotionLiveness {
+    /// `GC_FLAG_MARKED | GC_FLAG_PINNED` on the still-marked headers — the
+    /// cycle traced, so it knows.
+    Marked,
+    /// The cycle did not trace (#7880), so it does not know and does not
+    /// pretend to: every parseable object on the block is registered.
+    ///
+    /// Registering an object that is in fact dead is safe, and is strictly
+    /// closer to what the index is FOR than omitting it would be. The index
+    /// answers "which objects live on this page" for the remembered-set dirty
+    /// scan; a dead promoted object is still an object on that page, still
+    /// intact memory, and — because promotion moves nothing — still holds the
+    /// slot values it held when it died, whose targets were promoted alongside
+    /// it. The next full mark-sweep frees it and unregisters it in the same
+    /// pass. What it costs is accounting precision: the page's live-bytes
+    /// figure counts it until then.
+    AssumeAllLive,
+}
+
 /// Per-block liveness, produced by the finish walk. This is the measurement the
 /// promotion policy is calibrated against — `PERRY_GC_DIAG=1` prints it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -227,7 +248,10 @@ fn collect_blocks(blocks: &[ArenaBlock], source: PromotionSource, out: &mut InPl
 ///
 /// MUST run before `CopyingNurseryCollector::clear_marks` — liveness here is
 /// `GC_FLAG_MARKED | GC_FLAG_PINNED` on the still-marked headers.
-pub(crate) fn finish_in_place_promotion(promotion: InPlacePromotion) -> InPlacePromotionStats {
+pub(crate) fn finish_in_place_promotion(
+    promotion: InPlacePromotion,
+    liveness: PromotionLiveness,
+) -> InPlacePromotionStats {
     let mut stats = InPlacePromotionStats {
         blocks: promotion.blocks.len(),
         ..InPlacePromotionStats::default()
@@ -246,7 +270,7 @@ pub(crate) fn finish_in_place_promotion(promotion: InPlacePromotion) -> InPlaceP
     for block in &promotion.blocks {
         let taken = take_block(*block);
         let Some(taken) = taken else { continue };
-        let (objects, live_objects, live_bytes) = stamp_and_index_block(&taken);
+        let (objects, live_objects, live_bytes) = stamp_and_index_block(&taken, liveness);
         stats.objects += objects;
         stats.live_objects += live_objects;
         stats.bytes += taken.offset;
@@ -341,7 +365,7 @@ fn install_block_into(arena: &mut Arena, block: ArenaBlock) {
 /// also a block the existing sweep walkers could not parse either, so it is a
 /// pre-existing whole-heap invariant rather than something this path can repair.
 /// `debug_assert` catches it in CI instead of letting it be silent.
-fn stamp_and_index_block(block: &ArenaBlock) -> (usize, usize, usize) {
+fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (usize, usize, usize) {
     use crate::gc::GcHeader;
 
     let mut objects = 0usize;
@@ -380,7 +404,12 @@ fn stamp_and_index_block(block: &ArenaBlock) -> (usize, usize, usize) {
         }
         objects += 1;
 
-        let live = flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0;
+        let live = match liveness {
+            PromotionLiveness::Marked => {
+                flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0
+            }
+            PromotionLiveness::AssumeAllLive => true,
+        };
         if live && crate::gc::gc_type_is_arena_walkable(obj_type) {
             live_objects += 1;
             live_bytes += total;

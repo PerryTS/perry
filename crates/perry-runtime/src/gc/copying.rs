@@ -944,6 +944,25 @@ unsafe fn clear_marks_in(headers: &[*mut GcHeader]) {
     }
 }
 
+/// Is a stress or verification instrument armed that an untraced promotion
+/// would silently stop exercising?
+///
+/// Each of these instruments takes the trace itself as its subject:
+/// `PERRY_GC_VERIFY_EVACUATION` checks the old→young edge coverage the scan
+/// records and the rewrite the drain performs; `PERRY_GC_FROMSPACE_SCAN` walks
+/// for stale from-space pointers the trace should have rewritten;
+/// `PERRY_GC_VERIFY_MARK` reads the marks. A cycle that produces no marks and
+/// rewrites nothing would let all three report success having examined
+/// nothing — the exact failure mode CLAUDE.md's "a gate must assert its
+/// subject was live" rule names. `PERRY_GC_FORCE_EVACUATE` (and every mode
+/// that implies it) is not listed because it already vetoes in-place promotion
+/// outright, which is a precondition here.
+fn untraced_promotion_instrument_veto() -> bool {
+    gc_verify_evacuation_enabled()
+        || super::fromspace_scan::fromspace_scan_enabled()
+        || std::env::var_os("PERRY_GC_VERIFY_MARK").is_some()
+}
+
 pub(super) fn scan_remembered_dirty_slots_copying(
     snapshot: &RememberedDirtySnapshot,
     mut visit: impl FnMut(*mut u64, *mut GcHeader, bool, &mut RememberedSetTraceStats),
@@ -1361,35 +1380,80 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         debug_assert_no_remembering_possible();
     }
     collector.stats.remembering_skipped = collector.skip_remembering;
+    // #7880: the cycle promotes the WHOLE young generation in place, so the
+    // trace has no products left worth its cost — skip it too.
+    //
+    // What the trace does on a promoting cycle, exhaustively, and why each is
+    // covered:
+    //
+    // * **Nothing moves.** `retag_young_for_in_place_promotion` takes every
+    //   in-use Eden and survivor block, so after it no address in the heap
+    //   classifies as `Nursery` and `move_young` is unreachable. Every root
+    //   walk, slot rewrite and forwarding repair is therefore a provable no-op,
+    //   not an approximation.
+    // * **No remembered-set entry can be created** — that is `skip_remembering`'s
+    //   existing proof, which this reuses verbatim (it is a precondition here).
+    //   With no young generation left, `remembered_set_clear()` is exact.
+    // * **The address-keyed death-pruning passes prune nothing anyway.**
+    //   `dead_owner::owner_is_dead` and the map/set/error finalizers all require
+    //   the owner to classify as `Nursery` on a minor; after the retag none do.
+    //   They still run below, and still find nothing, at their usual O(registered
+    //   holders) cost.
+    // * **Weak semantics need marks**, so a cycle with any weak-target holder
+    //   registered is excluded outright.
+    // * **The malloc sweep and `Longlived` marking need marks**, so this reuses
+    //   `malloc_registry_empty_at_start`.
+    // * **The stress/verify instruments need a trace to instrument**, so any of
+    //   them being armed excludes this path — an instrument that silently stops
+    //   exercising its subject is the failure mode CLAUDE.md's "a gate must
+    //   assert its subject was live" rule is about.
+    //
+    // That leaves liveness for the old-gen page index (answered by
+    // `PromotionLiveness::AssumeAllLive`) and the survival ratio itself, which
+    // is what `should_promote_young_untraced`'s budget bounds.
+    let untraced = promoting_in_place
+        && collector.skip_remembering
+        && !crate::weakref::weak_target_holders_allocated()
+        && !untraced_promotion_instrument_veto()
+        && super::should_promote_young_untraced();
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
 
-    let native_stack_walk = visit_mutable_root_slots(|slot| unsafe {
-        let bits = slot.read();
-        if let Some(trace) = trace.as_mut() {
-            let pointer_root = collector.ptrs.decode_bits(bits).is_some();
-            root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
-                .record_scan(bits != 0, pointer_root);
-            if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
-                trace.shadow_roots.record_scan(bits);
-            }
-        }
-        if bits == 0 {
-            return;
-        }
-        if let Some(new_bits) = collector.visit_value_bits(bits) {
-            slot.write(new_bits);
+    let native_stack_walk = if untraced {
+        Default::default()
+    } else {
+        visit_mutable_root_slots(|slot| unsafe {
+            let bits = slot.read();
             if let Some(trace) = trace.as_mut() {
-                root_source_for_mutable_slot(&mut trace.root_sources, slot.kind).record_rewrite();
+                let pointer_root = collector.ptrs.decode_bits(bits).is_some();
+                root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
+                    .record_scan(bits != 0, pointer_root);
                 if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
-                    trace.shadow_roots.record_rewrite();
+                    trace.shadow_roots.record_scan(bits);
                 }
             }
-        }
-    });
+            if bits == 0 {
+                return;
+            }
+            if let Some(new_bits) = collector.visit_value_bits(bits) {
+                slot.write(new_bits);
+                if let Some(trace) = trace.as_mut() {
+                    root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
+                        .record_rewrite();
+                    if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
+                        trace.shadow_roots.record_rewrite();
+                    }
+                }
+            }
+        })
+    };
     let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
     record_native_stack_walk_source(native_stack_walk, &mut root_sources);
 
-    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let scanners: Vec<MutableRootScannerEntry> = if untraced {
+        Vec::new()
+    } else {
+        MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone())
+    };
     {
         let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
         if let Some(sources) = &mut root_sources {
@@ -1426,17 +1490,32 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
 
+    // On an untraced promotion the dirty SCAN is where the whole per-object
+    // mark pass lived: `retain`'s array store has a young child in every page
+    // of its backing store, so the scan walks all three million slots and marks
+    // the record behind each one. With nothing to mark and nothing to rewrite,
+    // it has no product left — `remembered_set_clear()` below is exact once the
+    // young generation is empty.
+    //
+    // The SNAPSHOT is still taken: it is O(dirty pages), and it is the sole
+    // read path for the remembered set, which is where #7187's lazy barrier
+    // arming happens. Skipping it would leave the barrier unarmed for the next
+    // cycle — a missing-edge bug one collection later.
     let snapshot = remembered_dirty_snapshot();
-    let remembered_stats =
-        scan_remembered_dirty_slots_copying(&snapshot, |slot, header, external, stats| unsafe {
-            let before = *slot;
-            collector.visit_slot_with_parent(slot, header, external);
-            if *slot != before {
-                stats.newly_marked += 1;
-            }
-        });
-    if let Some(trace) = trace.as_mut() {
-        trace.remembered_set = remembered_stats;
+    if !untraced {
+        let remembered_stats = scan_remembered_dirty_slots_copying(
+            &snapshot,
+            |slot, header, external, stats| unsafe {
+                let before = *slot;
+                collector.visit_slot_with_parent(slot, header, external);
+                if *slot != before {
+                    stats.newly_marked += 1;
+                }
+            },
+        );
+        if let Some(trace) = trace.as_mut() {
+            trace.remembered_set = remembered_stats;
+        }
     }
     if !collector.skip_remembering {
         let promoted_sticky =
@@ -1457,8 +1536,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         collector.drain();
     }
     {
-        let scanners: Vec<MutableRootScannerEntry> =
-            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+        let scanners: Vec<MutableRootScannerEntry> = if untraced {
+            Vec::new()
+        } else {
+            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone())
+        };
         let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
         let mut visitor = RuntimeRootVisitor::for_copying_rewrite(&collector);
         for entry in scanners {
@@ -1552,7 +1634,14 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     let (reset, promotion_stats) = if promoting_in_place {
         let phase_start = trace_phase_start(trace);
         super::note_promoted_young_capacity(promotion.reserved_bytes());
-        let promotion_stats = crate::arena::finish_in_place_promotion(promotion);
+        let promotion_stats = crate::arena::finish_in_place_promotion(
+            promotion,
+            if untraced {
+                crate::arena::PromotionLiveness::AssumeAllLive
+            } else {
+                crate::arena::PromotionLiveness::Marked
+            },
+        );
         trace_phase_record(trace, "in_place_promotion", phase_start);
         (
             crate::arena::ArenaResetStats {
@@ -1570,6 +1659,19 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         )
     };
     collector.stats.reset_blocks += reset.reset_blocks;
+    if untraced {
+        // The finish walk is the only census an untraced cycle has, and it is
+        // an exact one for everything except liveness: it parsed every object
+        // on every promoted block. Promotion counters come from it so the trace
+        // and the `[gc-copy-minor]` line stay comparable across both paths —
+        // ns-per-promoted-object is the acceptance measurement, and a path that
+        // reported zero promotions would read as infinitely fast.
+        collector.stats.promoted_objects = promotion_stats.objects;
+        collector.stats.in_place_promoted_objects = promotion_stats.objects;
+        collector.stats.promoted_bytes = promotion_stats.bytes;
+        collector.stats.eden_live_bytes = promotion_stats.bytes;
+        collector.live_from_bytes = promotion_stats.bytes;
+    }
     collector.stats.in_place_dead_bytes = promotion_stats
         .bytes
         .saturating_sub(promotion_stats.live_bytes);
@@ -1595,11 +1697,27 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     }
 
     CONS_PINNED.with(|s| s.borrow_mut().clear());
-    // #7742: feed the policy its measurement. This runs on EVERY copying minor
-    // — promoting ones included, which is the whole reason a promoting cycle
-    // still traces — so the ratio the next decision reads is never stale.
-    super::note_young_survival(from_space_bytes, collector.live_from_bytes);
-    note_survivor_count_for_presizing(collector.moved_headers.len());
+    // #7742: feed the policy its measurement. This runs on every copying minor
+    // that TRACED — promoting ones included, which is why a promoting cycle
+    // still traces once its untraced budget is spent — so the ratio the next
+    // decision reads is never stale.
+    //
+    // #7880: an untraced cycle measured nothing. Recording its own assumption
+    // as a measurement would make the predictor a mirror — permanently 1000‰,
+    // permanently armed, and unable to notice the workload changing. It charges
+    // the untraced budget instead, and the cycle that spends that budget is the
+    // one that measures.
+    if untraced {
+        super::note_untraced_promotion(promotion_stats.bytes, promotion_stats.objects);
+    } else {
+        super::note_young_survival(from_space_bytes, collector.live_from_bytes);
+    }
+    if !untraced {
+        // An untraced cycle marked nothing, so its `moved_headers` is empty and
+        // says nothing about the next cycle's survivor count. Leave the last
+        // real observation in place rather than resetting the estimate to zero.
+        note_survivor_count_for_presizing(collector.moved_headers.len());
+    }
     collector.stats.young_survival_permille =
         super::last_young_survival_permille().unwrap_or_default();
     // A promoting cycle frees NOTHING: the dead young bytes were promoted
@@ -1668,8 +1786,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     );
     if std::env::var_os("PERRY_GC_DIAG").is_some() {
         eprintln!(
-            "[gc-copy-minor] ran in_place={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} trigger={:?} declared_safepoint={}",
+            "[gc-copy-minor] ran in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} trigger={:?} declared_safepoint={}",
             collector.stats.in_place_promotion,
+            untraced,
+            super::untraced_promotion_cycles(),
+            super::untraced_promoted_objects(),
             collector.stats.in_place_promoted_blocks,
             collector.stats.in_place_dead_bytes,
             collector.stats.in_place_sparse_blocks,

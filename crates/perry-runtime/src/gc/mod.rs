@@ -154,7 +154,10 @@ mod fromspace_scan;
 /// mechanism is `arena/promote.rs`; this decides when to use it.
 mod promote_in_place;
 use promote_in_place::*;
-pub use promote_in_place::{in_place_promoted_objects, in_place_promotion_cycles};
+pub use promote_in_place::{
+    in_place_promoted_objects, in_place_promotion_cycles, untraced_promoted_objects,
+    untraced_promotion_cycles,
+};
 /// Instrument-liveness counters (#7604): copying minors completed, objects
 /// relocated, loop back-edge polls reached. Mode-independent — they count what
 /// the COLLECTOR did, not what forced it, so they outlive any one stress knob.
