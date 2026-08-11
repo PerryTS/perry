@@ -89,25 +89,56 @@ fn strip_nullish_union(ty: &HirType) -> Option<&HirType> {
 /// `GC_TYPE_ARRAY` on the receiver and fall back, so a violated claim costs a
 /// branch and nothing else.
 ///
-/// **`.length` does not.** Its inline arm is guarded, but its FALLBACK
-/// (`js_value_length_f64`) answers **0** for every value that carries no
-/// length, where JS answers `undefined` — a pre-existing degradation the
-/// runtime documents in place ("the generic PropertyGet slow path already
-/// degrades to 0 here", `value/dynamic_object.rs`) and which is therefore
-/// reachable on `main` today through a hand-written annotation (#7853). Handing it a
-/// freshly inferred claim would widen a silent wrong answer, so
-/// `refined_array_type_is_declared_only` records these ids in
-/// `FnCtx::declared_only_array_locals` and the `.length` arm in
-/// `expr/property_get.rs` refuses them — leaving them on exactly the generic
-/// path the unrefined `Any` local takes today.
-/// `test_gap_declared_field_type_refine_guarded.ts` pins all of it: the same
-/// declaration is handed strings, plain objects, numbers, `null` and
+/// `.length` used to be the exception: #7854 refused these ids there because
+/// its FALLBACK (`js_value_length_f64`) answered **0** for every value that
+/// carries no length where JS answers `undefined`, and continued instead of
+/// throwing for a nullish receiver (#7853). #7862 replaced that fallback with
+/// `js_value_length_property_f64` — ordinary property semantics — so `.length`
+/// now takes a claim on the same terms as an element read, and the refusal and
+/// its bookkeeping set are gone. `test_gap_declared_field_type_refine_guarded.ts`
+/// and `test_gap_7853_declared_array_length_runtime_value.ts` still pin it: the
+/// same declaration is handed strings, plain objects, numbers, `null` and
 /// `undefined`, and every row must match node.
 ///
 /// Deliberately conservative: only a NON-generic receiver name whose entry is a
 /// class, an interface, or an alias to a closed object type answers, and only
 /// the property's own declared type is returned — no inheritance walk beyond
 /// what the class table already does, and no index-signature fallback.
+/// Is `expr` a property READ whose declared type on the receiver's annotation is
+/// an array (`e.vals` on `type Env = { vals: Value[] }`)?
+///
+/// #7854 taught `refine_type_from_init` to recover that type for a LOCAL
+/// (`const names = e.names`), which is why `names[i]` is an inline element read
+/// today. It did nothing for the read used DIRECTLY as a receiver — `e.vals[i]`,
+/// `p.toks[p.pos]` — because the HIR types a `PropertyGet` off a UNION receiver
+/// as `Any` (`perry-hir/src/analysis/value_types.rs`, the `Union` arm), so
+/// `static_type_of` answers `Any` and `expr/index_get.rs` routes the read to the
+/// `js_dyn_index_get` unknown-receiver dispatcher. In `gc-handoff/apps/interp.ts`
+/// — where the lexer, the parser cursor and the environment chain are all
+/// `type` aliases over arrays — that dispatcher plus the `js_array_length` its
+/// miss path calls is 9.6% of the program.
+///
+/// **This is a claim, not a proof**, and its ONLY admissible consumer is a
+/// guarded element read: `lower_guarded_array_index_get` re-checks
+/// `GC_TYPE_ARRAY`, the forwarding flag, per-array descriptors, the prototype
+/// latch and the bounds on the receiver itself, and routes every failure to
+/// `js_typed_feedback_array_index_get_fallback_boxed`. So a violated claim costs
+/// a predicted branch and the same answer, which is the exact deal #7854
+/// records for element reads. Do not hand it to a consumer that has no guarded
+/// fallback.
+pub(crate) fn declared_array_property_claim(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    else {
+        return false;
+    };
+    matches!(
+        declared_property_type_from_annotation(ctx, object, property),
+        Some(HirType::Array(_)) | Some(HirType::Tuple(_))
+    )
+}
+
 pub(crate) fn declared_property_type_from_annotation(
     ctx: &FnCtx<'_>,
     object: &Expr,
@@ -140,29 +171,6 @@ pub(crate) fn declared_property_type_from_annotation(
         HirType::Object(obj) => obj.properties.get(property).map(|p| p.ty.clone()),
         _ => None,
     }
-}
-
-/// True when `refine_type_from_init` would answer this `PropertyGet` ONLY via
-/// [`declared_property_type_from_annotation`] — i.e. the array/string type is a
-/// copied annotation and not something an initializer proved.
-///
-/// Mirrors `numeric_proof_is_declared_only` (#7773). Callers use it to record
-/// the local in `FnCtx::declared_only_array_locals`.
-pub(crate) fn refined_array_type_is_declared_only(ctx: &FnCtx<'_>, init: &Expr) -> bool {
-    let Expr::PropertyGet {
-        object, property, ..
-    } = init
-    else {
-        return false;
-    };
-    // The pre-existing class walk is the proof-ish arm (a real `class` whose
-    // field type came from a declaration Perry itself lowered); if it answers,
-    // this is not a NEW claim and behaviour is unchanged from before #7854.
-    let via_class = receiver_class_name(ctx, object)
-        .and_then(|receiver_class| ctx.classes.get(&receiver_class))
-        .and_then(|class| class.fields.iter().find(|f| f.name == *property))
-        .is_some();
-    !via_class && declared_property_type_from_annotation(ctx, object, property).is_some()
 }
 
 /// Refine an `Any`-typed local's static type based on its initializer

@@ -1126,6 +1126,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 recv_ty,
                 None | Some(perry_hir::types::Type::Any) | Some(perry_hir::types::Type::Unknown)
             );
+            // #7854 recovered a receiver's declared array type for a LOCAL
+            // (`const names = e.names`), never for the read used directly as a
+            // receiver (`e.vals[i]`, `p.toks[p.pos]`) — the HIR types a
+            // `PropertyGet` off a UNION receiver as `Any`, so those land in the
+            // `recv_unknown` arm below and pay `js_dyn_index_get` plus the
+            // `js_array_length` its miss path calls.
+            //
+            // A declared property type is a CLAIM. It is admissible here and
+            // only here because the tier this unlocks —
+            // `lower_guarded_array_index_get` — re-checks `GC_TYPE_ARRAY`, the
+            // forwarding flag, descriptors, the prototype latch and the bounds
+            // on the receiver itself and routes every failure to the boxed
+            // fallback. A violated claim costs a branch, not an answer. (#6132
+            // records that the same guard is what makes a typed-array-valued
+            // member receiver safe on this path.)
+            let claimed_array =
+                recv_unknown && crate::type_analysis::declared_array_property_claim(ctx, object);
+            let recv_unknown = recv_unknown && !claimed_array;
             // #5525: route every non-static-string/symbol read on an unknown
             // receiver through `js_dyn_index_get` (numeric, runtime-string, and
             // runtime-symbol are all triaged in the runtime). The earlier
@@ -1157,7 +1175,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //      generic object field access via js_object_get_field_by_name_f64
             //   3. Anything else → fall back to dynamic object field
             //      access by stringifying the index at runtime
-            if is_array_expr(ctx, object) {
+            if is_array_expr(ctx, object) || claimed_array {
                 // #321: a symbol-keyed array read (`arr[Symbol.iterator]`) must
                 // NOT take the numeric fast path below — `fptosi` on the symbol
                 // value yields a garbage index (returned a number). Route symbol

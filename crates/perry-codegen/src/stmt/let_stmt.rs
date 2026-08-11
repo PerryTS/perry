@@ -305,21 +305,13 @@ pub(crate) fn lower_let(
         }
     }
 
-    // Same discipline for the array/string half. When the refinement above
-    // answered `Array`/`String` only because the RECEIVER'S ANNOTATION said so
-    // (`const names = e.names` on `type Env = { names: string[] }`), record the
-    // id: element reads re-check `GC_TYPE_ARRAY` and are safe on a claim, but
-    // the `.length` fast arm's fallback answers 0 where JS answers `undefined`,
-    // so it must not consume one. See `FnCtx::declared_only_array_locals`.
-    if matches!(
-        refined_ty,
-        perry_hir::types::Type::Array(_) | perry_hir::types::Type::String
-    ) && init.is_some_and(|e| {
-        matches!(e, perry_hir::Expr::PropertyGet { .. })
-            && crate::type_analysis::refined_array_type_is_declared_only(ctx, e)
-    }) {
-        ctx.declared_only_array_locals.insert(id);
-    }
+    // (#7854 also recorded the array/string half of this — a local whose
+    // `Array`/`String` type came only from the RECEIVER'S ANNOTATION — in
+    // `declared_only_array_locals`, so the `.length` fast arm could refuse it.
+    // #7862 gave that arm a property-semantic fallback, which is what the
+    // refusal existed to avoid, so both the set and its one consumer are gone;
+    // see the `.length` arm in `expr/property_get.rs`. The NUMERIC half above
+    // stays: its consumer is an arithmetic op with no guarded fallback.)
 
     // Track closure func_id → local_id mapping so the closure
     // call site in lower_call can look up rest param info.

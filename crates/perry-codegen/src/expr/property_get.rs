@@ -294,15 +294,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PropertyGet {
             object, property, ..
         } if property == "length"
-            // #7854: a receiver whose Array/String type is a copied ANNOTATION
-            // rather than a proof must not reach this arm. The inline half is
-            // guarded, but the `js_value_length_f64` fallback answers 0 where
-            // JS answers `undefined` (and where a nullish receiver must throw),
-            // so a violated claim becomes a silent wrong answer instead of a
-            // slower path. These ids take the generic property route — exactly
-            // what the same local took before it was refined at all.
-            // See `FnCtx::declared_only_array_locals`.
-            && !matches!(object.as_ref(), Expr::LocalGet(id) if ctx.declared_only_array_locals.contains(id))
+            // #7854 recorded a receiver whose Array/String type is a copied
+            // ANNOTATION rather than a proof in `FnCtx::declared_only_array_locals`
+            // and refused it here, because the inline half was guarded but the
+            // fallback — `js_value_length_f64` — answered **0** for every value
+            // that carries no length where JS answers `undefined`, and continued
+            // instead of throwing for a nullish receiver. A violated claim was
+            // therefore a silent wrong answer rather than a slower path.
+            //
+            // #7862 replaced that fallback with `js_value_length_property_f64`
+            // (the slow arm below, and the string-lowering arm above), which
+            // *is* ordinary property semantics: `undefined` for a missing
+            // property, the real value for a non-numeric one, normal
+            // object/function/native/proxy dispatch, and a catchable TypeError
+            // for a nullish receiver. The reason for the refusal is gone, so the
+            // refusal is too — a claim now costs a guard branch and nothing else,
+            // which is exactly the deal element reads have always taken.
+            //
+            // `test-files/test_gap_7853_declared_array_length_runtime_value.ts`
+            // and `test_gap_declared_field_type_refine_guarded.ts` are the
+            // sabotage: both feed a `string[]`-declared local an array, a
+            // string, a number, an array-like object with numeric and
+            // non-numeric `length`, a function, a typed array, `null` and
+            // `undefined`, and require node-identical output. They run the
+            // inline arm now instead of the generic tower.
             && (is_array_expr(ctx, object)
                 || is_string_expr(ctx, object)
                 || match crate::type_analysis::static_type_of(ctx, object) {
