@@ -107,7 +107,6 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
-    crate::typed_feedback::guard_counters::bump(4);
     // Sloppy script assignment lowers to PutValue rather than the named-field
     // setter.  Existing own data fields need none of PutValue's rooting,
     // ToPropertyKey, Proxy, typed-array, or receiver-aware prototype work.

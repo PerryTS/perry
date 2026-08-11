@@ -1075,8 +1075,6 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name_fast(
     }
 }
 
-#[path = "typed_feedback/guard_counters.rs"]
-pub(crate) mod guard_counters;
 #[path = "typed_feedback/guards.rs"]
 mod guards;
 pub use guards::{
