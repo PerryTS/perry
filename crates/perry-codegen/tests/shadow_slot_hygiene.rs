@@ -1118,6 +1118,33 @@ fn canonical_str_shadow_module() -> Module {
     }
 }
 
+fn declared_string_lie_self_append_module() -> Module {
+    let mut module = canonical_str_shadow_module();
+    module.name = "declared_string_lie_self_append.ts".to_string();
+    module.functions[0].name = "probe_declared_string_lie".to_string();
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "value".to_string(),
+            ty: Type::String,
+            mutable: true,
+            // Models `let value: string = (42 as any)`: the annotation selects
+            // the string self-append lowering, but the slot bits are numeric.
+            init: Some(Expr::Number(42.0)),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(1)),
+                right: Box::new(Expr::Number(1.0)),
+            }),
+        )),
+        Stmt::Return(Some(Expr::LocalGet(1))),
+    ];
+    module
+}
+
 /// Phase 3a invariants (default flag state, `PERRY_CANONICAL_STR_LOCALS` on):
 /// a canonical-Str local keeps EXACTLY the pre-phase GC protocol — same
 /// double slot, same `js_shadow_slot_bind` — while the string ops tag-
@@ -1156,7 +1183,7 @@ fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
     }
     let heap_arm_start = block_def_offset(fn_ir, "strapp.heap");
     let heap_arm_end =
-        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.rcold") + 1;
+        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.rnotheap") + 1;
     let heap_arm = &fn_ir[heap_arm_start..heap_arm_end];
     assert!(
         heap_arm.contains("call i64 @js_string_append"),
@@ -1176,5 +1203,32 @@ fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
     assert!(
         !fn_ir.contains("plen.check_gc"),
         "canonical-Str .length must not fall into the generic receiver tower:\n{fn_ir}"
+    );
+}
+
+/// #7841: a TypeScript annotation may select the self-append lowering, but it
+/// cannot decide whether `+` means numeric addition or string concatenation.
+/// The real slot tag makes that decision at runtime. Keep the load-bearing
+/// heap-string arm direct while routing the annotation-lie arm through the
+/// spec-complete dynamic operator.
+#[test]
+fn declared_string_self_append_keeps_dynamic_lie_arm() {
+    let _pin = NativeRootsPin::shadow();
+    let ir = String::from_utf8(
+        compile_module(&declared_string_lie_self_append_module(), empty_opts()).unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let fn_ir = function_slice(
+        &ir,
+        "perry_fn_declared_string_lie_self_append_ts__probe_declared_string_lie",
+    );
+
+    assert!(
+        fn_ir.contains("call i64 @js_string_append"),
+        "a real heap-string destination must retain the in-place append arm:\n{fn_ir}"
+    );
+    assert!(
+        fn_ir.contains("call double @js_dynamic_string_or_number_add"),
+        "a non-string destination must use the actual runtime `+` operator:\n{fn_ir}"
     );
 }
