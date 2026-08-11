@@ -446,6 +446,11 @@ pub extern "C" fn js_string_concat_value(
     js_string_concat(prefix_handle.get_raw_const_ptr::<StringHeader>(), value_str)
 }
 
+/// Ceiling on the per-call part count. Must match `CONCAT_CHAIN_MAX_PARTS` in
+/// `perry-codegen/src/lower_string_concat.rs`. The cap keeps the stack scratch
+/// bounded so a pathological fold cannot overflow the stack.
+const CONCAT_CHAIN_MAX_PARTS: usize = 32;
+
 /// N-way string concatenation (v0.5.771).
 ///
 /// Replaces a left-spine of `Binary { Add }` string-concat nodes with a
@@ -471,22 +476,40 @@ pub extern "C" fn js_string_concat_value(
 /// with STRING_TAG via the standard `nanbox_string_inline` helper.
 #[no_mangle]
 pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut StringHeader {
-    // Cap the per-call part count. The codegen-side fold limits chains
-    // to 32; in practice user code rarely exceeds 8-10 (CSV row, log
-    // line, prompt template). The cap keeps the stack arrays bounded so
-    // we don't risk stack overflow on a pathological 10k-element fold.
-    const MAX_PARTS: usize = 32;
-    let n = (n as usize).min(MAX_PARTS);
-    if n == 0 {
-        return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
-    }
-    if parts.is_null() {
+    let n = (n as usize).min(CONCAT_CHAIN_MAX_PARTS);
+    if n == 0 || parts.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }
 
+    // ★ Size the stack scratch to the chain actually being built. One
+    // `MAX_PARTS = 32` shape made EVERY call pay ~2 KB of stack
+    // initialisation — the release disassembly opens `sub sp, sp, #0x7e0`,
+    // then `memset(sp+0x20, _, 0x400)` for `num_bufs`, then 32 `str xzr` for
+    // the handle array — whether the chain had 32 parts or 2. Real chains are
+    // 2-4 parts: `seen = seen + "[" + names[i] + "]"` in an environment-lookup
+    // loop is four, and was memsetting 2 KB per append.
+    if n <= 4 {
+        concat_chain_sized::<4>(parts, n)
+    } else if n <= 8 {
+        concat_chain_sized::<8>(parts, n)
+    } else {
+        concat_chain_sized::<CONCAT_CHAIN_MAX_PARTS>(parts, n)
+    }
+}
+
+/// The body of [`js_string_concat_chain`], monomorphised on the scratch-array
+/// size. `0 < n <= MAX_PARTS` and `!parts.is_null()` are preconditions the
+/// dispatcher establishes.
+fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *mut StringHeader {
+    debug_assert!(n > 0 && n <= MAX_PARTS);
     // Per-part scratch buffer for number formatting. 32 bytes is enough
-    // for any f64 string representation (max ~24 chars).
-    let mut num_bufs: [[u8; 32]; MAX_PARTS] = [[0u8; 32]; MAX_PARTS];
+    // for any f64 string representation (max ~24 chars). Left UNINITIALISED:
+    // a slot becomes readable only via `MaybeUninit::write`, on exactly the
+    // two numeric arms, which are also the only arms that publish a
+    // `piece_ptrs[i]` into it — so the copy loop can never read an
+    // uninitialised slot.
+    let mut num_bufs: [core::mem::MaybeUninit<[u8; 32]>; MAX_PARTS] =
+        [core::mem::MaybeUninit::uninit(); MAX_PARTS];
     // For each part: (ptr, len, flags). ptr is either a pointer into
     // num_bufs[i] (numeric path) or null for a rooted string handle;
     // len is the byte count; flags carries STRING_FLAG_HAS_LONE_SURROGATES
@@ -551,8 +574,8 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
         // Plain f64 (no NaN-box tag in upper 16 bits). Format inline.
         let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
         if is_plain_f64 {
-            let len = format_number_into(value, &mut num_bufs[i]);
-            piece_ptrs[i] = num_bufs[i].as_ptr();
+            let len = format_number_into(value, num_bufs[i].write([0u8; 32]));
+            piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
             piece_lens[i] = len as u32;
             piece_u16[i] = len as u32; // ASCII for all formatted numbers
             total_blen = total_blen.saturating_add(len as u32);
@@ -565,15 +588,18 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
         // renders as function source, not its numeric id.
         if tag == 0x7FFE && !crate::object::is_class_id_registered((bits & 0xFFFF_FFFF) as u32) {
             let v = (bits & 0xFFFF_FFFF) as u32 as i32;
-            let len = if v >= 0 {
-                fast_itoa_u32(v as u32, &mut num_bufs[i])
-            } else {
-                let s = format!("{}", v);
-                let l = s.len().min(32);
-                num_bufs[i][..l].copy_from_slice(&s.as_bytes()[..l]);
-                l
+            let len = {
+                let buf = num_bufs[i].write([0u8; 32]);
+                if v >= 0 {
+                    fast_itoa_u32(v as u32, buf)
+                } else {
+                    let s = format!("{}", v);
+                    let l = s.len().min(32);
+                    buf[..l].copy_from_slice(&s.as_bytes()[..l]);
+                    l
+                }
             };
-            piece_ptrs[i] = num_bufs[i].as_ptr();
+            piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
             piece_lens[i] = len as u32;
             piece_u16[i] = len as u32;
             total_blen = total_blen.saturating_add(len as u32);
