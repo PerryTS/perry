@@ -58,6 +58,12 @@ mod hot_tls;
 pub(crate) use hot_tls::*;
 mod roots;
 pub use roots::*;
+#[cfg(test)]
+pub(crate) fn test_rewrite_runtime_handles_for_forwarded_objects() {
+    let valid_ptrs = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_rewrite(&valid_ptrs);
+    scan_runtime_handle_roots_mut(&mut visitor);
+}
 /// #7148: the census of conservative-scan fallbacks and the precise-safepoint
 /// drains that replace them. Declared next to `roots` because
 /// `ManualGcScanGuard` is what records into it.
