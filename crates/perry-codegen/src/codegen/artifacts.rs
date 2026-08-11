@@ -1433,9 +1433,36 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // `BTreeSet` so a multi-path site that resolves to N targets emits
     // N declarations exactly once even when multiple `paths` arrays
     // share entries.
-    if !cross_module.dynamic_import_path_to_prefix.is_empty() {
-        let mut foreign_prefixes: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+    // #7189: nested namespace members (`export * as ns from "./m.ts"`, read as
+    // `B.ns` through a static `import * as B`) load the SAME
+    // `@__perry_ns_<prefix>` global a dynamic import would, so they need the
+    // same extern declaration. Without it the module references a global it
+    // never declared and LLVM refuses to parse the IR — which is a good way for
+    // this to fail, since it fails at build time and names the missing global.
+    let mut nested_prefixes: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for key in &cross_module.namespace_member_nested {
+        if let Some(prefix) = cross_module.namespace_member_prefixes.get(key) {
+            if prefix != module_prefix.as_str() {
+                nested_prefixes.insert(prefix.clone());
+            }
+        }
+    }
+    // The other direction: this module's OWN populator has a nested entry for
+    // each `export * as ns` it declares, and that entry's value is the source
+    // module's namespace global. Before #7189 this could not come up, because a
+    // module only got a populator by being a dynamic-import target and those
+    // already declare their targets. Now that a namespace re-exporter gets one
+    // too, its source needs declaring on the same terms.
+    for entry in &cross_module.namespace_entries {
+        if let crate::NamespaceEntryKind::NestedNamespace { source_prefix } = &entry.kind {
+            if source_prefix != module_prefix.as_str() {
+                nested_prefixes.insert(source_prefix.clone());
+            }
+        }
+    }
+    if !cross_module.dynamic_import_path_to_prefix.is_empty() || !nested_prefixes.is_empty() {
+        let mut foreign_prefixes: std::collections::BTreeSet<String> = nested_prefixes;
         for prefix in cross_module.dynamic_import_path_to_prefix.values() {
             if prefix != module_prefix.as_str() {
                 foreign_prefixes.insert(prefix.clone());

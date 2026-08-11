@@ -545,6 +545,10 @@ pub(crate) struct FnCtx<'a> {
     /// by namespace member access lowering to disambiguate when the same
     /// export name appears in multiple `import * as X / Y` sources.
     pub namespace_member_prefixes: &'a std::collections::HashMap<(String, String), String>,
+    /// #7189: `(namespace local, member)` pairs whose member is another
+    /// module's namespace object rather than a binding. See the doc on
+    /// `CompileOptions::namespace_member_nested`.
+    pub namespace_member_nested: &'a std::collections::HashSet<(String, String)>,
     /// Issue #5924: per-namespace origin-name resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `origin_name`. Consulted
     /// before `import_function_origin_names` when computing the symbol

@@ -947,6 +947,7 @@ pub(super) fn compile_closure(
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
+        namespace_member_nested: &cross_module.namespace_member_nested,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,

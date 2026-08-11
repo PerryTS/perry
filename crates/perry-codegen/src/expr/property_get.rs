@@ -929,6 +929,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (the registry duplication bug was the first).
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                 if ctx.namespace_imports.contains(name) {
+                    // #7189: `B.deep` where the imported module says
+                    // `export * as deep from "./m.ts"`. The member's value is
+                    // another module's namespace OBJECT, so there is no
+                    // `perry_fn_<mod>__deep` symbol to call — every arm below
+                    // resolves to a symbol, and this member does not have one.
+                    //
+                    // The object it should produce is the one
+                    // `@__perry_ns_<prefix>` already holds, built by the same
+                    // populator a dynamic `import()` of that module would use.
+                    // Reusing it means nested re-exports (a namespace whose own
+                    // exports include another `export * as`) come out right
+                    // without a second implementation, because the populator
+                    // already recurses.
+                    //
+                    // First, ahead of the class and member-prefix arms: a
+                    // namespace alias can collide with a class or function name
+                    // exported elsewhere, and the alias is what the source said.
+                    if ctx
+                        .namespace_member_nested
+                        .contains(&(name.clone(), property.to_string()))
+                    {
+                        if let Some(prefix) = ctx
+                            .namespace_member_prefixes
+                            .get(&(name.clone(), property.to_string()))
+                            .cloned()
+                        {
+                            return Ok(crate::expr::dyn_extern_i18n::namespace_value_for_prefix(
+                                ctx, &prefix,
+                            ));
+                        }
+                    }
                     // Issue #841: namespace member access for the five
                     // recognized Node submodules — `import * as ns from
                     // "node:timers/promises"; ns.setTimeout`. Resolve

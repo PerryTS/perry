@@ -21,7 +21,7 @@ use super::{
 /// on the current block: a native submodule (`__node_submod__<key>`), a native
 /// builtin (`__native_mod__<name>`), or a compiled module (`<prefix>__init` +
 /// `@__perry_ns_<prefix>`). Returns a NaN-boxed `DOUBLE` value id.
-fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> String {
+pub(crate) fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> String {
     if let Some(key) = prefix.strip_prefix("__node_submod__") {
         let key = key.to_string();
         let submod_label = emit_string_literal_global(ctx, &key);
