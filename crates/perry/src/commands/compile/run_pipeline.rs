@@ -4344,7 +4344,7 @@ pub fn run_with_parse_cache(
             // The HIR fingerprint is computed inside this rayon job
             // (paralelizes the cost across modules and avoids an extra
             // serial O(modules) pass). Crucially, every HIR-mutating
-            // pass (inline_functions, unroll_static_loops,
+            // pass (inline_functions, unroll_static_loops, prop_cse,
             // inline_finally_into_returns, transform_async_to_generator,
             // transform_generators per-module; transform_js_imports,
             // fix_local_native_instances, fix_cross_module_native_instances,
