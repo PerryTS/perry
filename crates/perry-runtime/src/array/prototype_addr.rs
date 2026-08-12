@@ -1,6 +1,7 @@
-//! The memoized `Array.prototype` / `Object.prototype` addresses (#6981).
+//! The memoized `Array.prototype` / `Object.prototype` addresses (#6981),
+//! **one pair per thread** (#7988).
 //!
-//! Two `AtomicUsize` cells and the algebra over them: lazy resolution from
+//! Two `usize` cells and the algebra over them: lazy resolution from
 //! `globalThis`, healing through the GC forwarding chain, and the registered
 //! root scanner that lets a relocating cycle rewrite them.
 //!
@@ -9,106 +10,150 @@
 //! invariant is easiest to keep true when the cells, the accessors and the
 //! scanner are the only things in the file (and it kept `indexing.rs` under
 //! `scripts/check_file_size.sh`'s 2000-line cap).
+//!
+//! # Why the cells are PER-THREAD (#7988)
+//!
+//! Both cells hold a **raw address of an object in a thread-local arena**, and
+//! the realm they name is per-thread: `js_get_global_this` bootstraps
+//! `THREAD_GLOBAL_THIS` once *per thread*, so every `perry/thread` agent has
+//! its own `Array.prototype` and its own `Object.prototype` in its own heap.
+//! When the cells were process-global `AtomicUsize` statics they missed only
+//! once *per process*, so the first thread to touch either intrinsic decided
+//! the value for every other agent, with three consequences:
+//!
+//!   1. **Wrong identity.** [`object_prototype_addr_matches`] on agent B
+//!      compared B's objects against *A's* `Object.prototype`, so B's own
+//!      intrinsic was never recognised. `array_oob_prototype_get`'s hole/OOB
+//!      fallbacks and the typed-feedback guards that consult it silently took
+//!      the other branch on every thread but the first — B's
+//!      `Object.prototype[7] = v` never even flipped `OBJECT_PROTO_HAS_INDEX`,
+//!      because the write hook's "is this the prototype?" test compared against
+//!      a foreign address.
+//!   2. **Unattributed dereference.** [`heal_prototype_addr`] reads the cached
+//!      address's `GcHeader` from *any* thread, and `note_array_index_write`
+//!      calls it on every indexed array write. A's collector can sweep or move
+//!      that object, and A's arena blocks are `dealloc`'d at thread exit, so
+//!      the read was on memory the reading thread had no claim to.
+//!   3. **Cross-thread root rewrite.** [`scan_prototype_addr_cache_roots_mut`]
+//!      is registered per thread and *writes* the cell with **its own**
+//!      to-space address, so agent B's collector could overwrite a cell naming
+//!      A's heap with a B-heap address.
+//!
+//! All three are structural once the storage is per-thread: a cell only ever
+//! holds an address this thread allocated, healed by this thread's forwarding
+//! chain and rewritten by this thread's collector.
+//!
+//! # Why a thread-local is affordable here
+//!
+//! [`crate::perry_thread_local`] is not `std::thread_local!`: the address of
+//! the value lands in this thread's [`crate::tls_hot::HotTls`] cache, which on
+//! Apple aarch64 is reached with an `mrs` plus two loads that LLVM CSEs across
+//! the enclosing function — not the out-of-line `_tlv_get_addr` call that made
+//! "Darwin has no local-exec TLS" the recorded objection to this fix (#7955).
+//! Both intrinsics share ONE declaration (an array indexed by
+//! [`ARRAY_PROTO_CACHE`] / [`OBJECT_PROTO_CACHE`]) so a function that consults
+//! both — `array_oob_prototype_get` does — pays one resolution, not two.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
-/// Lazily-memoized address of the `Array.prototype` array. An out-of-bounds
-/// element read on an ordinary array must fall through to
-/// `Array.prototype[index]` (ECMA-262 OrdinaryGet → prototype chain), but in
-/// real code nobody adds numeric indices to `Array.prototype`, so the hot OOB
-/// path stays a single relaxed atomic load until the (rare) write flips
-/// `ARRAY_PROTO_HAS_INDEX`. `usize::MAX` marks the address as not-yet-computed.
+/// How many intrinsic prototype addresses one realm memoizes.
 ///
-/// ***THIS IS A RAW ADDRESS OF A MOVABLE OBJECT*** (#6981). `Array.prototype`
-/// relocates two different ways, and BOTH leave this cache pointing at a
-/// `GC_FLAG_FORWARDED` stub while every reader resolves its own receiver
-/// through `clean_arr_ptr` (which follows forwarding):
-///
-///   1. `js_array_grow` — an indexed write past the dense capacity
-///      (`Array.prototype[300] = v`) reallocates and forwards the old head;
-///   2. the copying young-gen minor — it evacuates the prototype and forwards.
-///
-/// A stale cache is not merely a wrong value: `array_oob_prototype_get`'s
-/// self-recursion guard is `proto != receiver`, and after a move those are two
-/// different addresses **for the same object**, so the guard stops firing and
-/// `js_array_get_f64` ⇄ `array_oob_prototype_get` recurse until the stack guard
-/// page (SIGSEGV, "excessive recursion"). Hence the two defences below:
-/// [`memoized_prototype_addr`] resolves the forwarding chain and self-heals,
-/// and [`scan_prototype_addr_cache_roots_mut`] lets the collector rewrite the
-/// slot so the address stays live even once the from-space stub is recycled.
-static ARRAY_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// This is the length of BOTH the per-thread cell array and the builtin-name
+/// table below, and the root scanner iterates the cell array itself, so
+/// "a cell an accessor reads that the collector never rewrites" — the #6981
+/// defect — is not representable. Adding a third memoized intrinsic address
+/// means bumping this and adding a row to [`PROTOTYPE_ADDR_BUILTINS`]; it is
+/// then covered by both halves automatically.
+const PROTOTYPE_ADDR_CACHE_COUNT: usize = 2;
 
-/// Same idea for `Object.prototype`: a numeric index installed there
-/// (`Object.prototype[2] = 2`, or a defineProperty accessor) shows through
-/// array HOLES and OOB reads (chain: arr → Array.prototype →
-/// Object.prototype; test262 concat/S15.4.4.4_A3_T3). Consulted by the
-/// typed-feedback guards and the hole/OOB read fallbacks.
-static OBJECT_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
-
-/// One memoized intrinsic-prototype address: the cell, and the `globalThis`
-/// builtin whose `.prototype` fills it.
-///
-/// The pairing is a TABLE rather than two hand-written accessors so that the
-/// two facts a reader has to trust — "the collector rewrites every cell some
-/// accessor reads" and "each accessor resolves the builtin its cell is named
-/// for" — are established by construction instead of by a test that has to
-/// mutate a process-global to observe them (#7955). See
-/// [`PROTOTYPE_ADDR_CACHES`].
-struct PrototypeAddrCache {
-    cell: &'static AtomicUsize,
-    /// `globalThis` key whose `.prototype` this cell memoizes.
-    builtin: &'static [u8],
-}
-
-/// Every memoized prototype address in the runtime, in the order the GC root
-/// scanner visits them.
-///
-/// [`scan_prototype_addr_cache_roots_mut`] iterates this table and
-/// [`array_prototype_addr`] / [`object_prototype_addr`] index it, so a cell
-/// that an accessor reads but the collector never rewrites — the #6981 defect
-/// — is not representable. Adding a third memoized intrinsic address means
-/// adding a row here, and it is covered by both halves automatically.
-static PROTOTYPE_ADDR_CACHES: [PrototypeAddrCache; 2] = [
-    PrototypeAddrCache {
-        cell: &ARRAY_PROTO_ADDR,
-        builtin: b"Array",
-    },
-    PrototypeAddrCache {
-        cell: &OBJECT_PROTO_ADDR,
-        builtin: b"Object",
-    },
-];
-
+/// Row index of the `Array.prototype` cell.
 const ARRAY_PROTO_CACHE: usize = 0;
+/// Row index of the `Object.prototype` cell.
 const OBJECT_PROTO_CACHE: usize = 1;
 
-/// GC root scanner for the memoized prototype addresses (#6981).
+crate::perry_thread_local! {
+    /// **THIS THREAD's** lazily-memoized intrinsic prototype addresses, indexed
+    /// by [`ARRAY_PROTO_CACHE`] / [`OBJECT_PROTO_CACHE`]. `usize::MAX` marks a
+    /// row as not-yet-computed.
+    ///
+    /// Row 0 is `Array.prototype`. An out-of-bounds element read on an ordinary
+    /// array must fall through to `Array.prototype[index]` (ECMA-262
+    /// OrdinaryGet → prototype chain), but in real code nobody adds numeric
+    /// indices to `Array.prototype`, so the hot OOB path stays one load until
+    /// the (rare) write flips `ARRAY_PROTO_HAS_INDEX`.
+    ///
+    /// Row 1 is `Object.prototype`: a numeric index installed there
+    /// (`Object.prototype[2] = 2`, or a defineProperty accessor) shows through
+    /// array HOLES and OOB reads (chain: arr → Array.prototype →
+    /// Object.prototype; test262 concat/S15.4.4.4_A3_T3). Consulted by the
+    /// typed-feedback guards and the hole/OOB read fallbacks.
+    ///
+    /// ***THESE ARE RAW ADDRESSES OF MOVABLE OBJECTS*** (#6981).
+    /// `Array.prototype` relocates two different ways, and BOTH leave the cache
+    /// pointing at a `GC_FLAG_FORWARDED` stub while every reader resolves its
+    /// own receiver through `clean_arr_ptr` (which follows forwarding):
+    ///
+    ///   1. `js_array_grow` — an indexed write past the dense capacity
+    ///      (`Array.prototype[300] = v`) reallocates and forwards the old head;
+    ///   2. the copying young-gen minor — it evacuates the prototype and
+    ///      forwards.
+    ///
+    /// A stale cache is not merely a wrong value: `array_oob_prototype_get`'s
+    /// self-recursion guard is `proto != receiver`, and after a move those are
+    /// two different addresses **for the same object**, so the guard stops
+    /// firing and `js_array_get_f64` ⇄ `array_oob_prototype_get` recurse until
+    /// the stack guard page (SIGSEGV, "excessive recursion"). Hence the two
+    /// defences below: [`memoized_prototype_addr`] resolves the forwarding
+    /// chain and self-heals, and [`scan_prototype_addr_cache_roots_mut`] lets
+    /// the collector rewrite the slot so the address stays live even once the
+    /// from-space stub is recycled.
+    static PROTOTYPE_ADDRS: [Cell<usize>; PROTOTYPE_ADDR_CACHE_COUNT] =
+        const { [const { Cell::new(usize::MAX) }; PROTOTYPE_ADDR_CACHE_COUNT] };
+}
+
+/// The `globalThis` builtin whose `.prototype` fills each row of
+/// [`PROTOTYPE_ADDRS`], in the same order.
 ///
-/// `ARRAY_PROTO_ADDR` / `OBJECT_PROTO_ADDR` hold raw addresses of movable
-/// objects, so a relocating cycle must REWRITE them exactly like the other
-/// address-holding side tables (`CLASS_PROTOTYPE_OBJECTS`,
-/// `TYPED_ARRAY_VIEW_META`, …). Forwarding-chain healing alone is not
-/// sufficient: once the from-space stub is swept and its block recycled the
-/// `GC_FLAG_FORWARDED` bit is gone, and the cache would then name an unrelated
-/// live object. Both intrinsics are reachable from `globalThis`, so the marking
-/// half of this visit is redundant; the rewriting half is the point.
+/// The pairing is POSITIONAL rather than two hand-written accessors so that the
+/// second fact a reader has to trust — "each accessor resolves the builtin its
+/// cell is named for" — is established by construction instead of by a test
+/// that has to mutate a process-global to observe it (#7955).
+static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] = [b"Array", b"Object"];
+
+/// GC root scanner for this thread's memoized prototype addresses (#6981).
+///
+/// The cells hold raw addresses of movable objects, so a relocating cycle must
+/// REWRITE them exactly like the other address-holding side tables
+/// (`CLASS_PROTOTYPE_OBJECTS`, `TYPED_ARRAY_VIEW_META`, …). Forwarding-chain
+/// healing alone is not sufficient: once the from-space stub is swept and its
+/// block recycled the `GC_FLAG_FORWARDED` bit is gone, and the cache would then
+/// name an unrelated live object. Both intrinsics are reachable from
+/// `globalThis`, so the marking half of this visit is redundant; the rewriting
+/// half is the point.
+///
+/// #7988: the scanner runs on the collecting thread and now visits **that
+/// thread's** cells. Before the storage was per-thread it wrote the collecting
+/// thread's to-space address into a cell that could be naming another agent's
+/// heap.
 pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    for entry in &PROTOTYPE_ADDR_CACHES {
-        rewrite_prototype_addr_slot(entry.cell, visitor);
-    }
+    PROTOTYPE_ADDRS.with(|cells| {
+        for cell in cells {
+            rewrite_prototype_addr_slot(cell, visitor);
+        }
+    });
 }
 
 /// The per-cell half of [`scan_prototype_addr_cache_roots_mut`].
 ///
 /// Split out so the #6981 rewrite algebra can be exercised on a cell the test
-/// owns privately: driving it through the shipped `static`s made the assertion
-/// depend on no other libtest thread touching the realm's real intrinsics
-/// meanwhile, which is the #7955 flake.
+/// owns privately: driving it through the realm's real intrinsics made the
+/// assertion depend on no other libtest thread touching them meanwhile, which
+/// is the #7955 flake.
 fn rewrite_prototype_addr_slot(
-    cache: &AtomicUsize,
+    cache: &Cell<usize>,
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
 ) {
-    let cached = cache.load(Ordering::Relaxed);
+    let cached = cache.get();
     if cached == usize::MAX || cached == 0 {
         return;
     }
@@ -120,7 +165,7 @@ fn rewrite_prototype_addr_slot(
         // relocated the object, and the value written is the visitor's own
         // to-space address — barriering it would push an edge into the
         // remembered set that this very cycle is rebuilding.
-        cache.store(addr, Ordering::Relaxed);
+        cache.set(addr);
     }
 }
 
@@ -128,14 +173,14 @@ fn rewrite_prototype_addr_slot(
 /// chain. `None` means "not resolved yet" — the caller must run the
 /// `globalThis` bootstrap.
 #[inline]
-fn memoized_prototype_addr(cache: &AtomicUsize) -> Option<usize> {
-    let cached = cache.load(Ordering::Relaxed);
+fn memoized_prototype_addr(cache: &Cell<usize>) -> Option<usize> {
+    let cached = cache.get();
     (cached != usize::MAX).then(|| heal_prototype_addr(cache, cached))
 }
 
 /// Re-read a memoized prototype address through the GC forwarding chain and
 /// write the healed address back, so every caller compares (and dereferences)
-/// the object's CURRENT location. See the [`ARRAY_PROTO_ADDR`] doc for why an
+/// the object's CURRENT location. See the [`PROTOTYPE_ADDRS`] doc for why an
 /// unresolved cache is a hang, not just a wrong answer (#6981).
 ///
 /// `note_array_index_write` calls this on every indexed array write until the
@@ -145,8 +190,14 @@ fn memoized_prototype_addr(cache: &AtomicUsize) -> Option<usize> {
 /// address. It also classifies the address band before dereferencing, so the
 /// not-yet-resolved sentinel (`usize::MAX`) and any non-heap value fall
 /// straight through.
+///
+/// #7988: the address is now always one THIS thread allocated, so the header
+/// read has an owner. It used to be able to land on another agent's arena
+/// block — possibly already swept, moved, or `dealloc`'d at that thread's exit
+/// — and a stray `GC_FLAG_FORWARDED` byte there sent `resolve_forwarding` one
+/// word further into it.
 #[inline]
-fn heal_prototype_addr(cache: &AtomicUsize, cached: usize) -> usize {
+fn heal_prototype_addr(cache: &Cell<usize>, cached: usize) -> usize {
     let forwarded = unsafe {
         crate::value::addr_class::try_read_gc_header(cached)
             .is_some_and(|header| header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0)
@@ -156,22 +207,33 @@ fn heal_prototype_addr(cache: &AtomicUsize, cached: usize) -> usize {
     }
     let resolved = crate::value::resolve_forwarding(cached);
     if resolved != cached {
-        cache.store(resolved, Ordering::Relaxed);
+        cache.set(resolved);
     }
     resolved
 }
 
-/// Resolve one row of [`PROTOTYPE_ADDR_CACHES`]: the memoized address if it is
-/// already known (healed through any forwarding chain), otherwise the
+/// Resolve one row of [`PROTOTYPE_ADDRS`]: the memoized address if this thread
+/// already knows it (healed through any forwarding chain), otherwise the
 /// `globalThis` bootstrap, memoized.
-fn resolve_prototype_addr(entry: &PrototypeAddrCache) -> usize {
-    if let Some(addr) = memoized_prototype_addr(entry.cell) {
+#[inline]
+fn resolve_prototype_addr(slot: usize) -> usize {
+    if let Some(addr) = PROTOTYPE_ADDRS.with(|cells| memoized_prototype_addr(&cells[slot])) {
         return addr;
     }
-    let ctor = crate::object::js_get_global_this_builtin_value(
-        entry.builtin.as_ptr(),
-        entry.builtin.len(),
-    );
+    bootstrap_prototype_addr(slot)
+}
+
+/// The cold half of [`resolve_prototype_addr`]: derive the intrinsic's address
+/// from THIS thread's `globalThis` and memoize it.
+///
+/// Out of line so the hot arm — `note_array_index_write` on every indexed array
+/// write — is a slot load, a compare and a branch, with the whole `globalThis`
+/// walk off the fast path.
+#[cold]
+#[inline(never)]
+fn bootstrap_prototype_addr(slot: usize) -> usize {
+    let builtin = PROTOTYPE_ADDR_BUILTINS[slot];
+    let ctor = crate::object::js_get_global_this_builtin_value(builtin.as_ptr(), builtin.len());
     let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
     let addr = if ctor_value.is_pointer() {
         let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
@@ -190,53 +252,63 @@ fn resolve_prototype_addr(entry: &PrototypeAddrCache) -> usize {
     // call into here via `note_array_proto_iterator_write`). Re-derive until it
     // resolves.
     if addr != 0 {
-        entry.cell.store(addr, Ordering::Relaxed);
+        PROTOTYPE_ADDRS.with(|cells| cells[slot].set(addr));
     }
     addr
 }
 
 pub(crate) fn array_prototype_addr() -> usize {
-    resolve_prototype_addr(&PROTOTYPE_ADDR_CACHES[ARRAY_PROTO_CACHE])
+    resolve_prototype_addr(ARRAY_PROTO_CACHE)
 }
 
 pub(crate) fn object_prototype_addr() -> usize {
-    resolve_prototype_addr(&PROTOTYPE_ADDR_CACHES[OBJECT_PROTO_CACHE])
+    resolve_prototype_addr(OBJECT_PROTO_CACHE)
 }
 
-/// `true` when `addr` is the canonical `Object.prototype` (cheap: cached
-/// atomic + compare; lazily computes the address on first use).
+/// `true` when `addr` is **this realm's** canonical `Object.prototype` (cheap:
+/// one slot load + compare; lazily computes the address on first use).
 pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
     addr != 0 && addr == object_prototype_addr()
 }
 
-/// Test-only handle on the shipped table, for the read-only wiring assertion
-/// in `gc::tests::runtime_roots::prototype_addr_cache`. The mutating #6981
-/// cases run on cells they own; nothing hands out a writable reference to the
-/// realm's real intrinsic cells any more (#7955).
+/// Test-only handle on the shipped wiring, for the read-only assertion in
+/// `gc::tests::runtime_roots::prototype_addr_cache`. Returns each accessor's
+/// row index paired with the `globalThis` builtin that row bootstraps from.
+/// The mutating #6981 cases run on cells they own; nothing hands out a writable
+/// reference to the realm's real intrinsic cells (#7955).
 #[cfg(test)]
-pub(crate) fn test_prototype_addr_cache_wiring() -> [(&'static AtomicUsize, &'static [u8]); 2] {
+pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 2] {
     [
         (
-            PROTOTYPE_ADDR_CACHES[ARRAY_PROTO_CACHE].cell,
-            PROTOTYPE_ADDR_CACHES[ARRAY_PROTO_CACHE].builtin,
+            ARRAY_PROTO_CACHE,
+            PROTOTYPE_ADDR_BUILTINS[ARRAY_PROTO_CACHE],
         ),
         (
-            PROTOTYPE_ADDR_CACHES[OBJECT_PROTO_CACHE].cell,
-            PROTOTYPE_ADDR_CACHES[OBJECT_PROTO_CACHE].builtin,
+            OBJECT_PROTO_CACHE,
+            PROTOTYPE_ADDR_BUILTINS[OBJECT_PROTO_CACHE],
         ),
     ]
 }
 
-/// The two halves of the #6981 defences, exported so the tests can drive them
-/// on a private cell instead of the process-global one (#7955).
+/// Number of cells this thread owns — i.e. how many
+/// [`scan_prototype_addr_cache_roots_mut`] visits. Read by the wiring test so
+/// "the scanner visits every cell an accessor can index" is asserted rather
+/// than assumed.
 #[cfg(test)]
-pub(crate) fn test_memoized_prototype_addr(cache: &AtomicUsize) -> Option<usize> {
+pub(crate) fn test_prototype_addr_cell_count() -> usize {
+    PROTOTYPE_ADDRS.with(|cells| cells.len())
+}
+
+/// The two halves of the #6981 defences, exported so the tests can drive them
+/// on a private cell instead of this thread's real ones (#7955).
+#[cfg(test)]
+pub(crate) fn test_memoized_prototype_addr(cache: &Cell<usize>) -> Option<usize> {
     memoized_prototype_addr(cache)
 }
 
 #[cfg(test)]
 pub(crate) fn test_rewrite_prototype_addr_slot(
-    cache: &AtomicUsize,
+    cache: &Cell<usize>,
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
 ) {
     rewrite_prototype_addr_slot(cache, visitor)

@@ -1,8 +1,10 @@
 //! #6981 — the memoized `Array.prototype` / `Object.prototype` addresses are
 //! raw pointers to MOVABLE objects, so they must survive relocation.
 //!
-//! `array::prototype_addr` memoizes both intrinsic addresses in process-global
-//! `AtomicUsize` cells. `Array.prototype` relocates two ways, and both leave a
+//! `array::prototype_addr` memoizes both intrinsic addresses in a PER-THREAD
+//! pair of cells (#7988 — the realm they name is per-thread, so a process-wide
+//! cell handed every `perry/thread` agent the first thread's addresses).
+//! `Array.prototype` relocates two ways, and both leave a
 //! `GC_FLAG_FORWARDED` stub at the memoized address:
 //!
 //!   * `js_array_grow` — `Array.prototype[300] = v` reallocates the dense
@@ -40,24 +42,33 @@
 //! better: restoring the value read at test entry stamps a stale address over
 //! whatever another thread resolved meanwhile.
 //!
-//! Both defences are algebra over an `&AtomicUsize`, so each case now owns its
-//! cell and the shipped `static`s are never written from a test. What that
+//! Both defences are algebra over a `&Cell<usize>`, so each case now owns its
+//! cell and the realm's real cells are never written from a test. What that
 //! decomposition would otherwise lose — "the collector rewrites every cell an
 //! accessor reads" — is not recovered by a test at all but by CONSTRUCTION:
-//! `PROTOTYPE_ADDR_CACHES` is one table, the scanner iterates it and the
-//! accessors index it. `the_shipped_cells_are_the_ones_the_scanner_visits`
-//! pins the table itself, read-only, so it cannot be raced either.
+//! `PROTOTYPE_ADDRS` is one fixed-length per-thread array, the scanner iterates
+//! that array and the accessors index it positionally against
+//! `PROTOTYPE_ADDR_BUILTINS`. `the_shipped_cells_are_the_ones_the_scanner_visits`
+//! pins the wiring itself, read-only, so it cannot be raced either.
+//!
+//! # The per-thread half (#7988)
+//!
+//! `a_second_agents_prototype_addresses_are_its_own` is the isolation gate: two
+//! live threads, each with its own realm and its own arena, must memoize
+//! DIFFERENT addresses. It is deliberately not satisfiable by a run in which
+//! nothing happened — it asserts both threads resolved a real (non-zero,
+//! non-sentinel) address first, so "distinct" cannot be earned by two failures.
 
 use super::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 /// A memoized-prototype-address cell owned by ONE test.
 ///
 /// `memoized_prototype_addr` / `rewrite_prototype_addr_slot` take the cell as
 /// an argument, so the #6981 algebra is exercised exactly as shipped without
 /// any test writing to the realm's real intrinsic cells.
-fn private_cache_cell() -> AtomicUsize {
-    AtomicUsize::new(usize::MAX)
+fn private_cache_cell() -> Cell<usize> {
+    Cell::new(usize::MAX)
 }
 
 /// Allocate a nursery object to stand in for the intrinsic.
@@ -118,7 +129,7 @@ fn prototype_addr_reads_through_a_forwarding_stub() {
     for which in ["array", "object"] {
         let cell = private_cache_cell();
         let (from, to) = forwarded_pair();
-        cell.store(from, Ordering::Relaxed);
+        cell.set(from);
 
         assert_eq!(
             crate::array::test_memoized_prototype_addr(&cell),
@@ -130,7 +141,7 @@ fn prototype_addr_reads_through_a_forwarding_stub() {
              fallback and hangs the mutator (#6981)"
         );
         assert_eq!(
-            cell.load(Ordering::Relaxed),
+            cell.get(),
             to,
             "the read must write the healed address back so the hot path stays \
              a single relaxed load"
@@ -145,7 +156,7 @@ fn prototype_addr_reads_through_a_forwarding_stub() {
 fn an_unresolved_prototype_cell_reports_no_address() {
     let cell = private_cache_cell();
     assert_eq!(crate::array::test_memoized_prototype_addr(&cell), None);
-    assert_eq!(cell.load(Ordering::Relaxed), usize::MAX);
+    assert_eq!(cell.get(), usize::MAX);
 }
 
 /// Multi-hop chains (grow, then grow again, then evacuate) must resolve all the
@@ -166,7 +177,7 @@ fn prototype_addr_reads_through_a_multi_hop_forwarding_chain() {
     }
 
     let cell = private_cache_cell();
-    cell.store(first as usize, Ordering::Relaxed);
+    cell.set(first as usize);
     assert_eq!(
         crate::array::test_memoized_prototype_addr(&cell),
         Some(final_user as usize),
@@ -195,8 +206,8 @@ fn prototype_addr_cache_is_rewritten_by_the_collector() {
     let object_to = evacuate(object_from);
     let array_cell = private_cache_cell();
     let object_cell = private_cache_cell();
-    array_cell.store(array_from as usize, Ordering::Relaxed);
-    object_cell.store(object_from as usize, Ordering::Relaxed);
+    array_cell.set(array_from as usize);
+    object_cell.set(object_from as usize);
 
     for cell in [&array_cell, &object_cell] {
         crate::array::test_rewrite_prototype_addr_slot(
@@ -206,14 +217,14 @@ fn prototype_addr_cache_is_rewritten_by_the_collector() {
     }
 
     assert_eq!(
-        array_cell.load(Ordering::Relaxed),
+        array_cell.get(),
         array_to,
         "a memoized prototype cell must be rewritten by the relocating cycle — \
          it is a raw address of a movable object, exactly like the other \
          registered side tables (#6981)"
     );
     assert_eq!(
-        object_cell.load(Ordering::Relaxed),
+        object_cell.get(),
         object_to,
         "the rewrite is per-cell, so both rows of PROTOTYPE_ADDR_CACHES get it \
          (#6981)"
@@ -252,19 +263,20 @@ fn prototype_addr_cache_scanner_leaves_the_unset_sentinel_alone() {
         &mut RuntimeRootVisitor::for_rewrite(&valid_ptrs),
     );
 
-    assert_eq!(cell.load(Ordering::Relaxed), usize::MAX);
+    assert_eq!(cell.get(), usize::MAX);
 }
 
 /// The WIRING, and deliberately read-only so it cannot be raced (#7955).
 ///
 /// The cases above prove the algebra on cells they own; on its own that would
-/// leave nothing asserting that the shipped `static`s are the cells in play —
-/// the "gate runs but its subject never did" shape. `PROTOTYPE_ADDR_CACHES` is
-/// the single table the scanner iterates and the accessors index, so this
-/// pins the table: two DISTINCT cells (a copy-pasted row would give
+/// leave nothing asserting that the realm's real cells are the cells in play —
+/// the "gate runs but its subject never did" shape. `PROTOTYPE_ADDRS` is the
+/// single per-thread array the scanner iterates and the accessors index, so
+/// this pins the wiring: two DISTINCT rows (a copy-pasted index would give
 /// `Array.prototype`'s address to `object_prototype_addr()` and leave one cell
-/// unrewritten), each paired with the `globalThis` builtin whose `.prototype`
-/// its accessor resolves. Nothing here writes.
+/// unrewritten), each paired positionally with the `globalThis` builtin whose
+/// `.prototype` its accessor resolves, and the scanner covering EVERY row an
+/// accessor can index. Nothing here writes.
 #[test]
 fn the_shipped_cells_are_the_ones_the_scanner_visits() {
     let wiring = crate::array::test_prototype_addr_cache_wiring();
@@ -278,10 +290,106 @@ fn the_shipped_cells_are_the_ones_the_scanner_visits() {
         "row 1 is what object_prototype_addr() indexes; it must bootstrap from \
          globalThis.Object"
     );
-    assert!(
-        !std::ptr::eq(wiring[0].0, wiring[1].0),
+    assert_ne!(
+        wiring[0].0, wiring[1].0,
         "the two intrinsics must memoize into DIFFERENT cells — sharing one \
          cell makes the second accessor return the first intrinsic's address \
          and leaves the collector with nothing to rewrite for it (#6981)"
+    );
+    // The scanner iterates the per-thread cell array itself, so covering every
+    // accessor's row reduces to the array being at least as long as the highest
+    // index an accessor uses.
+    let cells = crate::array::test_prototype_addr_cell_count();
+    for (row, builtin) in wiring {
+        assert!(
+            row < cells,
+            "accessor row {row} ({}) is outside the {cells}-cell array the \
+             collector rewrites — that cell would never be visited (#6981)",
+            String::from_utf8_lossy(builtin)
+        );
+    }
+}
+
+/// #7988 — ISOLATION. Two live `perry/thread`-style agents must memoize their
+/// OWN realm's intrinsics.
+///
+/// Each thread bootstraps its own `globalThis` into its own arena, so its
+/// `Array.prototype` / `Object.prototype` are different objects at different
+/// addresses. When the cells were process-global the second thread never even
+/// missed: it read the first thread's addresses, compared its own objects
+/// against a foreign heap (so `object_prototype_addr_matches` never matched),
+/// dereferenced that foreign address's `GcHeader` on every indexed array
+/// write, and let its own collector rewrite the cell with a to-space address
+/// from the wrong heap.
+///
+/// LIVENESS. "The two addresses differ" is satisfiable by two threads that both
+/// resolved NOTHING, so each thread's address is asserted to be a real one
+/// (non-zero and not the `usize::MAX` not-yet-resolved sentinel) before the
+/// distinctness check runs — the two paths to a green verdict are separated.
+/// The bootstraps are serialized (`GLOBAL_THIS_PTR`, the process-global root
+/// slot, is written by each one) but both threads are held live across the
+/// comparison by a barrier, so the two arenas provably coexist and the
+/// addresses cannot have merely been recycled.
+#[test]
+fn a_second_agents_prototype_addresses_are_its_own() {
+    use std::sync::{Arc, Barrier, Mutex};
+
+    let bootstrap_gate = Arc::new(Mutex::new(()));
+    let both_alive = Arc::new(Barrier::new(2));
+
+    let agent = |gate: Arc<Mutex<()>>, barrier: Arc<Barrier>| {
+        move || -> (usize, usize) {
+            let addrs = {
+                let _serialized = gate.lock().expect("bootstrap gate");
+                (
+                    crate::array::array_prototype_addr(),
+                    crate::array::object_prototype_addr(),
+                )
+            };
+            // Hold this thread — and therefore its arena — alive until the other
+            // agent has resolved too. Without this the second thread could be
+            // handed a recycled address and "distinct" would prove nothing.
+            barrier.wait();
+            addrs
+        }
+    };
+
+    let spawn_agent = |gate: Arc<Mutex<()>>, barrier: Arc<Barrier>| {
+        std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(agent(gate, barrier))
+            .expect("spawn realm agent")
+    };
+
+    let a = spawn_agent(Arc::clone(&bootstrap_gate), Arc::clone(&both_alive));
+    let b = spawn_agent(bootstrap_gate, both_alive);
+    let (a_array, a_object) = a.join().expect("agent A panicked");
+    let (b_array, b_object) = b.join().expect("agent B panicked");
+
+    for (label, addr) in [
+        ("A Array.prototype", a_array),
+        ("A Object.prototype", a_object),
+        ("B Array.prototype", b_array),
+        ("B Object.prototype", b_object),
+    ] {
+        assert!(
+            addr != 0 && addr != usize::MAX,
+            "{label} did not resolve ({addr:#x}) — the distinctness assertion \
+             below would then be satisfied by two agents that resolved nothing"
+        );
+    }
+
+    assert_ne!(
+        a_array, b_array,
+        "two live agents must memoize their OWN Array.prototype: a shared cell \
+         makes the second agent compare its arrays against the first agent's \
+         heap and read that heap's GcHeader on every indexed write (#7988)"
+    );
+    assert_ne!(
+        a_object, b_object,
+        "two live agents must memoize their OWN Object.prototype: a shared cell \
+         is why `Object.prototype[i] = v` on a worker never flipped \
+         OBJECT_PROTO_HAS_INDEX — the write hook compared against the main \
+         thread's address (#7988)"
     );
 }
