@@ -643,8 +643,14 @@ fn two_field_literal_footprint_is_exactly_accounted() {
     let obj = js_object_alloc_with_shape(0x7916_0001, 2, keys.as_ptr(), keys.len() as u32);
     assert!(!obj.is_null());
     let recorded = unsafe {
-        let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc).size as usize
+        // #7928 added this probe with a bare `as *const GcHeader`, which the
+        // addr-class ratchet rejects (and which turned required `lint` red on
+        // `main`). `try_read_gc_header` is the approved accessor: it takes the
+        // OBJECT address and does the header arithmetic itself, behind the
+        // plausibility and slab checks.
+        crate::value::addr_class::try_read_gc_header(obj as usize)
+            .expect("a freshly allocated object must carry a readable GcHeader")
+            .size as usize
     };
     let expected = crate::gc::GC_HEADER_SIZE
         + std::mem::size_of::<ObjectHeader>()
