@@ -2581,6 +2581,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
         if budgeted {
             super::instruments::note_moving_safepoint_blocked_by_budgeted();
         }
+        super::instruments::note_moving_safepoint_blocked(in_alloc, unsafe_zone, root_lock);
         return false;
     }
     // We are handling this safepoint (collect or find nothing due): clear the

@@ -154,7 +154,18 @@ ALLOCATOR_TOKENS = (
 # "stdlib:worker_threads:workers", scan_worker_roots_mut)` puts the scanner
 # SECOND, and a first-argument-only regex silently reported every holder that
 # scanner covers as uncovered — six of them, in one file.
-REGISTER_CALL = re.compile(r"gc_register_\w*root_scanner\w*\s*\((?P<args>[^;()]*)\)", re.S)
+#
+# `reg_scanner!` / `reg_budgeted_scanner!` are `gc_init`'s wrappers (#7915):
+# they exist only to attach `stringify!`'d registration-site names, and they
+# expand to the same `gc_register_*` calls. They must be matched here or every
+# holder reached only from `gc_init` reads as uncovered — which is exactly what
+# happened when they were introduced, and the MIN_REGISTERED floor below is
+# what caught it.
+REGISTER_CALL = re.compile(
+    r"(?:gc_register_\w*root_scanner\w*|reg_scanner!|reg_budgeted_scanner!)"
+    r"\s*\((?P<args>[^;()]*)\)",
+    re.S,
+)
 FN_DEF = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+|extern\s+\"C\"\s+)*fn\s+(\w+)")
 IDENT = re.compile(r"\b[A-Za-z_]\w*\b")
 

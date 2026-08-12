@@ -1261,7 +1261,10 @@ impl CopiedMinorEligibility {
         {
             let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
             for entry in scanners {
-                (entry.scanner)(&mut visitor);
+                let (_, nanos) = super::scanner_profile::record_scanner(|| {
+                    (entry.scanner)(&mut visitor);
+                });
+                super::scanner_profile::note_scanner(entry.name, nanos, 0, 0, 0);
             }
             visit_ffi_mutable_registered_roots(&mut visitor);
         }
@@ -1496,9 +1499,13 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
                 },
                 None => None,
             };
+            let before = super::scanner_profile::snapshot_stats(stats);
             let previous = visitor.set_root_source_stats(stats);
-            (entry.scanner)(&mut visitor);
+            let (_, nanos) = super::scanner_profile::record_scanner(|| {
+                (entry.scanner)(&mut visitor);
+            });
             visitor.set_root_source_stats(previous);
+            super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats);
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
@@ -1568,9 +1575,13 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
                 },
                 None => None,
             };
+            let before = super::scanner_profile::snapshot_stats(stats);
             let previous = visitor.set_root_source_stats(stats);
-            (entry.scanner)(&mut visitor);
+            let (_, nanos) = super::scanner_profile::record_scanner(|| {
+                (entry.scanner)(&mut visitor);
+            });
             visitor.set_root_source_stats(previous);
+            super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats);
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
@@ -1840,6 +1851,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             super::policy::GC_AT_DECLARED_SAFEPOINT.with(std::cell::Cell::get)
         );
     }
+    super::scanner_profile::report_and_reset("copying_minor");
     Some(CopiedMinorFastPathOutcome {
         freed_bytes,
         malloc_swept: malloc_sweep_due,

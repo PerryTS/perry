@@ -173,6 +173,41 @@ pub fn moving_safepoints_blocked_by_budgeted() -> u64 {
     MOVING_SAFEPOINT_BLOCKED_BY_BUDGETED.load(Ordering::Relaxed)
 }
 
+static MOVING_SAFEPOINT_BLOCKED_BY_ALLOC: AtomicU64 = AtomicU64::new(0);
+static MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE: AtomicU64 = AtomicU64::new(0);
+static MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK: AtomicU64 = AtomicU64::new(0);
+
+/// The other three entry guards of `gc_safepoint_moving_minor`.
+///
+/// Before this existed only the budgeted arm was counted, so "the precise
+/// collector did not run here" had exactly one observable explanation and
+/// three invisible ones — and a hypothesis about a *different* suppressor
+/// (an active `setjmp`/`try` region, #7910) could be neither confirmed nor
+/// refuted from a run. Each arm is counted separately because they mean
+/// different things: `in_alloc` and `root_lock` are transient and retried,
+/// `unsafe_zone` is held across native work, and `budgeted` can be permanent.
+#[inline]
+pub(crate) fn note_moving_safepoint_blocked(in_alloc: bool, unsafe_zone: bool, root_lock: bool) {
+    if in_alloc {
+        MOVING_SAFEPOINT_BLOCKED_BY_ALLOC.fetch_add(1, Ordering::Relaxed);
+    }
+    if unsafe_zone {
+        MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE.fetch_add(1, Ordering::Relaxed);
+    }
+    if root_lock {
+        MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// `(in_alloc_or_suppressed, unsafe_ffi_zone, root_lock_depth)` rejection counts.
+pub fn moving_safepoints_blocked_by_other_guards() -> (u64, u64, u64) {
+    (
+        MOVING_SAFEPOINT_BLOCKED_BY_ALLOC.load(Ordering::Relaxed),
+        MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE.load(Ordering::Relaxed),
+        MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK.load(Ordering::Relaxed),
+    )
+}
+
 /// Why a budgeted step did no work. Every arm is a distinct reason a cycle can
 /// stall, and a stalled-but-active cycle keeps the mark barrier armed.
 #[derive(Clone, Copy)]

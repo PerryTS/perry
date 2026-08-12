@@ -145,6 +145,7 @@ impl TemporaryRustMutableRootScanner {
                 source: MutableRootScannerSource::RuntimeMutableScanner,
                 budgeted_scanner: None,
                 budgeted_state_factory: None,
+                name: "test_rust_mutable_root_scanner",
             });
             previous_len
         });
