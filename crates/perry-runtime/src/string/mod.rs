@@ -515,7 +515,7 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
 /// re-issue through [`string_storage_alloc`].
 ///
 /// See `arena::arena_alloc_gc_no_collect` for why the guarantee holds.
-#[inline]
+#[inline(always)]
 pub(crate) fn string_storage_alloc_no_collect(
     capacity: u32,
 ) -> Option<(*mut StringHeader, *mut u8)> {

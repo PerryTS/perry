@@ -73,7 +73,7 @@ pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
 /// are both refusals — an oversized request and a non-empty hot free list
 /// both return null instead of being served — so this can only ever hand back
 /// memory `arena_alloc_gc` would have handed back identically.
-#[inline]
+#[inline(always)]
 pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
@@ -113,7 +113,7 @@ pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8)
 /// allocation is indistinguishable from one taken through it. A refusal
 /// leaves every offset exactly where it was, so the caller's fallback through
 /// `arena_alloc` behaves as if this had never been called.
-#[inline]
+#[inline(always)]
 fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
     unsafe {
         let inline_ptr = crate::arena::hot_inline_state();
