@@ -88,6 +88,18 @@ pub(crate) fn copying_from_space_in_use_bytes() -> usize {
     eden + survivor
 }
 
+/// #7901: is `block_idx` inside the copying collector's from-space (Eden plus
+/// the ACTIVE survivor semispace)? The inactive semispace is to-space and is
+/// empty at sweep time, so it deliberately does not count.
+#[inline]
+pub(crate) fn block_in_copying_from_space(
+    block_idx: usize,
+    general_n: usize,
+    active_survivor: &std::ops::Range<usize>,
+) -> bool {
+    block_idx < general_n || active_survivor.contains(&block_idx)
+}
+
 pub(crate) fn active_survivor_block_index_range() -> std::ops::Range<usize> {
     let general_n = ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
     let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });

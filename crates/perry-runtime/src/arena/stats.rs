@@ -11,6 +11,13 @@ struct ArenaLiveCensus {
     high_water_bytes: usize,
     arena_free_bytes: usize,
     old_free_bytes: usize,
+    /// #7901: the from-space (Eden + active survivor) share of `live_bytes`,
+    /// and the from-space high-water at the same instant. A copied minor
+    /// replaces from-space wholesale, so it must remove the LIVE share — the
+    /// high-water also covers dead holes this census already excluded, and
+    /// subtracting those a second time silently eats unrelated generations.
+    from_space_live_bytes: usize,
+    from_space_high_water_bytes: usize,
     valid: bool,
 }
 
@@ -21,6 +28,8 @@ crate::perry_thread_local! {
             high_water_bytes: 0,
             arena_free_bytes: 0,
             old_free_bytes: 0,
+            from_space_live_bytes: 0,
+            from_space_high_water_bytes: 0,
             valid: false,
         }) };
 }
@@ -33,17 +42,63 @@ fn arena_free_bytes() -> usize {
 /// Record the exact header-inclusive live bytes found by a completed GC walk.
 /// This is called after block reset/reclaim, so its high-water and hole
 /// snapshots describe the same instant as `live_bytes`.
-pub(crate) fn record_arena_live_census(live_bytes: usize) {
+///
+/// `from_space_live_bytes` is the from-space (Eden + active survivor) share of
+/// `live_bytes` (#7901). `None` means "from-space is compacted — every byte
+/// below its bump pointers is live", which is exactly true after a copying
+/// minor has flipped: Eden is empty and the new active survivor holds only the
+/// copies. A non-moving sweep must pass `Some(..)`: it leaves dead holes
+/// beside surviving objects, and those holes are inside the from-space
+/// high-water but NOT inside `live_bytes`.
+pub(crate) fn record_arena_live_census(live_bytes: usize, from_space_live_bytes: Option<usize>) {
     let high_water_bytes = arena_in_use_bytes();
+    let from_space_high_water_bytes = copying_from_space_in_use_bytes();
+    // Live can never exceed the high-water it sits in; clamping keeps one
+    // miscounted walk from making the derived non-from-space figure negative
+    // (and, through `saturating_sub`, silently zero).
+    let from_space_live_bytes = from_space_live_bytes
+        .unwrap_or(from_space_high_water_bytes)
+        .min(from_space_high_water_bytes);
     ARENA_LIVE_CENSUS.with(|census| {
         census.set(ArenaLiveCensus {
             live_bytes,
             high_water_bytes,
             arena_free_bytes: arena_free_bytes(),
             old_free_bytes: crate::gc::old_free_bytes(),
+            from_space_live_bytes,
+            from_space_high_water_bytes,
             valid: true,
         });
     });
+}
+
+/// #7901: how much of what [`arena_live_allocated_bytes`] currently reports
+/// lives in the copying collector's from-space (Eden + the active survivor).
+///
+/// This is the quantity a copied minor must subtract before adding back its
+/// copied/promoted survivors — NOT `copying_from_space_in_use_bytes()`, which
+/// is a block high-water. Two components, matching how the running census is
+/// itself derived:
+///
+/// * `census.from_space_live_bytes` — the exact live share the last collection
+///   measured, holes already excluded;
+/// * the from-space high-water growth since that census — bump allocations,
+///   which the running census also treats as live.
+///
+/// With no valid census the running figure is itself high-water-derived, so
+/// the high-water is the consistent answer.
+pub(crate) fn arena_live_from_space_bytes() -> usize {
+    let high_water_now = copying_from_space_in_use_bytes();
+    ARENA_LIVE_CENSUS.with(|census_cell| {
+        let census = census_cell.get();
+        if !census.valid {
+            return high_water_now;
+        }
+        census
+            .from_space_live_bytes
+            .saturating_add(high_water_now.saturating_sub(census.from_space_high_water_bytes))
+            .min(high_water_now)
+    })
 }
 
 /// Header-inclusive bytes occupied by live arena objects.

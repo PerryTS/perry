@@ -987,16 +987,9 @@ impl GcCycleState {
     ) -> Self {
         let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
         let trigger_kind = trigger.kind;
-        // Allocate-black for the WHOLE cycle, from the first build slice on:
-        // the mark barrier only engages at the END of BuildValidPointerSet
-        // (the longest phase), so an object born during a build slice and
-        // installed via a runtime-internal raw store would be swept live
-        // (measured: identical 2,890-node loss with barrier-window-only
-        // birth flags). Cleared when the barrier disables at sweep entry
-        // (post-snapshot births cannot be reached by the in-flight sweep,
-        // and a mark they carried would leak into the next cycle as
-        // "already traced"). Every black birth is also pushed as a mark
-        // seed — see `gc_note_black_birth`.
+        // Allocate-black for the WHOLE cycle — see `new_full` above for why the
+        // barrier window alone is not enough, and `gc_note_black_birth` for why
+        // every black birth is also seeded.
         super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(GC_FLAG_MARKED));
         Self {
             collection_kind: GcCollectionKind::Minor,
@@ -1948,11 +1941,17 @@ impl GcCycleState {
             trace.pause_us = elapsed_us;
             trace.capture_layout_scans();
         }
-        let arena_live_bytes = self
-            .sweep
-            .map(|sweep| sweep.arena_live_bytes as usize)
-            .unwrap_or_else(crate::arena::arena_live_allocated_bytes);
-        crate::arena::record_arena_live_census(arena_live_bytes);
+        // #7901: a non-moving sweep leaves dead holes beside survivors, so it
+        // must publish the LIVE from-space share alongside the total; a
+        // following copied minor subtracts that instead of the high-water.
+        let (arena_live_bytes, from_space_live) = match self.sweep {
+            Some(sweep) => (
+                sweep.arena_live_bytes as usize,
+                Some(sweep.arena_live_from_space_bytes as usize),
+            ),
+            None => (crate::arena::arena_live_allocated_bytes(), None),
+        };
+        crate::arena::record_arena_live_census(arena_live_bytes, from_space_live);
         // #7865: arena-growth pacing tests a POST-collection occupancy, which
         // is the same kind of quantity as its post-full baseline. Recorded here
         // rather than per-kind because this is the one site both kinds reach.

@@ -92,10 +92,11 @@ pub(crate) use walk::{
 
 // reset.rs
 pub(crate) use reset::{
-    active_survivor_block_index_range, copying_active_survivor_in_use_bytes,
-    copying_from_space_in_use_bytes, copying_prepare_to_space, copying_reset_from_spaces_and_flip,
-    old_arena_reclaim_dead_blocks, old_arena_reclaim_selected_dead_blocks,
-    survivor_arena_reclaim_dead_blocks, ArenaResetEmptyBlocksState, OldArenaReclaimDeadBlocksState,
+    active_survivor_block_index_range, block_in_copying_from_space,
+    copying_active_survivor_in_use_bytes, copying_from_space_in_use_bytes,
+    copying_prepare_to_space, copying_reset_from_spaces_and_flip, old_arena_reclaim_dead_blocks,
+    old_arena_reclaim_selected_dead_blocks, survivor_arena_reclaim_dead_blocks,
+    ArenaResetEmptyBlocksState, OldArenaReclaimDeadBlocksState,
     SurvivorArenaReclaimDeadBlocksState,
 };
 pub use reset::{arena_reset_all_blocks_to_zero, arena_reset_empty_blocks};
@@ -118,12 +119,12 @@ pub(crate) use quarantine::{
 pub use quarantine::{quarantine_stats, QuarantineStats};
 
 // stats.rs
-pub(crate) use stats::record_arena_live_census;
 pub(crate) use stats::{active_survivor_space, inactive_survivor_space};
 pub use stats::{
     arena_live_allocated_bytes, js_arena_stats, longlived_in_use_bytes, old_gen_in_use_bytes,
     pointer_in_nursery, pointer_in_old_gen,
 };
+pub(crate) use stats::{arena_live_from_space_bytes, record_arena_live_census};
 #[cfg(test)]
 pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_resync};
 

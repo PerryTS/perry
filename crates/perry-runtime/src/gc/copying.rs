@@ -1368,6 +1368,9 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     let phase_start = trace_phase_start(trace);
     let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
     let pre_collection_live_bytes = crate::arena::arena_live_allocated_bytes();
+    // #7901: the LIVE share of from-space inside `pre_collection_live_bytes`.
+    // Captured here, before anything moves or resets.
+    let pre_from_space_live_bytes = crate::arena::arena_live_from_space_bytes();
     // #7742: decide BEFORE anything classifies, then retag the young blocks so
     // every classification for the rest of this cycle already reads the
     // generation those objects will have when it ends. The eligibility
@@ -1783,7 +1786,10 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
             // the collections that run NO copying minor.
             eden_live_bytes: 0,
             eden_dead_bytes: 0,
+            // The copied minor publishes its census directly (below), not
+            // through these sweep fields.
             arena_live_bytes: 0,
+            arena_live_from_space_bytes: 0,
         };
         trace.pause_us = start.elapsed().as_micros() as u64;
         trace.capture_layout_scans();
@@ -1804,19 +1810,36 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // nothing (see `credit_promoted_bytes_to_old_baseline`).
     credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
     // Everything outside from-space retains its pre-minor accounting. Remove
-    // the entire Eden/active-survivor high-water, then add back exactly the
+    // the from-space share of that accounting, then add back exactly the
     // objects that survived by copy or promotion. This also preserves objects
     // promoted by an EARLIER minor: old-page cycle summaries do not retain a
     // complete allocated-byte census across later cycles (#7879 A/B caught
     // `12_large_live_set` dropping ~38 MiB of prior promotions from heapUsed).
-    // Whole-block promotion is covered too: subtracting the full from-space
-    // high-water excludes its dead bytes, while `promoted_bytes` adds back only
-    // marked objects. No second object walk is needed.
+    //
+    // #7901: subtract the LIVE from-space share, not `from_space_bytes` (the
+    // block high-water captured above for fragmentation telemetry). After a
+    // non-moving sweep the high-water still covers dead holes beside surviving
+    // objects — holes the exact census already excluded — so subtracting it
+    // charges the same garbage twice, and `saturating_sub` then quietly eats
+    // unrelated old-gen occupancy out of `heapUsed` and major-GC pacing.
+    debug_assert!(
+        pre_from_space_live_bytes <= from_space_bytes,
+        "live from-space bytes ({pre_from_space_live_bytes}) exceeded the from-space \
+         high-water ({from_space_bytes}) — the census split is inconsistent"
+    );
+    debug_assert!(
+        pre_from_space_live_bytes <= pre_collection_live_bytes,
+        "a from-space subtraction ({pre_from_space_live_bytes}) larger than the whole \
+         live census ({pre_collection_live_bytes}) would consume unrelated generations"
+    );
     let arena_live_bytes = pre_collection_live_bytes
-        .saturating_sub(from_space_bytes)
+        .saturating_sub(pre_from_space_live_bytes)
         .saturating_add(collector.stats.copied_bytes)
         .saturating_add(collector.stats.promoted_bytes);
-    crate::arena::record_arena_live_census(arena_live_bytes);
+    // `None`: to-space is compacted by construction — Eden is empty after the
+    // flip and the new active survivor holds only the copies, so from-space
+    // live == from-space high-water.
+    crate::arena::record_arena_live_census(arena_live_bytes, None);
     note_collection_finished_arena_occupancy();
     // The same argument one trigger over: a young generation that did not die
     // is a heap growing by LIVE data, so arena-growth pacing must not read that

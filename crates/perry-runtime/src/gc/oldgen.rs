@@ -135,6 +135,12 @@ pub(super) struct SweepTraceStats {
     /// Header-inclusive bytes this arena walk classified live. Unlike block
     /// offsets, this excludes dead objects stranded beside a tiny survivor.
     pub(super) arena_live_bytes: u64,
+    /// #7901: the share of `arena_live_bytes` sitting in the copying
+    /// collector's FROM-SPACE (Eden + active survivor). A following copied
+    /// minor replaces from-space wholesale and must remove exactly this — see
+    /// `arena::arena_live_from_space_bytes` for why the block high-water is the
+    /// wrong quantity to subtract.
+    pub(super) arena_live_from_space_bytes: u64,
 }
 
 pub(super) fn evacuation_policy_initial_decision(
@@ -762,48 +768,22 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     let mut retained_forwarded_stub_bytes: usize = 0;
     let mut arena_live_bytes: u64 = 0;
 
-    // Sweep arena objects. Two-phase strategy:
+    // Sweep arena objects with per-block live tracking, in ONE walk. (The
+    // "two-phase probe-then-track" strategy this comment used to describe was
+    // replaced by the single walk below; the per-object HashMap it existed to
+    // avoid is gone.)
     //
-    //   1. Fast probe pass: walk objects, clear mark bits, count
-    //      dead bytes, track whether ANY block has a live object.
-    //      If no live anywhere → entire arena is reclaimable. Skip
-    //      every per-block tracking structure and reset all blocks
-    //      to offset=0 in O(1). This is the common case for tight
-    //      `new ClassName()` loops where nothing escapes.
+    // Per object: live → set `block_has_live[block_idx]` and clear the mark bit
+    // inline; dead → zero its payload so stale pointers cannot retain anything
+    // next cycle. Dead objects are deliberately NOT pushed onto the global
+    // ARENA_FREE_LIST: the inline bump allocator never reads it (it relies on
+    // the per-block reset), and the push cost measured ~420 ms per benchmark
+    // (~50 ns × ~700k objects × ~12 cycles) purely for the rare shapes the
+    // function-call allocator handles.
     //
-    //   2. Slow tracking pass (only when some block has live objects):
-    //      walk again, this time bucketing dead objects per block so
-    //      we can decide which blocks are fully empty (reset) vs
-    //      partially empty (push their dead objects to the free list
-    //      in a single batched extend).
-    //
-    // The two-pass split avoids the per-object HashMap insert cost
-    // (~50ns) on the common all-dead path, where it would account for
-    // 700k × 50ns = 35ms per GC cycle.
-    // Sweep arena objects with per-block live tracking.
-    //
-    // For each object, walk and check mark/pinned state:
-    //   - live → set `block_has_live[block_idx]` and clear the mark
-    //     bit inline so we don't need a separate pass.
-    //   - dead → zero its payload memory (so stale pointers don't
-    //     retain other objects on the next GC cycle).
-    //
-    // We deliberately do NOT push dead objects onto the global
-    // ARENA_FREE_LIST. The inline bump allocator never reads the
-    // free list — it uses the per-block reset instead. Pushing
-    // dead objects to the free list would cost ~50ns per object
-    // × ~700k objects per GC × ~12 GC cycles per benchmark = 420ms
-    // of pure waste in `object_create`. The function-call allocator
-    // path (`js_object_alloc_class_inline_keys` → `arena_alloc_gc`)
-    // is the only consumer of the free list, and it's only used
-    // for shapes the inline path doesn't cover (anonymous classes,
-    // closure body new'd from a slot, etc.) — those are rare enough
-    // that running them through the slow path is fine.
-    //
-    // After the walk, `arena_reset_empty_blocks` resets every block
-    // with zero live objects to offset=0. This is the load-bearing
-    // optimization that lets the inline bump allocator reuse memory
-    // across GC cycles instead of page-faulting through fresh blocks.
+    // After the walk, `arena_reset_empty_blocks` resets every block with zero
+    // live objects to offset=0 — the load-bearing optimization that lets the
+    // inline bump allocator reuse memory instead of page-faulting fresh blocks.
     let n_blocks = crate::arena::arena_block_count();
     let mut block_has_live: Vec<bool> = vec![false; n_blocks];
     // Inclusive upper bound on indices that age. `general_block_count()`
@@ -1105,10 +1085,13 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
         retained_forwarded_stub_objects,
         retained_forwarded_stub_bytes,
         // Legacy unbudgeted path, not reached in production and not wired to
-        // the #7598 seed.
+        // the #7598 seed nor to #7901's live census — the cycle stepper's
+        // `IncrementalSweepState` is the only publisher of either, so leaving
+        // these zero cannot feed a wrong number to `record_arena_live_census`.
         eden_live_bytes: 0,
         eden_dead_bytes: 0,
         arena_live_bytes,
+        arena_live_from_space_bytes: 0,
     }
 }
 
@@ -1287,6 +1270,7 @@ impl IncrementalSweepState {
                         eden_live_bytes: self.arena.eden_live_bytes,
                         eden_dead_bytes: self.arena.eden_dead_bytes,
                         arena_live_bytes: self.arena.arena_live_bytes,
+                        arena_live_from_space_bytes: self.arena.arena_live_from_space_bytes,
                     };
                     self.subphase = SweepCycleSubphase::Done;
                     return true;
@@ -1352,6 +1336,9 @@ struct ArenaSweepObjectsState {
     eden_live_bytes: u64,
     eden_dead_bytes: u64,
     arena_live_bytes: u64,
+    /// #7901: see `SweepTraceStats::arena_live_from_space_bytes`.
+    arena_live_from_space_bytes: u64,
+    active_survivor_blocks: std::ops::Range<usize>,
 }
 
 impl ArenaSweepObjectsState {
@@ -1384,6 +1371,8 @@ impl ArenaSweepObjectsState {
             eden_live_bytes: 0,
             eden_dead_bytes: 0,
             arena_live_bytes: 0,
+            arena_live_from_space_bytes: 0,
+            active_survivor_blocks: crate::arena::active_survivor_block_index_range(),
         }
     }
 
@@ -1518,7 +1507,18 @@ impl ArenaSweepObjectsState {
             self.eden_live_bytes = self.eden_live_bytes.saturating_add((*header).size as u64);
         }
         if count_in_live_census {
-            self.arena_live_bytes = self.arena_live_bytes.saturating_add((*header).size as u64);
+            let size = (*header).size as u64;
+            self.arena_live_bytes = self.arena_live_bytes.saturating_add(size);
+            // #7901: the from-space share of the census, so a following copied
+            // minor can remove exactly what it replaces.
+            if crate::arena::block_in_copying_from_space(
+                block_idx,
+                self.resettable_general_n,
+                &self.active_survivor_blocks,
+            ) {
+                self.arena_live_from_space_bytes =
+                    self.arena_live_from_space_bytes.saturating_add(size);
+            }
         }
         if age_bump_this && flags & GC_FLAG_TENURED == 0 {
             if flags & GC_FLAG_HAS_SURVIVED != 0 {
