@@ -249,11 +249,14 @@ Retitle it around the rate, or close it in favour of a fresh issue that quotes
   do not clear a 19% failure rate.
 * **Phase localization is inconclusive.** A marker-instrumented copy of the
   corpus (`/tmp/zod-probe`, `console.error` between and inside `describeAll` /
-  `parseLoop` / `parseRegistered`) passed **10 of 10** seeds, every one reaching
+  `parseLoop` / `parseRegistered`) passed **12 of 12** seeds, each reaching
   `PHASE: parseRegistered done`. The markers themselves allocate and perturb the
   schedule, so this is the recurring problem with this bug rather than evidence
   about which phase is at fault — a probe dense enough to localize the failure
-  is dense enough to prevent it.
+  is dense enough to prevent it. (Seed 11's marker log reads empty only because
+  a disk-pressure cleanup of mine deleted its stderr while that run was still in
+  flight; its exit status was 0 like the rest. Recorded rather than quietly
+  dropped: housekeeping aimed at a finished experiment hit a live one.)
 * **The pin-latch abort (§4)** is filed as **#7990**. Distinct from the rooting
   class, self-detecting, and its printed remediation is refuted by its own tool.
 * No fix is proposed here, so nothing is landed beyond this note. There is
@@ -261,3 +264,32 @@ Retitle it around the rate, or close it in favour of a fresh issue that quotes
   be flaky in CI, and CLAUDE.md's four-ways-a-gate-cannot-fail applies in
   reverse — a gate that goes red 19% of the time on a *healthy* tree teaches
   people to ignore it.
+
+## 8. Rebuilding this from scratch
+
+The worktree and its `CARGO_TARGET_DIR` were both deleted by whatever sweeps
+`/Users/amlug/projects/perry/wt-*` on this box, *while the protected sweep was
+still running* — so budget a full rebuild rather than expecting the artifacts to
+be there. Everything needed is on the branch; the numbers above came from:
+
+```bash
+git worktree add <wt> origin/main
+export CARGO_TARGET_DIR=$HOME/cargo-targets/zod        # ~2.5 GB
+cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static   # ~14 min
+npm ci --ignore-scripts --no-audit --no-fund           # or symlink node_modules; the lock pins zod 4.3.5
+
+export PERRY_RUNTIME_DIR=$CARGO_TARGET_DIR/release PERRY_NO_AUTO_OPTIMIZE=1 PERRY_DISABLE_BUILD_CACHE=1
+$CARGO_TARGET_DIR/release/perry test-files/gc-dep-corpus/main.ts -o /tmp/zod-w   # ~5 min
+
+# the filed condition (§1)
+PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 \
+PERRY_GC_PROTECT_FROMSPACE=0 PERRY_GC_DIAG=1 /tmp/zod-w
+
+# what actually finds it (§4) — ~145 s/run, budget an hour
+RATE=1 TIMEOUT=1800 KEEP=1 PERRY_GC_PROTECT_FROMSPACE=0 PERRY_GC_DIAG=1 \
+  ./scripts/gc_schedule_fuzz.sh /tmp/zod-w 16
+```
+
+`PERRY_NO_AUTO_OPTIMIZE=1` is not optional: without it the auto-optimizer
+relinks the runtime without `diagnostics`, which removes the very
+`[gc-fromspace-protect]` evidence §3 depends on.
