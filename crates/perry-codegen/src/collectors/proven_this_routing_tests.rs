@@ -780,6 +780,7 @@ fn tower_case_routes_to_proven_this_clone() {
 /// guard block → `icmp eq i64` → the branch that enters the clone's block.
 #[test]
 fn tower_route_is_guarded_by_the_class_keys_token() {
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let ir = emit(&tower_site_module(), false);
     let bs = blocks(&ir);
     let clone = pshape_definitions(&ir)
@@ -812,6 +813,22 @@ fn tower_route_is_guarded_by_the_class_keys_token() {
         .find(|l| l.contains(&format!("store i64 {}, ptr ", global_reg)))
         .unwrap_or_else(|| panic!("the hoisted keys token is never stored:\n{ir}"));
     let slot = store.rsplit(' ').next().expect("slot name");
+    let store_pos = ir
+        .find(store)
+        .expect("the hoisted class-keys store should be in the function");
+    let bind_pos = ir
+        .lines()
+        .find(|line| line.contains("call void @js_shadow_slot_bind") && line.contains(slot))
+        .and_then(|line| ir.find(line))
+        .unwrap_or_else(|| {
+            panic!(
+                "the cached class-keys pointer is not a mutable shadow root; old-page moves would leave this copy stale:\n{ir}"
+            )
+        });
+    assert!(
+        store_pos < bind_pos,
+        "the class-keys slot must be initialized before the root scanner can read it:\n{ir}"
+    );
     // 3. … which the guard block reloads …
     let expected = guard_body
         .iter()
@@ -840,6 +857,34 @@ fn tower_route_is_guarded_by_the_class_keys_token() {
             .iter()
             .any(|l| l.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")),
         "the routed call must also honour the sticky inline-guard latch:\n{guard_body:#?}"
+    );
+}
+
+#[test]
+fn tower_class_keys_cache_is_a_native_mutable_root() {
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
+    let ir = emit(&tower_site_module(), false);
+    let global_load = ir
+        .lines()
+        .find(|line| line.contains("= load i64, ptr @perry_class_keys_"))
+        .unwrap_or_else(|| panic!("the class keys token is never read:\n{ir}"));
+    let global_reg = global_load.trim().split(' ').next().expect("ssa name");
+    let cast = ir
+        .lines()
+        .find(|line| line.contains(&format!("= inttoptr i64 {global_reg} to ptr addrspace(1)")))
+        .unwrap_or_else(|| {
+            panic!("the cached class-keys pointer never enters a native GC root slot:\n{ir}")
+        });
+    let cast_reg = cast.trim().split(' ').next().expect("cast ssa name");
+    let root_store = ir
+        .lines()
+        .find(|line| line.contains(&format!("store ptr addrspace(1) {cast_reg}, ptr ")))
+        .unwrap_or_else(|| panic!("the native class-keys root is never stored:\n{ir}"));
+    let slot = root_store.rsplit(' ').next().expect("root slot name");
+    assert!(
+        ir.lines()
+            .any(|line| line.contains(&format!("{slot} = alloca ptr addrspace(1)"))),
+        "the class-keys cache alloca must be in the collector address space:\n{ir}"
     );
 }
 

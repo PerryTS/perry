@@ -1340,10 +1340,10 @@ struct ArenaSweepObjectsState {
     /// Full traces DO visit every live parent, so mark-based reclaim stays
     /// sound there (and bounds the accumulation).
     minor_sweep: bool,
-    /// Old-gen blocks selected for page defrag this cycle. Their live contents
-    /// were evacuated out during this same cycle, so what is left really is
-    /// reclaimable even in a minor — and the block-level reclaim needs
-    /// `block_has_live` to stay false for them.
+    /// Old-gen blocks selected for page defrag this cycle. Every indexed
+    /// occupant was evacuated out during this same cycle, so what is left
+    /// really is reclaimable even in a minor — and the block-level reclaim
+    /// needs `block_has_live` to stay false for them.
     targeted_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
     freed_bytes: u64,
     retained_forwarded_stub_objects: usize,
@@ -1480,8 +1480,8 @@ impl ArenaSweepObjectsState {
     /// following minor stopped tracing the array's other pointer elements,
     /// sweeping objects that were still referenced.
     ///
-    /// The old-page defrag targets are exempt: this cycle evacuated their live
-    /// contents, so the remainder is genuinely reclaimable.
+    /// The old-page defrag targets are exempt: this cycle evacuated every
+    /// indexed occupant, so the remainder is genuinely reclaimable.
     #[inline]
     fn unmarked_is_provably_dead(&self, block_idx: usize) -> bool {
         if !self.minor_sweep || block_idx < self.old_block_start {
@@ -1875,34 +1875,39 @@ pub(super) fn evacuate_selected_old_pages_collecting(
         &source_blocks.pages
     };
 
-    crate::arena::old_arena_walk_objects_on_pages(selected_pages, |header_ptr| {
-        let header = header_ptr as *mut GcHeader;
+    // A minor trace deliberately does not establish old-generation liveness:
+    // an unmarked old object is normally live and merely unvisited. Reclaim is
+    // block-granular, so moving only the marked occupants of selected pages
+    // and then targeting their whole source block discards live unmarked
+    // neighbors (#7876). Snapshot every indexed occupant of the containing
+    // source blocks and evacuate the block all-or-nothing. Dead old objects
+    // remain indexed until a full trace proves them dead, so conservatively
+    // copying them here preserves the same minor-GC retention contract.
+    let mut source_headers = Vec::new();
+    crate::arena::old_arena_walk_objects_on_pages(excluded_pages, |header_ptr| {
+        source_headers.push(header_ptr as *mut GcHeader);
+    });
+    let source_block_is_movable = source_headers.iter().all(|&header| unsafe {
+        if header.is_null() {
+            return false;
+        }
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        let flags = (*header).gc_flags;
+        crate::arena::pointer_in_old_gen(user_ptr as usize)
+            && flags != 0
+            && flags & (GC_FLAG_FORWARDED | GC_FLAG_PINNED) == 0
+            && gc_type_is_movable((*header).obj_type)
+            && !is_conservatively_pinned(header)
+    });
+    if source_headers.is_empty() || !source_block_is_movable {
+        return evacuated;
+    }
+
+    for header in source_headers {
         unsafe {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            if !crate::arena::pointer_in_old_gen(user_ptr as usize) {
-                return;
-            }
             let flags = (*header).gc_flags;
-            if flags & GC_FLAG_FORWARDED != 0 {
-                return;
-            }
-            if flags & GC_FLAG_MARKED == 0 {
-                return;
-            }
-            if flags & GC_FLAG_PINNED != 0 {
-                return;
-            }
-            if !gc_type_is_movable((*header).obj_type) {
-                return;
-            }
-            if is_conservatively_pinned(header) {
-                return;
-            }
-
             let total = (*header).size as usize;
-            if !old_object_pages_all_selected(header, total, selected_pages) {
-                return;
-            }
 
             let payload = total - GC_HEADER_SIZE;
             let new_user = crate::arena::arena_alloc_gc_old_excluding_pages(
@@ -1936,7 +1941,7 @@ pub(super) fn evacuate_selected_old_pages_collecting(
             evacuated.old_page_moved_objects = evacuated.old_page_moved_objects.saturating_add(1);
             evacuated.old_page_moved_bytes = evacuated.old_page_moved_bytes.saturating_add(total);
         }
-    });
+    }
 
     evacuated
 }

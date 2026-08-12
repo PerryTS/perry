@@ -238,7 +238,8 @@ pub(super) fn emit_guarded_direct_method_call(
         .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
 
     let expected_class_id_str = expected_class_id.to_string();
-    let expected_keys_slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
+    let expected_keys_slot =
+        crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
     let expected_keys = ctx.block().load(I64, &expected_keys_slot);
 
     let key_idx = ctx.strings.intern(property);
@@ -263,7 +264,7 @@ pub(super) fn emit_guarded_direct_method_call(
     let subclass_keys: Vec<String> = subclass_arms
         .iter()
         .map(|arm| {
-            let slot = ctx.func.entry_init_load_global(&arm.keys_global, I64);
+            let slot = crate::expr::entry_init_load_rooted_global(ctx, &arm.keys_global, I64);
             ctx.block().load(I64, &slot)
         })
         .collect();

@@ -79,17 +79,15 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
     selection
 }
 
-// gh #6206 test hook: the defrag machinery's unit tests exercise the
-// selection/copy/re-remember mechanics directly and must bypass the
-// production off-gate below. Thread-local so parallel tests don't race.
+// Test override for selection-policy tests. Thread-local so parallel tests do
+// not race with the production default or one another.
 #[cfg(test)]
 thread_local! {
     pub(crate) static OLD_DEFRAG_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// RAII enable for the defrag unit tests: forces the off-gate open on this
-/// thread for the guard's lifetime.
+/// RAII enable for defrag unit tests on this thread for the guard's lifetime.
 #[cfg(test)]
 pub(crate) struct OldDefragTestEnable;
 
@@ -108,36 +106,46 @@ impl Drop for OldDefragTestEnable {
     }
 }
 
+fn old_page_defrag_enabled_from_value(value: Option<&str>) -> bool {
+    !matches!(value, Some("0") | Some("off") | Some("false"))
+}
+
 fn old_page_defrag_enabled() -> bool {
     #[cfg(test)]
     if let Some(v) = OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.get()) {
         return v;
     }
     use std::sync::OnceLock;
-    static OPT_IN: OnceLock<bool> = OnceLock::new();
-    *OPT_IN.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_OLD_DEFRAG").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        old_page_defrag_enabled_from_value(std::env::var("PERRY_GC_OLD_DEFRAG").ok().as_deref())
     })
 }
 
 pub(super) fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelection {
-    // gh #6206: old-page defrag evacuation is OFF pending a rewrite-contract
-    // fix. With defrag active, a reader can observe a pre-move address of a
-    // defrag-moved old object long after the cycle (wild-pointer crash /
-    // silently corrupt cached value); the reproducer corrupts 6/6 with defrag
-    // enabled and is clean 6/6 with it disabled, on the same binary, while
-    // every heap-payload slot (arrays in-length, object fields, Map entries)
-    // verifies as correctly rewritten — the stale reference lives on a
-    // non-heap path (address-keyed cache / IC / side table) the defrag
-    // rewrite doesn't reach. Nursery evacuation and tenured promotion (the
-    // reclaim-critical moving paths) are unaffected. Re-enable for
-    // debugging/bisection with PERRY_GC_OLD_DEFRAG=1.
+    // #7876 restored the mutable-root contract for old movable addresses and
+    // made defrag the production default. Keep an explicit kill switch for
+    // field diagnosis and rollback without shipping a second binary.
     if !old_page_defrag_enabled() {
         return OldPageDefragSelection::default();
     }
     let snapshot = crate::arena::old_page_meta_snapshot();
     select_old_page_defrag_pages_from_snapshot(&snapshot, force)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::old_page_defrag_enabled_from_value;
+
+    #[test]
+    fn old_page_defrag_defaults_on_with_an_explicit_kill_switch() {
+        assert!(old_page_defrag_enabled_from_value(None));
+        assert!(old_page_defrag_enabled_from_value(Some("1")));
+        assert!(old_page_defrag_enabled_from_value(Some("on")));
+        assert!(old_page_defrag_enabled_from_value(Some("true")));
+        assert!(!old_page_defrag_enabled_from_value(Some("0")));
+        assert!(!old_page_defrag_enabled_from_value(Some("off")));
+        assert!(!old_page_defrag_enabled_from_value(Some("false")));
+        assert!(old_page_defrag_enabled_from_value(Some("unexpected")));
+    }
 }

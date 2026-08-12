@@ -303,13 +303,6 @@ fn gc_collect_minor_with_trigger_inner(
     // recorded in the cycle trace and read back by the evacuation-policy tests.
     let evacuation_policy_allowed = true;
     let force_evacuation = gc_force_evacuate_enabled();
-    let old_page_selection = if old_to_young_tracking_complete() {
-        select_old_page_defrag_pages(force_evacuation)
-    } else {
-        OldPageDefragSelection::default()
-    };
-    let old_page_source_blocks =
-        crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
@@ -333,6 +326,18 @@ fn gc_collect_minor_with_trigger_inner(
         };
     }
     clear_mark_seeds();
+    // Old-page defrag belongs to the non-copying fallback below. Snapshotting
+    // and sorting all old-page metadata before trying the copying fast path
+    // charged every ordinary minor an O(old pages) cost even though that path
+    // cannot consume the selection. Defer both selection and source-block
+    // expansion until the fast path has declined the collection.
+    let old_page_selection = if old_to_young_tracking_complete() {
+        select_old_page_defrag_pages(force_evacuation)
+    } else {
+        OldPageDefragSelection::default()
+    };
+    let old_page_source_blocks =
+        crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
     GcCycleState::new_minor_fallback(
         trigger,
         trace,

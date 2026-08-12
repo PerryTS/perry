@@ -330,7 +330,7 @@ fn emit_instance_alloc_inner(
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
             } else {
-                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                let s = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
                 ctx.class_keys_slots
                     .insert(class_name.to_string(), s.clone());
                 s
@@ -447,7 +447,7 @@ fn emit_instance_alloc_inner(
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
             } else {
-                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                let s = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
                 ctx.class_keys_slots
                     .insert(class_name.to_string(), s.clone());
                 s

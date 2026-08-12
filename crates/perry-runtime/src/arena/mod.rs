@@ -140,5 +140,6 @@ pub(crate) use page_meta::{
 pub(crate) use page_meta::{
     deferred_old_page_registrations_len, generation_page_base,
     old_arena_page_index_clear_for_tests, old_page_meta_for_tests,
+    old_page_meta_snapshot_calls_for_tests, reset_old_page_meta_snapshot_calls_for_tests,
     DEFERRED_OLD_PAGE_REGISTRATION_CAP, GENERATION_CLASS_SHIFT, GENERATION_PAGE_SIZE,
 };

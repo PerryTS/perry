@@ -369,10 +369,10 @@ pub fn derives_from_slot_load(fn_ir: &str, reg: &str, depth: usize) -> bool {
 /// a null `addrspace(1)` store.
 ///
 /// Required as well as the alloca type because an `alloca i64` is also how
-/// codegen spells an unrelated scratch cell — the per-class inline-keys cache
-/// in `@main` is one, and without this filter it read as a temp root and made
-/// `a_class_that_runs_no_user_code_emits_no_instance_root` fail for a slot that
-/// holds a static keys pointer.
+/// codegen spells unrelated scratch cells. The per-class inline-keys cache is
+/// now a precise function-lifetime root (#7876), so it has the same seed and
+/// alloca type as a temp root; [`temp_root_slots`] excludes that one by the
+/// provenance of the value stored into it.
 pub fn zero_seeded_slots(fn_ir: &str) -> std::collections::BTreeSet<String> {
     let mut touched: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut seeded: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -432,6 +432,13 @@ pub fn temp_root_slots(fn_ir: &str) -> Vec<String> {
     let defs = defs(fn_ir);
     let undefined = undefined_literal();
     let seeded = zero_seeded_slots(fn_ir);
+    let class_key_loads: Vec<&str> = defs
+        .iter()
+        .filter_map(|(&reg, def)| {
+            def.starts_with("load i64, ptr @perry_class_keys_")
+                .then_some(reg)
+        })
+        .collect();
     slot_traffic(fn_ir)
         .into_iter()
         .filter(|(slot, _)| seeded.contains(slot))
@@ -457,6 +464,20 @@ pub fn temp_root_slots(fn_ir: &str) -> Vec<String> {
                             def.starts_with("bitcast double ") && def.contains(&undefined)
                         })
                 }
+                _ => false,
+            })
+        })
+        .filter(|(_, events)| {
+            // #7876: the registered class-keys global owns liveness, while a
+            // function-local immutable copy is a precise root solely so an
+            // old-page move can rewrite it. It lasts for the whole function;
+            // it is not one of #7487's scoped expression temporaries. Match
+            // the exact registered-global provenance so an ordinary temp that
+            // happens to lack its closing clear remains visible to this gate.
+            !events.iter().any(|event| match event {
+                SlotEvent::Store { value, .. } => class_key_loads
+                    .iter()
+                    .any(|load| derives_from(&defs, value, load, 4)),
                 _ => false,
             })
         })
@@ -631,6 +652,45 @@ entry.0:
         assert!(
             std::panic::catch_unwind(|| assert_no_temp_rooting(NATIVE, "sabotage")).is_err(),
             "…in both lowerings"
+        );
+    }
+
+    #[test]
+    fn a_function_lifetime_class_keys_root_is_not_a_temp_root() {
+        let shadow = "\
+define i32 @main() {
+entry.0:
+  %keys = alloca i64
+  store i64 0, ptr %keys
+  %r1 = load i64, ptr @perry_class_keys_fixture
+  store i64 %r1, ptr %keys
+  %r2 = load i64, ptr %keys
+  call void @consume(i64 %r2)
+  ret i32 0
+}
+";
+        let native = "\
+define i32 @main() gc \"statepoint-example\" {
+entry.0:
+  %keys = alloca ptr addrspace(1)
+  store ptr addrspace(1) null, ptr %keys
+  %r1 = load i64, ptr @perry_class_keys_fixture
+  %r1.rs4p = inttoptr i64 %r1 to ptr addrspace(1)
+  store ptr addrspace(1) %r1.rs4p, ptr %keys
+  %r2.rs4p = load ptr addrspace(1), ptr %keys
+  %r2 = ptrtoint ptr addrspace(1) %r2.rs4p to i64
+  call void @consume(i64 %r2)
+  ret i32 0
+}
+";
+        assert_no_temp_rooting(shadow, "class-key cache shadow root");
+        assert_no_temp_rooting(native, "class-key cache native root");
+
+        let unrelated = shadow.replace("@perry_class_keys_fixture", "@some_other_global");
+        assert_eq!(
+            temp_root_slots(&unrelated),
+            vec!["%keys".to_string()],
+            "only the registered class-key provenance is exempt; a missing temp-root clear must stay visible"
         );
     }
 }

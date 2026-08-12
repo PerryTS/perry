@@ -108,7 +108,7 @@ fn emit_tower_pshape_call(
 ) -> String {
     // The global is read ONCE per function (entry-hoisted); the case block only
     // reloads it from the stack slot, which mem2reg folds away.
-    let keys_slot = ctx.func.entry_init_load_global(&route.keys_global, I64);
+    let keys_slot = crate::expr::entry_init_load_rooted_global(ctx, &route.keys_global, I64);
     let expected_keys = ctx.block().load(I64, &keys_slot);
 
     let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));

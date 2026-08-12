@@ -338,6 +338,11 @@ thread_local! {
     static OLD_GEN_PAGE_DIRTY_EPOCH: Cell<u64> = const { Cell::new(1) };
 }
 
+#[cfg(test)]
+thread_local! {
+    static OLD_PAGE_META_SNAPSHOT_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
 // --- #7469 hot-TLS address providers. See `crate::tls_hot`. ---
 
 /// Address of this thread's `PAGE_GENERATION_CACHE`.
@@ -1178,6 +1183,8 @@ pub(crate) fn old_page_summary() -> OldPageSummary {
 }
 
 pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
+    #[cfg(test)]
+    OLD_PAGE_META_SNAPSHOT_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     // #7624 READER (`OLD_GEN_PAGE_META`): this one drives real policy —
     // `gc/oldgen_defrag.rs` selects evacuation pages from it.
     flush_deferred_old_page_registrations();
@@ -1192,6 +1199,16 @@ pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
         snapshot.sort_unstable_by_key(|page_meta| page_meta.page_base);
         snapshot
     })
+}
+
+#[cfg(test)]
+pub(crate) fn old_page_meta_snapshot_calls_for_tests() -> usize {
+    OLD_PAGE_META_SNAPSHOT_CALLS.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_old_page_meta_snapshot_calls_for_tests() {
+    OLD_PAGE_META_SNAPSHOT_CALLS.with(|calls| calls.set(0));
 }
 
 /// Fold a stale `dirty_slots` stamp down to the effective value so a copied

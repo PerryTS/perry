@@ -550,7 +550,7 @@ fn materialize_scalar_receiver(
             let keys_slot = if let Some(slot) = ctx.class_keys_slots.get(class_name).cloned() {
                 slot
             } else {
-                let slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                let slot = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
                 ctx.class_keys_slots
                     .insert(class_name.to_string(), slot.clone());
                 slot

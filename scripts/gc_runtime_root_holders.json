@@ -16,10 +16,10 @@
     "  not_a_gc_pointer   - the stored value is an id, a counter, an epoch, a code address, a",
     "                       .rodata object, or Rust-owned state. Nothing for the collector.",
     "  test_only          - #[cfg(test)] storage; never live in a shipped binary.",
-    "  open_gap           - a real unrooted GC pointer. `issue` says where it is tracked.",
-    "  unverified         - enumerated, verdict NOT established. A named, dated TODO \u2014 not an",
-    "                       exemption. Keep this list short; every entry here is a hole the",
-    "                       gate can see and nobody has looked into."
+    "  open_gap           - a real unrooted GC pointer. `issue` says where it is tracked; this",
+    "                       verdict FAILS while old-page relocation ships enabled.",
+    "  unverified         - enumerated, verdict NOT established. This also FAILS: an unknown",
+    "                       movable-address contract cannot be a production exemption."
   ],
   "holders": [
     {
@@ -41,13 +41,6 @@
       "why": "Monotonic id counter for CP_LIVE keys. CP_LIVE itself is covered by cp_reactor_scan_roots_mut."
     },
     {
-      "file": "crates/perry-runtime/src/json/mod.rs",
-      "name": "PARSE_KEY_RING",
-      "verdict": "open_gap",
-      "issue": "#7231",
-      "why": "A hot-key mirror of PARSE_KEY_CACHE holding the same *const StringHeader values. The CACHE is visited by scan_parse_roots_mut; the RING is not, so a move rewrites one copy and not the other and a ring hit hands out a pre-move address. Narrow: the keys are js_string_from_bytes_longlived, i.e. old-gen, so only old-gen defrag can move them \u2014 not the copying minor."
-    },
-    {
       "file": "crates/perry-runtime/src/node_submodules/blob.rs",
       "name": "FILE_BLOB_STREAMS",
       "verdict": "not_a_gc_pointer",
@@ -58,12 +51,6 @@
       "name": "NEXT_FILE_BLOB_STREAM_ID",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic id counter."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-      "name": "DIAG_CHANNEL_BY_KEY",
-      "verdict": "unverified",
-      "why": "Values are channel handle ids (safe), but DiagChannelKey::Symbol carries a symbol ADDRESS. Whether that address can be a gc_malloc'd fresh symbol (alloc_symbol, GC_TYPE_STRING, movable) rather than one of the Box::leak'd registered/well-known symbols has not been established. Raised 2026-08-09 with #7231's sweep; needs the write sites read."
     },
     {
       "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
@@ -140,13 +127,6 @@
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_object_cache_roots_mut (object/mod.rs:1141)",
       "why": "One of the six %IteratorPrototype%-style singletons visited by the same loop in object/mod.rs; see ITERATOR_PROTOTYPE_PTR for the full reasoning."
-    },
-    {
-      "file": "crates/perry-runtime/src/perf_hooks.rs",
-      "name": "PERF_ENTRY_KEYS_ARRAY",
-      "verdict": "open_gap",
-      "issue": "#7231",
-      "why": "Caches the shared keys_array address of performance entries (js_object_alloc_with_shape, nursery) and compares it by identity at perf_hooks.rs:119. Never rewritten, so after a move it misses (silent slow path) or \u2014 the sharper half \u2014 matches a newly-allocated array recycled into the address. The neighbouring PERF_ENTRIES table IS covered by scan_perf_entries_roots_mut; this one slot is not."
     },
     {
       "file": "crates/perry-runtime/src/process.rs",

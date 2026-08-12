@@ -176,7 +176,8 @@ pub(crate) use slot_rep::{
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
 pub(crate) use scalar_slot_root::{
-    root_entry_alloca, root_scalar_replaced_slot, root_scalar_replaced_slot_unconditional,
+    entry_init_load_rooted_global, root_entry_alloca, root_scalar_replaced_slot,
+    root_scalar_replaced_slot_unconditional,
 };
 pub(crate) use shadow_slot::{
     current_closure_ptr_value, emit_persistent_shadow_root_barrier,

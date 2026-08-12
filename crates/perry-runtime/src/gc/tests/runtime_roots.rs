@@ -8,6 +8,7 @@ mod hook_dispatch_handles;
 mod interned_string_caches;
 mod iter_result_keys;
 mod json_shape_template;
+mod old_defrag_contract;
 mod prototype_addr_cache;
 mod side_table_scanners;
 mod string_slice;

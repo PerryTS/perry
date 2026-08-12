@@ -47,6 +47,8 @@ How it fails
 
 * a new uncovered holder with no inventory entry -> exit 1
 * an inventory entry that no longer matches a declaration -> exit 1
+* an `open_gap` or `unverified` verdict -> exit 1; old-page relocation ships
+  enabled, so a known or unevaluated movable-address holder cannot be exempted
 * fewer than MIN_HOLDERS declarations matched -> exit 2, because a regex that
   stopped matching would otherwise report a clean, empty, green run
 * fewer than MIN_REGISTERED registered scanners found -> exit 2, same reason:
@@ -467,6 +469,12 @@ def inventory_problems(inventory: list[dict]) -> list[str]:
             )
         if verdict == "open_gap" and not (entry.get("issue") or "").strip():
             problems.append(f"{label}: open_gap must cite an `issue`")
+        if verdict in {"open_gap", "unverified"}:
+            problems.append(
+                f"{label}: `{verdict}` is not a shippable old-page relocation verdict. "
+                "Rewrite/invalidate the holder, prove it cannot hold a movable GC address, "
+                "or keep relocation disabled."
+            )
         if verdict == "unverified":
             unverified += 1
     if unverified > MAX_UNVERIFIED:

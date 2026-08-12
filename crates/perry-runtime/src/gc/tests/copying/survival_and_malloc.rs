@@ -127,7 +127,13 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
         "seeded unpinned live/dead old page should be selected for defrag"
     );
 
+    crate::arena::reset_old_page_meta_snapshot_calls_for_tests();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_eq!(
+        crate::arena::old_page_meta_snapshot_calls_for_tests(),
+        0,
+        "a copying minor cannot consume an old-page defrag selection"
+    );
     let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let promoted_header = unsafe { header_from_user_ptr(promoted as *const u8) };
     let promoted_total = unsafe { (*promoted_header).size as usize };

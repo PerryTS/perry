@@ -1469,6 +1469,10 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
             visitor.visit_nanbox_f64_slot(err);
         }
     });
+    // Symbol keys duplicate the structurally rooted DIAG_CHANNELS names.
+    // This is a rewrite-only identity index and can exist independently of
+    // the export/namespace singleton caches guarded below.
+    diagnostics::scan_diagnostics_channel_key_roots_mut(visitor);
     if ANY_SINGLETON_ALLOCATED.load(Ordering::Acquire) == 0 {
         return;
     }
