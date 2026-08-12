@@ -774,19 +774,27 @@ impl Arena {
 /// # Safety
 /// `arena` must be the `UnsafeCell` payload of a live thread-local `Arena` for
 /// the current thread.
-/// The first statement of [`arena_cell_alloc`], on its own: try the block that
-/// is already open, under a borrow that ends with the call.
+/// [`arena_cell_alloc`]'s FIRST step, and only that step: serve the request
+/// from the block that is already open, or report that it cannot.
 ///
-/// Split out so a caller can take **only** this step. Everything past it in
-/// `arena_cell_alloc` is a collection point (`gc_check_trigger`) or a block
-/// reservation that can reach one, so a `Some` from here is the runtime's
-/// proof that no object moved — which is what
-/// `arena::arena_alloc_gc_no_collect` sells to helpers holding unrooted raw
-/// heap pointers.
+/// Everything past that step in `arena_cell_alloc` is either the
+/// allocation-point collection (`gc_check_trigger`) or a block reservation
+/// that can reach one, so a `Some` from here is the runtime's proof that
+/// **no collection ran and therefore nothing moved**. That proof is what
+/// [`super::arena_alloc_gc_no_collect`] sells to helpers holding raw heap
+/// pointers they have not rooted.
+///
+/// Deliberately a copy of the two lines rather than a refactor of
+/// `arena_cell_alloc` to call it: that function is `#[inline]`d into every
+/// arena allocation in the program, and interposing a call there moved
+/// `pipeline` by +5.5% retired instructions on a measured A/B while the
+/// concatenation change it was supposed to be serving moved nothing there.
+/// A shared allocation path is not the place to find out whether the
+/// inliner agrees with you.
 ///
 /// # Safety
 /// Same as [`arena_cell_alloc`].
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn arena_cell_try_alloc_current(
     arena: *mut Arena,
     size: usize,
@@ -799,8 +807,11 @@ pub(crate) unsafe fn arena_cell_try_alloc_current(
 #[inline]
 pub(crate) unsafe fn arena_cell_alloc(arena: *mut Arena, size: usize, align: usize) -> *mut u8 {
     // Try current block first, under a borrow that ends with this statement.
-    if let Some(ptr) = arena_cell_try_alloc_current(arena, size, align) {
-        return ptr;
+    {
+        let _borrow = ArenaBorrowGuard::new();
+        if let Some(ptr) = (*arena).try_alloc_current(size, align) {
+            return ptr;
+        }
     }
 
     // Current block is full. Check the GC trigger first — if it fires and

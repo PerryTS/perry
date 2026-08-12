@@ -558,11 +558,14 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
     let mut total_blen: u32 = 0;
     let mut total_u16: u32 = 0;
 
+    // Admission scan FIRST, and it touches nothing but `parts`. A chain with
+    // a number, an SSO value or an object in it needs `js_jsvalue_to_string`,
+    // which allocates, so it belongs on the rooted path — and it must reach
+    // that path having paid only n register compares, not n cold
+    // `StringHeader` loads it is about to throw away and redo.
+    // STRING_TAG = 0x7FFF; `is_valid_string_ptr` is a range test, no deref.
     for i in 0..n {
         let bits = unsafe { *parts.add(i) }.to_bits();
-        // STRING_TAG = 0x7FFF. Anything else (SSO, numbers, objects) needs
-        // `js_jsvalue_to_string`, which allocates — so it belongs on the
-        // rooted path, not here.
         if bits >> 48 != 0x7FFF {
             return None;
         }
@@ -570,13 +573,17 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
         if !is_valid_string_ptr(ptr) {
             return None;
         }
+        piece_ptrs[i] = ptr;
+    }
+
+    for i in 0..n {
         // Mirrors the rooted loop exactly, including that an EMPTY part
         // contributes no flags: `piece_flags |= flags` sits inside its
         // `blen > 0` guard there, and a divergence here would be a
         // silent WTF-8 behaviour change rather than a slowdown.
+        let ptr = piece_ptrs[i];
         let blen = unsafe { (*ptr).byte_len };
         if blen > 0 {
-            piece_ptrs[i] = ptr;
             piece_lens[i] = blen;
             piece_flags |= unsafe { (*ptr).flags };
             total_blen = total_blen.saturating_add(blen);
