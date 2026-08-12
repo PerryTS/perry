@@ -1220,7 +1220,7 @@ fn budgeted_minor_fallback_ignores_forced_evacuation_and_stays_non_moving() {
     let _defrag = OldDefragTestEnable::new();
     let _guard = CopyingNurseryTestGuard::new(2);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");
+    let _force = ForcedEvacuationTestGuard::on();
 
     let _old_block_filler =
         crate::arena::arena_alloc_gc_old(2 * 1024 * 1024 - GC_HEADER_SIZE, 8, GC_TYPE_STRING);

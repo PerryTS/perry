@@ -423,6 +423,10 @@ pub fn gen_gc_enabled() -> bool {
 // decision that hasn't been made".
 
 fn gc_force_evacuate_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = knob_overrides::FORCE_EVACUATE_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return forced;
+    }
     // `PERRY_GC_SCHEDULE_SEED` implies forced evacuation (#7154 tooling): a
     // scheduled minor that leaves survivors in place would move nothing, and
     // "an unrooted value moves on its first exposure" is the entire contract of
@@ -437,10 +441,81 @@ fn gc_force_evacuate_enabled() -> bool {
 }
 
 fn gc_verify_evacuation_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = knob_overrides::VERIFY_EVACUATION_TEST_OVERRIDE.with(std::cell::Cell::get)
+    {
+        return forced;
+    }
     matches!(
         std::env::var("PERRY_GC_VERIFY_EVACUATION").as_deref(),
         Ok("1") | Ok("on") | Ok("true")
     )
+}
+
+/// Per-thread test overrides for the two collector knobs the unit suite needs
+/// to turn ON mid-run (#7946).
+///
+/// **A test may not reach for the process environment to do this.** `set_var`
+/// is process-wide, so a `PERRY_GC_FORCE_EVACUATE=1` held for one test's
+/// duration is read by every other libtest thread — and `gc_force_evacuate_
+/// enabled()` is an input to `should_promote_young_in_place()`, so it silently
+/// turned in-place promotion OFF underneath `gc::tests::promote_in_place`'s
+/// policy cases. Measured at 5 failed runs in 100 across three of them
+/// (`a_promoting_cycle_still_measures_so_the_predictor_cannot_go_stale`,
+/// `dead_byte_budget_stops_promotion_until_a_full_reclaims`,
+/// `untraced_budget_forces_a_measuring_cycle_and_a_measurement_clears_it`); the
+/// arm that skipped the env-setting tests dropped that family to zero.
+///
+/// The old `gc::tests::support::EnvVarGuard` took a mutex, which serialized the
+/// *setters* against each other and did nothing at all for the ~2 200 readers.
+/// That is the opt-in-defence shape `per_test_global!`'s module docs argue
+/// against; per-thread storage is the same answer in a different place.
+///
+/// `ScheduleGuard` (thread-local) was already doing this for forced evacuation
+/// via `PERRY_GC_SCHEDULE_SEED` — see
+/// `gc::tests::evacuation::explicit_gc_under_forced_evacuation_runs_a_moving_minor`,
+/// whose comment says in as many words that "an `EnvVarGuard` would set a
+/// process-global every other test in this crate shares".
+#[cfg(test)]
+pub(super) mod knob_overrides {
+    use std::cell::Cell;
+
+    thread_local! {
+        pub(super) static FORCE_EVACUATE_TEST_OVERRIDE: Cell<Option<bool>> =
+            const { Cell::new(None) };
+        pub(super) static VERIFY_EVACUATION_TEST_OVERRIDE: Cell<Option<bool>> =
+            const { Cell::new(None) };
+    }
+
+    /// Pin `gc_force_evacuate_enabled()` for this thread only.
+    pub(crate) struct ForcedEvacuationTestGuard(Option<bool>);
+
+    impl ForcedEvacuationTestGuard {
+        pub(crate) fn on() -> Self {
+            Self(FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.replace(Some(true))))
+        }
+    }
+
+    impl Drop for ForcedEvacuationTestGuard {
+        fn drop(&mut self) {
+            FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.set(self.0));
+        }
+    }
+
+    /// Pin `gc_verify_evacuation_enabled()` for this thread only.
+    pub(crate) struct VerifyEvacuationTestGuard(Option<bool>);
+
+    impl VerifyEvacuationTestGuard {
+        pub(crate) fn on() -> Self {
+            Self(VERIFY_EVACUATION_TEST_OVERRIDE.with(|c| c.replace(Some(true))))
+        }
+    }
+
+    impl Drop for VerifyEvacuationTestGuard {
+        fn drop(&mut self) {
+            VERIFY_EVACUATION_TEST_OVERRIDE.with(|c| c.set(self.0));
+        }
+    }
 }
 
 /// `PERRY_GC_SCAVENGE` — **ON by default since #7056**, kill switch

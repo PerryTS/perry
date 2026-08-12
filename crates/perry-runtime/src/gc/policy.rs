@@ -3575,7 +3575,43 @@ pub extern "C" fn js_gc_module_idle_hint() -> f64 {
 }
 
 pub(super) fn gc_blocked_by_unsafe_zone() -> bool {
+    #[cfg(test)]
+    if let Some(blocked) = unsafe_zone_test_override::OVERRIDE.with(std::cell::Cell::get) {
+        return blocked;
+    }
     GC_UNSAFE_ZONES.load(std::sync::atomic::Ordering::Acquire) > 0
+}
+
+/// Per-thread override of [`gc_blocked_by_unsafe_zone`] for the unit suite
+/// (#7946).
+///
+/// [`GC_UNSAFE_ZONES`] is genuinely process-wide in production — the whole
+/// point is that a *worker thread* holding JSValues on an unscannable stack
+/// stops the main thread collecting. In a test binary that same property makes
+/// `GC_UNSAFE_ZONES.store(1)` a global stop-the-collector: every concurrent
+/// libtest thread's `gc_budgeted_start_blocked()` / `gc_budgeted_resume_
+/// blocked()` starts answering "blocked", and any test driving a budgeted cycle
+/// to completion gets `JS_GC_STEP_STATUS_SKIPPED` instead. That is exactly what
+/// `gc::tests::root_words::bare_address_in_{shadow_slot,global_root}_survives_
+/// a_real_collection` failed with ("budgeted GC cycle stopped before
+/// completion: status 3"), 3 runs in 100.
+///
+/// The unsafe-zone tests are all single-threaded — they set the zone and then
+/// assert about a collection on the same thread — so a per-thread pin tests the
+/// same predicate without reaching outside the test.
+#[cfg(test)]
+pub(super) mod unsafe_zone_test_override {
+    use std::cell::Cell;
+
+    thread_local! {
+        pub(super) static OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    /// Pin (or unpin) `gc_blocked_by_unsafe_zone()` for this thread, returning
+    /// the previous pin so a guard can restore it.
+    pub(crate) fn set_unsafe_zone_blocked_for_test(blocked: Option<bool>) -> Option<bool> {
+        OVERRIDE.with(|c| c.replace(blocked))
+    }
 }
 
 pub(super) fn manual_gc_blocked_by_unsafe_zone() -> bool {

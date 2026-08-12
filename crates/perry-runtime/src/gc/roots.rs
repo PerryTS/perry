@@ -36,8 +36,9 @@ pub use scanner_shims::{
 pub(crate) use scan_mode::{
     conservative_stack_scan_decision, conservative_stack_scan_decision_for,
     conservative_stack_scan_mode, conservative_stack_scan_mode_from_value,
-    set_conservative_stack_scan_override, ConservativeStackScanDecision, ConservativeStackScanMode,
-    ManualGcScanGuard, CONSERVATIVE_STACK_SCAN_OVERRIDE,
+    resolve_conservative_stack_scan_mode, set_conservative_stack_scan_override,
+    ConservativeStackScanDecision, ConservativeStackScanMode, ManualGcScanGuard,
+    CONSERVATIVE_STACK_SCAN_OVERRIDE,
 };
 pub(crate) use shadow_stack::shadow_stack_has_active_frame;
 pub(crate) use shadow_stack::SHADOW;

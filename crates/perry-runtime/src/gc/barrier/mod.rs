@@ -853,8 +853,8 @@ pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
     push_mark_seed(header);
 }
 
-/// Is an incremental mark cycle in progress anywhere, or is this thread
-/// currently birthing objects black?
+/// Is an incremental mark cycle in progress **on this thread**, or is this
+/// thread currently birthing objects black?
 ///
 /// #7888 uses this to refuse the untraced promotion path. An allocate-black
 /// birth puts `GC_FLAG_MARKED` on a NURSERY object, and a cycle that neither
@@ -862,9 +862,28 @@ pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
 /// mark reads as "live" to the next full sweep. The untraced path makes no
 /// liveness claim, so it must not be running while anything else is making one
 /// through the mark bit.
+///
+/// ★ #7946: **this thread's**, not "anywhere". It used to read
+/// `!incremental_mark_barrier_globally_idle()` directly, which is the
+/// deliberately-conservative cross-thread approximation
+/// [`PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT`] exists to give the write
+/// barrier's fast path — where a false positive costs one call that returns.
+/// Here a false positive costs a *policy decision*, and it is unfounded:
+/// arenas are per-thread, `hot_birth_extra_flags` is per-thread, and only the
+/// thread holding the barrier's `valid_ptrs` pointer can shade anything, so
+/// another agent's cycle cannot put a mark on this thread's nursery. Single
+/// threaded the two are identical ([`incremental_mark_barrier_active`]
+/// short-circuits on the same global load); with `perry/thread` agents the old
+/// form let one agent's cycle disable another's promotion policy outright.
+///
+/// It was also a live test flake: under `cargo test` "anywhere" means "any of
+/// the other 2 200 tests", and
+/// `gc::tests::promote_in_place::an_untraced_promotion_indexes_the_objects_it_
+/// could_not_prove_live` failed 25 runs in 200 with `cycles=0, objects=0`
+/// because some unrelated thread happened to be marking.
 #[inline]
-pub(super) fn incremental_mark_in_progress() -> bool {
-    !incremental_mark_barrier_globally_idle() || gc_birth_extra_flags() != 0
+pub(super) fn incremental_mark_in_progress_on_this_thread() -> bool {
+    incremental_mark_barrier_active() || gc_birth_extra_flags() != 0
 }
 
 #[inline]

@@ -488,38 +488,25 @@ pub(super) fn assert_copied_minor_trace(
     assert_eq!(trace.copying_nursery.malloc_sweep_due, malloc_sweep_due);
 }
 
-static ENV_VAR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-pub(super) struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<std::ffi::OsString>,
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-impl EnvVarGuard {
-    pub(super) fn set(key: &'static str, value: &'static str) -> Self {
-        let lock = ENV_VAR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var_os(key);
-        std::env::set_var(key, value);
-        Self {
-            key,
-            previous,
-            _lock: lock,
-        }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        if let Some(previous) = self.previous.as_ref() {
-            std::env::set_var(self.key, previous);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
-}
+// `EnvVarGuard` used to live here. It took `std::env::set_var` under a mutex,
+// which serialized the twelve tests that SET a `PERRY_GC_*` knob against each
+// other and did nothing whatsoever for the ~2 200 that READ one — the process
+// environment is shared by every libtest thread, and the damage window is
+// "between this test's set and another test's read".
+//
+// It was a live source of red builds (#7946), not a theoretical hazard:
+// `PERRY_GC_FORCE_EVACUATE=1` is an input to `should_promote_young_in_place()`,
+// so holding it for one test's duration silently turned in-place promotion off
+// underneath `gc::tests::promote_in_place`'s policy cases — 5 failed runs in
+// 100 across three of them.
+//
+// Knobs a test needs to move now have a PER-THREAD override next to the reader
+// that consults them, the same shape `barrier_arming`'s `TEST_ARMED_OVERRIDE`,
+// `oldgen_defrag`'s `OLD_DEFRAG_TEST_OVERRIDE` and `roots`'s
+// `CONSERVATIVE_STACK_SCAN_OVERRIDE` already used. A knob whose *parse* or
+// *precedence* is the subject gets a pure function taking the value, the way
+// `parse_promote_in_place` does — never the live process environment.
+pub(super) use crate::gc::knob_overrides::{ForcedEvacuationTestGuard, VerifyEvacuationTestGuard};
 
 static GENERATED_BARRIER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

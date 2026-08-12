@@ -766,7 +766,7 @@ fn test_old_page_defrag_re_remembers_young_child_after_collection_clear() {
     let _scan = ConservativeScanDisabledGuard::new();
     let _isolation = copying_nursery_isolation_lock();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");
+    let _force = ForcedEvacuationTestGuard::on();
     let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
     reset_shadow_stack();
     reset_global_roots();

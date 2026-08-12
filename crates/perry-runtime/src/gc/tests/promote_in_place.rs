@@ -442,9 +442,11 @@ fn an_untraced_promotion_indexes_the_objects_it_could_not_prove_live() {
     // that a promoting one did.
     assert!(
         untraced_promotion_cycles() > 0 && untraced_promoted_objects() > 0,
-        "the untraced path must have run and promoted something (cycles={}, objects={})",
+        "the untraced path must have run and promoted something (cycles={}, objects={}); \
+         the cycle declined it because: {}",
         untraced_promotion_cycles(),
-        untraced_promoted_objects()
+        untraced_promoted_objects(),
+        crate::gc::copying::last_untraced_decline_reason()
     );
     assert_eq!(
         trace.remembered_set.dirty_objects_scanned, 0,
@@ -657,5 +659,89 @@ fn a_freshly_described_page_is_not_defrag_eligible() {
     assert!(
         !super::super::oldgen_defrag::old_page_defrag_eligible(meta),
         "a page whose run is still described must not be a defrag candidate"
+    );
+}
+
+/// #7946: **another agent's** incremental cycle must not veto this thread's
+/// untraced promotion.
+///
+/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` is a process-global armed by
+/// whichever thread has a cycle running — deliberately conservative, because on
+/// the write barrier's fast path a false positive costs one call that returns.
+/// The untraced-promotion veto read it directly, so one agent's cycle turned
+/// another agent's promotion policy off, and under `cargo test` "another agent"
+/// means "any of the other 2 200 tests":
+/// `an_untraced_promotion_indexes_the_objects_it_could_not_prove_live` failed 25
+/// runs in 200 with `cycles=0, objects=0` for exactly this reason.
+///
+/// Both directions, because a veto that never fires is as wrong as one that
+/// always does:
+///
+/// * count armed WITHOUT this thread's `valid_ptrs` pointer — the state another
+///   agent's cycle creates — must NOT veto;
+/// * this thread's own barrier armed MUST veto, or #7888's stale-mark hazard is
+///   back.
+#[test]
+fn another_agents_incremental_cycle_does_not_veto_this_threads_untraced_promotion() {
+    use std::sync::atomic::Ordering;
+
+    let _guard = GcTestIsolationGuard::new();
+
+    /// Restores the count even if an assertion unwinds — leaking an arm would
+    /// pin every later test into the conservative arm.
+    struct ForeignArm;
+    impl ForeignArm {
+        fn new() -> Self {
+            PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_add(1, Ordering::Release);
+            Self
+        }
+    }
+    impl Drop for ForeignArm {
+        fn drop(&mut self) {
+            PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_sub(1, Ordering::Release);
+        }
+    }
+
+    let veto_before = crate::gc::copying::test_untraced_promotion_instrument_veto();
+    assert_eq!(
+        veto_before, None,
+        "test premise: nothing else may be vetoing before the arm"
+    );
+
+    {
+        let _foreign = ForeignArm::new();
+        // The subject has to be live: if the count were still idle this test
+        // would pass having armed nothing.
+        assert!(
+            !crate::gc::incremental_mark_barrier_globally_idle(),
+            "test premise: the global count must read as armed"
+        );
+        assert_eq!(
+            crate::gc::copying::test_untraced_promotion_instrument_veto(),
+            None,
+            "a cycle on ANOTHER thread must not veto this thread's untraced \
+             promotion — its marks cannot reach this thread's nursery"
+        );
+    }
+
+    // The local direction. `GcTestIsolationGuard` above owns the root registry,
+    // so the barrier sees exactly this scope's pointers.
+    clear_marks();
+    let valid_ptrs = build_valid_pointer_set();
+    {
+        let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+        assert_eq!(
+            crate::gc::copying::test_untraced_promotion_instrument_veto(),
+            Some("incremental_mark_in_progress"),
+            "this thread's own incremental cycle MUST veto: an allocate-black \
+             birth would carry GC_FLAG_MARKED into old-gen (#7888)"
+        );
+    }
+    clear_marks();
+
+    assert_eq!(
+        crate::gc::copying::test_untraced_promotion_instrument_veto(),
+        None,
+        "and the veto must lift when this thread's cycle ends"
     );
 }

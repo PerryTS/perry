@@ -133,7 +133,21 @@ pub(crate) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
         .ok()
         .map(|value| conservative_stack_scan_mode_from_value(Some(&value)));
     let pinned = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get());
+    resolve_conservative_stack_scan_mode(env_mode, pinned)
+}
 
+/// The precedence rule, taking the env answer as an ARGUMENT (#7946).
+///
+/// The two cases that are *about* this rule used to set
+/// `PERRY_CONSERVATIVE_STACK_SCAN` for real, which every other libtest thread
+/// then read — `=full` alone failed 134 of 1574 tests when it was ambient, so a
+/// test holding it is a live stop-the-world for whatever runs beside it. Same
+/// idiom as `parse_promote_in_place`: assert the pure rule, never poke the
+/// process environment.
+pub(crate) fn resolve_conservative_stack_scan_mode(
+    env_mode: Option<ConservativeStackScanMode>,
+    pinned: Option<ConservativeStackScanMode>,
+) -> ConservativeStackScanMode {
     // ★ #7148: in the TEST build a pinned override beats an env request for
     // `Full`. The env var may make the scan *less* aggressive than the mode a
     // test declared, never more.

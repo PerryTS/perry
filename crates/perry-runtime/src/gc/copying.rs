@@ -968,11 +968,50 @@ unsafe fn clear_marks_in(headers: &[*mut GcHeader]) {
 /// subject was live" rule names. `PERRY_GC_FORCE_EVACUATE` (and every mode
 /// that implies it) is not listed because it already vetoes in-place promotion
 /// outright, which is a precondition here.
-fn untraced_promotion_instrument_veto() -> bool {
-    gc_verify_evacuation_enabled()
-        || super::fromspace_scan::fromspace_scan_enabled()
-        || std::env::var_os("PERRY_GC_VERIFY_MARK").is_some()
-        || super::barrier::incremental_mark_in_progress()
+///
+/// Returns the NAME of the armed instrument rather than a bool (#7946): the
+/// veto is the only input to the untraced decision that another thread can
+/// move, so when `an_untraced_promotion_indexes_the_objects_it_could_not_prove_
+/// live` fails with `cycles=0, objects=0` the first question is always which of
+/// these was on. Same short-circuit order and cost as the bool it replaced.
+fn untraced_promotion_instrument_veto() -> Option<&'static str> {
+    if gc_verify_evacuation_enabled() {
+        return Some("verify_evacuation");
+    }
+    if super::fromspace_scan::fromspace_scan_enabled() {
+        return Some("fromspace_scan");
+    }
+    if std::env::var_os("PERRY_GC_VERIFY_MARK").is_some() {
+        return Some("verify_mark");
+    }
+    if super::barrier::incremental_mark_in_progress_on_this_thread() {
+        return Some("incremental_mark_in_progress");
+    }
+    None
+}
+
+/// The veto as the cycle sees it, for
+/// `gc::tests::promote_in_place::another_agents_incremental_cycle_does_not_veto_
+/// this_threads_untraced_promotion`.
+#[cfg(test)]
+pub(super) fn test_untraced_promotion_instrument_veto() -> Option<&'static str> {
+    untraced_promotion_instrument_veto()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Why the last copying minor on this thread did NOT take the untraced
+    /// promotion path. `""` while it did. Read by
+    /// `gc::tests::promote_in_place`; see
+    /// [`untraced_promotion_instrument_veto`].
+    static UNTRACED_DECLINE_REASON: std::cell::Cell<&'static str> = const {
+        std::cell::Cell::new("no copying minor has run on this thread")
+    };
+}
+
+#[cfg(test)]
+pub(super) fn last_untraced_decline_reason() -> &'static str {
+    UNTRACED_DECLINE_REASON.with(std::cell::Cell::get)
 }
 
 pub(super) fn scan_remembered_dirty_slots_copying(
@@ -1430,11 +1469,31 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // That leaves liveness for the old-gen page index (answered by
     // `PromotionLiveness::AssumeAllLive`) and the survival ratio itself, which
     // is what `should_promote_young_untraced`'s budget bounds.
+    let instrument_veto = untraced_promotion_instrument_veto();
     let untraced = promoting_in_place
         && collector.skip_remembering
         && !crate::weakref::weak_target_holders_allocated()
-        && !untraced_promotion_instrument_veto()
+        && instrument_veto.is_none()
         && super::should_promote_young_untraced();
+    #[cfg(test)]
+    UNTRACED_DECLINE_REASON.with(|slot| {
+        // `instrument_veto` is the CAPTURED answer, not a re-evaluation: it is
+        // the racy one, and asking again after the fact would report whatever
+        // the other thread is doing now instead of what decided this cycle.
+        slot.set(if untraced {
+            ""
+        } else if !promoting_in_place {
+            "not promoting in place"
+        } else if !collector.skip_remembering {
+            "remembering not skipped (malloc registry non-empty at start)"
+        } else if crate::weakref::weak_target_holders_allocated() {
+            "a weak-target holder is registered on this thread"
+        } else if let Some(instrument) = instrument_veto {
+            instrument
+        } else {
+            "policy (should_promote_young_untraced)"
+        })
+    });
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
 
     let native_stack_walk = if untraced {
