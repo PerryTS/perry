@@ -602,6 +602,135 @@ pub extern "C" fn js_object_rest(
 }
 
 #[cfg(test)]
+mod shape_transition_tests_6759 {
+    //! #6759 C3: what a `delete` does to an object's SHAPE IDENTITY, pinned for
+    //! both object representations — because they differ, and the difference is
+    //! the entry gate for the header shrink (#7916).
+    //!
+    //! `perry-codegen`'s `class_field_inline_guard` speculates that a receiver's
+    //! packed slot layout is its class's canonical one. `delete` breaks that
+    //! (slots after the deleted key shift down one) while PRESERVING
+    //! `class_id`, so the guard compares the live `keys_array` POINTER against
+    //! the class's `@perry_class_keys_*` token. Replacing that pointer compare
+    //! with a one-word ShapeId compare — which is what makes the header shrink
+    //! a load *removal* instead of a load-for-probe trade — requires a class
+    //! instance to HAVE a shape word. It does not: `parent_class_id` is the
+    //! shape word only when `class_id == 0`.
+    //!
+    //! These tests state both facts so that a future change to either is a
+    //! deliberate edit rather than a silent drift.
+    use super::*;
+    use crate::object::shapes::is_shape_id;
+
+    fn key(name: &str) -> *mut crate::StringHeader {
+        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    }
+
+    /// A plain object's `delete` DOES mint a new ShapeId — lazily. The record
+    /// for the compacted keys array is dropped (`shape_drop`) and the stamp
+    /// cleared, so the next resolve allocates a genuinely fresh id rather than
+    /// reviving the old one. Ids are never reused, so "different" is the whole
+    /// property.
+    #[test]
+    fn delete_mints_a_fresh_shape_id_for_a_plain_object() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 8);
+            for name in ["del6759_a", "del6759_b", "del6759_c"] {
+                crate::object::js_object_set_field_by_name(obj, key(name), 1.0);
+            }
+            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_b"));
+            let before = (*obj).parent_class_id;
+            assert!(
+                is_shape_id(before),
+                "fixture is vacuous — no shape stamp to transition (got {before:#x})"
+            );
+
+            assert_eq!(js_object_delete_field(obj, key("del6759_a")), 1);
+
+            // The stamp is cleared eagerly …
+            assert_eq!(
+                (*obj).parent_class_id,
+                0,
+                "the stamp still describes the PRE-delete key list"
+            );
+            // … and re-minted, distinctly, on the next resolve.
+            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_c"));
+            let after = (*obj).parent_class_id;
+            assert!(
+                is_shape_id(after),
+                "no shape id re-minted after the delete (got {after:#x})"
+            );
+            assert_ne!(
+                after, before,
+                "the delete re-used the pre-delete ShapeId — a shape-id compare \
+                 would accept a compacted object as its own class's shape"
+            );
+        }
+    }
+
+    /// The gap. A class instance has NO shape word to mint into: `class_id` is
+    /// preserved by design (it is the vtable/instanceof identity) and
+    /// `parent_class_id` is inheritance data, so the ONLY header evidence that a
+    /// compaction happened is the `keys_array` pointer. That is why
+    /// `class_field_inline_guard` loads it, and why the #7916 header shrink
+    /// cannot delete it before #6759 C3 gives class instances a shape word.
+    #[test]
+    fn delete_leaves_a_class_instance_with_no_shape_word_to_transition() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_6760;
+        const PARENT: u32 = 0x0C3C_6761;
+        let packed = b"del6759_x\0del6759_y\0del6759_z";
+        unsafe {
+            let obj = crate::object::js_object_alloc_class_with_keys(
+                CID,
+                PARENT,
+                3,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            for (i, v) in [10.0f64, 20.0, 30.0].iter().enumerate() {
+                js_object_set_field(obj, i as u32, JSValue::from_bits(v.to_bits()));
+            }
+            let keys_before = (*obj).keys_array;
+            let parent_before = (*obj).parent_class_id;
+            assert_eq!((*obj).class_id, CID, "test premise: a class instance");
+            assert!(
+                !is_shape_id(parent_before),
+                "test premise: the header word is inheritance data, not a shape stamp"
+            );
+
+            assert_eq!(js_object_delete_field(obj, key("del6759_x")), 1);
+
+            // The compaction really happened: `z` moved from slot 2 to slot 1.
+            assert_eq!(
+                f64::from_bits(js_object_get_field(obj, 1).bits()),
+                30.0,
+                "test premise: the delete did not compact the slots"
+            );
+            // Only the keys pointer records it.
+            assert_ne!(
+                (*obj).keys_array,
+                keys_before,
+                "the keys pointer is the guard's ONLY compaction evidence and it did not change"
+            );
+            assert_eq!(
+                (*obj).class_id,
+                CID,
+                "class_id changed — a class-id compare would now catch the delete"
+            );
+            assert_eq!(
+                (*obj).parent_class_id,
+                parent_before,
+                "the header word changed — if this is now a minted ShapeId, \
+                 class_field_inline_guard can switch to a one-word compare and \
+                 this test should be replaced by that assertion (#6759 C3)"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod sso_tests_1781 {
     use super::*;
 

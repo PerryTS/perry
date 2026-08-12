@@ -605,7 +605,32 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     }
 
     let class_id = (*obj).class_id;
-    let parent_class_id = (*obj).parent_class_id;
+    // #6759 C3c: `ObjectHeader.parent_class_id` is NOT purely inheritance data.
+    // For a plain object (`class_id == 0`) the same word carries the runtime
+    // ShapeId stamp (`shapes::SHAPE_ID_BASE..SHAPE_ID_END`), written lazily by
+    // every resolve path. Replaying that word verbatim on the destination
+    // thread — `deserialize` hands it to `js_object_alloc_with_parent`, which
+    // does `if parent != 0 { register_class(class_id, parent) }` — registers
+    // `class 0 → <a shape id>` in the process-global class-parent registry and
+    // bumps the store-plan epoch, once per deserialized stamped object.
+    //
+    // The authoritative parent edge does not live in the header at all: every
+    // parent-chain walk in the runtime reads `get_parent_class_id(class_id)`
+    // (`object/class_meta_registry.rs`), and each edge is registered from a
+    // compile-time constant — by `js_register_class_parent` in the module-init
+    // prelude for the codegen inline `new C()` path, and by `register_class`
+    // inside every runtime allocator that takes a `parent_class_id` argument.
+    // So read it from the registry, which is both correct for class instances
+    // and immune to the stamp.
+    //
+    // This also removes the LAST consumer of the header word as inheritance
+    // data, which is the blocking dependency for #6759 C3's unification of
+    // class layouts and plain-object shapes into one shape-id space.
+    let parent_class_id = if class_id != 0 {
+        crate::object::get_parent_class_id(class_id).unwrap_or(0)
+    } else {
+        0
+    };
     let field_count = (*obj).field_count as usize;
 
     // Serialize field values
@@ -1750,6 +1775,10 @@ pub(crate) fn purge_agent_thread_results(agent: crate::agent::AgentId) {
     };
     pending.retain(|item| item.owner != agent);
 }
+
+#[cfg(test)]
+#[path = "thread_parent_class_id_tests.rs"]
+mod parent_class_id_serialization_tests;
 
 #[cfg(test)]
 mod transfer_guard_tests {
