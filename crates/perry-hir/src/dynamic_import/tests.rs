@@ -1083,6 +1083,71 @@ fn flatten_reexport_chain_reaches_ultimate_owner() {
 }
 
 #[test]
+fn flatten_explicit_reexport_through_export_all_reaches_ultimate_owner() {
+    // #7964 — zod's source graph has this exact mixed chain:
+    //
+    //   core.ts:     export const NEVER = ...
+    //   core/index:  export * from "./core.js"
+    //   external.ts: export { NEVER } from "../core/index.js"
+    //
+    // `external.ts` is then itself materialized as a namespace. Stopping at
+    // core/index makes codegen ask that pure barrel for a getter it never
+    // emits, so the dependency corpus fails at link time.
+    let mut leaf = Module::new("leaf");
+    leaf.init.push(Stmt::Let {
+        id: 1,
+        name: "NEVER".into(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::Number(1.0)),
+    });
+    leaf.exports.push(Export::Named {
+        local: "NEVER".into(),
+        exported: "NEVER".into(),
+    });
+    leaf.init.push(Stmt::Let {
+        id: 2,
+        name: "_null".into(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::Number(2.0)),
+    });
+    leaf.exports.push(Export::Named {
+        local: "_null".into(),
+        exported: "null".into(),
+    });
+    let mut barrel = Module::new("barrel");
+    barrel.exports.push(Export::ExportAll {
+        source: "leaf".into(),
+    });
+    let mut bridge = Module::new("bridge");
+    bridge.exports.push(Export::ReExport {
+        source: "barrel".into(),
+        imported: "NEVER".into(),
+        exported: "NEVER".into(),
+    });
+    bridge.exports.push(Export::ReExport {
+        source: "barrel".into(),
+        imported: "null".into(),
+        exported: "null".into(),
+    });
+    let map = std::collections::HashMap::from([
+        ("leaf".to_string(), leaf),
+        ("barrel".to_string(), barrel),
+        ("bridge".to_string(), bridge),
+    ]);
+    let lookup = |s: &str| map.get(s);
+    let flat = flatten_exports("bridge", &lookup);
+    assert_eq!(flat.len(), 2);
+    assert_eq!(flat[0].name, "NEVER");
+    assert_eq!(flat[0].source_module, "leaf");
+    assert_eq!(flat[0].source_local, "NEVER");
+    assert_eq!(flat[1].name, "null");
+    assert_eq!(flat[1].source_module, "leaf");
+    assert_eq!(flat[1].source_local, "_null");
+}
+
+#[test]
 fn flatten_local_definition_still_wins_over_same_named_import() {
     // A module that DEFINES the name it exports must keep pointing at itself —
     // the redirect only fires for bindings this module does not define.

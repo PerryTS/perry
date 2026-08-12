@@ -1541,7 +1541,11 @@ pub(super) fn emit_namespace_populator(
                     let wrapper_name = format!(
                         "__perry_wrap_perry_fn_{}__{}",
                         source_prefix,
-                        sanitize(source_local)
+                        // Function bodies and their closure wrappers use the
+                        // injective function-name mangler. Plain names are
+                        // unchanged; `$constructor` and similar exports must
+                        // not be collapsed to `_constructor` here (#7964).
+                        sanitize_member(source_local)
                     );
                     let arity = (*param_count).min(16);
                     let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
