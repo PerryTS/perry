@@ -122,30 +122,41 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         }
         // #6943: the ordinary arm dereferences `obj` for its `keys_array`
         // *after* the GC-capable coercion, so the receiver is rooted across it.
-        // An already-heap-string key — the common `Reflect.defineProperty(o,
-        // "x", …)` shape — keeps the pre-fix path: `js_string_coerce` returns
-        // that pointer unchanged without touching the allocator.
-        let (obj, key_str) = if crate::builtins::string_coerce_is_inert(key) {
-            (obj, crate::builtins::js_string_coerce(key))
-        } else {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let obj_handle = scope.root_raw_mut_ptr(obj);
-            let key_str = crate::builtins::js_string_coerce(key);
-            (obj_handle.get_raw_mut_ptr::<super::ObjectHeader>(), key_str)
-        };
+        // (#7963 dropped the `string_coerce_is_inert` shortcut around this
+        // scope: the keys walk below needs the same scope for its own roots
+        // whatever the key's shape, so skipping it here bought nothing.)
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        let (key_str, obj) = obj_handle
+            .across_mut::<super::ObjectHeader, _>(|| crate::builtins::js_string_coerce(key));
         if key_str.is_null() {
             return false;
         }
         if let Some(present) = crate::process::process_env_has_field(obj, key_str) {
             return present;
         }
-        let keys = (*obj).keys_array;
+        // #7963 (the second half of #6949's deferred scope note): `js_array_get`
+        // MATERIALIZES a lazy array, so it can allocate and therefore evacuate.
+        // `keys` and `key_str` were raw Rust locals walked across it — neither
+        // shadow slots nor temp roots nor reachable from any registered
+        // scanner, so the collector could neither keep them alive nor rewrite
+        // them, and the very next iteration compared a from-space string
+        // against a from-space slot. Root both and re-read each iteration; the
+        // pre-call addresses are never bound past the call.
+        let keys_handle = scope.root_raw_mut_ptr((*obj).keys_array);
+        let key_handle = scope.root_string_ptr(key_str);
+        let ((), mut keys) = keys_handle.across_mut::<crate::array::ArrayHeader, _>(|| ());
         if keys.is_null() || (keys as usize) < 0x10000 {
             return false;
         }
         let key_count = crate::array::js_array_length(keys) as usize;
         for i in 0..key_count {
-            let stored = crate::array::js_array_get(keys, i as u32);
+            let (stored, refreshed_keys) =
+                keys_handle.across_mut::<crate::array::ArrayHeader, _>(|| {
+                    crate::array::js_array_get(keys, i as u32)
+                });
+            let ((), key_str) = key_handle.across_const::<crate::StringHeader, _>(|| ());
+            keys = refreshed_keys;
             if crate::string::js_string_key_matches(stored, key_str) {
                 return true;
             }

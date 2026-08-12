@@ -135,20 +135,38 @@ pub(crate) const DESC_WRITABLE: usize = 3;
 pub(crate) const DESC_ENUMERABLE: usize = 4;
 pub(crate) const DESC_CONFIGURABLE: usize = 5;
 
-pub(crate) struct DescView {
+/// A decoded `ToPropertyDescriptor` result whose six field values are GC roots.
+///
+/// #7963: the view is built ONCE near the top of `js_object_define_property`
+/// and then read at a dozen points spread across the rest of that function —
+/// past `ensure_key_in_keys_array`, `clone_closure_rebind_this`,
+/// `define_property_force_store_value` and the own-key probes, every one of
+/// which can allocate and therefore evacuate. Six raw `JSValue`s in a Rust
+/// struct are neither shadow slots nor temp roots nor reachable from any
+/// registered scanner, so an evacuating minor could neither keep those values
+/// alive nor rewrite them — and the stale word was then *stored into* the
+/// receiver (`define_property_force_store_value`) or into the accessor side
+/// table. Holding each present field as a [`crate::gc::RuntimeHandle`] puts it
+/// on the already-registered runtime-handle mutable root scanner, so `read`
+/// hands back the post-collection address.
+pub(crate) struct DescView<'scope> {
     present: [bool; 6],
-    vals: [crate::value::JSValue; 6],
+    handles: [Option<crate::gc::RuntimeHandle<'scope>>; 6],
 }
 
-impl DescView {
+impl DescView<'_> {
     #[inline]
     pub(crate) fn has(&self, f: usize) -> bool {
         self.present[f]
     }
-    /// Field value; `undefined` when absent (matching the per-field readers).
+    /// Field value, **re-read from its root**; `undefined` when absent
+    /// (matching the per-field readers).
     #[inline]
     pub(crate) fn read(&self, f: usize) -> crate::value::JSValue {
-        self.vals[f]
+        match &self.handles[f] {
+            Some(h) => crate::value::JSValue::from_bits(h.get_nanbox_u64()),
+            None => crate::value::JSValue::from_bits(crate::value::TAG_UNDEFINED),
+        }
     }
 }
 
@@ -203,7 +221,10 @@ unsafe fn object_prototype_has_desc_field() -> bool {
 /// Single-pass decode of `descriptor_value`'s 6 `ToPropertyDescriptor` fields.
 /// `Some(view)` is exactly equivalent to running `desc_has_field` /
 /// `desc_read_field` per field; `None` means the caller must use those.
-pub(crate) unsafe fn try_decode_descriptor(descriptor_value: f64) -> Option<DescView> {
+pub(crate) unsafe fn try_decode_descriptor<'scope>(
+    scope: &'scope crate::gc::RuntimeHandleScope,
+    descriptor_value: f64,
+) -> Option<DescView<'scope>> {
     let jv = crate::value::JSValue::from_bits(descriptor_value.to_bits());
     if !jv.is_pointer() {
         return None;
@@ -256,10 +277,9 @@ pub(crate) unsafe fn try_decode_descriptor(descriptor_value: f64) -> Option<Desc
         return None;
     }
 
-    const UNDEF: u64 = crate::value::TAG_UNDEFINED;
     let mut view = DescView {
         present: [false; 6],
-        vals: [crate::value::JSValue::from_bits(UNDEF); 6],
+        handles: [None; 6],
     };
     let keys = (*obj).keys_array;
     if !keys.is_null() {
@@ -276,7 +296,10 @@ pub(crate) unsafe fn try_decode_descriptor(descriptor_value: f64) -> Option<Desc
                 if let Some(fi) = desc_field_index(b) {
                     if !view.present[fi] {
                         view.present[fi] = true;
-                        view.vals[fi] = js_object_get_field(obj, i as u32);
+                        // Root the field value: the caller reads it back long
+                        // after several allocating calls (#7963).
+                        view.handles[fi] =
+                            Some(scope.root_nanbox_u64(js_object_get_field(obj, i as u32).bits()));
                     }
                 }
             }
@@ -290,7 +313,7 @@ pub(crate) unsafe fn try_decode_descriptor(descriptor_value: f64) -> Option<Desc
 }
 
 /// `validate_property_descriptor`, view form (see the f64 form below).
-pub(crate) unsafe fn validate_property_descriptor_view(view: &DescView) {
+pub(crate) unsafe fn validate_property_descriptor_view(view: &DescView<'_>) {
     let has_get = view.has(DESC_GET);
     let has_set = view.has(DESC_SET);
     if (has_get || has_set) && (view.has(DESC_VALUE) || view.has(DESC_WRITABLE)) {
@@ -503,7 +526,7 @@ pub(crate) unsafe fn enforce_define_property_invariants(
     key: *const crate::StringHeader,
     key_name: &str,
     descriptor_value: f64,
-    desc_view: Option<&DescView>,
+    desc_view: Option<&DescView<'_>>,
 ) {
     if obj.is_null() || (obj as usize) <= 0x10000 {
         return;
@@ -567,13 +590,23 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     cur_accessor: Option<AccessorDescriptor>,
     cur_value: f64,
     descriptor_value: f64,
-    desc_view: Option<&DescView>,
+    desc_view: Option<&DescView<'_>>,
 ) {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    let desc_ptr = extract_obj_ptr(descriptor_value);
-    if desc_ptr.is_null() && desc_view.is_none() {
+    if extract_obj_ptr(descriptor_value).is_null() && desc_view.is_none() {
         return;
     }
+    // #7963: the `desc_view.is_none()` arm allocates a field-name string per
+    // probe (and `desc_has_field` can run a user `HasProperty`), so the
+    // descriptor object, the CURRENT value being compared against, and the
+    // current accessor's closure bits are all live across a collection point.
+    // Root them and re-read at every use; `desc_ptr` in particular is
+    // re-resolved AFTER the allocation that precedes each read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let desc_handle = scope.root_nanbox_f64(descriptor_value);
+    let cur_value_handle = scope.root_nanbox_f64(cur_value);
+    let acc_get_handle = scope.root_nanbox_u64(cur_accessor.map(|a| a.get).unwrap_or(0));
+    let acc_set_handle = scope.root_nanbox_u64(cur_accessor.map(|a| a.set).unwrap_or(0));
     let reject = || throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
 
     let view_index = |name: &[u8]| -> usize {
@@ -590,7 +623,7 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     let has_field = |name: &[u8]| -> bool {
         match desc_view {
             Some(v) => v.has(view_index(name)),
-            None => desc_has_field(descriptor_value, name),
+            None => desc_has_field(desc_handle.get_nanbox_f64(), name),
         }
     };
     let read = |name: &[u8]| -> crate::value::JSValue {
@@ -598,6 +631,8 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
             Some(v) => v.read(view_index(name)),
             None => {
                 let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                // Resolve the descriptor AFTER the allocation above.
+                let desc_ptr = extract_obj_ptr(desc_handle.get_nanbox_f64());
                 js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k)
             }
         }
@@ -651,6 +686,7 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
                 0
             }
         };
+        let _ = acc;
         if desc_has_get {
             let want = read(b"get");
             let want_fp = if want.is_undefined() {
@@ -658,7 +694,9 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
             } else {
                 closure_func_ptr(want.bits())
             };
-            if want_fp != closure_func_ptr(acc.get) {
+            // `read` can allocate, so take the CURRENT accessor bits from the
+            // root rather than the pre-call copy captured in `cur_accessor`.
+            if want_fp != closure_func_ptr(acc_get_handle.get_nanbox_u64()) {
                 reject();
             }
         }
@@ -669,7 +707,7 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
             } else {
                 closure_func_ptr(want.bits())
             };
-            if want_fp != closure_func_ptr(acc.set) {
+            if want_fp != closure_func_ptr(acc_set_handle.get_nanbox_u64()) {
                 reject();
             }
         }
@@ -685,7 +723,8 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
         }
         if desc_has_value {
             let new_value = f64::from_bits(read(b"value").bits());
-            if js_object_is(new_value, cur_value).to_bits() != TAG_TRUE {
+            // `read` can allocate; `cur_value` is a pre-call copy.
+            if js_object_is(new_value, cur_value_handle.get_nanbox_f64()).to_bits() != TAG_TRUE {
                 reject();
             }
         }
