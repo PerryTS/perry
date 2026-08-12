@@ -107,6 +107,15 @@ fn one_registry_record_array_is_sliced_across_budgeted_steps() {
 
     // LIVENESS FIRST: without this the two bounds below are satisfied by a run
     // that never reached weak processing at all.
+    //
+    // ★ But note exactly how much this proves, because it is less than it
+    // looks. A step can end "mid-registry" at the ENTRY park — budget already
+    // spent on resolving the holder, so the cursor is stashed before a single
+    // record is scanned. Sabotaging the slice (`take` = the whole array)
+    // therefore still satisfies THIS assertion; what catches it is the
+    // per-step ceiling below, which fails with `charged 64`. Verified by
+    // sabotage, not assumed. So: a zero here means the path did not run, but a
+    // nonzero does NOT by itself mean records were sliced.
     assert!(
         instruments::weak_steps_sliced() > 0,
         "no step ended mid-registry — the sliced path did not run, so the \

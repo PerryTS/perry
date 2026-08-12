@@ -106,3 +106,11 @@ rather than claim it**. `final_remark_max_us` is that measurement.
   happen". Most programs register no weak holders and will legitimately report
   zeros across this whole line — which is exactly why the acceptance tests drive
   the counters directly rather than inferring them from a corpus run.
+
+  ★ **A nonzero value proves less than it looks, and this was measured rather
+  than reasoned about.** A step can end "mid-registry" at the *entry park* — its
+  budget already spent resolving the holder, so the cursor is stashed before a
+  single record is scanned. Sabotaging the slice so that one unit swallows the
+  whole array still leaves this counter nonzero. The quantity that actually
+  discriminates is `weak_max_records_per_step`: under that sabotage it reads the
+  full array length instead of the budget. Use the pair, not the flag alone.

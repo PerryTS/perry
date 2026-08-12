@@ -1121,7 +1121,10 @@ fn emit_incremental_liveness_diag() {
 ///   one registry was one work unit, so this maximum was the whole registry.
 /// * `weak_steps_sliced` — steps that ended PARTWAY THROUGH a registry. **This
 ///   is the subject-was-live counter**: a run reporting zero has not exercised
-///   the sliced path, whatever else it reports.
+///   the sliced path, whatever else it reports. A NONZERO value proves less
+///   than it looks — a step can end mid-registry at the entry park, before any
+///   record is scanned — so pair it with `weak_max_records_per_step`, which is
+///   what actually distinguishes a sliced array from a swallowed one.
 /// * `weak_registry_restarts` / `weak_registry_atomic_finishes` — cursors
 ///   invalidated by mutator restructuring, and the bounded fallback taken when
 ///   one registry exhausted its restart budget.
