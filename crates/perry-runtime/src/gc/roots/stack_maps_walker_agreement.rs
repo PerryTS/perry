@@ -234,8 +234,9 @@ thread_local! {
             frame: ELF_FRAME,
             offset: 8,
             body_sp: 0,
+            ran: false,
             fast: None,
-            slow: None,
+            slow: Vec::new(),
         })
     };
 }
@@ -244,8 +245,11 @@ struct ProbeState {
     frame: Frame,
     offset: i32,
     body_sp: usize,
+    /// Whether the callback ran at all — distinct from "it ran and the
+    /// fp-chain walk declined", which `fast: None` means.
+    ran: bool,
     fast: Option<Vec<Sample>>,
-    slow: Option<Vec<Sample>>,
+    slow: Vec<Sample>,
 }
 
 extern "C" fn run_probe(body_sp: usize, return_address: usize) {
@@ -254,17 +258,16 @@ extern "C" fn run_probe(body_sp: usize, return_address: usize) {
         (state.frame, state.offset)
     });
     let index = index_for(frame, return_address, offset);
+    // Nothing here may panic: this is an `extern "C"` callback, so unwinding
+    // out of it aborts the process and the test reports SIGABRT instead of the
+    // assertion that fired. Every verdict is taken by the caller.
     let (fast, slow) = walk(&index);
-    let fast = fast.expect(
-        "the fp-chain walk returned None (an anomaly bail-out). A walker that \
-         declines to run cannot be cross-checked against the other, which is \
-         the other half of what `verify` reports.",
-    );
     PROBE.with(|cell| {
         let mut state = cell.borrow_mut();
         state.body_sp = body_sp;
-        state.fast = Some(fast);
-        state.slow = Some(slow);
+        state.ran = true;
+        state.fast = fast;
+        state.slow = slow;
     });
 }
 
@@ -277,15 +280,20 @@ fn drive(
         let mut state = cell.borrow_mut();
         state.frame = frame;
         state.offset = offset;
+        state.ran = false;
         state.fast = None;
-        state.slow = None;
+        state.slow = Vec::new();
     });
     unsafe { probe(run_probe) };
     PROBE.with(|cell| {
         let mut state = cell.borrow_mut();
-        let fast = state.fast.take().expect("the probe callback never ran");
-        let slow = state.slow.take().expect("the probe callback never ran");
-        (state.body_sp, fast, slow)
+        assert!(state.ran, "the probe callback never ran");
+        let fast = state.fast.take().expect(
+            "the fp-chain walk declined (an anomaly bail-out). A walker that \
+             will not run cannot be cross-checked against the other, which is \
+             the other half of what `verify` reports.",
+        );
+        (state.body_sp, fast, std::mem::take(&mut state.slow))
     })
 }
 
