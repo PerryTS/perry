@@ -325,6 +325,9 @@ pub fn transform_generator_function_with_extra_captures(
     // means the analysis is unusable (sloppy `with`) and nothing may be
     // released. See `box_release.rs` for why closure visibility is the exact
     // condition.
+    // Consumed only by the `was_plain_async` arm below — a generator's
+    // `{next, return, throw}` object is user-visible, so "done" is not the end
+    // of observability there and nothing is ever released.
     let closure_visible_before: Option<std::collections::HashSet<LocalId>> = {
         closure_visible_ids(&func.body).and_then(|mut ids| {
             closure_visible_ids(&param_prologue).map(|p| {
