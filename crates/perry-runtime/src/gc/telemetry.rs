@@ -261,6 +261,13 @@ pub(super) struct CopyingNurseryTraceStats {
     /// dead, `tree_wide` 61 sparse and 60 fully dead.
     pub(super) in_place_dead_blocks: usize,
     pub(super) in_place_dead_block_bytes: usize,
+    /// #7937: this cycle ATTEMPTED the first-cycle promotion, and whether its
+    /// own trace refuted it. The live-subject pair for that path — a corpus row
+    /// with neither set never entered it, and the rollback half is otherwise
+    /// invisible because the cycle that gets reported is the one it rolled back
+    /// TO.
+    pub(super) first_cycle_promotion_attempted: bool,
+    pub(super) first_cycle_promotion_rolled_back: bool,
     /// Young-survival ratio (permille) this cycle measured — the input the
     /// NEXT cycle's promotion decision is taken from.
     pub(super) young_survival_permille: u64,
@@ -1081,6 +1088,8 @@ impl GcCycleTrace {
             "in_place_sparse_blocks": self.copying_nursery.in_place_sparse_blocks,
             "in_place_dead_blocks": self.copying_nursery.in_place_dead_blocks,
             "in_place_dead_block_bytes": self.copying_nursery.in_place_dead_block_bytes,
+            "first_cycle_promotion_attempted": self.copying_nursery.first_cycle_promotion_attempted,
+            "first_cycle_promotion_rolled_back": self.copying_nursery.first_cycle_promotion_rolled_back,
             "young_survival_permille": self.copying_nursery.young_survival_permille,
             "remembering_skipped": self.copying_nursery.remembering_skipped,
         });

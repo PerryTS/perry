@@ -1492,6 +1492,11 @@ fn run_copied_minor_attempt(
     collector.stats.malloc_sweep_due = malloc_sweep_due;
     collector.stats.preflight_skipped = preflight_skipped;
     collector.stats.in_place_promotion = promoting_in_place;
+    // `may_speculate` is false on exactly one path: the retry the wrapper runs
+    // after a rollback. So this pair is exact without threading extra state
+    // through, and it survives the retry overwriting the trace.
+    collector.stats.first_cycle_promotion_attempted = speculate_first_cycle || !may_speculate;
+    collector.stats.first_cycle_promotion_rolled_back = !may_speculate;
     collector.stats.in_place_promoted_blocks = promotion.block_count();
     // See `CopyingNurseryCollector::skip_remembering` for the proof.
     collector.skip_remembering =
