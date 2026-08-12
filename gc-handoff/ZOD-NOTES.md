@@ -240,8 +240,10 @@ Retitle it around the rate, or close it in favour of a fresh issue that quotes
   localize it (`PERRY_GC_PROTECT_FROMSPACE=1`, depth 800) *suppresses* the
   failure on this workload (§3), which is #7803's own hypothesis (1) confirmed
   on a second seed. A 24-seed sweep over the PROTECTED arm — the issue's
-  suggested way out — ran to completion here with **no protected-arm fault**, so
-  that route did not pay off within this session.
+  suggested way out — was **still running when this note was written** (7 of 24
+  seeds, no protected-arm fault yet). That is a partial result, not a negative
+  one: re-read `/tmp/zod-fuzz-prot.log` before quoting it, and note that at
+  ~4 min/run a protected sweep wide enough to matter is a multi-hour job.
 * **Phase localization is inconclusive.** A marker-instrumented copy of the
   corpus (`/tmp/zod-probe`, `console.error` between and inside `describeAll` /
   `parseLoop` / `parseRegistered`) survived every seed it was given — the
