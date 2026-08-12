@@ -262,6 +262,42 @@ jobs:
         run: |
           export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
           cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+
+      # The two aarch64 walkers, over a frame this repository wrote, on the host
+      # that has to walk it.
+      #
+      # Until this step, NOTHING `cargo test` runs ever called `fp_chain::visit`
+      # or `unwind::visit` — their only exercise anywhere was `verify` mode in
+      # the step further down, inside a workflow that has never had a successful
+      # run on any branch (#7970). The unit tests cover the decoder and the
+      # matcher; the step that turns a `(register, offset)` pair into a stack
+      # address had none, which is why #7984 could only ever be found by
+      # compiling TypeScript and collecting.
+      #
+      # This asks the same question in seconds and without a compiler: given a
+      # frame whose layout is known — the aarch64-ELF one, where LLVM puts the
+      # `x29,x30` pair below the other callee-saves, and the Mach-O one, where
+      # it sits at the top — do both walkers land on the word the record names?
+      # It runs BEFORE the probe matrix so a walker defect is reported as a
+      # walker defect rather than as an oracle diff twenty minutes later.
+      - name: Walker agreement (aarch64 hosts)
+        if: ${{ !cancelled() && matrix.arch == 'aarch64' && runner.os != 'Windows' }}
+        run: |
+          set -euo pipefail
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo test --profile perry-dev -p perry-runtime --lib gc::roots::stack_maps \
+            -- --test-threads=1 | tee /tmp/walker-agreement.log
+          # `--lib <filter>` is a substring match, so a rename makes it select
+          # nothing and `cargo test` still exits 0 having run zero tests — a
+          # gate that cannot fail. Require each test by name, including the
+          # sabotage arm that proves the sentinel check discriminates.
+          for name in both_walkers_resolve_an_sp_root_in_an_elf_shaped_frame \
+                      both_walkers_resolve_an_sp_root_in_a_darwin_shaped_frame \
+                      a_wrong_frame_offset_is_caught; do
+            grep -q "walker_agreement::$name ... ok" /tmp/walker-agreement.log \
+              || { echo "::error::$name did not run — the filter matched nothing"; exit 1; }
+          done
+
       - name: Probe matrix, RS4GC mode, forced evacuation
         if: ${{ !cancelled() }}
         run: |
