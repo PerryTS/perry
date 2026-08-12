@@ -627,8 +627,8 @@ else
 fi
 BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
 BUILD_FEATURES=()
-# #7629 — every tokio-using `perry-ext-*` wrapper this run will link, by
-# staticlib stem. Two jobs:
+# #7629 — every tokio-using `perry-ext-*` wrapper this run will link from the
+# prebuilt set, by staticlib stem. Two jobs:
 #   1. they must be in the SAME `cargo build` as perry-stdlib-static, or cargo
 #      resolves feature unification separately for each invocation and the
 #      wrapper bundles a different tokio compilation than the stdlib archive.
@@ -640,41 +640,25 @@ BUILD_FEATURES=()
 #   2. under PERRY_SKIP_BUILD=1 nothing is built at all, so their presence in
 #      PERRY_RUNTIME_DIR is a precondition — checked below with the exact
 #      command instead of leaving the operator to decode a link error per test.
+# The `all` suite adds nothing here on purpose: its ext-routed tests take the
+# auto-optimize path per-test (see `test_routes_to_ext_wrapper`), which builds
+# its own coherent archives, so no prebuilt ext archive is required for it.
 REQUIRED_EXT_LIBS=()
 needs_wasm_host=0
-# The default `test-files/` corpus (the gap suite) under PERRY_NO_AUTO_OPTIMIZE
-# links the prebuilt `full` stdlib, which is NOT compiled with the
-# `external-*` pump features. Any test whose module routes through a
-# well-known ext wrapper (events / http / net / ws / zlib) then links against
-# a stdlib with no pump and fails — reported as an untriaged NEW gap failure
-# with no hint that the run mode caused it. Measured: 7 such false regressions
-# (test_gap_events_import_4995, 5x http/fetch, test_gap_net_connect_bound_value),
-# all of which pass with auto-optimize. node-suite already compensates below;
-# do the same here. There is no MODULE_FILTER for this suite, so build the
-# whole well-known set rather than switching on it.
-if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]]; then
-    BUILD_PACKAGES+=(-p perry-ext-events -p perry-ext-http -p perry-ext-net -p perry-ext-ws -p perry-ext-zlib)
-    REQUIRED_EXT_LIBS+=(perry_ext_events perry_ext_http perry_ext_net perry_ext_ws perry_ext_zlib)
-    BUILD_FEATURES+=(
-        perry-stdlib/external-events-construct
-        perry-stdlib/external-http-server-pump
-        perry-stdlib/external-http-client-pump
-        perry-stdlib/external-net-pump
-        perry-stdlib/external-ws-pump
-        perry-stdlib/external-zlib-pump
-    )
-    # …and every one of those archives must then be on the link line of EVERY
-    # test, not just the tests that import the module. `external-zlib-pump`
-    # makes perry-stdlib's `js_stdlib_process_pending` reference
-    # `js_ext_zlib_process_pending` unconditionally, so a test that imports
-    # only `node:http` failed to link with five undefined `_js_ext_zlib_*`
-    # symbols — the pumps are a property of the ONE prebuilt stdlib, while
-    # archive selection is per-import. The auto-optimize path never hits this
-    # because it enables a pump only when it is also routing that module.
-    # `PERRY_FORCE_WELL_KNOWN` is the in-tree mechanism for exactly this: it
-    # unions modules into `well_known_iteration_set` regardless of imports.
-    export PERRY_FORCE_WELL_KNOWN="${PERRY_FORCE_WELL_KNOWN:-events,http,net,ws,zlib}"
-fi
+# Modules the well-known flip routes to a `perry-ext-*` staticlib. A test that
+# imports one of these cannot be served by the prebuilt stdlib at all — see
+# `test_routes_to_ext_wrapper` below and the per-test override at the compile
+# site, which is where the gap suite's http/net/events failures came from.
+EXT_ROUTED_MODULES='http|https|http2|net|ws|zlib|events'
+
+# Does this test import a module the well-known flip routes to a `perry-ext-*`
+# wrapper? Matches both spellings (`node:http` and `http`), both quote styles,
+# and both `import … from` and `require(…)` — `test_gap_net_connect_bound_value`
+# reaches `net` only through `createRequire(import.meta.url)`, so an
+# `^import`-anchored match would miss it.
+test_routes_to_ext_wrapper() {
+    grep -qE "(from|import|require\()[[:space:]]*\(?[\"'](node:)?($EXT_ROUTED_MODULES)[\"']" "$1"
+}
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
         ""|http|http/*|https|https/*|http2|http2/*)
@@ -1364,6 +1348,30 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     compile_env=""
     if [[ "$test_name" == test_parity_* || "$test_id" == node-suite/* ]]; then
         compile_env="PERRY_ALLOW_UNIMPLEMENTED=1"
+    fi
+    # #7629 — a test that routes a module to a `perry-ext-*` wrapper cannot be
+    # served by ONE prebuilt stdlib. The `external-*-pump` features are a
+    # property of that single archive while ext-archive selection is
+    # per-import, so a stdlib built with (say) `external-zlib-pump` references
+    # `js_ext_zlib_process_pending` unconditionally and fails to link every
+    # test that does not import `node:zlib`; a stdlib built without the pumps
+    # links, but the wrapper's queues are never drained. There is no subset
+    # that satisfies both, which is why the "build the ext packages too"
+    # compensation this script used to rely on never actually worked.
+    #
+    # Auto-optimize has no such problem: it enables a pump exactly when it is
+    # also routing that module. So let it handle these tests specifically,
+    # instead of forcing every wrapper archive onto every link
+    # (`PERRY_FORCE_WELL_KNOWN` does work, but it costs 2.2s -> 37.7s per
+    # compile — measured — which is 17x the whole point of PERRY_SKIP_BUILD).
+    # Scoped to the `all` suite: node-suite selects one module at a time, so its
+    # prebuilt stdlib and its ext archives DO agree and the per-module setup
+    # above is coherent. It is the mixed corpus that cannot be served.
+    if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]] &&
+        test_routes_to_ext_wrapper "$parity_test_file"; then
+        # `-u` and not `PERRY_NO_AUTO_OPTIMIZE=`: perry tests the variable with
+        # `var_os(...).is_some()`, so an empty-but-set value still counts as on.
+        compile_env="-u PERRY_NO_AUTO_OPTIMIZE $compile_env"
     fi
     compile_flags=()
     if [[ -n "$BACKEND_FLAG" ]]; then

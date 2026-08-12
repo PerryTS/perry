@@ -116,6 +116,37 @@ a second invocation, and under `PERRY_SKIP_BUILD=1` verify every required ext
 archive is present in `PERRY_RUNTIME_DIR` before running anything — with the
 exact command, instead of leaving the operator to decode six SIGABRTs.
 
+**(d) A second, independent defect the first one was hiding.**
+With coherent tokio, the no-auto gap path still failed — now at *link*, with
+five undefined `_js_ext_zlib_*`. The `external-*-pump` features are a property
+of the ONE prebuilt stdlib, while ext-archive selection is per-import: a stdlib
+built with `external-zlib-pump` references `js_ext_zlib_process_pending`
+unconditionally, so it cannot link a test that does not import `node:zlib`. The
+auto-optimize path never hits this because it enables a pump only when it is
+also routing that module. `run_parity_tests.sh` now exports the in-tree
+`PERRY_FORCE_WELL_KNOWN=events,http,net,ws,zlib` for that path, which unions
+those modules into `well_known_iteration_set` regardless of imports.
+
+This is worth stating plainly: the harness comment claiming the ext-package
+build "compensates" for no-auto was **not true before this change** — the
+recipe it describes fails to link. That branch of the harness had never been
+run green.
+
+## 2b. Validation
+
+All on `b8a230366` (the fix), archives from ONE cargo invocation.
+
+| step | result |
+|---|---|
+| `libperry_{stdlib,ext_http,ext_net,ext_ws}.a` tokio ids after one invocation | all `tokio-5aeb62139069856e` |
+| `test_gap_fetch_request_from_node_incoming_message`, `PERRY_NO_AUTO_OPTIMIZE=1` | `len=55 match=true`, exit 0 (was exit 134, 3/3) |
+| `test_gap_net_connect_bound_value`, `PERRY_NO_AUTO_OPTIMIZE=1` | full round trip, exit 0 (was exit 134, 3/3) |
+| `perry -v` on both | prints `shared-tokio: … (matches stdlib)` for http/net/ws — the check is visibly live |
+| **sabotage**: `cargo build --release -p perry-ext-http` alone → id diverges to `tokio-01c4c58f10c605f6` | compile **refused**, exit 1, both ids named, no binary produced |
+| restore by **rebuilding** the full invocation (not `git checkout`) | ids coherent again, compiles pass again |
+| `cargo test -p perry --bin perry shared_tokio` | 11 passed |
+| `cargo test -p perry-runtime --lib gc::pin::` | 6 passed |
+
 ---
 
 ## 3. #7990 — the FATAL message was wrong, and the header says why
