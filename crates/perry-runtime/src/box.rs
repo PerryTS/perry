@@ -64,6 +64,68 @@ crate::perry_thread_local! {
         ));
 }
 
+/// Number of slots in each registry's direct-mapped positive cache. Eight
+/// covers the working set that matters: the async-to-generator state machine
+/// re-reads the same handful of boxes (`__gen_state`, `__gen_done`,
+/// `__gen_executing`, plus the activation's body locals) on every step, and
+/// activations run one at a time.
+const BOX_PTR_CACHE_SLOTS: usize = 8;
+
+type BoxPtrCache = crate::tls_hot::HotKey<[std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS]>;
+
+crate::perry_thread_local! {
+    /// Direct-mapped **positive** cache over `BOX_REGISTRY`.
+    ///
+    /// `js_box_get`/`js_box_set` validate their operand against the registry on
+    /// every access (perry#4898), and that hash probe is the single largest leaf
+    /// in Perry's async machinery — the transform boxes every body local of an
+    /// `async` function, so a state machine pays one probe per local read and
+    /// one per write. Measured on a promise-only kernel (24 000 activations,
+    /// 48 000 awaits): `is_registered_{,i32_,bool_}box_ptr` were 8.2 % + 5.9 %
+    /// + 5.5 % of leaf samples.
+    ///
+    /// ## Why caching only positives is sound
+    ///
+    /// The registries are **monotonic**: `js_box_alloc*` inserts and nothing
+    /// ever removes (boxes are never freed — see `is_registered_box_ptr`). So
+    /// "address A was in the registry" is a fact that can never later become
+    /// false, and an address can never be recycled into a non-box allocation.
+    /// A cache hit is therefore exactly as authoritative as the probe it
+    /// replaces.
+    ///
+    /// A **negative** cache would NOT be sound — an address that is not a box
+    /// today can be minted as one tomorrow — so a miss always falls through to
+    /// the hash set, and only a confirmed positive is recorded. That keeps the
+    /// perry#4898 rejection (a read-only `__TEXT.__cstring` address that passes
+    /// every structural check) exactly as strict as before.
+    ///
+    /// Thread-local like the registry it fronts: a box minted on another thread
+    /// is not in this thread's registry, and never enters this thread's cache.
+    static BOX_PTR_CACHE: [std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS] =
+        const { [const { std::cell::Cell::new(0) }; BOX_PTR_CACHE_SLOTS] };
+    static I32_BOX_PTR_CACHE: [std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS] =
+        const { [const { std::cell::Cell::new(0) }; BOX_PTR_CACHE_SLOTS] };
+    static BOOL_BOX_PTR_CACHE: [std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS] =
+        const { [const { std::cell::Cell::new(0) }; BOX_PTR_CACHE_SLOTS] };
+}
+
+/// Boxes are 8-byte allocations, so bits 0..3 of an address carry no
+/// information; index on the bits above them.
+#[inline(always)]
+fn box_ptr_cache_index(addr: usize) -> usize {
+    (addr >> 3) & (BOX_PTR_CACHE_SLOTS - 1)
+}
+
+#[inline(always)]
+fn box_ptr_cache_hit(cache: &'static BoxPtrCache, addr: usize) -> bool {
+    cache.with(|slots| slots[box_ptr_cache_index(addr)].get() == addr)
+}
+
+#[inline(always)]
+fn box_ptr_cache_record(cache: &'static BoxPtrCache, addr: usize) {
+    cache.with(|slots| slots[box_ptr_cache_index(addr)].set(addr));
+}
+
 /// Allocate a new box with an initial JSValue bit pattern.
 #[no_mangle]
 pub extern "C" fn js_box_alloc_bits(initial_bits: i64) -> *mut Box {
@@ -83,6 +145,7 @@ pub extern "C" fn js_box_alloc_bits(initial_bits: i64) -> *mut Box {
         BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
+        box_ptr_cache_record(&BOX_PTR_CACHE, ptr as usize);
         ptr
     }
 }
@@ -108,6 +171,7 @@ pub extern "C" fn js_i32_box_alloc(initial_value: i32) -> *mut I32Box {
         I32_BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
+        box_ptr_cache_record(&I32_BOX_PTR_CACHE, ptr as usize);
         ptr
     }
 }
@@ -127,6 +191,7 @@ pub extern "C" fn js_bool_box_alloc(initial_value: i32) -> *mut BoolBox {
         BOOL_BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
+        box_ptr_cache_record(&BOOL_BOX_PTR_CACHE, ptr as usize);
         ptr
     }
 }
@@ -436,7 +501,15 @@ fn is_registered_box_ptr(ptr: *mut Box) -> bool {
     if !is_plausible_box_ptr(ptr) {
         return false;
     }
-    BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+    let addr = ptr as usize;
+    if box_ptr_cache_hit(&BOX_PTR_CACHE, addr) {
+        return true;
+    }
+    let present = BOX_REGISTRY.with(|r| r.borrow().contains(&addr));
+    if present {
+        box_ptr_cache_record(&BOX_PTR_CACHE, addr);
+    }
+    present
 }
 
 /// If `slot_bits` (the raw contents of a closure capture slot) is a registered
@@ -474,7 +547,15 @@ fn is_registered_i32_box_ptr(ptr: *mut I32Box) -> bool {
     if !is_plausible_box_ptr(ptr.cast::<Box>()) {
         return false;
     }
-    I32_BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+    let addr = ptr as usize;
+    if box_ptr_cache_hit(&I32_BOX_PTR_CACHE, addr) {
+        return true;
+    }
+    let present = I32_BOX_REGISTRY.with(|r| r.borrow().contains(&addr));
+    if present {
+        box_ptr_cache_record(&I32_BOX_PTR_CACHE, addr);
+    }
+    present
 }
 
 #[inline]
@@ -482,7 +563,15 @@ fn is_registered_bool_box_ptr(ptr: *mut BoolBox) -> bool {
     if !is_plausible_box_ptr(ptr.cast::<Box>()) {
         return false;
     }
-    BOOL_BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+    let addr = ptr as usize;
+    if box_ptr_cache_hit(&BOOL_BOX_PTR_CACHE, addr) {
+        return true;
+    }
+    let present = BOOL_BOX_REGISTRY.with(|r| r.borrow().contains(&addr));
+    if present {
+        box_ptr_cache_record(&BOOL_BOX_PTR_CACHE, addr);
+    }
+    present
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -527,6 +616,17 @@ pub(crate) fn test_clear_box_registry() {
     BOX_REGISTRY.with(|r| r.borrow_mut().clear());
     I32_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
     BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
+    // Clearing the registry is the ONE operation that breaks the monotonicity
+    // the positive cache rests on, and it exists only for tests. Drop the
+    // caches with it, or a later test would see a stale "yes" for an address
+    // this call just un-registered.
+    for cache in [&BOX_PTR_CACHE, &I32_BOX_PTR_CACHE, &BOOL_BOX_PTR_CACHE] {
+        cache.with(|slots| {
+            for slot in slots {
+                slot.set(0);
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -631,6 +731,104 @@ mod tests {
         assert_eq!(js_i32_box_get(ordinary_box.cast::<I32Box>()), 0);
         js_i32_box_set(ordinary_box.cast::<I32Box>(), 99);
         assert_eq!(js_box_get(ordinary_box), 1.0);
+    }
+
+    /// The direct-mapped positive cache in front of `BOX_REGISTRY` must not
+    /// widen what counts as a box. Sabotage shape: warm the cache with a real
+    /// box, then probe a plausible-but-unregistered address that lands in the
+    /// SAME cache slot. A cache that compared only the slot index (rather than
+    /// the full address) would answer "registered" and `js_box_set` would then
+    /// write through a pointer perry#4898 exists to reject.
+    #[test]
+    fn box_ptr_cache_rejects_a_colliding_unregistered_address() {
+        test_clear_box_registry();
+        let real = js_box_alloc_bits(crate::value::JSValue::int32(5).bits() as i64);
+        assert!(
+            is_registered_box_ptr(real),
+            "warm the cache with a real box"
+        );
+
+        // Every 8-byte-aligned address whose (addr >> 3) is congruent mod the
+        // slot count collides with `real`. Walk candidates until one is both
+        // plausible and unregistered — `real + 8 * SLOTS * k` is guaranteed to
+        // collide by construction.
+        let real_addr = real as usize;
+        let mut collided = 0usize;
+        for k in 1..64usize {
+            let candidate = real_addr + 8 * BOX_PTR_CACHE_SLOTS * k;
+            let candidate_ptr = candidate as *mut Box;
+            if !is_plausible_box_ptr(candidate_ptr) {
+                continue;
+            }
+            if BOX_REGISTRY.with(|r| r.borrow().contains(&candidate)) {
+                continue;
+            }
+            assert_eq!(
+                box_ptr_cache_index(candidate),
+                box_ptr_cache_index(real_addr),
+                "candidate must map to the same cache slot"
+            );
+            assert!(
+                !is_registered_box_ptr(candidate_ptr),
+                "a colliding unregistered address must still be rejected"
+            );
+            collided += 1;
+            if collided == 4 {
+                break;
+            }
+        }
+        assert!(
+            collided > 0,
+            "no colliding candidate found — test is vacuous"
+        );
+
+        // And the real box still reads back correctly after those misses.
+        assert_eq!(
+            js_box_get_bits(real) as u64,
+            crate::value::JSValue::int32(5).bits()
+        );
+    }
+
+    /// A box evicted from the cache by later allocations is still recognised —
+    /// the cache is an accelerator, never the source of truth.
+    #[test]
+    fn box_ptr_cache_eviction_does_not_lose_a_real_box() {
+        test_clear_box_registry();
+        let first = js_box_alloc(1.0);
+        assert!(is_registered_box_ptr(first));
+
+        // Allocate well past the cache size so `first` is certainly evicted.
+        let mut others = Vec::new();
+        for i in 0..(BOX_PTR_CACHE_SLOTS * 8) {
+            let b = js_box_alloc(i as f64);
+            assert!(is_registered_box_ptr(b));
+            others.push(b);
+        }
+
+        assert!(
+            is_registered_box_ptr(first),
+            "eviction must fall through to the authoritative registry"
+        );
+        assert_eq!(js_box_get(first), 1.0);
+        js_box_set(first, 9.0);
+        assert_eq!(js_box_get(first), 9.0);
+    }
+
+    /// The three registries have independent caches: an ordinary box address
+    /// must never be accepted as an i32/bool box just because it is cached in
+    /// the ordinary registry's table.
+    #[test]
+    fn box_ptr_caches_do_not_cross_kinds() {
+        test_clear_box_registry();
+        let ordinary = js_box_alloc(1.0);
+        assert!(is_registered_box_ptr(ordinary));
+        assert!(!is_registered_i32_box_ptr(ordinary.cast::<I32Box>()));
+        assert!(!is_registered_bool_box_ptr(ordinary.cast::<BoolBox>()));
+
+        let i32_box = js_i32_box_alloc(3);
+        assert!(is_registered_i32_box_ptr(i32_box));
+        assert!(!is_registered_box_ptr(i32_box.cast::<Box>()));
+        assert!(!is_registered_bool_box_ptr(i32_box.cast::<BoolBox>()));
     }
 
     /// #6520: the thread-boundary serializer unwraps a capture slot that holds
