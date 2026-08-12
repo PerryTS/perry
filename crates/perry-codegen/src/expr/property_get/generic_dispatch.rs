@@ -41,7 +41,7 @@ pub(crate) const PIC_WAY_STATE: usize = 3;
 /// rather than as a `max` followed by one compare. The predicate is identical
 /// for every input (`x < max(a, b)` ⟺ `x < a ∨ x < b`), but the `max` had to be
 /// materialised — `mov w, #4` / `cmp` / `csel` — and that `csel` was the single
-/// hottest instruction in `interp.ts` (4.65% of `evalNode`, #7902), because it
+/// hottest instruction in `interp.ts` (4.65% of `evalNode`, #7907), because it
 /// sits on the dependency chain out of the `field_count` load. The disjunction
 /// has no such node: LLVM folds the pair into `cmp` + `ccmp`, and the
 /// `slot < 4` half does not depend on the load at all.
@@ -304,7 +304,7 @@ pub(crate) fn lower_generic_property_get(
     // what the flat predicate computed there).
     let hit_idx = ctx.new_block("pic.hit");
     let miss_idx = ctx.new_block("pic.miss");
-    // #7902: the two receiver-validation failures get their own landing block
+    // #7907: the two receiver-validation failures get their own landing block
     // so `pic.miss` is dominated by `pic.token`. See the comment on
     // `pic.miss.cold` below for why that is the whole point of this split.
     let cold_idx = ctx.new_block("pic.miss.cold");
@@ -406,7 +406,7 @@ pub(crate) fn lower_generic_property_get(
     // hang off the same predicate, so a non-object receiver used to execute
     // them before the flat `hit` could reject it.
     //
-    // #7902: the false edge goes to `pic.miss.cold`, not `pic.miss` — a
+    // #7907: the false edge goes to `pic.miss.cold`, not `pic.miss` — a
     // receiver that is not a plain descriptor-free `ObjectHeader` fails
     // `way_hit` by construction, so consulting the ways for it was always dead
     // work, and keeping it out is what lets `pic.miss` reuse this block's
@@ -546,7 +546,7 @@ pub(crate) fn lower_generic_property_get(
     // it was a real miss — the feedback heuristics see an unchanged signal
     // (the site IS polymorphic; only the cost of that changed).
     //
-    // # Why this block is DOMINATED by `pic.token` (#7902)
+    // # Why this block is DOMINATED by `pic.token` (#7907)
     //
     // Its only predecessors are `pic.token` (the MRU token did not match) and
     // `pic.hit` (it matched but the cached slot is outside this receiver's
@@ -620,7 +620,7 @@ pub(crate) fn lower_generic_property_get(
 
     ctx.current_block = ways_idx;
     // `is_object` is not ANDed in any more: it is statically true on every edge
-    // that reaches here (#7902 — see the dominance note above). `epoch_eq` and
+    // that reaches here (#7907 — see the dominance note above). `epoch_eq` and
     // `token_nonnull` are the values `pic.token` computed, from the same memory
     // with no intervening store, so the predicate is unchanged.
     let mut way_hit = ctx.block().and(I1, &epoch_eq, &token_nonnull);
@@ -630,7 +630,7 @@ pub(crate) fn lower_generic_property_get(
     // free to change — but the fold made `way_slot` a chain of `PIC_WAYS`
     // dependent `csel`s whose last node is the operand of the bounds compare
     // that gates the branch out of this block. On `interp.ts` that node was the
-    // hottest instruction in `evalNode` (#7902). The tree halves the chain.
+    // hottest instruction in `evalNode` (#7907). The tree halves the chain.
     let mut lanes: Vec<(String, String)> = Vec::with_capacity(PIC_WAYS);
     for w in 0..PIC_WAYS {
         let tok_ptr = ctx.block().gep(
@@ -694,7 +694,7 @@ pub(crate) fn lower_generic_property_get(
     let way_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
-    // #7902: receiver-validation failure. `way_hit` requires a real pointer to
+    // #7907: receiver-validation failure. `way_hit` requires a real pointer to
     // a plain descriptor-free `ObjectHeader`, so a receiver that got here can
     // never match a way — it goes straight to the handler, which reproduces the
     // whole ladder anyway (proxy band, closure magic, buffer/typed-array

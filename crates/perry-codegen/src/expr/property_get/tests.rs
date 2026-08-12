@@ -269,7 +269,7 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     );
 }
 
-/// #7902: `pic.miss` must be DOMINATED by `pic.token`, so the way compares can
+/// #7907: `pic.miss` must be DOMINATED by `pic.token`, so the way compares can
 /// use the values that block already computed instead of re-deriving them.
 ///
 /// #7883 routed all four failure edges — small-handle receiver, non-object
@@ -322,7 +322,7 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     }
 }
 
-/// #7902: the cached-slot bound is `slot < FLOOR || slot < field_count`, not
+/// #7907: the cached-slot bound is `slot < FLOOR || slot < field_count`, not
 /// `slot < max(field_count, FLOOR)`.
 ///
 /// Identical predicate; the point is that the `max` had to be materialised, and
@@ -345,7 +345,7 @@ fn cached_slot_bound_is_a_disjunction_not_a_materialised_max() {
     );
 }
 
-/// #7902: the way `(token, slot)` reduction is a balanced tree, so the slot
+/// #7907: the way `(token, slot)` reduction is a balanced tree, so the slot
 /// select chain is `log2(PIC_WAYS)` deep instead of `PIC_WAYS` deep. Its last
 /// node feeds the bounds compare that gates the branch out of `pic.ways`, so
 /// the chain depth is directly on the critical path.
@@ -360,7 +360,13 @@ fn way_slot_reduction_is_a_balanced_tree() {
     let ways = ir
         .find("\npic.ways")
         .unwrap_or_else(|| panic!("expected a pic.ways block:\n{ir}"));
-    let end = ir[ways..].find("\npic.").map(|o| o + ways).unwrap_or(ir.len());
+    // Block labels carry a numeric suffix (`pic.ways.16:`), so the search for
+    // the NEXT block has to start past this one's own label or it matches
+    // itself and slices an empty body — which reads as "the tree is missing".
+    let end = ir[ways + 1..]
+        .find("\npic.")
+        .map(|o| o + ways + 1)
+        .unwrap_or(ir.len());
     let body = &ir[ways..end];
     // A left fold emits PIC_WAYS selects whose 3rd operand is the previous
     // select; the tree emits PIC_WAYS lane selects against the literal 0 plus
