@@ -413,3 +413,137 @@ fn a_low_survival_cycle_still_evacuates_and_moves_the_object() {
     );
     assert!(crate::arena::pointer_in_nursery(after));
 }
+
+// ---------------------------------------------------------------------------
+// #7913 interaction: old-page relocation vs a still-DESCRIBED promoted run
+// ---------------------------------------------------------------------------
+
+/// #7914 describes a promoted page's object list by its `first_header` address
+/// and expands it lazily; #7913 relocates old pages BY DEFAULT. If a page
+/// carrying an unexpanded run could be relocated, the deferred expansion would
+/// later parse stale addresses — the silent-corruption shape.
+///
+/// It cannot, and this pins the mechanism that makes it so:
+/// `evacuate_selected_old_pages_collecting` snapshots its source-block
+/// occupants through `old_arena_walk_objects_on_pages`, which expands every
+/// pending run on every page of the source blocks BEFORE a single object is
+/// forwarded. #7913 widened that enumeration from the selected pages to the
+/// whole containing source blocks, so it covers strictly more than before.
+///
+/// The test is written so it cannot pass by accident: the objects are removed
+/// from the eager index first, so a run that is NOT expanded leaves
+/// `source_headers` empty, the all-or-nothing guard returns early, and
+/// `old_page_moved_objects` reads 0 instead of 3. Deleting the
+/// `materialize_promoted_page_runs` call in `old_arena_walk_objects_on_pages`
+/// turns this red.
+#[test]
+fn old_page_relocation_expands_a_described_run_before_it_moves_anything() {
+    let _isolation = copying_nursery_isolation_lock();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+    // Three real old-gen objects, contiguous and linearly parseable — the
+    // shape a promoted block hands to OLD_ARENA.
+    let users: Vec<usize> = (0..3)
+        .map(|_| crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize)
+        .collect();
+    let headers: Vec<(*mut GcHeader, usize)> =
+        users.iter().map(|&u| old_test_header_and_size(u)).collect();
+    let first = headers[0].0 as usize;
+    let last = headers[2].0 as usize;
+    let total: usize = headers.iter().map(|&(_, t)| t).sum();
+
+    let mut selected_pages = crate::fast_hash::new_ptr_hash_set();
+    for &(header, size) in &headers {
+        for (page, _) in crate::arena::old_object_page_overlaps(header as usize, size) {
+            selected_pages.insert(page);
+        }
+    }
+    // All three must share one page for the run to describe them as one span;
+    // 64-byte objects out of a fresh block do, but assert rather than assume.
+    assert_eq!(
+        selected_pages.len(),
+        1,
+        "test setup expects one page; a multi-page split would need one run per page"
+    );
+    let page = *selected_pages.iter().next().unwrap();
+
+    // Drop the eager index built at birth, then DESCRIBE the same objects.
+    // From here the run is the only record that this page has occupants.
+    crate::arena::old_arena_page_index_clear_for_tests();
+    crate::arena::register_promoted_page_run(page, first, last, headers.len(), total);
+    assert_eq!(
+        crate::arena::pending_promoted_page_runs(),
+        1,
+        "the page must be DESCRIBED going in, or this test proves nothing"
+    );
+
+    for &(header, _) in &headers {
+        unsafe {
+            (*header).gc_flags |= GC_FLAG_MARKED;
+        }
+    }
+
+    let mut new_headers = Vec::new();
+    let mut original_headers = Vec::new();
+    let moved = evacuate_selected_old_pages_collecting(
+        &selected_pages,
+        &mut new_headers,
+        &mut original_headers,
+    );
+
+    assert_eq!(
+        moved.old_page_moved_objects,
+        headers.len(),
+        "relocation must see every occupant of a DESCRIBED page. Seeing fewer \
+         means it relocated a block while some occupants were still only \
+         described — their memory would be released with live objects in it, \
+         and the deferred expansion would parse recycled addresses"
+    );
+    assert_eq!(
+        crate::arena::pending_promoted_page_runs(),
+        0,
+        "the run must have been consumed by the relocation's own enumeration"
+    );
+    for &(header, _) in &headers {
+        unsafe {
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "every described occupant must be forwarded, not just indexed"
+            );
+        }
+    }
+
+    release_evacuated_original_forwarding_stubs(&original_headers);
+    clear_marks();
+    CONS_PINNED.with(|s| s.borrow_mut().clear());
+}
+
+/// The second, independent line of defence, stated as a test rather than a
+/// comment: a page that has only just been promoted is not defrag-eligible at
+/// all, because `register_promoted_page_run` records live bytes and never dead
+/// ones, and `old_page_defrag_eligible` requires `dead_bytes > 0`. Dead bytes
+/// come only from the old-gen sweep, and the sweep's cycle constructor
+/// (`GcCycleState::new_full`) expands every pending run before it starts.
+#[test]
+fn a_freshly_described_page_is_not_defrag_eligible() {
+    let _isolation = copying_nursery_isolation_lock();
+    let user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let (header, size) = old_test_header_and_size(user);
+    let page = crate::arena::old_object_page_overlaps(header as usize, size)[0].0;
+    crate::arena::old_arena_page_index_clear_for_tests();
+    crate::arena::register_promoted_page_run(page, header as usize, header as usize, 1, size);
+
+    let meta = crate::arena::old_page_meta_for_tests(page).expect("promotion records page meta");
+    assert_eq!(
+        meta.dead_bytes, 0,
+        "a promotion records live bytes only; dead bytes are the sweep's to record"
+    );
+    assert!(
+        !super::super::oldgen_defrag::old_page_defrag_eligible(meta),
+        "a page whose run is still described must not be a defrag candidate"
+    );
+}
