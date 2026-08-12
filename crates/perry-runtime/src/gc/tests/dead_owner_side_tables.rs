@@ -6,6 +6,25 @@
 //! and assert the entry is gone — plus the two safety inverses (a LIVE owner's
 //! entries survive; a TENURED owner's entries survive a MINOR trace, which
 //! never marks the old generation and therefore proves nothing about it).
+//!
+//! ★ #7975 — THE PREMISE EVERY "IT IS PRUNED" CASE HERE DEPENDS ON. Arena
+//! block reset is all-or-nothing, so `gc::trace` force-MARKS every object in a
+//! block that still holds one reachable object
+//! (`mark_block_persisting_arena_objects`, `BLOCK_PERSIST_WINDOW`). An owner
+//! sharing its block with ANY live object is therefore not dead, and the prune
+//! *correctly* keeps its entry — a persisting block cannot recycle the
+//! address, so the entry is not stale. A case that lets a live tenant into its
+//! block does not test the prune; it fails on it.
+//!
+//! The tenant that actually turned up is the lazy `globalThis` realm bootstrap
+//! (~1.15 MB allocated, ~410 KB live), reached through the **process-global**
+//! memoized `Object.prototype` address that `set_property_attrs` and
+//! `js_object_set_field_by_name` resolve. It misses once per PROCESS, so which
+//! libtest thread pays for it is a scheduling accident: two cases here failed
+//! 200/200 alone and 0/200 behind a sibling. Use
+//! [`GcTestIsolationGuard::with_realm_bootstrapped`] in any case that reaches a
+//! realm-resolving API, and collect through [`full_gc_with_no_block_persistence`]
+//! so the premise fails as a premise instead of as the subject.
 
 use super::super::*;
 use super::support::*;
@@ -68,6 +87,39 @@ unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
     (*obj).keys_array = std::ptr::null_mut();
     (*obj).meta = std::ptr::null_mut();
     obj
+}
+
+/// PREMISE GUARD for the "dead owner ⇒ entry pruned" cases (#7975).
+///
+/// "The entry is gone" only says something about the death prune when the owner
+/// was genuinely DEAD. Arena block reset is all-or-nothing, so
+/// `gc::trace::mark_block_persisting_arena_objects` force-MARKS every object in
+/// a block that still holds one reachable object — and a force-marked owner is
+/// *correctly* left registered, because a block that persists cannot recycle
+/// its address, so the entry is not stale. A case whose block picked up an
+/// unrelated live tenant therefore fails on the prune assertion and blames the
+/// prune for something the prune got right.
+///
+/// The mark itself is cleared again by the sweep, so nothing about it survives
+/// the collection for a test to read. `gc::trace`'s force-mark census is the
+/// one quantity that does, and it has exactly one satisfying path: it moves iff
+/// some block in the persist window held a reachable object.
+///
+/// Wrap the collection so the premise fails as a premise, before the subject
+/// assertion gets a chance to mis-name it.
+fn full_gc_with_no_block_persistence() {
+    let force_marks_before = crate::gc::block_persist_force_mark_count();
+    full_gc();
+    assert_eq!(
+        crate::gc::block_persist_force_mark_count(),
+        force_marks_before,
+        "test premise: block persistence force-marked objects during this \
+         collection, so an unrooted owner in one of those blocks is NOT dead \
+         and the prune correctly declines to drop its entry. Something \
+         reachable shares the owner's arena block — the lazy `globalThis` \
+         realm bootstrap is the one that turned up (#7975); see \
+         `GcTestIsolationGuard::with_realm_bootstrapped`"
+    );
 }
 
 fn util_types_is_map_iterator(addr: usize) -> bool {
@@ -259,7 +311,10 @@ fn test_array_named_dead_set_iterator_marker_does_not_brand_exact_eden_reuse() {
 
 #[test]
 fn test_dead_owner_descriptor_entries_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
+    // `set_property_attrs` below resolves the process-global memoized
+    // `Object.prototype` address, and a MISS runs the whole lazy `globalThis`
+    // bootstrap inside this test — see `with_realm_bootstrapped` (#7975).
+    let _guard = GcTestIsolationGuard::with_realm_bootstrapped();
     let (obj, _) = unsafe { alloc_nursery_test_object(0) };
     let addr = obj as usize;
     crate::object::set_property_attrs(
@@ -275,7 +330,7 @@ fn test_dead_owner_descriptor_entries_pruned_on_full_gc() {
     assert!(crate::object::get_property_attrs(addr, "frozenKey").is_some());
 
     // No roots: the owner is dead at the full trace.
-    full_gc();
+    full_gc_with_no_block_persistence();
 
     assert!(
         crate::object::get_property_attrs(addr, "frozenKey").is_none(),
@@ -393,6 +448,54 @@ fn test_dead_owner_symbol_property_entries_pruned_on_full_gc() {
     );
 }
 
+/// SABOTAGE CHECK for [`full_gc_with_no_block_persistence`] (#7975). Every
+/// "the premise held" verdict it gives is vacuous unless the census it reads
+/// can move — CLAUDE.md's fourth way a gate cannot fail.
+///
+/// Plant the exact shape the #7975 confounder had, minus the realm: one ROOTED
+/// object and one unrooted owner in the same arena block. Nothing here resolves
+/// `globalThis` (`closure_set_dynamic_prop` does not), so the planted tenant is
+/// the only reachable object in the persist window and the census has exactly
+/// one satisfying path.
+///
+/// Both halves are asserted: the census moves, AND the semantic consequence
+/// that makes the premise guard necessary in the first place — a force-marked
+/// owner is not dead, so the death prune correctly leaves its entry alone.
+#[test]
+fn test_block_persistence_census_moves_when_a_block_has_a_live_tenant() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let (live, _) = unsafe { alloc_nursery_test_object(0) };
+    js_shadow_slot_set(0, ptr_bits(live as usize));
+
+    let ptr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        8,
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    let dead = ptr as usize;
+    crate::closure::closure_set_dynamic_prop(dead, "memo", 42.0);
+    assert!(crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_some());
+
+    let force_marks_before = crate::gc::block_persist_force_mark_count();
+    full_gc();
+
+    assert!(
+        crate::gc::block_persist_force_mark_count() > force_marks_before,
+        "block persistence must force-mark the unrooted neighbour of a rooted \
+         object — a census that cannot move makes every \
+         `full_gc_with_no_block_persistence` verdict in this file vacuous"
+    );
+    assert!(
+        crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_some(),
+        "and the consequence the premise guard exists to name: a force-marked \
+         owner is NOT dead, so its side-table entry correctly survives — a case \
+         that hits this shape is failing on its premise, not on the prune"
+    );
+}
+
 #[test]
 fn test_dead_closure_side_table_entries_pruned_on_full_gc() {
     let _guard = GcTestIsolationGuard::new();
@@ -477,13 +580,17 @@ fn test_object_dead_payload_arm_clears_keys_index() {
 
 #[test]
 fn test_dead_arguments_object_entry_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
+    // `js_arguments_object_alloc` reaches `js_object_set_field_by_name`, which
+    // resolves the process-global memoized `Object.prototype` address; a MISS
+    // runs the lazy `globalThis` bootstrap inside this test — see
+    // `with_realm_bootstrapped` (#7975).
+    let _guard = GcTestIsolationGuard::with_realm_bootstrapped();
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let obj = crate::object::js_arguments_object_alloc(undefined, undefined, 0);
     let addr = obj as usize;
     assert!(crate::object::test_arguments_object_registered(addr));
 
-    full_gc();
+    full_gc_with_no_block_persistence();
 
     assert!(
         !crate::object::test_arguments_object_registered(addr),

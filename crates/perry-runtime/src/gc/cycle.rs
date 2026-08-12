@@ -165,6 +165,7 @@ impl BlockPersistCycleState {
                     }
                     self.stats.marked_objects =
                         self.stats.marked_objects.saturating_add(self.newly_marked);
+                    super::trace::note_block_persist_force_marks(self.newly_marked);
                     if self.newly_marked == 0 {
                         self.subphase = BlockPersistSubphase::Done;
                         return true;

@@ -865,6 +865,46 @@ pub(super) fn trace_marked_objects(valid_ptrs: &ValidPointerSet) {
 /// old-block neighbors as new block-persist candidates.
 pub(super) const BLOCK_PERSIST_WINDOW: usize = 5;
 
+thread_local! {
+    /// Objects this thread's block-persistence pass has FORCE-MARKED since
+    /// process start — i.e. kept alive for no reason other than sharing a
+    /// block with something reachable.
+    ///
+    /// The census exists for the same reason `gc::scan_fallback`'s does
+    /// (#7148): force-marking is a correctness measure with a *semantic* side
+    /// effect — an unrooted object in a persisting block is not dead, so every
+    /// death-keyed consumer (the `dead_owner` side-table prunes, the Map/Set
+    /// registry sweeps) legitimately declines to act on it. A test that
+    /// asserts "this unrooted owner is dead" is therefore asserting something
+    /// about the tenancy of its arena block, and without this counter it has no
+    /// way to say so: the mark is cleared again by the sweep, so nothing
+    /// observable survives the collection. #7975 is what that costs — two
+    /// `dead_owner_side_tables` cases failed 200/200 when the lazy `globalThis`
+    /// bootstrap landed in their block, and the failure named the prune.
+    ///
+    /// Updated once per pass (per fixed-point round), never per object.
+    static BLOCK_PERSIST_FORCE_MARKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Running count of [`BLOCK_PERSIST_FORCE_MARKS`] on this thread. Compare
+/// across a collection: an unchanged value means block persistence force-marked
+/// nothing, so an object left unmarked by that collection was genuinely
+/// unreachable rather than merely a neighbour of something reachable.
+pub(crate) fn block_persist_force_mark_count() -> u64 {
+    BLOCK_PERSIST_FORCE_MARKS.with(std::cell::Cell::get)
+}
+
+/// Record one pass's force-mark count. BOTH arms call this: the whole-cycle
+/// pass below and the budgeted `BlockPersistCycleState` in `gc::cycle`, which
+/// force-marks through its own loop. A census that only counted one of them
+/// would read zero on exactly the cycles that are hardest to reason about.
+pub(super) fn note_block_persist_force_marks(marked: usize) {
+    if marked != 0 {
+        BLOCK_PERSIST_FORCE_MARKS
+            .with(|count| count.set(count.get().saturating_add(marked as u64)));
+    }
+}
+
 pub(super) fn mark_block_persisting_arena_objects(
     valid_ptrs: &ValidPointerSet,
 ) -> BlockPersistTraceStats {
@@ -940,6 +980,7 @@ pub(super) fn mark_block_persisting_arena_objects(
             },
         );
         stats.marked_objects += newly_marked;
+        note_block_persist_force_marks(newly_marked);
 
         if newly_marked == 0 {
             break;

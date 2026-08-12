@@ -324,7 +324,56 @@ pub(super) struct GcTestIsolationGuard {
 
 impl GcTestIsolationGuard {
     pub(super) fn new() -> Self {
+        Self::build(RealmBootstrap::LeaveLazy)
+    }
+
+    /// [`GcTestIsolationGuard::new`] plus: run the lazy `globalThis` realm
+    /// bootstrap BEFORE the measured window opens (#7975).
+    ///
+    /// REQUIRED by any test that asserts an unrooted object is DEAD at a
+    /// collection and reaches the runtime through an API that can resolve the
+    /// realm. Two facts compose into a scheduling-dependent false failure:
+    ///
+    /// 1. `object::set_property_attrs` and `js_object_set_field_by_name` both
+    ///    consult the **process-global** memoized `Object.prototype` address
+    ///    (`array::prototype_addr`), and a MISS runs the whole lazy
+    ///    `globalThis` bootstrap — ~1.15 MB allocated, ~410 KB of it live,
+    ///    rooted for the life of the thread — inside the caller. The cache
+    ///    misses exactly once per PROCESS, so WHICH libtest thread pays is a
+    ///    scheduling accident.
+    /// 2. Arena block reset is all-or-nothing, so
+    ///    `gc::trace::mark_block_persisting_arena_objects` force-MARKS every
+    ///    object in a block that holds one reachable object. A test owner that
+    ///    shares its block with a freshly-bootstrapped realm is therefore NOT
+    ///    dead — and the death prune *correctly* declines to drop its
+    ///    side-table entry, because a block that persists cannot recycle the
+    ///    owner's address.
+    ///
+    /// Measured on `origin/main` before this existed: the two affected cases in
+    /// `dead_owner_side_tables` failed **200/200** runs when scheduled first and
+    /// **0/200** when any sibling resolved the cache first — 10/200 at
+    /// `--test-threads=10` over the whole module (#7975).
+    ///
+    /// Bootstrapping here — inside the isolation lock, but before
+    /// [`ScopedRootScannerRegistryGuard`] takes the thread's scanners and
+    /// before `reset_global_roots` — puts the realm graph OUTSIDE the window:
+    /// the guard then un-roots it, so it cannot keep the test's own block
+    /// alive.
+    pub(super) fn with_realm_bootstrapped() -> Self {
+        Self::build(RealmBootstrap::RunItNow)
+    }
+
+    fn build(realm: RealmBootstrap) -> Self {
         let lock = copying_nursery_isolation_lock();
+        if matches!(realm, RealmBootstrap::RunItNow) {
+            let global = crate::object::js_get_global_this();
+            assert!(
+                crate::value::JSValue::from_bits(global.to_bits()).is_pointer(),
+                "the realm bootstrap must have produced a singleton — otherwise \
+                 it did not run here, and the confounder this guard exists to \
+                 move out of the window is still inside it"
+            );
+        }
         let scanner_guard = ScopedRootScannerRegistryGuard::new();
         reset_copying_nursery_runtime_test_state();
         reset_shadow_stack();
@@ -335,6 +384,14 @@ impl GcTestIsolationGuard {
             _lock: lock,
         }
     }
+}
+
+/// Whether [`GcTestIsolationGuard::build`] forces the lazy `globalThis`
+/// bootstrap before opening the window. See
+/// [`GcTestIsolationGuard::with_realm_bootstrapped`].
+enum RealmBootstrap {
+    LeaveLazy,
+    RunItNow,
 }
 
 impl Drop for GcTestIsolationGuard {
