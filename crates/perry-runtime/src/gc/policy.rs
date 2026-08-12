@@ -1613,6 +1613,22 @@ pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
     }
 }
 
+/// #7902: a traced cycle contradicted the predictor that admitted `bytes` of
+/// untraced (assumed-live) promotion, so schedule the old-gen reclaim that can
+/// actually decide their liveness.
+///
+/// Nothing else will: the traced cycle measures only its own young generation,
+/// so it can neither identify nor reclaim a cohort the preceding untraced
+/// cycles already moved into old-gen. Left alone the bytes sit there until
+/// growth pressure fires — which it may not, because a phase-changed program's
+/// heap has stopped growing.
+pub(super) fn request_old_reclaim_for_untraced_promotions(bytes: usize) {
+    if bytes == 0 {
+        return;
+    }
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
+}
+
 pub(super) fn finish_full_old_reclaim_baseline() {
     // Baseline includes external side-buffer bytes (#6010) so the growth
     // delta in `old_reclaim_pressure_due` stays unit-consistent.

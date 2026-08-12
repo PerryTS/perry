@@ -1802,7 +1802,16 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // old-reclaim baseline BEFORE the pressure check below, or the check reads
     // the stale baseline and schedules a full that is guaranteed to free
     // nothing (see `credit_promoted_bytes_to_old_baseline`).
-    credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
+    //
+    // #7902: "live by construction" is a MARKED-liveness claim, and an untraced
+    // promotion makes none — it uses `PromotionLiveness::AssumeAllLive`. Those
+    // bytes are the uncertain class the untraced budget bounds, so crediting
+    // them here would tell old-reclaim pacing that a cohort nobody has looked
+    // at is clean, and defer the very collection that could decide it. Charge
+    // only what a traced cycle actually marked.
+    if !untraced {
+        credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
+    }
     // Everything outside from-space retains its pre-minor accounting. Remove
     // the entire Eden/active-survivor high-water, then add back exactly the
     // objects that survived by copy or promotion. This also preserves objects

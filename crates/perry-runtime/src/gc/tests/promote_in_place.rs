@@ -16,8 +16,9 @@ use super::super::promote_in_place::{
     clear_young_survival_for_tests, note_untraced_promotion, parse_promote_in_place,
     promoted_dead_bytes_since_full, seed_promoted_dead_bytes_for_tests,
     seed_untraced_promoted_bytes_for_tests, seed_young_survival_for_tests,
-    InPlacePromotionTestGuard, PROMOTED_DEAD_BUDGET_BYTES, PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
-    UNTRACED_PROMOTION_SURVIVAL_PERMILLE,
+    untraced_promotion_budget_with, InPlacePromotionTestGuard, PROMOTED_DEAD_BUDGET_BYTES,
+    PROMOTE_SURVIVAL_THRESHOLD_PERMILLE, UNTRACED_PROMOTION_CEILING_BYTES,
+    UNTRACED_PROMOTION_FLOOR_BYTES, UNTRACED_PROMOTION_SURVIVAL_PERMILLE,
 };
 use super::super::*;
 use super::support::*;
@@ -259,6 +260,117 @@ fn an_untraced_cycle_charges_the_dead_bytes_its_last_measurement_implies() {
         !(should_promote_young_in_place() && should_promote_young_untraced()),
         "an exhausted dead-bytes budget must close the untraced path too"
     );
+}
+
+/// #7902: the extrapolation must not be taken from a stationary 1000‰ reading.
+///
+/// The predictor is by construction the PREVIOUS cycle's answer, so a fully-live
+/// measurement says nothing about the cohort being promoted now. Charging
+/// `1000 − 1000 = 0` disarmed `PROMOTED_DEAD_BUDGET_BYTES` on exactly the
+/// workloads that reach this path — and contradicted
+/// `UNTRACED_PROMOTION_SURVIVAL_PERMILLE`'s own doc, which derives its 1.28 MB
+/// bound from the threshold rather than from the measurement.
+#[test]
+fn a_stationary_fully_live_predictor_still_charges_implied_dead_bytes() {
+    let _guard = InPlacePromotionTestGuard::untraced();
+    seed_young_survival_for_tests(1000);
+    let before = promoted_dead_bytes_since_full();
+    note_untraced_promotion(100 * 1000, 1);
+    let charged = promoted_dead_bytes_since_full() - before;
+    assert_eq!(
+        charged, 1000,
+        "a 1000 permille predictor must still be charged at the threshold the \
+         decision admits ({UNTRACED_PROMOTION_SURVIVAL_PERMILLE} permille), not \
+         at its own optimism"
+    );
+
+    // ...and the charge is enough to close the composite decision once the
+    // footprint cap is spent, so the untraced path cannot bleed indefinitely
+    // while every individual cycle looks fine.
+    seed_promoted_dead_bytes_for_tests(PROMOTED_DEAD_BUDGET_BYTES);
+    assert!(!should_promote_young_in_place());
+}
+
+/// #7902: the untraced budget IS the worst-case retained-garbage bound (every
+/// byte it admits is assumed live), so it must be statable — bounded above, and
+/// scaled to a configured heap budget rather than parking a flat 128 MB floor
+/// on a device heap smaller than that.
+#[test]
+fn the_untraced_promotion_budget_is_bounded_and_scales_to_the_heap_budget() {
+    // Unconstrained: the historical floor, growing with old-gen, capped.
+    assert_eq!(
+        untraced_promotion_budget_with(None, 0),
+        UNTRACED_PROMOTION_FLOOR_BYTES
+    );
+    assert_eq!(
+        untraced_promotion_budget_with(None, 256 * 1024 * 1024),
+        256 * 1024 * 1024,
+        "the relative half must still track a genuinely-live old heap"
+    );
+    assert_eq!(
+        untraced_promotion_budget_with(None, 64 * 1024 * 1024 * 1024),
+        UNTRACED_PROMOTION_CEILING_BYTES,
+        "#7902: an unbounded relative half lets a phase change park a whole \
+         old-heap's worth of assumed-live garbage"
+    );
+
+    // Constrained: a quarter of the budget, and never more than half of it even
+    // against an old generation that fills the budget.
+    let budget = 64 * 1024 * 1024;
+    assert_eq!(
+        untraced_promotion_budget_with(Some(budget), 0),
+        budget / 4,
+        "#7902: a 128 MB floor is larger than this whole configured heap"
+    );
+    assert!(
+        untraced_promotion_budget_with(Some(budget), budget) <= budget / 2,
+        "a constrained process must not admit more assumed-live retention than \
+         half its own heap budget"
+    );
+    assert!(
+        untraced_promotion_budget_with(Some(budget), usize::MAX) < UNTRACED_PROMOTION_FLOOR_BYTES
+    );
+}
+
+/// #7902: the forced measuring cycle is the FIRST evidence about the cohort the
+/// preceding untraced cycles promoted on faith. When it contradicts the
+/// predictor, that cohort must be scheduled for reclamation — a traced minor
+/// measures only its own young generation and can neither identify nor free
+/// bytes already sitting in old-gen.
+#[test]
+fn a_contradicting_measurement_schedules_the_old_reclaim_it_needs() {
+    let _guard = InPlacePromotionTestGuard::untraced();
+    let previous = GC_OLD_RECLAIM_PENDING.with(Cell::get);
+
+    // A measurement that AGREES with the predictor changes nothing.
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+    seed_untraced_promoted_bytes_for_tests(64 * 1024 * 1024);
+    note_young_survival(16 * 1024 * 1024, 16 * 1024 * 1024);
+    assert!(
+        !GC_OLD_RECLAIM_PENDING.with(Cell::get),
+        "a confirming measurement must not schedule a reclaim"
+    );
+
+    // A phase change does: 1000 permille promoted the cohort, 0 permille says
+    // it was garbage.
+    seed_untraced_promoted_bytes_for_tests(64 * 1024 * 1024);
+    note_young_survival(16 * 1024 * 1024, 0);
+    assert!(
+        GC_OLD_RECLAIM_PENDING.with(Cell::get),
+        "#7902: a contradicted predictor must schedule the old-gen reclaim that \
+         can decide the cohort it already promoted"
+    );
+
+    // With no outstanding untraced run there is nothing to recover, so a low
+    // measurement on its own must not force a reclaim.
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+    seed_untraced_promoted_bytes_for_tests(0);
+    note_young_survival(16 * 1024 * 1024, 0);
+    assert!(
+        !GC_OLD_RECLAIM_PENDING.with(Cell::get),
+        "a low measurement with no untraced run behind it schedules nothing"
+    );
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(previous));
 }
 
 #[test]

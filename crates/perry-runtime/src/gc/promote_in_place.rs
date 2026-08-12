@@ -94,9 +94,16 @@ pub(super) const PROMOTE_SURVIVAL_THRESHOLD_PERMILLE: u64 = 950;
 /// assumed-live-but-dead bytes here against 0.128 MB at 999 — both far under
 /// the 32 MB cap, which means the binding bound is the untraced-bytes budget in
 /// either case, and that is unchanged.
+///
+/// #7902: that arithmetic is what the code does only because `permille` is now
+/// CLAMPED to this threshold (see [`implied_dead_bytes`]). Taken from the last
+/// measurement verbatim, a stationary 1000‰ reading charged zero and the
+/// paragraph above described a bound nothing enforced. The untraced-bytes
+/// budget remains the binding bound, and it is now itself capped — see
+/// [`untraced_promotion_budget_bytes`].
 pub(super) const UNTRACED_PROMOTION_SURVIVAL_PERMILLE: u64 = 990;
 
-/// Floor for the untraced-promotion budget — see
+/// Floor for the untraced-promotion budget on an UNCONSTRAINED heap — see
 /// [`untraced_promotion_budget_bytes`].
 ///
 /// Two young-cap ceilings (2 × 64 MB). The traced path's own misprediction
@@ -104,7 +111,28 @@ pub(super) const UNTRACED_PROMOTION_SURVIVAL_PERMILLE: u64 = 990;
 /// itself off" (see the module docs); this is that bound doubled, which is
 /// what buys a fully-live workload a whole run of free cycles instead of
 /// re-measuring every other one.
+///
+/// #7902: this is a DEFAULT, not a minimum. A process with a configured heap
+/// budget gets a quarter of it instead — 128 MB of assumed-live retention is
+/// larger than some intended device heaps outright, and the floor was being
+/// applied unconditionally.
 pub(super) const UNTRACED_PROMOTION_FLOOR_BYTES: usize = 128 * 1024 * 1024;
+
+/// Hard ceiling on the untraced-promotion budget, i.e. on the worst-case
+/// retained-garbage exposure of the untraced path (#7902).
+///
+/// The budget's relative half (`old-gen at the last measurement`) exists so a
+/// program with a large genuinely-live old heap can keep running free cycles.
+/// But that half was uncapped, so on a multi-GB old generation an abrupt
+/// live→dead phase change could park an old-heap-sized cohort of assumed-live
+/// garbage before anything re-measured. The exposure is now bounded by
+/// `min(max(floor, old-gen-at-last-measurement), this)` — an explicit,
+/// statable worst case rather than "whatever the heap happens to be".
+///
+/// 4 × the unconstrained floor: it keeps the proportional behaviour across the
+/// range where it is cheap (old-gen up to 512 MB) and stops it exactly where a
+/// misprediction would cost more than one forced traced cycle is worth.
+pub(super) const UNTRACED_PROMOTION_CEILING_BYTES: usize = 512 * 1024 * 1024;
 
 /// Running cap on dead bytes promoted in place since the last full collection.
 ///
@@ -216,21 +244,55 @@ pub(super) fn should_promote_young_in_place() -> bool {
         .is_some_and(|permille| permille >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE)
 }
 
-/// How many untraced-promoted bytes may accumulate before a cycle has to
-/// measure again.
+/// The untraced-promotion budget, and therefore **the worst-case retained
+/// garbage of the untraced path**: every byte it admits is *assumed* live, so
+/// after an abrupt live→dead phase change every one of them can be garbage
+/// until the forced measuring cycle and a following full collection.
 ///
-/// `max(floor, old-gen as it stood at the last MEASUREMENT)`: an untraced run
-/// may not more than double the old generation it started from. The relative
-/// half lets a program with a large genuinely-live old heap keep running free
-/// cycles — its exposure is proportional to memory it already holds — and the
-/// absolute floor keeps the rule from re-measuring constantly while old-gen is
-/// still small.
+/// `min(max(floor, old-gen as it stood at the last MEASUREMENT), ceiling)`:
+///
+/// * the relative half lets a program with a large genuinely-live old heap keep
+///   running free cycles — its exposure is proportional to memory it already
+///   holds;
+/// * the floor keeps the rule from re-measuring constantly while old-gen is
+///   still small, and (#7902) scales to a configured heap budget rather than
+///   parking a flat 128 MB on a device heap smaller than that;
+/// * the ceiling (#7902) makes the worst case statable. Without it the bound
+///   grew with old-gen without limit, so a phase-changing server could park a
+///   whole old-heap's worth of dead-but-accounted-live memory.
 ///
 /// It has to be the size at the last measurement, not the size now: the
 /// untraced bytes ARE old-gen bytes, so comparing against the current figure
 /// compares a quantity with itself and the relative half can never fire.
-fn untraced_promotion_budget_bytes() -> usize {
-    UNTRACED_PROMOTION_FLOOR_BYTES.max(OLD_GEN_AT_LAST_MEASUREMENT.with(Cell::get))
+pub(super) fn untraced_promotion_budget_bytes() -> usize {
+    untraced_promotion_budget_with(
+        super::gc_heap_budget_bytes(),
+        OLD_GEN_AT_LAST_MEASUREMENT.with(Cell::get),
+    )
+}
+
+/// Pure form of [`untraced_promotion_budget_bytes`], so both the constrained
+/// and unconstrained arms are asserted without poking the process environment.
+pub(super) fn untraced_promotion_budget_with(
+    heap_budget: Option<usize>,
+    old_gen_at_last_measurement: usize,
+) -> usize {
+    // A quarter of a constrained budget; the historical 128 MB otherwise. One
+    // young cap (4 MB) is the floor's own floor — below that the policy would
+    // re-measure on essentially every cycle and #7888 would not exist.
+    let floor = super::budget_scaled_with(
+        heap_budget,
+        UNTRACED_PROMOTION_FLOOR_BYTES,
+        1,
+        4,
+        4 * 1024 * 1024,
+    );
+    // The ceiling scales the same way, so a constrained process never admits
+    // more retained garbage than its own budget allows.
+    let ceiling =
+        super::budget_scaled_with(heap_budget, UNTRACED_PROMOTION_CEILING_BYTES, 1, 2, floor)
+            .max(floor);
+    floor.max(old_gen_at_last_measurement).min(ceiling)
 }
 
 /// Should this promoting cycle also skip the trace?
@@ -275,16 +337,37 @@ pub(super) fn should_promote_young_untraced() -> bool {
 ///   footprint bound; they differ only in whether the dead figure is measured
 ///   or extrapolated, and the untraced budget is what bounds the extrapolation.
 pub(super) fn note_untraced_promotion(promoted_bytes: usize, promoted_objects: usize) {
-    let dead_permille =
-        1000u64.saturating_sub(LAST_YOUNG_SURVIVAL_PERMILLE.with(Cell::get).unwrap_or(0));
-    let implied_dead = (promoted_bytes as u64)
-        .saturating_mul(dead_permille)
-        .checked_div(1000)
-        .unwrap_or(0) as usize;
-    PROMOTED_DEAD_BYTES.with(|c| c.set(c.get().saturating_add(implied_dead)));
+    PROMOTED_DEAD_BYTES.with(|c| {
+        c.set(c.get().saturating_add(implied_dead_bytes(
+            promoted_bytes,
+            LAST_YOUNG_SURVIVAL_PERMILLE.with(Cell::get),
+        )))
+    });
     UNTRACED_PROMOTED_BYTES.with(|c| c.set(c.get().saturating_add(promoted_bytes)));
     UNTRACED_PROMOTION_CYCLES.with(|c| c.set(c.get().saturating_add(1)));
     UNTRACED_PROMOTED_OBJECTS.with(|c| c.set(c.get().saturating_add(promoted_objects as u64)));
+}
+
+/// Dead bytes an untraced promotion of `promoted_bytes` implies (#7902).
+///
+/// The extrapolation is capped at [`UNTRACED_PROMOTION_SURVIVAL_PERMILLE`], not
+/// taken from the last measurement verbatim. A stationary 1000‰ measurement
+/// says nothing about the cycle being promoted — it is by construction the
+/// PREVIOUS cycle's answer — so charging `1000 − 1000 = 0` disarmed
+/// [`PROMOTED_DEAD_BUDGET_BYTES`] entirely on exactly the workloads that enter
+/// this path. The most optimistic honest assumption is the worst ratio the
+/// decision itself admits, which is also the figure
+/// [`UNTRACED_PROMOTION_SURVIVAL_PERMILLE`]'s own doc computes its 1.28 MB
+/// bound from: before this the doc and the code disagreed.
+fn implied_dead_bytes(promoted_bytes: usize, last_survival_permille: Option<u64>) -> usize {
+    let assumed_survival = last_survival_permille
+        .unwrap_or(0)
+        .min(UNTRACED_PROMOTION_SURVIVAL_PERMILLE);
+    let dead_permille = 1000u64.saturating_sub(assumed_survival);
+    (promoted_bytes as u64)
+        .saturating_mul(dead_permille)
+        .checked_div(1000)
+        .unwrap_or(0) as usize
 }
 
 /// Cycles that promoted without tracing, and the objects they promoted.
@@ -309,7 +392,7 @@ pub(crate) fn untraced_promoted_bytes_since_measurement() -> usize {
 pub(super) fn note_young_survival(young_bytes: usize, live_bytes: usize) {
     // A real measurement landed, so the untraced run it ends is settled and the
     // next run's budget is taken against the heap this one leaves behind.
-    UNTRACED_PROMOTED_BYTES.with(|c| c.set(0));
+    let untraced_run_bytes = UNTRACED_PROMOTED_BYTES.replace(0);
     OLD_GEN_AT_LAST_MEASUREMENT.with(|c| c.set(crate::arena::old_gen_in_use_bytes()));
     if young_bytes == 0 {
         return;
@@ -320,6 +403,16 @@ pub(super) fn note_young_survival(young_bytes: usize, live_bytes: usize) {
         .unwrap_or(0)
         .min(1000);
     LAST_YOUNG_SURVIVAL_PERMILLE.with(|c| c.set(Some(permille)));
+    // #7902: this measurement is the FIRST evidence about the cohort the
+    // preceding untraced cycles promoted on faith. If it contradicts the
+    // predictor that admitted them, that cohort is probably garbage sitting in
+    // old-gen — and nothing else will look at it, because the traced cycle
+    // measures only its own young generation and old-reclaim pacing was told
+    // the promoted bytes were live. Ask for the old-gen reclaim now instead of
+    // waiting for growth pressure to notice a heap that is not growing.
+    if untraced_run_bytes > 0 && permille < UNTRACED_PROMOTION_SURVIVAL_PERMILLE {
+        super::request_old_reclaim_for_untraced_promotions(untraced_run_bytes);
+    }
 }
 
 /// Charge the dead bytes an in-place promotion just moved into old-gen against
