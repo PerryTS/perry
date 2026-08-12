@@ -1,8 +1,8 @@
 Fixed two receiver boundaries found during review of #7897's header-gated
 property-miss probes.
 
-A possible Symbol header is now read only after the candidate passes the
-canonical plausible-heap address check. This preserves both Symbol storage
+The runtime reads a candidate Symbol header only after the candidate passes
+the canonical plausible-heap address check. This preserves both Symbol storage
 classes — GC-backed `Symbol()` and Box-leaked `Symbol.for()` — while rejecting
 tag remnants, handles, and out-of-range garbage before the four-byte
 `SYMBOL_MAGIC` dereference. The regression test uses the exact upper-bound
