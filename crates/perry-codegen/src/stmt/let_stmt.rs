@@ -1312,15 +1312,14 @@ pub(crate) fn lower_let(
     // * `int_valued_ta_locals` (#6898): every write i32-producing or an int-kind
     //   TA read, every observation ToInt32-coercing — which makes canonical-i32
     //   storage output-invariant with the NaN-safe entry conversion.
-    // * `loop_bounded_i32_locals` (#7110): a monotone induction variable whose
-    //   whole reachable interval is a pair of compile-time i32 constants —
-    //   single literal init, every write a step dominated by a constant-bounded
-    //   guard on the immediately enclosing loop. This is the term that admits a
-    //   plain `for (let i = 0; i < 1000000; i++)` counter, which satisfies
-    //   neither `index_used_locals` (nothing is indexed) nor
-    //   `strictly_i32_bounded_locals` (`i++` disqualifies there, #6072).
-    //   See `collectors/loop_bounded_i32.rs` for the interval argument — and
-    //   for why a bare accumulator is NOT admitted by it.
+    // * `loop_bounded_i32_locals` (#7110/#7123): either a monotone induction
+    //   variable whose whole reachable interval is a pair of compile-time i32
+    //   constants, or an accumulator whose entry magnitude plus every bounded
+    //   loop trip count times every bounded step magnitude fits i32. This term
+    //   admits both a plain `for (let i = 0; i < 1000000; i++)` counter and a
+    //   soundly bounded `sum = sum + 1`; neither satisfies `index_used_locals`
+    //   or `strictly_i32_bounded_locals`. See the collector for the proof and
+    //   the deliberately small accepted step-expression set.
     let canonical_safe_local = i32_safe_local
         || ctx.native_facts.int_valued_ta_locals().contains(&id)
         || ctx.native_facts.loop_bounded_i32_locals().contains(&id);

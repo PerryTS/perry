@@ -484,6 +484,12 @@ pub(crate) fn collect_type_facts(
     } else {
         HashSet::new()
     };
+    // #7123: this set now includes accumulators whose integer-ness and full
+    // range were proved together (for example `sum += i % 1000`). The older
+    // integer provenance collector deliberately does not accept bare `%`, so
+    // feed the stronger fact into its downstream consumers explicitly. This
+    // is a consequence of the range proof, not an additional assumption.
+    integer_locals.extend(loop_bounded_i32_locals.iter().copied());
     let not_bigint_locals =
         super::not_bigint_locals::collect_not_bigint_locals(stmts, params, binding_types);
     let (mut array_facts, effect_facts, materialization_hazards) =
@@ -1994,6 +2000,45 @@ mod tests {
         );
 
         assert!(!facts.unsigned_i32_locals().contains(&2));
+    }
+
+    #[test]
+    fn bounded_modulo_accumulator_seeds_integer_provenance() {
+        // The pre-#7123 integer collector deliberately rejects bare `%`.
+        // Once trip-count x magnitude proves the whole accumulator range, that
+        // stronger fact must reach the ordinary integer-storage gate too.
+        let stmts = vec![
+            mutable_number_let(1, Expr::Integer(0)),
+            Stmt::For {
+                init: Some(Box::new(mutable_number_let(2, Expr::Integer(0)))),
+                condition: Some(Expr::Compare {
+                    op: perry_hir::CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::Integer(1000)),
+                }),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: perry_hir::UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    1,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(1)),
+                        right: Box::new(Expr::Binary {
+                            op: BinaryOp::Mod,
+                            left: Box::new(Expr::LocalGet(2)),
+                            right: Box::new(Expr::Integer(10)),
+                        }),
+                    }),
+                ))],
+            },
+        ];
+        let facts = collect_hir_facts(&stmts, &HashSet::new(), &HashSet::new());
+
+        assert!(facts.loop_bounded_i32_locals().contains(&1));
+        assert!(facts.integer_locals().contains(&1));
     }
 
     #[test]

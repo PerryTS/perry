@@ -1,16 +1,16 @@
-// Liveness fixture for the monotone loop-induction i32 range proof (#7110).
+// Liveness fixture for the loop-bound i32 range proofs (#7110/#7123).
 //
 // `fixture_canonical_slots.ts` proves canonical-i32 on STRAIGHT-LINE bitwise
 // locals and says so in its own comment — it deliberately avoids loops, because
 // before #7110 a loop counter could not select the canonical rep at all. This
-// fixture is the complement: every canonical-i32 promotion in it comes from the
-// loop-induction rule and from nothing else. There is no bitwise mixing, no
+// fixture is the complement: every canonical-i32 promotion in it comes from a
+// loop induction or bounded-accumulator rule and from nothing else. There is no bitwise mixing, no
 // `| 0`, no `>>> 0`, and no array indexing anywhere, so if
 // `collect_loop_bounded_i32_locals` returns the empty set this file's
 // canonical-i32 count is zero and the census goes red.
 //
-// The three locals it must NOT promote are here on purpose: an unadmitted
-// counter, an unbounded accumulator, and (since #7128) a counter that is
+// The two locals it must NOT promote are here on purpose: an overflowing
+// accumulator and (since #7128) a counter that is
 // perfectly provable and not worth promoting. Together they keep the fixture
 // from being satisfied by any rule that simply says yes to proven-integer
 // locals.
@@ -62,14 +62,17 @@ function overshoot(): number {
   return i;
 }
 
-// DOES NOT PROMOTE. A bare accumulator: `sum` has no guard bounding it, and
-// 13_factorial's version of this really does reach 4.995e10.
-function accumulate(): number {
+// PROMOTES via #7123, and not via #7110's induction-variable rule. The counter
+// gives an execution bound of 4096 and the step magnitude is 1, so the full
+// accumulator interval is inside i32.
+function accumulate(): string {
   let sum = 0;
+  let overflow = 0;
   for (let i = 0; i < ROUNDS; i++) {
-    sum = sum + 1000000;
+    sum = sum + 1;
+    overflow = overflow + 1000000;
   }
-  return sum;
+  return sum + "/" + overflow;
 }
 
 // DOES NOT PROMOTE — and this is the only entry here whose PROOF succeeds.

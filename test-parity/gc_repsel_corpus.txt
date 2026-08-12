@@ -32,10 +32,10 @@ test_gap_int_valued_ta_locals
 # --- Phase 1 widening: constant-bounded loop induction variables (#7110) ----
 # A counter that is neither index-used nor `strictly_i32_bounded` now takes
 # canonical i32 storage when the loop guard pins its whole interval inside i32.
-# Three functions in the file are there to be REFUSED (`overshoot`,
-# `runtimeBound`, `accumulate`); an i32 slot for any of them prints a wrapped
-# negative where Node prints the true value, so this file fails loudly under an
-# unsound widening rather than drifting by one.
+# #7123 also admits a loop accumulator when trip count times step magnitude
+# fits i32. The file's refusal probes (`overshoot`, `runtimeBound`, and
+# `overflowingAccumulator`) print wrapped values under an unsound widening, so
+# this fails loudly rather than merely changing an optimization report.
 test_gap_repsel_loop_bounded_i32
 
 # --- Phase 2: specialized calling convention / spec-ABI raw params (#6905) --

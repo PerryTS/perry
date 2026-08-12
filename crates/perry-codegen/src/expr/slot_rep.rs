@@ -53,14 +53,13 @@
 //! - `int_valued_ta_locals` (merged into `integer_locals`): every write i32 or
 //!   a possibly-OOB int-TA read whose every observation is ToInt32-coercing;
 //!   NaN-safe entry conversion (`toint32_wrap`) keeps OOB `undefined` → 0.
-//! - `loop_bounded_i32_locals` (#7110): a monotone induction variable whose
-//!   reachable interval is a pair of compile-time i32 constants — single
-//!   literal init, every write a `+k`/`-k` step dominated by a
-//!   constant-bounded guard on the immediately enclosing loop, direction
-//!   agreeing with the guard. A real range argument, not a compatibility
-//!   bound: there is no reachable state in which the value leaves i32. A bare
-//!   accumulator is deliberately NOT admitted — see
-//!   `collectors/loop_bounded_i32.rs`.
+//! - `loop_bounded_i32_locals` (#7110/#7123): either a monotone induction
+//!   variable whose reachable interval is a pair of compile-time i32 constants,
+//!   or an accumulator whose literal entry magnitude plus every enclosing
+//!   loop's trip-count bound times every write's step-magnitude bound fits i32.
+//!   Both are real range arguments, not compatibility bounds: there is no
+//!   reachable state in which the value leaves i32. Unknown loop counts and
+//!   step expressions remain boxed; see `collectors/loop_bounded_i32.rs`.
 //! - `integer_locals ∩ index_used_locals`: admission accepts `Add/Sub/Mul`
 //!   chains that can in principle exceed i32 — but under the pre-phase shadow
 //!   model every `LocalGet` of such a local ALREADY reads the i32 slot
@@ -382,11 +381,11 @@ impl CanonicalI32Denial {
         if self.not_index_used_or_bounded {
             return Some((
                 "not_index_used_or_bounded",
-                "proven integer-valued, but never used as an array index, not \
-                 provably i32-bounded, and not a constant-bounded loop \
-                 induction variable (#7110), so nothing pins its range to 32 \
-                 bits. A bare accumulator lands here and must: \
-                 `sum = sum + (i % 1000)` over 1e8 iterations really does reach \
+                "proven integer-valued, but never used as an array index and \
+                 not provably i32-bounded by either a constant-bounded loop \
+                 induction interval (#7110) or a trip-count times \
+                 step-magnitude accumulator bound (#7123). The factorial \
+                 counterexample (`sum += i % 1000` over 1e8 iterations) reaches \
                  4.995e10, so an i32 slot would print a wrapped negative",
                 Tier::CompilerLimitation,
                 Some(NOT_BOUNDED_ISSUE),
@@ -441,7 +440,7 @@ pub(crate) fn deny_canonical_i32(ctx: &FnCtx<'_>, id: u32, name: &str, denial: C
 /// Tracking issue for "a module-level binding can never take a canonical slot".
 const MODULE_GLOBAL_ISSUE: &str = "#7109";
 /// Tracking issue for the index-use / i32-bound precondition.
-const NOT_BOUNDED_ISSUE: &str = "#7110";
+const NOT_BOUNDED_ISSUE: &str = "#7123";
 /// Tracking issue for the profitability refusal — the one denial in this list
 /// that is not a failed proof.
 const NO_BENEFIT_ISSUE: &str = "#7128";
@@ -961,9 +960,9 @@ mod repsel_denial_tests {
         assert_eq!(d.verdict().map(|v| v.0), Some(MODULE_INIT_CONTEXT));
     }
 
-    /// A bare accumulator at module top level fails BOTH rules. The
-    /// value-level one is the more actionable, so it wins. This is
-    /// `02_loop_overhead`'s `i`.
+    /// An accumulator with no provable trip-count/magnitude product at module
+    /// top level fails BOTH rules. The value-level one is more actionable, so
+    /// it wins.
     #[test]
     fn a_value_rule_outranks_the_context_rule() {
         let d = CanonicalI32Denial {
@@ -974,7 +973,7 @@ mod repsel_denial_tests {
         let (rule, _, tier, issue) = d.verdict().expect("a value-level denial");
         assert_eq!(rule, "not_index_used_or_bounded");
         assert_eq!(tier, crate::opt_report::Tier::CompilerLimitation);
-        assert_eq!(issue, Some("#7110"));
+        assert_eq!(issue, Some("#7123"));
     }
 
     /// Precedence is total and ordered: with every rule failing at once, the

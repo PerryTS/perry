@@ -60,17 +60,25 @@
 //! canonical storage (i32 slot only, no double slot, no dual writes) instead of
 //! a shadow that has to be kept in sync with a boxed double.
 //!
-//! ## What it deliberately does NOT prove
+//! ## Bounded accumulators (#7123)
 //!
-//! A bare **accumulator** — `let sum = 0; for (…) sum = sum + x;` — is not
-//! admitted, and must not be. `benchmarks/suite/13_factorial.ts` is the live
-//! counterexample: `sum = sum + (i % 1000)` over 1e8 iterations reaches
-//! 49,950,000,000, twenty-three times `INT32_MAX`. Node prints it exactly; an
-//! i32 slot would print a wrapped negative. Admitting "every write is
-//! `sum = sum + <integer>`" as an i32 proof is a silent wrong answer, not a
-//! missed optimization. Bounding an accumulator needs the loop's *trip count*
-//! multiplied by a magnitude bound on the step expression — strictly more
-//! analysis than this module does; #7123 specifies it.
+//! A bare **accumulator** — `let sum = 0; for (…) sum = sum + x;` — still is
+//! not enough. `benchmarks/suite/13_factorial.ts` is the live counterexample:
+//! `sum = sum + (i % 1000)` over 1e8 iterations reaches 49,950,000,000,
+//! twenty-three times `INT32_MAX`. Node prints it exactly; an i32 slot would
+//! print a wrapped negative.
+//!
+//! The second half of this collector therefore proves a separate inequality.
+//! A `for` loop whose update is a positive constant step on one of the
+//! induction variables above has a compile-time trip-count upper bound `T`.
+//! Bounds multiply through nested loops (with saturating arithmetic). For an
+//! accumulator with literal entry value `A0`, every write must be
+//! `acc = acc + e`, and `e` must have a small syntactic magnitude bound `M`:
+//! an integer literal/constant, `x % literal`, `x & non_negative_literal`, or
+//! another loop-bounded induction local. The accumulated proof is then
+//! `|acc| <= |A0| + sum(T * M)`. Only a result at most `INT32_MAX` is admitted.
+//! Unknown loop bounds and unknown expression shapes fall through to boxed
+//! storage; under-approximation is free here.
 //!
 //! Consumed only by the canonical-i32 gate (`canonical_safe_local` in
 //! `stmt/let_stmt.rs`), never by the parallel-shadow `needs_i32_slot` gate, so
@@ -95,6 +103,12 @@ struct GuardedLevel {
     /// The extreme the local can reach at this level: an upper bound for
     /// [`Dir::Inc`], a lower bound for [`Dir::Dec`]. Always inside i32.
     extreme: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct IntInterval {
+    lo: i64,
+    hi: i64,
 }
 
 /// Analysis state, accumulated over one whole function body.
@@ -163,6 +177,29 @@ pub fn collect_loop_bounded_i32_locals(
             out.insert(id);
         }
     }
+    let induction_intervals = out
+        .iter()
+        .filter_map(|id| {
+            let init = *st.declared_init.get(id)?;
+            let bound = *st.bounds.get(id)?;
+            let interval = match bound.dir {
+                Dir::Inc => IntInterval {
+                    lo: init,
+                    hi: bound.extreme,
+                },
+                Dir::Dec => IntInterval {
+                    lo: bound.extreme,
+                    hi: init,
+                },
+            };
+            Some((*id, interval))
+        })
+        .collect();
+    out.extend(collect_bounded_accumulator_locals(
+        stmts,
+        &st,
+        &induction_intervals,
+    ));
     out
 }
 
@@ -864,6 +901,498 @@ fn record_write(
                 Dir::Inc => cur.extreme.max(level.extreme),
                 Dir::Dec => cur.extreme.min(level.extreme),
             };
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pass 3: trip-count x step-magnitude bounds for accumulators (#7123)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct ExecutionBound {
+    loop_depth: u32,
+    executions: Option<u128>,
+}
+
+impl ExecutionBound {
+    fn function_body() -> Self {
+        Self {
+            loop_depth: 0,
+            executions: Some(1),
+        }
+    }
+
+    fn nested_loop(self, trips: Option<u128>) -> Self {
+        Self {
+            loop_depth: self.loop_depth.saturating_add(1),
+            executions: self
+                .executions
+                .zip(trips)
+                .map(|(outer, inner)| outer.saturating_mul(inner)),
+        }
+    }
+}
+
+#[derive(Default)]
+struct AccumulatorState {
+    /// Sum of the worst-case magnitude contribution from every syntactic write
+    /// site. Mutually-exclusive sites are deliberately summed: overestimating
+    /// only declines an optimization, while underestimating would wrap values.
+    contribution: HashMap<u32, u128>,
+    saw_accumulation: HashSet<u32>,
+    disqualified: HashSet<u32>,
+}
+
+fn collect_bounded_accumulator_locals(
+    stmts: &[Stmt],
+    induction: &State,
+    induction_intervals: &HashMap<u32, IntInterval>,
+) -> HashSet<u32> {
+    let mut accumulators = AccumulatorState::default();
+    walk_accumulator_stmts(
+        stmts,
+        ExecutionBound::function_body(),
+        induction,
+        induction_intervals,
+        &mut accumulators,
+    );
+
+    accumulators
+        .saw_accumulation
+        .iter()
+        .filter_map(|&id| {
+            if accumulators.disqualified.contains(&id) || induction.bad_decl.contains(&id) {
+                return None;
+            }
+            let init = *induction.declared_init.get(&id)?;
+            let contribution = *accumulators.contribution.get(&id)?;
+            let worst_magnitude = u128::from(init.unsigned_abs()).saturating_add(contribution);
+            (worst_magnitude <= i32::MAX as u128).then_some(id)
+        })
+        .collect()
+}
+
+/// A direct, guaranteed `for` update. Restricting the trip-count premise to a
+/// single update expression avoids treating a short-circuited or conditional
+/// body step as minimum progress. Extra same-direction body steps can only
+/// reduce the number of iterations; the induction pass has already rejected
+/// any reversing or otherwise-unrecognised write to this counter.
+fn direct_for_update(update: &Expr, st: &State) -> Option<(u32, Dir, u64)> {
+    let (id, dir, magnitude) = match update {
+        Expr::Update { id, op, .. } => (*id, update_dir(*op), 1),
+        Expr::LocalSet(id, value) => {
+            let (dir, magnitude) = classify_step(*id, value, st)?;
+            (*id, dir, magnitude)
+        }
+        _ => return None,
+    };
+    let magnitude = u64::try_from(magnitude).ok()?;
+    (magnitude > 0).then_some((id, dir, magnitude))
+}
+
+fn for_loop_trip_bound(
+    condition: Option<&Expr>,
+    update: Option<&Expr>,
+    st: &State,
+    induction_intervals: &HashMap<u32, IntInterval>,
+) -> Option<u128> {
+    let condition = condition?;
+    let (id, dir, step) = direct_for_update(update?, st)?;
+    if !induction_intervals.contains_key(&id) {
+        return None;
+    }
+    let init = *st.declared_init.get(&id)?;
+    conjunct_guards(condition, st)
+        .into_iter()
+        .filter(|(guarded, _, _)| *guarded == id)
+        .filter_map(|(_, op, bound)| trip_count_for_guard(init, dir, step, op, bound))
+        .min()
+}
+
+fn trip_count_for_guard(init: i64, dir: Dir, step: u64, op: CompareOp, bound: i64) -> Option<u128> {
+    let (distance, agrees) = match (dir, op) {
+        (Dir::Inc, CompareOp::Lt) => ((i128::from(bound) - i128::from(init)).max(0), true),
+        (Dir::Inc, CompareOp::Le) => ((i128::from(bound) - i128::from(init) + 1).max(0), true),
+        (Dir::Dec, CompareOp::Gt) => ((i128::from(init) - i128::from(bound)).max(0), true),
+        (Dir::Dec, CompareOp::Ge) => ((i128::from(init) - i128::from(bound) + 1).max(0), true),
+        _ => (0, false),
+    };
+    if !agrees {
+        return None;
+    }
+    let distance = u128::try_from(distance).ok()?;
+    let step = u128::from(step);
+    Some(distance.saturating_add(step - 1) / step)
+}
+
+fn accumulator_step_magnitude(
+    id: u32,
+    value: &Expr,
+    st: &State,
+    induction_intervals: &HashMap<u32, IntInterval>,
+) -> Option<u128> {
+    let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = value
+    else {
+        return None;
+    };
+    let is_self = |e: &Expr| matches!(e, Expr::LocalGet(other) if *other == id);
+    let step = if is_self(left) {
+        right.as_ref()
+    } else if is_self(right) {
+        left.as_ref()
+    } else {
+        return None;
+    };
+    step_magnitude_bound(step, st, induction_intervals)
+}
+
+fn step_magnitude_bound(
+    e: &Expr,
+    st: &State,
+    induction_intervals: &HashMap<u32, IntInterval>,
+) -> Option<u128> {
+    if let Some(value) = integer_literal(e) {
+        return Some(u128::from(value.unsigned_abs()));
+    }
+    if let Expr::LocalGet(id) = e {
+        if let Some(value) = st.const_ints.get(id).or_else(|| st.module_consts.get(id)) {
+            return Some(u128::from(value.unsigned_abs()));
+        }
+        let interval = induction_intervals.get(id)?;
+        return Some(
+            u128::from(interval.lo.unsigned_abs()).max(u128::from(interval.hi.unsigned_abs())),
+        );
+    }
+    let Expr::Binary { op, left, right } = e else {
+        return None;
+    };
+    match op {
+        // JS remainder has the sign of its dividend and magnitude strictly
+        // below the divisor's magnitude. The dividend must itself be an
+        // integer-proven value; otherwise `1.5 % 1` is fractional and a range
+        // bound alone would not justify integer storage. Zero is excluded
+        // because `% 0` is NaN, not an integer step.
+        BinaryOp::Mod => {
+            let dividend_is_integer = integer_literal(left).is_some()
+                || matches!(left.as_ref(), Expr::LocalGet(id)
+                    if st.const_ints.contains_key(id)
+                        || st.module_consts.contains_key(id)
+                        || induction_intervals.contains_key(id));
+            if !dividend_is_integer {
+                return None;
+            }
+            let divisor = integer_literal(right)?;
+            let magnitude = u128::from(divisor.unsigned_abs());
+            (magnitude > 0).then_some(magnitude - 1)
+        }
+        // Bitwise operands are ToInt32-coerced. For a non-negative literal
+        // mask, the source literal itself is a conservative magnitude bound
+        // even when it exceeds the signed-i32 range.
+        BinaryOp::BitAnd => {
+            let mask = integer_literal(right)
+                .or_else(|| integer_literal(left))
+                .filter(|mask| *mask >= 0)?;
+            Some(mask as u128)
+        }
+        _ => None,
+    }
+}
+
+fn record_accumulator_write(
+    id: u32,
+    value: Option<&Expr>,
+    execution: ExecutionBound,
+    induction: &State,
+    induction_intervals: &HashMap<u32, IntInterval>,
+    accumulators: &mut AccumulatorState,
+) {
+    let magnitude = value
+        .and_then(|value| accumulator_step_magnitude(id, value, induction, induction_intervals));
+    let Some((executions, magnitude)) = execution.executions.zip(magnitude) else {
+        accumulators.disqualified.insert(id);
+        return;
+    };
+    if execution.loop_depth == 0 {
+        accumulators.disqualified.insert(id);
+        return;
+    }
+    accumulators.saw_accumulation.insert(id);
+    let contribution = executions.saturating_mul(magnitude);
+    accumulators
+        .contribution
+        .entry(id)
+        .and_modify(|total| *total = total.saturating_add(contribution))
+        .or_insert(contribution);
+}
+
+fn walk_accumulator_stmts(
+    stmts: &[Stmt],
+    execution: ExecutionBound,
+    induction: &State,
+    induction_intervals: &HashMap<u32, IntInterval>,
+    accumulators: &mut AccumulatorState,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { init, .. } => {
+                if let Some(init) = init {
+                    walk_accumulator_expr(
+                        init,
+                        execution,
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) => walk_accumulator_expr(
+                expr,
+                execution,
+                induction,
+                induction_intervals,
+                accumulators,
+            ),
+            Stmt::Return(value) => {
+                if let Some(value) = value {
+                    walk_accumulator_expr(
+                        value,
+                        execution,
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                walk_accumulator_expr(
+                    condition,
+                    execution,
+                    induction,
+                    induction_intervals,
+                    accumulators,
+                );
+                walk_accumulator_stmts(
+                    then_branch,
+                    execution,
+                    induction,
+                    induction_intervals,
+                    accumulators,
+                );
+                if let Some(else_branch) = else_branch {
+                    walk_accumulator_stmts(
+                        else_branch,
+                        execution,
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                // This first implementation intentionally derives execution
+                // counts only from a `for` loop's guaranteed update. A while
+                // body step may be skipped by control flow; treating it as
+                // minimum progress would make the trip bound unsound.
+                let unknown = execution.nested_loop(None);
+                walk_accumulator_expr(
+                    condition,
+                    unknown,
+                    induction,
+                    induction_intervals,
+                    accumulators,
+                );
+                walk_accumulator_stmts(body, unknown, induction, induction_intervals, accumulators);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    walk_accumulator_stmts(
+                        std::slice::from_ref(init.as_ref()),
+                        execution,
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+                let trips = for_loop_trip_bound(
+                    condition.as_ref(),
+                    update.as_ref(),
+                    induction,
+                    induction_intervals,
+                );
+                let loop_execution = execution.nested_loop(trips);
+                if let Some(condition) = condition {
+                    // The condition executes once more than the body and may
+                    // short-circuit. Writes there are outside this proof.
+                    walk_accumulator_expr(
+                        condition,
+                        execution.nested_loop(None),
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+                if let Some(update) = update {
+                    walk_accumulator_expr(
+                        update,
+                        loop_execution,
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+                walk_accumulator_stmts(
+                    body,
+                    loop_execution,
+                    induction,
+                    induction_intervals,
+                    accumulators,
+                );
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                walk_accumulator_stmts(
+                    body,
+                    execution,
+                    induction,
+                    induction_intervals,
+                    accumulators,
+                );
+                if let Some(catch) = catch {
+                    walk_accumulator_stmts(
+                        &catch.body,
+                        execution,
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+                if let Some(finally) = finally {
+                    walk_accumulator_stmts(
+                        finally,
+                        execution,
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                walk_accumulator_expr(
+                    discriminant,
+                    execution,
+                    induction,
+                    induction_intervals,
+                    accumulators,
+                );
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        walk_accumulator_expr(
+                            test,
+                            execution,
+                            induction,
+                            induction_intervals,
+                            accumulators,
+                        );
+                    }
+                    walk_accumulator_stmts(
+                        &case.body,
+                        execution,
+                        induction,
+                        induction_intervals,
+                        accumulators,
+                    );
+                }
+            }
+            Stmt::Labeled { body, .. } => walk_accumulator_stmts(
+                std::slice::from_ref(body.as_ref()),
+                execution,
+                induction,
+                induction_intervals,
+                accumulators,
+            ),
+            _ => {}
+        }
+    }
+}
+
+fn walk_accumulator_expr(
+    expr: &Expr,
+    execution: ExecutionBound,
+    induction: &State,
+    induction_intervals: &HashMap<u32, IntInterval>,
+    accumulators: &mut AccumulatorState,
+) {
+    match expr {
+        Expr::LocalSet(id, value) => {
+            record_accumulator_write(
+                *id,
+                Some(value),
+                execution,
+                induction,
+                induction_intervals,
+                accumulators,
+            );
+            walk_accumulator_expr(
+                value,
+                execution,
+                induction,
+                induction_intervals,
+                accumulators,
+            );
+        }
+        Expr::Update { id, .. } => record_accumulator_write(
+            *id,
+            None,
+            execution,
+            induction,
+            induction_intervals,
+            accumulators,
+        ),
+        Expr::Closure { body, .. } => {
+            // A closure can be called any number of times. Disqualify every
+            // local it writes in this enclosing analysis; its own codegen pass
+            // will independently analyse locals owned by the closure.
+            let mut written = HashSet::new();
+            collect_written_locals(body, &mut written);
+            accumulators.disqualified.extend(written);
+            let unknown = execution.nested_loop(None);
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                walk_accumulator_expr(child, unknown, induction, induction_intervals, accumulators)
+            });
+        }
+        _ => {
+            if let Some(id) = with_set_fallback_local(expr) {
+                accumulators.disqualified.insert(id);
+            }
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                walk_accumulator_expr(
+                    child,
+                    execution,
+                    induction,
+                    induction_intervals,
+                    accumulators,
+                )
+            });
         }
     }
 }
