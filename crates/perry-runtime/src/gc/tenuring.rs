@@ -222,9 +222,16 @@ pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
 pub(super) fn influx_driven_nursery_cap_bytes() -> usize {
     let constant_band =
         gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize);
-    constant_band.saturating_mul(nursery_cap_object_scale_permille(
-        mean_surviving_object_bytes(),
-    )) / 1000
+    // The multiply is done in u64 deliberately. `usize::saturating_mul` on an
+    // ILP32 target (watchOS/visionOS are 32-bit) would saturate a 64 MB band
+    // against a 1000-per-mille factor at `u32::MAX` and the following divide
+    // would then hand back ~4 MB — a silent 16x cap collapse on exactly the
+    // devices with the least headroom. A 64-bit intermediate cannot overflow:
+    // the band is bounded by 4 GB and the factor by 1000.
+    let scaled = constant_band as u64
+        * nursery_cap_object_scale_permille(mean_surviving_object_bytes()) as u64
+        / 1000;
+    scaled.min(usize::MAX as u64) as usize
 }
 
 /// #7929: the mean size of the objects the last copying minor actually moved,
