@@ -1,0 +1,4 @@
+main: mainArr mainObj
+spawn agent: undefined/undefined/arr1/obj1 match: true
+parallelMap count: 4 allMatch: true
+main after: mainArr mainObj undefined undefined
