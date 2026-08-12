@@ -61,7 +61,7 @@ pub(super) fn visit(
     });
 
     if !addresses_agree(&fast, &slow) {
-        panic!("{}", report(index, &fast, &slow));
+        panic!("{}", report(index, &fast, &slow, fast_stats, stats));
     }
 
     stats.fp_walks = fast_stats.fp_walks;
@@ -84,7 +84,13 @@ fn unique_addresses(roots: &[ResolvedRoot]) -> Vec<usize> {
 
 /// The full disagreement, one line per root, plus the prologue evidence for
 /// every function whose frame either walker resolved an SP-relative root in.
-fn report(index: &StackMapIndex, fast: &[ResolvedRoot], slow: &[ResolvedRoot]) -> String {
+fn report(
+    index: &StackMapIndex,
+    fast: &[ResolvedRoot],
+    slow: &[ResolvedRoot],
+    fast_stats: NativeStackWalkStats,
+    slow_stats: NativeStackWalkStats,
+) -> String {
     let fast_addresses = unique_addresses(fast);
     let slow_addresses = unique_addresses(slow);
     let mut out = String::new();
@@ -114,6 +120,20 @@ fn report(index: &StackMapIndex, fast: &[ResolvedRoot], slow: &[ResolvedRoot]) -
              frame; fp-chain minus unwinder = {deltas:?} byte(s)"
         );
     }
+    // How far each walk got. A walker that stopped early reaches fewer
+    // frames and therefore fewer records, and its roots come from the INNER
+    // part of the stack — which presents as a constant offset too, but is a
+    // completely different bug from a wrong frame base. These two counts are
+    // what tell them apart.
+    let _ = writeln!(
+        out,
+        "  frames visited: fp-chain {}, unwinder {}; records matched: \
+         fp-chain {}, unwinder {}",
+        fast_stats.frames_visited,
+        slow_stats.frames_visited,
+        fast_stats.records_matched,
+        slow_stats.records_matched,
+    );
     let _ = writeln!(out, "\n  fp-chain roots:");
     for root in fast {
         describe(&mut out, index, root);
@@ -210,6 +230,13 @@ mod tests {
         }
     }
 
+    fn stats(frames_visited: usize) -> NativeStackWalkStats {
+        NativeStackWalkStats {
+            frames_visited,
+            ..NativeStackWalkStats::default()
+        }
+    }
+
     /// An index that vouches for NO function address, so the report never
     /// dereferences the synthetic addresses above.
     fn empty_index() -> StackMapIndex {
@@ -240,7 +267,7 @@ mod tests {
         let fast = vec![root(0x1060, 0x1058, 8)];
         let slow = vec![root(0x1000, 0xFF8, 8)];
         assert!(!addresses_agree(&fast, &slow));
-        let text = report(&empty_index(), &fast, &slow);
+        let text = report(&empty_index(), &fast, &slow, stats(3), stats(4));
         assert!(
             text.contains("base disagreement"),
             "equal slot counts must be reported as a base disagreement: {text}"
@@ -259,7 +286,7 @@ mod tests {
     fn a_missed_frame_is_not_reported_as_a_base_disagreement() {
         let fast = vec![root(0x1000, 0xFF8, 8)];
         let slow = vec![root(0x1000, 0xFF8, 8), root(0x2000, 0x1FF8, 8)];
-        let text = report(&empty_index(), &fast, &slow);
+        let text = report(&empty_index(), &fast, &slow, stats(3), stats(4));
         assert!(
             !text.contains("base disagreement"),
             "different slot counts mean a frame was missed or invented: {text}"
@@ -277,7 +304,7 @@ mod tests {
     fn an_unvouched_function_address_is_never_dereferenced() {
         let index = empty_index();
         assert!(!map_vouches_for(&index, 0x3000));
-        let text = report(&index, &[root(0x1000, 0xFF8, 8)], &[]);
+        let text = report(&index, &[root(0x1000, 0xFF8, 8)], &[], stats(3), stats(3));
         assert!(
             !text.contains("prologue words"),
             "no prologue may be dumped for an address the map does not list: {text}"
