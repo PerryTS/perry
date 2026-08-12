@@ -372,3 +372,77 @@ load-bearing in a guard, will need E pinned.
    write PIC's missing epoch check — which matters *less* after rung 1 (that PIC
    now mostly sees id tokens) but is still an unintended asymmetry.
 6. Sites E and G have no behavioural pin (§5b). Rung 3 needs E pinned.
+
+---
+
+## 7. Gap-suite triage (`scripts/run_gap_tests.sh`, 532/554 = 96.0 %)
+
+The snapshot ratchet reported 8 regressions, 10 status changes and 1 improvement.
+None of it may be attributed without an A/B, so:
+
+### 7a. Six of the eight are #7932 — signature-matched, not assumed
+
+| test | exit | panic site |
+|---|--:|---|
+| `test_gap_fetch_request_from_node_incoming_message` | 134 | `perry-ext-http/src/server/server.rs:911` |
+| `test_gap_http_client_no_redirect_follow` | 134 | `perry-ext-http/src/server/server.rs:911` |
+| `test_gap_http_overloads_3226plus` | 134 | `perry-ext-http/src/server/server.rs:911` |
+| `test_gap_http_req_async_iterator` | 134 | `perry-ext-http/src/server/server.rs:911` |
+| `test_gap_http_res_socket_writable_onfinished` | 134 | `perry-ext-http/src/server/server.rs:911` |
+| `test_gap_net_connect_bound_value` | 134 | `tokio-1.53.1/.../net/tcp/listener.rs:304` |
+
+All six: *"there is no reactor running, must be called from the context of a
+Tokio 1.x runtime"*, zero stdout before aborting. This reproduces #7932's table
+**exactly**, including the one detail that discriminates it from a generic
+"http tests crash" — five share `server.rs:911` while `net_connect_bound_value`
+aborts one frame lower inside tokio's own `TcpListener`. #7932 was A/B'd against
+two compilers when filed (3 runs each, `exit=134` 6/6) and closed as a duplicate
+of #7629 (release-profile ext-staticlib link defect). It is deliberately **not**
+in `gap_snapshot.json`, which is why the gate reads it as `pass -> crash` and why
+`run_gap_tests.sh` is red on `main`.
+
+Retired: pre-existing, tracked, not rung 1.
+
+### 7b. ★ A stale-archive trap I walked into inside my own target dir
+
+`libperry_ext_http.a` (20:06) and `libperry_ext_zlib.a` (20:07) in
+`$HOME/cargo-targets/rung1/release` were built during my FIRST gap run — the one
+against the `ka_ok`-sabotaged compiler (§5c) — and the second run **reused them**
+rather than rebuilding, because they already existed. CI evicts exactly these
+before its parity job (`rm -rf target/perry-auto-* target/debug/libperry_ext_*.a`,
+#5892); an ad-hoc `PERRY_SKIP_BUILD=1` run does not.
+
+Every "regression" and every status change maps to one of the ten ext archives
+present in that directory (http, net, zlib, cron, dayjs, moment, ratelimit,
+slugify, exponential_backoff, events), which is what made the mapping visible.
+Re-running the two parity failures with `PERRY_RUNTIME_DIR` pointed at a clean
+directory (no ext archives, `PERRY_NO_AUTO_OPTIMIZE=1`) still diverges, so those
+two are NOT stale-archive artifacts — but the general lesson stands and is worth
+adding to the runbook: **a reused target dir carries ext staticlibs across arms,
+and they are invisible to `git status` just like the runtime `.a`.**
+
+### 7c. Ten `node_fail -> parity_fail` are oracle-coverage, not Perry
+
+A fresh worktree has no `node_modules`, a known phantom-regression source for
+this harness, so I symlinked the main checkout's. That changes which tests the
+NODE oracle can run, which is exactly the shape of a `node_fail -> parity_fail`
+transition. Both arms share the symlink, so the A/B controls for it. (Running
+those tests' node command by hand from the worktree root still gives
+`ERR_MODULE_NOT_FOUND`, so the harness resolves modules from a different CWD —
+either way it is oracle coverage, not Perry behaviour.)
+
+### 7d. Two remain under A/B
+
+`test_gap_specabi_reassign` (`plain: 0 0 2` vs node `99 101 2`) and
+`test_gap_zlib_3285_params` (zlib argument validation: `no-throw` vs
+`ERR_OUT_OF_RANGE`/`ERR_INVALID_ARG_TYPE`). Neither is in `gap_snapshot.json`,
+which — per #7932 — neither convicts nor exonerates, since the snapshot demonstrably
+does not enumerate every currently-red test. Both reproduce deterministically.
+
+Prior: neither touches an object-shape surface. `zlib_3285_params` is argument
+validation; `specabi_reassign` is a typed-array binding reassigned via `as any`,
+whose subject is the #6906/#7052 spec-ABI invalidation in codegen — no classes,
+no `delete`, no keys array. But a prior is not evidence, so the control arm
+(all seven rung-1 `class_id` gates restored, same tree otherwise — a tighter
+control than a pristine `main` build, and it costs no extra disk) is being built
+and both tests re-run on it. Verdict recorded below.
