@@ -12,12 +12,11 @@ different, hand-curated performance section and intentionally dropped the
 auto-generated public-node-bun block. ``public_baseline.py check`` still *requires*
 that block, so it fails on every PR ("README generated markers are missing").
 
-This policy lives in a SEPARATE module on purpose: ``public_baseline.py`` is a
-fingerprinted harness file (``HARNESS_PATHS``), so relaxing the check there would
-change ``harness_fingerprint`` and trip ``validate_public``'s "harness changed;
-regenerate" guard — which can't be satisfied without re-running the full
-Node/Bun/Perry benchmark suite. Reusing its functions from here leaves the file,
-and therefore the fingerprint, untouched.
+This policy lives in a SEPARATE module on purpose: the checker and assembler are
+plumbing rather than measurement inputs. ``HARNESS_PATHS`` fingerprints the
+declarative measurement config and correctness oracle instead, while this thin
+wrapper reuses the same validation functions and cannot drift into a second
+implementation of the freshness policy.
 """
 
 from __future__ import annotations
