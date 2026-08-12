@@ -395,6 +395,17 @@ pub extern "C" fn js_object_delete_field(
         //    the case the shape word had no way to express: `class_id` is
         //    preserved by design (vtable/instanceof identity) and the keys
         //    pointer was the only compaction evidence in the header.
+        //
+        //    ★ REDUNDANT ON EVERY CURRENT PATH, deliberately kept. The clone
+        //    above is a FRESH `js_array_alloc`, so `set_object_keys_array`
+        //    already saw a pointer CHANGE and cleared the stamp there. Per-site
+        //    sabotage confirms it: gating either clear alone breaks no test;
+        //    gating BOTH breaks
+        //    `delete_mints_a_fresh_shape_id_for_a_class_instance`. This one is
+        //    the only clear that would still fire if a future path compacts
+        //    IN PLACE (which is what the comment above describes and what
+        //    `shape_slot_lookup`'s shrink check already anticipates), so
+        //    deleting it would silently make that path wrong.
         crate::object::shapes::clear_object_shape_stamp(obj);
 
         1

@@ -215,17 +215,103 @@ post-delete clone, identical in kind to a plain object's.
 
 ## 4. Validation
 
-### 4a. The discriminating shape (§4b of SHAPE-NOTES) — see §5 below
+Compiler `$HOME/cargo-targets/rung1/release/perry` (106 MB — the size that
+confirms the `-p perry -p perry-runtime-static -p perry-stdlib-static` set;
+100 MB would mean the wrappers were dropped and cargo features re-unified),
+`PERRY_RUNTIME_DIR` pinned to the same dir, `.a` mtimes verified after the edit.
 
-### 4b. Unit suite
+| gate | result |
+|---|---|
+| `cargo test --lib -p perry-runtime` (CI's per-PR scope for this diff) | **2250 passed, 0 failed, 4 ignored** |
+| 19-app corpus, byte-exact + exit 0 | **19/19** |
+| …under `PERRY_GC_PROTECT_FROMSPACE=1 _DEPTH=800` | **19/19** |
+| …under `PERRY_GC_VERIFY_EVACUATION=1` | **19/19** |
+| `probe_delete_isolate_ka.ts` vs node 26.5.1 | byte-identical |
 
-`cargo test -p perry-runtime --lib`: **2249 passed, 0 failed, 4 ignored**.
+### 4a. The discriminating shape — and why it is NOT vacuous for rung 1
+
+SHAPE-NOTES §4b's fixture (`≥4 fields, delete the FIRST, read a mid field,
+non-numeric declared types`) was built to isolate `ka_ok` for rung 3. It earns
+its place here for a **different** reason:
+
+★ **Rung 1 makes a delete-compacted class instance read-PIC-cacheable for the
+first time.** Before it, such an instance's keys array is a private clone, so
+`keys_cacheable_for_pic` (SHAPE_SHARED only) refused it and every read fell to
+the slow path forever. Rung 1 stamps it, so it primes an id token and the
+emitted hit path starts serving it. `probe_delete_isolate_ka.ts` is precisely a
+program that reads `s.b` / `s.c` off a compacted instance — i.e. the first
+program in which that new surface is exercised. It is a real gate here, not a
+borrowed one.
+
+The runtime twin is
+`ic_miss::a_compacted_class_instance_primes_a_token_a_pristine_sibling_cannot_match`,
+which asserts the compacted instance primes a token a pristine sibling cannot
+match **and** that the slots really differ (2 vs 1), so it cannot pass by both
+being unprimed.
 
 ---
 
 ## 5. Sabotage-verify — fix committed FIRST
 
-Commit `c0d26ba72` landed before any sabotage, so `git checkout --` restores the
-sabotage, never the fix.
+Commits `c0d26ba72` / `63c44b23e` landed before any sabotage, so
+`git checkout --` restores the sabotage, never the fix.
 
-(filled in below as it runs)
+### 5a. `ka_ok` sabotage ON TOP of rung 1 — the fixture still discriminates
+
+Dropped `ka_ok` from all three emitters in
+`perry-codegen/src/expr/class_field_inline_guard.rs` (the `acc &= ka_ok`
+conjunctions and the two subclass-arm halves), rebuilt the compiler only, same
+runtime archives.
+
+| arm | `S post b/c` | `S2 after write` | `N post b/c` (control) |
+|---|---|---|---|
+| node 26.5.1 | `B C` | `B2 C` | `2 3` |
+| **rung 1, base** | `B C` | `B2 C` | `2 3` |
+| **rung 1, `ka_ok` sabotaged** | **`C D`** | **`B2 D`** | `2 3` |
+
+Exactly SHAPE-NOTES §4b's table, reproduced on top of rung 1. Two things follow:
+rung 1 did not change what `ka_ok` uniquely covers (so rung 3's gate is still
+the right one), and the numeric twin stays correct on BOTH arms, which is the
+control proving the fixture measures `ka_ok` and not something else.
+
+### 5b. Per-site sabotage of rung 1 itself — which test pins which site
+
+Each relaxed site had its pre-rung-1 `class_id == 0` gate restored **one at a
+time**, then `cargo test --lib -p perry-runtime`:
+
+| site | catcher(s) |
+|---|---|
+| A `set_object_keys_array` clear | **none alone** — see below |
+| B `delete_rest` clear | **none alone** — see below |
+| **A + B together** (= the pre-rung-1 state) | `delete_mints_a_fresh_shape_id_for_a_class_instance` |
+| C `ic_miss` mint | `a_compacted_class_instance_primes_a_token_…` |
+| D `ic_miss` token kind | `a_class_instance_primes_an_id_token_after_rung1`, `a_compacted_class_instance_primes_a_token_…` |
+| E `get_field_by_name_tail` FIELD_CACHE key | **none** — accelerator-only, by construction |
+| F `get_field_by_name_tail` mint | `delete_mints_…`, `class_siblings_share_one_shape_id_…`, `a_stamped_class_instance_still_resolves_a_three_level_parent_chain` |
+| G `field_set_by_name/tail` first-key stamp | **none** — earliness-only, by construction |
+
+★ **A and B are each other's backup, and the sabotage is how I learned it.**
+`js_object_delete_field` **always** allocates a fresh clone
+(`js_array_alloc` → `set_object_keys_array`, `delete_rest.rs:302-322`), so the
+keys POINTER always changes on a delete and site A fires. Site B exists for an
+in-place compaction that no current path produces. SHAPE-NOTES §1b calls B "the
+whole of today's shape transition on delete"; that is half right — A does it
+first. Both were present (class-gated) before this PR, so the redundancy is
+pre-existing, not introduced here. Recorded rather than removed: B is the only
+clear that would still fire if a future path compacts without reallocating, and
+deleting it would silently make that path wrong.
+
+The append case is why A alone is not load-bearing: SHAPE-NOTES' invariant
+allows a same-pointer append to KEEP its stamp (slots are append-only, existing
+mappings stay valid), and a *clone*-on-append re-mints an id that describes the
+same prefix. The one key-set change a stamp must not survive is the
+**compaction**, and that is exactly where A and B overlap.
+
+**E and G are accelerator-only and I am not claiming otherwise.** E swaps the
+FIELD_CACHE key from the keys address to the stamp; every hit re-validates the
+stored key, so the delta is that entries survive grow-reallocs and GC moves —
+faster, never different. G moves a class instance's stamp earlier (to the
+null→first-key edge) than the resolve paths would; sabotaging it only delays the
+stamp. Neither has a behavioural assertion, and building a hit-counter probe for
+them was judged out of proportion for rung 1. Rung 3, which makes the id
+load-bearing in a guard, will need E pinned.
