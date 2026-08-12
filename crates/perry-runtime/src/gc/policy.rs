@@ -108,8 +108,55 @@ pub(super) fn young_scavenge_cap_due() -> bool {
     if !nursery_cap_active() {
         return false;
     }
-    crate::arena::copying_from_space_in_use_bytes()
-        >= super::tenuring::scavenge_nursery_cap_effective_bytes()
+    crate::arena::copying_from_space_in_use_bytes() >= scavenge_nursery_cap_dueness_bytes()
+}
+
+/// The cap value [`young_scavenge_cap_due`] compares against.
+///
+/// Split out only so a test can make the cap due without allocating the real
+/// 16 MB — a PER-THREAD override next to the reader, the shape support.rs
+/// mandates for anything a test needs to move (never the process environment,
+/// which is shared by every libtest thread; see #7946). It deliberately does
+/// NOT feed `effective_next_arena_trigger`: this is about *dueness*, and a test
+/// that also moved the trigger clamp would be changing two things at once.
+fn scavenge_nursery_cap_dueness_bytes() -> usize {
+    #[cfg(test)]
+    if let Some(bytes) = GC_NURSERY_CAP_TEST_DUE_BYTES.with(Cell::get) {
+        return bytes;
+    }
+    super::tenuring::scavenge_nursery_cap_effective_bytes()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override for [`scavenge_nursery_cap_dueness_bytes`].
+    static GC_NURSERY_CAP_TEST_DUE_BYTES: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// RAII override making the young-gen scavenge cap due at `bytes` of from-space
+/// occupancy on this thread (#7909).
+#[cfg(test)]
+pub(super) struct ScavengeNurseryCapTestGuard {
+    previous: Option<usize>,
+}
+
+#[cfg(test)]
+impl ScavengeNurseryCapTestGuard {
+    pub(super) fn due_at_bytes(bytes: usize) -> Self {
+        let previous = GC_NURSERY_CAP_TEST_DUE_BYTES.with(|cell| {
+            let previous = cell.get();
+            cell.set(Some(bytes));
+            previous
+        });
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScavengeNurseryCapTestGuard {
+    fn drop(&mut self) {
+        GC_NURSERY_CAP_TEST_DUE_BYTES.with(|cell| cell.set(self.previous));
+    }
 }
 
 /// Is the scavenge nursery cap in force?
@@ -2344,7 +2391,14 @@ pub fn gc_check_trigger() {
             || super::roots::registered_root_scanners_block_budgeted_gc())
     {
         let direct_kind = match gc_budgeted_due_trigger() {
-            Some(BudgetedGcTrigger::ArenaBytes) => Some(GcTriggerKind::ArenaBytes),
+            // #7909: `YoungScavengeCap` is a nursery-churn trigger exactly like
+            // `ArenaBytes` here — this arm's whole job is to route nursery
+            // pressure to a collection that can actually reclaim it, so the two
+            // must not diverge at THIS site. They diverge only at the budgeted
+            // stepper's start decision.
+            Some(BudgetedGcTrigger::ArenaBytes | BudgetedGcTrigger::YoungScavengeCap) => {
+                Some(GcTriggerKind::ArenaBytes)
+            }
             Some(BudgetedGcTrigger::MallocCount) => Some(GcTriggerKind::MallocCount),
             _ => None,
         };
@@ -2551,10 +2605,20 @@ struct BudgetedGcCycle {
     rebaseline: BudgetedGcRebaseline,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BudgetedGcTrigger {
     OldReclaim,
     ArenaBytes,
+    /// The young-generation scavenge cap ([`young_scavenge_cap_due`]).
+    ///
+    /// Split out of `ArenaBytes` by #7909. Every *collection* treats the two
+    /// identically — the split exists solely so the budgeted stepper can tell
+    /// them apart at the moment it decides whether to START a cycle, because
+    /// the quantity this one tests (`copying_from_space_in_use_bytes`) is one
+    /// a budgeted low-pause NON-MOVING cycle cannot lower. See
+    /// [`nursery_cap_active`] for why: a non-moving minor sweeps in place and
+    /// leaves from-space occupied.
+    YoungScavengeCap,
     MallocCount,
 }
 
@@ -2612,7 +2676,7 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
         return Some(BudgetedGcTrigger::ArenaBytes);
     }
     if young_scavenge_cap_due() {
-        return Some(BudgetedGcTrigger::ArenaBytes);
+        return Some(BudgetedGcTrigger::YoungScavengeCap);
     }
 
     let malloc_count = malloc_object_count();
@@ -2679,7 +2743,11 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
     let kind = match gc_budgeted_due_trigger() {
-        Some(BudgetedGcTrigger::ArenaBytes) => GcTriggerKind::ArenaBytes,
+        // #7909: the nursery cap and the whole-arena trigger are the same
+        // collection here — this IS the evacuating collector the cap is for.
+        Some(BudgetedGcTrigger::ArenaBytes | BudgetedGcTrigger::YoungScavengeCap) => {
+            GcTriggerKind::ArenaBytes
+        }
         Some(BudgetedGcTrigger::MallocCount) => GcTriggerKind::MallocCount,
         // ★ #7148: old-gen reclaim used to be the alloc-point arm's business
         // exclusively — it ran a direct full mark-sweep behind a forced
@@ -3127,7 +3195,10 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
                 progress_kind,
             )
         }
-        BudgetedGcTrigger::ArenaBytes => {
+        // #7909: identical treatment — a cycle that DOES start for nursery
+        // pressure (a non-budgeted one, which can evacuate) is the same
+        // arena-bytes collection it always was.
+        BudgetedGcTrigger::ArenaBytes | BudgetedGcTrigger::YoungScavengeCap => {
             let rebaseline = BudgetedGcRebaseline::ArenaBytes {
                 pre_in_use: crate::arena::arena_in_use_bytes(),
             };
@@ -3300,6 +3371,19 @@ fn gc_budgeted_step_work_units_inner(work_units: usize) -> JsGcStepResult {
     gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
 }
 
+/// #7909: arm the precise-root safepoint for nursery pressure the budgeted
+/// stepper just declined, mirroring `gc_check_trigger`'s deferral arm exactly
+/// (including the arena baseline the slack valve measures from — leaving that
+/// stale would make `moving_defer_within_slack` read an already-exceeded
+/// baseline and disable deferral for the rest of the process, the #7024 shape).
+fn defer_nursery_cap_to_precise_safepoint() {
+    if GC_SAFEPOINT_PENDING.with(Cell::get) {
+        return;
+    }
+    GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(crate::arena::arena_total_bytes()));
+    set_safepoint_pending(true);
+}
+
 fn gc_budgeted_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
@@ -3316,10 +3400,52 @@ fn gc_budgeted_step_work_units_inner_with_progress(
     };
 
     if !gc_budgeted_cycle_active() {
-        if gc_budgeted_due_trigger().is_none() {
+        let Some(due) = gc_budgeted_due_trigger() else {
             super::instruments::note_budgeted_step_skip(
                 super::instruments::BudgetedStepSkip::NoTrigger,
             );
+            return gc_idle_step_result();
+        };
+        if due == BudgetedGcTrigger::YoungScavengeCap && start_progress_kind.is_budgeted() {
+            // ★ #7909. Starting a budgeted cycle here is strictly worse than
+            // starting nothing, and it is self-sustaining.
+            //
+            // A budgeted cycle is `low_pause_non_moving` by construction
+            // (`progress_kind.is_budgeted()` at the collection site), so it
+            // sweeps in place and CANNOT lower
+            // `copying_from_space_in_use_bytes()` — the exact quantity
+            // `young_scavenge_cap_due()` tests. So the trigger it was started
+            // for survives the cycle. Worse, while the cycle is open
+            // `gc_safepoint_moving_minor` rejects every precise safepoint at
+            // its `budgeted` entry guard, so the ONE collector that can lower
+            // that quantity is locked out for the cycle's whole life. If the
+            // host's step cadence cannot finish the cycle — 2048 work units
+            // per microtask drain, and `asyncpipe` reaches ~15 drains after the
+            // cap goes due — the cycle never completes, is never cancelled, and
+            // the composition is permanent: cap due -> cycle started -> moving
+            // minor blocked -> nothing reclaims -> cap still due. The mutator
+            // then pays the SATB mark barrier for the rest of the process
+            // (measured: 22.9-42.5 ms of a ~127 ms program) for a collection
+            // that reclaims nothing, and the `[gc]` trace stays EMPTY because
+            // it is written by the completion path.
+            //
+            // The alloc-point arm already routes nursery pressure away from
+            // this stepper for the same reason (`gc_check_trigger`'s direct /
+            // deferred arm, which runs before the mutator assist). This is that
+            // asymmetry closed: the host-safepoint path now defers nursery
+            // pressure to the precise safepoint too, where the copying minor
+            // runs with rewritable roots and actually reclaims it.
+            //
+            // Note what is NOT skipped: `young_scavenge_cap_due()` is false
+            // unless `nursery_cap_active()`, which IS
+            // `gc_moving_loop_polls_enabled()`. So the cap can only be the due
+            // trigger in exactly the configuration where the precise route
+            // exists. When it does not, this branch is unreachable and the cap
+            // never fires at all.
+            super::instruments::note_budgeted_step_skip(
+                super::instruments::BudgetedStepSkip::NurseryCapUndischargeable,
+            );
+            defer_nursery_cap_to_precise_safepoint();
             return gc_idle_step_result();
         }
         if gc_budgeted_start_blocked() {

@@ -216,12 +216,24 @@ pub(crate) enum BudgetedStepSkip {
     NoTrigger,
     StartBlocked,
     ResumeBlocked,
+    /// #7909: a cycle was NOT started because the only due trigger was the
+    /// young-generation scavenge cap, which a budgeted (low-pause non-moving)
+    /// cycle cannot discharge. The pressure is deferred to the precise
+    /// safepoint instead, where the copying minor can evacuate it.
+    ///
+    /// This is the one arm that is a *refusal*, not a stall: every other arm
+    /// leaves the trigger owned by a cycle that will eventually run, while this
+    /// one hands ownership to a different collector. It is counted because the
+    /// alternative — starting the cycle — is invisible in the `[gc]` trace, so
+    /// without a counter neither state can be told from "nothing was due".
+    NurseryCapUndischargeable,
 }
 
 static SKIP_REENTRANT: AtomicU64 = AtomicU64::new(0);
 static SKIP_NO_TRIGGER: AtomicU64 = AtomicU64::new(0);
 static SKIP_START_BLOCKED: AtomicU64 = AtomicU64::new(0);
 static SKIP_RESUME_BLOCKED: AtomicU64 = AtomicU64::new(0);
+static SKIP_NURSERY_CAP_UNDISCHARGEABLE: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 pub(crate) fn note_budgeted_step_skip(reason: BudgetedStepSkip) {
@@ -230,6 +242,7 @@ pub(crate) fn note_budgeted_step_skip(reason: BudgetedStepSkip) {
         BudgetedStepSkip::NoTrigger => &SKIP_NO_TRIGGER,
         BudgetedStepSkip::StartBlocked => &SKIP_START_BLOCKED,
         BudgetedStepSkip::ResumeBlocked => &SKIP_RESUME_BLOCKED,
+        BudgetedStepSkip::NurseryCapUndischargeable => &SKIP_NURSERY_CAP_UNDISCHARGEABLE,
     }
     .fetch_add(1, Ordering::Relaxed);
 }
@@ -242,6 +255,12 @@ pub fn budgeted_step_skips() -> (u64, u64, u64, u64) {
         SKIP_START_BLOCKED.load(Ordering::Relaxed),
         SKIP_RESUME_BLOCKED.load(Ordering::Relaxed),
     )
+}
+
+/// #7909: budgeted cycles declined because only the undischargeable young-gen
+/// scavenge cap was due. Each one is a stalled cycle that did NOT happen.
+pub fn budgeted_step_nursery_cap_deferrals() -> u64 {
+    SKIP_NURSERY_CAP_UNDISCHARGEABLE.load(Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------

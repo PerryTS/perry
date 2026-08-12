@@ -1164,7 +1164,8 @@ fn emit_incremental_liveness_diag() {
         "[gc-incremental] cycle_starts={} steps={} completions={} active_at_exit={} \
          mark_barrier_arms={} mark_barrier_armed_us={} \
          skips(reentrant={reentrant} no_trigger={no_trigger} start_blocked={start_blocked} \
-         resume_blocked={resume_blocked}) safepoints_blocked_by_budgeted={} \
+         resume_blocked={resume_blocked} nursery_cap_deferred={}) \
+         safepoints_blocked_by_budgeted={} \
          safepoints_blocked(in_alloc={blocked_alloc} unsafe_zone={blocked_unsafe_zone} \
          root_lock={blocked_root_lock}) \
          copying_minors={} loop_polls={} poll_arm_events={} \
@@ -1175,6 +1176,7 @@ fn emit_incremental_liveness_diag() {
         policy::gc_budgeted_cycle_active(),
         instruments::mark_barrier_arm_events(),
         instruments::mark_barrier_armed_us(),
+        instruments::budgeted_step_nursery_cap_deferrals(),
         instruments::moving_safepoints_blocked_by_budgeted(),
         instruments::copying_minor_cycles(),
         instruments::loop_polls_reached(),
