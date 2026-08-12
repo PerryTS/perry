@@ -48,7 +48,7 @@ const BARRIER_CALL: &str = "call void @js_write_barrier_slot";
 /// These tests describe DEFAULT barrier emission. `PERRY_WRITE_BARRIERS=0`
 /// removes every barrier and would make all of them vacuously "pass" the
 /// negative half while the positive half fails for the wrong reason.
-fn assert_default_barrier_env_not_disabled() {
+pub(super) fn assert_default_barrier_env_not_disabled() {
     assert!(
         !matches!(
             std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
@@ -58,7 +58,7 @@ fn assert_default_barrier_env_not_disabled() {
     );
 }
 
-fn ir_opts() -> CompileOptions {
+pub(super) fn ir_opts() -> CompileOptions {
     CompileOptions {
         target: None,
         is_entry_module: true,
@@ -239,6 +239,12 @@ fn ir() -> String {
 /// slicing text around the first mention of the barrier name — the first
 /// mention IS the branch, and a slice starting there is empty.
 fn branch_into_barrier(ir: &str) -> Option<(String, String)> {
+    branch_into_block(ir, BARRIER_BLOCK)
+}
+
+/// [`branch_into_barrier`] for any block name — #7715 reuses it for the
+/// element-store gate (`expr/index_set_barrier_tests.rs`).
+pub(super) fn branch_into_block(ir: &str, block: &str) -> Option<(String, String)> {
     let mut current_body: Vec<&str> = Vec::new();
     for line in ir.lines() {
         let trimmed = line.trim_end();
@@ -247,7 +253,7 @@ fn branch_into_barrier(ir: &str) -> Option<(String, String)> {
             continue;
         }
         let t = trimmed.trim_start();
-        if t.starts_with("br i1 ") && t.contains(&format!("label %{BARRIER_BLOCK}")) {
+        if t.starts_with("br i1 ") && t.contains(&format!("label %{block}")) {
             return Some((trimmed.to_string(), current_body.join("\n")));
         }
         current_body.push(line);
@@ -256,7 +262,7 @@ fn branch_into_barrier(ir: &str) -> Option<(String, String)> {
 }
 
 /// Body of the named block (label definition to its terminator, inclusive).
-fn block_body(ir: &str, label_prefix: &str) -> Option<String> {
+pub(super) fn block_body(ir: &str, label_prefix: &str) -> Option<String> {
     let mut inside = false;
     let mut out: Vec<&str> = Vec::new();
     for line in ir.lines() {
@@ -280,7 +286,7 @@ fn block_body(ir: &str, label_prefix: &str) -> Option<String> {
 
 /// The instruction that defines `%reg` inside `body`, without its `%reg = `
 /// prefix. `None` for a constant operand or a value defined elsewhere.
-fn def_of<'a>(body: &'a str, reg: &str) -> Option<&'a str> {
+pub(super) fn def_of<'a>(body: &'a str, reg: &str) -> Option<&'a str> {
     let needle = format!("{reg} = ");
     body.lines()
         .map(str::trim)
@@ -289,7 +295,7 @@ fn def_of<'a>(body: &'a str, reg: &str) -> Option<&'a str> {
 }
 
 /// The `i`th SSA operand (`%…`) of an instruction.
-fn operand(instr: &str, i: usize) -> Option<String> {
+pub(super) fn operand(instr: &str, i: usize) -> Option<String> {
     instr.match_indices('%').nth(i).map(|(pos, _)| {
         instr[pos..]
             .split(|c: char| c == ',' || c.is_whitespace() || c == ')')

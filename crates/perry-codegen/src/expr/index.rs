@@ -6,7 +6,8 @@ use anyhow::{anyhow, Result};
 use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
     emit_jsvalue_slot_store_scalar_aware_on_block, emit_write_barrier_slot_on_block,
-    nanbox_pointer_inline, raw_f64_layout_fact, FnCtx,
+    emit_write_barrier_slot_value_and_generation_tested, nanbox_pointer_inline,
+    raw_f64_layout_fact, FnCtx,
 };
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
@@ -377,7 +378,12 @@ pub(crate) fn lower_index_set_fast(
 
     // FASTEST: in-bounds path. Store directly, jump to merge.
     ctx.current_block = inbounds_idx;
-    {
+    // #7715 B3: on the JSValue arm the barrier is emitted separately, behind an
+    // inline live test of the stored VALUE and then of the parent array's
+    // generation — see `emit_write_barrier_slot_value_and_generation_tested`.
+    // Nothing else about the store moves, and the barrier still lands between
+    // the layout note and the numeric-write note exactly where it did.
+    let gated_barrier = {
         let blk = ctx.block();
         let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
         if require_numeric_layout {
@@ -394,6 +400,7 @@ pub(crate) fn lower_index_set_fast(
                 let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
                 blk.store(DOUBLE, &numeric_value, &element_ptr);
             }
+            None
         } else {
             // In-place overwrite of a non-raw-layout (e.g. downgraded `any[]`)
             // array element: the slot holds a valid value, so the scalar-aware
@@ -408,15 +415,40 @@ pub(crate) fn lower_index_set_fast(
                 layout_note_needed,
                 &arr_handle,
                 &element_addr,
-                write_barrier_needed,
+                false,
             )
             .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
-            if !value_is_numeric {
-                emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+            if write_barrier_needed {
+                Some((element_addr, value_bits))
+            } else {
+                if !value_is_numeric {
+                    emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+                }
+                None
             }
         }
-        blk.br(&merge_label);
+    };
+    if let Some((element_addr, child_bits)) = gated_barrier {
+        // `arr_handle` reached this block through the guard — the inline tier's
+        // own `obj_type`/`!FORWARDED` header reads, or the out-of-line
+        // `js_typed_feedback_plain_array_index_set_guard` — and the arm above
+        // has already stored raw into `arr_handle + 8 + i*8`, so reading the
+        // header byte at `arr_handle - 7` is strictly weaker than what this
+        // block already does.
+        emit_write_barrier_slot_value_and_generation_tested(
+            ctx,
+            &arr_handle,
+            &arr_handle,
+            &element_addr,
+            &child_bits,
+            "idxset.inbounds",
+        );
+        if !value_is_numeric {
+            let blk = ctx.block();
+            emit_array_numeric_write_note_on_block(blk, &arr_handle, &child_bits);
+        }
     }
+    ctx.block().br(&merge_label);
     if require_numeric_layout {
         let stored = LoweredValue {
             semantic: SemanticKind::JsNumber,

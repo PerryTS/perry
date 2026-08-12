@@ -44,7 +44,8 @@ use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::{
-    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_scalar_aware_on_block, FnCtx,
+    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_scalar_aware_on_block,
+    emit_write_barrier_slot_value_and_generation_tested, FnCtx,
 };
 
 /// Emit the guarded diamond. `fallback` emits the original slow arm (the
@@ -144,7 +145,20 @@ pub(super) fn emit_guarded_inbounds_array_store(
     }
 
     ctx.current_block = fast_idx;
-    {
+    // #7715 B3: the barrier is emitted separately, behind an inline live test
+    // of the stored VALUE and then of the parent array's generation, so the
+    // store emitter is told not to emit it. Everything else — the slot write,
+    // the string addref, the layout note, and their ordering — is unchanged,
+    // and the barrier still lands between the layout note and the
+    // numeric-write note, exactly where it did.
+    //
+    // The layout note deliberately stays OUTSIDE the value test even though
+    // the class-field emitter puts its own note inside one: `layout_note_slot`
+    // funnels `crate::array::note_element_store` (#7480), and a non-pointer
+    // stored over a pointer is exactly the store that must clear
+    // `GC_ARRAY_ELEMENT_SHAPE`. Class fields have no such per-slot array
+    // invariant, which is why that half of #7511's argument does not transfer.
+    let (arr_handle, element_addr, value_bits) = {
         let blk = ctx.block();
         let arr_bits = blk.bitcast_double_to_i64(arr_box);
         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
@@ -166,9 +180,28 @@ pub(super) fn emit_guarded_inbounds_array_store(
             layout_note_needed,
             &arr_handle,
             &element_addr,
-            write_barrier_needed,
+            false,
         )
         .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
+        (arr_handle, element_addr, value_bits)
+    };
+    if write_barrier_needed {
+        // `arr_handle` reached this block through the guard's own
+        // `obj_type == GC_TYPE_ARRAY` / `!GC_FLAG_FORWARDED` header reads, so
+        // it is a live, non-forwarded GC array user pointer — the precondition
+        // for reading its header byte. (LLVM CSEs that byte load with the
+        // guard's, so the gate costs the test and the branch, not a reload.)
+        emit_write_barrier_slot_value_and_generation_tested(
+            ctx,
+            &arr_handle,
+            &arr_handle,
+            &element_addr,
+            &value_bits,
+            block_prefix,
+        );
+    }
+    {
+        let blk = ctx.block();
         if !value_is_numeric {
             // A non-numeric store into a raw-f64-flagged array downgrades the
             // layout. Identical to the local-receiver arm.
