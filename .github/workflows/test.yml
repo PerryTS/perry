@@ -258,6 +258,21 @@ jobs:
           python3 scripts/check_gc_doc_claims.py --self-test
           python3 scripts/check_gc_doc_claims.py
 
+      # Node is a correctness input (see CLAUDE.md "TypeScript Parity Status"):
+      # an oracle that cannot run a gap test drops it from the gate instead of
+      # failing it. #6367 made `.node-version` the single pin, and the pin has
+      # leaked twice since -- CLAUDE.md's prose drifted off the file (#7599), and
+      # npm-launcher.yml was created the same day as #6367 and kept that day's
+      # ambient "22.23.1" literal by omission. This re-derives every restatement
+      # from the file it quotes and requires every literal `node-version:` in a
+      # workflow to be a registered exemption with a reason. Build-free, so it
+      # belongs in `lint`, which IS a required context.
+      - name: Node version consistency
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_node_version_consistency.py --self-test
+          python3 scripts/check_node_version_consistency.py
+
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
       # in the quarantine sweep had rooting ALREADY -- what was missing was

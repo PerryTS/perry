@@ -31,9 +31,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # Single source of truth: .node-version at the repo root. detect.cjs is
+      # shipped JS that every installing user executes, so the Node it is
+      # exercised under is a behavioural input, not a toolchain detail. This
+      # file was created by #6350 on the same day #6367 converted every other
+      # workflow to the shared pin, so it kept that day's ambient "22.23.1"
+      # literal by omission rather than by decision.
       - uses: actions/setup-node@v7
         with:
-          node-version: "22.23.1"
+          node-version-file: .node-version
       - run: node npm/perry/test/detect.test.cjs
       - name: install.sh is valid POSIX sh
         run: sh -n packaging/install.sh
@@ -50,9 +56,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # Single source of truth: .node-version. Safe on this image — Node 26
+      # requires glibc >= 2.28 (nodejs/node v26.x BUILDING.md, Tier 1 linux
+      # x64/arm64) and jammy ships 2.35. The glibc under test here is the one
+      # Perry's own prebuilt binary needs, not Node's.
       - uses: actions/setup-node@v7
         with:
-          node-version: "22.23.1"
+          node-version-file: .node-version
 
       - name: Host glibc
         run: |

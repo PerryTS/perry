@@ -2034,15 +2034,26 @@ jobs:
       # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is a
       # *publishing* toolchain (npm registry auth), not a test oracle — it never
       # runs a parity diff, so the gap suite's Node version is irrelevant here.
+      # Pinned to a MAJOR literal on purpose, not `node-version-file`: an oracle
+      # bump made for gap-suite reasons must never be able to move the runtime
+      # that publishes releases. Registered in
+      # scripts/check_node_version_consistency.py, which keeps this major in
+      # step with .node-version's major.
+      #
+      # Was "20" until the Node-26 sweep. Node 20 reached end-of-life on
+      # 2026-04-30, and this is the repo's most privileged job (`id-token: write`,
+      # OIDC-publishes every platform package) — an EOL runtime is a defect there.
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "26"
           registry-url: "https://registry.npmjs.org"
 
       - name: Upgrade npm (OIDC Trusted Publisher requires >= 11.5.1)
-        # Node 20 ships npm 10.x; versions below 11.5.1 silently fail the OIDC
-        # handshake and the registry returns a misleading 404 ("'pkg@ver' is
-        # not in this registry") on PUT. See npm/cli#9088.
+        # Node 26 already ships npm 11.x, which clears the floor; kept because
+        # it is free and pins the guarantee rather than inheriting it. Below
+        # 11.5.1 the OIDC handshake fails silently and the registry returns a
+        # misleading 404 ("'pkg@ver' is not in this registry") on PUT. See
+        # npm/cli#9088.
         run: npm install -g npm@latest
 
       - name: Download all build artifacts
