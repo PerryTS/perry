@@ -381,12 +381,16 @@ fn the_class_field_barrier_sits_behind_a_live_parent_generation_test() {
         "the incremental clause is `{incremental_cmp}`:\n{body}"
     );
     let count_reg = operand(incremental_cmp, 0).expect("icmp lhs");
+    let count_load = def_of(&body, &count_reg).unwrap_or_default();
     assert!(
-        def_of(&body, &count_reg)
-            .unwrap_or_default()
-            .contains(INCREMENTAL_GLOBAL),
+        count_load.contains(INCREMENTAL_GLOBAL),
         "the incremental clause does not read {INCREMENTAL_GLOBAL}; skipping \
          the barrier also skips SATB shading:\n{body}"
+    );
+    assert!(
+        count_load.starts_with("load atomic i32") && count_load.contains(" monotonic, align 4"),
+        "the incremental gate uses `{count_load}` rather than the runtime's \
+         Relaxed ordering (LLVM `monotonic`):\n{body}"
     );
     // The barrier must be on the TAKEN edge. A swapped `cond_br` compiles,
     // prints the right answer, and strands a child on the next minor GC.

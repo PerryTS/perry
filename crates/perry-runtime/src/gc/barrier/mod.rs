@@ -800,13 +800,23 @@ pub(super) fn incremental_mark_barrier_disable() {
 /// pointer. Non-zero is conservative and falls through to the thread-local
 /// read, which then finds its own null and returns.
 ///
+/// `Relaxed` is sufficient here. The counter publishes no accompanying data:
+/// it only decides whether to pay for a thread-local read and barrier call.
+/// Atomic coherence ensures that a thread which has incremented the counter
+/// before installing its own pointer cannot later observe a value preceding
+/// that increment; while its pointer remains installed, later counter values
+/// also remain non-zero because that thread has not removed its contribution.
+/// A zero observed by a thread with a null pointer merely skips a call that
+/// would have returned immediately. No acquire/release relationship with
+/// `ValidPointerSet` is required because that pointer is thread-local.
+///
 /// #7469: the point is to skip the *thread-local* read. On Darwin that read is
 /// an out-of-line `_tlv_get_addr` call on every heap-pointer store, and it was
 /// 91 of the 653 attributed `_tlv_get_addr` samples on `churn.ts` — all of them
 /// spent proving a null pointer was still null. This is a relaxed load of a
 /// static: `adrp` + `ldr` and a perfectly-predicted branch.
 #[inline(always)]
-fn incremental_mark_barrier_globally_idle() -> bool {
+pub(crate) fn incremental_mark_barrier_globally_idle() -> bool {
     PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed) == 0
 }
 

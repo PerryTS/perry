@@ -142,11 +142,13 @@ const GC_FLAG_TENURED_I8: &str = "32"; // 0x20
 ///    NOT a generational question and must never be dropped while a cycle is
 ///    live. A zero count *proves* this thread's
 ///    `INCREMENTAL_MARK_BARRIER_VALID_PTRS` is null, because
-///    `incremental_mark_barrier_enable` installs the thread-local BEFORE
-///    incrementing the count (`gc/barrier.rs:676–693`, where that ordering is
-///    documented as load-bearing for exactly this reason). This is the same
-///    gate, on the same global, that `expr/shadow_inline.rs` and
-///    `expr/shadow_slot.rs` already emit for the root shading barrier.
+///    `incremental_mark_barrier_enable` increments the count BEFORE installing
+///    the thread-local, while disable clears the thread-local BEFORE
+///    decrementing the count. This is the same gate, on the same global, that
+///    `expr/shadow_inline.rs` and `expr/shadow_slot.rs` already emit for the
+///    root shading barrier. It is an LLVM `monotonic` load (Rust `Relaxed`):
+///    the counter is authoritative state, not a publication fence for other
+///    memory.
 ///
 /// ## Why a live test and not a static claim
 ///
@@ -169,7 +171,7 @@ pub(crate) fn emit_parent_may_need_remembering_check(
     let gc_flags = blk.load(I8, &gc_flags_ptr);
     let tenured_bits = blk.and(I8, &gc_flags, GC_FLAG_TENURED_I8);
     let is_tenured = blk.icmp_ne(I8, &tenured_bits, "0");
-    let active = blk.load_atomic_seq_cst(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
+    let active = blk.load_atomic_monotonic(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
     let incremental_active = blk.icmp_ne(I32, &active, "0");
     blk.or(I1, &is_tenured, &incremental_active)
 }

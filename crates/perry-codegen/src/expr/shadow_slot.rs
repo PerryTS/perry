@@ -272,11 +272,13 @@ pub(crate) fn emit_shadow_slot_bind_ptr(ctx: &mut FnCtx<'_>, slot_idx: u32, slot
 /// collector scanned roots still has to be shaded. Guarding on
 /// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` inline keeps the common
 /// (no incremental cycle in flight) path down to a load, a compare, and a
-/// not-taken branch instead of a TLS-touching call.
+/// not-taken branch instead of a TLS-touching call. The load is LLVM
+/// `monotonic`, matching the runtime's Rust `Relaxed` readers: the counter is
+/// only a gate and does not publish accompanying memory.
 pub(crate) fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bits: &str) {
     let active =
         ctx.block()
-            .load_atomic_seq_cst(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
+            .load_atomic_monotonic(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
     let barrier_needed = ctx.block().icmp_ne(I32, &active, "0");
     let barrier_idx = ctx.new_block("shadow.root.barrier");
     let done_idx = ctx.new_block("shadow.root.barrier.done");

@@ -885,9 +885,10 @@ fn immutable_index_alias_binds_once_but_keeps_incremental_root_barrier() {
     );
     assert!(
         main_ir.contains(
-            "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst, align 4"
+            "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT monotonic, align 4"
         ) && main_ir.contains("shadow.root.barrier"),
-        "an inactive incremental collector should skip the TLS-backed root barrier call"
+        "the relaxed global gate should let an inactive incremental collector skip the \
+         TLS-backed root barrier call"
     );
 }
 

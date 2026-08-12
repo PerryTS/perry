@@ -385,8 +385,8 @@ pub(crate) fn bound_slot_meta(raw: usize) -> usize {
 ///
 /// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` counts the threads whose
 /// thread-local pointer is currently non-null. `incremental_mark_barrier_enable`
-/// installs the thread-local *and then* increments the count, both before
-/// returning to the mutator, so on any thread:
+/// increments the count *before* installing the thread-local; disable clears
+/// the thread-local *before* decrementing the count. Thus, on any thread:
 ///
 /// > this thread's `VALID_PTRS` is non-null  ⟹  the count is ≥ 1
 ///
@@ -402,7 +402,7 @@ pub(crate) fn bound_slot_meta(raw: usize) -> usize {
 /// this makes the runtime entry points agree with it.
 #[inline(always)]
 fn root_shading_barrier(value_bits: u64) {
-    if crate::gc::PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::SeqCst) != 0 {
+    if !crate::gc::incremental_mark_barrier_globally_idle() {
         shade_root_slot_value(value_bits);
     }
 }

@@ -301,6 +301,8 @@ fn bind_roots_the_value_present_at_the_call_not_a_later_store() {
 /// barrier is armed, `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` is
 /// non-zero. If that ever stopped holding, a zero count would no longer prove
 /// the barrier call is a no-op and the gate would start dropping shading.
+/// This deliberately observes with the same `Relaxed` ordering used by the
+/// runtime readers and by codegen's LLVM `monotonic` loads.
 #[test]
 fn active_count_is_nonzero_whenever_this_threads_barrier_is_armed() {
     let _guard = GcTestIsolationGuard::new();
@@ -311,7 +313,7 @@ fn active_count_is_nonzero_whenever_this_threads_barrier_is_armed() {
     let armed = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
     assert!(incremental_mark_barrier_active());
     assert_ne!(
-        PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::SeqCst),
+        PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed),
         0,
         "armed barrier must be visible in the global gate"
     );
