@@ -15,8 +15,7 @@ pub(super) unsafe fn symbol_property_if_registered(
         let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let key_len = (*key).byte_len as usize;
         let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-        let sym_f64 =
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | (obj as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let sym_f64 = crate::value::js_nanbox_pointer(obj as i64);
         if key_bytes == b"description" {
             return Some(JSValue::from_bits(
                 crate::symbol::js_symbol_description(sym_f64).to_bits(),
@@ -76,5 +75,7 @@ pub(super) unsafe fn set_property_if_registered(
             }
         }
     }
-    Some(JSValue::undefined())
+    // Unknown keys continue to the shared Map/Set receiver path, which owns
+    // prototype data-property lookup and the final `undefined` fallback.
+    None
 }

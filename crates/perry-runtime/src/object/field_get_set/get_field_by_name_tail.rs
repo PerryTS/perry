@@ -457,7 +457,9 @@ pub(crate) fn get_field_by_name_object_tail(
         // SYMBOL_MAGIC in its own first word, so use that exact-false screen
         // before the authoritative registry. A plain object now pays one
         // 4-byte load instead of the process-global symbol Mutex + SipHash.
-        if crate::symbol::may_be_symbol_header(obj as *const u8) {
+        if crate::value::addr_class::is_plausible_heap_addr(obj as usize)
+            && crate::symbol::may_be_symbol_header(obj as *const u8)
+        {
             if let Some(value) = super::probe_dispatch::symbol_property_if_registered(obj, key) {
                 return value;
             }

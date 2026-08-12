@@ -51,6 +51,16 @@ fn plain_object_miss_skips_set_and_symbol_registries() {
     let _set = crate::set::js_set_alloc(4);
     let object = crate::object::js_object_alloc(0, 0) as usize;
 
+    let invalid = 0x8000_0000_0000usize;
+    assert!(
+        !crate::value::addr_class::is_plausible_heap_addr(invalid),
+        "test premise: the upper-bound address is not dereferenceable"
+    );
+    assert!(
+        tail(invalid, b"missing").is_undefined(),
+        "reject an implausible receiver before reading SYMBOL_MAGIC"
+    );
+
     // Warm unrelated lazy state before taking the counters.
     assert!(tail(object, b"missing").is_undefined());
     let set_before = crate::set::test_set_registry_probe_count();
@@ -98,6 +108,24 @@ fn set_and_both_symbol_storage_classes_still_dispatch() {
     assert!(
         crate::set::test_set_registry_probe_count() > set_before,
         "GC_TYPE_SET must still enter the authoritative Set registry"
+    );
+
+    // An unrecognised key must continue to the shared Map/Set receiver path,
+    // which owns prototype data-property lookup. Returning `undefined` from
+    // the early authoritative-registry probe would swallow this property.
+    let _global = crate::object::js_get_global_this();
+    let set_proto = crate::object::builtin_prototype_value("Set");
+    let set_proto = crate::value::js_nanbox_get_pointer(set_proto) as *mut ObjectHeader;
+    assert!(!set_proto.is_null(), "test premise: Set.prototype exists");
+    js_object_set_field_by_name(
+        set_proto,
+        key(b"perryReviewMarker"),
+        f64::from_bits(JSValue::number(7867.0).bits()),
+    );
+    assert_eq!(
+        f64::from_bits(tail(set, b"perryReviewMarker").bits()),
+        7867.0,
+        "unknown Set keys must fall through to Set.prototype data properties"
     );
 
     let symbol = leaked_symbol("perry-7867-headerless-symbol");
