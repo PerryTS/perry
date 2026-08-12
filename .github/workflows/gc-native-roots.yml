@@ -104,6 +104,40 @@
 #                               an entry reading "deleted" for a name still
 #                               greppable in the tree makes the whole list
 #                               look stale.
+# ── STATUS as of #7970 (read before believing a red run) ───────────────────
+#
+# This workflow had NEVER had a successful run on any branch. Three of its four
+# arms failed, for three unrelated reasons, and they are NOT one bug:
+#
+#   macos-14      GATE DEFECT, fixed here. The in-process step asserted
+#                 evacuation liveness without setting `PERRY_GC_DIAG=1`, and
+#                 `[gc-copy-minor]` — the assert's only input — is printed only
+#                 under that flag. So the arm reported "evacuated NOTHING (0
+#                 copying minors)" on every run since it was written. Measured
+#                 on macOS aarch64 at b847afd1c: with the flag, the same binary
+#                 under the same GC env reports 75 copying minors and 16277
+#                 objects copied, and the whole step passes. The collector was
+#                 never the problem.
+#
+#   ubuntu-24.04-arm  REAL DEFECT, filed as #7984. `PERRY_STACKMAP_WALKER=verify`
+#                 caught the fast fp-chain walker and the unwinder resolving the
+#                 same root to addresses 96 bytes apart. This arm is red because
+#                 it found the bug it was built to find; it must STAY red until
+#                 #7984 is fixed. Do not skip it.
+#
+#   windows-latest    REAL DEFECT, filed as #7985 (`perry.exe` cannot link
+#                 against the official LLVM 22 release: /MT-vs-/MD CRT mismatch,
+#                 bundled rpmalloc redefining malloc, and inkwell referencing
+#                 target backends the release does not build). A SECOND,
+#                 separate failure in the same arm — Git-bash `tar` reading
+#                 `D:\a\_temp` as a remote host — was a workflow bug and is
+#                 fixed here with `--force-local`.
+#
+# So: after #7970 the macOS and ubuntu-latest arms should pass and the other two
+# should remain red on their filed defects. This workflow is therefore NOT a
+# promotion candidate yet — promoting it while #7984/#7985 are open would block
+# every PR. Promote only once all four arms are green, and per CLAUDE.md, run it
+# green once BEFORE adding it to branch protection.
 name: gc-native-roots
 on:
   # Must run where it can actually gate something. Branch-scoped triggers were
@@ -256,7 +290,23 @@ jobs:
             if [ ! -x "$llvm_root/bin/opt.exe" ]; then
               curl -sSL --retry 3 -o "$RUNNER_TEMP/llvm.tar.xz" \
                 "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvm_ver/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc.tar.xz"
-              tar -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP"
+              # --force-local: this step runs under Git-bash, where $RUNNER_TEMP
+              # is a WINDOWS path (`D:\a\_temp`). GNU tar reads `D:` as a remote
+              # `host:path` and tries to rsh to a host named `D`, which is the
+              # 2026-08-11 failure verbatim:
+              #     tar (child): Cannot connect to D: resolve failed
+              #     xz: (stdin): File format not recognized
+              #     tar: Error is not recoverable: exiting now      (exit 2)
+              # `-C` is not parsed for a remote spec, so only the ARCHIVE path
+              # needs the flag. Verify the extraction rather than trusting it:
+              # a half-extracted tree would otherwise surface as the much more
+              # confusing "no matched opt+clang pair" error below.
+              tar --force-local -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP"
+              if [ ! -x "$llvm_root/bin/opt.exe" ]; then
+                echo "::error::extracted $RUNNER_TEMP/llvm.tar.xz but $llvm_root/bin/opt.exe is still missing — the archive layout changed, or the download was truncated"
+                ls -la "$RUNNER_TEMP" | head -20
+                exit 1
+              fi
             fi
             llvm_bin="$llvm_root/bin"
           else
@@ -560,12 +610,31 @@ jobs:
           ./target/perry-dev/perry "$probe" -o /tmp/inproc-09-control
           PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
             /tmp/inproc-09-control > /tmp/inproc-09.control.out 2>/dev/null
+          # PERRY_GC_DIAG=1 is LOAD-BEARING, not decoration: `[gc-copy-minor]`
+          # is emitted only under it, and that line is the entire input to
+          # `gc_evacuation_liveness_assert.py`. Without it the assert reads an
+          # empty trace and reports "evacuated NOTHING (0 copying minors, 0
+          # objects copied)" no matter what the collector actually did — so
+          # this arm could never pass, which is a large part of why
+          # `gc-native-roots` has never had a green run (#7970).
+          #
+          # Measured on macOS aarch64 at this commit: with the flag, the same
+          # binary under the same GC env reports 75 copying minors and 16277
+          # objects copied. The collector was evacuating the whole time; the
+          # gate was asserting on telemetry it had not switched on. The sibling
+          # call site in the walker-trace step above always set it — this one
+          # was missed.
+          #
+          # `--probe` likewise: without it the failure message says the literal
+          # `<probe>`, which is what the 2026-08-11 logs show.
+          PERRY_GC_DIAG=1 \
           PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
           PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
             /tmp/inproc-09 > /tmp/inproc-09.out 2> /tmp/inproc-09.err
           diff /tmp/inproc-09.control.out /tmp/inproc-09.out \
             || { echo "::error::in-process RS4GC diverged from the shadow-stack control"; exit 1; }
-          python3 scripts/gc_evacuation_liveness_assert.py /tmp/inproc-09.err
+          python3 scripts/gc_evacuation_liveness_assert.py /tmp/inproc-09.err \
+            --probe "09_try_catch_roots (in-process RS4GC)"
 
           # And it must be RS4GC doing the lowering, not a per-function bail to
           # the bridge -- which would make this arm green while testing the

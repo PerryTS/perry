@@ -280,6 +280,19 @@ jobs:
           python3 scripts/check_locale_independent_io.py --self-test
           python3 scripts/check_locale_independent_io.py
 
+      # #7970. `gc_evacuation_liveness_assert.py` is the liveness gate for every
+      # forced-evacuation arm, and it reads ONLY `[gc-copy-minor]` lines, which
+      # exist only under `PERRY_GC_DIAG=1`. When an arm forgot that flag the
+      # assert reported "the forced-evacuation arm evacuated NOTHING" — sending
+      # readers to debug a collector that was in fact evacuating 16277 objects
+      # per run. It now separates "the instrument was off" from "the subject was
+      # dead", and this proves it still can, in both directions. Hermetic and
+      # instant, so it belongs in `lint` (a REQUIRED context) rather than only
+      # in the GC gate it serves — which is itself still red.
+      - name: GC evacuation-liveness assert can say no
+        if: ${{ !cancelled() }}
+        run: python3 scripts/gc_evacuation_liveness_assert.py --self-test
+
       # Node is a correctness input (see CLAUDE.md "TypeScript Parity Status"):
       # an oracle that cannot run a gap test drops it from the gate instead of
       # failing it. #6367 made `.node-version` the single pin, and the pin has
