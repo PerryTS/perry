@@ -36,8 +36,9 @@
 //   PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800
 //
 // Before the fix this exits 138 with `[gc-fromspace-protect] FAULT` naming a
-// retired from-space address (`obj_type=3`, a key string); after it the program
-// is byte-identical to node in every configuration.
+// retired from-space address during arm 3 (`obj_type=2`, a receiver
+// `ObjectHeader`); after it the program exits 0 with 301 copying minors and
+// ~110k objects moved, byte-identical to node in every configuration.
 
 function churn(n: number): number {
   const bits: any[] = [];
@@ -169,14 +170,31 @@ function expectedIndexed(prefix: string, valuePrefix: string, count: number): st
   return parts.join("|");
 }
 
-console.log("objectGroupBy", objectGroupBy() === expectedObjectGroupBy() ? "ok" : "BAD");
+// NOTE — why each side is bound to a `const` instead of being compared inline.
+//
+// `console.log("x", f() === g() ? …)` leaves `f()`'s result as an SSA temporary
+// that is live across `g()`. Under this witness configuration `g()` allocates
+// through several loop back-edges, so it collects, and the temporary names
+// from-space: the run faults inside `js_jsvalue_equals` (frame `js_eq` <- `main`)
+// on BOTH a pristine build and this branch. That is a SEPARATE, pre-existing
+// codegen root-dominance defect — the class
+// `scripts/gc_root_dominance_check.py` exists for — and it has nothing to do
+// with `Object.defineProperty`. Binding both sides first keeps this program a
+// witness for ONE defect. See the issue filed alongside #7963.
+const groupByObserved = objectGroupBy();
+const groupByExpected = expectedObjectGroupBy();
+console.log("objectGroupBy", groupByObserved === groupByExpected ? "ok" : "BAD");
+
+const oneAtATimeObserved = definePropertyOneAtATime();
+const oneAtATimeExpected = expectedIndexed("prop-", "value-", 12);
 console.log(
   "definePropertyOneAtATime",
-  definePropertyOneAtATime() === expectedIndexed("prop-", "value-", 12) ? "ok" : "BAD",
+  oneAtATimeObserved === oneAtATimeExpected ? "ok" : "BAD",
 );
+
+const accessorObserved = definePropertyWithAllocatingDescriptorGetters();
+const accessorExpected = expectedIndexed("key-", "v", 12);
 console.log(
   "definePropertyAccessorDescriptor",
-  definePropertyWithAllocatingDescriptorGetters() === expectedIndexed("key-", "v", 12)
-    ? "ok"
-    : "BAD",
+  accessorObserved === accessorExpected ? "ok" : "BAD",
 );

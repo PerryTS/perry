@@ -22,37 +22,48 @@ is structurally blind to the whole class.
 ## The pristine fault, reproduced and localized
 
 `test-files/test_gap_gc_define_property_descriptor_rooting.ts` under the witness
-configuration, on a pristine `origin/main` release build
-(`a769fafc6`, `PERRY_RUNTIME_DIR` pinned to that build's `.a` pair):
+configuration, on a pristine `origin/main` release build (`a769fafc6`,
+`PERRY_NO_AUTO_OPTIMIZE=1`, `PERRY_RUNTIME_DIR` pinned to that build's `.a`
+pair):
 
 ```
-exit 138, stdout stopped after "objectGroupBy ok"
+exit 138, stdout stopped after "definePropertyOneAtATime ok"
 
-[gc-schedule] FAILURE (signal 10) under seed=1
-[gc-schedule]   safepoints=135 scheduled_collections=135
-
-[gc-fromspace-protect] FAULT: signal 10 at 0x28207c40e5c
+[gc-fromspace-protect] FAULT: signal 10 at 0x39f9556083a
   This address is RETIRED FROM-SPACE. ...
-  block=0x28207c40000 +3676 retired_bytes=4104 retired_by_minor=#134
-  last-known object: user_ptr=0x28207c40e58 obj_type=3 size=216
+  block=0x39f95560000 +2106 retired_bytes=4200 retired_by_minor=#135
+  last-known object: user_ptr=0x39f95560840 obj_type=2 size=56
 ```
 
-The instrument is live (134 retiring minors before the fault), and the fault is
-precise in a way worth writing down:
+`obj_type=2` is `GC_TYPE_OBJECT`. The program dies in arm 3 — the descriptor
+bag whose fields are ACCESSORS, so `desc_read_field` runs user JS inside
+`js_object_define_property` — which is precisely the window #6949's scope note
+defers. The instrument is live: 135 from-space page-sets were retired before the
+fault. The same program on this branch exits 0.
 
-* `obj_type=3` is `GC_TYPE_STRING`.
-* the faulting address is `user_ptr + 4`, and `StringHeader::byte_len` is at
-  **offset 4** (`crates/perry-runtime/src/string/mod.rs:308`; offset 0 is
-  `utf16_len`).
+**Do not attribute a fault from the census line alone.** The first draft of this
+probe faulted with a *different* signature (`obj_type=3`, `GC_TYPE_STRING`, at
+`user_ptr + 4` — which is `StringHeader::byte_len`, so it really was a stale key
+string) and it was tempting to read that as the defineProperty key. It was not;
+see the next section. Only a symbolicated backtrace settled it.
 
-So the faulting instruction is a `(*key_str).byte_len` read on a stale
-`*const StringHeader` — i.e. the coerced key of `js_object_define_property`,
-which is exactly the pointer the issue predicted. This matches the report in
-#7963 (same `obj_type=3`, same `size=216`) on a different box/seed.
+## A second defect the first draft of the probe walked into
 
-The program never reaches arm 2's output, so the failing arm is the
-hand-written `Object.defineProperty` loop — with `Object.defineProperties`
-(#7949's helper) not on the path at all.
+The probe originally compared each arm inline —
+`console.log("x", observed() === expected() ? "ok" : "BAD")`. Under the witness
+configuration that faults on a pristine build **and on this branch**, in
+`js_jsvalue_equals` <- `js_eq` <- `main` (symbolicated against an unstripped
+`perry-dev` runtime with `PERRY_DEBUG_SYMBOLS=1`). The left operand is an SSA
+temporary live across `expected()`, which allocates through several loop
+back-edges and therefore collects: the temporary names from-space. That is a
+**codegen** root-dominance defect — the class
+`scripts/gc_root_dominance_check.py` exists for — with nothing to do with
+`Object.defineProperty`, and it is filed separately.
+
+Binding both sides to `const` first removes it from this program, and only then
+does the A/B separate. Worth recording as method: the FIRST fault a witness
+program produces is not necessarily the defect you are hunting, and the census
+line (`obj_type`, `size`) is a hint, not an attribution. Symbolicate.
 
 ## Sites fixed
 
@@ -151,12 +162,26 @@ under `CopyingNurseryTestGuard` + `suppress_automatic_triggers`:
 
 See "Sabotage run" below.
 
-### Compiled probe
+### Compiled probe — the A/B
 
-`test-files/test_gap_gc_define_property_descriptor_rooting.ts`, three arms:
-an allocating `Object.groupBy` first arm (to retire from-space blocks), a
+`test-files/test_gap_gc_define_property_descriptor_rooting.ts`, three arms: an
+allocating `Object.groupBy` first arm (to retire from-space blocks), a
 hand-written `Object.defineProperty` loop, and a loop whose descriptor bag
-carries three allocating accessor getters.
+carries three allocating accessor getters (so `desc_read_field` runs user JS
+mid-define).
+
+Both arms compiled with `PERRY_NO_AUTO_OPTIMIZE=1` and `PERRY_RUNTIME_DIR`
+pinned to their own `.a` pair; the fixed pair's mtimes were confirmed to have
+moved after the edit.
+
+| build | witness configuration | default |
+|---|---|---|
+| pristine `origin/main` (a769fafc6) | **exit 138**, `[gc-fromspace-protect] FAULT` at `block+2106`, `retired_by_minor=#135`, `obj_type=2` (a receiver `ObjectHeader`), stdout stops after arm 2 — i.e. it dies in the **descriptor-getter** arm | exit 0, byte-identical to node 26.5.1 |
+| this branch | **exit 0**, `[gc-schedule] done: safepoints=301 scheduled_collections=301 copying_minors=301 moved_objects=110912 loop_polls=8175` | exit 0, byte-identical to node 26.5.1 |
+
+Instrument liveness is reported rather than assumed: the pristine arm retired
+135 from-space page-sets before it faulted, and the fixed arm ran 301 copying
+minors moving 110,912 objects.
 
 ## Not covered by a moving test
 
