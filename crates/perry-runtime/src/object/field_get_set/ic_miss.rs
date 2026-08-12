@@ -1501,6 +1501,80 @@ mod c3c_pic_tests {
             );
         }
     }
+
+    /// ★ #6759 C3 rung 1 opens a NEW correctness surface, and this is it.
+    ///
+    /// Before rung 1 a delete-compacted class instance was UNCACHEABLE by the
+    /// read PIC: its keys array is a private clone, so `keys_cacheable_for_pic`
+    /// (SHAPE_SHARED only) refused it and the site fell through to the slow
+    /// path forever. Rung 1 stamps it, so it primes an id token and the emitted
+    /// hit path starts serving it. A token that failed to move across the
+    /// compaction would therefore be read as a pristine sibling's shape at a
+    /// site that has both — the one-slot shift the whole ladder is about.
+    ///
+    /// Pins: the compacted instance's primed token differs from a pristine
+    /// sibling's, AND the slot it primes is the post-compaction slot.
+    #[test]
+    fn a_compacted_class_instance_primes_a_token_a_pristine_sibling_cannot_match() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let packed = b"picdel_a\0picdel_b\0picdel_c";
+            let mk = || {
+                crate::object::js_object_alloc_class_with_keys(
+                    0x6081,
+                    0,
+                    3,
+                    packed.as_ptr(),
+                    packed.len() as u32,
+                )
+            };
+            let key = |n: &str| crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+            let pristine = mk();
+            let compacted = mk();
+            for (i, v) in [1.0f64, 2.0, 3.0].iter().enumerate() {
+                crate::object::js_object_set_field(
+                    pristine,
+                    i as u32,
+                    crate::JSValue::from_bits(v.to_bits()),
+                );
+                crate::object::js_object_set_field(
+                    compacted,
+                    i as u32,
+                    crate::JSValue::from_bits(v.to_bits()),
+                );
+            }
+            assert_eq!(
+                crate::object::js_object_delete_field(compacted, key("picdel_a")),
+                1
+            );
+
+            let mut c_pristine = [0i64; super::PIC_CACHE_WORDS];
+            let vp = super::js_object_get_field_ic_miss(pristine, key("picdel_c"), &mut c_pristine);
+            assert_eq!(vp, 3.0, "pristine `c` is slot 2");
+
+            let mut c_compacted = [0i64; super::PIC_CACHE_WORDS];
+            let vc =
+                super::js_object_get_field_ic_miss(compacted, key("picdel_c"), &mut c_compacted);
+            assert_eq!(
+                vc, 3.0,
+                "compacted `c` shifted to slot 1 and must still read 3"
+            );
+
+            assert_ne!(
+                c_compacted[0], 0,
+                "the compacted instance primed nothing — rung 1's new surface is inert"
+            );
+            assert_ne!(
+                c_compacted[0], c_pristine[0],
+                "the compacted instance primed its pristine sibling's token — an \
+                 id-comparing PIC would read slot {} for a receiver whose `c` is \
+                 at slot {}",
+                c_pristine[1], c_compacted[1]
+            );
+            assert_eq!(c_pristine[1], 2, "pristine `c` slot");
+            assert_eq!(c_compacted[1], 1, "compacted `c` slot");
+        }
+    }
 }
 
 #[cfg(test)]
