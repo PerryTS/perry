@@ -52,18 +52,47 @@ const ANY_ATOMIC_LOAD: &str =
     "load atomic i32, ptr @PERRY_PER_OBJECT_LAYOUTS_ANY monotonic, align 4";
 
 /// The packed `GcHeader` word the inline bump writes for a two-`number`-field
-/// class, WITH the baked layout:
+/// class:
 ///
 /// ```text
-///   obj_type  GC_TYPE_OBJECT                     = 0x02        bits  0..7
-///   gc_flags  GC_FLAG_ARENA                      = 0x02        bits  8..15
-///   _reserved GC_LAYOUT_POINTER_FREE | INTACT    = 0x5000       bits 16..31
-///   size      8 + 32 + max(2,4)*8                = 72          bits 32..63
+///   obj_type  GC_TYPE_OBJECT                     = 0x02   bits  0..7
+///   gc_flags  GC_FLAG_ARENA                      = 0x02   bits  8..15
+///   _reserved GC_LAYOUT_POINTER_FREE [| INTACT]  = 0x4000 [| 0x1000]  bits 16..31
+///   size      8 + 32 + max(2, INLINE_SLOT_FLOOR)*8       bits 32..63
 /// ```
-const BAKED_HEADER_WORD: &str = "store i64 310579823106,";
-/// The same word WITHOUT `GC_OBJ_TYPED_LAYOUT_INTACT` (0x1000 << 16 less) —
-/// what the pointer-bearing class still writes.
-const UNBAKED_HEADER_WORD: &str = "store i64 310311387650,";
+///
+/// Computed from `INLINE_SLOT_FLOOR` rather than spelled as a literal: #7916
+/// moved the floor 4 → 2, which changes `size` 72 → 56 and therefore both
+/// words. A hard-coded constant here fails the moment the footprint changes
+/// and says nothing about what this test is actually for (whether
+/// `GC_OBJ_TYPED_LAYOUT_INTACT` is claimed), so derive the part that is
+/// incidental and keep asserting the part that is not.
+fn header_word(intact: bool) -> String {
+    const GC_TYPE_OBJECT: u64 = 0x02;
+    const GC_FLAG_ARENA: u64 = 0x02;
+    const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+    const GC_OBJ_TYPED_LAYOUT_INTACT: u64 = 0x1000;
+    let slots = std::cmp::max(2, crate::target_layout::INLINE_SLOT_FLOOR);
+    let size =
+        8 + crate::target_layout::object_header_size_bytes("aarch64-apple-darwin") + 8 * slots;
+    let reserved = GC_LAYOUT_POINTER_FREE
+        | if intact {
+            GC_OBJ_TYPED_LAYOUT_INTACT
+        } else {
+            0
+        };
+    let word = (size << 32) | (reserved << 16) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
+    format!("store i64 {word},")
+}
+
+/// The packed word WITH the baked `GC_OBJ_TYPED_LAYOUT_INTACT`.
+fn baked_header_word() -> String {
+    header_word(true)
+}
+/// The same word WITHOUT it — what the pointer-bearing class still writes.
+fn unbaked_header_word() -> String {
+    header_word(false)
+}
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
@@ -318,7 +347,7 @@ pub(super) fn emit(m: &Module) -> String {
 fn a_pointer_free_shape_bakes_its_layout_into_the_header_constant() {
     let ir = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
     assert!(
-        ir.contains(BAKED_HEADER_WORD),
+        ir.contains(&baked_header_word()),
         "the inline-bump header constant does not carry \
          GC_OBJ_TYPED_LAYOUT_INTACT, so the bake did not fire and every \
          construction still pays the runtime declare:\n{ir}"
@@ -354,7 +383,7 @@ fn a_pointer_bearing_shape_keeps_the_runtime_declare() {
          lookup reads:\n{ir}"
     );
     assert!(
-        ir.contains(UNBAKED_HEADER_WORD) && !ir.contains(BAKED_HEADER_WORD),
+        ir.contains(&unbaked_header_word()) && !ir.contains(&baked_header_word()),
         "the header constant must NOT claim GC_OBJ_TYPED_LAYOUT_INTACT for a \
          shape whose descriptor is installed at runtime:\n{ir}"
     );
