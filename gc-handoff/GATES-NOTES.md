@@ -122,5 +122,15 @@ Reaping dead PR runs is worth ~51% of the queue immediately and is the only leve
 
 - The **bootstrap**: the reaper queues like everything else, so it cannot dig out an already-saturated queue. First drain must be a manual `python3 scripts/reap_stale_ci_runs.py --apply`. I did not run it -- it cancels ~780 runs on shared infrastructure and is a maintainer call.
 - **Branch protection**: `parity` / `compile-smoke` required-but-never-reporting. Server-side; admin only.
-- **gc-native-roots** and **llvm-inprocess** are broken, not starved. Filed separately.
+- **gc-native-roots** (#7970) and **llvm-inprocess** (#7971) are broken, not starved. Filed, not fixed.
 - **No gate ratchets collection KIND.** #7965's class stays uncovered.
+
+## Outcome
+
+- PR **#7969** (this work) — concurrency relapse fix across 22 workflows + the new reaper,
+  `check_schedule_group` guard in the required `lint` context, zizmor push-arm filter,
+  scheduling doc corrected.
+- Issue **#7970** — `gc-native-roots` has never been green; 3 of 4 arms fail with 3 distinct causes.
+- Issue **#7971** — `llvm-inprocess` reports green on PRs while skipping its only real job.
+- Issue **#7966** left OPEN deliberately: `gate-freshness.yml` maintains it in place and
+  closes it itself once every gate is fresh. Closing it by hand would be reverted.
