@@ -1283,6 +1283,7 @@ POLL_CAPABLE_RUNTIME = {
     "js_object_get_own_property_names", "js_object_keys",
     "js_object_keys_value",
     "js_reflect_construct", "js_regexp_construct_call",
+    "js_string_concat_box",
     "js_string_from_char_code_array",
     "js_string_index_get_boxed", "js_string_substr",
     "js_super_construct_apply",
@@ -5330,6 +5331,11 @@ _POLL_REACH_FIXTURE = {
     # one-hop audit misses entirely.
     "js_gadget_create": ["{ js_helper_that_coerces(v) }"],
     "js_helper_that_coerces": ["{ js_string_coerce(v) }"],
+    # #7872's exact edge: the allocating concat wrapper reaches coercion via
+    # a non-ALLOC_RE arithmetic helper. Keeping the production names here
+    # proves the audit can still expose this two-hop disagreement.
+    "js_string_concat_box": ["{ js_dynamic_string_or_number_add(l, r) }"],
+    "js_dynamic_string_or_number_add": ["{ js_number_coerce(v) }"],
     # a name that appears ONLY in a comment and a string literal. Reported
     # would mean `_strip_noncode` has stopped working and the audit is
     # extracting premises from prose.
@@ -5346,13 +5352,15 @@ _POLL_REACH_FIXTURE = {
 
 def poll_reach_self_test():
     ok = True
-    poll = {"js_object_get_field_by_name", "js_string_coerce"}
+    poll = {"js_object_get_field_by_name", "js_string_coerce",
+            "js_number_coerce"}
     # Through the SAME stripper `runtime_symbol_bodies` applies, so the decoy
     # arm below tests the real pipeline rather than a hand-cleaned copy of it.
     fixture = {sym: [_strip_noncode(b) for b in bodies]
                for sym, bodies in _POLL_REACH_FIXTURE.items()}
     gaps = dict(poll_reach_gaps(fixture, poll))
-    want = {"js_widget_new", "js_widget_new_from_value", "js_gadget_create"}
+    want = {"js_widget_new", "js_widget_new_from_value", "js_gadget_create",
+            "js_string_concat_box"}
     if set(gaps) != want:
         print("self-test FAIL: --audit-poll-reach over the planted fixture -> "
               f"{sorted(gaps)}, expected {sorted(want)}", file=sys.stderr)
