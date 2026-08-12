@@ -857,11 +857,11 @@ enum AtomicFinalizeSubphase {
     /// one-shot scan and would be swept live. Re-scan all roots with the
     /// marks nearly final, then drain the resulting seeds, so WeakProcessing
     /// and Sweep read a complete mark set. Bounded by root-set size (shadow
-    /// stack + globals + registered scanners), not heap size. From this
-    /// subphase to the Sweep transition the minor path runs ATOMICALLY (no
-    /// mutator windows); the full path's sliced RememberedSetRebuild is the
-    /// one post-remark window, and it is store-covered by the still-active
-    /// mark barrier.
+    /// stack + globals + registered scanners), not heap size. This is the LAST
+    /// root observation of the cycle: everything after it (the full path's
+    /// sliced RememberedSetRebuild, and WeakProcessing on both paths) still
+    /// opens mutator windows, so every white-to-strong transition there must be
+    /// barrier-covered — stores, black births, and weak reads (#7900).
     FinalRootRemark,
     RememberedSetRebuild,
     DisableBarrier,
@@ -1325,10 +1325,10 @@ impl GcCycleState {
                 .expect("atomic finalize state exists")
                 .subphase;
             // SLICED subphases honor the caller's budget and may return to the
-            // mutator. WeakProcessing is safe to slice while the barrier and
-            // allocate-black births stay active: a target the mutator can
-            // still name was marked at remark or was born black, and holders
-            // born after the registry snapshot wait for the next cycle.
+            // mutator. Post-remark windows are sound only because EVERY way the
+            // mutator can acquire a heap reference is shaded: stores by the
+            // incremental mark barrier, births by allocate-black, and weak
+            // READS by `weakref::read_barrier` (#7900 — that arm was missing).
             let sliced = matches!(
                 subphase,
                 AtomicFinalizeSubphase::BarrierSeedDrain

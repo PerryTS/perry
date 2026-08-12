@@ -46,3 +46,4 @@ mod teardown;
 mod telemetry_verifier;
 mod temp_roots;
 mod triggers;
+mod weak_read_barrier;

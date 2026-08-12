@@ -21,6 +21,8 @@ use crate::value::{
 };
 use std::cell::RefCell;
 
+/// #7900: weak-to-strong READ barrier. See the module for the full argument.
+mod read_barrier;
 pub(crate) mod sliced;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -426,7 +428,9 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
     if val.is_undefined() {
         f64::from_bits(TAG_UNDEFINED)
     } else {
-        f64::from_bits(val.bits())
+        // #7900: a white target becomes a STRONG mutator local here, through a
+        // read the store barrier cannot see. Shade it before handing it over.
+        read_barrier::weak_read_barrier_f64(val.bits())
     }
 }
 
@@ -1673,7 +1677,11 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
                 continue; // tombstoned (key collected)
             }
             if stored_key == key.to_bits() {
-                return f64::from_bits(object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD));
+                // #7900: shade the key (so a pending weak slice cannot tombstone
+                // this entry mid-turn) and the value handed to the mutator.
+                read_barrier::weak_read_barrier(stored_key);
+                let value = object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD);
+                return read_barrier::weak_read_barrier_f64(value);
             }
         }
     }
@@ -1702,6 +1710,7 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
                 continue; // tombstoned (key collected)
             }
             if stored_key == key.to_bits() {
+                read_barrier::weak_read_barrier(stored_key); // #7900: keep has/get agreeing
                 return f64::from_bits(TAG_TRUE);
             }
         }

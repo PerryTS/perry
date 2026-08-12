@@ -3,6 +3,23 @@ use super::WEAK_HOLDERS;
 thread_local! {
     static FULL_WEAK_PROCESSING_WORK_UNITS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    /// #7900: how many white objects the weak-READ barrier actually shaded.
+    /// Tests assert this is non-zero so a green run cannot mean "the read
+    /// happened to return an already-marked target" (CLAUDE.md: a gate must
+    /// assert its subject was live).
+    static WEAK_READ_BARRIER_SHADES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn weak_read_barrier_shades() -> usize {
+    WEAK_READ_BARRIER_SHADES.with(std::cell::Cell::get)
+}
+
+pub(crate) fn reset_weak_read_barrier_shades() {
+    WEAK_READ_BARRIER_SHADES.with(|shades| shades.set(0));
+}
+
+pub(crate) fn note_weak_read_barrier_shade() {
+    WEAK_READ_BARRIER_SHADES.with(|shades| shades.set(shades.get().saturating_add(1)));
 }
 
 pub(crate) fn full_weak_processing_work_units() -> usize {

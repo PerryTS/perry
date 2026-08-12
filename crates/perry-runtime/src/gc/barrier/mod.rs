@@ -981,6 +981,23 @@ pub(super) fn incremental_mark_barrier_value(value_bits: u64) -> bool {
     incremental_mark_barrier_value_with_valid_ptrs(value_bits, valid_ptrs)
 }
 
+/// Weak-to-strong READ barrier (#7900): shade a value word that a weak slot is
+/// about to hand the mutator as a strong reference.
+///
+/// This is the same shade-and-seed the store barrier performs, exposed to
+/// `crate::weakref` because the *read* side of a weak edge is the one
+/// white-to-strong transition neither the store barrier nor allocate-black
+/// birth accounting can observe — and budgeted cycles keep opening mutator
+/// windows AFTER `FinalRootRemark`, i.e. after the last root observation that
+/// could otherwise have discovered the new reference. See
+/// `crate::weakref::read_barrier` for the full argument.
+///
+/// Returns `true` when a previously-white object was marked.
+#[inline]
+pub(crate) fn gc_weak_read_shade(value_bits: u64) -> bool {
+    incremental_mark_barrier_value(value_bits)
+}
+
 #[allow(dead_code)]
 pub(super) fn drain_incremental_mark_barrier_seeds(valid_ptrs: &ValidPointerSet) {
     loop {
