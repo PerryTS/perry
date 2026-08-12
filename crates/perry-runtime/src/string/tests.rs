@@ -772,6 +772,58 @@ mod concat_chain_no_collect {
         }
     }
 
+    /// The REAL fallback: not "a part was a number", but "the open nursery
+    /// block could not serve the result". Driven on its own thread so filling
+    /// the block cannot leak into the rest of the suite.
+    ///
+    /// This is the arm that used to be reachable only in production. It has to
+    /// answer identically, because a refusal is not an event — nothing has
+    /// collected at that point, so the rooted path re-reads its operands from
+    /// the same `parts` array and gets the same pointers.
+    #[test]
+    fn a_full_block_falls_back_to_the_rooted_path_with_the_same_answer() {
+        std::thread::spawn(|| {
+            // Fill the open block through the same no-collect entry the concat
+            // uses, so the very next chain is guaranteed to be refused.
+            // Build the operands FIRST — `js_string_from_bytes` goes through
+            // the COLLECTING entry and would install a fresh block, undoing
+            // the fill.
+            let parts = [heap("a"), heap("bb"), heap("ccc"), heap("dddd")];
+
+            // Now fill through the no-collect entry, which by construction
+            // installs nothing and moves nothing, so `parts` stays valid.
+            // Coarse-to-fine, because refusing a 4 KB request only proves
+            // there is less than 4 KB left — and a 4-part chain of 10 bytes
+            // fits in 40.
+            let mut filled = false;
+            for chunk in [crate::gc::LARGE_OBJECT_THRESHOLD_BYTES / 4, 256, 8] {
+                let bound = 8 * 1024 * 1024 / chunk;
+                filled = false;
+                for _ in 0..bound {
+                    if crate::arena::arena_alloc_gc_no_collect(chunk, 8, crate::gc::GC_TYPE_STRING)
+                        .is_null()
+                    {
+                        filled = true;
+                        break;
+                    }
+                }
+                assert!(filled, "test premise: {chunk} B fill never refused");
+            }
+            assert!(filled, "test premise: the block must actually be full");
+
+            let before = hits();
+            let joined = chain(&parts);
+            assert_eq!(text(joined), "abbcccdddd");
+            assert_eq!(
+                hits(),
+                before,
+                "with the block full the chain must have taken the ROOTED path"
+            );
+        })
+        .join()
+        .expect("full-block fallback test panicked");
+    }
+
     /// The 4/8/32 scratch-size dispatch all route through the same fast path.
     #[test]
     fn every_scratch_size_class_takes_the_fast_path() {
