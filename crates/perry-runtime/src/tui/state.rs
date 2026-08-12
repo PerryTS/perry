@@ -23,16 +23,33 @@ use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-/// Set when ANY state.set() call writes a different value. Cleared by
-/// the render loop at the start of each frame; checked at the bottom
-/// to decide whether to re-render immediately.
-pub static STATE_DIRTY: AtomicBool = AtomicBool::new(false);
+// #7680: `STATE_DIRTY` and `SLOTS` used to be cleared by THREE different
+// locks — this module's own private `TEST_LOCK` (in `reset()` below),
+// `gc::tests::roots`'s `lock_safe_runtime_scanner_test_guard()` (10 call
+// sites), and the global GC-guard lock via `CopyingNurseryTestGuard`
+// (`gc/tests/cycle_state.rs`, `gc/tests/runtime_roots/callback_scanners.rs`).
+// `alloc_returns_sequential_handles`'s `h0 == 0, h1 == 1, h2 == 2` is exactly
+// the #7672 shape: a concurrent `SLOTS.clear()` or a concurrent `alloc()` on
+// another test thread breaks it, and it fails as "handles are not
+// sequential" rather than naming the interference. `tui::state` is not on
+// the GC guards' clear list `reset_copying_nursery_runtime_test_state()`
+// walks, so #7674's gate never saw this table either. Per-thread storage
+// removes the need for all three locks — `gc/tests/roots.rs` and friends
+// still take `lock_safe_runtime_scanner_test_guard()` for `tui::hooks`'s
+// still-unconverted slot pool and for scanner-registration serialization,
+// which is unrelated to this table's isolation.
+per_test_global! {
+    /// Set when ANY state.set() call writes a different value. Cleared by
+    /// the render loop at the start of each frame; checked at the bottom
+    /// to decide whether to re-render immediately.
+    pub static STATE_DIRTY: AtomicBool = AtomicBool::new(false);
 
-/// Per-state storage. Each state() call appends a slot; the returned
-/// handle is the slot's index. Slots hold raw NaN-boxed JSValue bits
-/// so any JS value (number, string, bool, object handle) round-trips
-/// cleanly.
-static SLOTS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+    /// Per-state storage. Each state() call appends a slot; the returned
+    /// handle is the slot's index. Slots hold raw NaN-boxed JSValue bits
+    /// so any JS value (number, string, bool, object handle) round-trips
+    /// cleanly.
+    static SLOTS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+}
 
 /// GC root scanner — emits every slot value so heap-allocated JS
 /// arrays/objects/strings stashed via `state.set(...)` stay reachable
@@ -129,29 +146,24 @@ pub(crate) fn test_with_state_slots_locked<R>(f: impl FnOnce() -> R) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
 
-    /// Cargo runs tests in parallel by default. SLOTS + STATE_DIRTY are
-    /// process-wide globals, so two tests racing see each other's writes.
-    /// This mutex serialises tests within this module — same shape as
-    /// `tui::hooks::tests::TEST_LOCK` (#862).
-    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
+    // #7680: no lock needed here anymore. `SLOTS` and `STATE_DIRTY` are
+    // `per_test_global!`, so this thread's `reset()` and `alloc`/`get`/`set`
+    // calls touch only this thread's own instances — a concurrent test on
+    // another thread cannot land a `SLOTS.clear()` or a concurrent `alloc()`
+    // between the three `js_perry_tui_state_alloc` calls below, which is
+    // exactly the #7672 shape `alloc_returns_sequential_handles` is named
+    // for (a wrong VALUE — non-sequential handles — not a hang).
 
-    /// Acquire the test lock and reset all shared state. Returns the
-    /// guard — drop at end of test. Binding the guard to `_g` keeps it
-    /// alive for the duration of the test; making it the return value
-    /// of `reset()` ensures no test can clear globals without first
-    /// taking the lock.
-    fn reset() -> std::sync::MutexGuard<'static, ()> {
-        let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    /// Reset this thread's state for a fresh test.
+    fn reset() {
         crate::gc::lock_gc_root_registry(&SLOTS).clear();
         STATE_DIRTY.store(false, Ordering::Release);
-        g
     }
 
     #[test]
     fn alloc_returns_sequential_handles() {
-        let _g = reset();
+        reset();
         let h0 = js_perry_tui_state_alloc(0.0);
         let h1 = js_perry_tui_state_alloc(1.0);
         let h2 = js_perry_tui_state_alloc(2.0);
@@ -162,7 +174,7 @@ mod tests {
 
     #[test]
     fn get_returns_initial_value() {
-        let _g = reset();
+        reset();
         let h = js_perry_tui_state_alloc(42.0);
         let v = js_perry_tui_state_get(h);
         assert_eq!(v.to_bits(), 42.0_f64.to_bits());
@@ -170,7 +182,7 @@ mod tests {
 
     #[test]
     fn set_writes_and_get_reads_back() {
-        let _g = reset();
+        reset();
         let h = js_perry_tui_state_alloc(1.0);
         js_perry_tui_state_set(h, 99.0);
         let v = js_perry_tui_state_get(h);
@@ -179,7 +191,7 @@ mod tests {
 
     #[test]
     fn set_flips_dirty_flag_on_change() {
-        let _g = reset();
+        reset();
         let h = js_perry_tui_state_alloc(5.0);
         assert!(!STATE_DIRTY.load(Ordering::Acquire));
         js_perry_tui_state_set(h, 6.0);
@@ -188,7 +200,7 @@ mod tests {
 
     #[test]
     fn set_to_same_value_does_not_flip_dirty() {
-        let _g = reset();
+        reset();
         let h = js_perry_tui_state_alloc(7.0);
         js_perry_tui_state_set(h, 7.0);
         // Same value → no dirty flag.
@@ -197,8 +209,49 @@ mod tests {
 
     #[test]
     fn out_of_range_handle_returns_undefined() {
-        let _g = reset();
+        reset();
         let v = js_perry_tui_state_get(9_999);
         assert_eq!(v.to_bits(), 0x7FFC_0000_0000_0001);
+    }
+
+    /// #7680: plants the #7672 shape directly — allocate a slot on THIS
+    /// thread, clear `SLOTS` (what all three pre-fix lock domains eventually
+    /// did) on ANOTHER thread, and assert the slot survived. Revert the
+    /// `per_test_global!` conversion above (back to a bare `static`) and this
+    /// fails: a foreign thread's clear empties the slot this thread just
+    /// allocated, and a subsequent `js_perry_tui_state_alloc` on this thread
+    /// hands out handle `0` again — the exact non-sequential-handle shape
+    /// `alloc_returns_sequential_handles` is named for.
+    #[test]
+    fn state_slots_survive_a_foreign_clear() {
+        reset();
+        let h = js_perry_tui_state_alloc(7680.0);
+        assert_eq!(
+            js_perry_tui_state_get(h).to_bits(),
+            7680.0_f64.to_bits(),
+            "the probe installed nothing, so survived-vs-wiped would be vacuous"
+        );
+
+        std::thread::spawn(|| {
+            crate::gc::lock_gc_root_registry(&SLOTS).clear();
+            STATE_DIRTY.store(false, Ordering::Release);
+        })
+        .join()
+        .expect("the clearing thread panicked");
+
+        assert_eq!(
+            js_perry_tui_state_get(h).to_bits(),
+            7680.0_f64.to_bits(),
+            "a state slot written on this thread was destroyed by a foreign thread's \
+             clear (#7680). Per-thread storage (`per_test_global!`) is what prevents \
+             this."
+        );
+        let h_next = js_perry_tui_state_alloc(1.0);
+        assert_eq!(
+            h_next,
+            h + 1,
+            "this thread's slot count must not have been reset by the foreign clear"
+        );
+        reset();
     }
 }

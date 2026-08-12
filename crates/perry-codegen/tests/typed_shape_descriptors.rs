@@ -23,6 +23,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -406,9 +407,21 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
         "number-typed array pushes should validate the runtime value before the numeric path"
     );
     assert!(
-        ir.contains("call void @js_typed_feedback_record_fallback_call")
-            && ir.contains("call i64 @js_array_push_f64"),
+        ir.contains("call i64 @js_array_push_f64"),
         "wrong runtime values must keep a boxed runtime push fallback"
+    );
+    // #7480: the fallback PUSH is the subject; the fallback RECORDING is not.
+    // This test used to require `record_fallback_call` alongside the push, which
+    // conflated the two -- and the recording call is exactly what a default
+    // build no longer emits. Asserting its absence keeps the test honest about
+    // which of the two survives, and turns it into a second witness for the
+    // emission gate on the ordinary `arr.push(x)` shape (`LocalGet` is excluded
+    // from `expr_produces_canonical_raw_f64`, so this path is the common one,
+    // not an edge case).
+    assert!(
+        !ir.contains("call void @js_typed_feedback_record_fallback_call"),
+        "a default build must not emit the fallback RECORDING call; only the \
+         fallback push itself is load-bearing"
     );
 }
 
@@ -713,23 +726,55 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
     );
 
     let ir = ir_for(module);
-    let fast_ir = block_between(&ir, "\napush.numeric_fast.", "\napush.numeric_fallback.");
 
+    // #7494: this used to pin the GUARDED-tier block shape
+    // (`apush.numeric_fast`/`apush.numeric_fallback`, from `array_push.rs`'s
+    // `js_typed_feedback_numeric_array_push_guard` + `js_array_numeric_push_
+    // f64_unboxed` pair). That tier only fires when `keep_guarded_numeric_
+    // push` is true — typed-feedback recording compiled in
+    // (`PERRY_TYPED_FEEDBACK`, unset in this harness), OR the pushed value is
+    // NOT provably canonical-raw-f64. #6915 (Repsel 4a.1, landed 2026-07-28,
+    // well before this test last passed) added the opposite-case tier: with
+    // feedback off and a value that IS canonical-raw-f64 by construction —
+    // `i * 1.5` is a `Number` arithmetic chain, which `expr_produces_
+    // canonical_raw_f64` admits — the push skips the runtime guard and the
+    // unboxed-push helper entirely and takes the plain inline-store tier
+    // (`apush.fwd`/`apush.nofwd`/`apush.inbounds`/`apush.realloc`/
+    // `apush.merge`), whose own inline checks (forwarding, integrity,
+    // capacity) are provably equivalent for this value/array combination.
+    // That is a real lowering change, not a regression: `cargo test -p
+    // perry-codegen --test typed_shape_descriptors` on this worktree shows
+    // the inline tier is what a default build emits today, ending in a bare
+    // `store double %v, ptr %element_ptr` with no guard call at all.
+    //
+    // The PROPERTY this test exists to protect survives that change intact:
+    // a push whose value is proven non-pointer by construction must never
+    // touch the per-slot layout mask or the write barrier
+    // (`array_store_needs_layout_note` / `array_store_needs_write_barrier`,
+    // consulted before EITHER tier is chosen, both answer `false` for this
+    // array/value pair). Assert that property directly, over the whole
+    // function, instead of re-deriving a block window for whichever tier is
+    // current — a positional window is exactly what stopped this test from
+    // seeing its own subject once the tier changed.
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard"),
-        "plain-number loop pushes must guard that the runtime layout is still raw-f64"
+        ir.contains("call i64 @js_array_push_f64"),
+        "sanity: the loop's push must still reach SOME push lowering (both \
+         tiers call this on their slow/grow edge) — this catches the \
+         property checks below going vacuous if a future change folds the \
+         push away entirely:\n{ir}"
     );
     assert!(
-        ir.contains("call i64 @js_array_numeric_push_f64_unboxed"),
-        "plain-number loop pushes should use the raw-f64 push helper on the guarded fast path"
+        ir.contains("fmul double") && ir.contains("1.5"),
+        "sanity: the pushed value's own arithmetic (`i * 1.5`) must still be \
+         computed, not constant-folded away:\n{ir}"
     );
     assert!(
-        !fast_ir.contains("call void @js_gc_note_slot_layout"),
-        "integer arithmetic push value should not update slot layout"
+        !ir.contains("call void @js_gc_note_slot_layout"),
+        "integer arithmetic push value should not update slot layout:\n{ir}"
     );
     assert!(
-        !fast_ir.contains("call void @js_write_barrier_slot"),
-        "integer arithmetic push value should not emit a slot barrier"
+        !ir.contains("call void @js_write_barrier_slot"),
+        "integer arithmetic push value should not emit a slot barrier:\n{ir}"
     );
 }
 

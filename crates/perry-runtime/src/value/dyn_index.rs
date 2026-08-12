@@ -2,6 +2,89 @@
 
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    static TEST_DYN_INDEX_DISPATCH_COUNTS: std::cell::Cell<(u64, u64, u64)> =
+        const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+#[cfg(test)]
+fn test_collection_registry_probe_count() -> (u64, u64) {
+    TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| {
+        let (maps, sets, _) = counts.get();
+        (maps, sets)
+    })
+}
+
+#[cfg(test)]
+fn test_receiver_gc_header_read_count() -> u64 {
+    TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| counts.get().2)
+}
+
+#[inline(always)]
+fn probe_set_registry(addr: usize) -> bool {
+    #[cfg(test)]
+    TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| {
+        let (maps, sets, header_reads) = counts.get();
+        counts.set((maps, sets.wrapping_add(1), header_reads));
+    });
+    crate::set::is_registered_set(addr)
+}
+
+#[inline(always)]
+fn probe_map_registry(addr: usize) -> bool {
+    #[cfg(test)]
+    TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| {
+        let (maps, sets, header_reads) = counts.get();
+        counts.set((maps.wrapping_add(1), sets, header_reads));
+    });
+    crate::map::is_registered_map(addr)
+}
+
+/// Read the GC type/flags that both dynamic-index dispatchers already need,
+/// after header-less TypedArray and Buffer receivers have been routed.
+/// A collection tag only selects a registry; registration still proves ownership.
+#[inline(always)]
+fn receiver_gc_tag(addr: usize) -> Option<(u8, u8)> {
+    unsafe {
+        crate::value::addr_class::try_read_gc_header(addr).map(|header| {
+            #[cfg(test)]
+            TEST_DYN_INDEX_DISPATCH_COUNTS.with(|counts| {
+                let (maps, sets, header_reads) = counts.get();
+                counts.set((maps, sets, header_reads.wrapping_add(1)));
+            });
+            (header.obj_type, header.gc_flags)
+        })
+    }
+}
+
+#[inline(always)]
+fn is_registered_collection(addr: usize, obj_type: u8) -> bool {
+    match obj_type {
+        crate::gc::GC_TYPE_SET => probe_set_registry(addr),
+        crate::gc::GC_TYPE_MAP => probe_map_registry(addr),
+        _ => false,
+    }
+}
+
+/// A legacy raw-I64 receiver has no NaN-box tag proving it came from a managed
+/// allocation. Validate membership without dereferencing it before asking for
+/// a `GcHeader`; the old magnitude-only `is_valid_obj_ptr` check admitted any
+/// aligned address in the platform heap range, including unmapped addresses.
+#[inline(always)]
+fn raw_i64_receiver_is_managed(addr: usize) -> bool {
+    if !matches!(
+        crate::arena::classify_heap_space(addr),
+        crate::arena::HeapSpace::Unknown
+    ) {
+        return true;
+    }
+    addr.checked_sub(crate::gc::GC_HEADER_SIZE)
+        .is_some_and(|header| {
+            crate::gc::gc_malloc_header_is_tracked(header as *const crate::gc::GcHeader)
+        })
+}
+
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
     let bits = index.to_bits();
     if (bits & TAG_MASK) == INT32_TAG {
@@ -229,7 +312,11 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    if crate::set::is_registered_set(raw_ptr) || crate::map::is_registered_map(raw_ptr) {
+    // #7865: the receiver's managed-header type can rule both collections out
+    // before either thread-local registry/hash probe. The registry remains the
+    // authority for a matching tag; the tag only selects which one to ask.
+    let receiver_tag = receiver_gc_tag(raw_ptr);
+    if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
         let Some(index) = finite_nonnegative_u32_index(index) else {
             return f64::from_bits(TAG_UNDEFINED);
         };
@@ -323,12 +410,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             return value;
         }
     }
-    if raw_ptr >= crate::gc::GC_HEADER_SIZE {
-        let gc_hdr = unsafe {
-            (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
-        };
-        let obj_type = unsafe { (*gc_hdr).obj_type };
-        let gc_flags = unsafe { (*gc_hdr).gc_flags };
+    if let Some((obj_type, gc_flags)) = receiver_tag {
         if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             || (gc_flags & crate::gc::GC_FLAG_FORWARDED) != 0
         {
@@ -541,12 +623,15 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         }
         return value;
     }
-    if crate::set::is_registered_set(raw_ptr) || crate::map::is_registered_map(raw_ptr) {
+    // A raw-I64 fallback is only a heuristic until arena/malloc membership
+    // proves it. Do this before `receiver_gc_tag`, which reads addr - 8.
+    if !jsval.is_pointer() && !raw_i64_receiver_is_managed(raw_ptr) {
         return value;
     }
-    // Mirror the #63/#321 guard on the get side: heuristic-derived
-    // pseudo-pointers from non-pointer dataflow must not be dereferenced.
-    if !jsval.is_pointer() && !crate::object::is_valid_obj_ptr(raw_ptr as *const u8) {
+    // #7865: reuse the header byte the array/object split below needs. Plain
+    // receivers skip both registries; Map/Set tags still require confirmation.
+    let receiver_tag = receiver_gc_tag(raw_ptr);
+    if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
         return value;
     }
     // #5579 / Issue #957 (set side): a STRING index (`obj["foo"] = v`) must
@@ -589,11 +674,7 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
             return value;
         }
     }
-    let is_array = unsafe {
-        let gc_header =
-            (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
-    };
+    let is_array = receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_ARRAY);
     if is_array {
         crate::array::js_array_set_index_or_string(
             raw_ptr as *mut crate::array::ArrayHeader,
@@ -713,3 +794,7 @@ static KEEP_JS_DYN_INDEX_SET: extern "C" fn(f64, f64, f64) -> f64 = js_dyn_index
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_IS_UNDEFINED_OR_BARE_NAN: extern "C" fn(f64) -> i32 = js_is_undefined_or_bare_nan;
+
+#[cfg(test)]
+#[path = "dyn_index_collection_tag_tests.rs"]
+mod collection_tag_tests;

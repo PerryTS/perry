@@ -550,7 +550,7 @@ fn materialize_scalar_receiver(
             let keys_slot = if let Some(slot) = ctx.class_keys_slots.get(class_name).cloned() {
                 slot
             } else {
-                let slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                let slot = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
                 ctx.class_keys_slots
                     .insert(class_name.to_string(), slot.clone());
                 slot
@@ -980,7 +980,43 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     if !ctx.scalar_replaced.contains_key(receiver_id) {
         return Ok(None);
     }
-    let Some(class_name) = crate::type_analysis::receiver_class_name(ctx, object.as_ref()) else {
+    // #6984: resolve the class from the `new` expression's own provenance
+    // (`ctx.non_escaping_news`, the exact map that gated scalar replacement
+    // for this local in `let_stmt.rs`) BEFORE falling back to the general
+    // `receiver_class_name` resolver.
+    //
+    // `receiver_class_name` is built for guarded/dynamic dispatch, where a
+    // local's DECLARED type is a safe stand-in whenever no `Ptr<Shape>` proof
+    // is available — that dispatch always re-checks the class in the
+    // registry and falls back cleanly on a miss. Scalar replacement's
+    // receiver has no such fallback: once a local is scalar-replaced,
+    // `ctx.locals[receiver_id]` is a bare, never-initialized alloca (the
+    // heap allocation was elided), so any lowering that reads it as an
+    // ordinary boxed receiver observes garbage. `receiver_class_name`'s own
+    // fallback arm returns the DECLARED type name whenever Phase 3b's proof
+    // is unavailable for ANY reason (not just `PERRY_PTR_SHAPE_LOCALS=0`) —
+    // and for an interface- or alias-typed local (`const o: Shaped = new
+    // Impl(...)`) that name is not a registered class at all. Looking it up
+    // in `ctx.classes` then fails, `simple_scalar_method_summary` returns
+    // `None`, this function bails, and the caller falls through to the
+    // ordinary heap-object method-call lowering — which reads the
+    // uninitialized dummy slot and crashes (`TypeError: Cannot read
+    // properties of undefined`).
+    //
+    // `ctx.non_escaping_news` is exact and structural: it is keyed by the
+    // `New` expression's own class name, never the declared annotation, so
+    // it names the correct class regardless of whether Phase 3b ran at all.
+    // Any id present in `ctx.scalar_replaced` via the `New` branch of
+    // `let_stmt.rs` is present here with the identical class name; the only
+    // scalar-replaced receivers NOT covered are non-escaping OBJECT
+    // LITERALS, which carry no class and keep falling back to
+    // `receiver_class_name` (unchanged, and already `None` for them there).
+    let class_name_opt = ctx
+        .non_escaping_news
+        .get(receiver_id)
+        .cloned()
+        .or_else(|| crate::type_analysis::receiver_class_name(ctx, object.as_ref()));
+    let Some(class_name) = class_name_opt else {
         return Ok(None);
     };
     let Some(method) = crate::collectors::simple_scalar_method_summary(

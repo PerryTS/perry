@@ -58,7 +58,16 @@ use std::sync::{Mutex, OnceLock};
 pub fn enabled() -> bool {
     #[cfg(test)]
     if test_support::forced() {
-        return true;
+        // Only the thread that opened the `Session` records. The gate and the
+        // sink are both process-global while `Session`'s lock only serialises
+        // tests that TAKE it, so any concurrently-running test that lowers code
+        // without one used to emit into the holder's sink — its snapshot then
+        // saw a neighbour's rows. That is a real, observed flake, not a
+        // theoretical one: `only_the_return_position_is_marked_served` reads
+        // `rows.len() == 2` and failed at 3 roughly one run in six once slice 7
+        // (#7662) added lowering tests, which changed the parallel schedule.
+        // Diagnosed from the extra row, not from the timing.
+        return test_support::recording_thread_is_current();
     }
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
@@ -81,9 +90,35 @@ pub(crate) mod test_support {
 
     static FORCED: AtomicBool = AtomicBool::new(false);
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    /// Thread that currently holds a `Session`. The sink is process-global but
+    /// the lock only serialises tests that take a `Session`, so recording is
+    /// additionally narrowed to the holder's thread — otherwise a neighbouring
+    /// test that lowers code without a `Session` writes into this one's
+    /// snapshot.
+    static RECORDING_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
 
     pub(crate) fn forced() -> bool {
         FORCED.load(Ordering::Relaxed)
+    }
+
+    /// Is the calling thread the one that opened the active `Session`?
+    pub(crate) fn recording_thread_is_current() -> bool {
+        RECORDING_THREAD
+            .lock()
+            .map(|t| *t == Some(std::thread::current().id()))
+            .unwrap_or(false)
+    }
+
+    fn claim_recording_thread() {
+        if let Ok(mut t) = RECORDING_THREAD.lock() {
+            *t = Some(std::thread::current().id());
+        }
+    }
+
+    fn release_recording_thread() {
+        if let Ok(mut t) = RECORDING_THREAD.lock() {
+            *t = None;
+        }
     }
 
     /// Enable the report and drain any leftover entries. Restores the gate on
@@ -99,6 +134,7 @@ pub(crate) mod test_support {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             FORCED.store(true, Ordering::Relaxed);
+            claim_recording_thread();
             let _ = super::take_entries();
             // The drain above may itself have collapsed leftovers; zero the
             // counter so a hand-built render test never reads a neighbour's.
@@ -114,6 +150,7 @@ pub(crate) mod test_support {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             FORCED.store(false, Ordering::Relaxed);
+            claim_recording_thread();
             let _ = super::take_entries();
             super::MASKED_BY_DEDUP.store(0, Ordering::Relaxed);
             Session { _guard: guard }
@@ -128,6 +165,7 @@ pub(crate) mod test_support {
         fn drop(&mut self) {
             let _ = super::take_entries();
             FORCED.store(false, Ordering::Relaxed);
+            release_recording_thread();
         }
     }
 }

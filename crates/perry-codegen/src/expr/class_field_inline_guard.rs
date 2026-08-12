@@ -54,6 +54,135 @@ const OBJ_FLAG_HAS_DESCRIPTORS_BIT: &str = "2048"; // OBJ_FLAG_HAS_DESCRIPTORS (
 const OBJ_FLAG_FROZEN_OR_DESCRIPTORS: &str = "2049";
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 
+/// A widening arm for the class-field shape check: one concrete subclass whose
+/// instances put `property` at the SAME packed slot as the declared class does.
+///
+/// `keys_global` names the module global holding that subclass's canonical keys
+/// array; `class_id` is its registered class id.
+#[derive(Clone, Debug)]
+pub(crate) struct ClassFieldSubclassArm {
+    pub class_id: u32,
+    pub keys_global: String,
+}
+
+/// A hierarchy wider than this turns the shape check into a longer compare
+/// chain than the by-name fallback it replaces. Matches the dispatch-side cap
+/// in `lower_call/property_get/dynamic_dispatch.rs`.
+const MAX_CLASS_FIELD_SUBCLASS_ARMS: usize = 8;
+
+/// Every transitive subclass of `class_name` that agrees with it about
+/// `property`'s slot — i.e. every receiver the field fast path may accept
+/// beyond the declared class itself.
+///
+/// ## Why this exists
+///
+/// `emit_class_field_inline_precheck` (and the runtime `class_field_fast_contract`
+/// behind it) speculates that the receiver's dynamic class is EXACTLY the
+/// expression's declared class. Inside a base class's own constructor or method
+/// that bet is not merely unreliable, it is **guaranteed wrong**: `this` in
+/// `Node2D`'s constructor is only ever reached through `super(...)` from a
+/// subclass, so the class-id compare fails on every single store and each
+/// `this.x = x` pays a full by-name `js_put_value_set`. The same holds for every
+/// inherited read — a `Node2D` getter reading `this.x` misses 100% of the time.
+///
+/// This is the field-side counterpart of the dispatch widening in
+/// `lower_call/property_get/dynamic_dispatch.rs` (#7800): one shape probe,
+/// several (class id, keys) pairs.
+///
+/// ## Why it is sound
+///
+/// `class_field_global_index` lays a class out as its init chain's keyable
+/// fields, root → leaf — parent fields first — so an inherited field keeps its
+/// index in every subclass. That is a property of the layout algorithm, not a
+/// promise, so this **re-derives the index for each candidate** and drops any
+/// subclass that disagrees (a shadowing re-declaration lands at its own slot,
+/// and an accessor anywhere on the chain makes `class_field_global_index`
+/// return `None`). The raw-f64 candidacy of the declared type is likewise
+/// re-checked per subclass: the fast path reads/writes the slot as a bare
+/// double, and the per-object typed-layout intact bit only licenses that for a
+/// field the *matched* class declares as a raw-f64 candidate.
+pub(crate) fn class_field_subclass_arms(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+    field_index: u32,
+    requires_raw_f64: bool,
+) -> Vec<ClassFieldSubclassArm> {
+    let Some(&declared_id) = ctx.class_ids.get(class_name) else {
+        return Vec::new();
+    };
+    // Deterministic order: class id, then name. Codegen output must be
+    // byte-reproducible (the corpus `cmp` A/B depends on it).
+    let mut candidates: Vec<(&String, u32)> = ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+    candidates.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+
+    let mut arms: Vec<ClassFieldSubclassArm> = Vec::new();
+    let mut seen_ids: Vec<u32> = vec![declared_id];
+    for (sub_name, sub_id) in candidates {
+        if sub_name == class_name || sub_id == 0 || seen_ids.contains(&sub_id) {
+            continue;
+        }
+        if !is_transitive_subclass(ctx, sub_name, class_name) {
+            continue;
+        }
+        // A class with computed runtime members has keys the packed layout
+        // does not describe; its sets route through the by-name path anyway.
+        if super::property_set::class_has_computed_runtime_members(ctx, sub_name) {
+            continue;
+        }
+        // The layout algorithm SHOULD put an inherited field at the same index
+        // in every subclass. Verify rather than assume — a shadowing
+        // re-declaration or an accessor on the subclass chain breaks it.
+        if crate::type_analysis::class_field_global_index(ctx, sub_name, property)
+            != Some(field_index)
+        {
+            continue;
+        }
+        // The fast path's representation choice (raw double vs NaN-boxed) is
+        // fixed at this site, so a subclass whose declared type disagrees would
+        // have the slot read at the wrong representation.
+        let sub_raw_f64 = crate::type_analysis::class_field_declared_type(ctx, sub_name, property)
+            .as_ref()
+            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+        if sub_raw_f64 != requires_raw_f64 {
+            continue;
+        }
+        let Some(keys_global) = ctx.class_keys_globals.get(sub_name).cloned() else {
+            continue;
+        };
+        seen_ids.push(sub_id);
+        arms.push(ClassFieldSubclassArm {
+            class_id: sub_id,
+            keys_global,
+        });
+        if arms.len() > MAX_CLASS_FIELD_SUBCLASS_ARMS {
+            return Vec::new();
+        }
+    }
+    arms
+}
+
+/// Is `name` a transitive subclass of `ancestor`? Cycle- and depth-guarded:
+/// heavily-modular packages declare same-named classes across modules, and the
+/// name-keyed `ctx.classes` can then form a parent cycle (see
+/// `type_analysis_class_fields.rs`).
+fn is_transitive_subclass(ctx: &FnCtx<'_>, name: &str, ancestor: &str) -> bool {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut parent = ctx.classes.get(name).and_then(|c| c.extends_name.clone());
+    let mut depth = 0usize;
+    while let Some(p) = parent {
+        depth += 1;
+        if depth > 64 || !seen.insert(p.clone()) {
+            return false;
+        }
+        if p == ancestor {
+            return true;
+        }
+        parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
+    }
+    false
+}
+
 /// Emit the `i1` "plain finite number" predicate on a value's raw bits: true
 /// iff the exponent field is not all-ones. Rejects ±Inf, every NaN (canonical
 /// or boxed), and therefore every NaN-box tag — exactly the values the
@@ -312,6 +441,13 @@ pub(crate) fn emit_proven_shape_recheck(
 /// adds the not-frozen and plain-finite-number checks the set fast contract
 /// requires (a non-number must downgrade through the boxed setter, never a raw
 /// store).
+///
+/// `subclass_arms` widens the shape test from "is exactly the declared class"
+/// to "is the declared class or one of these subclasses, each of which puts
+/// this property at this same slot" — see [`class_field_subclass_arms`] for why
+/// the narrow form misses 100% of the time in a base-class body. Pass an empty
+/// slice to keep the single-pair check; a class with no subclasses emits
+/// byte-identical IR either way.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_class_field_inline_precheck(
     ctx: &mut FnCtx,
@@ -323,6 +459,7 @@ pub(crate) fn emit_class_field_inline_precheck(
     require_raw_f64: bool,
     set_value_bits: Option<&str>,
     fast_label: &str,
+    subclass_arms: &[ClassFieldSubclassArm],
 ) -> String {
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
@@ -395,9 +532,32 @@ pub(crate) fn emit_class_field_inline_precheck(
         // before this dereference.)
         let mut acc = blk.and(I1, &gtype_ok, &not_fwd);
         acc = blk.and(I1, &acc, &ot_ok);
-        acc = blk.and(I1, &acc, &cid_ok);
-        acc = blk.and(I1, &acc, &fc_ok);
-        acc = blk.and(I1, &acc, &ka_ok);
+        if subclass_arms.is_empty() {
+            // Byte-for-byte the pre-widening and-chain. A class with no
+            // eligible subclass must emit IDENTICAL IR, so the corpus-wide
+            // `cmp` stays a usable no-regression instrument (a reordered
+            // and-chain alone made 17 of 19 corpus binaries differ for no
+            // behavioural reason).
+            acc = blk.and(I1, &acc, &cid_ok);
+            acc = blk.and(I1, &acc, &fc_ok);
+            acc = blk.and(I1, &acc, &ka_ok);
+        } else {
+            // The declared class's own (class id, keys) pair, OR any subclass
+            // arm's. Each arm is a full pair — matching a class id without its
+            // canonical keys array would accept an instance that has since
+            // grown a property and no longer has the packed layout this slot
+            // index describes.
+            let mut shape_ok = blk.and(I1, &cid_ok, &ka_ok);
+            for arm in subclass_arms {
+                let arm_cid_ok = blk.icmp_eq(I32, &class_id, &arm.class_id.to_string());
+                let arm_keys = blk.load(I64, &format!("@{}", arm.keys_global));
+                let arm_ka_ok = blk.icmp_eq(I64, &keys_array, &arm_keys);
+                let arm_ok = blk.and(I1, &arm_cid_ok, &arm_ka_ok);
+                shape_ok = blk.or(I1, &shape_ok, &arm_ok);
+            }
+            acc = blk.and(I1, &acc, &shape_ok);
+            acc = blk.and(I1, &acc, &fc_ok);
+        }
 
         // #5654: a receiver that has ever had a property / accessor descriptor
         // installed on it (Object.defineProperty / freeze / seal) needs the

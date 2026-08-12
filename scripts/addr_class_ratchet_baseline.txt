@@ -78,7 +78,6 @@ handle-floor | crates/perry-runtime/src/json/stringify.rs | 2
 handle-floor | crates/perry-runtime/src/jsx.rs | 4
 handle-floor | crates/perry-runtime/src/native_abi.rs | 3
 handle-floor | crates/perry-runtime/src/native_arena.rs | 2
-handle-floor | crates/perry-runtime/src/native_handle.rs | 1
 handle-floor | crates/perry-runtime/src/net_validate.rs | 1
 handle-floor | crates/perry-runtime/src/node_inspector.rs | 1
 handle-floor | crates/perry-runtime/src/node_repl.rs | 1
@@ -95,7 +94,7 @@ handle-floor | crates/perry-runtime/src/node_submodules/test.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/timers.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/trace_events.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/zlib.rs | 3
-handle-floor | crates/perry-runtime/src/node_v8.rs | 2
+handle-floor | crates/perry-runtime/src/node_v8.rs | 1
 handle-floor | crates/perry-runtime/src/node_vm.rs | 3
 handle-floor | crates/perry-runtime/src/object/alloc.rs | 4
 handle-floor | crates/perry-runtime/src/object/arguments.rs | 1
@@ -156,7 +155,7 @@ handle-floor | crates/perry-runtime/src/process.rs | 2
 handle-floor | crates/perry-runtime/src/process/env_misc.rs | 1
 handle-floor | crates/perry-runtime/src/process/node_module.rs | 2
 handle-floor | crates/perry-runtime/src/promise/combinators.rs | 1
-handle-floor | crates/perry-runtime/src/proxy.rs | 5
+handle-floor | crates/perry-runtime/src/proxy.rs | 4
 handle-floor | crates/perry-runtime/src/readline_helpers.rs | 1
 handle-floor | crates/perry-runtime/src/regex.rs | 2
 handle-floor | crates/perry-runtime/src/set.rs | 4
@@ -170,7 +169,7 @@ handle-floor | crates/perry-runtime/src/symbol/get.rs | 6
 handle-floor | crates/perry-runtime/src/symbol/iterator.rs | 1
 handle-floor | crates/perry-runtime/src/text.rs | 2
 handle-floor | crates/perry-runtime/src/thread.rs | 10
-handle-floor | crates/perry-runtime/src/timer.rs | 2
+handle-floor | crates/perry-runtime/src/timer.rs | 1
 handle-floor | crates/perry-runtime/src/tls.rs | 1
 handle-floor | crates/perry-runtime/src/tty.rs | 1
 handle-floor | crates/perry-runtime/src/typed_feedback.rs | 3
@@ -184,7 +183,6 @@ handle-floor | crates/perry-runtime/src/url/search_params.rs | 1
 handle-floor | crates/perry-runtime/src/util_call_sites.rs | 1
 handle-floor | crates/perry-runtime/src/util_inherits.rs | 2
 handle-floor | crates/perry-runtime/src/util_parse_args.rs | 1
-handle-floor | crates/perry-runtime/src/util_promisify.rs | 1
 handle-floor | crates/perry-runtime/src/util_style_text.rs | 1
 handle-floor | crates/perry-runtime/src/value/dyn_index.rs | 2
 handle-floor | crates/perry-runtime/src/value/dynamic_arith.rs | 2
@@ -234,11 +232,10 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/class_meta.r
 lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/construct.rs | 6
 lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/prototype_objects.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/descriptors.rs | 2
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/accessors.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 3
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 2
+lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/has_property.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_set_by_name/attr_variants.rs | 2
@@ -275,3 +272,19 @@ lone-valid-obj-ptr | crates/perry-runtime/src/util_mime.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_style_text.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/value/dyn_index.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/value/to_string.rs | 1
+
+# #7272: `crates/perry-ext-*` entered this gate's scope. These ten sites are
+# not new code — they were invisible because the scan roots stopped at
+# perry-runtime/perry-stdlib while the sibling gate
+# (gc_store_site_inventory.py) had globbed the ext crates all along.
+#
+# Five of them are the HTTP server's, which #6826 moved out of
+# crates/perry-stdlib/src/http.rs. This file used to carry an entry for that
+# path, and once the file vanished the gate reported "baseline says 11, found
+# 0 -- lower it to 0": an invitation to ratify a coverage loss as a fix. They
+# are baselined here at their real counts instead.
+handle-floor | crates/perry-ext-events/src/lib.rs | 3
+handle-floor | crates/perry-ext-exponential-backoff/src/lib.rs | 1
+handle-floor | crates/perry-ext-fastify/src/server.rs | 1
+handle-floor | crates/perry-ext-http/src/agent.rs | 3
+handle-floor | crates/perry-ext-http/src/lib.rs | 2

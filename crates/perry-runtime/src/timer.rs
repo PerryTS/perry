@@ -42,7 +42,7 @@ struct Timer {
 unsafe impl Send for Timer {}
 
 // Global timer queues (Mutex-protected for cross-thread access)
-static TIMER_QUEUE: Mutex<Vec<Timer>> = Mutex::new(Vec::new());
+per_test_global!(static TIMER_QUEUE: Mutex<Vec<Timer>> = Mutex::new(Vec::new()));
 static START_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Initialize the timer system (called once at startup)
@@ -374,7 +374,7 @@ static MOCK_TIMERS: Mutex<MockTimersState> = Mutex::new(MockTimersState {
     intervals: Vec::new(),
 });
 
-static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
+per_test_global!(static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new()));
 // Shared id counter across callback timers AND intervals so a handle id is
 // globally unique. Node treats Timeout/Interval as the same internal Timer
 // type, so `clearTimeout(intervalHandle)` and `clearInterval(timeoutHandle)`
@@ -388,6 +388,8 @@ static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 mod gc_scan;
 mod ownership;
 mod ref_states;
+#[cfg(test)] // #7680: not re-exported; reach via `crate::timer::test_shared_queues::`
+pub(crate) mod test_shared_queues;
 
 pub(crate) use ownership::purge_agent_timers;
 use ownership::{has_refed_callback_timer, has_refed_interval_timer, has_refed_promise_timer};
@@ -569,34 +571,13 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
 }
 
 fn set_timer_ref_state(id: i64, has_ref: bool) {
+    ref_states::TIMER_IDS_NONEMPTY.arm();
     let mut slot = TIMER_REF_STATES.lock().unwrap();
     slot.get_or_insert_with(TimerRefStates::default)
         .insert_bounded(id, has_ref, TIMER_REF_STATES_CAP);
 }
 
-/// Whether `id` corresponds to a timer that was scheduled by this runtime
-/// (active or already cleared). Used by the small-handle method/property
-/// fast paths in `object/*.rs` and by `js_number_coerce` to decide whether
-/// to apply Timeout-shaped semantics to a NaN-boxed small pointer. Without
-/// this gate, any small handle (UI widget, drizzle, etc.) would accidentally
-/// route through timer dispatch.
-///
-/// Entries in `TIMER_REF_STATES` are inserted at schedule time and never
-/// removed — clearing a timer marks it cleared in the queue but keeps the
-/// id registered as "this was a timer" so post-clear `.hasRef()` / `+timer`
-/// / `.unref()` still route through timer dispatch (Node keeps the
-/// Timeout object alive after `clearTimeout` and methods still work).
-pub fn is_known_timer_id(id: i64) -> bool {
-    if id <= 0 {
-        return false;
-    }
-    TIMER_REF_STATES
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|s| s.states.contains_key(&id))
-        .unwrap_or(false)
-}
+pub use ref_states::is_known_timer_id;
 
 fn throw_mock_timer_invalid_state(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -941,7 +922,8 @@ fn raw_closure_pointer(bits: u64) -> Option<usize> {
         return None;
     }
     let ptr = bits as usize;
-    if ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // #7531: band, not magnitude floor (0x1008 admitted every handle band).
+    if !crate::value::addr_class::is_plausible_heap_addr(ptr) {
         return None;
     }
     let header_addr = ptr - crate::gc::GC_HEADER_SIZE;
@@ -1402,7 +1384,7 @@ struct IntervalTimer {
 // what makes the cross-thread pointers here sound.
 unsafe impl Send for IntervalTimer {}
 
-static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(Vec::new());
+per_test_global!(static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(Vec::new()));
 
 /// JS-style setInterval that takes a callback function and interval
 /// The callback is a closure pointer that will be called repeatedly

@@ -429,6 +429,7 @@ pub(super) fn compile_method(
         const_number_locals: std::collections::HashMap::new(),
         current_block: 0,
         discard_expr_value: false,
+        discard_this_expr: false,
         func_names,
         strings,
         loop_targets: Vec::new(),
@@ -477,6 +478,7 @@ pub(super) fn compile_method(
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
+        namespace_member_nested: &cross_module.namespace_member_nested,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
@@ -504,9 +506,10 @@ pub(super) fn compile_method(
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
         shadow_slots_bound: shadow_slot_map.values().copied().collect(),
-        temp_roots: crate::expr::temp_root::TempRootPool::default(),
+        temp_roots: crate::rooting::TempRootPool::default(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
+        declared_only_numeric_locals: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
@@ -517,6 +520,7 @@ pub(super) fn compile_method(
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
@@ -1049,8 +1053,9 @@ pub(super) fn compile_method(
     }
     for ic_name in &ic_globals {
         llmod.add_raw_global(format!(
-            "@{} = private global [8 x i64] zeroinitializer",
-            ic_name
+            "@{} = private global [{} x i64] zeroinitializer",
+            ic_name,
+            crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
         ));
     }
     for raw in &typed_parse_rodata {
@@ -1484,6 +1489,7 @@ pub(super) fn compile_static_method(
         const_number_locals: std::collections::HashMap::new(),
         current_block: 0,
         discard_expr_value: false,
+        discard_this_expr: false,
         func_names,
         strings,
         loop_targets: Vec::new(),
@@ -1536,6 +1542,7 @@ pub(super) fn compile_static_method(
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
+        namespace_member_nested: &cross_module.namespace_member_nested,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
@@ -1563,9 +1570,10 @@ pub(super) fn compile_static_method(
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
         shadow_slots_bound: shadow_slot_map.values().copied().collect(),
-        temp_roots: crate::expr::temp_root::TempRootPool::default(),
+        temp_roots: crate::rooting::TempRootPool::default(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
+        declared_only_numeric_locals: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
@@ -1576,6 +1584,7 @@ pub(super) fn compile_static_method(
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
@@ -1716,8 +1725,9 @@ pub(super) fn compile_static_method(
     }
     for ic_name in &ic_globals {
         llmod.add_raw_global(format!(
-            "@{} = private global [8 x i64] zeroinitializer",
-            ic_name
+            "@{} = private global [{} x i64] zeroinitializer",
+            ic_name,
+            crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
         ));
     }
     for raw in &typed_parse_rodata {

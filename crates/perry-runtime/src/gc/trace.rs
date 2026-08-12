@@ -53,17 +53,36 @@ thread_local! {
 const VALID_POINTER_ARENA_RUN_CAPACITY: usize = 1024;
 
 pub(crate) struct ValidPointerSet {
-    /// Arena-only start pointers in address-ordered runs. `lookup_set`
-    /// handles exact pointer membership; these runs support
-    /// `enclosing_object` floor lookups for arena interior pointers without
-    /// a final heap-sized merge.
+    /// Arena-only start pointers in address-ordered runs — **the exact arena
+    /// membership set**, not merely an index for `enclosing_object`'s floor
+    /// lookups. `ArenaObjectCursorBuilder::new(ArenaWalkOrder::Address)` hands
+    /// the census headers over in ascending address order, so each run is
+    /// sorted by construction and a floor lookup that lands on the query IS
+    /// the membership answer.
+    ///
+    /// This used to be shadowed by a parallel `BTreeSet` over the same
+    /// addresses. That set cost one B-tree insert per live arena object with
+    /// nothing to show for it: the runs already held the same data in the same
+    /// order. On `json_pipeline` 500k the shadow cost **245.5 ms of a 748.3 ms
+    /// full collection** (`phase_us.build_valid_pointer_set`), 12.6% of the
+    /// `build_out` phase, and ~40 MB of transient peak heap (#7592).
     pub(super) arena_runs: Vec<Vec<usize>>,
+    /// `arena_runs[i].first()`, mirrored into one contiguous vector so the
+    /// run-level binary search reads 8-byte fences instead of chasing a
+    /// `Vec` header per probe. At 500k `json_pipeline` records this is ~4k
+    /// entries (32 KB, L2-resident) against 33 MB of run storage, and it is
+    /// what keeps the membership lookup competitive with the B-tree probe it
+    /// replaces (#7592).
+    pub(super) arena_run_firsts: Vec<usize>,
     pub(super) current_arena_run: Vec<usize>,
-    /// Exact pointer membership filled incrementally as arena and malloc
-    /// entries are discovered. A B-tree avoids hash-table rebuilds in tiny
+    /// Live count of pushed arena starts (sealed runs + the open one), kept so
+    /// `lookup_count` stays O(1).
+    pub(super) arena_count: usize,
+    /// Exact membership for **malloc-tracked** objects only, which have no
+    /// address order to exploit. A B-tree avoids hash-table rebuilds in tiny
     /// budget steps; insertion may split one fixed-size node but never
     /// rehashes all previously discovered pointers.
-    pub(super) lookup_set: std::collections::BTreeSet<usize>,
+    pub(super) malloc_lookup: std::collections::BTreeSet<usize>,
     // Min/max heap-pointer range across the valid set. Updated as entries
     // are inserted. The conservative stack scan calls `contains` once per
     // 8-byte stack word (~1024 calls per scanned KB of stack) and
@@ -99,8 +118,10 @@ impl ValidPointerSet {
     pub(super) fn new() -> Self {
         Self {
             arena_runs: Vec::new(),
+            arena_run_firsts: Vec::new(),
             current_arena_run: Vec::with_capacity(VALID_POINTER_ARENA_RUN_CAPACITY),
-            lookup_set: std::collections::BTreeSet::new(),
+            arena_count: 0,
+            malloc_lookup: std::collections::BTreeSet::new(),
             range_min: usize::MAX,
             range_max: 0,
             tenured_nursery_bytes: 0,
@@ -125,9 +146,9 @@ impl ValidPointerSet {
             debug_assert!(previous <= ptr);
         }
 
-        self.lookup_set.insert(ptr);
         self.record_pointer_range(ptr);
         self.current_arena_run.push(ptr);
+        self.arena_count += 1;
         if self.current_arena_run.len() >= VALID_POINTER_ARENA_RUN_CAPACITY {
             self.seal_current_arena_run();
         }
@@ -137,8 +158,13 @@ impl ValidPointerSet {
         if self.classifier_mode {
             return; // #6179: no exact census in classifier mode
         }
-        self.lookup_set.insert(ptr);
+        self.malloc_lookup.insert(ptr);
         self.record_pointer_range(ptr);
+    }
+
+    /// Total censused entries (arena starts + malloc starts).
+    pub(super) fn lookup_count(&self) -> usize {
+        self.arena_count + self.malloc_lookup.len()
     }
 
     pub(super) fn record_tenured_nursery_bytes(&mut self, bytes: usize) {
@@ -166,6 +192,9 @@ impl ValidPointerSet {
             return;
         }
         let sealed = std::mem::take(&mut self.current_arena_run);
+        // Non-empty by the guard above, so the fence mirror stays index-aligned
+        // with `arena_runs` — `arena_run_firsts[i] == arena_runs[i][0]`.
+        self.arena_run_firsts.push(sealed[0]);
         self.arena_runs.push(sealed);
     }
 
@@ -199,10 +228,13 @@ impl ValidPointerSet {
             // censused address range.
             return false;
         }
-        // Exact lookup. The B-tree insert path is bounded during
-        // `BuildValidPointerSet`, so a tiny GC step cannot trigger a
-        // heap-sized hash-table rebuild.
-        let exact = self.lookup_set.contains(ptr);
+        // Exact lookup. Arena starts answer from the address-ordered census
+        // runs (a floor lookup that lands ON the query is membership); only
+        // malloc-tracked starts, which have no usable order, need the B-tree.
+        // Arena first because arena hits dominate every workload that reaches
+        // here — a malloc pointer pays one extra run-level binary search.
+        let exact = self.arena_start_censused(*ptr)
+            || (!self.malloc_lookup.is_empty() && self.malloc_lookup.contains(ptr));
         // #6179 differential verification (PERRY_GC_VERIFY_CLASSIFIER=1):
         // before the exact set can be replaced by page-metadata
         // classification on precise cycles, the classifier must be proven a
@@ -253,10 +285,38 @@ impl ValidPointerSet {
         }
     }
 
+    /// Exact arena membership: the census runs are address-ordered, so `ptr`
+    /// was censused iff its floor is itself.
+    ///
+    /// **Load-bearing ordering requirement, which the `BTreeSet` this replaced
+    /// did not have.** The B-tree was complete after every `push_arena`, so a
+    /// mid-build query merely saw fewer entries. The runs are only complete
+    /// once `finalize()` has sealed `current_arena_run` — up to
+    /// `VALID_POINTER_ARENA_RUN_CAPACITY` censused starts are invisible before
+    /// that. A membership query on an unsealed set is therefore a FALSE
+    /// NEGATIVE, and a false negative here is not a missed optimisation: the
+    /// conservative scan drops the root, the object is swept live, and the
+    /// failure surfaces cycles later as `TypeError: value is not a function`.
+    ///
+    /// The builder's phase machine guarantees this today (`Finalize` precedes
+    /// `Done`, and the set escapes only through `finish()`), so the assert is
+    /// free in release. It exists so that a phase added after `Finalize`, or a
+    /// caller that queries a partially-built set, fails a test instead of
+    /// corrupting the heap. Verified to fire: skipping the seal in `finalize`
+    /// trips it with "4 censused starts are invisible to this lookup".
+    #[inline]
+    fn arena_start_censused(&self, ptr: usize) -> bool {
+        debug_assert!(
+            self.current_arena_run.is_empty(),
+            "arena membership queried before finalize() sealed the open run: \
+             {} censused starts are invisible to this lookup",
+            self.current_arena_run.len()
+        );
+        self.find_arena_floor(ptr) == Some(ptr)
+    }
+
     fn find_arena_floor(&self, ptr: usize) -> Option<usize> {
-        let idx = self
-            .arena_runs
-            .partition_point(|run| run.first().copied().is_some_and(|first| first <= ptr));
+        let idx = self.arena_run_firsts.partition_point(|&first| first <= ptr);
         if idx == 0 {
             return None;
         }
@@ -470,7 +530,7 @@ impl ValidPointerSetBuilder {
                 .map_or(0, crate::arena::ArenaObjectCursorBuilder::inspected_blocks),
             arena_run_count: self.set.arena_runs.len(),
             current_arena_run_len: self.set.current_arena_run.len(),
-            lookup_count: self.set.lookup_set.len(),
+            lookup_count: self.set.lookup_count(),
             malloc_index: self.malloc_index,
         }
     }

@@ -43,7 +43,7 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
             CONS_PINNED.with(|s| s.borrow_mut().clear());
             if !self.pinned_header.is_null() {
                 unsafe {
-                    (*self.pinned_header).gc_flags &= !GC_FLAG_PINNED;
+                    crate::gc::unpin_object(self.pinned_header);
                 }
             }
         }
@@ -103,7 +103,7 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
     unsafe {
         (*survivor_header).gc_flags |= GC_FLAG_MARKED;
         (*live_header).gc_flags |= GC_FLAG_MARKED;
-        (*pinned_header).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(pinned_header);
     }
 
     let sweep = sweep_with_age_bump(false);
@@ -127,7 +127,13 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
         "seeded unpinned live/dead old page should be selected for defrag"
     );
 
+    crate::arena::reset_old_page_meta_snapshot_calls_for_tests();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_eq!(
+        crate::arena::old_page_meta_snapshot_calls_for_tests(),
+        0,
+        "a copying minor cannot consume an old-page defrag selection"
+    );
     let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let promoted_header = unsafe { header_from_user_ptr(promoted as *const u8) };
     let promoted_total = unsafe { (*promoted_header).size as usize };
@@ -535,7 +541,7 @@ fn test_copying_minor_falls_back_for_pinned_young_root() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = young_leaf();
     unsafe {
-        (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(header_from_user_ptr(child as *const u8));
     }
     js_shadow_slot_set(0, ptr_bits(child));
 
@@ -550,7 +556,7 @@ fn test_copying_minor_falls_back_for_pinned_young_root() {
     );
     assert_eq!(after, child);
     unsafe {
-        (*header_from_user_ptr(child as *const u8)).gc_flags &= !GC_FLAG_PINNED;
+        crate::gc::unpin_object(header_from_user_ptr(child as *const u8));
     }
 }
 
@@ -562,7 +568,7 @@ fn test_copying_minor_falls_back_for_pinned_young_dirty_slot() {
     let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
     unsafe {
         *elements = ptr_bits(child);
-        (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(header_from_user_ptr(child as *const u8));
     }
     js_write_barrier_slot(ptr_bits(old_arr as usize), elements as u64, ptr_bits(child));
 
@@ -577,7 +583,7 @@ fn test_copying_minor_falls_back_for_pinned_young_dirty_slot() {
     );
     assert_eq!(child_after, child);
     unsafe {
-        (*header_from_user_ptr(child as *const u8)).gc_flags &= !GC_FLAG_PINNED;
+        crate::gc::unpin_object(header_from_user_ptr(child as *const u8));
     }
 }
 
@@ -593,7 +599,7 @@ fn test_copying_minor_falls_back_for_transitive_pinned_young_child() {
             (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
         *elements = ptr_bits(child);
         layout_note_slot(arr as usize, 0, *elements);
-        (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(header_from_user_ptr(child as *const u8));
         elements
     };
     if gc_force_evacuate_enabled() {
@@ -631,7 +637,7 @@ fn test_copying_minor_falls_back_for_transitive_pinned_young_child() {
             0,
             "pinned child must not receive a forwarding pointer"
         );
-        (*child_header).gc_flags &= !GC_FLAG_PINNED;
+        crate::gc::unpin_object(child_header);
     }
 }
 

@@ -518,63 +518,13 @@ pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
     }
 }
 
-/// Root every heap value an iterator-result constructor carries across its own
-/// allocations, and hand back the finished `{ … }` object.
-///
-/// #7475: `value` is a caller-supplied JSValue that is very often a heap
-/// pointer (an array element), `obj` is freshly allocated, and the two key
-/// strings and the keys array are all allocated while the earlier ones are
-/// still live. Every one of those lines can trigger the copying minor, and
-/// before this helper each was held in a bare Rust local the collector cannot
-/// see — so a collection during `make_iter_result` stored a from-space address
-/// into the result object, which the spread/`Array.from` drain then read back.
-///
-/// `first`/`second` name the two field slots in declaration order, since the
-/// array iterator stores `{ value, done }` and the `node:sqlite` iterator
-/// stores `{ done, value }`.
-unsafe fn build_iter_result(first: (&[u8], JSValue), second: (&[u8], JSValue)) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let first_h = scope.root_nanbox_u64(first.1.bits());
-    let second_h = scope.root_nanbox_u64(second.1.bits());
-
-    let obj_h = scope.root_nanbox_f64(js_nanbox_pointer(js_object_alloc(0, 2) as i64));
-
-    // keys array so destructuring + property reads find named slots.
-    let first_key_h = scope.root_nanbox_u64(
-        JSValue::string_ptr(crate::string::js_string_from_bytes(
-            first.0.as_ptr(),
-            first.0.len() as u32,
-        ))
-        .bits(),
-    );
-    let second_key_h = scope.root_nanbox_u64(
-        JSValue::string_ptr(crate::string::js_string_from_bytes(
-            second.0.as_ptr(),
-            second.0.len() as u32,
-        ))
-        .bits(),
-    );
-    let keys_h = scope.root_nanbox_f64(js_nanbox_pointer(crate::array::js_array_alloc(2) as i64));
-    let keys = || js_nanbox_get_pointer(keys_h.get_nanbox_f64()) as *mut ArrayHeader;
-    crate::array::js_array_push(keys(), JSValue::from_bits(first_key_h.get_nanbox_u64()));
-    crate::array::js_array_push(keys(), JSValue::from_bits(second_key_h.get_nanbox_u64()));
-
-    let obj = || js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
-    crate::object::js_object_set_keys(obj(), keys());
-    js_object_set_field(obj(), 0, JSValue::from_bits(first_h.get_nanbox_u64()));
-    js_object_set_field(obj(), 1, JSValue::from_bits(second_h.get_nanbox_u64()));
-    js_nanbox_pointer(obj() as i64)
-}
-
-/// Build the `{ value, done }` iterator-result object. `value` arrives as
-/// a NaN-boxed JSValue; `done` is a JS boolean.
-unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
-    build_iter_result((b"value", value), (b"done", JSValue::bool(done)))
-}
-
-unsafe fn make_sqlite_iter_result(value: JSValue, done: bool) -> f64 {
-    build_iter_result((b"done", JSValue::bool(done)), (b"value", value))
-}
+// #7564: `build_iter_result` lived here, rooted by #7475 but still allocating
+// the two key strings and the keys array on EVERY call — and minting a fresh
+// shape id per call, because `shape_id_for_keys_ensure` keys the shape table on
+// the keys array's address. Both constructors now come from the single
+// `crate::iter_result` implementation, which shares one keys array (and so one
+// shape) per key order per thread and allocates only the result object.
+use crate::iter_result::{make_iter_result, make_sqlite_iter_result};
 
 unsafe fn make_pair_array(idx: u32, value: f64) -> f64 {
     let pair = crate::array::js_array_alloc(2);

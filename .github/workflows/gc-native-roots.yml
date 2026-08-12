@@ -111,8 +111,18 @@ on:
   # filter would mean the job never runs at all — CLAUDE.md's second way a gate
   # cannot fail. Cancellation is deliberately NOT set here: a `main` run that
   # gets cancelled by the next merge is the third way.
+  #
+  # And the FOURTH way is what `push: branches: [main]` turned out to be here:
+  # STARVED (#7856). Neither cancelled nor failing — simply never scheduled,
+  # because fourteen workflows enqueued ~29 jobs on every one of 58 daily merges
+  # against a repo that runs ~9 jobs at a time. The post-merge arm is now a
+  # staggered six-hourly sweep; the pull-request arm is unchanged, so every PR is
+  # still measured. ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "37 */6 * * *"
   push:
-    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 

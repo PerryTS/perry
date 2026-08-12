@@ -1915,6 +1915,46 @@ pub fn run_with_parse_cache(
             }
         }
     }
+    // #7189: `export * as ns from "./m.ts"` names a member whose VALUE is
+    // another module's namespace object. That object is exactly what
+    // `@__perry_ns_<prefix>` already holds for dynamic-import targets, and
+    // `emit_namespace_populator` already builds it correctly — including nested
+    // namespaces of its own, recursively. So rather than invent a second way to
+    // materialize one, mark every namespace-re-export TARGET as needing that
+    // global, and point the member at it.
+    //
+    // Keyed by re-exporting module path → exported alias → target module path.
+    let mut namespace_reexport_targets: HashMap<String, BTreeMap<String, PathBuf>> = HashMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        for export in &hir_module.exports {
+            let perry_hir::Export::NamespaceReExport { source, name } = export else {
+                continue;
+            };
+            // `source` was rewritten to `Module::name` on `module_name_to_module`
+            // above, but `hir_module` here is the ORIGINAL, so this is still the
+            // specifier as written.
+            let Some((target_path, _)) = resolve_import(
+                source,
+                path,
+                &ctx.project_root,
+                &ctx.compile_packages,
+                &ctx.compile_package_dirs,
+            ) else {
+                continue;
+            };
+            if !ctx.native_modules.contains_key(&target_path) {
+                continue;
+            }
+            namespace_reexport_targets
+                .entry(path.to_string_lossy().to_string())
+                .or_default()
+                .insert(name.clone(), target_path.clone());
+            // The target needs its own `@__perry_ns_` global emitted and
+            // populated, which is what being in this set means.
+            dyn_target_paths.insert(target_path);
+        }
+    }
+
     // Per-module precomputed namespace_entries (keyed by path).
     let mut per_module_namespace_entries: HashMap<PathBuf, Vec<perry_codegen::NamespaceEntry>> =
         HashMap::new();
@@ -2443,6 +2483,13 @@ pub fn run_with_parse_cache(
                 std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
+            // #7189: members of a namespace whose value is ITSELF a module
+            // namespace, from `export * as ns from "./m.ts"` in the imported
+            // module. They resolve to `@__perry_ns_<target>` rather than to a
+            // `perry_fn_<mod>__<name>` symbol, because no such symbol exists —
+            // the member is a whole module, not a binding in one.
+            let mut namespace_member_nested: std::collections::HashSet<(String, String)> =
+                std::collections::HashSet::new();
             let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
             let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
             let mut imported_async_set: std::collections::HashSet<String> =
@@ -2709,6 +2756,24 @@ pub fn run_with_parse_cache(
                                 if let Some(members) = exported_enums.get(&key) {
                                     imported_enums.push((local.clone(), members.clone()));
                                 }
+                            }
+                        }
+                        // #7189: the source module's `export * as ns` aliases.
+                        // These are NOT in `all_module_exports` — that map holds
+                        // name → module-that-declares-the-binding, and a
+                        // namespace alias has no declaring binding to point at.
+                        // Registering the alias here is what puts it in
+                        // `Object.keys(ns)`, since the whole-value materializer
+                        // enumerates `namespace_member_prefixes`.
+                        if let Some(nested) = namespace_reexport_targets.get(&resolved_path_str) {
+                            for (alias, target_path) in nested {
+                                let target_prefix =
+                                    compute_module_prefix(&target_path.to_string_lossy(), &ctx.project_root);
+                                namespace_member_prefixes.insert(
+                                    (local.clone(), alias.clone()),
+                                    target_prefix,
+                                );
+                                namespace_member_nested.insert((local.clone(), alias.clone()));
                             }
                         }
                         // Register all exports from the source module
@@ -4184,6 +4249,7 @@ pub fn run_with_parse_cache(
                 verify_native_regions,
                 disable_buffer_fast_path,
                 namespace_imports,
+                namespace_member_nested: namespace_member_nested.into_iter().collect(),
                 imported_classes,
                 imported_enums,
                 imported_async_funcs: imported_async_set,
@@ -4278,7 +4344,7 @@ pub fn run_with_parse_cache(
             // The HIR fingerprint is computed inside this rayon job
             // (paralelizes the cost across modules and avoids an extra
             // serial O(modules) pass). Crucially, every HIR-mutating
-            // pass (inline_functions, unroll_static_loops,
+            // pass (inline_functions, unroll_static_loops, prop_cse,
             // inline_finally_into_returns, transform_async_to_generator,
             // transform_generators per-module; transform_js_imports,
             // fix_local_native_instances, fix_cross_module_native_instances,
@@ -6110,64 +6176,7 @@ pub fn run_with_parse_cache(
         // For Windows/Linux (non-bundle targets), copy asset directories next to the exe
         // so that resolve_asset_path can find them relative to the executable.
         if let Some(output_dir) = exe_path.parent() {
-            let source_dir = args
-                .input
-                .canonicalize()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-            if let Some(src_dir) = source_dir {
-                let mut project_root = src_dir.clone();
-                for _ in 0..5 {
-                    if project_root.join("package.json").exists() {
-                        break;
-                    }
-                    if let Some(parent) = project_root.parent() {
-                        project_root = parent.to_path_buf();
-                    } else {
-                        break;
-                    }
-                }
-                fn copy_dir_recursive_standalone(
-                    src: &std::path::Path,
-                    dst: &std::path::Path,
-                ) -> std::io::Result<()> {
-                    fs::create_dir_all(dst)?;
-                    for entry in fs::read_dir(src)? {
-                        let entry = entry?;
-                        let ty = entry.file_type()?;
-                        let dest_path = dst.join(entry.file_name());
-                        if ty.is_dir() {
-                            copy_dir_recursive_standalone(&entry.path(), &dest_path)?;
-                        } else {
-                            fs::copy(entry.path(), &dest_path)?;
-                        }
-                    }
-                    Ok(())
-                }
-                // Resolve output_dir: exe_path.parent() returns "" for bare filenames like "Mango"
-                let output_resolved = if output_dir.as_os_str().is_empty() {
-                    std::path::PathBuf::from(".")
-                } else {
-                    output_dir.to_path_buf()
-                };
-                let output_canon = output_resolved
-                    .canonicalize()
-                    .unwrap_or_else(|_| output_resolved.clone());
-                let project_canon = project_root
-                    .canonicalize()
-                    .unwrap_or_else(|_| project_root.to_path_buf());
-                // Skip asset copying if output dir IS the project root
-                // (fs::copy to self truncates files to 0 bytes)
-                if output_canon != project_canon {
-                    for dir_name in &["logo", "assets", "resources", "images"] {
-                        let resource_dir = project_root.join(dir_name);
-                        if resource_dir.is_dir() {
-                            let dest = output_dir.join(dir_name);
-                            let _ = copy_dir_recursive_standalone(&resource_dir, &dest);
-                        }
-                    }
-                }
-            }
+            resources::copy_standalone_resource_dirs(&args.input, output_dir);
             if !is_harmonyos {
                 resources::stage_native_library_artifacts(&ctx, output_dir, format)?;
             }

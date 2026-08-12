@@ -22,8 +22,10 @@ crates/perry-runtime/src/closure/dynamic_props.rs | for handle in [0x10000usize,
 # Grandfathered GcHeader-cast files:
 crates/perry-runtime/src/arena/allocators.rs | * | arena allocator/walker internals: header addresses come from block iteration or fresh allocation, never from NaN-box payloads
 crates/perry-runtime/src/arena/quarantine.rs | let header = data.add(pos) as *const crate::gc::GcHeader; | #7154 from-space quarantine census: `data + pos` comes from linear block iteration over a detached arena block (the same discipline as arena/walk.rs), never from a NaN-box payload, so no handle band can reach it; the walk stops at the first header whose size does not cover the remaining bytes
+crates/perry-runtime/src/string/mod.rs | let header = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader; | #7647 zero_alignment_padding_tail: `raw` is the pointer arena_alloc_gc just returned to string_storage_alloc/_longlived a few lines above, never a NaN-box payload -- same discipline as arena/allocators.rs's own grandfathered entry, reading `.size` back to zero the alignment pad the allocator introduced
 crates/perry-runtime/src/arena/tests.rs | * | arena allocator/walker internals: header addresses come from block iteration or fresh allocation, never from NaN-box payloads
 crates/perry-runtime/src/arena/walk.rs | * | arena allocator/walker internals: header addresses come from block iteration or fresh allocation, never from NaN-box payloads
+crates/perry-runtime/src/arena/promote.rs | let header = header_ptr as *mut GcHeader; | #7742 whole-block promotion: `header_ptr` is `block.data + aligned` from the same linear block iteration arena/walk.rs performs (its grandfathered sibling entry above), never a NaN-box payload, so no handle band can reach it; the walk stops at the first header whose size does not cover the remaining bytes
 crates/perry-runtime/src/array/alloc.rs | * | pre-existing GcHeader probe predating addr_class; address validated by call-site guards (magnitude/registry/is_valid_obj_ptr) -- migrate to addr_class::try_read_gc_header in a follow-up
 crates/perry-runtime/src/array/concat_reverse.rs | * | pre-existing GcHeader probe predating addr_class; address validated by call-site guards (magnitude/registry/is_valid_obj_ptr) -- migrate to addr_class::try_read_gc_header in a follow-up
 crates/perry-runtime/src/array/from_concat.rs | * | #4994 split of the pre-existing concat GcHeader probe; address validated by call-site guards (magnitude/registry/is_valid_obj_ptr) -- migrate to addr_class::try_read_gc_header in a follow-up
@@ -149,3 +151,19 @@ crates/perry-runtime/src/child_process/value_util.rs | * | pre-existing GcHeader
 crates/perry-runtime/src/closure/dispatch/ | * | pre-existing GcHeader probe predating addr_class; address validated by call-site guards (magnitude/registry/is_valid_obj_ptr) -- migrate to addr_class::try_read_gc_header in a follow-up (split of closure/dispatch.rs)
 crates/perry-runtime/src/bun_compat/string_width.rs | 0xE0000..=0xE007F | Unicode "Tags" codepoint block (U+E0000..U+E007F) tested against a char, not a handle-band address
 crates/perry-runtime/src/bun_compat/width_tables.rs | * | pure Unicode East-Asian-width codepoint-range table; every hex literal is a Unicode code point (e.g. U+F0000 / U+100000 SPUA-A/B planes), never a handle-band address
+crates/perry-runtime/src/array/collection_tag_tests.rs | * | unit tests for the #7765 receiver-tag gate: they read AND re-stamp `GcHeader.obj_type` on an address they allocated themselves, which is the whole subject under test. `try_read_gc_header` cannot serve them (it hands out a shared reference, and the recycling test must WRITE the tag to model `arena_alloc_gc` handing the bytes to the next owner).
+
+# #7272: band literals in `crates/perry-ext-*`, which entered this gate's scope
+# with the widened scan roots. Each is a wrapper deciding "is this f64 payload a
+# small registry handle rather than a heap pointer?" before dereferencing --
+# the same question `addr_class::is_handle_band` answers, re-typed. They are
+# recorded rather than rewritten because the ext crates reach perry-runtime
+# through its public surface and `is_handle_band` is not on it; exporting it is
+# the actual fix and belongs with #7448's `ptr_is_tracked_heap_object` export,
+# not buried in a scan-scope change.
+crates/perry-ext-events/src/lib.rs | const EVENT_EMITTER_HANDLE_ID_END | #7272: the crate's own handle-id range end, a registry bound rather than a heap-address band test
+crates/perry-ext-net/src/jsvalue.rs | * | #7272: socket/server handle-vs-pointer discrimination before dereference; re-types the handle band instead of calling addr_class::is_handle_band, which perry-runtime does not export
+crates/perry-ext-ratelimit/src/lib.rs | (obj as usize) >= 0x100000 | #7272: same handle-vs-pointer guard before an ObjectHeader read
+crates/perry-ext-slugify/src/lib.rs | (obj as usize) < 0x100000 | #7272: same handle-vs-pointer guard before an ObjectHeader read
+crates/perry-runtime/src/arena/page_meta.rs | let header = addr as *const GcHeader; | promoted-page-run expansion: `addr` starts at a `first_header` recorded by arena/promote.rs's linear block iteration (its grandfathered sibling entry above) and advances by `GcHeader::size` from there, so every address is a block-interior header, never a NaN-box payload; the parse stops at the first implausible size exactly as the arena walkers do
+crates/perry-runtime/src/arena/tests_promoted_runs.rs | * | arena promoted-run tests: header addresses are offsets into a buffer the test itself allocated and initialised, never NaN-box payloads -- same discipline as the arena/tests.rs entry above

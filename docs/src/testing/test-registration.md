@@ -45,7 +45,7 @@ Run `--list` for the authoritative version with every exclusion and its reason.
 
 | Registry | Candidate files | Runner |
 |----------|-----------------|--------|
-| `test-parity/gc_repsel_corpus.txt` | `test-files/test_gap_{gc,repsel,specabi}_*.ts` | `scripts/gc_repsel_matrix.sh` (`gc-stress`, `gc-moving-witnesses`) |
+| `test-parity/gc_repsel_corpus.txt` | `test-files/test_gap_{gc,repsel,specabi}_*.ts` | `scripts/gc_repsel_matrix.sh` (`gc-stress`, `gc-moving-witnesses`, `gc-ptr-shape-off-witness`) |
 | `test-features/feature_matrix.toml` | `test-features/probes/**/*.ts` | `scripts/gen_feature_matrix.py` (`feature-matrix`) |
 | `benchmarks/compiler_output/workloads.toml` | `benchmarks/compiler_output/fixtures/**/*.ts` | `scripts/compiler_output_regression.py` (`compiler-output-regression`) |
 | a `mod` declaration in the parent module | `crates/*/**/tests/**/*.rs` below a suite root | `cargo test` |

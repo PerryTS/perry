@@ -2,11 +2,17 @@ use super::super::*;
 use super::support::*;
 use std::cell::Cell;
 mod callback_scanners;
+mod fs_options_object;
+mod generator_attach_prototype;
 mod hook_dispatch_handles;
 mod interned_string_caches;
+mod iter_result_keys;
+mod json_shape_template;
+mod old_defrag_contract;
 mod prototype_addr_cache;
 mod side_table_scanners;
 mod string_slice;
+mod symbol_description;
 mod transient_handles;
 
 fn assert_panics_with(expected: &str, f: impl FnOnce()) {
@@ -501,21 +507,21 @@ extern "C" fn test_rest_first_value(
     f64::from_bits(crate::array::js_array_get(rest_ptr, 0).bits())
 }
 
-static ASYNC_HOOK_RUNTIME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-struct AsyncHookRuntimeTestGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
+// #7680: this guard used to serialize on a private `ASYNC_HOOK_RUNTIME_TEST_LOCK`
+// — a lock domain of its own, split from both the GC guards' shared lock and
+// this file's other test infrastructure. Nothing it clears needs a lock
+// anymore: `async_hooks::reset_for_tests()`'s tables are `per_test_global!`
+// (#7680) and `object::test_clear_transition_cache_root` /
+// `test_clear_object_cache_roots` were already thread-local / `per_test_global!`
+// (#7674), so each is confined to the calling thread's own instance.
+struct AsyncHookRuntimeTestGuard;
 
 impl AsyncHookRuntimeTestGuard {
     fn new() -> Self {
-        let lock = ASYNC_HOOK_RUNTIME_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::async_hooks::reset_for_tests();
         crate::object::test_clear_transition_cache_root();
         crate::object::test_clear_object_cache_roots();
-        Self { _lock: lock }
+        Self
     }
 }
 

@@ -57,6 +57,18 @@ pub const BIGINT_TAG_I64: &str = "9221683186994511872";
 /// Asserted against the u64 tags in `tag_strings_match_u64_values`.
 pub const STRING_TAG_TOP16_I64: &str = "32767";
 pub const SHORT_STRING_TAG_TOP16_I64: &str = "32761";
+/// The other two `lshr 48` comparands that name a HEAP-POINTER-bearing tag.
+/// Together with [`STRING_TAG_TOP16_I64`] these are exactly the three tags
+/// `perry-runtime::gc::barrier::decode_heap_addr` resolves to a heap address —
+/// the set the #7511 inline pointer-bearing test is built from. Asserted
+/// against the u64 tags in `tag_strings_match_u64_values`.
+pub const POINTER_TAG_TOP16_I64: &str = "32765";
+pub const BIGINT_TAG_TOP16_I64: &str = "32762";
+/// `INT32_TAG >> 48`. Used by the inline `===` prefix, which settles two
+/// INT32-tagged operands by bit inequality — the encoding
+/// `INT32_TAG | (v as u32 as u64)` is canonical, so different bits are
+/// different integers. Asserted in `tag_strings_match_u64_values`.
+pub const INT32_TAG_TOP16_I64: &str = "32766";
 
 /// Format a `u64` as a signed LLVM i64 literal (LLVM IR integer literals are signed).
 pub fn i64_literal(v: u64) -> String {
@@ -117,6 +129,48 @@ mod tests {
             i64_literal(SHORT_STRING_TAG >> 48),
             SHORT_STRING_TAG_TOP16_I64
         );
+        assert_eq!(i64_literal(POINTER_TAG >> 48), POINTER_TAG_TOP16_I64);
+        assert_eq!(i64_literal(BIGINT_TAG >> 48), BIGINT_TAG_TOP16_I64);
+        assert_eq!(i64_literal(INT32_TAG >> 48), INT32_TAG_TOP16_I64);
+    }
+
+    /// #7511 — the inline pointer-bearing test emitted at class-field stores
+    /// must be a **superset** of every tag the runtime resolves to a heap
+    /// address. This enumerates the whole 16-bit tag space and asserts the
+    /// codegen predicate never says "no pointer" where the runtime's
+    /// `decode_heap_addr` / `layout_pointer_bearing_bits` would say "pointer".
+    ///
+    /// Written against the tag values rather than against the emitted IR on
+    /// purpose: the IR is a rendering of this set, and it is the SET that has
+    /// to be right. If a future tag joins the heap-pointer family
+    /// (`perry-runtime/src/value.rs`), this test still passes while the
+    /// generated code silently drops its barrier — so the mirror assertion
+    /// lives in the runtime too (`gc::barrier::tests`).
+    #[test]
+    fn inline_pointer_bearing_top16_set_covers_every_heap_tag() {
+        let comparands: Vec<u64> = vec![
+            POINTER_TAG_TOP16_I64.parse().unwrap(),
+            STRING_TAG_TOP16_I64.parse().unwrap(),
+            BIGINT_TAG_TOP16_I64.parse().unwrap(),
+        ];
+        for tag in [POINTER_TAG, STRING_TAG, BIGINT_TAG] {
+            assert!(
+                comparands.contains(&(tag >> 48)),
+                "heap tag {tag:#x} is missing from the inline pointer-bearing comparand set"
+            );
+        }
+        // Non-heap tags must NOT be in the set, or the test would be vacuous.
+        for tag in [
+            TAG_UNDEFINED & TAG_MASK,
+            INT32_TAG,
+            SHORT_STRING_TAG,
+            STATIC_DISPATCH_TAG,
+        ] {
+            assert!(
+                !comparands.contains(&(tag >> 48)),
+                "non-heap tag {tag:#x} must not force a barrier call"
+            );
+        }
     }
 
     #[test]

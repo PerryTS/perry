@@ -1927,15 +1927,15 @@ fn collect_module_finish(
             &extra_class_fields,
             &extra_anon_classes,
         );
-        // Static-trip-count for-loop unroll. Runs AFTER the inliner so any
-        // inlined function bodies' loops also get unrolled. Runs BEFORE the
-        // async/generator transforms — those transforms pre-emptively rewrite
-        // control flow into state-machine shapes that the unroll match would
-        // no longer recognize. Doing it pre-async keeps the analysis simple.
-        // image_convolution's 5x5 blur kernel: outer ky and inner kx both
-        // become 25 fully-unrolled stmts with `KERNEL[ky+2][kx+2]` collapsed
-        // to compile-time integer literals — see crates/perry-transform/
-        // src/unroll.rs.
+        // Post-inline HIR cleanups, in ONE call because they share their
+        // ordering constraint — `perry_transform::post_inline_cleanups`:
+        // static-trip-count for-loop unroll, then redundant property-read
+        // elimination over diverging guard chains. Both want the INLINED
+        // (and unrolled) bodies, and both must run BEFORE the async/generator
+        // transforms: those rewrite control flow into state-machine shapes the
+        // unroll match no longer recognizes, and box every body local into a
+        // shared mutable cell, which would turn a hoisted `const` into one
+        // more boxed cell. See crates/perry-transform/src/{unroll,prop_cse}.
         progress.record(ProgressSnapshot {
             stage: "transform-unroll-static-loops",
             module_path: Some(&canonical),
@@ -1944,7 +1944,7 @@ fn collect_module_finish(
             collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
             ..Default::default()
         });
-        perry_transform::unroll_static_loops(&mut hir_module);
+        perry_transform::post_inline_cleanups(&mut hir_module);
         // Inline `finally` bodies before each abrupt completion
         // (`return` / `break` / `continue` / labeled-break / labeled-
         // continue) reachable inside a `try { ... } finally { Y }`

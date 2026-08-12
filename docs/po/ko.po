@@ -53858,10 +53858,6 @@ msgid ""
 msgstr "세대별 모드를 비활성화하고 전체 mark-sweep으로 폴백합니다 (이분법 전용)."
 
 #: src/internals/memory-model.md:116
-msgid "`PERRY_GEN_GC_EVACUATE=0` / `off` / `false`"
-msgstr ""
-
-#: src/internals/memory-model.md:116
 msgid ""
 "Disable policy evacuation. `=1` / `on` / `true` is accepted as \"allow the "
 "auto-policy\", not as unconditional evacuation."

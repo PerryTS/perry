@@ -272,6 +272,12 @@ fn region_i32_bounded_write_locals(stmts: &[Stmt]) -> std::collections::HashSet<
                     &empty,
                     &empty,
                     &empty_views,
+                    // #7700: this region walker deliberately consults none of
+                    // the function-wide oracles (see the doc comment), so it
+                    // has no numeric-local evidence either — a `u8[k]` write
+                    // source keyed on a bare local drops out, exactly like the
+                    // copy-shaped writes it already drops.
+                    &empty,
                     &mut |_| {},
                 );
                 if !strict {
@@ -518,7 +524,8 @@ pub(super) fn try_match_masked_window_region(
             .buffer_view_slots
             .get(&access.array_id)
             .is_some_and(|view| {
-                view.storage_inline_proven
+                view.pointer_state.is_stable()
+                    && view.storage_inline_proven
                     && view.native_owned.is_none()
                     && view.alias.allows_noalias()
                     && view.scope_idx.is_some()

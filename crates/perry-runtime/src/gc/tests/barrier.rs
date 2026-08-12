@@ -1768,7 +1768,7 @@ fn test_minor_gc_promotes_after_two_survivals() {
     let user_ptr = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     unsafe {
         let header = header_from_user_ptr(user_ptr);
-        (*header).gc_flags |= GC_FLAG_PINNED;
+        crate::gc::pin_object(header);
         // Initial state: not yet survived, not tenured.
         assert_eq!((*header).gc_flags & GC_FLAG_HAS_SURVIVED, 0);
         assert_eq!((*header).gc_flags & GC_FLAG_TENURED, 0);
@@ -1855,4 +1855,37 @@ fn test_remembered_set_scan_marks_malloc_child_of_old_parent() {
 
     reset_remembered_set();
     clear_marks();
+}
+
+/// #7742-adjacent: array growth may inherit its dirty-page coverage from the
+/// store it was copied from, but ONLY when that store was an old-gen parent.
+///
+/// This is the predicate that a silent wrong answer turned on. `shapes.ts`
+/// printed `1277282` instead of `1176000` — exit 0, deterministic, and
+/// invisible to `retain.ts`, the benchmark the optimisation was written for —
+/// because a nursery array grown into an old-gen backing store inherited an
+/// EMPTY dirty set that no barrier had ever been recording, and the next minor
+/// swept its still-live children.
+///
+/// Both arms are asserted: the young source must be refused (that is the fix)
+/// and the old source must be accepted (or the optimisation is dead code that
+/// still passes the first assertion).
+#[test]
+fn dirty_page_translation_only_inherits_from_an_old_gen_source() {
+    use super::super::barrier::growth_source_can_donate_dirty_pages;
+
+    let young_source = crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_ARRAY) as usize;
+    assert!(
+        !growth_source_can_donate_dirty_pages(young_source),
+        "a YOUNG growth source has no dirty coverage to inherit — the write \
+         barrier never recorded any for it — so an empty set is not proof that \
+         it holds no young children"
+    );
+
+    let old_source = crate::arena::arena_alloc_gc_old(4096, 8, GC_TYPE_ARRAY) as usize;
+    assert!(
+        growth_source_can_donate_dirty_pages(old_source),
+        "an OLD growth source is exactly the population the barrier maintains \
+         the invariant for; refusing it would make the whole translation dead"
+    );
 }

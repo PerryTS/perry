@@ -231,7 +231,9 @@ pub extern "C" fn perry_arkts_set_text(id_handle: f64, val_handle: f64) {
 // Issue #535 — `perry/ui` `state<T>` runtime registry.
 // =============================================================================
 
-static STATE_VALUES: Mutex<Option<std::collections::HashMap<String, f64>>> = Mutex::new(None);
+per_test_global! {
+    static STATE_VALUES: Mutex<Option<std::collections::HashMap<String, f64>>> = Mutex::new(None);
+}
 
 fn with_state_values<F, R>(f: F) -> R
 where
@@ -444,8 +446,10 @@ struct ForEachBinding {
     render_closure: f64,
 }
 
-static FOREACH_REGISTRY: Mutex<Option<std::collections::HashMap<String, Vec<ForEachBinding>>>> =
-    Mutex::new(None);
+per_test_global! {
+    static FOREACH_REGISTRY: Mutex<Option<std::collections::HashMap<String, Vec<ForEachBinding>>>> =
+        Mutex::new(None);
+}
 
 /// GC root scanner for cross-platform UI state values and `ForEach` render
 /// callbacks held in Rust registries outside the managed heap.

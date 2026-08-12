@@ -410,11 +410,18 @@ pub(crate) fn collect_type_facts(
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
 ) -> TypeFacts {
+    // #7700: which locals hold a NUMBER, so a `u8[k]` keyed on one is a byte
+    // read rather than a property read. Computed once here because
+    // `binding_types` covers only params and module globals — the body `let`s,
+    // above all the counter in `for (let i = …) sum += buf[i]`, have to be
+    // walked for or the hottest buffer shape loses its i32 representation.
+    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
     let mut integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
         flat_const_ids,
         clamp_fn_ids,
         arg_dependent_clamp_fn_ids,
+        &numeric_locals,
     );
     // Native-i32 residency for integer-valued locals whose init/writes include a
     // possibly-out-of-bounds INT typed-array element read (bcryptjs `_encipher`
@@ -503,6 +510,7 @@ pub(crate) fn collect_type_facts(
         flat_const_ids,
         clamp_fn_ids,
         strict_int_ta_views,
+        &numeric_locals,
     );
     // #7128: the profitability half of canonical-i32 selection. Every term
     // above answers "may we?"; this one answers "should we?", and it is
@@ -2298,6 +2306,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         );
 
         assert!(
@@ -2333,6 +2342,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -2372,6 +2382,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -2428,6 +2439,7 @@ mod tests {
             &HashSet::new(),
             &clamp_ids,
             &clamp_ids,
+            &HashSet::new(),
         );
         assert!(!ints.contains(&1), "non-int-written seed must be pruned");
         assert!(
@@ -2450,6 +2462,7 @@ mod tests {
             &HashSet::new(),
             &clamp_ids,
             &clamp_ids,
+            &HashSet::new(),
         );
         assert!(ints.contains(&2), "int-arg clamp3 result must stay integer");
         assert!(ints.contains(&3), "copy of live clamp3 result must stay");
@@ -2461,6 +2474,7 @@ mod tests {
             &coercing_stmts,
             &HashSet::new(),
             &clamp_ids,
+            &HashSet::new(),
             &HashSet::new(),
         );
         assert!(
@@ -2494,6 +2508,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -2531,6 +2546,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),

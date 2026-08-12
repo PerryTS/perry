@@ -258,6 +258,150 @@ fn native_module_member_path(
     }
 }
 
+fn is_node_core(module: &str) -> bool {
+    crate::ir::is_node_builtin_module(module.strip_prefix("node:").unwrap_or(module))
+}
+
+/// Sub-namespaces of a node-core module that the runtime by-name dispatcher has
+/// a bucket for — the DOTTED tags in `nm_module_index` (perry-runtime), which
+/// perry-codegen mirrors in `nm_install_symbol`. This is the third mirror and is
+/// deliberately kept to the handful that matter.
+///
+/// The list is an allowlist, not a derivation from `NODE_BUILTIN_MODULES`:
+/// `fs/promises` and `dns/promises` are real node-core module names, but there
+/// is no `fs.promises` / `dns.promises` dispatch bucket, so treating the
+/// property as a namespace and routing `promises.readFile(...args)` to the
+/// dynamic path yields `TypeError: value is not a function` — worse than the
+/// positional fold it replaced. Measured, not assumed (#7720 follow-up).
+pub(super) fn sub_namespace_has_dispatch_bucket(module: &str, sub: &str) -> bool {
+    matches!(
+        (module.strip_prefix("node:").unwrap_or(module), sub),
+        ("path", "posix" | "win32")
+            | ("util", "types")
+            | ("crypto", "subtle" | "webcrypto")
+            | ("punycode", "ucs2")
+    )
+}
+
+/// Is the named export `export` of node-core `module` itself a NAMESPACE
+/// (`import { posix } from "node:path"`) rather than a class or function value?
+///
+/// The distinction decides whether `<export>.<method>(...)` is a module call.
+/// `Buffer.concat(...)` / `URL.parse(...)` are class statics reached through a
+/// different lowering family, and their by-name runtime dispatch does not cover
+/// the same surface, so they stay on their existing path.
+fn is_submodule_export(module: &str, export: &str) -> bool {
+    export == "default" || sub_namespace_has_dispatch_bucket(module, export)
+}
+
+/// Does `name` denote a node-core module NAMESPACE in this scope — a
+/// namespace/default import (`import path from "node:path"`), a sub-namespace
+/// export of one (`import { posix } from "node:path"`), or a `require()` alias?
+///
+/// Deliberately node-core ONLY: an ext/npm native module (`mysql2`, `redis`,
+/// `node-forge`) is served by codegen-wired `NativeMethodCall` rows with no
+/// by-name runtime dispatcher behind them, so declining its fast path would
+/// trade a wrong answer for no answer. Every name this returns `true` for
+/// resolves through `dispatch_native_module_method` in the runtime.
+fn name_is_node_builtin_namespace(ctx: &LoweringContext, name: &str) -> bool {
+    if let Some((module, export)) = ctx.lookup_native_module(name) {
+        if is_node_core(module)
+            && is_top_level_module(module)
+            && export.is_none_or(|e| is_submodule_export(module, e))
+        {
+            return true;
+        }
+    }
+    ctx.lookup_builtin_module_alias(name)
+        .is_some_and(|m| is_node_core(m) && is_top_level_module(m))
+}
+
+/// Reject the slash sub-module tags (`fs/promises`, `dns/promises`,
+/// `assert/strict`).
+///
+/// A NAMED import of one (`import { promises } from "node:fs"`) registers under
+/// the slash tag, but its local does not read back as a dispatchable namespace
+/// value — diverting `promises.readFile(...args)` turned a rejected promise into
+/// a synchronous `TypeError: value is not a function`, which is worse than the
+/// wrong error code it replaced. The DIRECT import
+/// (`import fsp from "node:fs/promises"`) needs no help from the bail: it
+/// already reaches the generic tail on its own (measured — identical HIR and
+/// `ENOENT` output on both arms), so excluding the slash tags costs nothing.
+fn is_top_level_module(module: &str) -> bool {
+    !module.strip_prefix("node:").unwrap_or(module).contains('/')
+}
+
+/// Is `recv` (a call's RECEIVER) a node-core module namespace, or a
+/// sub-namespace of one (`path.posix`, `crypto.subtle`, `util.types`,
+/// `fs.promises`)?
+fn receiver_is_node_builtin_module(ctx: &LoweringContext, recv: &ast::Expr) -> bool {
+    match unwrap_ts_wrappers(recv) {
+        ast::Expr::Ident(ident) => {
+            let name = ident.sym.as_ref();
+            name_is_node_builtin_namespace(ctx, name)
+                // #1750: `const w = path.win32; w.join(...)`.
+                || ctx
+                    .lookup_subns_path_alias(name)
+                    .is_some_and(|(root, _)| name_is_node_builtin_namespace(ctx, root))
+        }
+        // 3-level sub-namespace (`path.posix.join`, `util.types.isDate`): the
+        // ROOT must be a module namespace AND the property must be a
+        // bucket-backed sub-namespace. Recursing on the root alone claimed
+        // `fs.promises.readFile(...)` / `dns.promises.lookup(...)` too, which
+        // have no bucket.
+        ast::Expr::Member(inner) => {
+            let ast::Expr::Ident(root) = unwrap_ts_wrappers(inner.obj.as_ref()) else {
+                return false;
+            };
+            let Some(sub) = super::static_call_prop_name(&inner.prop) else {
+                return false;
+            };
+            let Some((module, export)) = ctx.lookup_native_module(root.sym.as_ref()) else {
+                return false;
+            };
+            is_node_core(module)
+                && matches!(export, None | Some("default"))
+                && sub_namespace_has_dispatch_bucket(module, sub)
+        }
+        // `require("node:path").join(...)` — the inline-require shape.
+        other => require_literal_native_module(ctx, other)
+            .is_some_and(|m| crate::ir::is_node_builtin_module(&m)),
+    }
+}
+
+/// #7720: is this call a node-core native-module call — `ns.method(...)`,
+/// `ns.sub.method(...)`, or a named import `method(...)`?
+///
+/// Every native fast path below consumes its arguments POSITIONALLY, so a
+/// spread operand (`path.join(...parts)`) is folded in as one argument holding
+/// the whole array: `path.join` saw a single non-string and threw
+/// `ERR_INVALID_ARG_TYPE`, `util.format` inspected the array instead of
+/// formatting it, `fs.existsSync` tested an array for existence. `lower_call`
+/// uses this to decline the entire fast-path chain for a spread call, leaving
+/// the generic tail to build an `Expr::CallSpread` over the namespace member —
+/// the same lowering the value-read form (`const j = path.join; j(...parts)`)
+/// already takes, which materializes the args array and dispatches through
+/// `js_native_call_method` → `dispatch_native_module_method`. That dispatcher
+/// is variadic by construction, so it gets both the valid case and Node's
+/// `ERR_INVALID_ARG_TYPE` for an invalid one right.
+///
+/// Generalizes the per-module bails #6668 added for `crypto` (those stay: they
+/// also cover the bare `crypto` GLOBAL receiver, which is not an import and so
+/// is invisible here). Native CLASS statics (`Buffer.concat(...list)`,
+/// `URL.parse(...)`) are deliberately NOT included — see `is_submodule_export`.
+pub(super) fn is_node_builtin_module_call(ctx: &LoweringContext, callee: &ast::Expr) -> bool {
+    match unwrap_ts_wrappers(callee) {
+        // `ns.method(...)` / `ns.sub.method(...)`.
+        ast::Expr::Member(member) => receiver_is_node_builtin_module(ctx, member.obj.as_ref()),
+        // A named export of a node-core module called directly:
+        // `import { join } from "node:path"; join(...parts)`.
+        ast::Expr::Ident(ident) => ctx
+            .lookup_native_module(ident.sym.as_ref())
+            .is_some_and(|(module, export)| is_node_core(module) && export.is_some()),
+        _ => false,
+    }
+}
+
 /// node-forge sub-namespace flattening. Unlike the single-level `ns.method()`
 /// shape the other arms match, forge's API is deeply nested:
 /// `forge.pki.rsa.generateKeyPair(...)`, `forge.pki.createCertificate()`,

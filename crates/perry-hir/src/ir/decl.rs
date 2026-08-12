@@ -268,6 +268,19 @@ pub struct Class {
     /// site. Pure capacity: does not add fields, keys, or enumeration
     /// entries. 0 = no hint.
     pub alloc_width_hint: u32,
+    /// #7575: the GENERIC class this one was monomorphized from, when it is a
+    /// specialization. `class Gen<T> {}` + `new Gen<number>()` produces a second
+    /// class named `Gen$num` (`monomorph::mangle::generate_specialized_name`)
+    /// carrying its own class id, and the instance is stamped with THAT id —
+    /// while `x instanceof Gen` resolves the RHS to the generic's id, which no
+    /// longer appears anywhere in the instance's chain.
+    ///
+    /// The runtime learns the edge from here (`js_register_class_generic_origin`)
+    /// and consults it during the `instanceof` chain walk ONLY. It deliberately
+    /// is not folded into `extends`/`extends_name`: the runtime parent chain also
+    /// resolves `super()`, static-method lookup and vtable dispatch, so splicing
+    /// the generic in as a parent would re-run the wrong constructor.
+    pub specialized_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

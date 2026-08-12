@@ -4,7 +4,8 @@
 
 use crate::expr::FnCtx;
 use crate::native_value::{
-    AliasState, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource, NativeOwnedViewSlot,
+    AliasState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
+    NativeOwnedViewSlot,
 };
 use crate::types::{I32, I64, I8, PTR};
 
@@ -93,6 +94,7 @@ pub(super) fn register_noalias_buffer_view(
             alias: AliasState::NoAliasProven,
             length_source: Some(init.length_source),
             native_owned,
+            pointer_state: BufferViewPointerState::Stable,
             storage_inline_proven: init.storage_inline_proven,
         },
     );

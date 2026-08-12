@@ -4,7 +4,7 @@ use super::*;
 use std::cell::Cell;
 use std::sync::atomic::Ordering;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Re-entrancy guard for `OrdinaryToPrimitive(string)`. A user
     /// `toString`/`valueOf` whose body coerces `this` back to a string
     /// (e.g. `toString() { return "" + this; }`) would recurse forever;

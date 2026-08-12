@@ -14,19 +14,24 @@ use crate::types::DOUBLE;
 #[cfg(test)]
 mod class_field_loop_tests;
 mod counter_range;
+mod element_shape_loop;
+#[cfg(test)]
+mod element_shape_loop_tests;
 mod if_stmt;
 mod let_buffer_views;
 mod let_stmt;
 mod let_stmt_facts;
 mod loops;
 mod masked_window_region;
+#[cfg(test)]
+mod prealloc_module_global_tests;
 mod switch_stmt;
 mod try_stmt;
 mod unused_expr;
 
 pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
-pub(crate) use loops::{lower_do_while, lower_for, lower_while};
+pub(crate) use loops::{emit_js_value_is_number, lower_do_while, lower_for, lower_while};
 pub(crate) use switch_stmt::lower_switch;
 pub(crate) use try_stmt::lower_try;
 
@@ -258,7 +263,12 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         Stmt::Expr(e) => {
             let prev_discard = ctx.discard_expr_value;
             ctx.discard_expr_value = true;
+            // #7590: the non-leaking companion. `lower_expr` takes this at the
+            // top of its dispatch, so only `e` itself sees it — an operand of
+            // `e` (`sink(a.push(10))`) reads `false` and keeps its value.
+            ctx.discard_this_expr = true;
             let result = lower_expr(ctx, e);
+            ctx.discard_this_expr = false;
             ctx.discard_expr_value = prev_discard;
             let _ = result?;
             Ok(())
@@ -595,6 +605,33 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
 
 fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result<()> {
     for id in ids {
+        // #7521: a module-level binding promoted to `@perry_global_<mod>__<id>`
+        // ALREADY has the shared, forward-visible, GC-rooted cell a prealloc box
+        // would provide, and every read/write site in codegen treats
+        // `module_globals` as winning over `boxed_vars` (`ctx.boxed_vars
+        // .contains(id) && !ctx.module_globals.contains_key(id)`). Allocating a
+        // box here anyway is not merely redundant — it registers a
+        // `ctx.locals` slot for the id, and `ctx.locals` is consulted BEFORE
+        // `ctx.module_globals` on both the `Stmt::Let` reuse path
+        // (`let_stmt.rs`) and the `LocalGet`/`LocalSet` store paths
+        // (`expr/literals_vars.rs`). The declaration then writes the value into
+        // the local box-pointer slot and the module global is never stored, so
+        // any function or closure that reads the binding through the global
+        // sees the `undefined` it was defined with. That is how a strict-mode
+        // block-scoped `function` declaration lost its entire captured
+        // environment once #7105 started emitting `PreallocateBoxes` for
+        // module-top-level blocks (`{ const events = []; function t(){
+        // events.push(x) } }` in any ES module — every push landed nowhere).
+        //
+        // The global is statically initialized to `TAG_UNDEFINED`, which is
+        // exactly what a non-TDZ prealloc box seeds. The TDZ variant is skipped
+        // too: module-global reads are raw `load double @g` with no
+        // `js_box_get_bits` choke point, so seeding `TAG_TDZ` there would leak
+        // the sentinel into arithmetic instead of throwing a ReferenceError —
+        // strictly worse than the `undefined` a forward read gets today.
+        if ctx.module_globals.contains_key(id) {
+            continue;
+        }
         if ctx.locals.contains_key(id) {
             // A previous PreallocateBoxes (or an unusual nesting)
             // already set this up -- skip to keep the existing slot.

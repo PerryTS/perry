@@ -292,3 +292,96 @@ fn host_safepoint_trace_reports_normal_incremental_budgeted_steps() {
         );
     }
 }
+
+/// #7909: a budgeted cycle started at a host safepoint for NURSERY pressure
+/// locks the moving minor out for as long as it stays active — and it can stay
+/// active forever.
+///
+/// # The bug this documents
+///
+/// `gc_runtime_safepoint()` starts a budgeted cycle as soon as any trigger is
+/// due, including the young-generation scavenge cap. That cycle is
+/// `low_pause_non_moving` by construction, so it cannot evacuate and cannot
+/// lower the quantity `young_scavenge_cap_due()` tests. Meanwhile
+/// `gc_safepoint_moving_minor` rejects every safepoint at its `budgeted` entry
+/// guard. If the host's step cadence is too slow to finish the cycle, the two
+/// facts compose into a stall: the trigger stays due, the collector that could
+/// clear it never runs, and the mutator pays the SATB mark barrier for the rest
+/// of the process with nothing collected.
+///
+/// Measured on `gc-handoff/apps/asyncpipe.ts` (`PERRY_GC_DIAG=1`, the
+/// `[gc-incremental]` line this branch adds): **1 cycle started, 15 steps, 0
+/// completions, still active at exit, mark barrier armed 37 ms of a 127 ms
+/// program, zero collections** — 11.8 % of the program's instructions.
+///
+/// This test does not assert the stall is *fixed* — it is not; the fix
+/// (unblocking the moving minor) costs +51 % on that program because of the
+/// per-cycle root-scanning price tracked in #7915. It pins the composition, so
+/// that a change to either half is a deliberate change to a documented
+/// interaction rather than a silent one, and it pins the instrument that makes
+/// the state observable.
+#[test]
+fn an_active_budgeted_cycle_locks_out_the_moving_minor_and_keeps_the_barrier_armed() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+    make_arena_pressure(&trigger_guard, b"host_safepoint_7909_live");
+
+    // ★ Live-subject half #1: the pressure is real. Without this every
+    // assertion below is equally satisfied by a fixture with nothing due —
+    // CLAUDE.md, the fourth way a gate cannot fail.
+    assert!(
+        crate::arena::arena_total_bytes() >= GC_NEXT_TRIGGER_BYTES.with(|t| t.get()),
+        "fixture must present a due arena trigger"
+    );
+
+    let starts_before = super::super::instruments::incremental_cycle_starts();
+    let blocked_before = super::super::instruments::moving_safepoints_blocked_by_budgeted();
+    let armed_before = super::super::instruments::mark_barrier_armed_us();
+
+    let started = gc_runtime_safepoint();
+
+    // ★ Live-subject half #2: a cycle really was started by this call.
+    assert_eq!(started.status, JS_GC_STEP_STATUS_ACTIVE);
+    assert_eq!(
+        super::super::instruments::incremental_cycle_starts(),
+        starts_before + 1,
+        "the instrument must count the cycle the host safepoint just started"
+    );
+    assert!(gc_budgeted_cycle_active());
+
+    // The composition: with that cycle active, the precise safepoint is
+    // rejected, and rejected for the `budgeted` reason specifically.
+    assert!(
+        !super::super::gc_safepoint_moving_minor(),
+        "an active budgeted cycle must lock the moving minor out"
+    );
+    assert_eq!(
+        super::super::instruments::moving_safepoints_blocked_by_budgeted(),
+        blocked_before + 1,
+        "the block must be attributed to the budgeted cycle, not to a transient guard"
+    );
+
+    // And the barrier is armed for the whole time the cycle is open. `>=` not
+    // `>`: the window is measured in microseconds and a fast machine can open
+    // and read it inside one tick. What must hold is that the instrument is
+    // running at all, which the arm-event count states exactly.
+    assert!(
+        super::super::instruments::mark_barrier_arm_events() > 0,
+        "an active incremental cycle must have armed the SATB mark barrier"
+    );
+    assert!(super::super::instruments::mark_barrier_armed_us() >= armed_before);
+
+    // Drive it to completion so the shared thread state is left clean, and take
+    // the opportunity to pin the other end of the instrument.
+    let completions_before = super::super::instruments::incremental_completions();
+    let completed = complete_host_safepoint_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert_eq!(
+        super::super::instruments::incremental_completions(),
+        completions_before + 1,
+        "the instrument must count the completion too, or `starts > completions` \
+         could never be read as a stall"
+    );
+    assert!(!gc_budgeted_cycle_active());
+}

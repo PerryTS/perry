@@ -24,18 +24,36 @@
 //! `a_collection_free_construction_emits_no_this_slot_root` needed the pin even
 //! though it was *passing*, because under the post-#7370 native-roots default
 //! its `!contains("@js_shadow_slot_bind")` is true of every program (hazard 4:
-//! the gate ran, its subject did not).
+//! the gate ran, its subject did not). Since #7876 every class-key cache also
+//! has one function-lifetime bind; that negative asserts there is exactly that
+//! one bind rather than no bind anywhere in the function.
 //!
-//! The rest of this file is lowering-INDEPENDENT and deliberately unpinned —
-//! but READ #7503 BEFORE TRUSTING IT. #7487 re-lowered temp roots onto pooled
-//! frame allocas, so `js_gc_temp_root_push` / `_get` / `_set` / `_truncate` are
-//! now emitted only on the FFI fallback arm, which neither lowering takes here.
-//! Every positive assertion spelled that way fails, and — worse — every
-//! `!ir.contains("call i32 @js_gc_temp_root_push")` passes vacuously. The
-//! contract itself is intact (the value is stored into an entry alloca, root-
-//! bound, and re-loaded after the allocating call); only the spelling these
-//! assertions look for is gone.
+//! The rest of this file is lowering-INDEPENDENT and deliberately unpinned.
+//!
+//! SPELLING (#7503). Until #7487 the temp-root contract was three runtime calls
+//! and this file asserted the calls. #7487 re-lowered temp roots onto pooled
+//! frame allocas — push became a store, get a load, truncate a slot clear — so
+//! `js_gc_temp_root_push` / `_get` / `_set` / `_truncate` now survive only on an
+//! FFI fallback arm that neither shipped lowering takes. Six positive
+//! assertions here failed, and — worse — every
+//! `!ir.contains("call i32 @js_gc_temp_root_push")` NEGATIVE held for every
+//! program in the language, rooted or not. The contract itself never changed.
+//!
+//! Every rooting claim now goes through `perry_codegen::testing::temp_slots`,
+//! which names the VALUE — this producer's result went into a rooted slot, and
+//! this consuming call read it back OUT of that slot — and understands both
+//! lowerings' spelling of a slot. That is strictly stronger than the call-
+//! existence check it replaces: `contains("…temp_root_push")` only ever proved
+//! that SOME call existed SOMEWHERE in the module.
+//!
+//! The argument-accumulator half of this family lives in
+//! `perry_codegen::temp_root_coverage` since #6988 — in `src/`, so it runs in
+//! the per-PR `cargo-test` gate rather than the nightly-only integration tier.
 
+use perry_codegen::testing::temp_slots::{
+    assert_no_temp_rooting, assert_rooted_across, derives_from_slot_load, first_call_result,
+    slot_holding, slot_traffic, temp_root_slots, SlotEvent,
+};
 use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{Class, Expr, Module, ModuleInitKind, Stmt};
@@ -59,6 +77,7 @@ fn entry_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -159,25 +178,22 @@ fn map_set_key_is_rooted_across_an_allocating_value() {
         })],
     );
 
-    assert!(
-        ir.contains("call i32 @js_gc_temp_root_push"),
-        "the receiver and key must be pushed onto the temp-root stack before \
-         the value's lowering, which collects (#6970):\n{ir}"
-    );
-    assert!(
-        ir.contains("call i64 @js_gc_temp_root_get"),
-        "they must be RE-READ after the value is lowered — the slot is a \
-         mutable root and an evacuating cycle rewrites it:\n{ir}"
-    );
+    let f = init_ir(&ir);
+    let key = first_call_result(f, "js_object_alloc")
+        .unwrap_or_else(|| panic!("the key must allocate, or this proves nothing:\n{f}"));
+    assert_rooted_across(f, &key, "js_map_set", "#6970 map.set key");
 
-    let push = ir.find("call i32 @js_gc_temp_root_push").unwrap();
-    let get = ir.find("call i64 @js_gc_temp_root_get").unwrap();
-    let consume = ir.find("call i64 @js_map_set(").unwrap();
-    let truncate = ir.find("call void @js_gc_temp_root_truncate").unwrap();
+    let slot = slot_holding(f, &key).expect("assert_rooted_across just found the slot");
+    let consume = f
+        .lines()
+        .position(|line| line.contains("@js_map_set("))
+        .expect("assert_rooted_across just found the call");
     assert!(
-        push < get && get < consume && consume < truncate,
-        "order must be push → re-read → consuming call → release; the release \
-         comes last because js_map_set allocates while it reads the key:\n{ir}"
+        slot_traffic(f)[&slot]
+            .iter()
+            .any(|e| matches!(e, SlotEvent::Clear { line } if *line > consume)),
+        "the release comes AFTER the consuming call, because js_map_set \
+         allocates while it reads the key:\n{f}"
     );
 }
 
@@ -193,10 +209,10 @@ fn map_set_with_a_non_allocating_value_emits_no_rooting_calls() {
         })],
     );
 
-    assert!(
-        !ir.contains("call i32 @js_gc_temp_root_push"),
-        "nothing after the key can collect, so this must cost exactly what it \
-         cost before (the `declare` line is unconditional; only a CALL counts):\n{ir}"
+    assert_no_temp_rooting(
+        init_ir(&ir),
+        "#6970 gate: nothing after the key can collect, so this must cost \
+         exactly what it cost before",
     );
 }
 
@@ -225,21 +241,37 @@ fn concat_accumulator_is_rooted_and_written_back() {
         })],
     );
 
+    let f = init_ir(&ir);
+    let slots = temp_root_slots(f);
     assert!(
-        ir.contains("call i32 @js_gc_temp_root_push"),
+        !slots.is_empty(),
         "the concat accumulator must be rooted across an allocating argument \
-         (#6971):\n{ir}"
+         (#6971):\n{f}"
     );
+    let traffic = slot_traffic(f);
+    let written_back = slots.iter().any(|slot| {
+        traffic[slot]
+            .iter()
+            .filter(|e| matches!(e, SlotEvent::Store { .. }))
+            .count()
+            >= 2
+    });
     assert!(
-        ir.contains("call void @js_gc_temp_root_set"),
+        written_back,
         "each js_string_concat yields a NEW address, so the accumulator must be \
-         written back into its slot — otherwise the next argument's lowering \
-         keeps the INPUT alive and sweeps the string under construction:\n{ir}"
+         written BACK into its slot — otherwise the next argument's lowering \
+         keeps the INPUT alive and sweeps the string under construction. Slot \
+         traffic: {traffic:#?}\n{f}"
     );
+    let re_read = slots.iter().any(|slot| {
+        traffic[slot]
+            .iter()
+            .any(|e| matches!(e, SlotEvent::Load { .. }))
+    });
     assert!(
-        ir.contains("call i64 @js_gc_temp_root_get"),
+        re_read,
         "the accumulator must be re-read after the argument (and its ToString \
-         coercion, which also allocates):\n{ir}"
+         coercion, which also allocates):\n{f}"
     );
 }
 
@@ -265,9 +297,10 @@ fn string_method_with_non_allocating_args_emits_no_rooting_calls() {
         })],
     );
 
-    assert!(
-        !ir.contains("call i32 @js_gc_temp_root_push"),
-        "a numeric argument cannot collect, so the receiver needs no root:\n{ir}"
+    assert_no_temp_rooting(
+        init_ir(&ir),
+        "#6971 gate: a numeric argument cannot collect, so the receiver needs \
+         no root",
     );
 }
 
@@ -309,6 +342,7 @@ fn module_with_new(name: &str, args: Vec<Expr>) -> Module {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }];
     module
 }
@@ -331,57 +365,74 @@ fn ir_for_new(name: &str, args: Vec<Expr>) -> String {
 fn constructor_arguments_are_rooted_across_the_instance_allocation() {
     let ir = ir_for_new("ctor_args_rooted.ts", vec![allocating(), allocating()]);
 
-    assert!(
-        ir.contains("call i32 @js_gc_temp_root_push"),
-        "constructor arguments must be rooted (#6969):\n{ir}"
-    );
-    assert!(
-        ir.contains("call i64 @js_gc_temp_root_get"),
-        "they must be re-read after the instance allocation:\n{ir}"
-    );
+    let f = init_ir(&ir);
+    let traffic = slot_traffic(f);
 
-    // Push order: the scope marker, then one root per heap argument — and
-    // argument 0's push must precede argument 1's *lowering*, not merely
-    // precede the instance allocation.
-    let pushes: Vec<usize> = ir
-        .match_indices("call i32 @js_gc_temp_root_push")
-        .map(|(i, _)| i)
-        .collect();
-    assert!(
-        pushes.len() >= 3,
-        "expected the scope marker plus a root for each of the two heap \
-         arguments, got {} pushes:\n{ir}",
-        pushes.len()
-    );
     // Each argument is an object literal, so each lowers to its own
     // `js_object_alloc`; the SECOND one is argument 1's, i.e. the collection
     // point argument 0 has to survive.
-    let arg_allocs: Vec<usize> = ir
-        .match_indices("call i64 @js_object_alloc(")
-        .map(|(i, _)| i)
+    let arg_allocs: Vec<(usize, String)> = f
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("call i64 @js_object_alloc("))
+        .filter_map(|(i, l)| l.trim().split_once(" = ").map(|(r, _)| (i, r.to_string())))
         .collect();
-    assert!(arg_allocs.len() >= 2, "both arguments allocate:\n{ir}");
+    assert_eq!(arg_allocs.len(), 2, "both arguments allocate:\n{f}");
+
+    let (arg1_line, _) = &arg_allocs[1];
+    let (_, arg0) = &arg_allocs[0];
+    let slot = slot_holding(f, arg0)
+        .unwrap_or_else(|| panic!("constructor argument 0 ({arg0}) is never rooted (#6969):\n{f}"));
+    let arg0_store = traffic[&slot]
+        .iter()
+        .find_map(|e| match e {
+            SlotEvent::Store { line, .. } => Some(*line),
+            _ => None,
+        })
+        .expect("slot_holding just found it");
     assert!(
-        pushes[1] < arg_allocs[1],
+        arg0_store < *arg1_line,
         "argument 0 must be rooted BEFORE argument 1 is lowered — rooting the \
-         whole list after the loop publishes an already-dangling pointer (#6969):\n{ir}"
+         whole list after the loop publishes an already-dangling pointer \
+         (#6969). Store at {arg0_store}, argument 1 allocates at {arg1_line}:\n{f}"
     );
 
-    let instance_alloc = ir
-        .find("call i64 @js_object_alloc_class_inline_keys")
-        .expect("the instance allocation");
-    let get = ir.find("call i64 @js_gc_temp_root_get").unwrap();
+    // …and every argument is still rooted across the INSTANCE allocation, then
+    // re-read below it. That call is the one that always collects.
+    let instance_alloc = f
+        .lines()
+        .position(|l| l.contains("call i64 @js_object_alloc_class_inline_keys"))
+        .unwrap_or_else(|| panic!("the instance allocation:\n{f}"));
     assert!(
-        pushes[pushes.len() - 1] < instance_alloc && instance_alloc < get,
-        "every argument must still be rooted across the instance allocation, \
-         and re-read after it:\n{ir}"
+        traffic
+            .values()
+            .flat_map(|events| events.iter())
+            .any(|e| matches!(e, SlotEvent::Load { line, .. } if *line > instance_alloc)),
+        "the arguments must be re-read from their slots AFTER the instance \
+         allocation — a register held across it names from-space (#6969):\n{f}"
     );
-
-    let truncate = ir.find("call void @js_gc_temp_root_truncate").unwrap();
-    assert!(
-        get < truncate,
-        "the scope cut must come after the arguments are consumed:\n{ir}"
-    );
+    // The scope cut comes after the arguments are consumed — per SLOT. A
+    // module-wide "last load before any clear" would be answered by an
+    // unrelated named local's slot, which is the class of mistake this whole
+    // issue is about.
+    for slot in temp_root_slots(f) {
+        let events = &traffic[&slot];
+        let last_load = events
+            .iter()
+            .filter_map(|e| match e {
+                SlotEvent::Load { line, .. } => Some(*line),
+                _ => None,
+            })
+            .max()
+            .unwrap_or_else(|| panic!("{slot} was rooted and never read:\n{f}"));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SlotEvent::Clear { line } if *line > last_load)),
+            "{slot}'s scope cut must come after its last read (line {last_load}); \
+             releasing early un-roots a value still in use:\n{f}"
+        );
+    }
 }
 
 /// The gate: `new Pair(a, b)` on immediates must emit no rooting.
@@ -398,10 +449,11 @@ fn constructor_arguments_on_plain_locals_emit_no_rooting_calls() {
         vec![Expr::Number(1.0), Expr::String("s".to_string())],
     );
 
-    assert!(
-        !ir.contains("call i32 @js_gc_temp_root_push"),
-        "a number and a string literal need no root — the literal is a load \
-         from a module global already registered with js_gc_register_global_root:\n{ir}"
+    assert_no_temp_rooting(
+        init_ir(&ir),
+        "#6969 gate: a number and a string literal need no root — the literal \
+         is a load from a module global already registered with \
+         js_gc_register_global_root",
     );
 }
 
@@ -440,13 +492,18 @@ fn registered_root_operands_are_reloaded_rather_than_rooted() {
     );
 
     // And it must be a re-LOAD, not a temp root: a registered root needs no
-    // second liveness mechanism, so this must cost zero runtime calls for it.
-    // (The allocating operand still gets a real root — hence >= 1 push.)
-    let pushes = ir.matches("call i32 @js_gc_temp_root_push").count();
-    assert!(
-        pushes <= 2,
-        "expected at most the scope marker plus the allocating operand's root; \
-         the literal must not get a slot of its own, got {pushes}:\n{ir}"
+    // second liveness mechanism, so this must cost zero slot traffic for it.
+    // The allocating operand still gets a real root — so the count is exactly
+    // one, and "at most one" would let a regression that roots the literal but
+    // stops rooting the object pass.
+    let slots = temp_root_slots(init_ir(&ir));
+    assert_eq!(
+        slots.len(),
+        1,
+        "expected exactly the allocating operand's root; the literal must not \
+         get a slot of its own, and the object must not lose one. Slots: \
+         {slots:?}\n{}",
+        init_ir(&ir)
     );
 }
 
@@ -610,12 +667,11 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
          address:\n{f}"
     );
 
-    assert_eq!(
-        f.matches("call i32 @js_gc_temp_root_push").count(),
-        0,
-        "and it must cost no runtime call. A registered root already has \
-         liveness; all it was missing is the re-derivation, which is the load \
-         that was going to be emitted anyway:\n{ir}"
+    assert_no_temp_rooting(
+        f,
+        "#7114: a registered root already has liveness; all it was missing is \
+         the re-derivation, which is the load that was going to be emitted \
+         anyway — so it must cost no slot",
     );
 }
 
@@ -648,10 +704,7 @@ fn string_literal_concat_operand_is_not_re_derived_when_nothing_collects() {
         "a comparison over two immediates runs no user code and allocates \
          nothing, so the literal must be loaded exactly once:\n{f}"
     );
-    assert!(
-        !f.contains("call i32 @js_gc_temp_root_push"),
-        "and no rooting at all:\n{f}"
-    );
+    assert_no_temp_rooting(f, "#7114 gate: nothing collects, so no rooting at all");
 }
 
 /// The same helper, reached from its other caller: an array literal's element
@@ -674,19 +727,33 @@ fn string_literal_array_element_is_re_derived_below_an_allocating_element() {
         1,
         "exactly one allocating element in @main:\n{f}"
     );
-    assert_eq!(
-        f.matches(handle_pat).count(),
-        2,
-        "element 0's handle must be loaded twice in @main: the original \
-         lowering and the re-derivation below element 1's allocation:\n{f}"
-    );
+    let element_alloc = f
+        .lines()
+        .position(|l| l.contains("call i64 @js_object_alloc("))
+        .expect("just counted it");
 
-    let loads: Vec<usize> = f.match_indices(handle_pat).map(|(i, _)| i).collect();
-    let element_alloc = f.find("call i64 @js_object_alloc(").unwrap();
+    // #7114's invariant admits TWO discharges, and which one a given operand
+    // gets is a lowering decision, not part of the contract: re-derive the
+    // value from immutable storage below the collection point, or park it in a
+    // rooted slot and re-read it from there. Asserting only the first is what
+    // made this test fail on a compiler that had switched to the second. What
+    // must never happen is the third thing: reusing the pre-collection
+    // register.
+    let re_derived = f
+        .lines()
+        .enumerate()
+        .any(|(i, l)| i > element_alloc && l.contains(handle_pat));
+    let re_read = slot_traffic(f)
+        .values()
+        .flat_map(|events| events.iter())
+        .any(|e| matches!(e, SlotEvent::Load { line, .. } if *line > element_alloc));
     assert!(
-        loads[0] < element_alloc && loads[1] > element_alloc,
-        "#7114: one load above element 1's allocation and one below it, so the \
-         value stored into the array is the post-relocation address:\n{f}"
+        re_derived || re_read,
+        "#7114: element 0 must reach the array store either re-derived from its \
+         handle global BELOW element 1's allocation, or re-read from a rooted \
+         slot below it. Neither happened, so the value stored is the \
+         pre-relocation address. Slot traffic: {:#?}\n{f}",
+        slot_traffic(f)
     );
 }
 
@@ -718,18 +785,14 @@ fn wtf8_literal_operand_is_rooted_not_merely_reused() {
     );
 
     let f = init_ir(&ir);
+    let slots = temp_root_slots(f);
     assert_eq!(
-        f.matches("call i32 @js_gc_temp_root_push").count(),
+        slots.len(),
         1,
         "exactly one temp root in @main — the WTF-8 operand's. Zero means it \
          was suppressed without a compensating re-derivation (#7114 for \
          lone-surrogate literals); more than one means this assertion is no \
-         longer about the operand it names:\n{f}"
-    );
-    assert_eq!(
-        f.matches("call i64 @js_gc_temp_root_get").count(),
-        1,
-        "and exactly one re-read of it:\n{f}"
+         longer about the operand it names. Slots: {slots:?}\n{f}"
     );
     assert_eq!(
         f.matches("call i64 @js_object_alloc(").count(),
@@ -737,14 +800,25 @@ fn wtf8_literal_operand_is_rooted_not_merely_reused() {
         "exactly one allocating sibling in @main:\n{f}"
     );
 
-    let push = f.find("call i32 @js_gc_temp_root_push").unwrap();
-    let alloc = f.find("call i64 @js_object_alloc(").unwrap();
-    let get = f.find("call i64 @js_gc_temp_root_get").unwrap();
+    let alloc = f
+        .lines()
+        .position(|l| l.contains("call i64 @js_object_alloc("))
+        .expect("just counted it");
+    let events = &slot_traffic(f)[&slots[0]];
     assert!(
-        push < alloc && alloc < get,
-        "order must be push -> allocating sibling -> re-read. Anything else \
-         means the WTF-8 literal is being carried across the collection point \
-         in a register, which is #7114 for lone-surrogate literals:\n{f}"
+        events
+            .iter()
+            .any(|e| matches!(e, SlotEvent::Store { line, .. } if *line < alloc)),
+        "the WTF-8 literal must reach its slot BEFORE the allocating sibling \
+         runs:\n{f}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SlotEvent::Load { line, .. } if *line > alloc)),
+        "…and be re-read AFTER it. Anything else means the literal is being \
+         carried across the collection point in a register, which is #7114 for \
+         lone-surrogate literals:\n{f}"
     );
 }
 
@@ -797,67 +871,40 @@ fn the_new_instance_is_rooted_across_the_constructor_body() {
     // Assertions are on the DEF-USE chain, not on textual order: the override
     // is emitted into the `ctor.return.after` block, which the writer appends
     // below the block that re-reads the root.
-    let def_of = |reg: &str| -> String {
-        let needle = format!("  %{reg} = ");
-        f.lines()
-            .find(|l| l.starts_with(&needle))
-            .unwrap_or_else(|| panic!("no definition of %{reg} in:\n{f}"))
-            .to_string()
-    };
-    let first_operand_reg = |line: &str| -> String {
-        line.split("%")
-            .nth(1)
-            .and_then(|s| {
-                s.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
-                    .next()
-            })
-            .unwrap_or_else(|| panic!("no register operand in `{line}`"))
-            .to_string()
-    };
 
-    // 1. The allocation's result is pushed as a temp root immediately.
-    let alloc_line = f
+    // 1. The allocation's result reaches a rooted slot immediately.
+    let inst_reg = f
         .lines()
         .find(|l| l.contains("call i64 @js_object_alloc_class"))
+        .and_then(|l| l.trim().split_once(" = ").map(|(r, _)| r.to_string()))
         .unwrap_or_else(|| panic!("the instance allocation:\n{f}"));
-    let inst_reg = alloc_line
-        .trim_start()
-        .trim_start_matches('%')
-        .split(' ')
-        .next()
-        .unwrap()
-        .to_string();
     assert!(
-        f.contains(&format!("call i32 @js_gc_temp_root_push(i64 %{inst_reg})")),
-        "the instance %{inst_reg} must be rooted as soon as it is allocated, \
-         before the constructor body runs (#7154):\n{f}"
+        slot_holding(f, &inst_reg).is_some(),
+        "the instance {inst_reg} must be rooted as soon as it is allocated, \
+         before the constructor body runs (#7154). Slot traffic: {:#?}\n{f}",
+        slot_traffic(f)
     );
 
-    // 2. The value `js_ctor_return_override` publishes is re-derived from that
+    // 2. The value `js_ctor_return_override` publishes is re-read from that
     //    root, not carried across the constructor in the original register.
     let override_line = f
         .lines()
         .find(|l| l.contains("call double @js_ctor_return_override"))
         .unwrap_or_else(|| panic!("the return-override:\n{f}"));
-    let mut reg = first_operand_reg(
-        override_line
-            .split_once("js_ctor_return_override")
-            .expect("split")
-            .1,
-    );
-    let mut chain = vec![reg.clone()];
-    for _ in 0..8 {
-        let d = def_of(&reg);
-        if d.contains("@js_gc_temp_root_get") {
-            return;
-        }
-        reg = first_operand_reg(d.split_once(" = ").expect("assignment").1);
-        chain.push(reg.clone());
-    }
-    panic!(
-        "the instance handed to js_ctor_return_override must be re-read from \
-         its temp root after the constructor body — walked {chain:?} without \
-         reaching a js_gc_temp_root_get (#7154):\n{f}"
+    let published = override_line
+        .split_once("js_ctor_return_override(")
+        .expect("argument list")
+        .1
+        .split(',')
+        .next()
+        .and_then(|a| a.trim().rsplit_once(' ').map(|(_, r)| r.to_string()))
+        .unwrap_or_else(|| panic!("no register operand in `{override_line}`"));
+    assert!(
+        derives_from_slot_load(f, &published, 8),
+        "the instance handed to js_ctor_return_override ({published}) must be \
+         re-read from its root after the constructor body — the callee's own \
+         `this` slot keeps it alive, so it MOVES, and the caller's register \
+         names from-space (#7154):\n{f}"
     );
 }
 
@@ -867,10 +914,10 @@ fn the_new_instance_is_rooted_across_the_constructor_body() {
 #[test]
 fn a_class_that_runs_no_user_code_emits_no_instance_root() {
     let ir = ir_for_new("new_inst_no_ctor.ts", vec![Expr::Number(1.0)]);
-    assert!(
-        !ir.contains("call i32 @js_gc_temp_root_push"),
-        "nothing can collect between the allocation and the `new` value, so \
-         rooting the instance would be pure TLS traffic:\n{ir}"
+    assert_no_temp_rooting(
+        init_ir(&ir),
+        "#7154 gate: nothing can collect between the allocation and the `new` \
+         value, so rooting the instance would be pure cost",
     );
 }
 
@@ -1104,12 +1151,6 @@ fn the_object_assign_accumulator_is_rooted_across_each_source() {
         .expect("LLVM IR should be UTF-8");
     let f = init_ir(&ir);
 
-    let def_of: std::collections::HashMap<&str, &str> = f
-        .lines()
-        .filter_map(|l| l.trim_start().split_once(" = "))
-        .map(|(r, rhs)| (r.trim(), rhs))
-        .collect();
-
     let calls: Vec<&str> = f
         .lines()
         .filter(|l| l.contains("@js_object_assign_one("))
@@ -1133,39 +1174,31 @@ fn the_object_assign_accumulator_is_rooted_across_each_source() {
             .and_then(|a| a.trim().strip_prefix("double "))
             .unwrap_or_else(|| panic!("no accumulator operand in `{call}`"))
             .to_string();
-        // Follow the bitcast back to the `js_gc_temp_root_get` that produced it.
-        let mut reg = acc.clone();
-        let mut rooted = false;
-        for _ in 0..4 {
-            let Some(rhs) = def_of.get(reg.as_str()) else {
-                break;
-            };
-            if rhs.contains("@js_gc_temp_root_get") {
-                rooted = true;
-                break;
-            }
-            let Some(next) = rhs
-                .split(|c: char| !(c.is_alphanumeric() || c == '%' || c == '.' || c == '_'))
-                .find(|w| w.starts_with('%'))
-            else {
-                break;
-            };
-            reg = next.to_string();
-        }
         assert!(
-            rooted,
+            derives_from_slot_load(f, &acc, 4),
             "the Object.assign accumulator passed to `{call}` must be re-read \
-             from its temp root below the previous source's lowering, not \
-             carried in a register (#7200):\n{f}"
+             from its root below the previous source's lowering, not carried \
+             in a register (#7200). Slot traffic: {:#?}\n{f}",
+            slot_traffic(f)
         );
     }
 
-    // And the result of each link must be republished, because the helper now
-    // returns the target's POST-collection address.
+    // And the result of each link must be republished, because the helper
+    // returns the target's POST-collection address. That is a SECOND store into
+    // the same slot — the pooled spelling of `js_gc_temp_root_set`.
+    let republished = temp_root_slots(f).into_iter().any(|slot| {
+        slot_traffic(f)[&slot]
+            .iter()
+            .filter(|e| matches!(e, SlotEvent::Store { .. }))
+            .count()
+            >= 2
+    });
     assert!(
-        f.contains("@js_gc_temp_root_set"),
+        republished,
         "each js_object_assign_one result must be written back into the \
-         accumulator's root — the helper returns the moved target (#7200):\n{f}"
+         accumulator's root — the helper returns the moved target (#7200). \
+         Slot traffic: {:#?}\n{f}",
+        slot_traffic(f)
     );
 }
 
@@ -1275,15 +1308,17 @@ fn a_collection_free_construction_emits_no_this_slot_root() {
         f.contains("@js_object_alloc"),
         "the fixture must actually construct something:\n{f}"
     );
-    assert!(
-        !f.contains("@js_gc_temp_root_push"),
-        "an inert construction runs no user code, so it must emit no instance \
-         temp root (#7192) — the `this`-slot bind is gated on the same \
-         predicate:\n{f}"
+    assert_no_temp_rooting(
+        f,
+        "#7192: an inert construction runs no user code, so it must emit no \
+         instance temp root — the `this`-slot bind is gated on the same \
+         predicate",
     );
-    assert!(
-        !f.contains("@js_shadow_slot_bind"),
-        "an inert construction must not grow the shadow frame for a `this` \
-         slot that cannot go stale (#7202):\n{f}"
+    assert_eq!(
+        f.matches("@js_shadow_slot_bind").count(),
+        1,
+        "an inert construction needs only #7876's function-lifetime class-key \
+         root; it must not grow the shadow frame for a `this` slot that cannot \
+         go stale (#7202):\n{f}"
     );
 }

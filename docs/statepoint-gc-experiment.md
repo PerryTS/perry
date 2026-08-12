@@ -1,5 +1,11 @@
 # Explicit statepoint GC experiment
 
+> **Historical experiment journal.** Its sections retain the decision at each
+> measurement date, including conclusions superseded later in this same file.
+> Native RS4GC roots now ship by default on supported 64-bit AArch64/arm64 and
+> x86-64 targets; other targets use shadow frames. See
+> [the current collector page](src/internals/garbage-collector.md#roots-by-target).
+
 Date: 2026-07-31
 
 Branch: `exp/stackmap-viability`
@@ -712,7 +718,7 @@ chain versus `PERRY_STACKMAP_WALKER=unwind` — is a dead heat (0.24 s vs
 0.24 s; 1.01 s vs 1.01 s). The DWARF CFI parsing that `perf` measured at
 ~22% of samples is simply no longer hot. The other variable between the
 two runs is the rebase onto main's 64 commits of GC work (root-store
-dominance #7192, from-space protection and zeal #7196, and #7148's precise
+dominance #7192, from-space protection and forced-collection tooling #7196, and #7148's precise
 safepoint drains replacing conservative-scan fallbacks), which plausibly
 reduced how often the native stack is walked at all. Shadow itself got
 faster on the same probes (469.2 → 429.2 ms geo), which is consistent with

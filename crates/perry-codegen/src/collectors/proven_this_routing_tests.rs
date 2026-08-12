@@ -55,6 +55,7 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -157,6 +158,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>, methods: Vec<Function>) -
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
@@ -476,6 +478,82 @@ fn typed_clone_fallback_routes_to_proven_this_clone() {
     );
 }
 
+/// The text of the `define` block whose signature line contains
+/// `name_contains` — same "def line, take until the closing brace" idiom
+/// [`proven_this_clone_binds_its_receiver_slot`] uses to isolate a callee's
+/// body, applied to a CALLER instead.
+fn function_body(ir: &str, name_contains: &str) -> String {
+    let def_line = ir
+        .lines()
+        .position(|l| l.starts_with("define") && l.contains(name_contains))
+        .unwrap_or_else(|| panic!("no `define` line containing {name_contains:?} in:\n{ir}"));
+    ir.lines()
+        .skip(def_line)
+        .take_while(|l| *l != "}")
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Soundness ratchet (#7143): `method_direct.fast`'s `$pshape` call site is
+/// preceded, in its own function, by the keys-token shape guard.
+///
+/// `guarded_site_module`'s `probe(c: Counter)` receiver (`c`) is a plain
+/// typed PARAMETER — proven-`this`'s aliased-by-construction case, not a
+/// Phase 3b `Ptr<Shape>` local (no provenance, no containment). #7143 raised
+/// exactly this shape: `ModuleDispatchFacts::has_shape_barrier_sites()` is
+/// computed per module (`collect_module_dispatch_facts`) and can never see a
+/// `delete` performed on `c`'s referent through an alias held by some OTHER
+/// module — so if THIS call site's soundness rested on that admission-time
+/// fact, a cross-module `delete` would let it read through stale fixed-slot
+/// offsets.
+///
+/// It does not rest on that fact. `emit_guarded_direct_method_call`
+/// (`lower_call/method_override.rs`) unconditionally emits
+/// `js_typed_feedback_method_direct_call_guard` (or, under `shape_only_guard`,
+/// `js_method_direct_shape_guard`) BEFORE any block that can reach the clone
+/// — both compare the receiver's live `keys_array` pointer against the
+/// class's canonical `@perry_class_keys_*` token, and `delete`'s only code
+/// path for a class instance always repoints `keys_array` at a freshly
+/// cloned array (`perry-runtime/src/object/delete_rest.rs`), from ANY
+/// module. See `collectors/proven_this.rs`'s "`delete` is aliased across
+/// modules by construction" section for the full argument; this pins the
+/// IR shape it depends on, the same way
+/// `tower_route_is_guarded_by_the_class_keys_token` pins it for the #7142
+/// tower site.
+///
+/// This checks TEXTUAL precedence within `probe`'s body rather than walking
+/// block dominance (`tower_route_is_guarded_by_the_class_keys_token`'s
+/// approach) because `probe` calls two methods sequentially and the typed-f64
+/// arm nests the clone's call another level deep behind its OWN per-argument
+/// guard — precedence is the invariant that survives that nesting, and
+/// `probe` is this fixture's only method-dispatching function, so it is also
+/// the only place a `$pshape` callee name can appear in a `call` line.
+#[test]
+fn guarded_pshape_call_site_is_preceded_by_a_keys_token_guard() {
+    let ir = emit(&guarded_site_module(), false);
+    let calls = pshape_call_targets(&ir);
+    assert!(
+        !calls.is_empty(),
+        "nothing to check — no `$pshape` call emitted:\n{ir}"
+    );
+    let probe = function_body(&ir, "__probe(");
+    for target in &calls {
+        let call_pos = probe.find(&format!("@{target}(")).unwrap_or_else(|| {
+            panic!("{target} is called somewhere in the module but not from `probe`:\n{ir}")
+        });
+        let prefix = &probe[..call_pos];
+        let guarded = prefix.contains("call i32 @js_typed_feedback_method_direct_call_guard(")
+            || prefix.contains("call i32 @js_method_direct_shape_guard(");
+        assert!(
+            guarded,
+            "{target}: no keys-token guard call precedes it in `probe` — a \
+             post-`delete` receiver (deleted from through an alias in another \
+             module, #7143) would reach this clone's stale fixed-slot loads \
+             unguarded:\n{probe}"
+        );
+    }
+}
+
 /// Regression (#7128), Phase 3b guard-free site: a shape-proven LOCAL whose
 /// method also has a typed-receiver clone must still route to the proven-`this`
 /// clone.
@@ -702,6 +780,7 @@ fn tower_case_routes_to_proven_this_clone() {
 /// guard block → `icmp eq i64` → the branch that enters the clone's block.
 #[test]
 fn tower_route_is_guarded_by_the_class_keys_token() {
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let ir = emit(&tower_site_module(), false);
     let bs = blocks(&ir);
     let clone = pshape_definitions(&ir)
@@ -734,6 +813,22 @@ fn tower_route_is_guarded_by_the_class_keys_token() {
         .find(|l| l.contains(&format!("store i64 {}, ptr ", global_reg)))
         .unwrap_or_else(|| panic!("the hoisted keys token is never stored:\n{ir}"));
     let slot = store.rsplit(' ').next().expect("slot name");
+    let store_pos = ir
+        .find(store)
+        .expect("the hoisted class-keys store should be in the function");
+    let bind_pos = ir
+        .lines()
+        .find(|line| line.contains("call void @js_shadow_slot_bind") && line.contains(slot))
+        .and_then(|line| ir.find(line))
+        .unwrap_or_else(|| {
+            panic!(
+                "the cached class-keys pointer is not a mutable shadow root; old-page moves would leave this copy stale:\n{ir}"
+            )
+        });
+    assert!(
+        store_pos < bind_pos,
+        "the class-keys slot must be initialized before the root scanner can read it:\n{ir}"
+    );
     // 3. … which the guard block reloads …
     let expected = guard_body
         .iter()
@@ -762,6 +857,34 @@ fn tower_route_is_guarded_by_the_class_keys_token() {
             .iter()
             .any(|l| l.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")),
         "the routed call must also honour the sticky inline-guard latch:\n{guard_body:#?}"
+    );
+}
+
+#[test]
+fn tower_class_keys_cache_is_a_native_mutable_root() {
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
+    let ir = emit(&tower_site_module(), false);
+    let global_load = ir
+        .lines()
+        .find(|line| line.contains("= load i64, ptr @perry_class_keys_"))
+        .unwrap_or_else(|| panic!("the class keys token is never read:\n{ir}"));
+    let global_reg = global_load.trim().split(' ').next().expect("ssa name");
+    let cast = ir
+        .lines()
+        .find(|line| line.contains(&format!("= inttoptr i64 {global_reg} to ptr addrspace(1)")))
+        .unwrap_or_else(|| {
+            panic!("the cached class-keys pointer never enters a native GC root slot:\n{ir}")
+        });
+    let cast_reg = cast.trim().split(' ').next().expect("cast ssa name");
+    let root_store = ir
+        .lines()
+        .find(|line| line.contains(&format!("store ptr addrspace(1) {cast_reg}, ptr ")))
+        .unwrap_or_else(|| panic!("the native class-keys root is never stored:\n{ir}"));
+    let slot = root_store.rsplit(' ').next().expect("root slot name");
+    assert!(
+        ir.lines()
+            .any(|line| line.contains(&format!("{slot} = alloca ptr addrspace(1)"))),
+        "the class-keys cache alloca must be in the collector address space:\n{ir}"
     );
 }
 

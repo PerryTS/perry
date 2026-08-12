@@ -618,6 +618,96 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
     }
 }
 
+/// #7916: the per-object footprint accounting this issue is about, pinned as an
+/// executable fact rather than a comment.
+///
+/// A two-field object literal is `GcHeader (8) + ObjectHeader (32) + 8 *
+/// max(field_count, INLINE_SLOT_FLOOR)`. At `INLINE_SLOT_FLOOR = 4` that is
+/// **72 bytes to store 16 bytes of payload** and `gc-handoff/bench/retain.ts`
+/// writes 216 MB to hold 48 MB of doubles. Lowering the floor to 2 removes the
+/// two unusable slots.
+///
+/// This reads the size the ALLOCATOR recorded (`GcHeader::size`), not a
+/// recomputation of the same formula, so it fails if any allocation path
+/// silently stops honouring the floor.
+#[test]
+fn two_field_literal_footprint_is_exactly_accounted() {
+    assert_eq!(
+        std::mem::size_of::<ObjectHeader>(),
+        32,
+        "the ObjectHeader half of the accounting: 4 u32 + 2 pointers"
+    );
+    assert_eq!(crate::gc::GC_HEADER_SIZE, 8);
+
+    let keys = b"a\0b\0";
+    let obj = js_object_alloc_with_shape(0x7916_0001, 2, keys.as_ptr(), keys.len() as u32);
+    assert!(!obj.is_null());
+    let recorded = unsafe {
+        let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc).size as usize
+    };
+    let expected = crate::gc::GC_HEADER_SIZE
+        + std::mem::size_of::<ObjectHeader>()
+        + 8 * std::cmp::max(2, crate::object::INLINE_SLOT_FLOOR);
+    assert_eq!(
+        recorded, expected,
+        "a 2-field literal must occupy exactly {expected} bytes"
+    );
+    assert_eq!(
+        recorded, 56,
+        "#7916: the 2-field literal footprint is 56 bytes (was 72 at floor 4). \
+         Raising INLINE_SLOT_FLOOR back to 4 re-adds 16 bytes of unusable slots \
+         to every small object"
+    );
+}
+
+/// Paired with `inline_slot_floor_matches_runtime` in
+/// `perry-codegen/src/target_layout.rs` (#7916).
+///
+/// perry-codegen cannot depend on perry-runtime, so it carries its own copy of
+/// this constant and uses it BOTH to size the inline-`new` bump allocation and
+/// to emit `slot < max(field_count, FLOOR)` bounds checks around raw inline
+/// slot loads/stores. The two failure modes point in opposite directions
+/// (codegen too small under-allocates; codegen too large over-reads), so the
+/// values must be exactly equal — pin the number on both sides.
+#[test]
+fn inline_slot_floor_matches_codegen() {
+    assert_eq!(
+        crate::object::INLINE_SLOT_FLOOR,
+        2,
+        "perry-codegen's target_layout::INLINE_SLOT_FLOOR is 2; update both sides together"
+    );
+}
+
+/// #7916: lowering the floor must not change what `{}` + by-name growth does,
+/// only where the inline/overflow boundary sits. Fields placed past the
+/// boundary go to overflow storage and must still read back — the property
+/// that makes the floor a footprint dial rather than a correctness one.
+#[test]
+fn by_name_growth_past_the_floor_reads_back() {
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        assert!(!obj.is_null());
+        let names: [&[u8]; 6] = [b"k0", b"k1", b"k2", b"k3", b"k4", b"k5"];
+        for (i, n) in names.iter().enumerate() {
+            let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+            js_object_set_field_by_name(obj, key, i as f64);
+        }
+        for (i, n) in names.iter().enumerate() {
+            let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+            let got = js_object_get_field_by_name(obj, key);
+            assert!(
+                got.is_number() && got.as_number() == i as f64,
+                "field {} ({}) read back as {:#x}; the inline/overflow boundary \
+                 must be invisible to reads",
+                i,
+                std::str::from_utf8(n).unwrap(),
+                got.bits()
+            );
+        }
+    }
+}
+
 #[test]
 fn test_object_alloc_and_fields() {
     let obj = js_object_alloc(1, 3);
@@ -1308,5 +1398,187 @@ fn global_builtin_constructor_values_are_not_redispatched_by_name() {
     assert!(
         crate::object::builtin_constructor_spec_length("EventTarget").is_some(),
         "#7518: EventTarget must keep its spec `.length`"
+    );
+}
+
+/// #7548: the array branches of `Object.*` reinterpreted the caller's
+/// `ObjectHeader` pointer as an `ArrayHeader` with a bare cast. When a JS
+/// binding still holds an array's PRE-GROW address, that pointer is a #233
+/// forwarding stub whose first 8 bytes — exactly `length` and `capacity` —
+/// have been overwritten with the forwarding POINTER, so `(*arr).length` read
+/// back a heap address (~6·10^8 in the wild) instead of the real length.
+///
+/// Two loops are driven by that value and became bounded-but-unreachable
+/// walks — one `to_string()` plus a side-table probe per index, hundreds of
+/// millions of iterations, which presents as a hang:
+///   * `mark_all_array_props`          — `Object.freeze` / `Object.seal`.
+///   * `array_set_length_from_descriptor` — ArraySetLength's shrink walk, the
+///     `Set(receiver, "length", …)` tail of a Proxy-receiver `splice` that grows.
+///
+/// The header read is asserted FIRST and directly: a regression must fail fast
+/// here rather than hang the suite in one of the walks below.
+#[test]
+fn stale_pre_grow_array_pointer_reads_the_real_length_in_object_ops() {
+    let mut arr = crate::array::js_array_alloc(0);
+    let stale = arr;
+    let capacity = unsafe { (*arr).capacity };
+    for i in 0..capacity {
+        arr = crate::array::js_array_push_f64(arr, i as f64);
+    }
+    // One more push exceeds the dense capacity: the array is reallocated and a
+    // forwarding stub is left behind at `stale`.
+    let grown = crate::array::js_array_push_f64(arr, capacity as f64);
+    assert_ne!(
+        grown as usize, stale as usize,
+        "pushing past capacity must reallocate — otherwise no stub exists and \
+         this test proves nothing"
+    );
+    let real_len = crate::array::js_array_length(grown);
+    assert_eq!(real_len, capacity + 1);
+
+    // Non-vacuity: the stub's payload must really be clobbered, or the bare
+    // cast below would have been harmless all along.
+    let raw_len = unsafe { (*(stale as *const crate::array::ArrayHeader)).length };
+    assert_ne!(
+        raw_len, real_len,
+        "the forwarding stub's length word must be clobbered for this test to \
+         exercise #7548"
+    );
+
+    // The fix: resolve the chain before reading the header.
+    let resolved = unsafe { super::array_object_ops::array_header(stale as *const ObjectHeader) };
+    assert_eq!(
+        unsafe { (*resolved).length },
+        real_len,
+        "#7548: a stale pre-grow array pointer must resolve to the array's \
+         current home before its length is read"
+    );
+
+    // `Object.freeze`'s index walk now terminates at the real length: it must
+    // record attrs for every real index and none beyond it.
+    unsafe {
+        super::array_object_ops::mark_all_array_props(stale as *mut ObjectHeader, true, true);
+    }
+    let addr = stale as usize;
+    assert!(
+        crate::object::get_property_attrs(addr, &(real_len - 1).to_string()).is_some(),
+        "the freeze walk must reach the array's last real index"
+    );
+    assert!(
+        crate::object::get_property_attrs(addr, &real_len.to_string()).is_none(),
+        "the freeze walk must not run past the array's real length"
+    );
+}
+
+/// #7563: an ARRAY receiver must never be read back as a class instance.
+///
+/// `ObjectHeader` is `{ object_type: u32, class_id: u32, … }` and `ArrayHeader`
+/// is `{ length: u32, capacity: u32 }`, so the two u32s at offset 4 alias — an
+/// array read as an `ObjectHeader` reports its **capacity** as a `class_id`.
+///
+/// That mattered because `arr[Symbol.iterator]` resolves through
+/// `js_class_method_bind(arr, "values")`, whose receiver→class step used a bare
+/// `(*obj).class_id` read instead of the guarded `js_object_get_class_id`. Any
+/// class whose id equalled the array's capacity and which owned a `values`
+/// method therefore captured the array's iterator. When that class was the
+/// *calling* class — `class C { values() { return [x][Symbol.iterator](); } }`
+/// — `values` re-entered `values` until the stack guard page, i.e. a SIGSEGV
+/// with no `Map` anywhere in the program.
+#[test]
+fn array_receiver_is_never_read_as_a_class_id() {
+    let arr = crate::array::js_array_alloc(3);
+    assert!(!arr.is_null());
+    // Impersonate exactly the class id this array's bytes would have yielded.
+    let impersonated = unsafe { (*arr).capacity };
+    assert_ne!(
+        impersonated, 0,
+        "the test is vacuous unless the capacity is a non-zero (i.e. lookup-able) class id"
+    );
+
+    let arr_value = crate::value::js_nanbox_pointer(arr as i64);
+    assert_eq!(
+        super::native_module::class_id_from_method_receiver(arr_value),
+        None,
+        "an array is not a class instance: its capacity must not be read as a class id"
+    );
+
+    // The guard must not over-narrow. A genuine class instance carrying the
+    // very same id still resolves, so the bound-method identity path (#446)
+    // keeps working.
+    let obj = js_object_alloc(impersonated, 0);
+    assert!(!obj.is_null());
+    let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+    assert_eq!(
+        super::native_module::class_id_from_method_receiver(obj_value),
+        Some(impersonated),
+        "a real class instance must still resolve to its class id"
+    );
+}
+
+/// #7689: `const f = C.m; f(...)` — a method value read off a CONSTRUCTOR
+/// class ref — must invoke the STATIC method when the class declares both a
+/// static and an instance method of the same name.
+///
+/// `js_class_method_bind`'s #446 method-identity canonicalization resolved
+/// the name against the INSTANCE vtable (`class_id_from_method_receiver`
+/// treats a class ref like an instance receiver), so the extracted value was
+/// the prototype method. marked's `Lexer` has exactly this collision
+/// (`static lex` + instance `lex`): `const lexer2 = _Lexer.lex;
+/// lexer2(src, opt)` ran the instance `lex` with no constructed receiver and
+/// every `marked.parse` threw "Cannot read properties of undefined (reading
+/// 'pedantic')".
+#[test]
+fn constructor_ref_method_value_resolves_static_over_instance_method() {
+    // Unique id so the process-global registries don't collide with other tests.
+    const CLASS_ID: u32 = 0x7689;
+    const NAME: &[u8] = b"lex";
+
+    extern "C" fn static_lex_7689() -> f64 {
+        42.0
+    }
+    extern "C" fn instance_lex_7689(_this: f64) -> f64 {
+        7.0
+    }
+
+    unsafe {
+        super::class_registry::js_register_class_method(
+            CLASS_ID as i64,
+            NAME.as_ptr(),
+            NAME.len() as i64,
+            instance_lex_7689 as usize as i64,
+            0,
+            0,
+            0,
+        );
+        super::class_registry::js_register_class_static_method(
+            CLASS_ID as i64,
+            NAME.as_ptr(),
+            NAME.len() as i64,
+            static_lex_7689 as usize as i64,
+            0,
+            0,
+        );
+    }
+
+    let class_ref = super::native_module::class_constructor_ref_value(CLASS_ID);
+    let bound = super::native_module::js_class_method_bind(class_ref, NAME.as_ptr(), NAME.len());
+    let result = unsafe { crate::closure::js_native_call_value(bound, std::ptr::null(), 0) };
+    assert_eq!(
+        result, 42.0,
+        "a method value extracted off the CONSTRUCTOR ref must dispatch the \
+         static `lex`, not the same-named instance method"
+    );
+
+    // The guard must not over-narrow: the PROTOTYPE ref names the instance
+    // method, and an extracted `C.prototype.lex` must keep resolving it.
+    let proto_ref = super::native_module::class_prototype_ref_value(CLASS_ID);
+    let bound_proto =
+        super::native_module::js_class_method_bind(proto_ref, NAME.as_ptr(), NAME.len());
+    let result_proto =
+        unsafe { crate::closure::js_native_call_value(bound_proto, std::ptr::null(), 0) };
+    assert_eq!(
+        result_proto, 7.0,
+        "a method value extracted off the PROTOTYPE ref must still dispatch \
+         the instance `lex`"
     );
 }

@@ -268,5 +268,13 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
         aliases: class.aliases.clone(),
         is_nested: class.is_nested,
         alloc_width_hint: class.alloc_width_hint,
+        // #7575: `new Gen<number>()` constructs `Gen$num`, whose class id is
+        // what the instance carries — while `x instanceof Gen` resolves the RHS
+        // to the GENERIC's id, which appears nowhere in that chain. Record the
+        // origin so the runtime can answer the specialization as an instance of
+        // the class the user actually wrote. Nested specializations chain
+        // through the generic (`class Gen2<T> extends Gen<T>` copies
+        // `extends_name = "Gen"`), so one edge per class is enough.
+        specialized_from: Some(class.name.clone()),
     }
 }

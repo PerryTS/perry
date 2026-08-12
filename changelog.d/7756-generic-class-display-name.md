@@ -1,0 +1,11 @@
+### Fixed
+
+- **`constructor.name` of a generic-class instance reported the mangled specialization (#7632).** `(new Gen<number>()).constructor.name` said `Gen$num`; node says `Gen`. TypeScript erases type arguments, so the mangling `monomorph::mangle::generate_specialized_name` produces is Perry's business and must not reach a user-visible name.
+
+  This is the display-name half of the leak whose `instanceof` half was fixed in #7575 / PR #7631. Monomorphization emits a second class (`Gen$num`) with its own class id, and the instance is stamped with that id — so every id-keyed user-visible surface reports the specialization. The fix registers the ORIGIN's name against the specialization's class id in `Module::class_display_names`, the mechanism `codegen/string_pool.rs` already prefers over the registration key when emitting named-class constants (added for #5592's uniquified class-expression bindings). It reads the origin's own display name rather than its `name`, so a specialization of an already-uniquified class reports the JS name and not the internal key.
+
+  Only instantiation WITH type arguments was affected — `new Gen()` is never specialized. Measured against node 26.5.1, the affected surface was exactly `instance.constructor.name`: `Gen.name` read off the constructor binding, `Object.prototype.toString.call(...)`, and error-subclass `name`/`toString()` were already correct, and `instanceof` keeps working.
+
+  **Not fixed, and pre-existing:** two specializations of one generic are still distinct constructor objects. `new Pair<number>().constructor === new Pair<string>().constructor` is `false` where node says `true`, as is `a.constructor === Gen`, and `Object.getPrototypeOf(a) === Object.getPrototypeOf(b)`. That is the monomorphization model rather than a name-registry bug, so it is filed separately rather than bundled here — but it is worth knowing that after this change the two report the same NAME while remaining `!==`.
+
+  Coverage: a `perry-hir` unit test asserting the registration (`--lib`, so it runs per-PR rather than only at tag time), verified to fail when the registration is removed; plus `test-files/test_gap_generic_class_constructor_name_7632.ts`, byte-identical to node, covering nested generics, two specializations, error subclasses and the #7575 `instanceof` half.

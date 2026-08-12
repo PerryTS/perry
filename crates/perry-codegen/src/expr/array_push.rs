@@ -3,37 +3,325 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Layer 1 migrated module (#7615, slice 3)
+//!
+//! Nothing here names `expr::temp_root`, and nothing here did before the
+//! migration either — so the ledger line is **vacuous on the committed source**
+//! and only means something because the slice ran the sabotage arm (a real
+//! `temp_root_push_i64` / `temp_root_truncate` pair injected here turns
+//! `migrated_modules_do_not_reach_past_the_rooting_api` red). Slices 1a and 1b
+//! carried the same caveat. `ArrayPushSpread`'s operand pair goes through
+//! [`crate::rooting::with_operands_rooted`], which is a documentation change
+//! rather than a repair: the group's window is empty, so it emits nothing.
+//!
+//! ## Two orders, and the as-if test that picks between them (#7634)
+//!
+//! The historical arms lower the **pushed value first and the receiver
+//! second**, and the receiver is `Expr::LocalGet`, i.e. a load from the local's
+//! alloca / box / module global. A load taken *after* the value's arbitrary
+//! user code observes whatever an evacuating cycle wrote back into that
+//! storage, so there is no stale register to repair and `operand_protection`
+//! answers `Reuse`. Everything the arms emit below that point —
+//! `js_array_push_f64`, `js_array_concat`, the header probes,
+//! `js_gc_note_slot_layout`, `js_write_barrier_slot`, `js_array_length` —
+//! either consumes the pointer it is handed or cannot re-enter user code, so no
+//! value crosses a moving window.
+//!
+//! That safety was a **consequence of an evaluation order the spec does not
+//! permit**: ES2024 evaluates the `MemberExpression` `a.push` to a Reference
+//! before the argument list, so `a.push(f())` must push onto the array `a`
+//! named *before* `f` ran. Perry pushed onto whatever `a` named afterwards.
+//!
+//! The repair is not a blanket reorder, because a blanket reorder makes the
+//! receiver live across the argument on **every** push and buys an observable
+//! difference on almost none of them. [`push_receiver_is_rebindable`] is the
+//! as-if test: unless the argument can rebind the receiver's binding — it
+//! assigns the id itself, or the binding is boxed (captured *and* mutated) or a
+//! module global and the argument can reach a collection point — the two orders
+//! name the same array and the historical lowering is kept, tiers, register
+//! numbering and all. `an_unreachable_binding_keeps_the_historical_order_and_
+//! roots_nothing` pins that.
+//!
+//! When the test does fire, the spec fix and the rooting fix are one change
+//! (#7634's own framing) and [`lower_array_push_spec_order`] is both: the
+//! receiver is an operand of `with_operands_rooted_across`, rooted before the
+//! argument and re-read after it. That arm also drops the inline fast tiers on
+//! purpose — they publish the reallocated head back into the binding
+//! unconditionally, and once the argument may have rebound it that store lands
+//! on the wrong array.
 
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
+use crate::nanbox::double_literal;
 use crate::native_value::{
     BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
     NativeRep, SemanticKind,
 };
+use crate::rooting;
 use crate::type_analysis::is_numeric_expr;
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier,
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
-    emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_nanbox_store_on_block,
+    emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
+    emit_may_carry_heap_pointer_check, emit_root_nanbox_store_on_block,
     emit_typed_feedback_register_site, emit_write_barrier,
-    expr_has_numeric_pointer_free_array_layout, lower_expr, lower_expr_native,
-    nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
+    emit_write_barrier_slot_generation_tested, expr_has_numeric_pointer_free_array_layout,
+    lower_expr, lower_expr_native, nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
-fn emit_array_handle_length(ctx: &mut FnCtx<'_>, array_handle: &str) -> String {
+/// The expression's result: the new length per ES2024 `Array.prototype.push`.
+///
+/// `js_array_length` is NOT a field read — it resolves Proxy arrays through
+/// the `get` trap and probes the registered-Set/Map side tables — and a
+/// statement-position `arr.push(x);` discards its result, so on push-heavy
+/// workloads it was 8–13% of the run computing a number nobody reads.
+/// `value_discarded` is the `mem::take`n per-expression signal from
+/// `dispatch::lower_expr` (#7590: it reaches exactly the statement's own
+/// expression, never an operand — a consumed `n = arr.push(x)` always
+/// computes the real length). When set, the placeholder constant is returned
+/// without emitting the call.
+/// The `nofwd` admission test for a #7839 numeric push: the historical
+/// integrity mask `0x0407` PLUS the three `_reserved` states in which
+/// `js_gc_note_slot_layout` does real work for a **non-pointer** value stored
+/// into a `GC_TYPE_ARRAY`. Every other state that function can be in is a
+/// provable no-op for such a value (see
+/// [`emit_numeric_push_store_pointer_tested`]).
+///
+/// * `0x0407` `FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS` — the historical
+///   integrity bits, unchanged in meaning and in destination.
+/// * `0x0800` `GC_ARRAY_ELEMENT_SHAPE` — a live element-shape proof (#7480).
+///   `note_element_store` must CLEAR it when a non-object lands in the array,
+///   and that call sits ahead of every early return in `layout_note_slot`.
+/// * `0x1000` — `GC_OBJ_TYPED_LAYOUT_INTACT` as `layout_note_slot` reads it
+///   (`GC_ARRAY_RAW_F64_HOLES` as `gc::types` writes it for an array; the two
+///   share the bit and are disjoint by `obj_type`). Set, it routes into the
+///   typed-descriptor probe, whose `slot_index >= slot_count` arm downgrades.
+/// * `0x2000` `GC_LAYOUT_ALL_POINTERS` — a non-pointer store into an
+///   all-pointer array calls `layout_mark_unknown`, which is a real state
+///   change, not a no-op.
+///
+/// `GC_LAYOUT_SIDE_MASK` is deliberately absent. Skipping the note there leaves
+/// a stale set bit over a non-pointer, and `mark_field_into_worklist`
+/// re-validates every slot word, so the cost is one rejected visit and never a
+/// stranded child — the identical argument `class_field_store_needs_layout_note`
+/// already ships.
+///
+/// Failing this test costs the push its inline store: it takes
+/// `js_array_push_f64`, which notes the slot exactly as it always did. So a
+/// widening here can only ever be slower, never wrong — the same direction of
+/// approximation `emit_may_carry_heap_pointer_check` documents.
+///
+/// `0x0407 | 0x3800` == `0x3C07` == 15367.
+const ARRAY_PUSH_NUMERIC_CLEAN_I16: &str = "15367";
+
+/// #7839 — the inline array append's GC bookkeeping behind ONE live test.
+///
+/// The `apush.inbounds` store used to pay `js_string_addref_if_heap_string` +
+/// `js_gc_note_slot_layout` unconditionally and then an `ldar` on
+/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` for the barrier gate — three
+/// cross-crate obligations on *every* element of a `number[]` push loop, where
+/// all three are dead. `bench/push_num.ts` is 20M such pushes.
+///
+/// The static proof that would retire them (`array_store_needs_layout_note` →
+/// `expr_produces_non_pointer_bits_by_construction`) cannot be made for the
+/// shape that matters: `keep.push(base + j)` is an `Expr::Binary { Add }`, and
+/// that arm answers `false` unconditionally because `+` is string concatenation
+/// for non-numeric operands. It fires only for a bare canonical-i32 local
+/// (`keep.push(j)`), which is why the same loop is ~1.7x faster written that
+/// way. This is #7511's answer to the identical problem on class fields: ask
+/// the question ONCE inline, on the live bits, and branch over all three.
+///
+/// Why each obligation is dead when the test says no:
+///
+/// * `js_string_addref_if_heap_string` is tag-checked and a no-op for every
+///   non-`STRING_TAG` value — `emit_may_carry_heap_pointer_check` admits
+///   `STRING_TAG`, so a string always takes the guarded arm.
+/// * `js_write_barrier_slot` opens with `barrier_child_prologue`, which returns
+///   immediately when `decode_heap_addr(child) == 0`. The predicate is a
+///   superset of every address that decoder resolves.
+/// * `js_gc_note_slot_layout` for a non-pointer value is a no-op in every
+///   layout state EXCEPT three, and reaching this block already PROVES all
+///   three clear: [`ARRAY_PUSH_NUMERIC_CLEAN_I16`] widens the `nofwd`
+///   integrity mask to cover them, so the array's half of the proof costs a
+///   wider constant on an `and` that was being emitted anyway, and this block
+///   has only the value left to test.
+///
+/// Gated on `value_is_numeric` at the call site, so a pointer-pushing loop
+/// (`churn`, `tree`, `push_cls`) emits byte-identical IR to before rather than
+/// paying the predicate for a test it always fails. That also keeps
+/// `js_array_note_numeric_write` out of the picture: it is already statically
+/// elided for exactly this class of value.
+#[allow(clippy::too_many_arguments)]
+fn emit_numeric_push_store_pointer_tested(
+    ctx: &mut FnCtx<'_>,
+    arr_handle: &str,
+    value_double: &str,
+    value_bits_override: Option<&str>,
+    string_addref_needed: bool,
+    layout_note_needed: bool,
+    write_barrier_needed: bool,
+) -> (String, String, Option<String>) {
+    let (length, element_addr, value_bits) = {
+        let blk = ctx.block();
+        let length = blk.safe_load_i32_from_ptr(arr_handle);
+        let length_i64 = blk.zext(I32, &length, I64);
+        let byte_offset = blk.shl(I64, &length_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        // GC_STORE_AUDIT(BARRIERED): the slot write itself is unconditional;
+        // only the bookkeeping moves behind the live test below, and the
+        // barrier's own first test is a subset of that predicate.
+        blk.store(DOUBLE, value_double, &element_ptr);
+        let value_bits = value_bits_override
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| blk.bitcast_double_to_i64(value_double));
+        (length, element_addr, value_bits)
+    };
+    let bookkeeping_idx = ctx.new_block("apush.gc_bookkeeping");
+    let done_idx = ctx.new_block("apush.gc_bookkeeping.done");
+    let bookkeeping_label = ctx.block_label(bookkeeping_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let may_carry_pointer = emit_may_carry_heap_pointer_check(blk, &value_bits);
+        blk.cond_br(&may_carry_pointer, &bookkeeping_label, &done_label);
+    }
+    ctx.current_block = bookkeeping_idx;
+    {
+        let blk = ctx.block();
+        if string_addref_needed {
+            blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
+        }
+        if layout_note_needed {
+            emit_layout_note_slot_on_block(blk, arr_handle, &length, &value_bits);
+        }
+    }
+    if write_barrier_needed {
+        // `arr_handle` reached here through the `nofwd` header test, so it is a
+        // live, non-forwarded GC array user pointer — the precondition for
+        // reading its header byte. The generation test stays: this arm is
+        // reached for real pointer children too.
+        emit_write_barrier_slot_generation_tested(
+            ctx,
+            arr_handle,
+            arr_handle,
+            &element_addr,
+            &value_bits,
+            "apush",
+        );
+    }
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+    (length, element_addr, None)
+}
+
+fn emit_array_handle_length(
+    ctx: &mut FnCtx<'_>,
+    array_handle: &str,
+    value_discarded: bool,
+) -> String {
+    if value_discarded {
+        return double_literal(0.0);
+    }
     let blk = ctx.block();
     let len_i32 = blk.call(I32, "js_array_length", &[(I64, array_handle)]);
     blk.sitofp(I32, &len_i32, DOUBLE)
 }
 
-fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str) -> String {
+fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str, value_discarded: bool) -> String {
+    if value_discarded {
+        return double_literal(0.0);
+    }
     let blk = ctx.block();
     let array_handle = unbox_to_i64(blk, array_box);
-    emit_array_handle_length(ctx, &array_handle)
+    emit_array_handle_length(ctx, &array_handle, false)
+}
+
+/// Publish a (possibly reallocated) array head back into whichever storage
+/// backs `array_id`.
+///
+/// Extracted verbatim from `Expr::ArrayPush`'s generic tail in #7634 so that
+/// the spread arm and the spec-order arm share one copy: three sites emitting
+/// the same five-way storage chain is three places for the #5459 fall-through
+/// to be got wrong. The two early `return`s are the boxed cases — they must NOT
+/// also take the capture-slot store below, which would clobber the box pointer
+/// in the capture slot with the array pointer, so the next push would treat the
+/// array as the box and silently lose the realloc write-back.
+///
+/// `what` names the caller for the "local not in scope" diagnostic.
+fn emit_push_writeback(
+    ctx: &mut FnCtx<'_>,
+    array_id: u32,
+    new_box: &str,
+    what: &str,
+) -> Result<()> {
+    // Boxed var takes priority: write through the box so every closure sharing
+    // the box sees the new pointer.
+    if ctx.boxed_vars.contains(&array_id) {
+        // Captured-through-closure boxed var.
+        if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
+            let closure_ptr =
+                super::current_closure_ptr_value(ctx, &format!("{what} boxed captured"))?;
+            let idx_str = capture_idx.to_string();
+            let blk = ctx.block();
+            let box_ptr = blk.call(
+                I64,
+                "js_closure_get_capture_bits",
+                &[(I64, &closure_ptr), (I32, &idx_str)],
+            );
+            let new_bits = blk.bitcast_double_to_i64(new_box);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+            // Gen-GC Phase C2: the realloc'd array head is a (possibly young)
+            // heap pointer stored into an existing box — barrier the box parent
+            // so a minor GC can't miss it.
+            emit_write_barrier(ctx, &box_ptr, &new_bits);
+            return Ok(());
+        } else if let Some(slot) = ctx.locals.get(&array_id).cloned() {
+            let blk = ctx.block();
+            let box_ptr = blk.load(I64, &slot);
+            let new_bits = blk.bitcast_double_to_i64(new_box);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+            // Gen-GC Phase C2: barrier the box parent (see capture path).
+            emit_write_barrier(ctx, &box_ptr, &new_bits);
+            return Ok(());
+        }
+        // #5459: `array_id` is in `boxed_vars` but has no box location in THIS
+        // context — it's a module-level global accessed directly from a nested
+        // function (the load path read `@global`, not a box-get). Returning here
+        // would skip the realloc write-back entirely, so the relocated array
+        // header is never stored to the registered GC-root global slot: the old
+        // head is freed on the next GC and the global dangles (use-after-free /
+        // corrupted length). Fall through to the module-global store-back below
+        // instead of returning.
+    }
+    if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
+        let closure_ptr = super::current_closure_ptr_value(ctx, &format!("{what} captured"))?;
+        let idx_str = capture_idx.to_string();
+        let new_bits = ctx.block().bitcast_double_to_i64(new_box);
+        ctx.block().call_void(
+            "js_closure_set_capture_bits",
+            &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
+        );
+        // Gen-GC Phase C2: the realloc'd array head stored into the closure
+        // capture is a (possibly young) heap pointer — barrier the closure
+        // parent.
+        emit_write_barrier(ctx, &closure_ptr, &new_bits);
+    } else if let Some(slot) = ctx.locals.get(&array_id).cloned() {
+        ctx.block().store(DOUBLE, new_box, &slot);
+    } else if let Some(global_name) = ctx.module_globals.get(&array_id).cloned() {
+        let g_ref = format!("@{}", global_name);
+        // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
+        emit_root_nanbox_store_on_block(ctx.block(), new_box, &g_ref);
+    } else {
+        return Err(anyhow!("{}({}): local not in scope", what, array_id));
+    }
+    Ok(())
 }
 
 fn lower_array_push_value(
@@ -69,7 +357,175 @@ fn lower_array_push_value(
     Ok((value_double, Some(value_bits)))
 }
 
-pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+/// Does evaluating `arg` **rebind** `array_id` — assign the binding a different
+/// array — rather than merely mutate the array it names?
+///
+/// Only a direct `LocalSet` / `Update` on that id, in this expression, can do
+/// it without the binding also being reachable from other code. A closure
+/// LITERAL inside the argument is answered `true` without looking inside:
+/// `walk_expr_children` deliberately does not descend into a closure body, and
+/// "a closure that assigns it is boxed, so [`push_receiver_is_rebindable`]'s
+/// other clause catches it" is a second-order argument this predicate should
+/// not rest on.
+fn expr_rebinds_local(arg: &Expr, array_id: u32) -> bool {
+    match arg {
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+            if *id == array_id {
+                return true;
+            }
+        }
+        Expr::Closure { .. } => return true,
+        _ => {}
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(arg, &mut |child| {
+        found = found || expr_rebinds_local(child, array_id);
+    });
+    found
+}
+
+/// Is the receiver binding of `arr.push(arg)` reachable for **rebinding** while
+/// `arg` is evaluated? (#7634)
+///
+/// ES2024 evaluates the `MemberExpression` `arr.push` to a Reference *before*
+/// the argument list, so the push must land on the array `arr` named at that
+/// moment. Perry lowers the argument first and reads the receiver afterwards,
+/// which observes whatever `arg` left in the binding. That divergence is
+/// **unobservable unless the binding can change**, and this predicate is the
+/// as-if test: when it answers `false`, the two orders name the same array and
+/// the historical lowering — with its inline fast tiers and its `Reuse` verdict
+/// from `operand_protection` — is kept byte for byte.
+///
+/// It answers `true` in exactly three cases:
+///
+///  * `arg` rebinds the id itself ([`expr_rebinds_local`]);
+///  * the binding is **boxed** — `collect_boxed_vars`' rule is "captured AND
+///    mutated", so a boxed id is one some closure or the enclosing function
+///    assigns. A captured-but-never-assigned array is not boxed and stays on
+///    the fast path, which is why `items.forEach(x => rows.push(f(x)))` costs
+///    nothing;
+///  * the binding is a module global, which any function can assign.
+///
+/// The last two additionally require the argument to be able to reach a
+/// collection point at all (`any_operand_may_collect`, the same window
+/// predicate every rooting decision in this crate consults). `g.push(1)` on a
+/// module global cannot rebind anything: there is no call to do it in.
+fn push_receiver_is_rebindable(ctx: &FnCtx<'_>, array_id: u32, arg: &Expr) -> bool {
+    if expr_rebinds_local(arg, array_id) {
+        return true;
+    }
+    let reachable_from_other_code =
+        ctx.boxed_vars.contains(&array_id) || ctx.module_globals.contains_key(&array_id);
+    reachable_from_other_code && rooting::any_operand_may_collect(ctx, std::iter::once(arg))
+}
+
+/// The spec-ordered push: receiver first, rooted across the argument.
+///
+/// Reached only when [`push_receiver_is_rebindable`] says the order is
+/// observable, which is also exactly when the receiver acquires a rooting
+/// window — the receiver is now live across arbitrary user code, so it is an
+/// operand group rather than a post-argument load. The two are one change
+/// (#7634's own framing) and `operand_protection` supplies the `Root`: a local
+/// or a module global is deliberately NOT `Reload`-able, because re-deriving it
+/// would observe the argument's assignment, which is the bug.
+///
+/// It deliberately does **not** take any of the inline fast tiers. Those all
+/// publish the reallocated head back into the binding unconditionally, and once
+/// the argument may have rebound the binding that store lands on the wrong
+/// array: `a.push(f())` with `f` setting `a = [9]` would overwrite `[9]` with
+/// the grown `[1,2]`. Here the write-back is guarded on the binding still
+/// naming the array that was pushed onto; when it does not, the store is simply
+/// skipped and aliases stay valid through the forwarding pointer
+/// `js_array_push_f64` installs (issue #233), exactly as they do for
+/// `const x = a; a.push(1)`.
+fn lower_array_push_spec_order(
+    ctx: &mut FnCtx<'_>,
+    array_id: u32,
+    array_expr: &Expr,
+    value: &Expr,
+    layout_note_needed: bool,
+    write_barrier_needed: bool,
+    value_discarded: bool,
+) -> Result<String> {
+    rooting::with_operands_rooted_across(
+        ctx,
+        std::slice::from_ref(&array_expr),
+        std::slice::from_ref(&value),
+        |ctx| lower_array_push_value(ctx, value, layout_note_needed, write_barrier_needed),
+        |ctx, vals, (v, _v_bits)| {
+            let recv_box = vals[0].clone();
+            // The binding as it stands NOW. Equal to `recv_box` unless the
+            // argument rebound it.
+            let cur_box = lower_expr(ctx, array_expr)?;
+            let blk = ctx.block();
+            let recv_bits = blk.bitcast_double_to_i64(&recv_box);
+            let cur_bits = blk.bitcast_double_to_i64(&cur_box);
+            let still_bound = blk.icmp_eq(I64, &cur_bits, &recv_bits);
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let new_handle = blk.call(
+                I64,
+                "js_array_push_f64",
+                &[(I64, &recv_handle), (DOUBLE, &v)],
+            );
+            let new_box = nanbox_pointer_inline(blk, &new_handle);
+
+            let wb_idx = ctx.new_block("apush.spec.writeback");
+            let done_idx = ctx.new_block("apush.spec.done");
+            let wb_label = ctx.block_label(wb_idx);
+            let done_label = ctx.block_label(done_idx);
+            ctx.block().cond_br(&still_bound, &wb_label, &done_label);
+
+            ctx.current_block = wb_idx;
+            emit_push_writeback(ctx, array_id, &new_box, "ArrayPush")?;
+            ctx.block().br(&done_label);
+
+            ctx.current_block = done_idx;
+            Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
+        },
+    )
+}
+
+/// [`lower_array_push_spec_order`] for `arr.push(...src)`.
+fn lower_array_push_spread_spec_order(
+    ctx: &mut FnCtx<'_>,
+    array_id: u32,
+    array_expr: &Expr,
+    source: &Expr,
+    value_discarded: bool,
+) -> Result<String> {
+    rooting::with_operands_rooted(ctx, &[array_expr, source], |ctx, vals| {
+        let recv_box = vals[0].clone();
+        let src_box = vals[1].clone();
+        let cur_box = lower_expr(ctx, array_expr)?;
+        let blk = ctx.block();
+        let recv_bits = blk.bitcast_double_to_i64(&recv_box);
+        let cur_bits = blk.bitcast_double_to_i64(&cur_box);
+        let still_bound = blk.icmp_eq(I64, &cur_bits, &recv_bits);
+        let dst_handle = unbox_to_i64(blk, &recv_box);
+        let src_handle = unbox_to_i64(blk, &src_box);
+        let new_handle = blk.call(
+            I64,
+            "js_array_concat",
+            &[(I64, &dst_handle), (I64, &src_handle)],
+        );
+        let new_box = nanbox_pointer_inline(blk, &new_handle);
+
+        let wb_idx = ctx.new_block("apushspread.spec.writeback");
+        let done_idx = ctx.new_block("apushspread.spec.done");
+        let wb_label = ctx.block_label(wb_idx);
+        let done_label = ctx.block_label(done_idx);
+        ctx.block().cond_br(&still_bound, &wb_label, &done_label);
+
+        ctx.current_block = wb_idx;
+        emit_push_writeback(ctx, array_id, &new_box, "ArrayPushSpread")?;
+        ctx.block().br(&done_label);
+
+        ctx.current_block = done_idx;
+        Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
+    })
+}
+
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Result<String> {
     match expr {
         Expr::ArrayPush { array_id, value } => {
             // Resolve the array storage in priority order: closure
@@ -104,6 +560,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let value_is_numeric = is_numeric_expr(ctx, value);
             let require_numeric_layout =
                 value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, &array_expr);
+            // #7839 — the inline append's three GC-bookkeeping calls behind ONE
+            // live test of the stored bits, exactly #7511's class-field shape.
+            // See `emit_numeric_push_store_pointer_tested` for why each call is
+            // dead when the test says "no pointer, no watched layout state",
+            // and why the gate is `value_is_numeric` rather than unconditional.
+            let guarded_numeric_bookkeeping = value_is_numeric
+                && !declared_all_pointer
+                && (layout_note_needed || string_addref_needed || write_barrier_needed);
+            // #7634: spec order (receiver Reference, then argument) is only
+            // observable when the argument can rebind the receiver. When it
+            // can, take the rooted spec-ordered arm; when it cannot — the hot
+            // shape, `out.push(f(x))` over a plain local — the historical
+            // argument-then-receiver order names the same array and every tier
+            // below keeps the IR it has always emitted.
+            if push_receiver_is_rebindable(ctx, *array_id, value) {
+                return lower_array_push_spec_order(
+                    ctx,
+                    *array_id,
+                    &array_expr,
+                    value,
+                    layout_note_needed,
+                    write_barrier_needed,
+                    value_discarded,
+                );
+            }
             let (v, v_bits) =
                 lower_array_push_value(ctx, value, layout_note_needed, write_barrier_needed)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
@@ -202,7 +683,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.current_block = fallback_idx;
                 {
                     let blk = ctx.block();
-                    blk.call_void(
+                    crate::expr::emit_typed_feedback_record_call(
+                        blk,
                         "js_typed_feedback_record_fallback_call",
                         &[(I64, &feedback_site_id)],
                     );
@@ -254,8 +736,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
 
                 ctx.current_block = merge_idx;
+                if value_discarded {
+                    // Skip the slot reload too — it only feeds the length.
+                    return Ok(double_literal(0.0));
+                }
                 let current_box = ctx.block().load(DOUBLE, &slot);
-                return Ok(emit_array_box_length(ctx, &current_box));
+                return Ok(emit_array_box_length(ctx, &current_box, false));
             }
 
             // Fast path: local-bound, non-captured, non-boxed array.
@@ -298,11 +784,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // head — the inline path's offset-0 length read would
                 // otherwise pick up the lower 32 bits of the
                 // forwarding pointer (garbage).
+                //
+                // #7574: the same load also has to prove the receiver IS an
+                // array. `Expr::ArrayPush` is folded from the receiver's
+                // DECLARED type, and a declared type is a hint, never a layout
+                // fact (CLAUDE.md, *Known Limitations*), so
+                // `const a: number[] = new MyArr()` — a `class X extends Array`
+                // instance, which perry models as a plain `ObjectHeader` —
+                // reached the inline store below. `ObjectHeader` overlays
+                // `ArrayHeader` field for field, so `length` read
+                // `object_type` (= 1) and `capacity` read `class_id` (large):
+                // `1 < class_id` passed the in-bounds test and the value was
+                // stored at `handle + 8 + 1*8` — i.e. over `ObjectHeader
+                // .keys_array`, a live GC child edge — while `length + 1`
+                // overwrote `object_type`. The SECOND push then SIGSEGVed
+                // (exit 139) dereferencing `keys_array`, whose bytes were now
+                // the double `1.0` (fault address `0x3ff0000000000000`).
+                //
+                // Route any non-`GC_TYPE_ARRAY` receiver to `js_array_push_f64`
+                // — the same slow arm forwarding already uses — which resolves
+                // an array-like object receiver onto the spec-generic engine.
+                // Strictly more restrictive than the old test: nothing that
+                // used to take the slow arm now takes the inline store.
+                let gc_type_addr = blk.sub(I64, &arr_handle, "8");
+                let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+                let gc_type = blk.load(I8, &gc_type_ptr);
+                let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
                 let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
                 let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
                 let gc_flags = blk.load(I8, &gc_flags_ptr);
                 let fwd_bits = blk.and(I8, &gc_flags, "128");
-                let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
+                let fwd_set = blk.icmp_ne(I8, &fwd_bits, "0");
+                let is_fwd = blk.or(I1, &not_array, &fwd_set);
 
                 let fwd_idx = ctx.new_block("apush.fwd");
                 let nofwd_idx = ctx.new_block("apush.nofwd");
@@ -396,6 +909,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // notes the slot); it can never cost correctness.
                         let admitted_bits = blk.and(I16, &obj_flags, "62599");
                         blk.icmp_eq(I16, &admitted_bits, "40960")
+                    } else if guarded_numeric_bookkeeping {
+                        // #7839 — the array's half of the guard, folded into the
+                        // integrity test rather than emitted as a second one:
+                        // same `and`, same `icmp`, a wider constant. Reaching
+                        // the inline store now additionally proves the three
+                        // `_reserved` states in which `js_gc_note_slot_layout`
+                        // does real work for a NON-pointer value, so the store's
+                        // guard has only the value left to test. See
+                        // `emit_numeric_push_store_pointer_tested`.
+                        let admitted_bits = blk.and(I16, &obj_flags, ARRAY_PUSH_NUMERIC_CLEAN_I16);
+                        blk.icmp_eq(I16, &admitted_bits, "0")
                     } else {
                         // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4)|ARRAY_DESCRIPTORS(0x400).
                         let integrity_bits = blk.and(I16, &obj_flags, "1031");
@@ -416,7 +940,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
                 // Inline store: arr+8+length*8 = value, length++.
                 ctx.current_block = inbounds_idx;
-                {
+                // #7511: the barrier is emitted separately, behind an inline
+                // live test of the PARENT's generation, so the store emitter
+                // below is told not to emit it. Everything else about the store
+                // — the slot write, the string addref, the layout note, and
+                // their ordering — is unchanged.
+                //
+                // `js_write_barrier_slot` still lands in exactly the position it
+                // did before (after the layout note, before the numeric-write
+                // note and the length bump), because a collection reached
+                // between the store and the barrier would run with the
+                // old→young edge unrecorded. The block is split here rather
+                // than the call being sunk to the end of the block.
+                let (length, element_addr, barrier_value_bits) = if guarded_numeric_bookkeeping {
+                    emit_numeric_push_store_pointer_tested(
+                        ctx,
+                        &arr_handle,
+                        &v,
+                        v_bits.as_deref(),
+                        string_addref_needed,
+                        layout_note_needed,
+                        write_barrier_needed,
+                    )
+                } else {
                     let blk = ctx.block();
                     let length = blk.safe_load_i32_from_ptr(&arr_handle);
                     let length_i64 = blk.zext(I32, &length, I64);
@@ -436,7 +982,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             layout_note_needed,
                             &arr_handle,
                             &element_addr,
-                            write_barrier_needed,
+                            false,
                         )
                     } else {
                         emit_jsvalue_slot_store_with_flags_on_block(
@@ -449,17 +995,48 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             layout_note_needed,
                             &arr_handle,
                             &element_addr,
-                            write_barrier_needed,
+                            false,
                         )
+                    };
+                    // The store emitter only hands back the bits when it needed
+                    // them itself; the barrier needs them whenever it is
+                    // emitted, so materialize them here otherwise.
+                    let barrier_value_bits = if write_barrier_needed {
+                        Some(
+                            value_bits
+                                .clone()
+                                .unwrap_or_else(|| blk.bitcast_double_to_i64(&v)),
+                        )
+                    } else {
+                        None
                     };
                     // #7469: provably dead under `declared_all_pointer` — the
                     // `nofwd` admission test proved both raw-f64 bits already
                     // clear, and clearing them is this call's only effect.
                     if !value_is_numeric && !declared_all_pointer {
-                        let value_bits =
-                            value_bits.unwrap_or_else(|| blk.bitcast_double_to_i64(&v));
+                        let value_bits = barrier_value_bits
+                            .clone()
+                            .or(value_bits)
+                            .unwrap_or_else(|| blk.bitcast_double_to_i64(&v));
                         emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
                     }
+                    (length, element_addr, barrier_value_bits)
+                };
+                if let Some(child_bits) = barrier_value_bits {
+                    // `arr_handle` reached this block through the `nofwd` header
+                    // test, so it is a live, non-forwarded GC array user
+                    // pointer — the precondition for reading its header byte.
+                    emit_write_barrier_slot_generation_tested(
+                        ctx,
+                        &arr_handle,
+                        &arr_handle,
+                        &element_addr,
+                        &child_bits,
+                        "apush",
+                    );
+                }
+                {
+                    let blk = ctx.block();
                     let new_length = blk.add(I32, &length, "1");
                     let arr_ptr = blk.inttoptr(I64, &arr_handle);
                     // GC_STORE_AUDIT(POINTER_FREE): array length header update has no child pointer.
@@ -484,8 +1061,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
 
                 ctx.current_block = merge_idx;
+                if value_discarded {
+                    // Skip the slot reload too — it only feeds the length.
+                    return Ok(double_literal(0.0));
+                }
                 let current_box = ctx.block().load(DOUBLE, &slot);
-                return Ok(emit_array_box_length(ctx, &current_box));
+                return Ok(emit_array_box_length(ctx, &current_box, false));
             }
 
             let blk = ctx.block();
@@ -496,77 +1077,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(I64, &arr_handle), (DOUBLE, &v)],
             );
             let new_box = nanbox_pointer_inline(blk, &new_handle);
-            // Write back to whichever storage backs the local.
-            // Boxed var takes priority: write through the box so
-            // every closure sharing the box sees the new pointer.
-            if ctx.boxed_vars.contains(array_id) {
-                // Captured-through-closure boxed var.
-                if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                    let closure_ptr =
-                        super::current_closure_ptr_value(ctx, "ArrayPush boxed captured")?;
-                    let idx_str = capture_idx.to_string();
-                    let blk = ctx.block();
-                    let box_ptr = blk.call(
-                        I64,
-                        "js_closure_get_capture_bits",
-                        &[(I64, &closure_ptr), (I32, &idx_str)],
-                    );
-                    let new_bits = blk.bitcast_double_to_i64(&new_box);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-                    // Gen-GC Phase C2: the realloc'd array head is a (possibly
-                    // young) heap pointer stored into an existing box — barrier
-                    // the box parent so a minor GC can't miss it.
-                    emit_write_barrier(ctx, &box_ptr, &new_bits);
-                    // The capture slot holds the BOX pointer; the box content is
-                    // the shared storage every closure sees. Return here — do NOT
-                    // fall through to the `closure_set_capture_bits` store below,
-                    // which would clobber the box pointer in the capture slot with
-                    // the array pointer, so the next push would treat the array as
-                    // the box and silently lose the realloc write-back.
-                    return Ok(emit_array_handle_length(ctx, &new_handle));
-                } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                    let blk = ctx.block();
-                    let box_ptr = blk.load(I64, &slot);
-                    let new_bits = blk.bitcast_double_to_i64(&new_box);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-                    // Gen-GC Phase C2: barrier the box parent (see capture path).
-                    emit_write_barrier(ctx, &box_ptr, &new_bits);
-                    // The slot holds the BOX pointer — the box is the shared
-                    // storage. Return so the slot keeps pointing at the box (see
-                    // the captured branch above).
-                    return Ok(emit_array_handle_length(ctx, &new_handle));
-                }
-                // #5459: `array_id` is in `boxed_vars` but has no box location in
-                // THIS context — it's a module-level global accessed directly from
-                // a nested function (the load path read `@global`, not a box-get).
-                // Returning here would skip the realloc write-back entirely, so the
-                // relocated array header is never stored to the registered GC-root
-                // global slot: the old head is freed on the next GC and the global
-                // dangles (use-after-free / corrupted length). Fall through to the
-                // module-global store-back below instead of returning.
-            }
-            if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                let closure_ptr = super::current_closure_ptr_value(ctx, "ArrayPush captured")?;
-                let idx_str = capture_idx.to_string();
-                let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
-                ctx.block().call_void(
-                    "js_closure_set_capture_bits",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
-                );
-                // Gen-GC Phase C2: the realloc'd array head stored into the
-                // closure capture is a (possibly young) heap pointer — barrier
-                // the closure parent.
-                emit_write_barrier(ctx, &closure_ptr, &new_bits);
-            } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                ctx.block().store(DOUBLE, &new_box, &slot);
-            } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
-                let g_ref = format!("@{}", global_name);
-                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
-                emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-            } else {
-                return Err(anyhow!("ArrayPush({}): local not in scope", array_id));
-            }
-            Ok(emit_array_handle_length(ctx, &new_handle))
+            emit_push_writeback(ctx, *array_id, &new_box, "ArrayPush")?;
+            Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
         }
 
         // `arr.push(...src)` — HIR variant carrying the destination
@@ -579,76 +1091,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // return pointer, and write back to whichever storage backs
         // `array_id`. Issue #248.
         Expr::ArrayPushSpread { array_id, source } => {
-            let src_box = lower_expr(ctx, source)?;
-            let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
-            let blk = ctx.block();
-            let dst_handle = unbox_to_i64(blk, &arr_box);
-            let src_handle = unbox_to_i64(blk, &src_box);
-            let new_handle = blk.call(
-                I64,
-                "js_array_concat",
-                &[(I64, &dst_handle), (I64, &src_handle)],
-            );
-            let new_box = nanbox_pointer_inline(blk, &new_handle);
-            if ctx.boxed_vars.contains(array_id) {
-                if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                    let closure_ptr =
-                        super::current_closure_ptr_value(ctx, "ArrayPushSpread boxed captured")?;
-                    let idx_str = capture_idx.to_string();
-                    let blk = ctx.block();
-                    let box_ptr = blk.call(
-                        I64,
-                        "js_closure_get_capture_bits",
-                        &[(I64, &closure_ptr), (I32, &idx_str)],
-                    );
-                    let new_bits = blk.bitcast_double_to_i64(&new_box);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-                    // Gen-GC Phase C2: the realloc'd array head is a (possibly
-                    // young) heap pointer stored into an existing box — barrier
-                    // the box parent so a minor GC can't miss it.
-                    emit_write_barrier(ctx, &box_ptr, &new_bits);
-                    // Box content is the shared storage; the capture slot must keep
-                    // pointing at the box. Return so we don't fall through to the
-                    // capture-slot store, which would clobber the box pointer (see
-                    // the matching note in `Expr::ArrayPush`).
-                    return Ok(emit_array_handle_length(ctx, &new_handle));
-                } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                    let blk = ctx.block();
-                    let box_ptr = blk.load(I64, &slot);
-                    let new_bits = blk.bitcast_double_to_i64(&new_box);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-                    // Gen-GC Phase C2: barrier the box parent (see capture path).
-                    emit_write_barrier(ctx, &box_ptr, &new_bits);
-                    return Ok(emit_array_handle_length(ctx, &new_handle));
-                }
-                // #5459: in `boxed_vars` but no box location here — a module-level
-                // global accessed directly from a nested function. Fall through to
-                // the module-global store-back so the relocated head reaches the
-                // GC-root slot (see the matching note in `Expr::ArrayPush`).
-            }
-            if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                let closure_ptr =
-                    super::current_closure_ptr_value(ctx, "ArrayPushSpread captured")?;
-                let idx_str = capture_idx.to_string();
-                let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
-                ctx.block().call_void(
-                    "js_closure_set_capture_bits",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
+            let array_expr = Expr::LocalGet(*array_id);
+            // #7634, same as `Expr::ArrayPush`: spec order is only observable
+            // when the source can rebind the destination binding.
+            if push_receiver_is_rebindable(ctx, *array_id, source) {
+                return lower_array_push_spread_spec_order(
+                    ctx,
+                    *array_id,
+                    &array_expr,
+                    source,
+                    value_discarded,
                 );
-                // Gen-GC Phase C2: the realloc'd array head stored into the
-                // closure capture is a (possibly young) heap pointer — barrier
-                // the closure parent.
-                emit_write_barrier(ctx, &closure_ptr, &new_bits);
-            } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
-                ctx.block().store(DOUBLE, &new_box, &slot);
-            } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
-                let g_ref = format!("@{}", global_name);
-                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
-                emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-            } else {
-                return Err(anyhow!("ArrayPushSpread({}): local not in scope", array_id));
             }
-            Ok(emit_array_handle_length(ctx, &new_handle))
+            // The operand pair, stated through the API instead of by statement
+            // order. The window is EMPTY and stays empty: the only thing lowered
+            // after `source` is the receiver, which is a slot read, so
+            // `operand_protection` answers `Reuse` for both and this emits no
+            // rooting IR at all. It is here so that a later edit which inserts a
+            // lowering between the two is a change to a rooted group rather than
+            // a silent reopening.
+            rooting::with_operands_rooted(ctx, &[source.as_ref(), &array_expr], |ctx, vals| {
+                let blk = ctx.block();
+                let dst_handle = unbox_to_i64(blk, &vals[1]);
+                let src_handle = unbox_to_i64(blk, &vals[0]);
+                let new_handle = blk.call(
+                    I64,
+                    "js_array_concat",
+                    &[(I64, &dst_handle), (I64, &src_handle)],
+                );
+                let new_box = nanbox_pointer_inline(blk, &new_handle);
+                emit_push_writeback(ctx, *array_id, &new_box, "ArrayPushSpread")?;
+                Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
+            })
         }
 
         // -------- Closures (Phase D.1) --------
@@ -660,5 +1134,343 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (`perry_closure_<modprefix>__<func_id>`) earlier in
         // `compile_module` via the `compile_closure` pass.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}
+
+/// #7634: the receiver-order gate, and the two IR shapes it selects between.
+#[cfg(test)]
+mod receiver_order_tests {
+    use super::expr_rebinds_local;
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Function, Module as HirModule, Stmt};
+
+    /// A one-function module whose body is `let a = []; a.push(<value>); return a;`.
+    fn push_ir(value: Expr) -> String {
+        let mut hir = HirModule::new("apush_receiver_order_test");
+        hir.functions.push(Function {
+            id: 0,
+            name: "pushes".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 0,
+                    name: "a".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Array(Vec::new())),
+                },
+                Stmt::Expr(Expr::ArrayPush {
+                    array_id: 0,
+                    value: Box::new(value),
+                }),
+                Stmt::Return(Some(Expr::LocalGet(0))),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let opts = crate::CompileOptions {
+            emit_ir_only: true,
+            ..Default::default()
+        };
+        let bytes = crate::compile_module(&hir, opts).expect("test module compiles");
+        String::from_utf8(bytes).expect("LLVM IR is UTF-8")
+    }
+
+    /// An allocating argument that CANNOT reach the receiver's binding leaves
+    /// the historical argument-then-receiver order in place: no spec-order
+    /// blocks, and therefore none of the cost #7634 worried about.
+    ///
+    /// It asserts the ABSENCE of the spec-ordered arm rather than counting
+    /// `js_gc_temp_root_push` call sites, and that is not a stylistic choice:
+    /// `temp_root_push_double` lowers to a plain alloca `store` in alloca mode
+    /// and to a stack-map index under statepoints, so a count reads zero on the
+    /// default build and passes vacuously. The spec-ordered arm is the only
+    /// thing in this lowering that roots the receiver, so its absence is the
+    /// no-cost claim, stated in something the emitted IR always shows.
+    ///
+    /// It cannot pass vacuously in the other direction either: the same IR is
+    /// required to still contain the push's own inline tier (`apush.nofwd`), so
+    /// an empty or failed compile fails here rather than reporting "clean".
+    #[test]
+    fn an_unreachable_binding_keeps_the_historical_order_and_roots_nothing() {
+        let ir = push_ir(Expr::Object(vec![("v".to_string(), Expr::Number(1.0))]));
+        assert!(
+            ir.contains("apush.nofwd"),
+            "the push must still take its inline tier, or this test proves nothing:\n{ir}"
+        );
+        assert!(
+            !ir.contains("apush.spec."),
+            "a plain local nothing else can reach must NOT take the spec-ordered arm — and \
+             the spec-ordered arm is the ONLY thing that roots the receiver, so its absence \
+             is the no-cost claim:\n{ir}"
+        );
+    }
+
+    /// An argument that assigns the receiver's own binding takes the
+    /// spec-ordered arm: the receiver is lowered FIRST, rooted across the
+    /// argument, and the realloc write-back is guarded on the binding still
+    /// naming the array that was pushed onto.
+    #[test]
+    fn an_argument_that_rebinds_the_receiver_takes_the_spec_ordered_arm() {
+        let ir = push_ir(Expr::Sequence(vec![
+            Expr::LocalSet(0, Box::new(Expr::Array(vec![Expr::Number(9.0)]))),
+            Expr::Number(2.0),
+        ]));
+        assert!(
+            ir.contains("apush.spec.writeback"),
+            "the rebinding argument must take the spec-ordered arm:\n{ir}"
+        );
+        assert!(
+            ir.contains("apush.spec.done"),
+            "the spec-ordered arm must join back through its own merge block:\n{ir}"
+        );
+        // The guard is what stops the grown OLD array being published into a
+        // binding the argument has already pointed somewhere else.
+        let guard = ir
+            .lines()
+            .find(|l| l.contains("br i1") && l.contains("label %apush.spec.writeback"))
+            .unwrap_or_else(|| panic!("no guarded write-back branch in:\n{ir}"));
+        let cond = guard
+            .split_whitespace()
+            .nth(2)
+            .and_then(|c| c.strip_suffix(','))
+            .unwrap_or_else(|| panic!("cannot read the branch condition from {guard:?}"));
+        let def = ir
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{cond} = ")))
+            .unwrap_or_else(|| panic!("no definition of {cond} in:\n{ir}"));
+        assert!(
+            def.contains("icmp eq i64"),
+            "the write-back must be guarded on the binding still holding the pushed array, \
+             got {def:?}"
+        );
+    }
+
+    /// The predicate itself: a write nested inside the argument counts, a write
+    /// to a DIFFERENT local does not, and a closure literal is answered
+    /// conservatively because `walk_expr_children` does not descend into one.
+    #[test]
+    fn rebinding_predicate_sees_nested_writes_only_for_the_right_local() {
+        let nested = Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left: Box::new(Expr::Number(1.0)),
+            right: Box::new(Expr::LocalSet(7, Box::new(Expr::Number(2.0)))),
+        };
+        assert!(expr_rebinds_local(&nested, 7));
+        assert!(!expr_rebinds_local(&nested, 8));
+        assert!(expr_rebinds_local(
+            &Expr::Update {
+                id: 7,
+                op: perry_hir::UpdateOp::Increment,
+                prefix: false,
+            },
+            7
+        ));
+        assert!(!expr_rebinds_local(
+            &Expr::Call {
+                callee: Box::new(Expr::LocalGet(3)),
+                args: vec![Expr::Number(1.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            },
+            7
+        ));
+    }
+}
+
+#[cfg(test)]
+mod parent_gate_tests {
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Function, Module as HirModule, Stmt};
+
+    /// `const a = []; a.push({v: 1});` — a pointer-valued push into a local
+    /// array, which is the shape whose barrier #7511 gates.
+    fn pushing_ir() -> String {
+        let mut hir = HirModule::new("apush_parent_gate_test");
+        hir.functions.push(Function {
+            id: 0,
+            name: "pushes".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Let {
+                    id: 0,
+                    name: "a".to_string(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Array(Vec::new())),
+                },
+                Stmt::Expr(Expr::ArrayPush {
+                    array_id: 0,
+                    value: Box::new(Expr::Object(vec![("v".to_string(), Expr::Number(1.0))])),
+                }),
+                Stmt::Return(Some(Expr::LocalGet(0))),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let opts = crate::CompileOptions {
+            emit_ir_only: true,
+            ..Default::default()
+        };
+        let bytes = crate::compile_module(&hir, opts).expect("test module compiles");
+        String::from_utf8(bytes).expect("LLVM IR is UTF-8")
+    }
+
+    fn assert_default_barrier_env_not_disabled() {
+        assert!(
+            !matches!(
+                std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            ),
+            "this test describes DEFAULT barrier emission; PERRY_WRITE_BARRIERS must be unset or on"
+        );
+    }
+
+    /// Block labels carry a uniquing suffix (`apush.barrier.21:`), so collect
+    /// the gated block's body by walking labels rather than by substring —
+    /// `apush.barrier.done.22:` would otherwise match a `apush.barrier.` prefix
+    /// test and silently hand back the WRONG block, which is exactly the block
+    /// the store is supposed to be in.
+    fn gated_barrier_block(ir: &str) -> String {
+        let mut body = Vec::new();
+        let mut inside = false;
+        for line in ir.lines() {
+            if let Some(label) = line.strip_suffix(':') {
+                if !label.starts_with(char::is_whitespace) {
+                    inside = label.starts_with("apush.barrier.")
+                        && !label.starts_with("apush.barrier.done");
+                    continue;
+                }
+            }
+            if inside {
+                body.push(line);
+            }
+        }
+        assert!(
+            !body.is_empty(),
+            "no `apush.barrier.<n>` block in the emitted IR — the push did not take the \
+             gated inline tier, so this test would be vacuous:\n{ir}"
+        );
+        body.join("\n")
+    }
+
+    /// The barrier call must sit in its own block, reached only through the
+    /// parent-generation `cond_br`, and both clauses of the gate must be
+    /// present.
+    #[test]
+    fn array_push_barrier_is_gated_on_the_parent_header() {
+        assert_default_barrier_env_not_disabled();
+        let ir = pushing_ir();
+        assert!(
+            ir.contains("js_write_barrier_slot"),
+            "the pointer-valued push must still emit a barrier at all:\n{ir}"
+        );
+        let gated = gated_barrier_block(&ir);
+        assert!(
+            gated.contains("js_write_barrier_slot"),
+            "the gated block must be the one holding the barrier call:\n{gated}"
+        );
+        // Count CALL sites only — the module's `declare` line names the symbol
+        // too, and counting it would make this compare 2 against 1 forever.
+        assert_eq!(
+            ir.matches("call void @js_write_barrier_slot").count(),
+            gated.matches("call void @js_write_barrier_slot").count(),
+            "every array-push barrier must be inside the gate — an ungated one would be the \
+             cost this ticket exists to remove:\n{ir}"
+        );
+        assert_gate_condition_is_both_clauses(&ir);
+    }
+
+    /// Follow the `cond_br`'s condition back to its definition and require it to
+    /// be the `or` of a `GC_FLAG_TENURED` header test and the incremental-count
+    /// test.
+    ///
+    /// Checking only that the IR *contains* `and i8 …, 32` and the global's name
+    /// is not enough, and this is not hypothetical: replacing the `or` with a
+    /// constant-true left both of those substrings in place (the clauses are
+    /// still computed, just no longer consulted) and the test stayed green while
+    /// the gate had stopped gating. A branch that is always taken is precisely
+    /// the failure this ticket's perf claim rests on not happening.
+    fn assert_gate_condition_is_both_clauses(ir: &str) {
+        let br = ir
+            .lines()
+            .find(|l| l.contains("br i1") && l.contains("label %apush.barrier."))
+            .unwrap_or_else(|| panic!("no gated branch in the emitted IR:\n{ir}"));
+        let cond = br
+            .split_whitespace()
+            .nth(2)
+            .and_then(|c| c.strip_suffix(','))
+            .unwrap_or_else(|| panic!("cannot read the branch condition from {br:?}"));
+        let def = ir
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{cond} = ")))
+            .unwrap_or_else(|| panic!("no definition of {cond} in:\n{ir}"));
+        assert!(
+            def.contains("or i1"),
+            "the gate's branch condition must be the OR of both clauses, not {def:?} — a \
+             condition that is not an `or` of the two tests is a gate that never skips"
+        );
+        let mut operands = def
+            .split("or i1 ")
+            .nth(1)
+            .expect("or operands")
+            .split(", ")
+            .map(str::trim);
+        let tenured = operands.next().expect("tenured operand");
+        let incremental = operands.next().expect("incremental operand");
+        let def_of = |name: &str| {
+            ir.lines()
+                .find(|l| l.trim_start().starts_with(&format!("{name} = ")))
+                .unwrap_or_else(|| panic!("no definition of {name} in:\n{ir}"))
+                .to_string()
+        };
+        assert!(
+            def_of(tenured).contains("icmp ne i8"),
+            "the first clause must be the parent's header-byte test, got {:?}",
+            def_of(tenured)
+        );
+        assert!(
+            def_of(incremental).contains("icmp ne i32"),
+            "the second clause must be the incremental-count test, got {:?}",
+            def_of(incremental)
+        );
+        assert!(
+            ir.contains("and i8") && ir.contains(", 32"),
+            "the header test must mask GC_FLAG_TENURED (0x20):\n{ir}"
+        );
+        assert!(
+            ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),
+            "dropping the incremental clause would skip the insertion barrier's shading:\n{ir}"
+        );
+    }
+
+    /// The SLOT STORE is unconditional: it must NOT be inside the gated block.
+    /// Only the bookkeeping moves.
+    #[test]
+    fn array_push_slot_store_stays_outside_the_gate() {
+        assert_default_barrier_env_not_disabled();
+        let ir = pushing_ir();
+        let gated = gated_barrier_block(&ir);
+        assert!(
+            !gated.contains("store double"),
+            "the element store must stay OUTSIDE the gate — a store that only happens when the \
+             parent is tenured would drop the value entirely:\n{gated}"
+        );
     }
 }

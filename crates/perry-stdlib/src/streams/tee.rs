@@ -277,8 +277,8 @@ pub(super) unsafe fn tee_schedule_pull(source: usize) {
 }
 
 /// Demand-initiated pull entry — a branch read parked against an empty branch
-/// queue (`maybe_pull` routing). On a COLD pipeline Node pays TWO microtask
-/// hops before that read resolves: the `sourceReader.read()` promise
+/// queue (`maybe_pull` routing). On a COLD, UNBUFFERED pipeline Node pays TWO
+/// microtask hops before that read resolves: the `sourceReader.read()` promise
 /// resolution plus the `.then(fanout)` reaction (streamsuite first-delivery
 /// cadence: node's first chunk lands after t2, Perry's landed after t1 — the
 /// one-hop-short residual behind the Next.js RSC Flight row-reorder). Once
@@ -288,6 +288,23 @@ pub(super) unsafe fn tee_schedule_pull(source: usize) {
 /// calibrated cadence throughout.
 pub(super) unsafe fn tee_schedule_pull_demand(source: usize) {
     if TEE_STARTED.lock().unwrap().contains(&source) {
+        tee_schedule_pull(source);
+        return;
+    }
+    // A source that was already buffered before `tee()` is not a cold pull
+    // pipeline: `sourceReader.read()` can consume its first chunk immediately,
+    // so Node pays only the queued fanout/reaction cycle. Sending that case
+    // through `tee_demand_hop` added a third observable promise generation
+    // (test_gap_stream_tee_tick_parity: first delivery after t2 instead of
+    // Node's t1). Keep the extra cold-start hop only for an empty source whose
+    // producer still has to run; that is the Flight cadence #6657 calibrated.
+    let has_buffered_chunk = READABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get(&source)
+        .map(|s| !s.chunks.is_empty())
+        .unwrap_or(false);
+    if has_buffered_chunk {
         tee_schedule_pull(source);
         return;
     }

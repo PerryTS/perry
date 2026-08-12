@@ -83,6 +83,15 @@ unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
 /// Build a fresh Map iterator object for `map` (raw pointer) of the given
 /// kind. Returns the RAW iterator-object pointer as i64 (caller NaN-boxes).
 unsafe fn map_iter_obj_raw(map: *const MapHeader, kind: i32) -> i64 {
+    // #7570: these entries are reached from the DECLARED-type lowering of
+    // `m.entries()`/`.keys()`/`.values()`, so `map` can be a `class X extends
+    // Map` instance (a plain ObjectHeader) rather than a `MapHeader`. Every
+    // `next()` would then read `parent_class_id ‖ field_count` as the entries
+    // pointer. Resolve onto the hidden backing before the iterator captures it.
+    // Unlike the `js_map_*` entries this is not a `clean_map_ptr` caller — it
+    // stores the raw pointer into the iterator object, so the redirect has to
+    // happen here.
+    let map = crate::map::resolve_map_receiver(map);
     if map.is_null() {
         return 0;
     }
@@ -91,6 +100,8 @@ unsafe fn map_iter_obj_raw(map: *const MapHeader, kind: i32) -> i64 {
 }
 
 unsafe fn set_iter_obj_raw(set: *const SetHeader, kind: i32) -> i64 {
+    // #7570 — see `map_iter_obj_raw`.
+    let set = crate::set::resolve_set_receiver(set);
     if set.is_null() {
         return 0;
     }
@@ -159,21 +170,11 @@ static KEEP_SET_ENTRIES_ITER: extern "C" fn(*const SetHeader) -> i64 = js_set_en
 
 /// Build the `{ value, done }` iterator-result object. Mirrors
 /// `array/iter_object.rs::make_iter_result`.
-unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-
-    // keys array so destructuring + property reads find named slots.
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::object::js_object_set_keys(obj, keys);
-
-    js_object_set_field(obj, 0, value);
-    js_object_set_field(obj, 1, JSValue::bool(done));
-    js_nanbox_pointer(obj as i64)
-}
+// #7564: this was a local five-allocation copy with every intermediate in a
+// bare Rust local — see `crate::iter_result` for what that cost and why it was
+// a stale-from-space hazard. `use` rather than a wrapper so the call sites
+// below read unchanged.
+use crate::iter_result::make_iter_result;
 
 /// `[key, value]` pair array for Map entries / Set entries (`[v, v]`).
 unsafe fn make_pair_array(a: f64, b: f64) -> f64 {

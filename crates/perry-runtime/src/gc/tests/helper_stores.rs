@@ -2,6 +2,13 @@ use super::super::*;
 use super::support::*;
 use std::fmt::Write as _;
 
+/// Field/element count whose backing store exceeds the POINTER-BEARING
+/// born-tenured threshold — see `copying.rs`'s `OLD_BORN_ELEMENTS`. These two
+/// fixtures assert that a materialized JSON object / regex result array is an
+/// OLD-generation birth holding young children, so they must actually be one.
+const OLD_BORN_FIELDS: u32 =
+    (crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES / 8) as u32 + 64;
+
 unsafe fn alloc_old_test_map(
     capacity: u32,
 ) -> (*mut crate::map::MapHeader, *mut u64, std::alloc::Layout) {
@@ -131,7 +138,7 @@ fn json_large_object_materialization_preserves_young_string_fields() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let mut json = String::from("{");
-    for i in 0..4096 {
+    for i in 0..OLD_BORN_FIELDS {
         if i != 0 {
             json.push(',');
         }
@@ -169,7 +176,7 @@ fn regex_global_result_array_preserves_young_match_strings() {
     let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
-    let source_bytes = "x".repeat(4096);
+    let source_bytes = "x".repeat(OLD_BORN_FIELDS as usize);
     let source =
         crate::string::js_string_from_bytes(source_bytes.as_ptr(), source_bytes.len() as u32);
     let pattern = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);

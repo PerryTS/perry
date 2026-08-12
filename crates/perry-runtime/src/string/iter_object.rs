@@ -20,8 +20,19 @@ use crate::object::{js_object_alloc, js_object_get_field, js_object_set_field, O
 use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
 use crate::StringHeader;
 
-/// Class id reserved for String iterators. Sits just past the Set iterator id
-/// (0xFFFF0008) in the 0xFFFF prefix reserved for runtime-defined classes.
+/// Class id reserved for String iterators, in the 0xFFFF prefix reserved for
+/// runtime-defined classes.
+///
+/// #7576: "sits just past the Set iterator id (0xFFFF0008)" was this comment's
+/// original wording, and it was copied verbatim onto
+/// [`ITERATOR_HELPER_CLASS_ID`], which then claimed the same value. Every
+/// dispatch tower matches these ids in a fixed order, so the later arm went
+/// unreachable and the whole iterator-helper surface died silently. **The next
+/// free id is not "one past the id in the comment above" — check the family**:
+/// `iterator_helpers::tests::iterator_class_ids_are_pairwise_distinct`
+/// enumerates every one of them and fails on a duplicate.
+///
+/// [`ITERATOR_HELPER_CLASS_ID`]: crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID
 pub const STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_0009;
 
 unsafe fn alloc_iterator(cp_array: *mut ArrayHeader) -> f64 {
@@ -52,18 +63,8 @@ pub fn string_values_iter(s: *const StringHeader) -> f64 {
 
 /// Build the `{ value, done }` iterator-result object. Mirrors
 /// `array/iter_object.rs::make_iter_result`.
-unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::object::js_object_set_keys(obj, keys);
-    js_object_set_field(obj, 0, value);
-    js_object_set_field(obj, 1, JSValue::bool(done));
-    js_nanbox_pointer(obj as i64)
-}
+// #7564: was a local five-allocation copy with unrooted intermediates.
+use crate::iter_result::make_iter_result;
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a String iterator object.
 pub unsafe fn dispatch_string_iterator_method(

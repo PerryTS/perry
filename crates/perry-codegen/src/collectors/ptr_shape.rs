@@ -84,7 +84,11 @@
 //!    conservative first-increment rule from the RFC §5.2 discussion and
 //!    still covers the common barrier-free module. (`eval` needs no kill:
 //!    Perry never executes a runtime code string — see
-//!    `perry-hir/src/eval_classifier.rs`.)
+//!    `perry-hir/src/eval_classifier.rs`.) Phase 5a consults this same
+//!    per-module fact as a COST HEURISTIC only: its receiver is aliased across
+//!    modules by construction, so its call sites carry runtime keys-token
+//!    guards instead. Here, rule 2's containment IS the correctness argument
+//!    (#7143, `collectors/proven_this.rs`).
 //!
 //!    **One exemption** (#7139, `collectors/cjs_scaffolding.rs`): the two
 //!    `defineProperty` sites every `cjs_wrap`-compiled CommonJS module
@@ -410,6 +414,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         field_stores: HashMap::new(),
         method_calls: HashMap::new(),
         new_args: HashMap::new(),
+        element_pushes: HashMap::new(),
         const_local_inits: HashMap::new(),
         disq_reasons: HashMap::new(),
         escape_ctx: report::ESC_BARE_REFERENCE,
@@ -425,10 +430,42 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         field_stores,
         method_calls,
         new_args,
+        element_pushes,
         const_local_inits,
         disq_reasons,
         ..
     } = walk;
+    // #7770: locals whose every write is number-producing by construction —
+    // they let a provenance `new C(i, i + 1)` resolve its parameters.
+    let numeric_locals = collect_numeric_by_construction_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        not_bigint_locals,
+        &const_local_inits,
+    );
+    // #7770: one numeric-field verdict per element group, computed from the
+    // union of every member's stores and the meet over every push's `new`
+    // arguments (see `ptr_shape_numeric.rs`). Consulted by the `'cand` loop
+    // in place of the per-member proof, which cannot see sibling stores. The
+    // claim is honest even though member verdicts are not in yet: group
+    // integrity below drops EVERY member's fact when any member fails, and a
+    // dropped fact takes its claim with it.
+    let groups = element_facts.group_members();
+    let group_numeric = prove_group_numeric_fields(
+        classes,
+        module_dispatch,
+        element_facts,
+        &groups,
+        &roots,
+        &field_stores,
+        &method_calls,
+        &new_args,
+        &element_pushes,
+        not_bigint_locals,
+        &const_local_inits,
+        &numeric_locals,
+    );
     let mut out = HashMap::new();
     // `--opt-report`: one closure so every `continue` below has a matching
     // one-line recording. Behaviour is unchanged — `deny` is a no-op when
@@ -464,46 +501,28 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         let chain = chain_classes(classes, class_name);
         let fields = chain_field_names(&chain);
         let methods = chain_method_map(&chain);
+        let called = method_calls.get(id);
         // Constructor chain + field initializers must not leak `this`. All
         // methods called on the local must be `this`-flow safe and the module
-        // must prove the method table stable.
-        let mut analysis = ThisFlowAnalysis {
-            chain: &chain,
-            fields: &fields,
-            methods: &methods,
-            visited: HashSet::new(),
-            store_records: Vec::new(),
-            super_call_args: HashMap::new(),
-            internally_invoked: HashSet::new(),
-            allow_this_in_store_values: false,
+        // must prove the method table stable. ONE implementation, shared with
+        // the group-scope numeric proof (#7770) — this gate licenses a bare
+        // unchecked `load double`, so two drifting copies would be a
+        // miscompile waiting to happen, not a missed optimization.
+        let mut analysis = match chain_this_flow_verdict(
+            classes,
+            module_dispatch,
+            class_name,
+            &chain,
+            &fields,
+            &methods,
+            called,
+        ) {
+            Ok(analysis) => analysis,
+            Err(why) => {
+                deny(id, class_name, why);
+                continue 'cand;
+            }
         };
-        if !analysis.ctor_chain_safe() {
-            deny(id, class_name, report::THIS_ESCAPE);
-            continue;
-        }
-        let called = method_calls.get(id);
-        if let Some(called) = called {
-            if !module_dispatch.prototype_is_stable(classes, class_name) {
-                deny(id, class_name, report::UNSTABLE_PROTOTYPE);
-                continue;
-            }
-            for m in called.keys() {
-                if fields.contains(m.as_str()) {
-                    // A name that is both a field and a method is ambiguous
-                    // under own-property shadowing — bail.
-                    deny(id, class_name, report::FIELD_METHOD_AMBIGUITY);
-                    continue 'cand;
-                }
-                let Some((owner, func)) = methods.get(m.as_str()) else {
-                    deny(id, class_name, report::ESC_UNRESOLVED_METHOD);
-                    continue 'cand;
-                };
-                if !analysis.method_safe(owner, func) {
-                    deny(id, class_name, report::METHOD_THIS_ESCAPE);
-                    continue 'cand;
-                }
-            }
-        }
         let store_records = std::mem::take(&mut analysis.store_records);
         let super_call_args = std::mem::take(&mut analysis.super_call_args);
         let internally_invoked = std::mem::take(&mut analysis.internally_invoked);
@@ -521,25 +540,31 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         // shape proof by itself still retires the whole guard diamond; this
         // is the same stand-down `collectors/proven_this.rs` makes, for the
         // same reason.
-        let numeric_fields = if return_seeded.contains(id) || element_facts.is_group_member(*id) {
-            // #7034 §3: an element-group member's object is reachable through
-            // the array, so the numeric proof's exhaustive-reachable-store
-            // obligation cannot be discharged from this local's stores alone —
-            // a sibling member's `r.score = "s"` is a store this proof never
-            // sees. Same stand-down as the return-seeded case above.
+        let numeric_fields = if return_seeded.contains(id) {
             HashSet::new()
+        } else if let Some(group_root) = element_facts.member_group_root(*id) {
+            // #7034 §3 / #7770: an element-group member cannot discharge the
+            // exhaustive-reachable-store obligation from its own stores — a
+            // sibling's `r.score = "s"` is a store this proof never sees.
+            // The GROUP can: containment bounds every reference to the
+            // group's objects to its members and provenance `new`s, and
+            // `prove_group_numeric_fields` unions exactly those. Every
+            // member carries the group verdict or nothing.
+            group_numeric.get(&group_root).cloned().unwrap_or_default()
         } else {
+            let single_new_list: [&[Expr]; 1] = [new_args.get(id).copied().unwrap_or(&[])];
             prove_numeric_fields(
                 &chain,
                 &members,
                 &store_records,
                 field_stores.get(id).map(Vec::as_slice).unwrap_or(&[]),
-                new_args.get(id).copied().unwrap_or(&[]),
+                &single_new_list,
                 called,
                 &super_call_args,
                 &internally_invoked,
                 not_bigint_locals,
                 &const_local_inits,
+                &numeric_locals,
             )
         };
         let fact = PtrShapeLocal {
@@ -571,7 +596,7 @@ pub(crate) fn collect_shape_proven_ptr_locals(
     // group is therefore all-or-nothing. Dropping is the conservative
     // direction and needs no fixpoint: removing members never admits one.
     if !element_facts.is_empty() {
-        for (_, members) in element_facts.group_members() {
+        for members in groups.values() {
             if members.iter().any(|m| !out.contains_key(m)) {
                 // The insert loop above gives every ALIAS of a promoted root
                 // the same fact, because an alias holds the same object. The
@@ -731,6 +756,7 @@ pub(super) fn chain_method_map<'a>(
 
 /// A recorded store into a candidate's field, with enough context to resolve
 /// parameter-mediated values later.
+#[derive(Clone, Copy)]
 enum StoreValue<'a> {
     /// Value expression in function scope (a direct `o.f = expr` store).
     Direct(&'a Expr),
@@ -738,6 +764,22 @@ enum StoreValue<'a> {
     /// unconditionally numeric: ToNumeric of a proven-number field is that
     /// number; non-proven fields are not claimed numeric anyway).
     Update,
+}
+
+/// #7770: one provenance record per push into an element-shape-proven array,
+/// feeding the group-wide numeric proof
+/// (`ptr_shape_numeric.rs::prove_group_numeric_fields`).
+enum ElementPush<'a> {
+    /// `A.push(new C(...))` — the inline argument list.
+    Inline(&'a [Expr]),
+    /// `A.push(v)` — a vetted producer local; its argument list is the one
+    /// `UseWalk::new_args` records at its `Let`.
+    Producer(u32),
+    /// A value shape E2 admits into no proven array. Unreachable while the
+    /// element walk and this walk see the same tree; recorded (rather than
+    /// skipped) so drift between them forfeits the group's numeric claim
+    /// instead of silently narrowing the provenance meet.
+    Opaque,
 }
 
 struct UseWalk<'a> {
@@ -753,6 +795,8 @@ struct UseWalk<'a> {
     method_calls: HashMap<u32, HashMap<String, Vec<&'a [Expr]>>>,
     /// root candidate -> the provenance `new C(...)` argument list.
     new_args: HashMap<u32, &'a [Expr]>,
+    /// #7770: proven element-array root -> one [`ElementPush`] per push.
+    element_pushes: HashMap<u32, Vec<ElementPush<'a>>>,
     /// Non-tracked `const` locals' init expressions (single-Let only; a
     /// re-declared id is poisoned to `None`). Lets the numeric-field proof
     /// chase one level through `const v = i * 0.5`-style temps.
@@ -1185,6 +1229,22 @@ impl<'a> UseWalk<'a> {
             // Any other array, any other value shape, keeps today's escape.
             Expr::ArrayPush { array_id, value } => {
                 self.disq(*array_id, report::ESC_CONTAINER_MUTATOR);
+                // #7770: record the provenance argument list for the
+                // group-wide numeric proof. Only pushes into a PROVEN array
+                // are recorded — for any other array no group exists to
+                // consume them.
+                if let Some(root) = self.element_facts.proven_array_root(*array_id) {
+                    let push = match value.as_ref() {
+                        Expr::New { args, .. } => ElementPush::Inline(args.as_slice()),
+                        Expr::LocalGet(v)
+                            if self.element_facts.push_is_contained(*v, *array_id) =>
+                        {
+                            ElementPush::Producer(*v)
+                        }
+                        _ => ElementPush::Opaque,
+                    };
+                    self.element_pushes.entry(root).or_default().push(push);
+                }
                 if let Expr::LocalGet(v) = value.as_ref() {
                     if self.element_facts.push_is_contained(*v, *array_id) {
                         return;
@@ -1260,6 +1320,61 @@ struct ThisStoreRecord<'a> {
     /// Owning context: `None` for field initializers; `Some((owner_class,
     /// method_name, param_ids))` for constructor ("constructor") and methods.
     context: Option<(String, String, Vec<u32>)>,
+}
+
+/// Pass-3 safety verdict for one class chain plus the methods invoked on the
+/// value: `this`-flow containment of the constructor chain, prototype
+/// stability when any method is called, field/method name-ambiguity, and
+/// per-method `this`-flow safety. Returns the analysis (holding the store
+/// records, `super(...)` argument lists, and internally-invoked set the
+/// numeric proof consumes) or the FIRST failed obligation.
+///
+/// This is the single implementation behind both the per-candidate `'cand`
+/// loop and the group-scope numeric proof (#7770,
+/// `ptr_shape_numeric.rs::prove_group_numeric_fields`). The verdict licenses
+/// a bare unchecked `load double`; keeping the two callers on one function
+/// is what makes "tighten an obligation" a one-place change.
+fn chain_this_flow_verdict<'a, 'b>(
+    classes: &HashMap<String, &'a Class>,
+    module_dispatch: &ModuleDispatchFacts,
+    class_name: &str,
+    chain: &'b [&'a Class],
+    fields: &'b HashSet<String>,
+    methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
+    called: Option<&HashMap<String, Vec<&'a [Expr]>>>,
+) -> Result<ThisFlowAnalysis<'a, 'b>, ShapeDenial> {
+    let mut analysis = ThisFlowAnalysis {
+        chain,
+        fields,
+        methods,
+        visited: HashSet::new(),
+        store_records: Vec::new(),
+        super_call_args: HashMap::new(),
+        internally_invoked: HashSet::new(),
+        allow_this_in_store_values: false,
+    };
+    if !analysis.ctor_chain_safe() {
+        return Err(report::THIS_ESCAPE);
+    }
+    if let Some(called) = called {
+        if !called.is_empty() && !module_dispatch.prototype_is_stable(classes, class_name) {
+            return Err(report::UNSTABLE_PROTOTYPE);
+        }
+        for m in called.keys() {
+            if fields.contains(m.as_str()) {
+                // A name that is both a field and a method is ambiguous
+                // under own-property shadowing — bail.
+                return Err(report::FIELD_METHOD_AMBIGUITY);
+            }
+            let Some((owner, func)) = methods.get(m.as_str()) else {
+                return Err(report::ESC_UNRESOLVED_METHOD);
+            };
+            if !analysis.method_safe(owner, func) {
+                return Err(report::METHOD_THIS_ESCAPE);
+            }
+        }
+    }
+    Ok(analysis)
 }
 
 pub(super) struct ThisFlowAnalysis<'a, 'b> {
@@ -1750,221 +1865,16 @@ fn expr_mentions_this(e: &Expr) -> bool {
     found
 }
 
-// ── Pass 4: numeric-proven fields ──────────────────────────────────────────
-
-/// Greatest-fixpoint proof that every reachable store into a raw-f64-declared
-/// chain field is number-producing. Parameter-mediated stores resolve through
-/// the actual argument expressions at the provenance `new` (constructor) or
-/// at every recorded call site (methods).
-/// Parameter environment for [`expr_numeric_by_construction`].
-enum ParamEnv<'x> {
-    /// Function scope: no parameters; const-local chasing applies.
-    None,
-    /// Method scope: params resolve through recorded call-site argument
-    /// lists (each argument evaluated in function scope).
-    Sites {
-        param_ids: &'x [u32],
-        sites: Vec<&'x [Expr]>,
-    },
-    /// Constructor scope: params pre-resolved to a numeric verdict through
-    /// the provenance `new` / `super(...)` argument chain.
-    Resolved(&'x HashMap<u32, bool>),
-}
-
-#[allow(clippy::too_many_arguments)]
-fn prove_numeric_fields(
-    chain: &[&Class],
-    members: &HashSet<u32>,
-    this_stores: &[ThisStoreRecord<'_>],
-    local_stores: &[(String, StoreValue<'_>)],
-    new_args: &[Expr],
-    method_calls: Option<&HashMap<String, Vec<&[Expr]>>>,
-    super_call_args: &HashMap<String, Vec<&[Expr]>>,
-    internally_invoked: &HashSet<String>,
-    not_bigint_locals: &HashSet<u32>,
-    const_local_inits: &HashMap<u32, Option<&Expr>>,
-) -> HashSet<String> {
-    let mut numeric: HashSet<String> = HashSet::new();
-    for class in chain {
-        for field in &class.fields {
-            if crate::typed_shape::type_is_raw_f64_candidate(&field.ty) {
-                numeric.insert(field.name.clone());
-            }
-        }
-    }
-    if numeric.is_empty() {
-        return numeric;
-    }
-    // Resolve the argument expressions that can flow into a given
-    // (context, param position): the provenance `new` args feed the root
-    // constructor; each parent constructor's params resolve through the
-    // recorded `super(...)` argument lists, evaluated under the CALLING
-    // constructor's (already-resolved) parameter environment. Derived-first
-    // chain order makes this a single top-down pass. The environment is
-    // computed against an EMPTY numeric-field set (strictly conservative —
-    // `super(this.x)` cannot occur, `this` is banned in super args).
-    let mut ctor_param_env: HashMap<String, HashMap<u32, bool>> = HashMap::new();
-    {
-        let empty_numeric: HashSet<String> = HashSet::new();
-        for (pos, class) in chain.iter().enumerate() {
-            let Some(ctor) = class.constructor.as_ref() else {
-                continue;
-            };
-            let mut env: HashMap<u32, bool> = HashMap::new();
-            if pos == 0 {
-                for (i, param) in ctor.params.iter().enumerate() {
-                    let ok = new_args
-                        .get(i)
-                        .map(|a| {
-                            expr_numeric_by_construction(
-                                a,
-                                &ParamEnv::None,
-                                members,
-                                &empty_numeric,
-                                not_bigint_locals,
-                                const_local_inits,
-                                0,
-                            )
-                        })
-                        .unwrap_or(false);
-                    env.insert(param.id, ok);
-                }
-            } else {
-                let caller_env = chain
-                    .get(pos - 1)
-                    .and_then(|caller| ctor_param_env.get(caller.name.as_str()));
-                let lists = super_call_args.get(class.name.as_str());
-                for (i, param) in ctor.params.iter().enumerate() {
-                    let ok = match (lists, caller_env) {
-                        (Some(lists), Some(caller_env)) if !lists.is_empty() => {
-                            lists.iter().all(|args| {
-                                args.get(i)
-                                    .map(|a| {
-                                        expr_numeric_by_construction(
-                                            a,
-                                            &ParamEnv::Resolved(caller_env),
-                                            members,
-                                            &empty_numeric,
-                                            not_bigint_locals,
-                                            const_local_inits,
-                                            0,
-                                        )
-                                    })
-                                    .unwrap_or(false)
-                            })
-                        }
-                        _ => false,
-                    };
-                    env.insert(param.id, ok);
-                }
-            }
-            ctor_param_env.insert(class.name.clone(), env);
-        }
-    }
-
-    loop {
-        let before = numeric.len();
-        let is_store_numeric = |field: &str,
-                                value: Option<&Expr>,
-                                context: Option<&(String, String, Vec<u32>)>,
-                                numeric: &HashSet<String>|
-         -> bool {
-            let _ = field;
-            let Some(value) = value else {
-                // `++`/`--` — ToNumeric of a proven-number field stays a
-                // number; if the field is currently claimed numeric the
-                // update preserves it.
-                return true;
-            };
-            let param_env: ParamEnv<'_> = match context {
-                None => ParamEnv::None,
-                Some((owner, name, param_ids)) => {
-                    if name == "constructor" {
-                        match ctor_param_env.get(owner.as_str()) {
-                            Some(env) => ParamEnv::Resolved(env),
-                            None => ParamEnv::Sites {
-                                param_ids: param_ids.as_slice(),
-                                sites: Vec::new(),
-                            },
-                        }
-                    } else {
-                        // A method that is ALSO invoked internally
-                        // (`this.m(...)` / `super.m(...)`) receives argument
-                        // expressions from method scope that the
-                        // function-scope site resolution below cannot see —
-                        // its parameters stay unproven even when every
-                        // external site is numeric (an internal
-                        // `this.m("s")` would otherwise poison a
-                        // "proven" field). Purely-external methods resolve
-                        // through their recorded call sites; purely-internal
-                        // ones have no sites and stay unproven either way.
-                        let sites: Vec<&[Expr]> = if internally_invoked.contains(name.as_str()) {
-                            Vec::new()
-                        } else {
-                            method_calls
-                                .and_then(|mc| mc.get(name))
-                                .map(|v| v.clone())
-                                .unwrap_or_default()
-                        };
-                        ParamEnv::Sites {
-                            param_ids: param_ids.as_slice(),
-                            sites,
-                        }
-                    }
-                }
-            };
-            expr_numeric_by_construction(
-                value,
-                &param_env,
-                members,
-                numeric,
-                not_bigint_locals,
-                const_local_inits,
-                0,
-            )
-        };
-        // Field initializers + ctor/method stores.
-        let mut retained: HashSet<String> = numeric.clone();
-        for rec in this_stores {
-            if retained.contains(&rec.field)
-                && !is_store_numeric(&rec.field, rec.value, rec.context.as_ref(), &numeric)
-            {
-                retained.remove(&rec.field);
-            }
-        }
-        for (field, sv) in local_stores {
-            if retained.contains(field) {
-                let ok = match sv {
-                    StoreValue::Update => true,
-                    StoreValue::Direct(v) => expr_numeric_by_construction(
-                        v,
-                        &ParamEnv::None,
-                        members,
-                        &numeric,
-                        not_bigint_locals,
-                        const_local_inits,
-                        0,
-                    ),
-                };
-                if !ok {
-                    retained.remove(field);
-                }
-            }
-        }
-        numeric = retained;
-        if numeric.len() == before || numeric.is_empty() {
-            break;
-        }
-    }
-    numeric
-}
-
-/// Number-by-construction proof for the numeric-field rule. Split out to
-/// stay under the 2000-line CI gate; still a child module, so `use super::*`
+/// Pass 4 — the numeric-field machinery: the number-by-construction expression
+/// proof, the per-candidate and per-element-group (#7770) reachable-store
+/// proofs, and the numeric-by-construction locals fixpoint. Split out to stay
+/// under the 2000-line CI gate; still a child module, so `use super::*`
 /// reaches the collector's private items.
 #[path = "ptr_shape_numeric.rs"]
 mod numeric;
-use numeric::expr_numeric_by_construction;
+use numeric::{
+    collect_numeric_by_construction_locals, prove_group_numeric_fields, prove_numeric_fields,
+};
 
 /// Conservative "cannot be a BigInt" for the spec Number-path argument.
 fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool {
@@ -1994,3 +1904,8 @@ fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool 
 #[cfg(test)]
 #[path = "ptr_shape_opt_report_tests.rs"]
 mod opt_report_tests;
+
+/// #7770 group-wide numeric proof tests. Same sibling-file arrangement.
+#[cfg(test)]
+#[path = "ptr_shape_group_numeric_tests.rs"]
+mod group_numeric_tests;

@@ -326,6 +326,22 @@ pub extern "C" fn js_typed_feedback_maybe_dump_trace() {
             return;
         }
 
+        // #7480 step 4: a trace was asked for and there is nothing to put in
+        // it. Overwhelmingly that means the binary was compiled without
+        // `PERRY_TYPED_FEEDBACK[_TRACE]` in the environment — instrumentation
+        // is emitted at compile time, so setting the var only at run time
+        // instruments nothing. Say it, rather than writing `{"sites": []}` and
+        // letting the reader conclude their program has no dynamic boundaries.
+        if super::no_sites_were_instrumented() {
+            eprintln!(
+                "perry typed-feedback trace: the registry is empty, so this \
+                 trace has no sites. The most common cause is a binary compiled \
+                 without PERRY_TYPED_FEEDBACK[_TRACE] in the environment — \
+                 instrumentation is emitted at COMPILE time, so setting the \
+                 variable only for the run instruments nothing."
+            );
+        }
+
         let json = typed_feedback_trace_json();
         let bytes = match serde_json::to_vec_pretty(&json) {
             Ok(bytes) => bytes,

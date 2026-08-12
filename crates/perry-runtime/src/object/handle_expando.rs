@@ -50,7 +50,7 @@ use std::collections::HashMap;
 // keys come back in INSERTION order — `Object.keys(handle)` / `{...handle}` are
 // ordered in JS, and handles carry a handful of expandos at most, so the linear
 // scan is cheaper than hashing.
-thread_local! {
+crate::perry_thread_local! {
     static HANDLE_EXPANDO_PROPS: RefCell<HashMap<i64, Vec<(String, u64)>>> =
         RefCell::new(HashMap::new());
 }

@@ -552,7 +552,7 @@ extern "C" fn async_from_sync_async_iterator(closure: *const crate::closure::Clo
 }
 
 fn register_async_from_sync_thunks_once() {
-    thread_local! {
+    crate::perry_thread_local! {
         static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     REGISTERED.with(|flag| {
@@ -707,6 +707,18 @@ fn object_like_iterator_result(value: f64) -> bool {
     raw >= 0x10000
 }
 
+/// #7542: does this value carry its OWN `[Symbol.iterator]`? An own method
+/// shadows the prototype, so the patched-prototype shortcut must stand aside
+/// for it and let the ordinary `@@iterator` walk resolve it.
+fn array_has_own_iterator(value: f64) -> bool {
+    let iter_sym = crate::symbol::well_known_symbol("iterator");
+    if iter_sym.is_null() {
+        return false;
+    }
+    let sym_value = f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
+    unsafe { crate::symbol::has_own_symbol_property(value, sym_value) }
+}
+
 pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, POINTER_MASK};
 
@@ -762,6 +774,56 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     if raw_ptr() == 0 {
         throw_not_iterable(value());
     }
+
+    // #7533: the overwhelmingly common spread — an ordinary dense array — is a
+    // straight element copy that nobody can observe as anything else. Take it
+    // before the classification probes and long before the `@@iterator` walk
+    // below: on the `object_deep_clone` app-pattern kernel that walk plus the
+    // `.next()` drain it feeds was 90% of the whole process, and the identical
+    // copy through `Array.from`'s memcpy was ~66x cheaper.
+    //
+    // `dense_spread_source` proves ordinariness (see its doc comment for each
+    // gate); anything it cannot prove falls through to the unchanged protocol.
+    // It runs before `entries_array_for_small_handle_id` / `is_registered_buffer`
+    // only because it never dereferences an unvalidated address itself —
+    // `try_read_gc_header` rejects the handle band and the header-less
+    // small-buffer slab without touching memory.
+    if crate::array::dense_spread_source(value()).is_some() {
+        return crate::array::dense_spread_copy(value());
+    }
+
+    // #7542: `Array.prototype[Symbol.iterator] = fn` must drive the spread, as
+    // it already drives `for…of` over a literal and destructuring.
+    //
+    // This has to run BEFORE the generic `[Symbol.iterator]` walk below, not
+    // after it. The walk does NOT miss for a plain array — contrary to how this
+    // looked from the outside, `js_object_get_symbol_property` synthesizes the
+    // BUILT-IN `Symbol.iterator` for an array receiver (a `js_class_method_bind`
+    // by name) rather than reading the prototype slot, so the walk resolves the
+    // builtin, calls it, and returns the element copy. A guard placed after the
+    // walk is dead code: measured, it is never reached.
+    //
+    // `js_get_iterator` is the one implementation that consults the patched
+    // prototype under this flag (per GetIterator: read the method off
+    // `Array.prototype`, call it with `this === val`, TypeError when deleted or
+    // non-callable). Delegate rather than restate it — two copies of a spec
+    // sequence that must agree is how this diverged in the first place.
+    //
+    // Placed after the dense fast path, which already declines when the flag is
+    // set (`flat_clone.rs`), and after the string/class-ref arms above, which
+    // are not arrays. The unpatched path is untouched: the flag is sticky-false
+    // until user code writes the prototype slot.
+    // An OWN `arr[Symbol.iterator]` still wins over the prototype, so this must
+    // not preempt the walk below for that case: `js_get_iterator`'s patched
+    // branch reads the PROTOTYPE only, and would throw "not iterable" for an
+    // array carrying its own method once the prototype slot has been deleted.
+    if crate::array::array_proto_iterator_modified()
+        && crate::array::js_array_is_array(value()).to_bits() == crate::value::TAG_TRUE
+        && !array_has_own_iterator(value())
+    {
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+    }
+
     if let Some(entries) = entries_array_for_small_handle_id(raw_ptr() as i64) {
         return entries;
     }
@@ -991,6 +1053,20 @@ fn is_object_like_value(value: f64) -> bool {
     raw >= 0x10000 && !crate::symbol::is_registered_symbol(raw)
 }
 
+/// #7562: the drain hit [`MAX_ITERATOR_DRAIN`] without the iterator finishing.
+///
+/// Throwing is the point. The previous behaviour was to fall out of the loop
+/// and return whatever had accumulated, so `[...it]` handed back a short array
+/// that looked entirely valid — a `RangeError` is recoverable and visible,
+/// silent truncation is neither.
+#[cold]
+fn throw_iterator_too_long() -> ! {
+    let msg = b"Iterator produced more than the maximum supported number of elements";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 #[cold]
 fn throw_iterator_result_not_object() -> ! {
     iter_bt_dump(
@@ -1019,6 +1095,21 @@ pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
     }
     result
 }
+
+/// Convert any iterator-protocol object (has `.next()` method) to an array.
+/// #7562: the drain loops below were bounded at a hardcoded 100,000 and
+/// **silently returned a short array** when a longer iterator hit it —
+/// `[...m.values()]` on a 250,000-entry Map produced 100,000 elements with no
+/// error, no warning, and a plausible-looking result. Wrong data a caller
+/// would ship, which is strictly worse than either hanging or throwing.
+///
+/// Node applies no such limit: `[...it]` runs until the iterator finishes or
+/// the process runs out of memory. Matching that exactly would trade silent
+/// truncation for an unbounded loop, so the bound stays — but it is raised to
+/// JavaScript's own maximum array length and **throws** on exhaustion instead
+/// of truncating. Every real workload is unaffected; a runaway iterator now
+/// reports itself rather than corrupting a result.
+const MAX_ITERATOR_DRAIN: usize = u32::MAX as usize - 1;
 
 /// `IteratorClose(iterator)` when destructuring exits before the iterator is done.
 #[no_mangle]
@@ -1088,7 +1179,12 @@ pub(crate) fn sync_iterator_to_array_if_not_async(iter_f64: f64) -> Option<*mut 
     let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
     let mut result = arr;
 
-    for _ in 0..100_000 {
+    for drained in 0..MAX_ITERATOR_DRAIN {
+        if drained == MAX_ITERATOR_DRAIN - 1 {
+            // Reached the cap with the iterator still producing: refuse rather
+            // than return a short array (#7562).
+            throw_iterator_too_long();
+        }
         let step = if use_method_dispatch {
             unsafe {
                 crate::object::js_native_call_method(
@@ -1169,7 +1265,6 @@ fn settled_promise_value(value: f64) -> Option<f64> {
     }
 }
 
-/// Convert any iterator-protocol object (has `.next()` method) to an array.
 /// Used by spread on generators, Array.from on generators, etc.
 /// Calls `.next()` in a loop until `.done` is true, collecting `.value` entries.
 #[no_mangle]
@@ -1260,7 +1355,12 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     // Reusable scratch slot for the `{ value, done }` object `.next()` returns.
     let step_h = scope.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
 
-    for _ in 0..100_000 {
+    for drained in 0..MAX_ITERATOR_DRAIN {
+        if drained == MAX_ITERATOR_DRAIN - 1 {
+            // Reached the cap with the iterator still producing: refuse rather
+            // than return a short array (#7562).
+            throw_iterator_too_long();
+        }
         // safety limit
         // Call next() — stored-closure fast path, or class-id method dispatch.
         // Both addresses are read fresh from their roots at the callsite: the
@@ -1372,7 +1472,12 @@ fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
     let mut result = arr;
 
-    for _ in 0..100_000 {
+    for drained in 0..MAX_ITERATOR_DRAIN {
+        if drained == MAX_ITERATOR_DRAIN - 1 {
+            // Reached the cap with the iterator still producing: refuse rather
+            // than return a short array (#7562).
+            throw_iterator_too_long();
+        }
         let step = if use_method_dispatch {
             unsafe {
                 crate::object::js_native_call_method(

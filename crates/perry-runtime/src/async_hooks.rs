@@ -28,8 +28,27 @@ const TAG_UNDEFINED_F64: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
 // context, so the first user-visible resource (e.g. the first `setTimeout`)
 // gets an id > 1 — observable through `executionAsyncId()` inside its
 // callback (#789).
-static NEXT_ASYNC_ID: AtomicU64 = AtomicU64::new(2);
-pub static HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+//
+// #7680: `NEXT_ASYNC_ID` and `HOOKS_ACTIVE` (with `HOOKS` / `RESOURCES` /
+// `GC_DESTROY_QUEUE` / `NEXT_CONTEXT_SNAPSHOT_ID` / `CONTEXT_SNAPSHOTS` /
+// `ASYNC_WRAP_PROVIDERS` below) are `per_test_global!`: `reset_for_tests()`
+// clears all eight from whatever thread runs it, and before this fix that
+// thread could be any of four disjoint lock domains (this module's own
+// private `TEST_LOCK`, `AsyncHookRuntimeTestGuard`'s private
+// `ASYNC_HOOK_RUNTIME_TEST_LOCK`, the GC guards' shared lock via
+// `CopyingNurseryTestGuard`, or — `gc/tests/alloc.rs`'s
+// `test_async_hooks_promise_alloc_remains_malloc_tracked` — no lock at all).
+// `resource_ids_are_monotonic_even_without_hooks`'s `b.async_id == a.async_id
+// + 1` is exactly the #7672 shape: a neighbour's concurrent `init_resource`
+// call turns that into `+ 2` and reads as "ids are not monotonic" rather than
+// "a neighbour allocated one". Per-thread storage removes the need for any of
+// the four locks, the same way #7674 did for the GC guards' own clear list —
+// this module's `reset_for_tests()` is simply outside that list, so #7674's
+// gate never saw it.
+per_test_global! {
+    static NEXT_ASYNC_ID: AtomicU64 = AtomicU64::new(2);
+    pub static HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+}
 
 #[derive(Clone, Copy)]
 pub struct AsyncResourceIds {
@@ -87,16 +106,25 @@ struct HookRecord {
     enabled: bool,
 }
 
-static HOOKS: LazyLock<Mutex<Vec<HookRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-static RESOURCES: LazyLock<Mutex<HashMap<u64, ResourceMeta>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static GC_DESTROY_QUEUE: LazyLock<Mutex<VecDeque<u64>>> =
-    LazyLock::new(|| Mutex::new(VecDeque::new()));
-static NEXT_CONTEXT_SNAPSHOT_ID: AtomicUsize = AtomicUsize::new(1);
-static CONTEXT_SNAPSHOTS: LazyLock<
-    Mutex<HashMap<usize, crate::async_context::AsyncContextSnapshot>>,
-> = LazyLock::new(|| Mutex::new(HashMap::new()));
-static ASYNC_WRAP_PROVIDERS: AtomicU64 = AtomicU64::new(0);
+// #7680: see the `NEXT_ASYNC_ID` / `HOOKS_ACTIVE` comment above — these six
+// are the rest of what `reset_for_tests()` clears, converted for the same
+// reason. `scan_async_hooks_roots_mut` (below) already reaches `HOOKS`,
+// `RESOURCES`, `CONTEXT_SNAPSHOTS` and `ASYNC_WRAP_PROVIDERS` through a
+// registered scanner defined in THIS file, so `scripts/gc_runtime_root_holders.py`
+// already covers them; `per_test_global!` only changes which instance a test
+// thread resolves to, not the scanner's reach.
+per_test_global! {
+    static HOOKS: LazyLock<Mutex<Vec<HookRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+    static RESOURCES: LazyLock<Mutex<HashMap<u64, ResourceMeta>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    static GC_DESTROY_QUEUE: LazyLock<Mutex<VecDeque<u64>>> =
+        LazyLock::new(|| Mutex::new(VecDeque::new()));
+    static NEXT_CONTEXT_SNAPSHOT_ID: AtomicUsize = AtomicUsize::new(1);
+    static CONTEXT_SNAPSHOTS: LazyLock<
+        Mutex<HashMap<usize, crate::async_context::AsyncContextSnapshot>>,
+    > = LazyLock::new(|| Mutex::new(HashMap::new()));
+    static ASYNC_WRAP_PROVIDERS: AtomicU64 = AtomicU64::new(0);
+}
 
 /// Live `AsyncResource` handles. Handles are raw `Box::into_raw` pointers
 /// (never freed → membership is monotonic), NaN-boxed with POINTER_TAG like
@@ -1428,13 +1456,17 @@ pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{LazyLock, Mutex};
 
-    static TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    // #7680: no lock needed here anymore. `NEXT_ASYNC_ID` / `HOOKS` /
+    // `RESOURCES` / etc. are `per_test_global!`, so this thread's
+    // `reset_for_tests()` and `init_resource` calls touch only this thread's
+    // own instances — a concurrent test on another thread cannot land a
+    // `+2` between the two `init_resource` calls below, which is exactly
+    // the #7672 shape this test's own docstring warns about (a wrong VALUE,
+    // not a hang).
 
     #[test]
     fn resource_ids_are_monotonic_even_without_hooks() {
-        let _guard = TEST_LOCK.lock().unwrap();
         reset_for_tests();
         let a = init_resource("A", TAG_UNDEFINED_F64, true);
         let b = init_resource("B", TAG_UNDEFINED_F64, true);
@@ -1446,12 +1478,45 @@ mod tests {
 
     #[test]
     fn before_after_restore_execution_ids() {
-        let _guard = TEST_LOCK.lock().unwrap();
         reset_for_tests();
         let ids = init_resource("A", TAG_UNDEFINED_F64, true);
         before(ids.async_id, ids.trigger_async_id);
         assert_eq!(execution_async_id_u64(), ids.async_id);
         after(ids.async_id);
         assert_eq!(execution_async_id_u64(), 0);
+    }
+
+    /// #7680: plants the #7672 shape directly rather than relying on a
+    /// scheduling accident — install a resource on THIS thread, run
+    /// `reset_for_tests()` (what all four of the pre-fix lock domains
+    /// eventually call) on ANOTHER thread, and assert the resource survived.
+    /// Revert the `per_test_global!` conversion above (back to bare
+    /// `static`s) and this fails with the resource gone — a foreign
+    /// thread's `reset_for_tests()` wiped `NEXT_ASYNC_ID` out from under a
+    /// resource this thread had already allocated, id and all.
+    #[test]
+    fn async_hooks_state_survives_a_foreign_reset_for_tests() {
+        reset_for_tests();
+        let ids = init_resource("survivor", TAG_UNDEFINED_F64, true);
+        assert!(
+            RESOURCES.lock().unwrap().contains_key(&ids.async_id),
+            "the probe installed nothing, so survived-vs-wiped would be vacuous"
+        );
+
+        std::thread::spawn(reset_for_tests)
+            .join()
+            .expect("the clearing thread panicked");
+
+        assert!(
+            RESOURCES.lock().unwrap().contains_key(&ids.async_id),
+            "a resource installed on this thread was destroyed by a GC test guard's \
+             async_hooks reset running on another thread (#7680). Per-thread storage \
+             (`per_test_global!`) is what prevents this."
+        );
+        assert!(
+            NEXT_ASYNC_ID.load(Ordering::Relaxed) > ids.async_id,
+            "NEXT_ASYNC_ID must not have been rewound by the foreign reset either"
+        );
+        reset_for_tests();
     }
 }

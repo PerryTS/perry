@@ -166,3 +166,39 @@ fn map_set_owner_records_follow_growth() {
     assert!(set_after.0 - set_before.0 >= 1);
     assert!(set_after.1 - set_before.1 >= 64);
 }
+
+/// #7539: a lazy JSON array's tape is a side allocation too, so a thread that
+/// exits still holding one must hand its bytes back. Runs entirely inside the
+/// probe thread — `json_tape_store`'s registry and byte counter are
+/// thread-local, so unlike the Map/Set counters above there is no cross-thread
+/// window to widen the assertions for.
+#[test]
+fn lazy_tape_side_allocations_release_on_thread_exit() {
+    std::thread::spawn(|| {
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        assert_eq!(crate::json_tape_store::registered_bytes(), 0);
+
+        let input = b"[1,2,3,4,5,6,7,8]";
+        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let tape = crate::json_tape::build_tape(input).expect("valid JSON");
+        let len = crate::json_tape::count_array_length(&tape.entries, 0);
+        // Left live and unmaterialized: only teardown can free this.
+        let _lazy = unsafe { crate::json_tape::alloc_lazy_array(&tape.entries, 0, len, text) };
+        assert!(
+            crate::json_tape_store::registered_bytes() > 0,
+            "test premise: the thread exits owning tape bytes"
+        );
+
+        crate::gc::js_gc_release_current_thread_collection_side_allocations();
+        assert_eq!(
+            crate::json_tape_store::registered_bytes(),
+            0,
+            "thread teardown must release live tapes"
+        );
+        // Idempotent, like the Map/Set drains above.
+        crate::gc::js_gc_release_current_thread_collection_side_allocations();
+        assert_eq!(crate::json_tape_store::registered_bytes(), 0);
+    })
+    .join()
+    .expect("lazy tape teardown probe thread should not panic");
+}

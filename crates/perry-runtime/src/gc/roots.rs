@@ -82,6 +82,10 @@ pub(super) struct MutableRootScannerEntry {
     pub(super) source: MutableRootScannerSource,
     pub(super) budgeted_scanner: Option<BudgetedMutableRootScanner>,
     pub(super) budgeted_state_factory: Option<BudgetedMutableRootScannerStateFactory>,
+    /// Registration-site name, for per-scanner root attribution
+    /// (`gc/scanner_profile.rs`, #7915). Diagnostics only — nothing in the
+    /// collector's control flow reads it.
+    pub(super) name: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,7 +95,7 @@ pub(super) enum RuntimeHandleSlot {
     HeapWord(u64),
 }
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
     pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScannerEntry>> = const { RefCell::new(Vec::new()) };
     pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
@@ -222,14 +226,35 @@ pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
     );
 }
 
+/// `gc_register_mutable_root_scanner` plus a registration-site name for
+/// per-scanner root attribution (`gc/scanner_profile.rs`).
+pub(crate) fn gc_register_named_mutable_root_scanner(
+    name: &'static str,
+    scanner: MutableRootScanner,
+) {
+    gc_register_mutable_root_scanner_named_with_source(
+        name,
+        scanner,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+}
+
 /// Compatibility wrapper for callers that provide a human-readable scanner
 /// name. Current root-source telemetry groups these under runtime mutable
 /// scanners.
-pub fn gc_register_mutable_root_scanner_named(_source: &'static str, scanner: MutableRootScanner) {
-    gc_register_mutable_root_scanner(scanner);
+pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: MutableRootScanner) {
+    gc_register_named_mutable_root_scanner(source, scanner);
 }
 
 pub(super) fn gc_register_mutable_root_scanner_with_source(
+    scanner: MutableRootScanner,
+    source: MutableRootScannerSource,
+) {
+    gc_register_mutable_root_scanner_named_with_source("unnamed", scanner, source);
+}
+
+pub(super) fn gc_register_mutable_root_scanner_named_with_source(
+    name: &'static str,
     scanner: MutableRootScanner,
     source: MutableRootScannerSource,
 ) {
@@ -239,11 +264,28 @@ pub(super) fn gc_register_mutable_root_scanner_with_source(
             source,
             budgeted_scanner: None,
             budgeted_state_factory: None,
+            name,
         });
     });
 }
 
 pub(super) fn gc_register_budgeted_mutable_root_scanner_with_source(
+    scanner: MutableRootScanner,
+    budgeted_scanner: BudgetedMutableRootScanner,
+    budgeted_state_factory: BudgetedMutableRootScannerStateFactory,
+    source: MutableRootScannerSource,
+) {
+    gc_register_budgeted_named_mutable_root_scanner_with_source(
+        "unnamed",
+        scanner,
+        budgeted_scanner,
+        budgeted_state_factory,
+        source,
+    );
+}
+
+pub(super) fn gc_register_budgeted_named_mutable_root_scanner_with_source(
+    name: &'static str,
     scanner: MutableRootScanner,
     budgeted_scanner: BudgetedMutableRootScanner,
     budgeted_state_factory: BudgetedMutableRootScannerStateFactory,
@@ -255,6 +297,7 @@ pub(super) fn gc_register_budgeted_mutable_root_scanner_with_source(
             source,
             budgeted_scanner: Some(budgeted_scanner),
             budgeted_state_factory: Some(budgeted_state_factory),
+            name,
         });
     });
 }

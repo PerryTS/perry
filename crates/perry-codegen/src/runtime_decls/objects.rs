@@ -29,10 +29,17 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // when it is non-zero (descriptors / typed-feedback in use). Defined in
     // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
     module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
+    // #7834/#7873: process-global count of threads with per-object records.
+    // `0` proves both per-object side tables are empty everywhere, so a
+    // construction site can skip `js_gc_forget_object_layout` outright.
+    // perry-runtime: `gc::layout_tables::PERRY_PER_OBJECT_LAYOUTS_ANY`.
+    module.add_external_global("PERRY_PER_OBJECT_LAYOUTS_ANY", I32);
     // Sticky summary of indexed Array/Object prototype pollution and custom
     // Array [[Prototype]] installation. Normal compiled programs read this
     // byte directly in the inline plain-array index guard.
     module.add_external_global("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED", I8);
+    // #7760: set when `Array.prototype[Symbol.iterator]` is replaced.
+    module.add_external_global("PERRY_ARRAY_PROTO_ITERATOR_PATCHED", I8);
     // Process-wide count of threads with an active incremental marking
     // barrier. Persistent shadow-slot updates use zero as an authoritative
     // fast skip before calling the TLS-backed root barrier.
@@ -215,6 +222,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, DOUBLE, I32, I64, PTR, I64, PTR],
     );
     module.declare_function("js_method_direct_shape_guard", I32, &[DOUBLE, I32, I64]);
+    module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR]);
     module.declare_function(
         "js_typed_feedback_closure_direct_call_guard",
         I32,

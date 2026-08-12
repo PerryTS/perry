@@ -299,6 +299,9 @@ fn parse_mock_timer_options(options: f64) -> (u32, f64) {
 #[derive(Clone)]
 enum MockRestoreTarget {
     None,
+    // Node 26.5 accepts Symbol method names, but its restore path only
+    // recognizes string names and falls through to the bare-function case.
+    ObjectSymbolMethod,
     ObjectProperty {
         target: f64,
         property: String,
@@ -315,6 +318,7 @@ enum MockRestoreTarget {
 
 struct MockState {
     id: i64,
+    tracked: bool,
     original: f64,
     implementation: f64,
     once: Vec<(usize, f64)>,
@@ -584,6 +588,7 @@ fn create_mock_function(original: f64, implementation: f64, restore: MockRestore
     MOCK_STATES.with(|states| {
         states.borrow_mut().push(MockState {
             id,
+            tracked: true,
             original: original.get_nanbox_f64(),
             implementation: implementation.get_nanbox_f64(),
             once: Vec::new(),
@@ -629,7 +634,15 @@ fn take_mock_implementation(state: &mut MockState) -> f64 {
 }
 
 fn prepare_mock_state_restore(state: &mut MockState) -> MockRestoreTarget {
-    state.implementation = state.original;
+    // Node 26.5's restore path only recognizes string method names. A
+    // Symbol-keyed method falls through to the bare-function case, so the
+    // restored mock is left with no implementation and a later invocation
+    // throws instead of reaching the original method.
+    state.implementation = if matches!(state.restore, MockRestoreTarget::ObjectSymbolMethod) {
+        undefined_value()
+    } else {
+        state.original
+    };
     state.restore.clone()
 }
 
@@ -717,16 +730,37 @@ mod metadata_tests;
 extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> f64 {
     let id = closure_id(closure);
     let args = array_values(rest).unwrap_or_default();
-    let implementation = MOCK_STATES.with(|states| {
+    let (implementation, is_symbol_method) = MOCK_STATES.with(|states| {
         let mut states = states.borrow_mut();
         let Some(state) = states.iter_mut().find(|state| state.id == id) else {
-            return undefined_value();
+            return (undefined_value(), false);
         };
-        take_mock_implementation(state)
+        (
+            take_mock_implementation(state),
+            matches!(state.restore, MockRestoreTarget::ObjectSymbolMethod),
+        )
     });
 
     let this_value = crate::object::js_implicit_this_get();
     if JSValue::from_bits(implementation.to_bits()).is_undefined() {
+        if is_symbol_method {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let rest_handle = scope.root_nanbox_f64(rest);
+            let this_handle = scope.root_nanbox_f64(this_value);
+            let message_handle = scope.root_nanbox_f64(string_value("undefined is not a function"));
+            let error = crate::error::js_typeerror_new(raw_ptr_from_value(
+                message_handle.get_nanbox_f64(),
+            ) as *mut crate::StringHeader);
+            let error_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+            record_mock_call(
+                id,
+                rest_handle.get_nanbox_f64(),
+                this_handle.get_nanbox_f64(),
+                undefined_value(),
+                error_handle.get_nanbox_f64(),
+            );
+            crate::exception::js_throw(error_handle.get_nanbox_f64());
+        }
         record_mock_call(id, rest, this_value, undefined_value(), undefined_value());
         return undefined_value();
     }
@@ -903,6 +937,35 @@ extern "C" fn mock_method_thunk(
             implementation.get_nanbox_f64(),
         );
     }
+    if unsafe { crate::symbol::js_is_symbol(property.get_nanbox_f64()) } != 0 {
+        object_target_addr(target.get_nanbox_f64());
+        let original = unsafe {
+            crate::symbol::js_object_get_symbol_property(
+                target.get_nanbox_f64(),
+                property.get_nanbox_f64(),
+            )
+        };
+        let implementation = if is_undefined_value(implementation.get_nanbox_f64()) {
+            original
+        } else {
+            implementation.get_nanbox_f64()
+        };
+        assert_callable_arg("implementation", implementation);
+        let function = scope.root_nanbox_f64(create_mock_function(
+            original,
+            implementation,
+            MockRestoreTarget::ObjectSymbolMethod,
+        ));
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                target.get_nanbox_f64(),
+                property.get_nanbox_f64(),
+                function.get_nanbox_f64(),
+            );
+        }
+        return function.get_nanbox_f64();
+    }
+
     let property_name = property_name(property.get_nanbox_f64());
     let original = get_property_value(target.get_nanbox_f64(), &property_name);
     let implementation = if is_undefined_value(implementation.get_nanbox_f64()) {
@@ -1053,22 +1116,22 @@ extern "C" fn mock_setter_thunk(
 }
 
 extern "C" fn mock_reset_thunk(_closure: *const ClosureHeader) -> f64 {
+    restore_tracked_mocks();
     MOCK_STATES.with(|states| {
         for state in states.borrow_mut().iter_mut() {
-            state.implementation = state.original;
-            state.once.clear();
-            reset_mock_state_calls(state);
+            state.tracked = false;
         }
     });
-    property_mock::restore_all();
+    crate::timer::js_mock_timers_reset();
     undefined_value()
 }
 
-extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
+fn restore_tracked_mocks() {
     let ids = MOCK_STATES.with(|states| {
         states
             .borrow()
             .iter()
+            .filter(|state| state.tracked)
             .map(|state| state.id)
             .collect::<Vec<_>>()
     });
@@ -1076,6 +1139,10 @@ extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
         restore_mock_state(id);
     }
     property_mock::restore_all();
+}
+
+extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
+    restore_tracked_mocks();
     undefined_value()
 }
 

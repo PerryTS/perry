@@ -336,6 +336,16 @@ fn compute_object_cache_key_with_env(
         "app_group",
         opts.app_metadata.app_group.as_deref().unwrap_or(""),
     );
+    // The embedded `perry.update` blob changes the ENTRY module's IR — it adds
+    // a string constant and a startup call — so it has to be part of the key.
+    // Without it, adding `perry.update` to a project and rebuilding serves the
+    // cached entry object from before, and the binary ships with no update
+    // check while the build reports success. Same class as `dbgloc` and
+    // `fmath` above.
+    h.field(
+        "update_config",
+        opts.app_metadata.update_config.as_deref().unwrap_or(""),
+    );
 
     // Ordered lists (order is significant — topological init, FFI index,
     // bundled extension order, etc.)

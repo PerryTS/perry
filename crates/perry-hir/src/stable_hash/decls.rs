@@ -34,6 +34,7 @@ impl SH for Class {
             aliases,
             is_nested,
             alloc_width_hint,
+            specialized_from,
         } = self;
         id.hash(h);
         name.hash(h);
@@ -58,6 +59,9 @@ impl SH for Class {
         aliases.hash(h);
         is_nested.hash(h);
         alloc_width_hint.hash(h);
+        // #7575: drives an extra module-init registration, so it is part of
+        // what the object cache keys on.
+        specialized_from.hash(h);
     }
 }
 

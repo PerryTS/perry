@@ -68,9 +68,74 @@ pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
 
 pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 
+/// The same threshold for an object that can hold POINTERS (`pointer_free ==
+/// false`), i.e. every arena type whose payload is traced: arrays, plain
+/// objects, closures.
+///
+/// # Why the two thresholds cannot be the same number
+///
+/// Crossing the threshold does not merely change where an object is allocated.
+/// [`crate::arena::arena_alloc_gc`] births it in the old generation **and
+/// stamps `GC_FLAG_TENURED`**, and a minor collection never sweeps old-gen. So
+/// the object — and, if it holds pointers, *everything reachable from it* —
+/// is immortal until a full mark-sweep runs. The threshold is therefore a
+/// trade between two costs:
+///
+/// * **copy cost**, paid by a young object that survives: one `memcpy`,
+///   bounded by the object's own size;
+/// * **retention cost**, paid by a born-tenured object that dies: its bytes,
+///   held until the next full collection.
+///
+/// For a `pointer_free` object those two quantities are the *same* quantity,
+/// so trading one against the other at 16 KB is a defensible wash. For a
+/// pointer-BEARING object the retention is **transitive and unbounded**: the
+/// write barrier records old→young edges out of it, and every minor's dirty
+/// scan then marks its children live, whether or not anything still refers to
+/// the container.
+///
+/// That is not hypothetical. `gc-handoff/apps/shapes.ts` builds a 2000-element
+/// `Node2D[]` per round and drops it. The backing store is
+/// `8 + 2048 * 8 + 8 = 16 400` bytes — over the 16 KB line by 16 bytes — so
+/// each round's array was born tenured and never reclaimed, and the remembered
+/// set re-marked **94 000 then 118 006** slots through arrays no live reference
+/// pointed at. Its young-survival ratio read 739‰ and 925‰ while its actual
+/// live set was ~3 200 objects, and its two minor collections cost 94 ms of a
+/// 139 ms program. Halving the array to 1000 elements — same total work, one
+/// step under the line — took survival to 30‰, the remembered-set marks to 0,
+/// and the program to 0.07 s.
+///
+/// 128 KB is V8's `kMaxRegularHeapObjectSize`, which draws exactly this line
+/// for exactly this reason. It sits well inside the copier's two structural
+/// ceilings — the 1 MB nursery block and `move_young`'s 1 MiB
+/// `MAX_YOUNG_MOVE_BYTES` refusal — so a young object admitted by it is always
+/// movable, and the worst-case block fragmentation it can cause is 1/8 of one
+/// block.
+pub const LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES: usize = 128 * 1024;
+
 #[inline]
 pub fn is_large_object_total_size(total_size: usize) -> bool {
     total_size > LARGE_OBJECT_THRESHOLD_BYTES
+}
+
+/// The birth-generation threshold for `obj_type`, i.e. the one
+/// [`crate::arena::arena_alloc_gc`] applies.
+///
+/// An unknown type gets the conservative (smaller) threshold: the widened one
+/// is justified by the retention argument above, which needs the type table to
+/// say the payload is traced.
+#[inline]
+pub fn large_object_threshold_for_type(obj_type: u8) -> usize {
+    match gc_type_info(obj_type) {
+        Some(info) if !info.pointer_free => LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES,
+        _ => LARGE_OBJECT_THRESHOLD_BYTES,
+    }
+}
+
+/// Does `total_size` bytes of `obj_type` have to be born in the non-moving old
+/// generation?
+#[inline]
+pub fn is_large_object_total_size_for_type(total_size: usize, obj_type: u8) -> bool {
+    total_size > large_object_threshold_for_type(obj_type)
 }
 
 #[allow(dead_code)]
@@ -190,6 +255,9 @@ pub(crate) enum GcFinalizeHookKind {
     /// so a fresh error allocated at the recycled address doesn't inherit
     /// the dead error's codes/props.
     ErrorSideTables,
+    /// #7539: free a dead lazy JSON array's tape bytes, which
+    /// `json_tape_store` owns outside the GC heap.
+    LazyArrayTape,
 }
 
 #[allow(dead_code)]
@@ -374,13 +442,26 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcRewriteDescriptorKind::LazyArray,
         GcLayoutSlotKind::None,
-        true,
-        GcExternalBytePolicy::InlinePayload,
+        // NOT movable. `json_tape_store` keys a lazy array's tape by its
+        // header address, and every caller outside `json_tape` holds raw
+        // header pointers across allocations. The header is allocated old-gen
+        // and born tenured (`json_tape::alloc_lazy_header_bytes`), so nothing
+        // relocates it today; saying so here is what keeps old-page defrag
+        // from ever doing so. `true` was vacuous before #7539 anyway — the
+        // header was multi-megabyte and never left the old generation.
+        false,
+        // #7539: the tape is a `json_tape_store` side allocation now, not
+        // inline payload. Keeping it inline made the header ~2.4 MB on a
+        // 10 k-record blob, which `arena_alloc_gc` routed into the old
+        // generation with GC_FLAG_TENURED — reclaimable only by a FULL
+        // collection, so per-iteration-dead tapes drove `old_gen_bytes`
+        // fulls (6 of 9 fulls on the `field_access` fixture).
+        GcExternalBytePolicy::SideAllocation,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::None,
+        GcFinalizeHookKind::LazyArrayTape,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_BUFFER,
@@ -750,6 +831,9 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
         }
         GcFinalizeHookKind::TypedArrayViewMeta => {
             crate::typedarray_view::clear_view_meta(user_ptr as usize);
+        }
+        GcFinalizeHookKind::LazyArrayTape => {
+            crate::json_tape_store::release(user_ptr as usize);
         }
     }
 }

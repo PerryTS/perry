@@ -54,6 +54,7 @@ fn class_with_fields(name: &str, fields: &[&str]) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
         static_accessor_names: Vec::new(),
         static_accessor_fn_ids: Vec::new(),
     }
@@ -277,6 +278,73 @@ fn module_barrier_still_enumerates_the_candidates_it_killed() {
         .find(|e| e.name == "victim")
         .expect("the killed candidate must still be named in the report");
     assert_eq!(e.rule.as_deref(), Some("rule 5 (module-wide barrier)"));
+}
+
+/// #7112: the provenance scan filters boxed and module-global bindings before
+/// the containment walk. They are still real `let o = new C()` shape
+/// candidates, so an empty report must not make them look unexamined.
+#[test]
+fn provenance_prefilters_report_boxed_and_module_global_new_bindings() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![let_c(1, "boxed"), let_c(2, "module_global")];
+    let boxed = HashSet::from([1]);
+    let module_globals = HashMap::from([(2, "module_global".to_string())]);
+
+    let session = Session::start();
+    let facts = collect_shape_proven_ptr_locals(
+        &stmts,
+        &boxed,
+        &module_globals,
+        &classes,
+        &clean_dispatch(),
+        &HashSet::new(),
+        &crate::collectors::ptr_shape_elements::ElementShapeFacts::default(),
+    );
+    let entries = session.entries();
+
+    assert!(facts.is_empty(), "neither filtered binding may be promoted");
+    assert_eq!(entries.len(), 2, "each filtered candidate is reported once");
+    let boxed_entry = entries
+        .iter()
+        .find(|e| e.name == "boxed")
+        .expect("the boxed candidate must be reported");
+    assert_eq!(boxed_entry.outcome, Outcome::Denied);
+    assert_eq!(boxed_entry.position, Position::Local);
+    assert_eq!(boxed_entry.rule.as_deref(), Some("rule 1 (provenance)"));
+    assert_eq!(
+        boxed_entry.tier,
+        Some(crate::opt_report::Tier::CompilerLimitation)
+    );
+    assert!(
+        boxed_entry
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("boxed"),
+        "the denial must name the storage prefilter: {boxed_entry:?}"
+    );
+
+    let global_entry = entries
+        .iter()
+        .find(|e| e.name == "module_global")
+        .expect("the module-global candidate must be reported");
+    assert_eq!(global_entry.outcome, Outcome::Denied);
+    assert_eq!(global_entry.position, Position::Local);
+    assert_eq!(global_entry.rule.as_deref(), Some("rule 1 (provenance)"));
+    assert_eq!(
+        global_entry.tier,
+        Some(crate::opt_report::Tier::CompilerLimitation)
+    );
+    assert!(
+        global_entry
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("module-global"),
+        "the denial must name the storage prefilter: {global_entry:?}"
+    );
 }
 
 /// The `.map(x => ({...}))` idiom: an allocation never bound to a local.

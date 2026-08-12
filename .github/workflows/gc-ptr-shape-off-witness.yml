@@ -1,0 +1,223 @@
+name: GC Ptr<Shape> OFF-arm witness
+
+# #6984: PERRY_PTR_SHAPE_LOCALS is the documented A/B kill switch for repsel
+# Phase 3b/5a (`Ptr<Shape>` proven object locals + the proven-`this` method
+# clones it feeds, #6911/#6925). Its whole point is that flipping it OFF
+# reverts to the boxed lowering and reproduces byte-identical output — that is
+# the entire premise the `rep_ptr_shape_off` matrix arm and every other
+# representation's own OFF arm exist to verify (CLAUDE.md's GC knob
+# kill-policy: "every GC env knob either has a required CI arm exercising its
+# OFF state, or it is deleted after one release of soak").
+#
+# That premise was FALSE on `main` for #6976/#6984: with the switch off, an
+# interface-typed local with `new` provenance and a scalar-replaceable
+# constructor (`const o: Shaped = new Impl(...)`) crashed with `TypeError:
+# Cannot read properties of undefined`. No GC was involved (`cycles=0
+# moved=0`) — this is a plain codegen defect in a completely different,
+# supposedly-orthogonal optimization (scalar replacement of `new` locals,
+# `collectors/escape_news.rs`), which the switch is not even supposed to
+# touch. It went unnoticed because the arm that would have caught it —
+# `rep_ptr_shape_off`, part of `scripts/gc_repsel_matrix.sh`'s `--arms all` —
+# is NOT in `gc-stress`'s PR-gating subset (`PR_ARMS` in that script), so no
+# per-PR run ever compiled with the switch off. `--arms all` only runs on
+# push-to-main/schedule/workflow_dispatch, so a regression here would sit
+# undetected for up to a release cycle, exactly the class of hole #7194 (the
+# `gc_gate_wiring_check.py` precedent) was written to close for the moving
+# collector.
+#
+# WHAT THIS DOES
+#
+# One arm, the whole representation-selection corpus:
+#
+#   scripts/gc_repsel_matrix.sh --arms rep_ptr_shape_off --filter test_gap_repsel_
+#
+# `rep_ptr_shape_off` compiles with `PERRY_PTR_SHAPE_LOCALS=0` and runs under
+# the evacuating base + forced evacuation (`%E% PERRY_GC_FORCE_EVACUATE=1`),
+# so it doubles as the OFF arm's GC-under-evacuation witness — not just this
+# one crash's regression test. The matrix's own exit status already covers
+# both halves of CLAUDE.md's "four ways a gate can be unable to fail" #4: a
+# FAIL cell fails the run, and an all-UNVER table (the arm's `requires=move`
+# never actually relocating anything) fails it too
+# (`scripts/gc_matrix_liveness_check.py`, invoked by the matrix script
+# itself) — so this job needs no separate liveness re-check the way
+# `gc-moving-witnesses.yml` does for its non-repsel-prefixed corpus.
+#
+# THIS JOB IS DESIGNED TO BE ABLE TO FAIL, checked against all four ways
+# (CLAUDE.md):
+#
+#   1. no `continue-on-error`, no `|| true`, no pipe between the matrix and
+#      the shell's exit status;
+#   2. NOT in branch protection's required contexts yet, deliberately: a new
+#      gate has never been green, and promoting it immediately would block
+#      every open PR (CLAUDE.md's own corollary). Promote once it has a green
+#      run on `main` — that is a maintainer action, not something this PR
+#      does.
+#   3. `concurrency` cancels pull-request runs only; `main` runs are keyed on
+#      the commit SHA so they queue instead of being cancelled by the next
+#      merge (#7205's fix, replicated from gc-moving-witnesses.yml).
+#   4. the matrix's OWN exit status already asserts liveness (see above), so
+#      a green run here means the OFF arm actually compiled, actually ran,
+#      and actually matched the pinned Node oracle — not merely that nothing
+#      threw.
+#
+# WHAT THIS DELIBERATELY DOES NOT COVER
+#
+#   * The other representations' own OFF arms (`rep_i32_off`, `rep_str_off`,
+#     `rep_ptr_numarray_off`, `rep_spec_abi_off`, `rep_int_valued_off`,
+#     `rep_str_static_off`) are still only exercised by `--arms all` on
+#     push/schedule. This job is scoped to the one knob #6984 was filed
+#     against; extending it to the others is a separate decision with its own
+#     cost/coverage tradeoff, not bundled in here.
+#   * `--arms all`'s other cells continue to run on their existing schedule
+#     (gc-stress in test.yml); this job does not replace that run, it adds a
+#     per-PR arm the existing PR-gating subset omits.
+
+on:
+  pull_request:
+  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
+  # `push: branches: [main]` starved this gate and nine others for two days
+  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
+  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
+  # measured. ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "47 */6 * * *"
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per main COMMIT, cancelling PR runs only — see
+  # gc-moving-witnesses.yml's comment for the #7205 rationale this mirrors.
+  group: gc-ptr-shape-off-witness-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # scripts/gc_repsel_matrix.sh deliberately does NOT set
+  # PERRY_NO_AUTO_OPTIMIZE (see its own header): the auto-optimizer decides
+  # whether the linked runtime carries the `diagnostics` feature, which
+  # changes the GC trace format the harness parses for its liveness evidence.
+  # Setting it here from outside could silently turn every cell UNVER.
+
+jobs:
+  gc-ptr-shape-off-witness:
+    # ubuntu-latest, matching gc-stress: the matrix already runs there, and
+    # the cargo cache is shared with that job (same `shared-key`) so this
+    # build is usually warm.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Decide whether this change can affect Ptr<Shape> lowering
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the witness."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad, same rationale as gc-moving-witnesses.yml:
+          # anything under crates/ can move what a scalar-replaced receiver's
+          # method-call lowering resolves to, not just the Ptr<Shape>
+          # collectors themselves — #6984's defect lived in
+          # lower_call/scalar_method.rs, three files away from ptr_shape.rs.
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|test-files/test_gap_repsel_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/gc-ptr-shape-off-witness\.yml$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches representation-selection-relevant paths; running the witness."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No representation-selection-relevant paths changed."
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
+        if: steps.relevance.outputs.run == 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          # Same key as gc-stress, which builds the identical package set, so
+          # this job usually starts from that job's warm cache.
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clang
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Setup Node oracle
+        if: steps.relevance.outputs.run == 'true'
+        uses: actions/setup-node@v7
+        with:
+          # Single source of truth: .node-version. The matrix refuses to run
+          # when the running node disagrees with the pin, so a version drift
+          # here would abort loudly rather than silently drop a test.
+          node-version-file: .node-version
+
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          # Match cargo-test / gc-stress's linker workaround (lld SIGBUS on
+          # the shared runner during large links).
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: |
+          set -euo pipefail
+          # perry-runtime / perry-stdlib are rlib-only; libperry_runtime.a and
+          # libperry_stdlib.a come from the -static wrapper crates. Building
+          # without them links a stale archive and makes the whole run
+          # vacuous (CLAUDE.md, "Verifying a runtime change"). Package set
+          # matches gc-stress exactly so the cache is shared.
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      # GATING. No pipe, no `|| true`: this step's exit status IS the gate.
+      # scripts/gc_repsel_matrix.sh's own exit status already folds in the
+      # liveness gate (scripts/gc_matrix_liveness_check.py) alongside the
+      # byte-exactness check, so a green run here means the OFF arm actually
+      # compiled, actually ran under evacuation, and actually matched the
+      # pinned Node oracle for every file in the representation-selection
+      # corpus — not merely that nothing threw (CLAUDE.md's "four ways a
+      # gate can be unable to fail", #4).
+      - name: Run the PERRY_PTR_SHAPE_LOCALS=0 witness across the repsel corpus
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          ./scripts/gc_repsel_matrix.sh \
+            --no-build \
+            --arms rep_ptr_shape_off \
+            --filter test_gap_repsel_ \
+            --json gc-ptr-shape-off-witness.json
+
+      - name: Upload the witness report
+        if: always() && steps.relevance.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gc-ptr-shape-off-witness-${{ github.sha }}
+          path: gc-ptr-shape-off-witness.json
+          if-no-files-found: ignore
+          retention-days: 30

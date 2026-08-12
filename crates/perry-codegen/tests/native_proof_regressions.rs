@@ -19,7 +19,10 @@ use perry_hir::{
 
 #[path = "native_proof_support/mod.rs"]
 mod native_proof_support;
-use native_proof_support::{artifact_env_lock, artifact_for_module, NativeRepsEnv};
+use native_proof_support::{
+    artifact_env_lock, artifact_for_module, assert_native_buffer_element_access, probe_body,
+    NativeRepsEnv,
+};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -39,6 +42,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -236,6 +240,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
@@ -679,14 +684,57 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
     for_loop_with_start_and_update(counter_id, int(0), bound, Some(increment(counter_id)), body)
 }
 
-fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
-    assert!(
-        ir.contains("call void @js_buffer_set"),
-        "stale-proof case should keep the checked Buffer store fallback:\n{ir}"
-    );
-    assert!(
-        !ir.contains("getelementptr inbounds i8"),
-        "stale-proof case must not emit an inbounds native buffer GEP:\n{ir}"
+// `assert_buffer_store_uses_dynamic_fallback` lives in `native_proof_support`
+// since #7505 — it used to prove "no native buffer GEP" with a MODULE-WIDE
+// `!ir.contains("getelementptr inbounds i8")`, which any unrelated `inbounds
+// i8` in the module satisfied.
+use native_proof_support::assert_buffer_store_uses_dynamic_fallback;
+
+#[test]
+fn array_isarray_reassigned_local_uses_runtime_predicate() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "number_to_array".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(int(0)),
+        },
+        Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![int(1)])))),
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(1)))),
+        Stmt::Let {
+            id: 2,
+            name: "array_to_number".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Array(vec![int(1)])),
+        },
+        Stmt::Expr(Expr::LocalSet(2, Box::new(int(0)))),
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(2)))),
+        Stmt::Let {
+            id: 3,
+            name: "unchanged_array".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Array(vec![int(1)])),
+        },
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(3)))),
+        Stmt::Return(Some(int(0))),
+    ];
+    let ir = String::from_utf8(
+        compile_module(
+            &module("array_isarray_reassignment_7844.ts", body),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ir.matches("call double @js_array_is_array(").count(),
+        2,
+        "both reassigned locals must use the runtime predicate, while the unchanged array may \
+         retain its compile-time true fold:\n{ir}"
     );
 }
 
@@ -700,7 +748,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -733,7 +781,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -780,7 +828,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -1278,7 +1326,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert!(
         artifact["records"]
             .as_array()
@@ -1515,7 +1563,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -1567,7 +1615,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -11688,6 +11736,7 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     let public = "perry_method_typed_f64_receiver_method_ts__Point__score";
     let generic_body = "perry_method_typed_f64_receiver_method_ts__Point__score$generic";
     let typed = "perry_method_typed_f64_receiver_method_ts__Point__score$typed_f64_recv";
+    let pshape_body = "perry_method_typed_f64_receiver_method_ts__Point__score$pshape";
     let caller = "perry_fn_typed_f64_receiver_method_ts__probe";
     let typed_ir = defined_function_ir_section(&ir, typed);
     let caller_ir = defined_function_ir_section(&ir, caller);
@@ -11709,7 +11758,9 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
             && typed_ir.contains("getelementptr i8, ptr")
             && typed_ir.matches("load double").count() >= 2
             && typed_ir.contains(" fadd ")
-            && typed_ir.contains(" fmul "),
+            && typed_ir.contains(" fmul ")
+            && !typed_ir.contains("js_number_coerce")
+            && !typed_ir.contains("js_dynamic_string_or_number_add"),
         "typed receiver clone should raw-load receiver fields and stay in f64 SSA:\n{typed_ir}"
     );
     let method_guard = caller_ir
@@ -11725,10 +11776,96 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
         method_guard < field_guard && field_guard < typed_call,
         "receiver clone must run only after method-direct and raw-f64 field guards:\n{caller_ir}"
     );
+    // #7506: this used to assert the guard-failure edge calls `$generic` BY
+    // NAME, and it drifted — the edge now calls `$pshape`, a Ptr<Shape> clone.
+    // That is a refinement, not a miscompile, but only for a reason a
+    // symbol-presence check cannot express, so the assertion is re-pointed at
+    // the PROPERTY the composition has to preserve (the #7492 shape).
+    //
+    // The three outcomes must stay three:
+    //
+    //   1. method-direct guard fails  -> fully dynamic `js_native_call_method_by_id`
+    //   2. raw-f64 field guard passes -> `$typed_f64_recv`, which raw-loads the
+    //      receiver's slots with NO coercion
+    //   3. raw-f64 field guard FAILS  -> a clone that may use the shape's slot
+    //      offsets but must NOT assume the slots hold canonical raw f64
+    //
+    // What makes (3) sound is not which symbol it is, it is that the callee
+    // preserves coercion semantics after loading. `$pshape` may use
+    // `inttoptr` + `getelementptr` + `load double` because the shape guarantees
+    // the OFFSETS, but it must tag-dispatch the `+` and then ToNumber that
+    // possibly boxed result before the following multiply. `$generic` is also
+    // acceptable here; what must never appear on this edge is
+    // `$typed_f64_recv`, whose whole premise is the guard that just failed.
+    let field_guard_branch = caller_ir[field_guard..]
+        .lines()
+        .find(|line| line.trim_start().starts_with("br i1 "))
+        .unwrap_or_else(|| panic!("field guards should feed a conditional branch:\n{caller_ir}"));
+    let mut field_guard_successors = field_guard_branch
+        .split("label %")
+        .skip(1)
+        .map(|part| part.split([',', ' ']).next().unwrap());
+    let success_label = field_guard_successors.next().unwrap_or_else(|| {
+        panic!("field-guard branch should have a success edge: {field_guard_branch}")
+    });
+    let failure_label = field_guard_successors.next().unwrap_or_else(|| {
+        panic!("field-guard branch should have a failure edge: {field_guard_branch}")
+    });
+    let basic_block = |label: &str| {
+        let marker = format!("\n{label}:\n");
+        let start = caller_ir
+            .find(&marker)
+            .unwrap_or_else(|| panic!("basic block `{label}` not found:\n{caller_ir}"))
+            + marker.len();
+        let rest = &caller_ir[start..];
+        &rest[..rest.find("\n\n").unwrap_or(rest.len())]
+    };
+    let success_block = basic_block(success_label);
+    let failure_block = basic_block(failure_label);
     assert!(
-        caller_ir.contains(&format!("call double @{generic_body}(")),
-        "receiver field or numeric arg guard failure should call the generic method body:\n{caller_ir}"
+        success_block.contains(&format!("call double @{typed}(i64 ")),
+        "the raw-f64 field-guard success edge must call the raw-f64 receiver clone:\n\
+         {success_block}"
     );
+    assert!(
+        !failure_block.contains(&format!("call double @{typed}(")),
+        "the raw-f64 field-guard failure edge must not call the raw-f64 receiver clone:\n\
+         {failure_block}"
+    );
+    let failure_edge_callee = [generic_body, pshape_body]
+        .into_iter()
+        .find(|sym| failure_block.contains(&format!("call double @{sym}(")))
+        .unwrap_or_else(|| {
+            panic!(
+                "raw-f64 field guard failure must reach a clone that does not \
+                 assume raw-f64 slots (`$generic` or `$pshape`):\n{failure_block}"
+            )
+        });
+    if failure_edge_callee == pshape_body {
+        let pshape_ir = defined_function_ir_section(&ir, pshape_body);
+        let dynamic_add = pshape_ir
+            .find("call double @js_dynamic_string_or_number_add(")
+            .unwrap_or_else(|| {
+                panic!("the Ptr<Shape> clone must tag-dispatch declared-only `+`:\n{pshape_ir}")
+            });
+        let result_coerce = pshape_ir
+            .find("call double @js_number_coerce(")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the Ptr<Shape> clone must ToNumber the possibly boxed `+` result:\n\
+                     {pshape_ir}"
+                )
+            });
+        let multiply = pshape_ir
+            .find(" fmul ")
+            .unwrap_or_else(|| panic!("expected score's multiply in `$pshape`:\n{pshape_ir}"));
+        assert!(
+            dynamic_add < result_coerce && result_coerce < multiply,
+            "the Ptr<Shape> clone reached on raw-f64 guard FAILURE must \
+             ToNumber the possibly boxed `+` result before multiplying it:\n\
+             {pshape_ir}"
+        );
+    }
     assert!(
         caller_ir.contains("call double @js_native_call_method_by_id"),
         "method-direct guard failure should retain dynamic method fallback:\n{caller_ir}"
@@ -14059,6 +14196,108 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         strict.contains("class_field_set.fast"),
         "the strict arm must still take the class-field store fast path — if \
          this fails the test is measuring nothing (#7288):\n{strict}"
+    );
+}
+
+/// P1 (#5094): the sibling of the test above for a POINTER-typed field.
+///
+/// #7288 took only the raw-f64 slots, so `node.next = other` in a sloppy script
+/// — the shape of every linked structure — stayed on the `PutValue` write IC
+/// whose miss is `js_put_value_set` → `js_object_set_field_by_name`: by-name
+/// dispatch and a `RuntimeHandleScope` for a store whose slot index is a
+/// compile-time constant.
+///
+/// Asserts the codegen decision AND that the GC bookkeeping survived, because
+/// that is the half where a mistake is a use-after-free rather than a slowdown:
+/// a pointer store into a boxed slot must still reach the write barrier. The
+/// value here is an opaque parameter read, so none of the three value-side
+/// elisions (`expr_produces_non_pointer_bits_by_construction` and friends) can
+/// fire and the emitted bookkeeping block must be present.
+#[test]
+fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
+    fn probe_body(ir: &str) -> &str {
+        let start = ir
+            .find("define double @perry_fn_sloppy_class_field_ptr_store_ts__probe")
+            .expect("probe function must be emitted");
+        let rest = &ir[start..];
+        let end = rest[1..]
+            .find("\ndefine ")
+            .map(|offset| offset + 1)
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    fn ir_for(strict: bool) -> String {
+        let node = class(
+            218,
+            "LNode",
+            vec![class_field("next", Type::Named("LNode".to_string()))],
+        );
+        let module = module_with_classes_and_params(
+            "sloppy_class_field_ptr_store.ts",
+            vec![node],
+            vec![
+                param(1, "node", Type::Named("LNode".to_string())),
+                param(2, "other", Type::Named("LNode".to_string())),
+            ],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PutValueSet {
+                    target: Box::new(local(1)),
+                    key: Box::new(Expr::String("next".to_string())),
+                    value: Box::new(local(2)),
+                    receiver: Box::new(local(1)),
+                    strict,
+                }),
+                Stmt::Return(Some(int(0))),
+            ],
+        );
+        compile_ir_for_module_with_opts(module, empty_opts()).unwrap()
+    }
+
+    let sloppy_module = ir_for(false);
+    let sloppy = probe_body(&sloppy_module);
+    assert!(
+        sloppy.contains("class_field_sloppy_set.boxed_fast"),
+        "a sloppy pointer-field store must reach the inline class-field boxed \
+         store (#5094 P1):\n{sloppy}"
+    );
+    assert!(
+        sloppy.contains("class_field_inline.deref"),
+        "the boxed arm must be fronted by the #5093 shape/flags precheck — it \
+         is what rejects the frozen / descriptor-bearing receivers sloppy and \
+         strict disagree about:\n{sloppy}"
+    );
+    let miss_call = sloppy
+        .lines()
+        .find(|line| line.contains("call double @js_put_value_set("))
+        .unwrap_or_else(|| {
+            panic!("the boxed arm's miss must CALL `js_put_value_set` (#5094):\n{sloppy}")
+        });
+    assert!(
+        miss_call.trim_end().ends_with("i32 0)"),
+        "the sloppy miss must pass strict = 0 (#5094):\n  {miss_call}"
+    );
+    // The GC half. An opaque parameter can carry a heap pointer, so the store
+    // must be followed by the pointer-tested bookkeeping block that reaches the
+    // remembered set. Without this assertion the test would pass just as
+    // happily on a lowering that dropped the barrier outright.
+    assert!(
+        sloppy.contains("class_field_set.gc_bookkeeping"),
+        "a boxed slot store of a possibly-pointer value must keep the \
+         pointer-tested write barrier / layout note (#5094):\n{sloppy}"
+    );
+    assert!(
+        !sloppy.contains("call void @js_class_field_set_fallback"),
+        "the sloppy arm must not CALL the throwing strict fallback:\n{sloppy}"
+    );
+
+    // Negative control: the strict arm keeps its own (unchanged) lowering.
+    let strict_module = ir_for(true);
+    let strict = probe_body(&strict_module);
+    assert!(
+        !strict.contains("class_field_sloppy_set"),
+        "the strict arm must keep its existing lowering:\n{strict}"
     );
 }
 

@@ -82,6 +82,10 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_gc_note_slot_layout"
         | "js_gc_note_slot_layout_aware"
         | "js_gc_init_typed_shape_layout"
+        | "js_gc_declare_typed_shape_layout"
+        // #7834: `layout_forget_object` behind a null check — two thread-local
+        // side-table removals, no allocation and no re-entry.
+        | "js_gc_forget_object_layout"
         // `typed_feedback.rs`: counters/registries only. This intentionally
         // does not include feedback wrappers that perform the actual object
         // get/set operation.
@@ -128,8 +132,9 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // callback-type validators (type check + static-message throw; their
         // throw path is the audited noreturn funnel). Deliberately NOT
         // admitted: js_value_length_f64 — its plain-object arm calls
-        // js_object_get_field_by_name_f64, a transitive getter path; and
-        // js_array_get_f64 — hole/accessor paths.
+        // js_object_get_field_by_name_f64, a transitive getter path;
+        // js_value_length_property_f64 deliberately delegates the full
+        // property/getter path; and js_array_get_f64 has hole/accessor paths.
         | "js_ctor_return_override"
         | "js_array_indexOf_jsvalue"
         | "js_validate_array_comparator"
@@ -241,9 +246,13 @@ mod tests {
             );
         }
         // Transitive re-entry paths found by the body audit must stay out:
-        // js_value_length_f64 reaches js_object_get_field_by_name_f64 for
+        // Both length helpers can reach js_object_get_field_by_name_f64 for
         // plain objects; js_array_get_f64 has hole/accessor paths.
-        for name in ["js_value_length_f64", "js_array_get_f64"] {
+        for name in [
+            "js_value_length_f64",
+            "js_value_length_property_f64",
+            "js_array_get_f64",
+        ] {
             assert_eq!(
                 classify_direct_callee(name),
                 GcCallEffect::Unknown,

@@ -68,9 +68,16 @@ pub(crate) enum ConservativeScanSite {
     /// `gc_try_emergency_reclaim` — a heap allocation already failed and the
     /// caller is about to panic. Automatic; cannot defer (see `mod.rs`).
     EmergencyReclaim,
-    /// `manual_gc_collect_now` — explicit `gc()`. Explicit.
-    ManualCollect,
     /// `js_gc_module_minor` — explicit `perry/gc` `minor()`. Explicit.
+    ///
+    /// ★ This is the LAST explicit site. `manual_gc_collect_now` (`gc()`) used
+    /// to be the other one; #7558 removed its scan, so the variant that named
+    /// it is deleted rather than kept unconstructible — same rule as
+    /// `HostPressure` below. `minor()` is deliberately NOT changed in the same
+    /// breath: dropping the scan there makes the *copying* minor eligible, so
+    /// the collection starts relocating survivors instead of merely retaining
+    /// less. That is a different risk with a different proof obligation, and
+    /// bundling it would have made one A/B answer two questions.
     ManualMinor,
     /// `PERRY_GC_SAFEPOINT_ONLY` heal (#7174 research): a precise-root
     /// collection began outside a declared safepoint, so the contract forces
@@ -78,6 +85,14 @@ pub(crate) enum ConservativeScanSite {
     /// stack maps only describe at mapped PCs. Automatic, and research-mode
     /// only — it cannot fire unless the contract env is set.
     SafepointContractHeal,
+    // ★ There is deliberately no `ManualCollect` variant either. `gc()` used to
+    // force the scan (#4977) and be counted here; #7558 established that the
+    // precise root set covers its callsite and removed the force. The variant
+    // is DELETED rather than kept for symmetry, for exactly the reason the
+    // `HostPressure` note below gives: an arm nothing can produce is a claim no
+    // test can check, and its `count=0` would read as "the site is quiet" when
+    // the truth is "the site is gone".
+    //
     // ★ There is deliberately no `HostPressure` variant. `js_gc_memory_pressure`
     // used to force the scan unconditionally; after #7148 it either collects
     // with precise roots (empty shadow stack) or defers to a safepoint (a
@@ -89,16 +104,15 @@ pub(crate) enum ConservativeScanSite {
 }
 
 impl ConservativeScanSite {
-    pub(crate) const COUNT: usize = 6;
+    pub(crate) const COUNT: usize = 5;
 
     const fn index(self) -> usize {
         match self {
             Self::OldReclaimAllocPoint => 0,
             Self::NurseryChurnSlackValve => 1,
             Self::EmergencyReclaim => 2,
-            Self::ManualCollect => 3,
-            Self::ManualMinor => 4,
-            Self::SafepointContractHeal => 5,
+            Self::ManualMinor => 3,
+            Self::SafepointContractHeal => 4,
         }
     }
 
@@ -107,7 +121,6 @@ impl ConservativeScanSite {
             Self::OldReclaimAllocPoint => "old_reclaim_alloc_point",
             Self::NurseryChurnSlackValve => "nursery_churn_slack_valve",
             Self::EmergencyReclaim => "emergency_reclaim",
-            Self::ManualCollect => "manual_collect",
             Self::ManualMinor => "manual_minor",
             Self::SafepointContractHeal => "safepoint_contract_heal",
         }
@@ -122,7 +135,7 @@ impl ConservativeScanSite {
             | Self::NurseryChurnSlackValve
             | Self::EmergencyReclaim
             | Self::SafepointContractHeal => true,
-            Self::ManualCollect | Self::ManualMinor => false,
+            Self::ManualMinor => false,
         }
     }
 
@@ -131,7 +144,6 @@ impl ConservativeScanSite {
         Self::OldReclaimAllocPoint,
         Self::NurseryChurnSlackValve,
         Self::EmergencyReclaim,
-        Self::ManualCollect,
         Self::ManualMinor,
         Self::SafepointContractHeal,
     ];
@@ -248,6 +260,18 @@ pub(crate) fn automatic_scan_fallback_total() -> u64 {
             .map(|site| counts[site.index()])
             .sum()
     })
+}
+
+/// Conservative-scan fallbacks across **every** site, automatic or explicit.
+///
+/// `automatic_scan_fallback_total()` deliberately excludes the explicit sites,
+/// which is right for #7148's claim. #7558 needs the other question — *did any
+/// site force the scan on this path at all* — because after it the answer for
+/// explicit `gc()` is "no site, not even a quiet one". Asserting the automatic
+/// total there would pass on a tree that reintroduced the explicit force.
+#[cfg(test)]
+pub(crate) fn scan_fallback_total() -> u64 {
+    SCAN_FALLBACKS.with(|c| c.get().iter().sum())
 }
 
 #[cfg(test)]

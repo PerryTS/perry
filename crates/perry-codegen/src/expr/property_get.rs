@@ -3,6 +3,25 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Listed in `crate::rooting`'s `MIGRATED_MODULES`, and the listing is
+//! **vacuous on the committed source**: this module has never named an
+//! `expr::temp_root` symbol, so only the sabotage arm makes the line an
+//! assertion. Say what it is rather than banking the count.
+//!
+//! The audit that earned it. A dotted `obj.k` has exactly ONE user expression
+//! to lower — the receiver — and the property name is a compile-time string
+//! interned into the pool, not an operand. So the sibling-window shape that
+//! `index_get.rs` has (base lowered, then key lowered, then base used) cannot
+//! arise: the receiver is lowered LAST and nothing follows it.
+//!
+//! The three `.call(I64, "js_*")` sites the campaign map counts —
+//! `js_error_get_errors`, `js_process_version`, `js_closure_alloc_singleton` —
+//! each hand their raw pointer straight to a `nanbox_*_inline` in the same
+//! block, with no emission in between. `call_rooted` has no site here: rooting
+//! them would add temp-root traffic to close a window that does not exist.
 
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
@@ -24,7 +43,7 @@ use super::property_get_names::{
     is_net_native_method_value, is_url_pattern_data_property,
 };
 
-mod generic_dispatch;
+pub(crate) mod generic_dispatch;
 mod globalget;
 mod helpers;
 #[cfg(test)]
@@ -47,6 +66,44 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // #7219: reading `.buffer` on a tracked typed-array view HANDS OUT ITS
+    // STORAGE, so the local's inline-storage proof stops holding from here on.
+    //
+    // `js_typed_array_backing_buffer` materializes a backing `ArrayBuffer` for
+    // a typed array that owned its bytes and rebinds the array to alias it —
+    // element 0 no longer follows the header. The proven-view tiers
+    // (`proven_view_access`, `buffer_access`, `range_facts`, `i32_fast_path`)
+    // all read `header + 16 + idx*width` directly, so after
+    //
+    //     const words = new Uint32Array(1);      // storage_inline_proven
+    //     const bytes = new Uint8Array(words.buffer);
+    //     words[0] = 0x01020304;                 // <- wrote the ORPHANED bytes
+    //
+    // the write landed in the pre-materialization storage while `bytes` read
+    // the buffer, and neither direction aliased: the repro summed 0 instead of
+    // 10, and writing through `bytes` was equally invisible to `words`.
+    //
+    // The runtime side already guards its own inline reader with
+    // `PERRY_TA_VIEW_GUARD`, which `register_view_meta` bumps. These tiers are
+    // the compile-time proof that skips that check entirely, so the hazard has
+    // to be recorded where the alias is created rather than where it is used.
+    // `MutableAlias` is exactly what this is.
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if property == "buffer" {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if ctx.buffer_view_slots.contains_key(id) {
+                    super::invalidate_buffer_view_pointer(
+                        ctx,
+                        *id,
+                        crate::native_value::MaterializationReason::MutableAlias,
+                    );
+                }
+            }
+        }
+    }
     // `split("literal")[constant].length` on a scalar-replaced split can
     // read the precomputed numeric length directly. The split part itself was
     // never observable as a string, so materializing a StringHeader would only
@@ -220,9 +277,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .is_some_and(is_numeric_typed_array_class) =>
         {
             let recv_box = lower_expr(ctx, object)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &recv_box)],
+            ))
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and
@@ -235,6 +294,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PropertyGet {
             object, property, ..
         } if property == "length"
+            // #7854 recorded a receiver whose Array/String type is a copied
+            // ANNOTATION rather than a proof in `FnCtx::declared_only_array_locals`
+            // and refused it here, because the inline half was guarded but the
+            // fallback — `js_value_length_f64` — answered **0** for every value
+            // that carries no length where JS answers `undefined`, and continued
+            // instead of throwing for a nullish receiver. A violated claim was
+            // therefore a silent wrong answer rather than a slower path.
+            //
+            // #7862 replaced that fallback with `js_value_length_property_f64`
+            // (the slow arm below, and the string-lowering arm above), which
+            // *is* ordinary property semantics: `undefined` for a missing
+            // property, the real value for a non-numeric one, normal
+            // object/function/native/proxy dispatch, and a catchable TypeError
+            // for a nullish receiver. The reason for the refusal is gone, so the
+            // refusal is too — a claim now costs a guard branch and nothing else,
+            // which is exactly the deal element reads have always taken.
+            //
+            // `test-files/test_gap_7853_declared_array_length_runtime_value.ts`
+            // and `test_gap_declared_field_type_refine_guarded.ts` are the
+            // sabotage: both feed a `string[]`-declared local an array, a
+            // string, a number, an array-like object with numeric and
+            // non-numeric `length`, a function, a typed array, `null` and
+            // `undefined`, and require node-identical output. They run the
+            // inline arm now instead of the generic tower.
             && (is_array_expr(ctx, object)
                 || is_string_expr(ctx, object)
                 || match crate::type_analysis::static_type_of(ctx, object) {
@@ -285,8 +368,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (`lshr 40; and 0xFF`, matching `js_value_length_f64`'s SSO
             // branch), heap STRING_TAG → `load i32` of `utf16_len` at
             // offset 0, anything else (annotation lie, nullable-union
-            // receiver) → the same `js_value_length_f64` slow call the
-            // generic tower's slow arm uses.
+            // receiver) → the property-semantic slow call used by the
+            // generic tower's slow arm.
             {
                 if crate::expr::static_string_lowering_enabled()
                     && is_string_expr(ctx, object)
@@ -331,9 +414,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.block().br(&merge_label);
 
                     ctx.current_block = slow_idx;
-                    let slow_len =
-                        ctx.block()
-                            .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]);
+                    let slow_len = ctx.block().call(
+                        DOUBLE,
+                        "js_value_length_property_f64",
+                        &[(DOUBLE, &recv_box)],
+                    );
                     let slow_pred = ctx.block().label.clone();
                     ctx.block().br(&merge_label);
 
@@ -460,14 +545,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let fast_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
 
-            // Runtime slow path: handles Buffer / TypedArray via side-
-            // table registries, returns 0 for non-length-bearing
-            // receivers (Closure / BigInt / Promise / Error / plain
-            // Object) and for non-pointer NaN-boxes.
+            // Runtime slow path: preserve ordinary property semantics when the
+            // annotation lies. It handles Buffer / TypedArray / Closure and
+            // objects through their normal dispatch, returns `undefined` for
+            // a missing property, preserves a non-numeric property value, and
+            // throws for a nullish receiver.
             ctx.current_block = slow_idx;
-            let slow_len = ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]);
+            let slow_len = ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &recv_box)],
+            );
             let slow_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
 
@@ -910,6 +998,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (the registry duplication bug was the first).
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                 if ctx.namespace_imports.contains(name) {
+                    // #7189: `B.deep` where the imported module says
+                    // `export * as deep from "./m.ts"`. The member's value is
+                    // another module's namespace OBJECT, so there is no
+                    // `perry_fn_<mod>__deep` symbol to call — every arm below
+                    // resolves to a symbol, and this member does not have one.
+                    //
+                    // The object it should produce is the one
+                    // `@__perry_ns_<prefix>` already holds, built by the same
+                    // populator a dynamic `import()` of that module would use.
+                    // Reusing it means nested re-exports (a namespace whose own
+                    // exports include another `export * as`) come out right
+                    // without a second implementation, because the populator
+                    // already recurses.
+                    //
+                    // First, ahead of the class and member-prefix arms: a
+                    // namespace alias can collide with a class or function name
+                    // exported elsewhere, and the alias is what the source said.
+                    if ctx
+                        .namespace_member_nested
+                        .contains(&(name.clone(), property.to_string()))
+                    {
+                        if let Some(prefix) = ctx
+                            .namespace_member_prefixes
+                            .get(&(name.clone(), property.to_string()))
+                            .cloned()
+                        {
+                            return Ok(crate::expr::dyn_extern_i18n::namespace_value_for_prefix(
+                                ctx, &prefix,
+                            ));
+                        }
+                    }
                     // Issue #841: namespace member access for the five
                     // recognized Node submodules — `import * as ns from
                     // "node:timers/promises"; ns.setTimeout`. Resolve
@@ -1510,6 +1629,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // branches straight to the fast slot load, skipping the
                         // cross-crate guard call; on a miss it leaves the current
                         // block at the guard-call path below (unchanged).
+                        let subclass_arms =
+                            crate::expr::class_field_inline_guard::class_field_subclass_arms(
+                                ctx,
+                                &class_name,
+                                property,
+                                field_index,
+                                requires_raw_f64,
+                            );
                         let _guardcall_label =
                             crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
                                 ctx,
@@ -1521,6 +1648,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 requires_raw_f64,
                                 None,
                                 &fast_label,
+                                &subclass_arms,
                             );
                         let guard_ok = ctx.block().call(
                             I32,
@@ -1641,7 +1769,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
                         ctx.current_block = lookup_idx;
                         let blk = ctx.block();
-                        blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+                        crate::expr::emit_typed_feedback_record_call(
+                            blk,
+                            "js_typed_feedback_record_fallback_call",
+                            &[(I64, &site_id)],
+                        );
                         let val_fallback_js = blk.call(
                             DOUBLE,
                             "js_object_get_field_by_name_f64",

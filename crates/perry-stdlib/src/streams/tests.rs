@@ -299,3 +299,42 @@ fn pipe_through_rejects_locked_endpoints_before_starting() {
         Some("The options.signal property must be an AbortSignal")
     );
 }
+
+#[test]
+fn buffered_tee_demand_skips_only_the_cold_source_hop() {
+    let _serial = serial_guard();
+    // Keep this assertion about jobs scheduled by the calls below, not work
+    // left behind by an earlier stream test on the same worker thread.
+    perry_runtime::promise::js_promise_run_microtasks();
+
+    let buffered = alloc_readable(0, 0, 0, 1.0);
+    READABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get_mut(&buffered)
+        .unwrap()
+        .push_chunk(TAG_UNDEFINED, 1.0);
+    unsafe {
+        tee::tee_schedule_pull_demand(buffered);
+    }
+    let buffered_jobs = perry_runtime::promise::js_promise_run_microtasks();
+
+    let empty = alloc_readable(0, 0, 0, 1.0);
+    unsafe {
+        tee::tee_schedule_pull_demand(empty);
+    }
+    let empty_jobs = perry_runtime::promise::js_promise_run_microtasks();
+
+    assert_eq!(
+        buffered_jobs, 1,
+        "a pre-buffered source needs only the fanout reaction job"
+    );
+    assert_eq!(
+        empty_jobs, 2,
+        "an empty cold source must retain the Flight-calibrated demand hop"
+    );
+
+    let mut streams = READABLE_STREAMS.lock().unwrap();
+    streams.remove(&buffered);
+    streams.remove(&empty);
+}

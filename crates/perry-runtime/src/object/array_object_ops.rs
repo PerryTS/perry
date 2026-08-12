@@ -13,6 +13,52 @@ unsafe fn is_array_object(obj: *const ObjectHeader) -> bool {
     (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
 }
 
+/// Reinterpret an array's `ObjectHeader` pointer as an `ArrayHeader`, following
+/// the growth/GC forwarding chain (#233) to the array's CURRENT home first.
+///
+/// `js_array_grow` reallocates header+elements as ONE allocation and leaves a
+/// forwarding stub at the old address — and the stub's first 8 bytes are
+/// exactly where `length` and `capacity` live, so they read back as the two
+/// halves of the forwarding POINTER. A JS binding still holding the pre-grow
+/// pointer (`const t = [1,2,3,4,5]; t.push(6)`) hands that stub to the
+/// `Object.*` entry points below, where `(*arr).length` then returns a heap
+/// address: ~6·10^8 instead of 6.
+///
+/// Two loops in this file are driven by that length and become bounded-but-
+/// unreachable walks — hundreds of millions of `to_string()` + side-table
+/// probes apiece, which present as a hang (#7548):
+///   * `mark_all_array_props` — every `Object.freeze` / `Object.seal` of an
+///     array that has ever grown past its dense capacity.
+///   * `array_set_length_from_descriptor` — ArraySetLength's shrink walk,
+///     reached by the `Set(receiver, "length", …)` tail of every
+///     `Array.prototype.splice` that grows a Proxy receiver.
+///
+/// `is_array_object` cannot tell a stub apart: it keeps
+/// `obj_type == GC_TYPE_ARRAY`, and only the `GC_FLAG_FORWARDED` bit plus the
+/// clobbered payload distinguish it — so only the chain walk can. Falls back to
+/// the raw cast when the chain does not resolve, so no caller loses a pointer
+/// it would previously have accepted.
+///
+/// Deliberately NOT applied to the `obj as usize` side-table keys in this file:
+/// those are written and read at whatever address the caller holds, so re-keying
+/// one half alone would strand the entry.
+#[inline]
+pub(super) unsafe fn array_header(obj: *const ObjectHeader) -> *const crate::array::ArrayHeader {
+    let raw = obj as *const crate::array::ArrayHeader;
+    let cleaned = crate::array::clean_arr_ptr(raw);
+    if cleaned.is_null() {
+        raw
+    } else {
+        cleaned
+    }
+}
+
+/// `*mut` sibling of [`array_header`].
+#[inline]
+unsafe fn array_header_mut(obj: *mut ObjectHeader) -> *mut crate::array::ArrayHeader {
+    array_header(obj as *const ObjectHeader) as *mut crate::array::ArrayHeader
+}
+
 /// Apply `Object.freeze` / `Object.seal` to an array's OWN index + named data
 /// properties. The generic `mark_all_keys` walks `(*obj).keys_array`, but an
 /// array's indices live in the dense element store and its named props in the
@@ -35,7 +81,16 @@ pub(crate) unsafe fn mark_all_array_props(
         let gc = gc_header_for(obj);
         (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
     }
-    let arr = obj as *const crate::array::ArrayHeader;
+    let arr = array_header(obj);
+    // NOTE: `addr` deliberately stays the CALLER's address, not `arr`'s. The
+    // attrs side table for arrays is keyed inconsistently across the runtime —
+    // `Object.getOwnPropertyDescriptor` reads at the caller's (possibly
+    // pre-grow) address while the element-write rejection path resolves through
+    // `clean_arr_ptr` first — so re-keying only this writer strands the entry
+    // for the reader that today finds it. Measured both ways under #7548;
+    // canonical keying regressed `getOwnPropertyDescriptor` on a grown frozen
+    // array without gaining the write rejection. Unifying the two is a separate
+    // change to the readers.
     let addr = obj as usize;
     let apply = |key: String| {
         let mut attrs =
@@ -71,7 +126,7 @@ pub(crate) unsafe fn array_property_is_enumerable(
     if key_name == "length" {
         return Some(f64::from_bits(TAG_FALSE));
     }
-    let arr = obj as *const crate::array::ArrayHeader;
+    let arr = array_header(obj);
     if !super::has_own_helpers::array_own_key_present(arr, key_str) {
         return Some(f64::from_bits(TAG_FALSE));
     }
@@ -121,7 +176,9 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
         let gc = gc_header_for(obj);
         (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
     }
-    let arr = obj as *mut crate::array::ArrayHeader;
+    // #7548: `obj` may be a pre-grow forwarding stub. `old_len` below drives
+    // the shrink walk, so it must come from the array's current home.
+    let arr = array_header_mut(obj);
 
     let read_present = |name: &[u8]| -> bool {
         let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -330,7 +387,10 @@ pub(crate) unsafe fn define_array_property(
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
 
-    let arr = obj as *mut crate::array::ArrayHeader;
+    // #7548: `obj` may be a pre-grow forwarding stub whose `length`/`capacity`
+    // words hold the forwarding pointer — the `index >= (*arr).length` gate
+    // below and every element read/extend need the array's current home.
+    let arr = array_header_mut(obj);
 
     let read_bool = |name: &[u8]| -> Option<bool> {
         if !super::desc_has_field(descriptor_value, name) {

@@ -99,6 +99,33 @@ pub(crate) fn root_scalar_replaced_slot_unconditional(ctx: &mut FnCtx<'_>, slot:
     root_entry_alloca(ctx, slot);
 }
 
+/// Cache a GC-pointer global in a function-entry slot and make that cached
+/// copy a mutable root.
+///
+/// Registering the global itself keeps the object live and rewrites the
+/// global, but an old-page move must also rewrite every function-local copy
+/// loaded before the move. The bind is emitted in the same post-init setup
+/// region, immediately after `entry_init_load_global` stores the initialized
+/// value, so the collector never observes an uninitialized slot. There is no
+/// per-store incremental barrier: the registered global already owns
+/// liveness, and this immutable duplicate exists only to receive rewrites.
+pub(crate) fn entry_init_load_rooted_global(
+    ctx: &mut FnCtx<'_>,
+    global_name: &str,
+    ty: crate::types::LlvmType,
+) -> String {
+    let slot = ctx.func.entry_init_load_global(global_name, ty);
+    let Some(idx) = ctx.func.reserve_shadow_slot() else {
+        return slot;
+    };
+    ctx.scalar_slot_shadow_slots.insert(slot.clone(), idx);
+    ctx.func.entry_setup_call_void(
+        "js_shadow_slot_bind",
+        &[(I32, &idx.to_string()), (PTR, &slot)],
+    );
+    slot
+}
+
 /// Make an arbitrary entry-block alloca a **rewritten** GC root (#7202).
 ///
 /// Scalar replacement is not the only producer of storage that holds a heap

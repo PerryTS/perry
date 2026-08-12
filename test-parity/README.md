@@ -42,11 +42,62 @@ correctness input, so regenerate the snapshot on the pinned Node, on Linux
 ## `known_failures.json` — the full parity suite (tag-gated)
 
 Hand-curated allowlist consumed by the `parity` job in `test.yml`, which runs
-the whole `test-files/*.ts` suite on tags and opt-in PRs. Still one-directional:
-it only catches new failures. Migrating it to a generated snapshot needs a
-full-suite baseline from a tag run and is a follow-up; until then its gap-suite
-entries are redundant with `gap_snapshot.json` and are kept only so the
-tag-gated job keeps passing.
+the whole `test-files/*.ts` suite on tags and opt-in PRs. Migrating it to a
+generated snapshot needs a full-suite baseline from a tag run and is still a
+follow-up; until then its gap-suite entries overlap `gap_snapshot.json` and are
+kept so the tag-gated job keeps passing.
+
+It is **bidirectional** as of #7582. `scripts/parity_known_failures.py` fails on
+a failure that is not allowed here, and equally on an **entry whose test ran on
+this platform and passed** — naming the entry to delete. It used to compute
+`failures - allowed` and stop, which made an entry whose test had been fixed
+inert forever: it never failed, never reported, and never asked to be removed,
+while silently converting that test's next regression into a non-event. That is
+not hypothetical. `test_gap_diagchannel_3082_3084_3085_3086` was listed on
+2026-07-04 for a shipped feature cluster; when #7105 broke the test again for an
+unrelated reason the entry absorbed it, and the underlying defect — every
+`let`/`const` in an ES module's top-level bare block reading back stale — sat
+for six days (#7580).
+
+"Now passes" needs positive evidence and is decided **per platform**: the test
+must appear in the report's `results[]` with status `pass` for the platform the
+run executed on. An entry whose test did not run — filtered out, not in this
+shard, `node_fail`, `skipped`, or scoped to another platform via `platforms` —
+is never flagged. Absence of evidence is not a pass; that is exactly the hole a
+Node-22 pin used to hide 14 tests in (#6364). The passing run prints how many
+entries it actually adjudicated, so a vacuously green gate is visible.
+
+Because the `parity` job is tag-gated, the live half of that ratchet only fires
+*after* the merges it was meant to judge. The offline half runs on `lint`, which
+is a required per-PR context, and needs no parity run at all:
+
+```bash
+python3 scripts/parity_known_failures.py --audit
+```
+
+It enforces provenance (below), fails on an entry naming a test file that no
+longer exists, and cross-checks every `test_gap_*` entry against
+`gap_snapshot.json` — which is generated and bidirectional, so a gap entry
+absent from it is one the snapshot asserts passes. That check would have named
+the diagchannel entry on the day it was added.
+
+One sharp edge, stated rather than special-cased: a `ci-env` entry is by
+definition one that *passes locally*, so running the full suite by hand — on a
+box that happens to have the fixture the entry says CI lacks — will report it as
+stale. That is the check working, not misfiring: on that host the entry is not
+load-bearing. The authoritative verdict is the CI run. If a `ci-env` failure is
+genuinely confined to one OS, scope it with `platforms` and the local run stops
+adjudicating it at all.
+
+### Provenance (#797)
+
+Every entry must carry `issue`, `added`, `category`, and `reason`; the checker
+rejects the file otherwise. `issue` is a GitHub issue number as a string,
+`added` an ISO `YYYY-MM-DD` date, and `category` one of the values in the table
+below — an undocumented category is a schema error (`toolchain` slipped in
+unvalidated and went unnoticed). When the tracking issue closes but the test
+still fails, re-triage: mark the entry `bug-stale` and file a new tracking
+issue.
 
 Entries apply on every host by default. A failure that is specific to one or
 more operating systems can add a `platforms` array containing `linux`, `macos`,

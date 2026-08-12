@@ -152,8 +152,43 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
     }
 }
 
+#[cfg(test)]
+pub(crate) type SpillSafepointHook = fn(usize);
+
+#[cfg(test)]
+thread_local! {
+    static SPILL_SAFEPOINT_HOOK: std::cell::Cell<Option<SpillSafepointHook>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_spill_safepoint_hook(
+    hook: Option<SpillSafepointHook>,
+) -> Option<SpillSafepointHook> {
+    SPILL_SAFEPOINT_HOOK.with(|slot| {
+        let previous = slot.get();
+        slot.set(hook);
+        previous
+    })
+}
+
+#[cfg(test)]
+#[inline]
+fn spill_safepoint(obj_ptr: usize) {
+    SPILL_SAFEPOINT_HOOK.with(|slot| {
+        if let Some(hook) = slot.get() {
+            hook(obj_ptr);
+        }
+    });
+}
+
+#[cfg(not(test))]
+#[inline]
+fn spill_safepoint(_obj_ptr: usize) {}
+
 /// Allocation path: ensure the meta record and a buffer wide enough for
-/// `field_index`, then store. Roots the owner across the allocations.
+/// `field_index`, then store. Roots the owner AND the incoming value across
+/// the allocations.
 #[cold]
 fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
     unsafe {
@@ -166,7 +201,24 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         // minor GC. Reload through the handle after every allocation.
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(obj);
+        // #7538: root the VALUE too. It arrives as plain `u64` bits — a
+        // by-value copy of a NaN-boxed pointer the caller may well have
+        // rooted, which does the callee no good: `object_meta_ensure` and
+        // `js_array_alloc_with_length` below are both collection points, and
+        // an evacuating minor at either one rewrites the caller's handle
+        // while this local keeps naming the from-space copy. The store at the
+        // end then publishes that address into a slot the collector has
+        // already finished rewriting, so the stale pointer is never fixed and
+        // never reported (its target is live, just relocated). Re-read the
+        // bits from the handle immediately before the store.
+        let value_handle = scope.root_nanbox_u64(vbits);
         object_meta_ensure(obj);
+        // Test-only stand-in for the collection `object_meta_ensure` (and the
+        // buffer allocation below) can genuinely take. Same pattern, and same
+        // reason, as `json_tape::json_tape_safepoint`: the window is one
+        // allocation wide, so a test that waits for the arena trigger to land
+        // in it is a coin flip. Compiles to nothing outside `cfg(test)`.
+        spill_safepoint(obj_ptr);
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let meta = (*obj).meta;
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
@@ -212,7 +264,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let meta = (*obj).meta;
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
-        spill_store_slot(spill, field_index, vbits);
+        spill_store_slot(spill, field_index, value_handle.get_nanbox_u64());
     }
 }
 
@@ -266,20 +318,43 @@ thread_local! {
         const { std::cell::UnsafeCell::new([(0u32, 0u32); LEARNED_INLINE_TABLE_SIZE]) };
 }
 
+type LearnedInlineTable = std::cell::UnsafeCell<[(u32, u32); LEARNED_INLINE_TABLE_SIZE]>;
+
+/// Address of this thread's `LEARNED_INLINE_FIELDS`. See `crate::tls_hot`.
+pub(crate) fn learned_inline_fields_hot_addr() -> *mut u8 {
+    LEARNED_INLINE_FIELDS.with(|t| t as *const _ as *mut u8)
+}
+
+/// `LEARNED_INLINE_FIELDS` without a TLS resolution.
+///
+/// [`learned_inline_field_count`] runs on every dynamic construct, so this was
+/// the last thread-local left on `churn_alloc`'s allocation path after #7469's
+/// structural half: 100% of the residual `_tlv_get_addr` samples attributed to
+/// `js_object_alloc_class_inline_keys`, which is this read.
+#[inline(always)]
+fn hot_learned_inline_fields() -> &'static LearnedInlineTable {
+    // SAFETY: paired with `learned_inline_fields_hot_addr` above, and asserted
+    // by `tls_hot::tests::cached_addresses_match_thread_locals`.
+    unsafe { &*(crate::tls_hot::hot().learned_inline_fields as *const LearnedInlineTable) }
+}
+
 #[inline]
 fn note_learned_inline_fields(class_id: u32, needed_fields: u32) {
     if class_id == 0 || needed_fields > LEARNED_INLINE_MAX_FIELDS {
         return;
     }
     let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) % LEARNED_INLINE_TABLE_SIZE;
-    LEARNED_INLINE_FIELDS.with(|t| unsafe {
+    let t = hot_learned_inline_fields();
+    // SAFETY: the table is this thread's own storage and the runtime is
+    // single-threaded per arena; `slot` is reduced modulo the table size.
+    unsafe {
         let e = &mut (*t.get())[slot];
         if e.0 != class_id {
             *e = (class_id, needed_fields);
         } else if e.1 < needed_fields {
             e.1 = needed_fields;
         }
-    });
+    }
 }
 
 /// Inline field count to pre-size a dynamic construct of `class_id` with —
@@ -301,14 +376,14 @@ pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
         return 0;
     }
     let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) % LEARNED_INLINE_TABLE_SIZE;
-    LEARNED_INLINE_FIELDS.with(|t| unsafe {
-        let e = (*t.get())[slot];
-        if e.0 == class_id {
-            e.1
-        } else {
-            0
-        }
-    })
+    let t = hot_learned_inline_fields();
+    // SAFETY: as in `note_learned_inline_fields` above.
+    let e = unsafe { (*t.get())[slot] };
+    if e.0 == class_id {
+        e.1
+    } else {
+        0
+    }
 }
 
 /// accessed Vec — the common row-build pattern where an object's

@@ -1818,7 +1818,7 @@ fn lower_packed_f64_range_versioned_for(
 /// `errors` runtime call, accessor-ish names, …). A tracked field must not
 /// collide or the fast clone's access would lower through a different —
 /// possibly calling — path, breaking the call-free guarantee.
-const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
+pub(super) const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
     "length",
     "errors",
     "size",
@@ -1837,7 +1837,7 @@ const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
 /// #5093: class names with dedicated (builtin-flavored) branches in the
 /// property lowering dispatch; a user class sharing one of these names could
 /// be intercepted before the class-field diamond.
-const CLASS_FIELD_LOOP_CLASS_DENYLIST: &[&str] = &[
+pub(super) const CLASS_FIELD_LOOP_CLASS_DENYLIST: &[&str] = &[
     "Headers",
     "URLPattern",
     "ClientRequest",
@@ -4569,7 +4569,7 @@ fn dynamic_bound_private_counter_is_safe(
     advanced_by_increment && !stmts_mutate_local(body, counter_id)
 }
 
-fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
+pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     let tag = ctx.block().and(
         I64,
@@ -4663,10 +4663,19 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    // repsel #7480 / #5093: `sum += arr[i].field` over an array carrying the
+    // homogeneous element-shape invariant. Tried last, so every array-shaped
+    // matcher above keeps precedence on the loops it already owns.
+    if super::element_shape_loop::lower_element_shape_versioned_for(
+        ctx, init, condition, update, body,
+    )? {
+        return Ok(());
+    }
+
     lower_for_after_init(ctx, init, condition, update, body, "for")
 }
 
-fn lower_for_after_init(
+pub(super) fn lower_for_after_init(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
     condition: Option<&perry_hir::Expr>,
@@ -4685,7 +4694,7 @@ fn lower_for_after_init(
 /// value must dominate the block this is emitted from — only the fast
 /// preheader of the range-versioned loop qualifies.
 #[allow(clippy::too_many_arguments)]
-fn lower_for_after_init_with_i32_bound(
+pub(super) fn lower_for_after_init_with_i32_bound(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
     condition: Option<&perry_hir::Expr>,
@@ -4756,18 +4765,41 @@ fn lower_for_after_init_with_i32_bound(
     // Whether THIS site allocated the counter's i32 slot (vs. the Let site or
     // repsel Phase 1 having done so). Only the inserter removes at loop exit.
     let mut hoist_counter_i32_was_fresh = false;
+    // #7480 step 4: inside a call-free-by-construction fast clone
+    // (`lower_element_shape_versioned_for`, `lower_class_field_versioned_for`)
+    // the caller has ALREADY materialized the trip count and passed it in
+    // `precomputed_i32_bound`, so the cond block never reads this slot. The
+    // hoist would emit a `js_value_length_f64` call whose result nothing
+    // consumes — and a call inside one of those clones does not make it slower,
+    // it DELETES it: the clone's own call-free scan fails and the guard branches
+    // unconditionally to the slow clone, leaving the fast blocks as unreachable
+    // code with every IR-census assertion still passing. That is precisely how
+    // `for (let j = 0; j < keep.length; j++) acc += keep[j].v` — #7480's own
+    // kernel, and the reason the clone exists — got a clone it never entered.
+    //
+    // Only the LOAD is skipped. The bounded-index / buffer-width facts and the
+    // i32 counter slot below are proofs and storage, not emitted work, and the
+    // clone's other lowering may depend on them; suppressing those too would
+    // trade one silent loss for another.
+    let in_call_free_clone =
+        !ctx.element_shape_loop_facts.is_empty() || !ctx.class_field_loop_facts.is_empty();
     let hoisted_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
-        let arr_box_loaded = lower_expr(
-            ctx,
-            &perry_hir::Expr::PropertyGet {
-                byte_offset: 0,
-                object: Box::new(perry_hir::Expr::LocalGet(hoist.arr_id)),
-                property: "length".to_string(),
-            },
-        )?;
-        let slot = ctx.func.alloca_entry(DOUBLE);
-        ctx.block().store(DOUBLE, &arr_box_loaded, &slot);
-        ctx.cached_lengths.insert(hoist.arr_id, slot.clone());
+        let hoisted_slot = if in_call_free_clone {
+            None
+        } else {
+            let arr_box_loaded = lower_expr(
+                ctx,
+                &perry_hir::Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(perry_hir::Expr::LocalGet(hoist.arr_id)),
+                    property: "length".to_string(),
+                },
+            )?;
+            let slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.block().store(DOUBLE, &arr_box_loaded, &slot);
+            ctx.cached_lengths.insert(hoist.arr_id, slot.clone());
+            Some(slot)
+        };
         // Also tell `lower_index_set_fast` (and similar sites) that
         // `arr[counter_id]` is statically inbounds for this body, so
         // it can skip the runtime length-load + bound check.
@@ -4817,7 +4849,7 @@ fn lower_for_after_init_with_i32_bound(
             }
         }
 
-        Some(slot)
+        hoisted_slot
     } else {
         None
     };
@@ -5223,29 +5255,73 @@ fn lower_for_after_init_with_i32_bound(
     Ok(())
 }
 
-/// Whether to emit loop back-edge safepoint polls — OPT-IN, default OFF
-/// (`PERRY_GC_MOVING_LOOP_POLLS=1`). The moving GC is the default at the
-/// event-loop safepoint, but the loop poll emits a `js_gc_loop_safepoint()`
+/// Whether to emit loop back-edge safepoint polls — **default ON since #7682**,
+/// kill switch `PERRY_GC_MOVING_LOOP_POLLS=0`/`off`/`false`.
+///
+/// The objection this used to carry — "the poll emits a `js_gc_loop_safepoint()`
 /// CALL at every loop back-edge, which defeats LLVM auto-vectorization and
-/// violates the native-region "no runtime calls in hot loop" proofs. Until the
-/// poll is emitted only in loops that actually ALLOCATE (so numeric/vectorizable
-/// loops stay call-free), it is opt-in and a tight allocating loop defers to the
-/// event-loop safepoint instead.
+/// violates the native-region 'no runtime calls in hot loop' proofs" — was
+/// answered by its own stated condition: *"until the poll is emitted only in
+/// loops that actually ALLOCATE"*. It is. [`emit_gc_loop_safepoint`] consults
+/// `loop_purity::loop_may_allocate` and emits nothing for a body that cannot
+/// allocate, so numeric and vectorizable loops stay call-free. A loop that
+/// cannot allocate also cannot arm a GC trigger, so that is not a coverage hole
+/// — it is the poll being placed where the pressure is.
+///
+/// Must match the runtime `gc_moving_loop_polls_enabled` (same env, same
+/// predicate): a mismatch either defers collections that never drain, or emits
+/// polls that nothing consumes. `policy::moving_loop_polls_enabled_from_env`
+/// carries the full argument for the flip and for why leaving it off was the
+/// more dangerous state after #7682.
 fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    // DEFAULT OFF (stopgap for #7154): the runtime moving-loop minor this poll
-    // drives has a use-after-free that corrupts the heap even in the default
-    // config, so the default reverts to the non-moving minor and the poll is
-    // emitted only under an explicit PERRY_GC_MOVING_LOOP_POLLS=1/on/true opt-in.
-    // Must match the runtime `gc_moving_loop_polls_enabled` (same env) so a
-    // deferred collection always has a drain and vice versa.
     *CACHED.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+        moving_safepoint_polls_enabled_from_env(
+            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").ok().as_deref(),
         )
     })
+}
+
+/// Pure env→emit decision, factored out so the default is testable without
+/// touching process env or the cached `OnceLock`.
+///
+/// **Byte-for-byte the same predicate as the runtime's
+/// `policy::moving_loop_polls_enabled_from_env`.** They are two crates and
+/// cannot share a symbol, so `polls_default_matches_codegen_mirror` in
+/// perry-runtime pins the pair against a copy of this table instead. Keep the
+/// two in step: a codegen default of OFF against a runtime default of ON is not
+/// a lost optimisation, it is a collector that defers nursery pressure to a
+/// safepoint that is never emitted (see #7690's regression).
+pub(crate) fn moving_safepoint_polls_enabled_from_env(value: Option<&str>) -> bool {
+    !matches!(value, Some("0") | Some("off") | Some("false"))
+}
+
+#[cfg(test)]
+mod moving_safepoint_poll_default {
+    use super::moving_safepoint_polls_enabled_from_env as emit;
+
+    /// Pins codegen's half of the pair. The runtime half is
+    /// `gc::tests::triggers::polls_default_is_on`, and
+    /// `polls_default_matches_codegen_mirror` pins that the two tables agree.
+    ///
+    /// Emitting no poll is not "one fewer instruction": it removes the only
+    /// precise safepoint a compute-only loop ever reaches, so a nursery
+    /// collection the runtime deferred has nowhere to drain.
+    #[test]
+    fn unset_emits_the_poll() {
+        assert!(emit(None), "unset must emit the loop safepoint poll");
+        for kill in ["0", "off", "false"] {
+            assert!(!emit(Some(kill)), "{kill} must remain the kill switch");
+        }
+        for on in ["1", "on", "true"] {
+            assert!(emit(Some(on)), "{on} must stay an explicit opt-in");
+        }
+        assert!(
+            emit(Some("yes")),
+            "only the documented kill-switch spellings may suppress the poll"
+        );
+    }
 }
 
 /// Emit a `js_gc_loop_safepoint()` after an allocating loop segment has
@@ -5270,6 +5346,47 @@ pub(crate) fn emit_gc_loop_safepoint(
     if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
         return;
     }
+    // #7480 step 4: never inside a call-free-by-construction fast clone.
+    //
+    // `lower_class_field_versioned_for` and `lower_element_shape_versioned_for`
+    // hoist a guard into a preheader and clone the body against it, and both
+    // rest on the SAME safety argument: the clone makes no call, therefore
+    // allocates nothing, therefore cannot collect, therefore the pointer the
+    // preheader cached cannot move. Each verifies that by scanning its own
+    // emitted blocks afterwards, and a clone whose call-freeness is unproven is
+    // never entered — the deref block branches unconditionally to the slow
+    // clone and the fast blocks are left as unreachable code.
+    //
+    // A back-edge poll is a call. Emitting one into the clone therefore does
+    // not make the clone slower; it deletes the clone, silently, with the fast
+    // blocks still present in the IR for any census to find. #7690 turning
+    // these polls back on by default did exactly that to the ELEMENT-SHAPE
+    // clone: `churn_read.ts` went 0.03 s -> 0.54 s on the same compiler, every
+    // `perry-codegen` test stayed green, and the only symptom was a benchmark
+    // that did not move. That is the failure mode
+    // `stmt/element_shape_loop.rs`'s module docs predicted in as many words,
+    // and `assert_fast_clone_is_entered` is the assertion that now catches it.
+    //
+    // The class-field clone is NOT affected today, and that was checked rather
+    // than assumed: removing this suppression leaves its three IR tests green,
+    // because `loop_may_allocate` already proves an `obj.field`-only body inert
+    // and emits no poll for it. It is covered here anyway — the two clones rest
+    // on the identical argument, and the next body shape admitted to the
+    // class-field matcher that is not provably inert would delete that clone
+    // the same way. Its tests gained the same liveness assertion.
+    //
+    // Skipping the poll here is not a new licence — it is the rule the line
+    // below already applies. A poll exists so that an ALLOCATING loop can defer
+    // a collection to a safe point; a body that cannot allocate does not need
+    // one, which is precisely why `loop_may_allocate` gates the poll at all.
+    // `loop_may_allocate` answers from the HIR body, before specialization, so
+    // it cannot see that the clone's `arr[j].f` lowers to a bare load rather
+    // than to the generic diamond. Inside a fact scope, it can: the clone is
+    // call-free or it is not entered, and the slow clone — lowered after the
+    // scope is popped — keeps its poll either way.
+    if !ctx.element_shape_loop_facts.is_empty() || !ctx.class_field_loop_facts.is_empty() {
+        return;
+    }
     // Only an ALLOCATING loop body can defer a collection to this poll; skip the
     // poll for pure (non-allocating) bodies so numeric/vectorizable loops stay
     // call-free (a poll defeats LLVM auto-vectorization — measured ~2x on a tight
@@ -5281,14 +5398,67 @@ pub(crate) fn emit_gc_loop_safepoint(
     // `ctx` ends with the block so the poll emission below can take it
     // mutably.
     let needs_poll = {
-        let is_inert =
-            |e: &perry_hir::Expr| crate::expr::temp_root::expr_is_inert_primitive(ctx, e);
+        let is_inert = |e: &perry_hir::Expr| crate::rooting::expr_is_inert_primitive(ctx, e);
         crate::loop_purity::loop_may_allocate(body, controls, &is_inert)
     };
     if !needs_poll {
         return;
     }
-    ctx.block().call_void("js_gc_loop_safepoint", &[]);
+    emit_armed_gc_loop_safepoint(ctx);
+}
+
+/// The poll itself: a load of the runtime's arming word, and the call only on
+/// the branch where it is non-zero.
+///
+/// A bare `call void @js_gc_loop_safepoint()` at every allocating back-edge is
+/// what #7721 shipped, and it is the most-executed instruction sequence in an
+/// allocating loop — 20 million times in `bench/churn_alloc.ts`, 200 million in
+/// `churn_alloc_big.ts`. Its no-work path was an out-of-line call into two
+/// `OnceLock` acquire loads, an unconditional atomic increment and a
+/// thread-local read; on Darwin the last of those is itself a call to
+/// `_tlv_get_addr`, Mach-O having no local-exec TLS model. Measured on the
+/// quiet bench host that is ~3 ns of pure overhead per back-edge and it moved
+/// three all-numeric benchmarks 15–30 %: `churn_alloc` 0.36 s -> 0.42,
+/// `push_cls` 0.34 -> 0.40, `push_num` 0.13 -> 0.17.
+///
+/// `@PERRY_GC_POLL_ARMED == 0` is a PROOF from the runtime that the call would
+/// return without doing anything (`perry-runtime/src/gc/poll_arm.rs`), so the
+/// guard is not a heuristic and does not change when a collection happens: the
+/// word is armed by the same transition that sets `GC_SAFEPOINT_PENDING`, and
+/// under `PERRY_GC_SCHEDULE_SEED` it is armed for the life of the process so the
+/// seeded schedule still sees every poll it is entitled to select.
+///
+/// The load is **volatile** for one reason: this word is written by the runtime
+/// from calls LLVM cannot see through, and a poll whose load got hoisted out of
+/// its loop or CSE'd across an allocating call would read a stale zero and
+/// silently stop draining — the #7721 failure mode (a collector with no nursery
+/// evacuation) returning as a codegen bug instead of a default. One `ldr` either
+/// way; nothing is bought by leaving it to alias analysis.
+///
+/// The CALL survives in the IR, which is what `gc_call_effects` classifies,
+/// what `scripts/gc_root_dominance_check.py` keys its MOVING classification on,
+/// and what `tests/loop_safepoint_purity.rs` counts. It has moved into its own
+/// block, and that is a real CFG change, not a cosmetic one — the checker's
+/// windows are path-based, so a collection point on one arm of a diamond is
+/// still a collection point on every path through it.
+fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
+    let poll_idx = ctx.new_block("gcpoll");
+    let done_idx = ctx.new_block("gcpoll.done");
+    let poll_label = ctx.block_label(poll_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let armed = blk.load_volatile(I32, "@PERRY_GC_POLL_ARMED");
+        let due = blk.icmp_ne(I32, &armed, "0");
+        blk.cond_br(&due, &poll_label, &done_label);
+    }
+    ctx.current_block = poll_idx;
+    {
+        let blk = ctx.block();
+        blk.call_void("js_gc_loop_safepoint", &[]);
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
 }
 
 pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
@@ -5831,11 +6001,11 @@ fn local_bound_storage_accessible(ctx: &crate::expr::FnCtx<'_>, bound_id: u32) -
 /// `class_field_versioned_loop_fires_for_module_scope_counter` is the assertion
 /// that the lowering is live; keep it that way (CLAUDE.md, "a gate must assert
 /// its subject was live").
-fn local_has_readable_slot(ctx: &crate::expr::FnCtx<'_>, local_id: u32) -> bool {
+pub(super) fn local_has_readable_slot(ctx: &crate::expr::FnCtx<'_>, local_id: u32) -> bool {
     ctx.locals.contains_key(&local_id) || ctx.local_slot_reps.contains_key(&local_id)
 }
 
-fn local_bound_is_loop_invariant(
+pub(super) fn local_bound_is_loop_invariant(
     cond: &perry_hir::Expr,
     update: Option<&perry_hir::Expr>,
     body: &[perry_hir::Stmt],
@@ -5887,7 +6057,7 @@ fn length_source_can_use_static_i32(ctx: &crate::expr::FnCtx<'_>, source: &Lengt
     }
 }
 
-fn loop_counter_bounds_are_safe(
+pub(super) fn loop_counter_bounds_are_safe(
     ctx: &crate::expr::FnCtx<'_>,
     counter_id: u32,
     update: Option<&perry_hir::Expr>,
@@ -5898,7 +6068,10 @@ fn loop_counter_bounds_are_safe(
         && !stmts_mutate_local(body, counter_id)
 }
 
-fn loop_counter_entry_i32_range_is_safe(init: Option<&perry_hir::Stmt>, counter_id: u32) -> bool {
+pub(super) fn loop_counter_entry_i32_range_is_safe(
+    init: Option<&perry_hir::Stmt>,
+    counter_id: u32,
+) -> bool {
     use perry_hir::{Expr, Stmt};
     let Some(Stmt::Let {
         id,

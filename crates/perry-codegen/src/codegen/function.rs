@@ -9,7 +9,9 @@ use perry_hir::Function;
 
 use crate::expr::FnCtx;
 use crate::module::LlModule;
-use crate::native_value::{AliasState, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource};
+use crate::native_value::{
+    AliasState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
+};
 use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
@@ -426,6 +428,16 @@ pub(super) fn compile_function(
     // functions (the hint would be redundant) and async/generator forms.
     // Try-containing functions are ordinary inline candidates since #7302
     // (invoke-EH removed the setjmp-era noinline requirement).
+    // #7834: record the raw admission, before the `inline_hint` window narrows
+    // it. `lower_call/new_alloc.rs` uses this to decide the inline-bump
+    // allocation, which wants "is this code hot" and not "may LLVM's inline
+    // threshold move" — an `alwaysinline` callee is excluded from the latter
+    // and is the hottest possible case for the former.
+    lf.hot_loop_callee = cross_module.hot_loop_callees.contains(&f.id);
+    // #7871: the allocator's hotness set. Set from the same well-ordered point
+    // as `hot_loop_callee` (before the entry block exists and before any
+    // expression is lowered), for the same reason.
+    lf.alloc_hot = cross_module.alloc_hot_functions.contains(&f.id);
     if !lf.force_inline
         && inline_hot_small_enabled()
         && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())
@@ -694,6 +706,7 @@ pub(super) fn compile_function(
         const_number_locals: std::collections::HashMap::new(),
         current_block: 0,
         discard_expr_value: false,
+        discard_this_expr: false,
         func_names,
         strings,
         loop_targets: Vec::new(),
@@ -742,6 +755,7 @@ pub(super) fn compile_function(
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
+        namespace_member_nested: &cross_module.namespace_member_nested,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
@@ -768,9 +782,10 @@ pub(super) fn compile_function(
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         shadow_slot_map,
         persistent_shadow_slots: std::collections::HashSet::new(),
+        declared_only_numeric_locals: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         shadow_slots_bound: bound_param_slots,
-        temp_roots: crate::expr::temp_root::TempRootPool::default(),
+        temp_roots: crate::rooting::TempRootPool::default(),
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
@@ -780,6 +795,7 @@ pub(super) fn compile_function(
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        element_shape_loop_facts: Vec::new(),
         // Specialized entries seed the canonical-i32 registry with their raw
         // i32 params (empty otherwise — identical to the pre-phase behavior).
         local_slot_reps: spec_i32_param_slots
@@ -947,6 +963,7 @@ pub(super) fn compile_function(
                 alias: AliasState::Unknown,
                 length_source: Some(LengthSource::Unknown),
                 native_owned: None,
+                pointer_state: BufferViewPointerState::Stable,
                 // Declared-type hoist only — the construction form is unknown,
                 // so no inline-storage proof.
                 storage_inline_proven: false,
@@ -1016,6 +1033,7 @@ pub(super) fn compile_function(
                         None => LengthSource::Unknown,
                     }),
                     native_owned: None,
+                    pointer_state: BufferViewPointerState::Stable,
                     storage_inline_proven: true,
                 },
             );
@@ -1063,8 +1081,9 @@ pub(super) fn compile_function(
     }
     for ic_name in &ic_globals {
         llmod.add_raw_global(format!(
-            "@{} = private global [8 x i64] zeroinitializer",
-            ic_name
+            "@{} = private global [{} x i64] zeroinitializer",
+            ic_name,
+            crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
         ));
     }
     for raw in &typed_parse_rodata {

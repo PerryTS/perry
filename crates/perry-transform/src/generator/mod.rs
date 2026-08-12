@@ -11,6 +11,7 @@
 use perry_hir::ir::*;
 use perry_hir::types::{FuncId, LocalId, Type};
 
+mod box_release;
 mod break_continue;
 mod helpers;
 mod hoist_yields;
@@ -24,6 +25,7 @@ mod rewrite_returns;
 // Explicit named re-exports so siblings can reach each other via
 // `use super::*;`. Globs don't propagate transitively, so spell every
 // cross-module symbol here.
+pub(crate) use box_release::{build_box_release_stmts, closure_visible_ids};
 pub(crate) use break_continue::{
     body_contains_yield, collect_hoisted_vars, fix_break_continue_sentinels,
     fix_break_continue_sentinels_in_catches, fix_break_continue_sentinels_in_stmts,

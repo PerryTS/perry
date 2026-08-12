@@ -79,17 +79,15 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
     selection
 }
 
-// gh #6206 test hook: the defrag machinery's unit tests exercise the
-// selection/copy/re-remember mechanics directly and must bypass the
-// production off-gate below. Thread-local so parallel tests don't race.
+// Test override for selection-policy tests. Thread-local so parallel tests do
+// not race with the production default or one another.
 #[cfg(test)]
 thread_local! {
     pub(crate) static OLD_DEFRAG_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// RAII enable for the defrag unit tests: forces the off-gate open on this
-/// thread for the guard's lifetime.
+/// RAII enable for defrag unit tests on this thread for the guard's lifetime.
 #[cfg(test)]
 pub(crate) struct OldDefragTestEnable;
 
@@ -108,36 +106,167 @@ impl Drop for OldDefragTestEnable {
     }
 }
 
+/// RAII *disable* for defrag on this thread, so the OFF arm is exercised
+/// deterministically rather than depending on the ambient environment.
+///
+/// Without this the OFF state has no behavioural coverage at all: the value
+/// mapping is unit-tested, but nothing asserts that a disabled collector
+/// actually declines to select a page. That gap is what #7917 records.
+#[cfg(test)]
+pub(crate) struct OldDefragTestDisable;
+
+#[cfg(test)]
+impl OldDefragTestDisable {
+    pub(crate) fn new() -> Self {
+        OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.set(Some(false)));
+        OldDefragTestDisable
+    }
+}
+
+#[cfg(test)]
+impl Drop for OldDefragTestDisable {
+    fn drop(&mut self) {
+        OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.set(None));
+    }
+}
+
+fn old_page_defrag_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("on") | Some("true"))
+}
+
 fn old_page_defrag_enabled() -> bool {
     #[cfg(test)]
     if let Some(v) = OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.get()) {
         return v;
     }
     use std::sync::OnceLock;
-    static OPT_IN: OnceLock<bool> = OnceLock::new();
-    *OPT_IN.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_OLD_DEFRAG").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        old_page_defrag_enabled_from_value(std::env::var("PERRY_GC_OLD_DEFRAG").ok().as_deref())
     })
 }
 
 pub(super) fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelection {
-    // gh #6206: old-page defrag evacuation is OFF pending a rewrite-contract
-    // fix. With defrag active, a reader can observe a pre-move address of a
-    // defrag-moved old object long after the cycle (wild-pointer crash /
-    // silently corrupt cached value); the reproducer corrupts 6/6 with defrag
-    // enabled and is clean 6/6 with it disabled, on the same binary, while
-    // every heap-payload slot (arrays in-length, object fields, Map entries)
-    // verifies as correctly rewritten — the stale reference lives on a
-    // non-heap path (address-keyed cache / IC / side table) the defrag
-    // rewrite doesn't reach. Nursery evacuation and tenured promotion (the
-    // reclaim-critical moving paths) are unaffected. Re-enable for
-    // debugging/bisection with PERRY_GC_OLD_DEFRAG=1.
+    // #7876 restored the mutable-root contract for old movable addresses, and
+    // #7913 shipped that restoration with defrag ON by default. The contract
+    // work is sound and stays; the DEFAULT is what this reverts (#7917).
+    //
+    // #7876's own acceptance criteria said to "re-enable defrag only after the
+    // reproducer and a dependency-scale stress corpus are clean". No such
+    // corpus exists yet, and none of the 19 benchmark programs can produce a
+    // candidate page: selection needs `dead_bytes >= live_bytes` on an old
+    // page, which needs promote-then-die at scale. The retain family survives
+    // at 999-1000 permille and the churn family promotes almost nothing, so
+    // the suite yields neither a benefit signal nor a regression signal while
+    // still inheriting the full old-address rewrite surface.
+    //
+    // So this is opt-in until a fragmentation workload exists that can
+    // actually exercise it. When that lands, the losing arm gets DELETED
+    // rather than left standing -- per CLAUDE.md, a mode that still exists is
+    // a decision that has not been made.
     if !old_page_defrag_enabled() {
         return OldPageDefragSelection::default();
     }
     let snapshot = crate::arena::old_page_meta_snapshot();
     select_old_page_defrag_pages_from_snapshot(&snapshot, force)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        old_page_defrag_enabled_from_value, select_old_page_defrag_pages, OldDefragTestDisable,
+        OldDefragTestEnable,
+    };
+
+    #[test]
+    fn old_page_defrag_is_opt_in_via_perry_gc_old_defrag() {
+        // Unset means OFF: defrag is opt-in until a fragmentation workload
+        // exists that can demonstrate it (#7917).
+        assert!(!old_page_defrag_enabled_from_value(None));
+        assert!(old_page_defrag_enabled_from_value(Some("1")));
+        assert!(old_page_defrag_enabled_from_value(Some("on")));
+        assert!(old_page_defrag_enabled_from_value(Some("true")));
+        assert!(!old_page_defrag_enabled_from_value(Some("0")));
+        assert!(!old_page_defrag_enabled_from_value(Some("off")));
+        assert!(!old_page_defrag_enabled_from_value(Some("false")));
+        // Anything unrecognised is OFF, so a typo cannot silently enable
+        // old-generation relocation.
+        assert!(!old_page_defrag_enabled_from_value(Some("unexpected")));
+    }
+
+    /// The OFF arm, asserted through the gated entry point rather than through
+    /// the value mapping.
+    ///
+    /// This matters because `select_old_page_defrag_pages_from_snapshot` does
+    /// NOT consult the knob — the gate lives only in
+    /// `select_old_page_defrag_pages` — so every pre-existing selection test
+    /// bypasses the switch entirely. Before this test the OFF state had no
+    /// behavioural coverage at all (#7917).
+    ///
+    /// The observable is the page-meta snapshot counter rather than the
+    /// returned selection, for two reasons. It needs no old-arena fixture, and
+    /// more importantly an empty selection is **not** evidence on its own: a
+    /// bare test process has no eligible old pages, so asserting only
+    /// "disabled returns nothing" passes just as happily against a kill switch
+    /// that does nothing at all. That is the gate-that-cannot-fail shape this
+    /// codebase keeps re-learning, and the first version of this test walked
+    /// straight into it.
+    ///
+    /// So the positive control is load-bearing: it proves the enabled path
+    /// really does reach the snapshot, which is the thing the disabled path
+    /// must then be shown to skip.
+    ///
+    /// It also pins the *placement* of the gate, not merely its effect: the
+    /// short-circuit must happen before the O(old pages) snapshot, so a
+    /// disabled collector pays nothing on every ordinary minor.
+    #[test]
+    fn disabled_defrag_short_circuits_before_taking_a_page_snapshot() {
+        use crate::arena::old_page_meta_snapshot_calls_for_tests as snapshot_calls;
+
+        let before_enabled = snapshot_calls();
+        let enabled = {
+            let _enable = OldDefragTestEnable::new();
+            select_old_page_defrag_pages(true)
+        };
+        let enabled_calls = snapshot_calls() - before_enabled;
+
+        let before_disabled = snapshot_calls();
+        let disabled_forced = {
+            let _disable = OldDefragTestDisable::new();
+            select_old_page_defrag_pages(true)
+        };
+        let disabled_unforced = {
+            let _disable = OldDefragTestDisable::new();
+            select_old_page_defrag_pages(false)
+        };
+        let disabled_calls = snapshot_calls() - before_disabled;
+
+        assert_eq!(
+            enabled_calls, 1,
+            "positive control: enabled defrag must reach the page snapshot. If \
+             this is 0 the assertions below prove nothing, because a switch \
+             that never runs looks identical to one that correctly declines"
+        );
+
+        assert_eq!(
+            disabled_calls, 0,
+            "the kill switch must short-circuit BEFORE the O(old pages) \
+             snapshot, so a disabled collector pays nothing per minor"
+        );
+
+        // `force` bypasses the dead>=live ratio, so this also proves the gate
+        // beats a forced selection rather than merely losing the ratio test.
+        assert_eq!(disabled_forced.selected_pages, 0);
+        assert_eq!(disabled_forced.candidate_pages, 0);
+        assert!(disabled_forced.pages.is_empty());
+        assert!(disabled_forced.page_order.is_empty());
+        assert_eq!(disabled_forced.selected_live_bytes, 0);
+        assert_eq!(disabled_forced.selected_reclaimable_bytes, 0);
+        assert_eq!(disabled_unforced.selected_pages, 0);
+        assert!(disabled_unforced.pages.is_empty());
+
+        // Sanity: the enabled arm returned a real (possibly empty) selection
+        // rather than the disabled default, i.e. the two paths are distinct.
+        let _ = enabled;
+    }
 }

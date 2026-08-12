@@ -245,6 +245,17 @@ pub(crate) enum TypedCloneRejectionReason {
     ReceiverFieldNotOwn,
     ReceiverFieldNotF64,
     ThisEscape,
+    /// #7111 — Spec-ABI: the function has NO direct call sites left to analyse,
+    /// because an earlier pass removed them all (the inliner, then
+    /// `unroll_static_loops` constant-folding what it produced).
+    ///
+    /// This is not a denial in the usual sense: there is nothing to specialise
+    /// FOR. It is reported anyway because the alternative is silence, and
+    /// silence here is indistinguishable from "not analysed" and from "analysed
+    /// and denied" — which is the whole complaint the opt-report exists to
+    /// answer. A reader seeing `spec_no_call_sites` knows the decision loop was
+    /// reached and had nothing to decide.
+    SpecNoCallSites,
     /// Spec-ABI (Phase 2): no call site proved a viable representation tuple.
     SpecTupleUnproven,
     /// Spec-ABI: the function already carries a typed_abi clone family —
@@ -292,6 +303,7 @@ impl TypedCloneRejectionReason {
             Self::ReceiverFieldNotOwn => "receiver_field_not_own",
             Self::ReceiverFieldNotF64 => "receiver_field_not_f64",
             Self::ThisEscape => "this_escape",
+            Self::SpecNoCallSites => "spec_no_call_sites",
             Self::SpecTupleUnproven => "spec_tuple_unproven",
             Self::SpecTypedCloneOverlap => "spec_typed_clone_overlap",
             Self::SpecBudgetExceeded => "spec_budget_exceeded",

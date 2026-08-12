@@ -516,7 +516,7 @@ pub(crate) fn test_clear_class_side_table_roots() {
 
 #[cfg(test)]
 pub(crate) fn test_seed_class_dynamic_prop_root(class_id: u32, name: &str, value_bits: u64) {
-    class_dynamic_prop_root_store(class_id, name.to_string(), f64::from_bits(value_bits));
+    class_dynamic_prop_root_store(class_id, name, f64::from_bits(value_bits));
 }
 
 #[cfg(test)]

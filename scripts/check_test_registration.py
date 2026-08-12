@@ -273,7 +273,7 @@ MECHANISMS: tuple[Mechanism, ...] = (
             "test-files/test_gap_specabi_*.ts",
         ),
         registry="test-parity/gc_repsel_corpus.txt",
-        runner="scripts/gc_repsel_matrix.sh (gc-stress, gc-moving-witnesses)",
+        runner="scripts/gc_repsel_matrix.sh (gc-stress, gc-moving-witnesses, gc-ptr-shape-off-witness)",
         key=_stem,
         registered=lambda t: _read_hash_list(t, "test-parity/gc_repsel_corpus.txt"),
         entry_to_path=lambda e: "test-files/%s.ts" % e,

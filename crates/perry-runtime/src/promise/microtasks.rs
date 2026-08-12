@@ -4,7 +4,7 @@
 
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Promise currently being dispatched by the microtask runner after its
     /// task has been popped from TASK_QUEUE. While user callbacks run this is
     /// the mutable root that lets copied-minor rewrite the promise pointer

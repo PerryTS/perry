@@ -52,12 +52,16 @@ mod unimpl_hints;
 pub(crate) use stmt::*;
 mod for_head;
 pub(crate) use for_head::{
-    for_head_binding_stmts, guard_for_in_body, map_set_delete_safe_for_of, predefine_for_head,
+    for_head_binding_stmts, guard_for_in_body, map_entry_pair, map_index_fast_path_head,
+    map_set_delete_safe_for_of, predefine_for_head, resolve_for_of_iterable_type,
+    rewrite_collection_view_for_of,
 };
+mod for_of_guard;
+pub(crate) use for_of_guard::lower_stmt_for_of;
 mod stmt_loops;
 pub(crate) use stmt_loops::{
     insert_iterator_close_on_abrupt, lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in,
-    lower_stmt_for_of, wrap_lazy_for_of_body_close_on_throw,
+    wrap_lazy_for_of_body_close_on_throw,
 };
 mod module_decl;
 pub(crate) use module_decl::*;
@@ -124,5 +128,9 @@ pub(crate) use crate::lower_decl::*;
 pub(crate) use crate::lower_patterns::*;
 pub(crate) use crate::lower_types::*;
 
+#[cfg(test)]
+mod collection_view_tests;
+#[cfg(test)]
+mod for_of_counter_tests;
 #[cfg(test)]
 mod tests;

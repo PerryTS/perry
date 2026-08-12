@@ -707,11 +707,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                 let name = get_binding_name(&decl.name)?;
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-                                let id = ctx.define_local(name.clone(), Type::Any);
+                                // #7547: same type computation as an ordinary
+                                // `let`/`const`, not a hardcoded `Any`.
+                                let ty = crate::destructuring::for_init_decl_type(ctx, decl);
+                                let id = ctx.define_local(name.clone(), ty.clone());
                                 result.push(Stmt::Let {
                                     id,
                                     name,
-                                    ty: Type::Any,
+                                    ty,
                                     mutable: true,
                                     init: init_expr,
                                 });
@@ -748,11 +751,16 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                         .as_ref()
                                         .map(|e| lower_expr(ctx, e))
                                         .transpose()?;
-                                    let id = ctx.define_local(name.clone(), Type::Any);
+                                    // #7547: the loop variable of
+                                    // `for (let j = 0; …)`. Typing it is what
+                                    // unblocks every expression computed from
+                                    // it — see `for_init_decl_type`.
+                                    let ty = crate::destructuring::for_init_decl_type(ctx, decl);
+                                    let id = ctx.define_local(name.clone(), ty.clone());
                                     Some(Box::new(Stmt::Let {
                                         id,
                                         name,
-                                        ty: Type::Any,
+                                        ty,
                                         mutable: true,
                                         init: init_expr,
                                     }))
@@ -893,6 +901,15 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             });
         }
         ast::Stmt::ForOf(for_of_stmt) => {
+            // #7760: where this arm's own statements begin, so the guard below
+            // can splice them back out as the index arm.
+            let result_mark = result.len();
+            // `for (… of m.values()/keys()/entries())` on a statically-proven
+            // Map/Set is the direct-collection loop written another way; see
+            // `for_head::rewrite_collection_view_for_of`.
+            let view_rewrite = crate::lower::rewrite_collection_view_for_of(ctx, for_of_stmt);
+            let for_of_stmt = view_rewrite.as_ref().unwrap_or(for_of_stmt);
+
             // --- Issue #237: `for await (const c of <ReadableStream>)` ---
             // Lower to a getReader/read loop so the body sees Uint8Array
             // chunks. Detect by checking the iterable's registered native
@@ -1318,49 +1335,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
 
             let arr_expr = lower_expr(ctx, &for_of_stmt.right)?;
 
-            // Issue #302: resolve the iterable's declared type. Was
-            // limited to `Ident` (local variable lookup) so
-            // `for (const [k, v] of this.someMap)` produced a raw Map
-            // handle that the for-loop's `.length` read returned 0 on,
-            // silently skipping the loop body. Now also resolves
-            // `Member { obj: This, prop: ident }` via the class field
-            // type registry so class instance fields work too.
-            // Issue #311 extends to plain object property access
-            // (`obj.m` where `obj` is a local with an inferred
-            // `Type::Object` shape) — same silent-zero-iterations
-            // symptom as #302, just a different missing arm.
-            let iterable_type: Option<Type> = match &*for_of_stmt.right {
-                ast::Expr::Ident(ident) => ctx.lookup_local_type(ident.sym.as_ref()).cloned(),
-                ast::Expr::Member(m) => {
-                    if matches!(m.obj.as_ref(), ast::Expr::This(_)) {
-                        if let (Some(cls), ast::MemberProp::Ident(p)) =
-                            (ctx.current_class.clone(), &m.prop)
-                        {
-                            ctx.lookup_class_field_type(&cls, p.sym.as_ref()).cloned()
-                        } else {
-                            None
-                        }
-                    } else if let ast::MemberProp::Ident(p) = &m.prop {
-                        let obj_ty = crate::lower_types::infer_type_from_expr(&m.obj, ctx);
-                        match obj_ty {
-                            Type::Object(ot) => {
-                                ot.properties.get(p.sym.as_ref()).map(|pi| pi.ty.clone())
-                            }
-                            // Class instance: receiver is `new Example()` or
-                            // a local typed `Example`. Consult the same
-                            // class_field_types registry the `this.<field>`
-                            // arm uses (populated for #302).
-                            Type::Named(cls) => {
-                                ctx.lookup_class_field_type(&cls, p.sym.as_ref()).cloned()
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
+            // Issue #302 (class instance fields) + #311 (plain object property
+            // access) — see `for_head::resolve_for_of_iterable_type`, which
+            // both for-of desugars share.
+            let iterable_type: Option<Type> =
+                crate::lower::resolve_for_of_iterable_type(ctx, &for_of_stmt.right);
 
             // Fast path: `for (const [k, v] of mapExpr)` reads flat entries
             // directly via `MapEntryKeyAt` / `MapEntryValueAt` — no pair-Array
@@ -1378,29 +1357,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 Some(Type::Union(variants)) => variants.iter().any(type_contains_map),
                 _ => false,
             };
-            // Map fast path also fires for the single-binding shapes
-            //   for (const [k] of map)        — only key
-            //   for (const [, v] of map)      — only value
-            // Each non-empty slot must be a plain Ident; nested patterns
-            // / object patterns / defaults fall through to the materialized
-            // MapEntries path so destructuring stays correct.
+            // The head shapes the index fast path accepts — and why the
+            // single-ident one is a correctness fix, not just a faster route —
+            // live in `for_head::map_index_fast_path_head`.
             let map_kv_fastpath = is_iterable_map
-                && match &for_of_stmt.left {
-                    ast::ForHead::VarDecl(var_decl) => match var_decl.decls.first() {
-                        Some(decl) => match &decl.name {
-                            ast::Pat::Array(arr_pat) => {
-                                let len = arr_pat.elems.len();
-                                (len == 1 || len == 2)
-                                    && arr_pat.elems.iter().all(|e| {
-                                        e.is_none() || matches!(e, Some(ast::Pat::Ident(_)))
-                                    })
-                            }
-                            _ => false,
-                        },
-                        None => false,
-                    },
-                    _ => false,
-                };
+                && crate::lower::map_index_fast_path_head(&for_of_stmt.left, !for_of_stmt.is_await);
             // Fast path: `for (const x of setExpr)` reads elements directly
             // via `SetValueAt` (→ `js_set_value_at`) instead of materializing
             // the buffer with `js_set_to_array`.
@@ -1473,7 +1434,18 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 return lower_runtime_for_await_iterator_body(ctx, for_of_stmt, arr_expr);
             }
             // Lazy iterator protocol for generic iterables (see stmt_loops.rs).
-            let use_lazy_iter = needs_runtime_iterator;
+            // #7760: the guard emission below lowers this same statement twice.
+            let use_lazy_iter = needs_runtime_iterator || ctx.for_of_force_lazy;
+            // Guarded exactly when this would otherwise be a plain array index
+            // loop, which ignores a patched `Array.prototype[Symbol.iterator]`.
+            let guard_with_lazy_arm = !ctx.for_of_force_lazy
+                && proven_array
+                && !needs_runtime_iterator
+                && !is_string_iter
+                && !is_iterable_map
+                && !is_iterable_set
+                && !is_iterable_typed_array
+                && !for_of_stmt.is_await;
             let arr_expr = if is_iterable_map {
                 if map_kv_fastpath {
                     arr_expr
@@ -1710,6 +1682,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                         set: Box::new(Expr::LocalGet(arr_id)),
                                         idx: Box::new(Expr::LocalGet(idx_id)),
                                     }
+                                } else if map_kv_fastpath {
+                                    crate::lower::map_entry_pair(arr_id, idx_id)
                                 } else {
                                     item_expr
                                 };
@@ -1866,13 +1840,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 }
             };
             // Create the for loop
+            //
+            // #7766: `Integer(0)`, not `Number(0.0)` — same shape as a
+            // user-written `let i = 0`, and the same change as the module-init
+            // for-of desugar (`lower/stmt_loops.rs`). The integer-local
+            // collector seeds on the literal kind, so a `Number(0.0)` counter
+            // never gets a canonical i32 slot and every i32-counter loop
+            // optimization silently declines the `for…of` spelling.
             result.push(Stmt::For {
                 init: Some(Box::new(Stmt::Let {
                     id: idx_id,
                     name: format!("__idx_{}", idx_id),
                     ty: Type::Number,
                     mutable: true,
-                    init: Some(Expr::Number(0.0)),
+                    init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(condition),
                 update: Some(Expr::Update {
@@ -1883,6 +1864,21 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 body: loop_body,
             });
             ctx.pop_block_scope(for_scope_mark);
+            if guard_with_lazy_arm {
+                // Splice out the index form just emitted, lower the same
+                // statement again in lazy mode, and branch between them on the
+                // runtime flag. Re-lowering rather than cloning keeps the two
+                // arms from drifting and gives the lazy arm its own locals.
+                let index_arm: Vec<Stmt> = result.split_off(result_mark);
+                ctx.for_of_force_lazy = true;
+                let lazy_arm = lower_body_stmt(ctx, stmt);
+                ctx.for_of_force_lazy = false;
+                result.push(Stmt::If {
+                    condition: Expr::ArrayIterationPatched,
+                    then_branch: lazy_arm?,
+                    else_branch: Some(index_arm),
+                });
+            }
         }
         ast::Stmt::ForIn(for_in_stmt) => {
             // Desugar for-in to a for-of over Object.keys(obj) (same as in lower_stmt).

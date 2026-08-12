@@ -398,7 +398,7 @@ pub fn try_lower_func_ref_call(
     // release has to sit in the merge block that post-dominates all of them,
     // not next to the lowering.
     let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
-    let arg_guard: Option<String>;
+    let arg_group: crate::rooting::RootedGroup<'_>;
     if ctx.func_synthetic_arguments.contains(fid) && has_rest && !synthetic_is_rest {
         // #1816: a real `...rest` AND a synthetic `arguments`, over the same
         // argument list at two different offsets.
@@ -418,7 +418,7 @@ pub fn try_lower_func_ref_call(
                 },
             ],
         )?;
-        arg_guard = guard;
+        arg_group = guard;
         lowered.extend(values);
     } else if has_rest && ctx.func_synthetic_arguments.contains(fid) {
         let fixed_count = declared_count.saturating_sub(1);
@@ -431,7 +431,7 @@ pub fn try_lower_func_ref_call(
                 mark_arguments_object: true,
             }],
         )?;
-        arg_guard = guard;
+        arg_group = guard;
         lowered.extend(values);
     } else if has_rest {
         // Rest is always the LAST declared param. Pass the
@@ -447,11 +447,11 @@ pub fn try_lower_func_ref_call(
                 mark_arguments_object: false,
             }],
         )?;
-        arg_guard = guard;
+        arg_group = guard;
         lowered.extend(values);
     } else {
         let (values, guard) = super::lower_call_args_rooted(ctx, args)?;
-        arg_guard = guard;
+        arg_group = guard;
         lowered.extend(values);
     }
     let arg_slices: Vec<(crate::types::LlvmType, &str)> =
@@ -471,7 +471,7 @@ pub fn try_lower_func_ref_call(
     // method's receiver, held across the callee body — arbitrary user code.
     let prev_this = if resets_this {
         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        Some(crate::expr::temp_root::implicit_this_save(ctx, &undef))
+        Some(crate::rooting::implicit_this_save(ctx, &undef))
     } else {
         None
     };
@@ -902,9 +902,9 @@ pub fn try_lower_func_ref_call(
     // its doc calls out that a caller holding a lower group may release
     // afterwards and drop the slot a second time harmlessly.
     if let Some(prev) = prev_this {
-        crate::expr::temp_root::implicit_this_restore(ctx, prev);
+        crate::rooting::implicit_this_restore(ctx, prev);
     }
-    crate::expr::temp_root::temp_root_release(ctx, arg_guard);
+    arg_group.release(ctx);
     if ctx.local_generator_funcs.contains(fid) {
         let wrap_ptr = format!("@__perry_wrap_{}", fname);
         let closure_handle =

@@ -1,0 +1,15 @@
+### Fixed
+
+**A generic class instantiated with a type ALIAS lost its specialization, and every method call on the binding went fully dynamic (#7848).**
+
+`type Stage = (r: Rec) => Rec; const stats = new Registry<Stage, number>()` constructed a `Registry$fn_num` but typed the binding `Generic { base: "Registry", type_args: [Named("Stage"), Number] }`. Codegen re-derives the specialization from that declared type (`type_analysis/predicates.rs`, via `generate_specialized_name`), sought `Registry$Stage_num`, missed, and silently fell back to the generic *template* class. The emitted `js_method_direct_shape_guard` was then compiled against class id 1 for a receiver of class id 1004, so it could never pass — and the guard-free `Ptr<Shape>` arm, which requires `fact.class_name == class_name`, was rejected by the same disagreement even though the provenance fact named the specialization correctly. Both fast tiers dead; every call took `js_native_call_method_by_id`, for the life of the program.
+
+Root cause: two lowerings read the same `new C<…>()` type-argument list and only one expanded aliases. `lower/expr_new.rs` builds the `New`'s `type_args` with `extract_ts_type_with_ctx(t, Some(ctx))` — which monomorphization keys the specialization on — while `lower_types.rs`'s inferred declared type used the context-free `extract_ts_type(t)`. `extract_ts_type_with_ctx` resolves a type alias only when `ctx.is_some()`.
+
+The fix passes `Some(ctx)` at that one site, so the inferred declared type is derived from the identical call on the identical AST nodes as the `New` — it can no longer name a class the `New` does not construct.
+
+Only *aliases* diverged, because `mangle_type` maps `Named(n) -> n`: a class or interface type argument always round-tripped, while `type S = string` (`str`), a function alias (`fn`), an object-literal alias (`obj`) and a union alias (`union_…`) did not. Nothing went red when it happened — the guard is a real runtime check, so a wrong class degrades to a guard that never passes, never to a wrong answer. The only symptom was speed.
+
+The fix keeps that property. The guarded tier still emits its runtime class-id + keys-token guard; only the id it tests changes. The guard-free tier is not widened: its authority is the `Ptr<Shape>` provenance fact, and the declared type appears there only inside an equality test against that fact, so it can never introduce a class the fact does not already assert. Programs that newly reach the guard-free tier are exactly those whose non-aliased siblings already reached it on `main`.
+
+Covered by `crates/perry-hir/src/lower_types/generic_alias_specialization_tests.rs` (a lib test, so it runs per-PR), which asserts the equation codegen depends on — the specialization name derived from the binding's declared type must equal the class the `New` was rewritten to — across every alias arm plus the class / interface / builtin arms that always worked. Benchmark probe: `gc-handoff/bench/generic_alias_dispatch.ts` with `generic_alias_dispatch_ctl.ts` as its one-word control.

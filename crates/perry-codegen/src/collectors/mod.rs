@@ -6,6 +6,9 @@
 //! hub — public-API shape (`crate::collectors::*`) is preserved.
 
 mod all_pointer_arrays;
+mod byte_read_key;
+#[cfg(test)]
+mod byte_read_key_tests;
 mod cjs_scaffolding;
 mod clamp_detect;
 mod class_accessors;
@@ -50,6 +53,7 @@ pub use clamp_detect::{detect_clamp3, detect_clamp_u8, returns_i32_identity_arg,
 
 // Internal-to-crate re-exports — explicit names because globs don't
 // transitively expose through `pub(crate) use crate::collectors::*`.
+pub(crate) use byte_read_key::{collect_numeric_typed_locals, uint8array_get_reads_a_byte};
 pub(crate) use class_accessors::{is_class_getter, is_class_setter};
 pub(crate) use closures::collect_closures_in_stmts;
 pub(crate) use escape_arrays::{const_index, MAX_SCALAR_OBJECT_FIELDS};
@@ -59,7 +63,7 @@ pub(crate) use hir_facts::{
     collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_lens,
     NativeRegionFactGraph,
 };
-pub(crate) use hot_callees::collect_hot_loop_callees;
+pub(crate) use hot_callees::{collect_alloc_hot_functions, collect_hot_loop_callees};
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_stmts, is_strictly_i32_bounded_expr,
     is_ushr_zero,

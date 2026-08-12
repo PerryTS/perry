@@ -194,6 +194,10 @@ pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::n
 pub static JS_NATIVE_TLS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_EVENTS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+// Module-level `events.*` helpers (`listenerCount`, `once`, `on`,
+// `getEventListeners`, `get`/`setMaxListeners`, `addAbortListener`). Distinct
+// from JS_NATIVE_EVENTS_CONSTRUCT above, which only serves `new`.
+pub static JS_NATIVE_EVENTS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 // Dynamic `new <bound async_hooks ctor>()` (e.g. `new maybeGlobalAsyncLocalStorage()`
 // where the value came from `globalThis.AsyncLocalStorage = AsyncLocalStorage`).
 // Registered by perry-stdlib at startup so a bound `async_hooks.AsyncLocalStorage` /

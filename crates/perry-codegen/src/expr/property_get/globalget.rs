@@ -3,6 +3,23 @@
 //! Pure mechanical move — body is the verbatim contents of the
 //! `if matches!(object.as_ref(), Expr::GlobalGet(_)) { ... }` block from the
 //! general catch-all arm, lifted into its own function.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Listed in `crate::rooting`'s `MIGRATED_MODULES`, and the listing is
+//! **vacuous on the committed source**: this module has never named an
+//! `expr::temp_root` symbol, so only the sabotage arm makes the line an
+//! assertion.
+//!
+//! The audit that earned it, and it is the one worth reading twice: the
+//! campaign map credits this file with **6 hazard sites** and all six are the
+//! same false positive. Each is `js_get_global_this_builtin_value` →
+//! `ctx.strings.intern(property)` → `unbox_to_i64` → `load` → the by-name
+//! getter. `intern` and `format!` are compile-time bookkeeping that emit NO IR,
+//! and the rest are loads, bitcasts and masks, none of which can collect. The
+//! `haz` heuristic counts source distance between a binding and its use; a
+//! window is measured in *emissions*, and there are none here. This module
+//! lowers no user expression at all.
 
 use super::*;
 

@@ -43,12 +43,15 @@ pub fn collect_not_bigint_locals(
     for p in params {
         types.entry(p.id).or_insert_with(|| p.ty.clone());
     }
+    // #7700: locals holding a number, so `u8[k]` keyed on one is a byte read
+    // (which is never a BigInt) rather than a property read (which can be).
+    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
 
     // Every write (Let init + `LocalSet` rhs) per candidate local. Descends
     // into closure bodies so a `LocalSet` to an ENCLOSING local inside a
     // closure is captured (LocalIds are unique per function, so the write is
     // recorded against the enclosing id).
-    let mut writes: HashMap<u32, Vec<&Expr>> = HashMap::new();
+    let mut writes: HashMap<u32, Vec<Option<&Expr>>> = HashMap::new();
     let mut candidates: HashSet<u32> = HashSet::new();
     collect_writes(stmts, &mut writes, &mut candidates);
 
@@ -67,8 +70,11 @@ pub fn collect_not_bigint_locals(
                 // A declared-but-never-assigned `let x;` is `undefined` — a
                 // non-BigInt — so no writes means the local stays.
                 .map(|ws| {
-                    ws.iter()
-                        .all(|rhs| expr_not_bigint(rhs, &types, &not_bigint))
+                    ws.iter().all(|rhs| match rhs {
+                        // A `let x;` binding is `undefined` — a non-BigInt.
+                        None => true,
+                        Some(rhs) => expr_not_bigint(rhs, &types, &not_bigint, &numeric_locals),
+                    })
                 })
                 .unwrap_or(true);
             if !all_ok {
@@ -89,7 +95,12 @@ pub fn collect_not_bigint_locals(
 /// `type_analysis::is_provably_not_bigint`: can this expression's value never be
 /// a BigInt? `LocalGet` leaves resolve against `set` (optimistic membership) or
 /// a concrete non-BigInt declared type.
-fn expr_not_bigint(e: &Expr, types: &HashMap<u32, HirType>, set: &HashSet<u32>) -> bool {
+fn expr_not_bigint(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    set: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
+) -> bool {
     match e {
         // Non-BigInt literals.
         Expr::Undefined
@@ -121,15 +132,20 @@ fn expr_not_bigint(e: &Expr, types: &HashMap<u32, HirType>, set: &HashSet<u32>) 
         | Expr::DateNow => true,
 
         // Typed-array / numeric-array element reads yield Number | undefined,
-        // never a BigInt.
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // never a BigInt. #7700: only a NUMERIC key reads an element — with a
+        // symbol or string key this is a PROPERTY read, and an expando holds
+        // anything (`u8.n = 1n; const k: any = "n"; u8[k]` is a BigInt).
+        Expr::Uint8ArrayGet { index, .. } => {
+            super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
+        }
+        Expr::BufferIndexGet { .. } => true,
         Expr::IndexGet { object, .. } => index_receiver_is_numeric(object, types),
 
         // `!x` → boolean; `+x` → Number-or-throw (never a BigInt VALUE).
         // `-x` / `~x` preserve BigInt.
         Expr::Unary { op, operand } => match op {
             UnaryOp::Not | UnaryOp::Pos => true,
-            UnaryOp::Neg | UnaryOp::BitNot => expr_not_bigint(operand, types, set),
+            UnaryOp::Neg | UnaryOp::BitNot => expr_not_bigint(operand, types, set, numeric_locals),
         },
 
         // Arithmetic / bitwise binary ops yield a BigInt only when BOTH
@@ -137,7 +153,8 @@ fn expr_not_bigint(e: &Expr, types: &HashMap<u32, HirType>, set: &HashSet<u32>) 
         // as EITHER operand is. (`BinaryOp` has only arithmetic/bitwise
         // variants.)
         Expr::Binary { left, right, .. } => {
-            expr_not_bigint(left, types, set) || expr_not_bigint(right, types, set)
+            expr_not_bigint(left, types, set, numeric_locals)
+                || expr_not_bigint(right, types, set, numeric_locals)
         }
 
         // Selection: non-BigInt when every branch that can become the value is.
@@ -145,13 +162,17 @@ fn expr_not_bigint(e: &Expr, types: &HashMap<u32, HirType>, set: &HashSet<u32>) 
             then_expr,
             else_expr,
             ..
-        } => expr_not_bigint(then_expr, types, set) && expr_not_bigint(else_expr, types, set),
+        } => {
+            expr_not_bigint(then_expr, types, set, numeric_locals)
+                && expr_not_bigint(else_expr, types, set, numeric_locals)
+        }
         Expr::Logical { left, right, .. } => {
-            expr_not_bigint(left, types, set) && expr_not_bigint(right, types, set)
+            expr_not_bigint(left, types, set, numeric_locals)
+                && expr_not_bigint(right, types, set, numeric_locals)
         }
 
         // A `LocalSet` used as an expression evaluates to the assigned value.
-        Expr::LocalSet(_, rhs) => expr_not_bigint(rhs, types, set),
+        Expr::LocalSet(_, rhs) => expr_not_bigint(rhs, types, set, numeric_locals),
 
         // Leaf locals: proven by the running assumption or a concrete
         // non-BigInt declared type. `Update` (`i++`) yields `ToNumeric(i) ± 1`,
@@ -199,18 +220,25 @@ fn index_receiver_is_numeric(object: &Expr, types: &HashMap<u32, HirType>) -> bo
 }
 
 /// Record every write (Let init + `LocalSet` rhs) per local, gather the set of
-/// analyzed candidate ids, and descend into closure bodies.
-fn collect_writes<'a>(
+/// `Let`-bound candidate ids, and descend into closure bodies. A `Let` with no
+/// initializer records `None` (the binding is `undefined` until assigned).
+///
+/// Shared with `ptr_shape/ptr_shape_numeric.rs`'s numeric-by-construction
+/// fixpoint (#7770) — the two analyses differ only in how they judge a write
+/// (`undefined` is a fine non-BigInt and a fatal non-number), so ONE walker
+/// keeps them from drifting by a `Stmt` variant, the bug class
+/// `ptr_shape_elements.rs`'s doc warns about.
+pub(super) fn collect_writes<'a>(
     stmts: &'a [Stmt],
-    writes: &mut HashMap<u32, Vec<&'a Expr>>,
+    writes: &mut HashMap<u32, Vec<Option<&'a Expr>>>,
     candidates: &mut HashSet<u32>,
 ) {
     for s in stmts {
         match s {
             Stmt::Let { id, init, .. } => {
                 candidates.insert(*id);
+                writes.entry(*id).or_default().push(init.as_ref());
                 if let Some(e) = init {
-                    writes.entry(*id).or_default().push(e);
                     collect_writes_expr(e, writes, candidates);
                 }
             }
@@ -296,11 +324,11 @@ fn collect_writes<'a>(
 
 fn collect_writes_expr<'a>(
     e: &'a Expr,
-    writes: &mut HashMap<u32, Vec<&'a Expr>>,
+    writes: &mut HashMap<u32, Vec<Option<&'a Expr>>>,
     candidates: &mut HashSet<u32>,
 ) {
     if let Expr::LocalSet(id, rhs) = e {
-        writes.entry(*id).or_default().push(rhs.as_ref());
+        writes.entry(*id).or_default().push(Some(rhs.as_ref()));
     }
     // Closure bodies are statements, not expression children, so descend
     // explicitly. A write to an enclosing local inside the closure body targets

@@ -94,7 +94,7 @@ pub use exec::js_regexp_exec;
 #[cfg(feature = "regex-engine")]
 pub use match_string::{js_string_match, js_string_match_value, js_string_search_value};
 
-thread_local! {
+crate::perry_thread_local! {
     /// Last exec result metadata: (index, groups_object_ptr)
     /// Stored per-thread so that `m.index` and `m.groups` can retrieve them
     /// after the exec call.
@@ -138,7 +138,26 @@ pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
     if regex_header_has_magic(ptr as *const RegExpHeader) {
         return true;
     }
-    REGEX_POINTERS.with(|s| s.borrow().contains(&(ptr as usize)))
+    regex_pointers_contains(ptr as usize)
+}
+
+/// Monotone "this process has ever constructed a `RegExp`" latch.
+///
+/// The three `REGEX_POINTERS` probes all reach the thread-local table only
+/// *after* the header-magic check misses — which is the common case, since they
+/// are asked about ordinary objects on the generic property-dispatch path
+/// (`object::exotic_expando::exotic_expando_kind`) and from `String.prototype`
+/// dispatch. A program with no regex answers from one atomic load.
+/// See `crate::registry_latch` for the ordering rule.
+static REGEX_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
+    crate::registry_latch::RegistryLatch::new();
+
+#[inline]
+fn regex_pointers_contains(addr: usize) -> bool {
+    if REGEX_EVER_REGISTERED.is_idle() {
+        return false;
+    }
+    REGEX_POINTERS.with(|s| s.borrow().contains(&addr))
 }
 
 /// Bounds-checked read of `RegExpHeader.magic`. Confirms the preceding
@@ -199,7 +218,7 @@ pub(crate) unsafe fn regex_gc_slot_ptrs(re: *mut RegExpHeader) -> (*mut u64, usi
 }
 
 #[cfg(feature = "regex-engine")]
-thread_local! {
+crate::perry_thread_local! {
     /// Cache of compiled regex objects, keyed by (pattern, flags).
     static REGEX_CACHE: RefCell<HashMap<(String, String), Arc<Regex>>> = RefCell::new(HashMap::new());
     /// Fancy-regex fallback cache for patterns with lookbehind/lookahead.
@@ -499,7 +518,7 @@ pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
     if regex_header_has_magic(p) {
         return true;
     }
-    REGEX_POINTERS.with(|s| s.borrow().contains(&(p as usize)))
+    regex_pointers_contains(p as usize)
 }
 
 /// Public: is `addr` a RegExpHeader we allocated via `js_regexp_new`?
@@ -512,7 +531,7 @@ pub fn is_registered_regex(addr: usize) -> bool {
     if regex_header_has_magic(addr as *const RegExpHeader) {
         return true;
     }
-    REGEX_POINTERS.with(|s| s.borrow().contains(&addr))
+    regex_pointers_contains(addr)
 }
 
 /// Internal helper: Get string data from StringHeader
@@ -867,6 +886,8 @@ pub extern "C" fn js_regexp_new(
 
         // Record the pointer so that js_string_split can detect
         // `s.split(regex)` without a dedicated runtime decl.
+        // Arm before the insert — see `crate::registry_latch`.
+        REGEX_EVER_REGISTERED.arm();
         REGEX_POINTERS.with(|s| {
             s.borrow_mut().insert(ptr as usize);
         });

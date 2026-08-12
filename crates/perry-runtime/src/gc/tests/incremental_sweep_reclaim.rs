@@ -326,7 +326,11 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
         "targeted old reclaim should not complete in one work unit"
     );
     let targeted_stats = complete_incremental_sweep(&mut targeted_sweep);
-    assert!(targeted_stats.returned_bytes > 0 || targeted_stats.reusable_bytes > 0);
+    assert!(
+        targeted_stats.returned_bytes > 0
+            || targeted_stats.pooled_bytes > 0
+            || targeted_stats.reusable_bytes > 0
+    );
     let targeted_summary = crate::arena::old_page_summary();
     assert_eq!(
         targeted_summary.returned_bytes,
@@ -336,6 +340,7 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
         targeted_summary.reusable_bytes,
         targeted_stats.reusable_bytes
     );
+    assert_eq!(targeted_summary.pooled_bytes, targeted_stats.pooled_bytes);
 
     let _full_dead_a = crate::arena::arena_alloc_gc_old(900 * 1024, 8, GC_TYPE_STRING) as usize;
     let _full_dead_b = crate::arena::arena_alloc_gc_old(900 * 1024, 8, GC_TYPE_STRING) as usize;
@@ -346,10 +351,15 @@ fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() 
         "full old reclaim should not complete in one work unit"
     );
     let full_stats = complete_incremental_sweep(&mut full_sweep);
-    assert!(full_stats.returned_bytes > 0 || full_stats.reusable_bytes > 0);
+    assert!(
+        full_stats.returned_bytes > 0
+            || full_stats.pooled_bytes > 0
+            || full_stats.reusable_bytes > 0
+    );
     let full_summary = crate::arena::old_page_summary();
     assert_eq!(full_summary.returned_bytes, full_stats.returned_bytes);
     assert_eq!(full_summary.reusable_bytes, full_stats.reusable_bytes);
+    assert_eq!(full_summary.pooled_bytes, full_stats.pooled_bytes);
 }
 
 #[test]
@@ -654,4 +664,90 @@ fn budgeted_reclaim_runs_process_malloc_trim() {
         trim["status"].as_str(),
         Some("executed") | Some("unsupported")
     ));
+}
+
+#[test]
+fn full_sweep_eden_census_counts_only_nursery_blocks() {
+    // #7598: `tenuring::seed_promote_lock_from_sweep` decides promote-on-
+    // first-copy from this census, so a census with a plausible-but-wrong
+    // answer would fire the policy on the wrong workloads and never show up
+    // as a crash. Three assertions, one per way it can be wrong:
+    //
+    //   1. live Eden bytes are counted at all;
+    //   2. dead Eden bytes are counted SEPARATELY, not folded into live
+    //      (folding them makes the survival-rate test read 100% always);
+    //   3. old-gen live bytes are counted in NEITHER. Dropping the
+    //      `block_idx < resettable_general_n` gate in `keep_live_object`
+    //      would add this 4 MB old-gen object to `eden_live_bytes`, and any
+    //      program with a large tenured set would then seed S=1 forever.
+    //
+    // The old-gen object is deliberately an order of magnitude larger than
+    // everything in the nursery so assertion 3 cannot pass by accident.
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    clear_marks();
+    clear_mark_seeds();
+    crate::arena::old_pages_begin_gc_cycle();
+
+    const CHUNK: usize = 8 * 1024;
+    const LIVE_CHUNKS: usize = 32;
+    const DEAD_CHUNKS: usize = 16;
+    const OLD_BYTES: usize = 4 * 1024 * 1024;
+
+    let mut live_nursery_bytes = 0usize;
+    for _ in 0..LIVE_CHUNKS {
+        let ptr = crate::arena::arena_alloc_gc(CHUNK, 8, GC_TYPE_STRING);
+        unsafe {
+            let header = header_from_user_ptr(ptr as *const u8);
+            (*header).gc_flags |= GC_FLAG_MARKED;
+            live_nursery_bytes += (*header).size as usize;
+        }
+    }
+    let mut dead_nursery_bytes = 0usize;
+    for _ in 0..DEAD_CHUNKS {
+        let ptr = crate::arena::arena_alloc_gc(CHUNK, 8, GC_TYPE_STRING);
+        unsafe {
+            dead_nursery_bytes += (*header_from_user_ptr(ptr as *const u8)).size as usize;
+        }
+    }
+
+    // A LIVE old-gen resident: marked, so the sweep keeps it. This is the
+    // bulk of the heap and must not reach the Eden census.
+    let old = crate::arena::arena_alloc_gc_old(OLD_BYTES, 8, GC_TYPE_STRING);
+    let old_bytes = unsafe {
+        let header = header_from_user_ptr(old as *const u8);
+        (*header).gc_flags |= GC_FLAG_MARKED;
+        (*header).size as usize
+    };
+    assert!(
+        old_bytes > live_nursery_bytes * 4,
+        "the old-gen resident must dominate the nursery for assertion 3 to bite"
+    );
+
+    // A FULL sweep: minor_sweep = false, so unmarked really means dead.
+    let mut sweep = IncrementalSweepState::new(false, true, None, true, false);
+    let stats = complete_incremental_sweep(&mut sweep);
+
+    assert!(
+        stats.eden_live_bytes as usize >= live_nursery_bytes,
+        "marked nursery bytes must be counted live (got {}, expected >= {live_nursery_bytes})",
+        stats.eden_live_bytes
+    );
+    assert!(
+        stats.eden_dead_bytes as usize >= dead_nursery_bytes,
+        "unmarked nursery bytes must be counted dead (got {}, expected >= {dead_nursery_bytes})",
+        stats.eden_dead_bytes
+    );
+    assert!(
+        (stats.eden_live_bytes as usize) < old_bytes,
+        "old-gen live bytes must not reach the Eden census: eden_live_bytes={} \
+         but the single old-gen resident alone is {old_bytes}",
+        stats.eden_live_bytes
+    );
+    assert!(
+        (stats.eden_dead_bytes as usize) < old_bytes,
+        "old-gen bytes must not reach the Eden dead census either (got {})",
+        stats.eden_dead_bytes
+    );
 }

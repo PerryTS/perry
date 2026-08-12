@@ -664,9 +664,8 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
         return currency_instance_parts(r, value);
     }
 
-    let de_style = r.locale.eq_ignore_ascii_case("de") || r.locale.starts_with("de-");
-    let group_sep = if de_style { '.' } else { ',' };
-    let decimal_sep = if de_style { ',' } else { '.' };
+    // #7429: CLDR separators for the resolved locale, not a de-vs-rest guess.
+    let (group_sep, decimal_sep) = locale_separators(&r.locale);
 
     let mut parts: Vec<(&'static str, String)> = Vec::new();
     let is_zero = value == 0.0;
@@ -879,6 +878,49 @@ pub(crate) fn compact_round(int_part: &str, frac_part: &str, r: &NfResolved) -> 
 /// The BCP-47 primary language subtag (`"de-DE"` → `"de"`).
 fn locale_lang(locale: &str) -> &str {
     locale.split(['-', '_']).next().unwrap_or(locale)
+}
+
+/// The `(group, decimal)` separator pair for a locale — CLDR's `symbols-*`
+/// `group` and `decimal` for its primary language subtag.
+///
+/// #7429: this used to be a single `de`-vs-everything-else branch, written when
+/// `de-DE` was the only non-`en` locale under test. Every other locale that
+/// does not group with `,` was therefore wrong, not just French: measured
+/// against Node v26.5.1, `es`/`it`/`pt`/`nl`/`tr` want `.` like German, and
+/// `fr`/`ru`/`pl`/`nb`/`sv`/`fi`/`cs`/`hu`/`uk` group with a SPACE.
+///
+/// The space is not one character. `fr-FR` uses U+202F (narrow no-break space)
+/// while `fr-CA` uses U+00A0, which is why the region is consulted for French
+/// and only for French — every other space-grouping locale here is U+00A0 in
+/// CLDR. Getting that wrong is invisible in a terminal and loud in a
+/// byte-for-byte oracle diff, which is exactly how #7429 was found.
+///
+/// Locales absent from the table keep the previous default (`,` and `.`), so
+/// this widens correctness without changing any locale it does not name.
+fn locale_separators(locale: &str) -> (char, char) {
+    const NNBSP: char = '\u{202f}';
+    const NBSP: char = '\u{00a0}';
+    match locale_lang(locale) {
+        // `.` group, `,` decimal.
+        "de" | "es" | "it" | "pt" | "nl" | "tr" | "id" | "da" | "ro" | "el" | "vi" | "ca" => {
+            ('.', ',')
+        }
+        // Space group, `,` decimal. French splits by region: fr-FR is U+202F,
+        // fr-CA (and the rest of these) U+00A0.
+        "fr" => {
+            // `"fr-FR"` is five bytes; slicing `..6` returns None and silently
+            // demotes every French locale to the U+00A0 arm.
+            let region_fr = locale.eq_ignore_ascii_case("fr")
+                || locale
+                    .get(..5)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("fr-fr"));
+            (if region_fr { NNBSP } else { NBSP }, ',')
+        }
+        "ru" | "pl" | "nb" | "no" | "sv" | "fi" | "cs" | "sk" | "hu" | "uk" | "lv" | "lt"
+        | "et" | "bg" => (NBSP, ','),
+        // `,` group, `.` decimal — en, ja, ko, zh, he, th, and the default.
+        _ => (',', '.'),
+    }
 }
 
 /// Prefix text some locales place *before* the number for a unit (e.g. the
@@ -1101,9 +1143,8 @@ fn bigint_number_parts_exact(
     negative: bool,
     abs_digits: &str,
 ) -> Vec<(&'static str, String)> {
-    let de_style = r.locale.eq_ignore_ascii_case("de") || r.locale.starts_with("de-");
-    let group_sep = if de_style { '.' } else { ',' };
-    let decimal_sep = if de_style { ',' } else { '.' };
+    // #7429: CLDR separators for the resolved locale, not a de-vs-rest guess.
+    let (group_sep, decimal_sep) = locale_separators(&r.locale);
     set_round_ctx(&r.rounding_mode, negative);
 
     let mut parts: Vec<(&'static str, String)> = Vec::new();

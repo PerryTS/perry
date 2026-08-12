@@ -616,7 +616,8 @@ pub(crate) fn lower_index_set_fast(
     ctx.current_block = realloc_idx;
     {
         let blk = ctx.block();
-        blk.call_void(
+        crate::expr::emit_typed_feedback_record_call(
+            blk,
             "js_typed_feedback_record_fallback_call",
             &[(I64, feedback_site_id)],
         );

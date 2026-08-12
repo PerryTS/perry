@@ -24,6 +24,14 @@ extern "C" {
 
     /// Canonical: perry-runtime `js_get_string_pointer_unified(value: f64) -> i64`.
     pub fn js_get_string_pointer_unified(value: f64) -> i64;
+
+    /// Canonical: perry-runtime `js_gc_pin_user_ptr(user_ptr: *mut u8)` — sets
+    /// `GC_FLAG_PINNED` on the allocation's header AND arms the copying
+    /// minor's young-pin latch (#7645). Call this instead of open-coding
+    /// `*(ptr - 8 + 1) |= 0x04`: a raw byte write pins the object without
+    /// telling the collector, which then relocates it out from under the
+    /// pointer we just returned to JS.
+    pub fn js_gc_pin_user_ptr(user_ptr: *mut u8);
 }
 
 // ---------------------------------------------------------------------------

@@ -44,6 +44,14 @@ pub(super) fn add_system_libs(cmd: &mut Command) {
         .arg("shlwapi.lib")
         .arg("ole32.lib")
         .arg("comctl32.lib")
+        // Perry strips bundled `.dll` import-library members from the UI
+        // staticlib during runtime deduplication. Keep every UI import explicit
+        // here so the trimmed archive remains self-contained at final link:
+        // uxtheme provides SetWindowTheme, winspool supplies the print-dialog
+        // imports, and rpcrt4 provides UuidCreate (windows-core GUID::new).
+        .arg("uxtheme.lib")
+        .arg("winspool.lib")
+        .arg("rpcrt4.lib")
         .arg("advapi32.lib")
         .arg("comdlg32.lib")
         .arg("ws2_32.lib")
@@ -80,7 +88,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_widget_system_imports_survive_the_staticlib_boundary() {
+    fn windows_ui_system_imports_survive_the_staticlib_boundary() {
         let mut command = Command::new("link.exe");
         add_system_libs(&mut command);
         let args: Vec<_> = command
@@ -89,6 +97,9 @@ mod tests {
             .collect();
         assert!(args.iter().any(|arg| arg == "shlwapi.lib"));
         assert!(args.iter().any(|arg| arg == "winhttp.lib"));
+        assert!(args.iter().any(|arg| arg == "uxtheme.lib"));
+        assert!(args.iter().any(|arg| arg == "winspool.lib"));
+        assert!(args.iter().any(|arg| arg == "rpcrt4.lib"));
     }
 }
 

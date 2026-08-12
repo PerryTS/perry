@@ -15,8 +15,14 @@ use crate::types::{DOUBLE, I32, I64};
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
 use crate::lower_call::method_override::{
-    emit_guarded_direct_method_call, emit_own_method_override_check,
+    emit_guarded_direct_method_call, emit_own_method_override_check, SubclassDispatchArm,
 };
+
+/// Cap on the number of extra `(class id, keys token)` arms a shape-guarded
+/// direct call may carry. A wide hierarchy would turn every callsite into a
+/// long inline compare chain — more instruction cache than the single tower
+/// call it replaces — so past this width the site keeps the single-arm guard.
+const MAX_SUBCLASS_DISPATCH_ARMS: usize = 8;
 
 /// #7142: the proven-`this` clone a class-id dispatch-tower case may route to,
 /// plus the keys token the routed path must re-check inline.
@@ -102,7 +108,7 @@ fn emit_tower_pshape_call(
 ) -> String {
     // The global is read ONCE per function (entry-hoisted); the case block only
     // reloads it from the stack slot, which mem2reg folds away.
-    let keys_slot = ctx.func.entry_init_load_global(&route.keys_global, I64);
+    let keys_slot = crate::expr::entry_init_load_rooted_global(ctx, &route.keys_global, I64);
     let expected_keys = ctx.block().load(I64, &keys_slot);
 
     let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));
@@ -238,7 +244,21 @@ pub(crate) fn try_lower_instance_method_call(
         let mut impl_owner: Vec<Option<String>> = Vec::new();
         let mut seen_pairs: std::collections::HashSet<(u32, String)> =
             std::collections::HashSet::new();
-        for (start_cls, &start_cid) in ctx.class_ids.iter() {
+        // Walk `class_ids` in a FIXED order, not `HashMap` order (#7622). Each
+        // surviving entry becomes one `icmp`-guarded case block in the tower
+        // below, so the map's per-process iteration order was the tower's arm
+        // order: the same source compiled twice by the same binary emitted the
+        // same arms naming DIFFERENT `perry_method_*` callees per position.
+        // `seen_pairs` also dedups on `(class_id, fname)`, so with two names
+        // sharing a class id (a class-expression self-binding alias, or an
+        // imported class registered under both its own and its local-alias
+        // name) which arm is emitted FIRST is what the runtime's first-match
+        // tower actually executes — order-dependence that is behavioural, not
+        // just cosmetic. Sorting by `(class_id, name)` is total and stable.
+        let mut dispatch_roots: Vec<(&String, u32)> =
+            ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+        dispatch_roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+        for (start_cls, start_cid) in dispatch_roots {
             let mut cur: Option<String> = Some(start_cls.clone());
             while let Some(c) = cur {
                 let key = (c.clone(), property.to_string());
@@ -393,8 +413,7 @@ pub(crate) fn try_lower_instance_method_call(
             // call fallthrough pattern (#519).
             let recv_for_this_probe = recv_box.clone();
             // #7211: rooted save/restore across the user-code dispatch.
-            let prev_this_probe =
-                crate::expr::temp_root::implicit_this_save(ctx, &recv_for_this_probe);
+            let prev_this_probe = crate::rooting::implicit_this_save(ctx, &recv_for_this_probe);
             let v_override_probe = ctx.block().call(
                 DOUBLE,
                 "js_native_call_value",
@@ -404,7 +423,7 @@ pub(crate) fn try_lower_instance_method_call(
                     (I64, &probe_args_len_str),
                 ],
             );
-            crate::expr::temp_root::implicit_this_restore(ctx, prev_this_probe);
+            crate::rooting::implicit_this_restore(ctx, prev_this_probe);
             let after_override_probe = ctx.block().label.clone();
             if !ctx.block().is_terminated() {
                 ctx.block().br(&probe_outer_merge_label);
@@ -691,7 +710,15 @@ pub(crate) fn try_lower_instance_method_call(
             // function than the static fallback, C needs an
             // explicit case in the dispatch table.
             let mut overrides: Vec<(u32, String)> = Vec::new();
-            for (sub_name, &sub_id) in ctx.class_ids.iter() {
+            // Fixed order, not `HashMap` order — the virtual-override tower has
+            // the same #7622 defect as the interface tower above, and for the
+            // same reason: `overrides` is walked by index to emit the
+            // `vdispatch.caseN` blocks, the `icmp eq i32` chain and the phi
+            // incoming list, so the map's per-process order WAS the arm order.
+            let mut override_roots: Vec<(&String, u32)> =
+                ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+            override_roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+            for (sub_name, sub_id) in override_roots {
                 if *sub_name == class_name {
                     continue;
                 }
@@ -776,18 +803,29 @@ pub(crate) fn try_lower_instance_method_call(
                 }
                 walk = ctx.classes.get(&cur).and_then(|c| c.extends_name.clone());
             }
+            // #7622: no `break` on the first name that carries `sub_id`. Class
+            // ids are not unique over `class_ids` KEYS — a class-expression
+            // self-binding alias (`var X = class _X`) and an imported class
+            // registered under both its own and its local-alias name both map
+            // two names to one id — so first-match-wins made this a hash-order
+            // tie-break, and the loser's arity is what decides how many
+            // TAG_UNDEFINED padding args EVERY emitted call in the tower
+            // carries. Taking the max over all names sharing the id is both
+            // order-independent and the direction this variable already means:
+            // under-padding is the #235 garbage-argument bug, over-padding just
+            // lets a default-param desugaring fire.
             for (sub_id, _) in &overrides {
                 for (sub_name, &id) in ctx.class_ids.iter() {
-                    if id == *sub_id {
-                        if let Some(&n) = ctx
-                            .method_param_counts
-                            .get(&(sub_name.clone(), property.to_string()))
-                        {
-                            if n > max_explicit_arity {
-                                max_explicit_arity = n;
-                            }
+                    if id != *sub_id {
+                        continue;
+                    }
+                    if let Some(&n) = ctx
+                        .method_param_counts
+                        .get(&(sub_name.clone(), property.to_string()))
+                    {
+                        if n > max_explicit_arity {
+                            max_explicit_arity = n;
                         }
-                        break;
                     }
                 }
             }
@@ -859,6 +897,95 @@ pub(crate) fn try_lower_instance_method_call(
             }
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+
+            // Arms for the shape-guarded direct call: every class in
+            // `class_name`'s subclass closure, paired with the body `property`
+            // resolves to from THAT class. Includes subclasses that do NOT
+            // override — a `Marker` receiver fails a `Node2D` class-id guard
+            // just as hard as a `Rect` one does, and the tower it falls into
+            // costs the same either way.
+            //
+            // The declared-class guard alone is a bet that the receiver's
+            // dynamic class equals its static class. Where a base-typed
+            // collection is the whole point of the hierarchy that bet loses
+            // every single time, and the miss is not free: it pays a guard
+            // call AND the full `js_native_call_method` tower.
+            let mut subclass_arms: Vec<SubclassDispatchArm> = Vec::new();
+            {
+                let mut seen_ids: Vec<u32> = vec![*ctx.class_ids.get(&class_name).unwrap_or(&0)];
+                let mut roots: Vec<(&String, u32)> =
+                    ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+                roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+                for (sub_name, sub_id) in roots {
+                    if *sub_name == class_name || sub_id == 0 || seen_ids.contains(&sub_id) {
+                        continue;
+                    }
+                    let mut parent = ctx
+                        .classes
+                        .get(sub_name)
+                        .and_then(|c| c.extends_name.clone());
+                    let mut is_subclass = false;
+                    while let Some(p) = parent {
+                        if p == class_name {
+                            is_subclass = true;
+                            break;
+                        }
+                        parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
+                    }
+                    if !is_subclass {
+                        continue;
+                    }
+                    let Some(keys_global) = ctx.class_keys_globals.get(sub_name).cloned() else {
+                        continue;
+                    };
+                    // Resolve through the SUBCLASS's own chain, and remember
+                    // where it landed: the rest-param shape is a property of
+                    // the declaring class, and a rest-bearing target cannot be
+                    // called with this site's flat, base-arity argument list.
+                    let mut cur = Some(sub_name.clone());
+                    let mut resolved: Option<(String, String)> = None;
+                    while let Some(c) = cur {
+                        let key = (c.clone(), property.to_string());
+                        if let Some(fname) = ctx.methods.get(&key).cloned() {
+                            resolved = Some((c, fname));
+                            break;
+                        }
+                        cur = ctx.classes.get(&c).and_then(|c| c.extends_name.clone());
+                    }
+                    let Some((decl_class, target_fn)) = resolved else {
+                        continue;
+                    };
+                    if target_fn.starts_with("perry_static_") {
+                        continue;
+                    }
+                    if matches!(
+                        ctx.method_has_rest
+                            .get(&(decl_class.clone(), property.to_string())),
+                        Some(&true)
+                    ) {
+                        continue;
+                    }
+                    if ctx
+                        .method_param_counts
+                        .get(&(decl_class, property.to_string()))
+                        .is_some_and(|&n| n > max_explicit_arity)
+                    {
+                        continue;
+                    }
+                    seen_ids.push(sub_id);
+                    subclass_arms.push(SubclassDispatchArm {
+                        class_id: sub_id,
+                        keys_global,
+                        target_fn,
+                    });
+                }
+            }
+            // A wide hierarchy would turn every callsite into a long compare
+            // chain — more instruction cache than the tower call it replaces.
+            // Beyond the cap the site keeps today's single-arm guard.
+            if subclass_arms.len() > MAX_SUBCLASS_DISPATCH_ARMS {
+                subclass_arms.clear();
+            }
 
             if !method_has_rest {
                 let typed_method_key = (class_name.clone(), property.to_string());
@@ -1113,6 +1240,7 @@ pub(crate) fn try_lower_instance_method_call(
                     typed_i1_direct,
                     typed_string_direct,
                     shape_only_guard,
+                    &subclass_arms,
                 ) {
                     return Ok(Some(guarded));
                 }
@@ -1367,7 +1495,7 @@ fn emit_collapsed_instance_dispatch(
     // function value (#632 — a class-field non-arrow function reads `this`).
     ctx.current_block = override_idx;
     // #7211: rooted save/restore across the user-code dispatch.
-    let prev_this = crate::expr::temp_root::implicit_this_save(ctx, recv_box);
+    let prev_this = crate::rooting::implicit_this_save(ctx, recv_box);
     let v_override = ctx.block().call(
         DOUBLE,
         "js_native_call_value",
@@ -1377,7 +1505,7 @@ fn emit_collapsed_instance_dispatch(
             (I64, &args_len),
         ],
     );
-    crate::expr::temp_root::implicit_this_restore(ctx, prev_this);
+    crate::rooting::implicit_this_restore(ctx, prev_this);
     let after_override = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);

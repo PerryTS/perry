@@ -18,40 +18,41 @@ pub unsafe extern "C" fn js_class_register_static_field(
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-        Ok(s) => s.to_string(),
-        Err(_) => return,
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) else {
+        return;
     };
     class_dynamic_prop_root_store(class_id, name, value);
 }
 
-/// Issue #838: JS-classic prototype method assignment.
-///
-/// `Class.prototype.method = function() {…}` (and the aliased form
-/// `var p = Class.prototype; p.method = function() {…}`) is a pre-ES6
-/// idiom dayjs, chalk, and a long tail of libraries still ship.
-/// Pre-fix the assignment was lowered to a generic `PropertySet` whose
-/// receiver evaluated to a class-prototype-shaped object that nothing
-/// downstream consulted, so `(new Class()).method` came back as
-/// `undefined`.
-///
-/// The HIR-level fix routes recognised shapes to
-/// `js_register_prototype_method(class_id, name, value)`, which stores
-/// the closure value into a per-class side-table here. The dispatch
-/// hot paths (`js_object_get_field_by_name` for `inst.method` reads
-/// and `js_native_call_method` for `inst.method(...)` calls) consult
-/// this table after the regular vtable / proto-object lookups miss,
-/// invoking the closure with `this` bound to the receiver.
-///
-/// Stored values use their full NaN-boxed bits (f64) — typically a
-/// POINTER_TAG'd closure, but the dispatch path treats whatever is
-/// stored as a callable value and routes it through
-/// `js_native_call_value`, which itself accepts both closures and raw
-/// `*ClosureHeader` shapes.
-pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
-    RwLock::new(None);
-pub(crate) static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+per_test_global! {
+    /// Issue #838: JS-classic prototype method assignment.
+    ///
+    /// `Class.prototype.method = function() {…}` (and the aliased form
+    /// `var p = Class.prototype; p.method = function() {…}`) is a pre-ES6
+    /// idiom dayjs, chalk, and a long tail of libraries still ship.
+    /// Pre-fix the assignment was lowered to a generic `PropertySet` whose
+    /// receiver evaluated to a class-prototype-shaped object that nothing
+    /// downstream consulted, so `(new Class()).method` came back as
+    /// `undefined`.
+    ///
+    /// The HIR-level fix routes recognised shapes to
+    /// `js_register_prototype_method(class_id, name, value)`, which stores
+    /// the closure value into a per-class side-table here. The dispatch
+    /// hot paths (`js_object_get_field_by_name` for `inst.method` reads
+    /// and `js_native_call_method` for `inst.method(...)` calls) consult
+    /// this table after the regular vtable / proto-object lookups miss,
+    /// invoking the closure with `this` bound to the receiver.
+    ///
+    /// Stored values use their full NaN-boxed bits (f64) — typically a
+    /// POINTER_TAG'd closure, but the dispatch path treats whatever is
+    /// stored as a callable value and routes it through
+    /// `js_native_call_value`, which itself accepts both closures and raw
+    /// `*ClosureHeader` shapes.
+    pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
+        RwLock::new(None);
+    pub(crate) static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+}
 
 pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
@@ -67,6 +68,14 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
     // and the class-registry state path), so one generation bump here retires
     // every outstanding record at O(1).
     crate::array::invalidate_all_element_shapes();
+    // #7769: prototype surgery can change which member a `recv.m()` resolves
+    // to, and the method-dispatch caches (`vtable_ic`, `obj_dispatch_ic`) key
+    // their entries on `VTABLE_GEN`. Those caches were only retired by class
+    // REGISTRATION, so a `Class.prototype.m = fn` after first dispatch left
+    // them serving the pre-surgery answer. Retire them here, at the one latch
+    // all three prototype-write entry points funnel through — the same O(1)
+    // argument as the element-shape invalidation above.
+    VTABLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Release);
 }
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {

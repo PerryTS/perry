@@ -374,6 +374,10 @@ pub fn collect_integer_locals(
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    // #7700: locals whose declared type says they hold a number. A
+    // `Uint8ArrayGet` is a byte read — hence integer-valued — only when its
+    // key is one of those, or is numeric by construction.
+    numeric_locals: &HashSet<u32>,
 ) -> HashSet<u32> {
     let mut candidates: HashSet<u32> = HashSet::new();
 
@@ -423,6 +427,7 @@ pub fn collect_integer_locals(
             flat_const_ids,
             &flat_row_alias_ids,
             clamp_fn_ids,
+            numeric_locals,
         );
         if candidates.len() == before {
             break;
@@ -447,6 +452,7 @@ pub fn collect_integer_locals(
         flat_row_alias_ids: &flat_row_alias_ids,
         clamp_fn_ids,
         arg_dependent_clamp_fn_ids,
+        numeric_locals,
         int_ta_views: &int_ta_views,
         dependents: HashMap::new(),
         disqualified: HashSet::new(),
@@ -496,6 +502,9 @@ struct ProvenanceJudge<'a> {
     flat_row_alias_ids: &'a HashSet<u32>,
     clamp_fn_ids: &'a HashSet<u32>,
     arg_dependent_clamp_fn_ids: &'a HashSet<u32>,
+    /// #7700: locals whose declared type says they hold a number, so a
+    /// `u8[k]` keyed on one is a byte read.
+    numeric_locals: &'a HashSet<u32>,
     /// Const int-typed-array views (`id → length`) whose in-window element
     /// loads are integers by construction — obligations whose rhs is such a
     /// load pass without deps.
@@ -524,6 +533,7 @@ impl ProvenanceJudge<'_> {
             self.flat_row_alias_ids,
             self.clamp_fn_ids,
             self.arg_dependent_clamp_fn_ids,
+            self.numeric_locals,
             &mut deps,
         ) {
             for dep in deps {
@@ -673,6 +683,7 @@ fn int32_producing_deps(
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
     deps: &mut HashSet<u32>,
 ) -> bool {
     let recurse = |sub: &Expr, deps: &mut HashSet<u32>| {
@@ -683,6 +694,7 @@ fn int32_producing_deps(
             flat_row_alias_ids,
             clamp_fn_ids,
             arg_dependent_clamp_fn_ids,
+            numeric_locals,
             deps,
         )
     };
@@ -733,7 +745,13 @@ fn int32_producing_deps(
             deps.insert(*id);
             true
         }
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // #7700: a byte read, hence integer-valued, only when the KEY is a
+        // number. `const it = u8[Symbol.iterator]` is a function; answering
+        // `true` here gave it an i32 slot and `typeof it` reported `number`.
+        Expr::Uint8ArrayGet { index, .. } => {
+            super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
+        }
+        Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true,
         // Issue #50 bridge: element access on a flat-const 2D int array
         // produces i32. The flat-const facts are immutable within this
@@ -763,6 +781,7 @@ pub fn collect_extra_integer_let_ids(
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
 ) {
     use perry_hir::Stmt;
     for s in stmts {
@@ -783,6 +802,7 @@ pub fn collect_extra_integer_let_ids(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                     )
                 => {
                     out.insert(*id);
@@ -798,6 +818,7 @@ pub fn collect_extra_integer_let_ids(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                 );
                 if let Some(eb) = else_branch {
                     collect_extra_integer_let_ids(
@@ -806,6 +827,7 @@ pub fn collect_extra_integer_let_ids(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                     );
                 }
             }
@@ -817,6 +839,7 @@ pub fn collect_extra_integer_let_ids(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                     );
                 }
                 collect_extra_integer_let_ids(
@@ -825,6 +848,7 @@ pub fn collect_extra_integer_let_ids(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                 );
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
@@ -834,6 +858,7 @@ pub fn collect_extra_integer_let_ids(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                 );
             }
             Stmt::Try {
@@ -847,6 +872,7 @@ pub fn collect_extra_integer_let_ids(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                 );
                 if let Some(c) = catch {
                     collect_extra_integer_let_ids(
@@ -855,6 +881,7 @@ pub fn collect_extra_integer_let_ids(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                     );
                 }
                 if let Some(f) = finally {
@@ -864,6 +891,7 @@ pub fn collect_extra_integer_let_ids(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                     );
                 }
             }
@@ -875,6 +903,7 @@ pub fn collect_extra_integer_let_ids(
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
+                        numeric_locals,
                     );
                 }
             }
@@ -885,6 +914,7 @@ pub fn collect_extra_integer_let_ids(
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
+                    numeric_locals,
                 );
             }
             _ => {}
@@ -997,6 +1027,8 @@ pub fn is_int32_producing_expr(
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    // #7700: see `collect_integer_locals`.
+    numeric_locals: &HashSet<u32>,
 ) -> bool {
     use perry_hir::{BinaryOp, Expr};
     match e {
@@ -1020,12 +1052,14 @@ pub fn is_int32_producing_expr(
                 flat_const_ids,
                 flat_row_alias_ids,
                 clamp_fn_ids,
+                numeric_locals,
             ) && is_int32_producing_expr(
                 right,
                 known_int_locals,
                 flat_const_ids,
                 flat_row_alias_ids,
                 clamp_fn_ids,
+                numeric_locals,
             )
         }
         Expr::Call { callee, .. } => {
@@ -1045,7 +1079,11 @@ pub fn is_int32_producing_expr(
                 | BinaryOp::UShr
         ),
         Expr::LocalGet(id) => known_int_locals.contains(id),
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // #7700: a byte read, hence integer-valued, only with a numeric key.
+        Expr::Uint8ArrayGet { index, .. } => {
+            super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
+        }
+        Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true, // Math.imul always returns i32
         // Issue #50 bridge: element access on a flat-const 2D int array
         // produces i32. Two shapes:

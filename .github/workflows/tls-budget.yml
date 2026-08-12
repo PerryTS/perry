@@ -1,0 +1,181 @@
+name: TLS Budget
+
+# Keeps Darwin's `_tlv_get_addr` cost from creeping back into the runtime
+# a fourth time (#7469).
+#
+# WHY THIS EXISTS
+#
+# On Darwin every `thread_local!` access is an out-of-line call to
+# `_tlv_get_addr` in libdyld. `crates/perry-runtime/src/tls_hot.rs` has removed
+# that cost three times and it has come back three times:
+#
+#   after #7565   churn_alloc   0%
+#   later         churn_alloc   8-9%
+#   later         interp        11%
+#   v0.5.1434     asyncpipe     20.5%   <- the largest single symbol in the
+#                                          worst-performing realistic program
+#
+# The mechanism never decayed. Nothing measured it. This job is that
+# measurement.
+#
+# THIS JOB IS DESIGNED TO BE ABLE TO FAIL, checked against CLAUDE.md's "four
+# ways a gate can be unable to fail":
+#
+#   1. no `continue-on-error`, no `|| true` between the gate script and the
+#      shell's exit status. `scripts/tls_budget_gate.sh` runs under
+#      `set -euo pipefail` and ends in a bare `exit "$rc"`.
+#   2. NOT wired into branch protection's required contexts by the change that
+#      adds it -- a new gate has never been green, so promoting it immediately
+#      would block every open PR (CLAUDE.md's corollary). That is a maintainer
+#      action after the first observed green run on `main`, and per the
+#      corollary it is not optional follow-through: `gc-root-dominance` sat red
+#      on `main` for weeks because the second step was never taken.
+#   3. `concurrency` below cancels `pull_request` runs only; `push` runs are
+#      keyed on the commit SHA so they queue instead of cancelling each other
+#      (#7205).
+#   4. THE SUBJECT MUST BE THE UNCOVERED ONE, and that is the whole design.
+#      Profiling `churn_alloc` -- the benchmark every previous fix was tuned
+#      against -- would pass forever while the real cost grew, because churn's
+#      thread-locals are exactly the sixteen the named-field cache covers by
+#      construction. So the subjects are `benchmarks/tls-budget/asyncpipe.ts`
+#      (Map/Set registries, buffer brands, descriptor state, async, template
+#      literals) and `interp.ts` (inline-cache misses, field lookup, arguments
+#      objects), and `scripts/tls_budget_check.py` refuses a pass unless the
+#      run proves it was live: `PERRY_TLS_HOT_STATS=1` reporting
+#      `direct_tsd=1` (else `hot()` is itself calling `_tlv_get_addr` and the
+#      mechanism is inert) and `claimed` above a floor no allocation
+#      microbenchmark clears. Its `--self-test` drives all seven rejections
+#      and runs on every PR, compiler-free, in the first job below.
+#
+# The one-time sabotage proof -- one hot declaration reverted to a raw
+# `thread_local!`, both budgets going red, restoring the macro restoring the
+# pass -- is recorded in the PR that introduced this file, matching how
+# gc-root-dominance and gc-parse-churn-gate treat theirs.
+
+on:
+  pull_request:
+  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
+  # `push: branches: [main]` starved this gate and nine others for two days
+  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
+  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
+  # measured. The macOS arm below is irreducible (`_tlv_get_addr` is a Mach-O
+  # artefact), so moving it to Linux was never an option; cutting demand was.
+  # ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "27 */6 * * *"
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tls-budget-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  self-test-checkers:
+    # Compiler-free and unconditional: the verdict logic must always be able to
+    # say no, and the thread-local policy ratchet is cheap enough to run on
+    # every PR regardless of what it touched.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Self-test the budget verdict logic
+        run: python3 scripts/tls_budget_check.py --self-test
+      - name: Self-test the thread-local policy checker
+        run: python3 scripts/check_thread_locals.py --self-test
+      - name: Enforce the thread-local policy ratchet
+        run: python3 scripts/check_thread_locals.py
+
+  tls-budget:
+    # macos-14 is arm64. `_tlv_get_addr` is a Mach-O TLS artefact and the
+    # direct thread-specific-data path in tls_hot.rs is Apple-aarch64 only, so
+    # this measurement does not exist on any other platform -- the gate script
+    # says so and exits 0 rather than pretending to measure.
+    runs-on: macos-14
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Decide whether this change can affect thread-local access cost
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the gate."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad: any runtime change can add a thread-local to a
+          # hot path, and the whole point of this gate is that such a change
+          # does not announce itself. The filter exists only to spare docs-only
+          # PRs a compiler build.
+          if grep -qE '^(crates/|benchmarks/tls-budget/|scripts/tls_budget_(gate\.sh|check\.py)$|scripts/check_thread_locals\.py$|Cargo\.(toml|lock)$|\.github/workflows/tls-budget\.yml$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches a path that can move thread-local access cost."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant paths changed."
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-llvm22
+        if: steps.relevance.outputs.run == 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only; libperry_runtime.a
+          # and libperry_stdlib.a come from the -static wrapper crates. Building
+          # without them links a stale archive and makes the measurement
+          # vacuous (CLAUDE.md, "Verifying a runtime change").
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      - name: Measure the `_tlv_get_addr` budget
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+          PERRY_NO_AUTO_OPTIMIZE: "1"
+        run: scripts/tls_budget_gate.sh target/release/perry "${{ runner.temp }}/tls-budget"
+
+      - name: Attach the profiles
+        if: always() && steps.relevance.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-budget-profiles
+          path: ${{ runner.temp }}/tls-budget/*.sample
+          if-no-files-found: warn

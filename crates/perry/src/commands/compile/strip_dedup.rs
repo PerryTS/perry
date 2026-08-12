@@ -412,6 +412,38 @@ fn collect_archive_undefined_by_member(
     )))
 }
 
+/// Locate a member after `llvm-ar x` extracted it into `extract_dir`.
+///
+/// COFF archives can preserve path-qualified member names (WebView2's loader
+/// uses names such as `obj/.../loader_impl.obj`), but `llvm-ar x` writes those
+/// members as their basename. Looking only at `extract_dir.join(member)` made
+/// the extraction appear successful while silently omitting the object from
+/// the rebuilt UI archive.
+fn extracted_archive_member(extract_dir: &Path, member: &str) -> Option<PathBuf> {
+    let exact = extract_dir.join(member);
+    if exact.exists() {
+        return Some(exact);
+    }
+    Path::new(member)
+        .file_name()
+        .map(|name| extract_dir.join(name))
+        .filter(|path| path.exists())
+}
+
+/// Rust staticlibs can bundle Windows SDK import-library members named after
+/// either a `.dll` or a `.drv` (notably the five same-named `winspool.drv`
+/// members). These must come from Perry's canonical system-library link line:
+/// extracting same-named import members one by one flattens/overwrites them and
+/// leaves an incomplete descriptor/thunk set in the rebuilt archive.
+fn is_windows_import_archive_member(member: &str) -> bool {
+    Path::new(member)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("dll") || extension.eq_ignore_ascii_case("drv")
+        })
+}
+
 /// On Windows, build a trimmed UI lib using the rlib (not staticlib).
 ///
 /// perry-ui-windows builds as both rlib and staticlib. The staticlib bundles
@@ -701,7 +733,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     let ui_only_deps: Vec<&String> = staticlib_members
         .iter()
         .filter(|m| {
-            if m.ends_with(".dll") {
+            if is_windows_import_archive_member(m) {
                 return false;
             }
             if m.contains("compiler_builtins") {
@@ -769,7 +801,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         let abs_rlib = std::fs::canonicalize(&rlib_path)?;
         let mut rlib_extracted = 0usize;
         let mut rlib_skipped = 0usize;
-        for member in &rlib_objects {
+        for (member_index, member) in rlib_objects.iter().enumerate() {
             let is_alloc_shim = !member.contains(".cgu.") && !member.contains("-cgu.");
             if is_alloc_shim {
                 rlib_skipped += 1;
@@ -782,9 +814,14 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
                 .current_dir(&extract_dir)
                 .output()?;
             if out.status.success() {
-                let p = extract_dir.join(member);
-                if p.exists() {
-                    all_objects.push(p);
+                if let Some(extracted) = extracted_archive_member(&extract_dir, member) {
+                    // Move every extracted object to a unique flat name before
+                    // extracting the next member. Two path-qualified members
+                    // may share a basename, and llvm-ar would otherwise
+                    // overwrite the earlier one.
+                    let normalized = extract_dir.join(format!("rlib_{member_index}.obj"));
+                    std::fs::rename(extracted, &normalized)?;
+                    all_objects.push(normalized);
                     rlib_extracted += 1;
                 }
             }
@@ -798,7 +835,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     // is read (the warning below); the parallel `extract_ok` counter
     // was incremented but never reported. Dropped.
     let mut extract_fail = 0usize;
-    for member in &ui_only_deps {
+    for (member_index, member) in ui_only_deps.iter().enumerate() {
         let out = Command::new(&llvm_ar)
             .arg("x")
             .arg(&abs_staticlib)
@@ -806,9 +843,12 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
             .current_dir(&extract_dir)
             .output()?;
         if out.status.success() {
-            let p = extract_dir.join(member.as_str());
-            if p.exists() {
-                all_objects.push(p);
+            if let Some(extracted) = extracted_archive_member(&extract_dir, member) {
+                let normalized = extract_dir.join(format!("static_{member_index}.obj"));
+                std::fs::rename(extracted, &normalized)?;
+                all_objects.push(normalized);
+            } else {
+                extract_fail += 1;
             }
         } else {
             extract_fail += 1;
@@ -1848,6 +1888,29 @@ empty_marker.o:
         let symbols = collect_archive_symbols_flat(&llvm_nm, &trimmed);
         assert!(symbols.contains("ui_only_symbol"));
         assert!(!symbols.contains("runtime_canonical"));
+    }
+
+    #[test]
+    fn extracted_path_qualified_archive_member_falls_back_to_basename() {
+        let temp = tempfile::tempdir().unwrap();
+        let extracted = temp.path().join("loader_impl.obj");
+        std::fs::write(&extracted, b"native object fixture").unwrap();
+
+        assert_eq!(
+            super::extracted_archive_member(
+                temp.path(),
+                "obj/edge_embedded_browser/client/win/WebView2LoaderLib/loader_impl.obj",
+            ),
+            Some(extracted)
+        );
+    }
+
+    #[test]
+    fn windows_import_members_include_dll_and_driver_archives() {
+        assert!(super::is_windows_import_archive_member("uxtheme.dll"));
+        assert!(super::is_windows_import_archive_member("winspool.drv"));
+        assert!(super::is_windows_import_archive_member("WINSPool.DRV"));
+        assert!(!super::is_windows_import_archive_member("loader_impl.obj"));
     }
 }
 

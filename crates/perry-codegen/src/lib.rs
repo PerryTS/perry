@@ -24,11 +24,22 @@ pub(crate) mod loop_purity;
 pub(crate) mod lower_array_method;
 pub(crate) mod lower_call;
 pub(crate) mod lower_conditional;
+pub(crate) mod lower_string_concat;
 pub(crate) mod lower_string_method;
 pub mod module;
 pub mod nanbox;
 #[cfg(feature = "llvm-inprocess")]
 pub mod native_emit;
+/// Coverage for the native-roots (RS4GC statepoint) lowering that ships —
+/// #7502. Test-only; see the module docs for what it asserts and why the
+/// shadow-pinned suites are not a substitute.
+///
+/// Gated on `llvm-inprocess` as well as `test`: two of its three vantages run
+/// the statepoint rewrite and emit assembly through that pipeline, so under
+/// `--no-default-features` (the text path, kept for bisection) there is nothing
+/// for it to assert against.
+#[cfg(all(test, feature = "llvm-inprocess"))]
+mod native_root_coverage;
 pub(crate) mod native_value;
 pub(crate) mod nm_install;
 pub mod opt_report;
@@ -40,6 +51,12 @@ pub(crate) mod stmt;
 pub mod strings;
 pub mod stubs;
 pub mod target_layout;
+/// The #6951 temp-root emission contract, asserted in the per-PR `cargo-test`
+/// gate rather than in the nightly-only integration tier (#6988), and against
+/// the pooled lowering #7487 actually emits rather than the FFI spelling it
+/// replaced (#7503).
+#[cfg(test)]
+mod temp_root_coverage;
 /// Test-support surface — compiled only under `cfg(test)` or the `testing`
 /// cargo feature (which nothing but this crate's own `[dev-dependencies]`
 /// enables). See the module docs for why it is a feature and not a

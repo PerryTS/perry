@@ -1,0 +1,13 @@
+### Fixed
+
+- **codegen: a non-numeric key on a `Uint8Array`/`Buffer`-typed local no longer reads a byte (#7700).** `const it = u8[Symbol.iterator]` reported `typeof it === "number"`; `const k: any = "byteLength"; const n = u8[k]` read `0`; an own expando read `0`. Node returns the iterator function, `4`, and the object.
+
+  `lower/expr_member/member_tail.rs` folds every non-STRING key on such a local onto `Expr::Uint8ArrayGet`, and six codegen collectors read that node as "a byte, hence a number" **with no regard for the key kind** — so the destination local was classified integer-valued, took an i32 slot, and `i32_from_indexed_get_lowered` applied `ToInt32(ToNumber(v))` to a function pointer. Codegen's own byte-path gate was already correct: `arrays_finds::lower_uint8array_get_i32` routes an unproven key to `js_object_get_index_polymorphic` and hands back a boxed JS value. The representation decision one level up is what discarded it, which is why only the *stored* form was wrong — `typeof u8[Symbol.iterator]` consumed directly was always right.
+
+  The key-kind condition now lives in one place, `collectors/byte_read_key.rs`, and is an **allowlist**: the key must be provably a number. The "not a string" blocklist it replaces is precisely what shipped this bug, by putting every key kind nobody enumerated — symbols first — on the byte-read side. Applied at all six sites (`integer_locals` ×2, `i32_locals`, `int_valued_ta_locals` ×3, `not_bigint_locals`) plus the three `type_analysis/numeric.rs` predicates that also mean "a raw double" (`is_numeric_expr`, `is_provably_not_bigint`, `integer_magnitude_bits`).
+
+  **The hot path is unchanged, and that is measured, not asserted.** A `for (let i = …) sum += buf[i]` counter is a body `let`, and the `binding_types` map the collectors are handed covers only params and module globals — gating on that map alone demotes the loop from `js_uint8array_get`/i32-slot to `js_uint8array_index_get_value`/double-slot. So `collect_numeric_typed_locals` walks the body for declared numeric types (including `for`-init counters) and that set is the evidence. With it, the emitted LLVM IR for a four-loop buffer fixture (FNV-1a, byte sum, masked mix, `Buffer`→`Buffer` copy) is **byte-identical** to the pre-fix compiler.
+
+  Also fixed by the same condition: `u8.n = 1n; const k: any = "n"; const b = u8[k]` was classified non-BigInt.
+
+  Not changed: the fold itself. Refusing to fold an unproven key and letting it fall through to `Expr::IndexGet` was tried and regressed two shapes the polymorphic escape gets right (`buf["1"]` → `undefined`, and an `any`-typed index in an accumulator loop → `NaN`).

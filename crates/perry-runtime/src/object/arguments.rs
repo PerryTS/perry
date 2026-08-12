@@ -12,9 +12,36 @@ struct ArgumentsMeta {
     restricted_callee: bool,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static ARGUMENTS_OBJECTS: RefCell<crate::fast_hash::PtrHashMap<usize, ArgumentsMeta>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+/// Latched by the one and only registry insert (`js_arguments_object_create`).
+/// Twin of `set::SET_REGISTRY_EVER_USED` / `map::MAP_REGISTRY_EVER_USED`, and
+/// added for the same reason: [`is_arguments_object`] is a *probe*, run on
+/// paths that have nothing to do with `arguments` — the by-name property-get
+/// tail, `Array.prototype.push`, the array and `Symbol.iterator` iterator
+/// entries, `Array.from`/`concat`, class construction — so a program that
+/// never writes the identifier `arguments` still paid a thread-local
+/// resolution plus a `RefCell` borrow plus a pointer hash on each of them.
+/// On the `interp` benchmark that was **2.8% of the whole program** proving
+/// the absence of a feature the source does not contain.
+///
+/// Process-global rather than per-thread on purpose: Darwin has no local-exec
+/// TLS, so reading a `thread_local!` flag would cost the very `_tlv_get_addr`
+/// call this exists to avoid. Being global only makes it *conservative* — one
+/// thread creating an arguments object sends every thread back to the
+/// registry, which is the pre-existing behaviour.
+static ARGUMENTS_OBJECTS_EVER_USED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// True when no arguments object has ever been created, so
+/// [`is_arguments_object`] can answer without touching the thread-local
+/// registry.
+#[inline(always)]
+fn arguments_registry_never_used() -> bool {
+    !ARGUMENTS_OBJECTS_EVER_USED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -176,6 +203,9 @@ pub extern "C" fn js_arguments_object_alloc(
         );
     }
 
+    // Latch BEFORE the insert, so no probe can observe a populated registry
+    // through a `false` flag.
+    ARGUMENTS_OBJECTS_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
     ARGUMENTS_OBJECTS.with(|m| {
         m.borrow_mut().insert(
             obj as usize,
@@ -205,10 +235,44 @@ pub extern "C" fn js_arguments_object_map_index(
 }
 
 pub(crate) fn is_arguments_object(obj: *const ObjectHeader) -> bool {
+    #[cfg(test)]
+    TEST_ARGUMENTS_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
+    // #7854: nothing has ever been created ⟹ nothing can be found. Checked
+    // first because it is the only arm that costs neither a thread-local
+    // resolution nor a hash. See `ARGUMENTS_OBJECTS_EVER_USED`.
+    if arguments_registry_never_used() {
+        return false;
+    }
     if obj.is_null() {
         return false;
     }
     ARGUMENTS_OBJECTS.with(|m| m.borrow().contains_key(&(obj as usize)))
+}
+
+/// Every entry into [`is_arguments_object`]. Twin of
+/// `set::TEST_SET_REGISTRY_PROBES` — lets a test assert that the latch
+/// actually short-circuits rather than merely that nothing threw.
+#[cfg(test)]
+thread_local! {
+    static TEST_ARGUMENTS_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_arguments_registry_never_used() -> bool {
+    arguments_registry_never_used()
+}
+
+/// Test-only: drive the process-global latch directly so a test can observe
+/// BOTH states deterministically instead of depending on which test in the
+/// binary ran first. Callers must restore the previous value.
+#[cfg(test)]
+pub(crate) fn test_force_arguments_registry_ever_used(value: bool) {
+    ARGUMENTS_OBJECTS_EVER_USED.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn test_arguments_registry_probe_count() -> u64 {
+    TEST_ARGUMENTS_REGISTRY_PROBES.with(|c| c.get())
 }
 
 pub(crate) unsafe fn arguments_object_get_index(
@@ -528,7 +592,17 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
             return crate::buffer::buffer_to_array(raw as *const crate::buffer::BufferHeader);
         }
         // A real Array → fast path (no protocol overhead).
+        //
+        // #7542: unless `Array.prototype[Symbol.iterator]` was replaced, in
+        // which case call-spread (`f(...arr)`) must drive the patched method —
+        // it decides how many arguments the callee receives, so `f(...[1,2,3])`
+        // passed 3 where node passes 1. `array_proto_iterator_modified()` is a
+        // sticky flag that is false until user code writes the prototype slot,
+        // so the fast path is untouched in every ordinary program.
         if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+            if crate::array::array_proto_iterator_modified() {
+                return crate::array::js_array_clone_for_spread(value);
+            }
             return crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader;
         }
         // Generic iterable with a user `[Symbol.iterator]` (Map/Set, generator

@@ -63,7 +63,7 @@ fn object_addr_of(value: f64) -> usize {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static ALIAS_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static ALIASES: RefCell<Vec<AliasEntry>> = const { RefCell::new(Vec::new()) };
 }

@@ -1541,6 +1541,25 @@ pub fn scan_perf_entries_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             c.set(bits);
         }
     });
+    // This is an identity index into structurally rooted entry objects, not
+    // an owner. Follow a forwarding address without keeping the keys array
+    // alive on its own.
+    PERF_ENTRY_KEYS_ARRAY.with(|c| {
+        let mut addr = c.get();
+        if addr != 0 && visitor.visit_metadata_usize_slot(&mut addr) {
+            c.set(addr);
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_perf_entry_keys_array(addr: usize) {
+    PERF_ENTRY_KEYS_ARRAY.with(|slot| slot.set(addr));
+}
+
+#[cfg(test)]
+pub(crate) fn test_perf_entry_keys_array() -> usize {
+    PERF_ENTRY_KEYS_ARRAY.with(|slot| slot.get())
 }
 
 // ── Histograms (perf_histogram namespace) ────────────────────────────────────

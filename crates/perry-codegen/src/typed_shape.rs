@@ -79,6 +79,158 @@ pub(crate) fn type_is_raw_f64_candidate(ty: &Type) -> bool {
     matches!(ty, Type::Number)
 }
 
+/// #7510: may this class's canonical layout be declared at **allocation**,
+/// before its constructor runs, rather than validated after it?
+///
+/// The motivating defect is #7512: `js_gc_init_typed_shape_layout` is emitted
+/// after the constructor call, so no raw-f64 class-field store *inside* a
+/// constructor can pass its `GC_OBJ_TYPED_LAYOUT_INTACT` guard, and every one
+/// falls back to `js_put_value_set`. Declaring the fields `number` is what
+/// makes the class slower — more type information selects a representation
+/// whose guard the construction path has made unsatisfiable.
+///
+/// Moving the existing call earlier does not work: it validates that each
+/// raw-f64 slot holds a plain double, and a fresh slot holds `TAG_UNDEFINED`
+/// (tag `0x7FFC`, inside `layout_raw_f64_bits`' reject range), so an early call
+/// downgrades every instance. `js_gc_declare_typed_shape_layout` skips that
+/// validation, which shifts the burden of proof here.
+///
+/// Two obligations, and both are discharged by conditions, not by hope:
+///
+/// 1. **No read may observe a raw-f64 slot before its first write** — it would
+///    read `undefined`'s NaN-box bits as a double and see a NaN. `prologue`
+///    is #7486's `ctor_prologue_param_assigned_fields`: the maximal leading run
+///    of `this.<f> = <plain param>` statements, non-empty only for a class with
+///    no heritage, no field initializers or computed keys, no decorators, plain
+///    parameters, and no setter shadowing an assigned field. A `LocalGet` of a
+///    plain parameter cannot throw, allocate, or observe `this`, so every field
+///    it assigns is written before ANY other effect of the constructor. We
+///    require **every** raw-f64 field to be in that set — one field assigned
+///    later would still be exposed.
+///
+/// 2. **The collector's view must be true at birth.** The declared state is
+///    `GC_LAYOUT_POINTER_FREE` for an empty pointer mask and `SIDE_MASK`
+///    otherwise, and in both cases the collector is handed slots that still
+///    hold the allocator's fill. That fill is `TAG_UNDEFINED` on **every**
+///    allocation path a `new` site can take — `js_object_alloc_class_inline_keys`
+///    writes `max(field_count, INLINE_SLOT_FLOOR)` slots (`object/alloc.rs`,
+///    #4717) and codegen's inline bump path writes the same range with the same
+///    constant (`lower_call/new_alloc.rs`) — so a pointer-masked slot the tracer
+///    visits before its first write yields `undefined`, which
+///    `mark_field_into_worklist` rejects at its tag check. A raw-f64-masked slot
+///    is not visited at all. Neither can strand a child, because neither holds
+///    one yet.
+///
+///    This is the one obligation the original #7510 rule discharged by *avoiding*
+///    it (pointer mask required empty) rather than by proving it, which cost
+///    every pointer-bearing class its at-allocation declaration — and with it
+///    every store in its constructor, since the post-constructor install arrives
+///    after them all. `tree_wide`'s eight `number` fields were on the by-name
+///    fallback for exactly this reason: two `Tree | null` siblings.
+///
+/// Nothing rests on the *values* being numbers. A constructor that stores a
+/// string into a `number`-declared field is rejected by the store guard
+/// (`is_plain_number_bits`, and the inline path's finite-exponent test), falls
+/// back to the boxed setter, and downgrades the descriptor through
+/// `layout_note_slot` — the same path any post-install contradiction takes.
+/// [`class_layout_declarable_at_allocation`] for a whole inheritance chain.
+///
+/// The single-class rule refuses every class with heritage, which is #7512
+/// one level up: a `Rect extends Shape extends Node2D` instance never gets an
+/// at-allocation declaration, so every raw-f64 store in *every* constructor on
+/// its chain — `Node2D`'s own `this.x = x` included, though `Node2D` itself
+/// extends nothing — misses `GC_OBJ_TYPED_LAYOUT_INTACT` and falls back to
+/// `js_put_value_set`. Counted on `shapes.ts`: 528 000 by-name field stores per
+/// run. A two-class probe measures **2.0x** against the hand-flattened class.
+///
+/// `chain` is `chain_prologue_assigned_fields`' root → leaf answer, which is
+/// `None` unless every class on the chain is individually analysable. The
+/// obligations are the single-class ones, restated over the chain:
+///
+/// 1. **Every raw-f64 field ANYWHERE on the chain is prologue-assigned** — by
+///    its own class, since that is the only constructor that writes it. One
+///    uncovered field would be read as a double while it still holds
+///    `undefined`'s NaN-box bits, yielding `NaN` instead of `undefined`.
+/// 2. **Nothing during construction can read a field before its write.** Each
+///    class's prologue RHS and `super()` arguments are `This`-free by
+///    `prologue_rhs_cannot_observe_this`, and everything after a class's
+///    prologue run is `This`-free by `stmt_is_this_free_expr` — which matters
+///    precisely because a *non-leaf* constructor's trailing statements run
+///    before the leaf assigns its own fields.
+/// 3. **The collector's view is true at birth** — unchanged from the
+///    single-class case: every allocation path prefills `TAG_UNDEFINED`, a
+///    pointer-masked slot holding it is rejected at `mark_field_into_worklist`'s
+///    tag check, and a raw-f64-masked slot is not visited at all.
+pub(crate) fn class_chain_layout_declarable_at_allocation(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    chain: &[(String, std::collections::HashSet<String>)],
+) -> bool {
+    let mut worth_declaring = false;
+    for (class_name, prologue) in chain {
+        let Some(class) = classes.get(class_name).copied() else {
+            return false;
+        };
+        for field in &class.fields {
+            if field.key_expr.is_some() {
+                continue;
+            }
+            if type_is_pointer_bearing(&field.ty) {
+                worth_declaring = true;
+            }
+            if type_is_raw_f64_candidate(&field.ty) {
+                worth_declaring = true;
+                if !prologue.contains(&field.name) {
+                    return false;
+                }
+            }
+        }
+    }
+    worth_declaring
+}
+
+pub(crate) fn class_layout_declarable_at_allocation(
+    class: &perry_hir::Class,
+    prologue: &std::collections::HashSet<String>,
+) -> bool {
+    if prologue.is_empty() {
+        return false;
+    }
+    // The declaration costs one call per construction, so it must buy at least
+    // one mask bit. A class whose every field is `boolean` declares two empty
+    // masks: the boxed store arm does not read the intact bit at all
+    // (`require_raw_f64 = false`), and the collector's view is already
+    // `POINTER_FREE` from `layout_init_pointer_free`. Nothing to unlock.
+    let mut worth_declaring = false;
+    for field in &class.fields {
+        if field.key_expr.is_some() {
+            continue;
+        }
+        if type_is_pointer_bearing(&field.ty) {
+            worth_declaring = true;
+        }
+        // Obligation 1 applies to raw-f64 slots ONLY. A pointer-masked slot
+        // read before its first write yields `undefined`, which is the correct
+        // answer; a raw-f64 slot read before its first write reinterprets
+        // `undefined`'s NaN-box bits as a double and yields NaN. So only the
+        // latter needs the prologue's write-before-anything-else guarantee.
+        //
+        // It also covers the field-init phase's own `undefined` write: that
+        // write lands in a raw-f64-masked slot, fails `layout_raw_f64_bits`,
+        // and would downgrade the descriptor on the spot — but a
+        // prologue-assigned field has that write ELIDED
+        // (`ctor_prologue_param_assigned_fields`, the same set), so it never
+        // happens. The two consumers of `prologue` have to agree here, and
+        // they agree because it is literally one set.
+        if type_is_raw_f64_candidate(&field.ty) {
+            worth_declaring = true;
+            if !prologue.contains(&field.name) {
+                return false;
+            }
+        }
+    }
+    worth_declaring
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypedShapeLayout {
     pub(crate) slot_count: u32,
@@ -172,6 +324,36 @@ fn typed_layout_from_fields<'a>(
         raw_f64_mask_words: trim_mask_words(raw_f64_mask_words),
         pointer_mask_words: trim_mask_words(pointer_mask_words),
     }
+}
+
+/// Does `layout`'s **pointer** mask declare `slot`?
+///
+/// The masks are word-packed exactly as `typed_layout_from_fields` builds them
+/// and as `js_gc_{init,declare}_typed_shape_layout` consumes them, so a `true`
+/// here is the same bit the runtime's `TypedLayoutDescriptor::pointer_mask`
+/// will carry for this shape.
+pub(crate) fn layout_declares_pointer_slot(layout: &TypedShapeLayout, slot: u32) -> bool {
+    let slot = slot as usize;
+    if slot >= layout.slot_count as usize {
+        return false;
+    }
+    let word = slot / 64;
+    // A pointer-masked slot may not also be raw-f64-masked. `init_typed_shape_layout`
+    // rejects an intersecting pair outright (`words_intersect` -> UNKNOWN), so a
+    // shape that reaches an installed descriptor has disjoint masks — but this
+    // predicate licenses eliding a store's layout note, so it re-establishes
+    // disjointness locally rather than importing it.
+    let raw_f64_here = layout
+        .raw_f64_mask_words
+        .get(word)
+        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0);
+    if raw_f64_here {
+        return false;
+    }
+    layout
+        .pointer_mask_words
+        .get(word)
+        .is_some_and(|w| w & (1u64 << (slot % 64)) != 0)
 }
 
 pub(crate) fn mask_global_name_from_keys_global(keys_global_name: &str) -> String {

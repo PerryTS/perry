@@ -15,8 +15,35 @@ name: GC Ratchet
 
 on:
   pull_request:
+  # POST-MERGE ARM: a staggered six-hourly sweep of `main`, NOT one run per merge.
+  #
+  # `push: branches: [main]` is what took this gate dark for two days (#7856).
+  # Fourteen workflows fired on every merge, ~29 jobs each time, against a repo
+  # that runs ~9 jobs concurrently; at 58 merges/day demand outran drain and the
+  # queue grew without bound. On 2026-08-11 this workflow had 22 of its 25 most
+  # recent `main` runs sitting `queued` (oldest 9h18m) and its last successful
+  # `main` run was 2026-08-09 -- two days and five collector-touching merges
+  # earlier (#7799, #7809, #7812, #7834, #7839). #7843's seven genuinely-red rows
+  # landed inside that blind window.
+  #
+  # This is the THIRD variant of CLAUDE.md's "four ways a gate can be unable to
+  # fail": not `continue-on-error`, not missing from required contexts, not
+  # cancelled -- STARVED. A gate that runs four times a day and COMPLETES is
+  # worth more than one that runs on every merge and never does.
+  #
+  # It is NOT the `concurrency:` block below (already correct, twice-repaired --
+  # see its comment) and it is NOT macOS capacity: at the moment of measurement
+  # the queue held 45 `ubuntu-latest` jobs against 14 `macos-14`. Rebalancing
+  # pools cannot help; only cutting total job demand can.
+  #
+  # ***DO NOT RESTORE `push: branches: [main]` HERE.*** Full measurement, the two
+  # #7856 claims that did not survive checking, and the cost this trades away:
+  # docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "7 */6 * * *"
   push:
-    branches: [main]
+    # Releases stay individually gated; tags are rare, so this costs nothing.
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -78,10 +105,27 @@ jobs:
 
       # Fast structural failure first: a broken harness or a tampered artifact
       # should not cost a 20-minute compiler build to discover.
+      #
+      # `--scope structural` is load-bearing and is the #7554 repair. This step
+      # runs BEFORE the measurement step, so anything it fails on costs the
+      # entire run's coverage — fourteen probes that never execute. That price
+      # is correct for "this artifact is unreadable or tampered with" and badly
+      # wrong for "one of its 156 cells is not bit-identical", which is what
+      # actually happened: one cell's 6,768-byte spread failed this step and the
+      # ratchet measured NOTHING on any branch for three days, while two GC
+      # pacing changes (#7594, #7596) merged with hand-run A/Bs in its place.
+      #
+      # Under `structural` a per-cell defect is printed loudly and deferred; the
+      # `check` step below re-derives the same defect list and fails on it, after
+      # the probes have run and with the full table attached. So this cannot
+      # wave a defect through to a green job — `check` is where the verdict is,
+      # and tests/test_gc_ratchet.py's
+      # `test_structural_preflight_defers_every_defect_it_waves_through` asserts
+      # that coupling one planted defect shape at a time.
       - name: Harness unit tests and artifact validation
         run: |
           python3 -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
-          python3 benchmarks/gc_ratchet/gc_ratchet.py validate
+          python3 benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
 
       - name: Decide whether this change can affect the collector
         id: relevance

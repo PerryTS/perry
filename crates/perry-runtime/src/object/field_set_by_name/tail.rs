@@ -14,6 +14,23 @@ use super::write_helpers::{
 };
 use super::*;
 
+/// Bits to publish into an overflow slot for a NEWLY appended key.
+///
+/// Must be called AFTER the last `refresh_roots_after_alloc!()` on the path,
+/// so it reads the post-collection `value` (#7538). Also scrubs the
+/// `0x7FFD_0000_0000_0000` null-POINTER_TAG shape that must never reach
+/// overflow storage.
+#[inline]
+fn overflow_store_bits(value: f64, obj: *mut ObjectHeader, new_index: usize) -> u64 {
+    let vbits = value.to_bits();
+    if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+        eprintln!("[WARN_NULL_PTR] overflow new store: null POINTER_TAG at obj={obj:p} new_index={new_index} — replacing with undefined");
+        crate::value::TAG_UNDEFINED
+    } else {
+        vbits
+    }
+}
+
 /// Tail of `js_object_set_field_by_name`, entered with `obj` already stripped
 /// of its NaN-box tag and vetted against the handle band, typed arrays, and
 /// the `arr.length` special case. Body moved verbatim.
@@ -684,12 +701,6 @@ pub(super) fn set_field_by_name_object_tail(
             };
             let new_index = key_count;
             if new_index >= alloc_limit {
-                let vbits = value.to_bits();
-                let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
-                    crate::value::TAG_UNDEFINED
-                } else {
-                    vbits
-                };
                 let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
                 let new_keys =
                     crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
@@ -708,6 +719,9 @@ pub(super) fn set_field_by_name_object_tail(
                 if !keys_shared {
                     super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
                 }
+                // #7538: derive the stored bits from the REFRESHED `value` —
+                // see the twin below the linear scan.
+                let vbits = overflow_store_bits(value, obj, new_index);
                 overflow_set(obj as usize, new_index, vbits);
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
@@ -888,13 +902,6 @@ pub(super) fn set_field_by_name_object_tail(
         if new_index >= alloc_limit {
             // No inline room — store in the overflow HashMap so the value is not lost.
             // Also add the key to keys_array so Object.keys() sees it.
-            let vbits = value.to_bits();
-            let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
-                eprintln!("[WARN_NULL_PTR] overflow new store: null POINTER_TAG at obj={:p} new_index={} — replacing with undefined", obj, new_index);
-                crate::value::TAG_UNDEFINED
-            } else {
-                vbits
-            };
             let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
             let new_keys =
                 crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
@@ -910,6 +917,26 @@ pub(super) fn set_field_by_name_object_tail(
             if !keys_shared {
                 super::shapes::shape_keys_grown(prev_keys_usize, new_keys);
             }
+            // #7538: the bits stored into overflow must come from the
+            // REFRESHED `value`. This was snapshotted ABOVE the
+            // `js_array_push` that grows the keys array — an allocation, so a
+            // collection point. `refresh_roots_after_alloc!` re-reads `value`
+            // from its handle, but a `let vbits = value.to_bits()` taken
+            // before the push is a dead copy the macro cannot reach, and this
+            // is the branch that stores it. An evacuating minor inside the
+            // push therefore published the from-space address of the value
+            // into the owner's overflow slot: the collector had already
+            // rewritten every live reference, so nothing ever corrected it
+            // and no verifier could see it (the target is live, just moved).
+            //
+            // Reachable for any object grown past its inline allocation by
+            // NAME — which is exactly what `json_tape`'s element-wise
+            // materializer does (`js_object_alloc(0, 0)` + one
+            // `js_object_set_field_by_name` per key), so a parsed record with
+            // more than `INLINE_SLOT_FLOOR` keys parks its last field here.
+            // The direct parser pre-sizes from a known field count and never
+            // overflows, which is why `PERRY_JSON_TAPE=0` did not reproduce.
+            let vbits = overflow_store_bits(value, obj, new_index);
             overflow_set(obj as usize, new_index, vbits);
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);

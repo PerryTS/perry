@@ -270,6 +270,7 @@ pub(crate) struct NativeRepRecord {
     pub access_mode: Option<BufferAccessMode>,
     pub buffer_access: Option<BufferAccessFacts>,
     pub native_owned_view: Option<NativeOwnedViewFact>,
+    pub buffer_view_pointer_state: Option<super::buffer::BufferViewPointerState>,
     pub materialization_reason: Option<MaterializationReason>,
     pub fallback_reason: Option<MaterializationReason>,
     pub native_value_state: NativeValueState,
@@ -315,6 +316,7 @@ pub(crate) fn typed_clone_rejection_record(
         access_mode: None,
         buffer_access: None,
         native_owned_view: None,
+        buffer_view_pointer_state: None,
         materialization_reason: None,
         fallback_reason: None,
         native_value_state: NativeValueState::RegionLocal,
@@ -609,7 +611,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 15,
+        schema_version: 16,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

@@ -113,7 +113,18 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
         crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
-        replay_array_growth_write_barriers(new_ptr);
+        // #7742-adjacent: the copy above is verbatim at offset 0, so the old
+        // store's dirty-page coverage can be TRANSLATED to the new address
+        // instead of re-derived from 3 M slot values. Falls back to the full
+        // value-derived replay whenever the translation declines.
+        if !crate::gc::relocate_copied_old_object_dirty_pages(
+            new_ptr as usize,
+            arr as usize,
+            new_ptr as usize,
+            old_size,
+        ) {
+            replay_array_growth_write_barriers(new_ptr);
+        }
 
         // Issue #233: install a forwarding pointer at the OLD location
         // so any stale reference (e.g. an async function's caller still
@@ -589,10 +600,23 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
         }
         return arr;
     }
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        // #7574: a `class X extends Array` instance (or any array-like object)
+        // in a `T[]`-annotated binding. Pre-fix `clean_arr_ptr` waved its
+        // `ObjectHeader` through and the store below overwrote `keys_array` /
+        // `meta` — the SECOND push SIGSEGVed (exit 139). Run the spec-generic
+        // `Array.prototype.push` on the object instead, and return the ORIGINAL
+        // receiver so codegen's realloc write-back leaves the binding pointing
+        // at the instance (returning a fresh empty array here is what made the
+        // push look silently dropped).
+        if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
+            crate::array::subclass::array_object_method(recv, "push", &[value]);
+            return arr;
+        }
         return js_array_alloc(0);
     }
+    let arr = cleaned;
     if array_is_frozen(arr) {
         throw_frozen_array_mutation();
     }
@@ -697,6 +721,26 @@ pub extern "C" fn js_array_push_spread_f64(
     if source.is_null() {
         return target;
     }
+    // #7542: call-spread (`f(...arr)`) is `GetIterator(arr)` + drain, so a
+    // patched `Array.prototype[Symbol.iterator]` decides how many arguments the
+    // callee receives. The element copy below never consults the protocol, so
+    // `f(...[1,2,3])` passed 3 arguments where node passes whatever the patched
+    // iterator yields (1).
+    //
+    // Materialize through the protocol and copy THAT, rather than concatenating:
+    // this helper appends into `target` in place and returns it, and callers
+    // rely on that identity. `js_array_clone_for_spread` is the same entry point
+    // `[...arr]` uses, so the two spread forms cannot disagree.
+    let source = if crate::array::array_proto_iterator_modified() {
+        let boxed = crate::value::js_nanbox_pointer(source as i64);
+        let materialized = crate::array::js_array_clone_for_spread(boxed);
+        if materialized.is_null() {
+            return target;
+        }
+        materialized as *const ArrayHeader
+    } else {
+        source
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let source_handle = scope.root_raw_const_ptr(source);
     unsafe {
@@ -786,10 +830,18 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 /// here. test262 built-ins/Array length-write-on-frozen.
 #[no_mangle]
 pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: f64) {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        // #7574: `a.length = n` on a `class X extends Array` instance reached
+        // here through the `is_array_expr`-keyed `property_set` lowering and
+        // wrote `ObjectHeader.object_type`. Perform the Array-exotic
+        // `Set(O, "length", n, true)` on the object instead.
+        if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
+            crate::array::subclass::array_object_set_length(recv, new_length);
+        }
         return;
     }
+    let arr = cleaned;
     if array_object_flags(arr) & crate::gc::OBJ_FLAG_FROZEN != 0 {
         throw_non_writable_length();
     }

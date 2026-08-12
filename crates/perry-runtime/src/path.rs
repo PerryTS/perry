@@ -1862,5 +1862,8 @@ pub extern "C" fn js_path_win32_relative(
     string_to_js(&parts.join("\\"))
 }
 
+/// NaN-boxed operand entry points (#7621) — see the child module's docs.
+pub mod value_args;
+
 #[cfg(test)]
 mod tests;

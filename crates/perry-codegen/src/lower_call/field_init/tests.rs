@@ -77,6 +77,7 @@ fn class(fields: Vec<ClassField>, constructor: Option<Function>) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
         static_accessor_names: Vec::new(),
         static_accessor_fn_ids: Vec::new(),
     }
@@ -311,4 +312,278 @@ fn derived_class_refuses_the_elision() {
     );
     c.extends_name = Some("Base".to_string());
     assert!(ctor_prologue_param_assigned_fields(&c).is_empty());
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// #7512-followup: the SAME predicate across an inheritance chain.
+//
+// The single-class rule bails to the empty set on any heritage, so a subclass
+// instance never got an at-allocation typed-shape declaration and every
+// raw-f64 store in every constructor on its chain — the BASE class's own
+// `this.x = x` included — missed `GC_OBJ_TYPED_LAYOUT_INTACT` and fell back to
+// the by-name `js_put_value_set`. Counted on `shapes.ts`: 528 000 by-name
+// stores, and a two-class probe measured 2.0x against the flattened class.
+// ───────────────────────────────────────────────────────────────────────────
+
+fn named_class(
+    name: &str,
+    extends: Option<&str>,
+    fields: Vec<ClassField>,
+    ctor: Option<Function>,
+) -> Class {
+    let mut c = class(fields, ctor);
+    c.name = name.to_string();
+    c.extends_name = extends.map(str::to_string);
+    c
+}
+
+fn super_call(args: Vec<Expr>) -> Stmt {
+    Stmt::Expr(Expr::SuperCall(args))
+}
+
+fn chain_of(classes: &[Class]) -> std::collections::HashMap<String, &Class> {
+    classes.iter().map(|c| (c.name.clone(), c)).collect()
+}
+
+fn chain_sets(
+    map: &std::collections::HashMap<String, &Class>,
+    leaf: &str,
+) -> Option<Vec<(String, Vec<String>)>> {
+    chain_prologue_assigned_fields(map, leaf)
+        .map(|v| v.into_iter().map(|(n, s)| (n, sorted(s))).collect())
+}
+
+/// The `shapes.ts` shape: `Rect extends Base`, both constructors opening with
+/// a plain prologue, the derived one after a `super(...)` whose arguments are
+/// plain parameters.
+#[test]
+fn chain_prologue_covers_base_and_derived() {
+    let base = named_class(
+        "Base",
+        None,
+        vec![field("x")],
+        Some(func(vec![param(1, "x")], vec![user_this_assign("x", 1)])),
+    );
+    let derived = named_class(
+        "Derived",
+        Some("Base"),
+        vec![field("w")],
+        Some(func(
+            vec![param(2, "x"), param(3, "w")],
+            vec![
+                super_call(vec![Expr::LocalGet(2)]),
+                user_this_assign("w", 3),
+            ],
+        )),
+    );
+    let all = vec![base, derived];
+    let map = chain_of(&all);
+    assert_eq!(
+        chain_sets(&map, "Derived"),
+        Some(vec![
+            ("Base".to_string(), vec!["x".to_string()]),
+            ("Derived".to_string(), vec!["w".to_string()]),
+        ])
+    );
+    let chain = chain_prologue_assigned_fields(&map, "Derived").unwrap();
+    assert!(crate::typed_shape::class_chain_layout_declarable_at_allocation(&map, &chain));
+}
+
+/// A FIELDLESS subclass assigns nothing, and that is a QUALIFIED answer, not a
+/// disqualification. The pre-followup API conflated "disqualified" and
+/// "qualified but assigns nothing" into one empty set, which is exactly what
+/// made a chain unanalysable a class at a time. `Marker extends Shape` in
+/// `shapes.ts` is this case.
+#[test]
+fn fieldless_subclass_is_qualified_with_an_empty_set() {
+    let base = named_class(
+        "Base",
+        None,
+        vec![field("x")],
+        Some(func(vec![param(1, "x")], vec![user_this_assign("x", 1)])),
+    );
+    let marker = named_class(
+        "Marker",
+        Some("Base"),
+        vec![],
+        Some(func(
+            vec![param(2, "x")],
+            vec![super_call(vec![Expr::LocalGet(2)])],
+        )),
+    );
+    let all = vec![base, marker];
+    let map = chain_of(&all);
+    assert_eq!(
+        chain_sets(&map, "Marker"),
+        Some(vec![
+            ("Base".to_string(), vec!["x".to_string()]),
+            ("Marker".to_string(), vec![]),
+        ])
+    );
+    let chain = chain_prologue_assigned_fields(&map, "Marker").unwrap();
+    assert!(crate::typed_shape::class_chain_layout_declarable_at_allocation(&map, &chain));
+}
+
+/// `Shape.made = Shape.made + 1` — a static bump AFTER the prologue run and
+/// BEFORE the subclass's own field writes. Admitted because `this` appears
+/// nowhere in it, which is what proves it cannot read a raw-f64 slot that is
+/// still holding the allocator's `undefined` fill.
+#[test]
+fn this_free_trailing_statement_does_not_disqualify() {
+    let base = named_class(
+        "Base",
+        None,
+        vec![field("x")],
+        Some(func(
+            vec![param(1, "x")],
+            vec![
+                user_this_assign("x", 1),
+                Stmt::Expr(Expr::Binary {
+                    op: perry_hir::BinaryOp::Add,
+                    left: Box::new(Expr::Number(1.0)),
+                    right: Box::new(Expr::Number(2.0)),
+                }),
+            ],
+        )),
+    );
+    let all = vec![base];
+    let map = chain_of(&all);
+    assert_eq!(
+        chain_sets(&map, "Base"),
+        Some(vec![("Base".to_string(), vec!["x".to_string()])])
+    );
+}
+
+/// ...but a trailing statement that DOES mention `this` disqualifies the whole
+/// chain. This is the soundness pin: in `Base extends nothing`, `Derived`'s
+/// `this.w` is still unwritten when `Base`'s body finishes, so a `this` read
+/// there would see `undefined`'s NaN-box bits through a declared raw-f64 mask
+/// and yield `NaN`.
+#[test]
+fn trailing_statement_mentioning_this_disqualifies() {
+    let base = named_class(
+        "Base",
+        None,
+        vec![field("x")],
+        Some(func(
+            vec![param(1, "x")],
+            vec![
+                user_this_assign("x", 1),
+                Stmt::Expr(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "w".to_string(),
+                    byte_offset: 0,
+                }),
+            ],
+        )),
+    );
+    let all = vec![base];
+    let map = chain_of(&all);
+    assert_eq!(chain_sets(&map, "Base"), None);
+}
+
+/// A raw-f64 field nobody's prologue assigns leaves a slot that would be read
+/// as a double while it still holds `undefined`. The chain must be refused.
+#[test]
+fn uncovered_raw_f64_field_refuses_the_declaration() {
+    let base = named_class(
+        "Base",
+        None,
+        vec![field("x"), field("never_assigned")],
+        Some(func(vec![param(1, "x")], vec![user_this_assign("x", 1)])),
+    );
+    let derived = named_class(
+        "Derived",
+        Some("Base"),
+        vec![],
+        Some(func(
+            vec![param(2, "x")],
+            vec![super_call(vec![Expr::LocalGet(2)])],
+        )),
+    );
+    let all = vec![base, derived];
+    let map = chain_of(&all);
+    let chain = chain_prologue_assigned_fields(&map, "Derived").unwrap();
+    assert!(!crate::typed_shape::class_chain_layout_declarable_at_allocation(&map, &chain));
+}
+
+/// A derived constructor that runs anything before `super(...)` may observe
+/// arbitrary state; refuse it rather than reason about it.
+#[test]
+fn statement_before_super_disqualifies() {
+    let base = named_class(
+        "Base",
+        None,
+        vec![field("x")],
+        Some(func(vec![param(1, "x")], vec![user_this_assign("x", 1)])),
+    );
+    let derived = named_class(
+        "Derived",
+        Some("Base"),
+        vec![field("w")],
+        Some(func(
+            vec![param(2, "x"), param(3, "w")],
+            vec![
+                Stmt::Expr(Expr::Number(1.0)),
+                super_call(vec![Expr::LocalGet(2)]),
+                user_this_assign("w", 3),
+            ],
+        )),
+    );
+    let all = vec![base, derived];
+    let map = chain_of(&all);
+    assert_eq!(chain_sets(&map, "Derived"), None);
+}
+
+/// A `super(...)` argument that could observe `this` hands the parent
+/// constructor the half-built instance.
+#[test]
+fn super_argument_mentioning_this_disqualifies() {
+    let base = named_class(
+        "Base",
+        None,
+        vec![field("x")],
+        Some(func(vec![param(1, "x")], vec![user_this_assign("x", 1)])),
+    );
+    let derived = named_class(
+        "Derived",
+        Some("Base"),
+        vec![field("w")],
+        Some(func(
+            vec![param(2, "x"), param(3, "w")],
+            vec![super_call(vec![Expr::This]), user_this_assign("w", 3)],
+        )),
+    );
+    let all = vec![base, derived];
+    let map = chain_of(&all);
+    assert_eq!(chain_sets(&map, "Derived"), None);
+}
+
+/// A named parent this module cannot resolve is a constructor we cannot
+/// analyse — refuse rather than assume it is inert.
+#[test]
+fn unresolvable_parent_disqualifies() {
+    let derived = named_class(
+        "Derived",
+        Some("SomewhereElse"),
+        vec![field("w")],
+        Some(func(vec![param(3, "w")], vec![user_this_assign("w", 3)])),
+    );
+    let all = vec![derived];
+    let map = chain_of(&all);
+    assert_eq!(chain_sets(&map, "Derived"), None);
+}
+
+/// The single-class predicate must be UNCHANGED by the followup: a class with
+/// heritage still gets the empty set from it, so every existing caller keeps
+/// its old answer and only the new chain form widens anything.
+#[test]
+fn single_class_predicate_still_refuses_heritage() {
+    let derived = named_class(
+        "Derived",
+        Some("Base"),
+        vec![field("w")],
+        Some(func(vec![param(3, "w")], vec![user_this_assign("w", 3)])),
+    );
+    assert!(ctor_prologue_param_assigned_fields(&derived).is_empty());
 }

@@ -41,9 +41,11 @@
 //!   `A` **dense** and monomorphic for its whole lifetime.
 //! * **E3 — array containment.** Every *other* use of `A` is an in-bounds
 //!   element read (E5), a `.length` read, or `return A`. The return exemption
-//!   is #7034 §4's, unchanged and for the same reason. Anything else — call
-//!   argument, closure capture, reassignment, `IndexSet`, an unrecognised
-//!   array method, being an element of another container — disqualifies `A`.
+//!   is #7034 §4's, unchanged and for the same reason. The one conditional
+//!   escape is the compiler-generated `ArrayIterationPatched` guard described
+//!   below. Anything else — call argument, closure capture, reassignment,
+//!   `IndexSet`, an unrecognised array method, being an element of another
+//!   container — disqualifies `A`.
 //! * **E4 — class admissibility.** `C` passes the same `chain_admissible`
 //!   gate rule 1 applies to a `new C(...)` local, and the module-wide rule-5
 //!   barrier scan is clear.
@@ -58,10 +60,17 @@
 //!   `A[i]` can be `undefined`, and a guard-free fixed-offset load masks a
 //!   NaN-boxed `undefined` into a wild pointer.
 //!
-//! `for (const r of A)` desugars to exactly the E5 shape
+//! `for (const r of A)` has an E5 index arm
 //! (`lower/stmt_loops.rs::lazy_or_index_elem` — a `__idx` local, `__idx <
-//! __arr.length`, `Let r = IndexGet(__arr, __idx)`), so the iterator form is
-//! covered by the indexed proof rather than by a second one.
+//! __arr.length`, `Let r = IndexGet(__arr, __idx)`) behind the
+//! `ArrayIterationPatched` runtime guard. Its lazy arm passes `A` to
+//! `GetIterator`, which is ordinarily an E3 escape: a custom iterator can
+//! reshape an element before returning. The index-arm facts remain sound only
+//! when that top-level guard is the last use of both the array and every
+//! element-group member. Then the mutating lazy arm and the proven index arm
+//! are mutually exclusive, and no fact crosses their join. A nested guard is
+//! refused because a loop backedge could bring the mutated array to an
+//! earlier proven access on the next iteration.
 //!
 //! ## What the facts are used for
 //!
@@ -86,18 +95,25 @@
 //! when any member fails, rather than dropping the member. See
 //! [`ElementShapeFacts::group_members`].
 //!
-//! ## `numeric_fields` is deliberately not claimed
+//! ## `numeric_fields` is claimed at GROUP scope (#7770)
 //!
-//! Phase 3b's numeric-field proof is an *exhaustive reachable store* proof,
-//! which containment makes possible because no alias exists. An element group
-//! has aliases by construction: a store through one member
-//! (`r.score = "s"` — a declared field, so rule 2 permits it) takes the
-//! store-side boxed-setter exit and downgrades that slot's raw-f64 layout,
-//! and another member's `load double` claiming `JsNumber` would then read
-//! NaN-boxed string bits as a number. Group members therefore claim no
-//! numeric fields at all — the same stand-down `proven_this.rs` and
-//! `ptr_shape_returns.rs` make, for the same reason. The shape proof by
-//! itself still retires the whole guard diamond.
+//! Phase 3b's numeric-field proof is an *exhaustive reachable store* proof.
+//! A single member cannot discharge it — a sibling's `r.score = "s"` (a
+//! declared field, so rule 2 permits it) takes the store-side boxed-setter
+//! exit and downgrades that slot's raw-f64 layout, and this member's
+//! `load double` claiming `JsNumber` would then read NaN-boxed string bits
+//! as a number. But the GROUP can: E1–E5 containment bounds every reference
+//! to the group's objects to the group's own members and the provenance
+//! `new`s at the push sites, so the union of the members' stores plus every
+//! push's constructor arguments IS the reachable-store set.
+//! `ptr_shape.rs` therefore computes one numeric-field set per array root
+//! (`ptr_shape_numeric.rs::prove_group_numeric_fields`) — the constructor
+//! parameter environment resolved as the meet over ALL provenance `new`
+//! argument lists — and every member carries that same set. Group integrity
+//! keeps the claim honest: a claim only survives if every member survives,
+//! because dropping any member drops them all. (`proven_this.rs` and
+//! `ptr_shape_returns.rs` still stand down entirely: their receivers are
+//! caller-aliased, so no bounded store universe exists to union over.)
 //!
 //! ## GC contract
 //!
@@ -191,10 +207,31 @@ impl ElementShapeFacts {
         out
     }
 
-    /// Locals whose object is reachable from an array, and which therefore
-    /// must not claim numeric fields (module doc).
+    /// Locals whose object is reachable from an array (either group half).
     pub(crate) fn is_group_member(&self, local: u32) -> bool {
-        self.pushed.contains_key(&local) || self.element_reads.contains_key(&local)
+        self.member_group_root(local).is_some()
+    }
+
+    /// The array root whose group `local` belongs to, if any. A member's
+    /// object is reachable through the array, so its numeric-field claim is
+    /// the GROUP's claim (module doc, #7770), never its own.
+    pub(crate) fn member_group_root(&self, local: u32) -> Option<u32> {
+        self.pushed
+            .get(&local)
+            .or_else(|| self.element_reads.get(&local))
+            .map(|(root, _)| *root)
+    }
+
+    /// The proven element class of array root `root`.
+    pub(crate) fn root_class(&self, root: u32) -> Option<&str> {
+        self.arrays.get(&root).map(String::as_str)
+    }
+
+    /// The proven root for an ARRAY local or alias id — `Some` only when the
+    /// array it references actually carries element-shape facts.
+    pub(crate) fn proven_array_root(&self, id: u32) -> Option<u32> {
+        let root = self.array_roots.get(&id)?;
+        self.arrays.contains_key(root).then_some(*root)
     }
 }
 
@@ -286,6 +323,7 @@ pub(crate) fn collect_element_shape_facts(
     // E3/E5: the array use walk.
     let mut walk = ArrayWalk {
         roots: &array_roots,
+        alias_edges: &alias_edges,
         disqualified: HashSet::new(),
         pushes: HashMap::new(),
         reads: Vec::new(),
@@ -293,7 +331,7 @@ pub(crate) fn collect_element_shape_facts(
         bounded: Vec::new(),
         in_closure: false,
     };
-    walk.walk_stmts(stmts);
+    walk.walk_region_stmts(stmts);
     let ArrayWalk {
         mut disqualified,
         pushes,
@@ -459,6 +497,7 @@ struct ReadSite {
 
 struct ArrayWalk<'a> {
     roots: &'a HashMap<u32, u32>,
+    alias_edges: &'a [(u32, u32)],
     disqualified: HashSet<u32>,
     pushes: HashMap<u32, Vec<PushValue>>,
     reads: Vec<ReadSite>,
@@ -490,6 +529,110 @@ impl<'a> ArrayWalk<'a> {
         for s in stmts {
             self.walk_stmt(s);
         }
+    }
+
+    /// Walk the region's outer statement list, where a one-shot temporal
+    /// boundary can be proved. Nested statement lists deliberately use
+    /// `walk_stmts`: admitting a guarded escape inside a loop would let its
+    /// lazy arm reshape the array before a backedge reaches an earlier fact.
+    fn walk_region_stmts(&mut self, stmts: &[Stmt]) {
+        for (index, stmt) in stmts.iter().enumerate() {
+            if self.walk_terminal_array_iteration_guard(stmt, &stmts[index + 1..]) {
+                continue;
+            }
+            self.walk_stmt(stmt);
+        }
+    }
+
+    /// Admit the compiler-generated guarded `for…of` shape without treating
+    /// its one `GetIterator(A)` as an unconditional E3 escape.
+    ///
+    /// A patched iterator is arbitrary code and may transition any element's
+    /// shape. Consequently the exception is temporal, not semantic: the lazy
+    /// and index arms must be the final use of the array and of every producer
+    /// or licensed reader in its element group. Otherwise the whole root is
+    /// disqualified exactly as a normal bare escape would be.
+    fn walk_terminal_array_iteration_guard(&mut self, stmt: &Stmt, following: &[Stmt]) -> bool {
+        let Stmt::If {
+            condition: Expr::ArrayIterationPatched,
+            then_branch,
+            else_branch: Some(index_branch),
+        } = stmt
+        else {
+            return false;
+        };
+        let Some(Stmt::Let {
+            id: iterator_id,
+            init: Some(Expr::GetIterator(source)),
+            ..
+        }) = then_branch.first()
+        else {
+            return false;
+        };
+        let Expr::LocalGet(source_id) = source.as_ref() else {
+            return false;
+        };
+        let Some(root) = self.root_of(*source_id) else {
+            return false;
+        };
+
+        // Preserve the Let write, but exempt exactly its GetIterator source.
+        // Every later lazy-arm statement is walked normally, so a second use
+        // of the array still disqualifies it through the ordinary E3 rules.
+        self.note_write(*iterator_id);
+        self.walk_stmts(&then_branch[1..]);
+        self.walk_stmts(index_branch);
+
+        let array_aliases: HashSet<u32> = self
+            .roots
+            .iter()
+            .filter_map(|(id, candidate_root)| (*candidate_root == root).then_some(*id))
+            .collect();
+        let mut group_members: HashSet<u32> = self
+            .pushes
+            .get(&root)
+            .into_iter()
+            .flatten()
+            .filter_map(|push| match push {
+                PushValue::Local(id) => Some(*id),
+                PushValue::Fresh(_) | PushValue::Other => None,
+            })
+            .chain(
+                self.reads
+                    .iter()
+                    .filter_map(|read| (read.root == root).then_some(read.local)),
+            )
+            .collect();
+        // `ptr_shape` promotes immutable aliases with their root. A use of an
+        // alias after the iterator escape is therefore a use of the same
+        // potentially-reshaped object and must participate in this boundary.
+        loop {
+            let mut changed = false;
+            for (alias, source) in self.alias_edges {
+                if group_members.contains(source) {
+                    changed |= group_members.insert(*alias);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let lazy_refs = local_refs(then_branch);
+        let following_refs = local_refs(following);
+        let lazy_array_uses = lazy_refs
+            .iter()
+            .filter(|id| array_aliases.contains(id))
+            .count();
+        let unsafe_after_escape = lazy_array_uses != 1
+            || lazy_refs.iter().any(|id| group_members.contains(id))
+            || following_refs
+                .iter()
+                .any(|id| array_aliases.contains(id) || group_members.contains(id));
+        if unsafe_after_escape {
+            self.disqualified.insert(root);
+        }
+        true
     }
 
     fn walk_stmt(&mut self, s: &Stmt) {
@@ -834,6 +977,18 @@ impl<'a> ArrayWalk<'a> {
             }
         }
     }
+}
+
+/// Every local referenced from `stmts`, including id-keyed array operations
+/// and nested closure bodies. Reuse HIR's exhaustive local-id walker rather
+/// than maintaining another list of expression variants in this proof pass.
+fn local_refs(stmts: &[Stmt]) -> Vec<u32> {
+    let mut refs = Vec::new();
+    let mut visited_closures = HashSet::new();
+    for stmt in stmts {
+        perry_hir::collect_local_refs_stmt(stmt, &mut refs, &mut visited_closures);
+    }
+    refs
 }
 
 /// Statement walker over one region's statement tree.

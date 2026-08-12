@@ -39,9 +39,9 @@ use crate::types::{DOUBLE, I32, I64};
 /// overwrite.
 ///
 /// The proof obligation is identical for both shapes and is entirely about the
-/// *operand* expressions, not the store opcode: `This` and `LocalGet(<plain
-/// param>)` cannot throw, allocate, or observe `this`, so the assignment is
-/// reached before any other effect of the constructor.
+/// *operand* expressions, not the store opcode: neither `This` nor any RHS
+/// [`prologue_rhs_cannot_observe_this`] admits can observe `this`, so the
+/// assignment is reached before anything that could read the field.
 ///
 /// **What the elided write is NOT** (the obvious objection, and it is
 /// measurably wrong — `test-files/test_class_field_init_proto_setter.ts`): it
@@ -66,14 +66,14 @@ fn prologue_assigned_field<'a>(
     stmt: &'a Stmt,
     param_ids: &std::collections::HashSet<u32>,
 ) -> Option<&'a str> {
-    let is_plain_param = |e: &Expr| matches!(e, Expr::LocalGet(id) if param_ids.contains(id));
+    let admissible = |e: &Expr| prologue_rhs_cannot_observe_this(e, param_ids);
     match stmt {
         // Synthesized (anon-shape ctor, destructuring lowering).
         Stmt::Expr(Expr::PropertySet {
             object,
             property,
             value,
-        }) if matches!(object.as_ref(), Expr::This) && is_plain_param(value.as_ref()) => {
+        }) if matches!(object.as_ref(), Expr::This) && admissible(value.as_ref()) => {
             Some(property.as_str())
         }
         // User-written `this.f = p;`.
@@ -85,7 +85,7 @@ fn prologue_assigned_field<'a>(
             strict: _,
         }) if matches!(target.as_ref(), Expr::This)
             && matches!(receiver.as_ref(), Expr::This)
-            && is_plain_param(value.as_ref()) =>
+            && admissible(value.as_ref()) =>
         {
             match key.as_ref() {
                 Expr::String(property) => Some(property.as_str()),
@@ -93,6 +93,60 @@ fn prologue_assigned_field<'a>(
             }
         }
         _ => None,
+    }
+}
+
+/// The RHS forms a prologue statement may carry.
+///
+/// The whole prologue guarantee is "this statement cannot throw, allocate, or
+/// **observe `this`**" — see [`ctor_prologue_param_assigned_fields`]. A plain
+/// parameter read was the original (and only) admitted form; #7469's widening
+/// adds the two other expression families that satisfy it by construction:
+///
+/// * **Literals** (`null`, `undefined`, a number, a string, a bool). `this.next
+///   = null` is the single most common opening statement of a linked-structure
+///   constructor, and refusing it truncated the prologue at statement 0 —
+///   which, since #7510 consults the same set, also denied the class an
+///   at-allocation layout declaration and left every store in its constructor
+///   on the by-name fallback.
+/// * **Pure operator trees over those two** (`s + 1`, `-n`, `a * b + 1`). Every
+///   leaf is a parameter read or a literal, and `Binary`/`Unary`/`Compare`/
+///   `Logical` evaluate their operands and combine them — no member access, no
+///   call, no `new`, no closure, and (decisively) no `This` anywhere in the
+///   tree. `s + 1` can still *allocate* when `s` is a string, and that is fine:
+///   the guarantee this predicate underwrites is about observability of `this`,
+///   not about the absence of a collection. A GC that scans the
+///   still-constructing instance reads the allocator's `undefined` fill through
+///   the declared descriptor and rejects it at the tag check.
+///
+/// Deliberately NOT admitted: `PropertyGet` (a getter runs user code),
+/// `Call`/`New` (arbitrary user code), `Closure` (captures), `Await`/`Yield`
+/// (suspension), and anything containing `This`. None of those can reach the
+/// half-built instance today — it has not escaped — but each makes the
+/// "cannot observe `this`" claim rest on a reachability argument instead of on
+/// the expression's own shape, and this predicate is consumed by two callers
+/// with different failure modes (a dead-store elision and a GC layout
+/// declaration).
+fn prologue_rhs_cannot_observe_this(
+    expr: &Expr,
+    param_ids: &std::collections::HashSet<u32>,
+) -> bool {
+    match expr {
+        Expr::LocalGet(id) => param_ids.contains(id),
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_) => true,
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
+            prologue_rhs_cannot_observe_this(left, param_ids)
+                && prologue_rhs_cannot_observe_this(right, param_ids)
+        }
+        Expr::Unary { operand, .. } => prologue_rhs_cannot_observe_this(operand, param_ids),
+        _ => false,
     }
 }
 
@@ -141,59 +195,232 @@ fn prologue_assigned_field<'a>(
 ///   `key_expr` none).
 ///
 /// The prologue is the maximal leading run of statements that
-/// [`prologue_assigned_field`] recognizes as `this.<f> = <plain param>`. A
-/// `LocalGet` of a plain parameter cannot throw, allocate, or observe `this`,
-/// so every field it assigns is written before ANY other effect of the
-/// constructor — which is exactly the guarantee that makes the earlier
-/// `undefined` write dead.
-fn ctor_prologue_param_assigned_fields(
+/// [`prologue_assigned_field`] recognizes as `this.<f> = <expr that cannot
+/// observe `this`>` — a plain parameter read, a literal, or a pure operator
+/// tree over those (see [`prologue_rhs_cannot_observe_this`] for why those
+/// three and nothing else). None of them can reach the half-built instance, so
+/// every field they assign is written before anything can read it — which is
+/// exactly the guarantee that makes the earlier `undefined` write dead.
+///
+/// Admitting literals is not a cosmetic widening. `constructor(v) { this.next
+/// = null; this.v = v; }` is the canonical linked-structure constructor, and
+/// under the param-only rule its prologue truncated at statement 0 and came
+/// back EMPTY — so neither field's dead `undefined` write was elided and, since
+/// #7510 consults the same set, the class was also refused an at-allocation
+/// layout declaration.
+pub(crate) fn ctor_prologue_param_assigned_fields(
     class: &perry_hir::Class,
 ) -> std::collections::HashSet<String> {
-    let empty = std::collections::HashSet::new();
-    if class.extends.is_some()
-        || class.extends_name.is_some()
-        || class.native_extends.is_some()
+    ctor_prologue_assigned_fields_inner(class, false).unwrap_or_default()
+}
+
+/// Does `expr`'s subtree contain `this`?
+///
+/// Recurses through [`perry_hir::walker::walk_expr_children`], which is
+/// exhaustive over `Expr` and drift-checked against its `_mut` twin by
+/// `walker_arms_match` — so a new expression variant cannot silently smuggle a
+/// `This` past this scan. That completeness is the whole reason the trailing
+/// region is screened at the EXPRESSION level; there is no equivalent shared
+/// `Stmt` walker in the HIR, and hand-rolling one would make a missed variant a
+/// silent wrong answer.
+fn expr_mentions_this(expr: &Expr) -> bool {
+    if matches!(expr, Expr::This) {
+        return true;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child: &Expr| {
+        if !found && expr_mentions_this(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// May `stmt` follow the prologue run without endangering a raw-f64 slot that
+/// a LATER constructor on the chain has yet to write?
+///
+/// A whitelist, deliberately: only `Stmt::Expr(e)` with no `this` anywhere in
+/// `e`. Everything else — `Return` (would skip a later assignment), `If` /
+/// loops / `Try` (would make the assignments conditional), `Let`, `Throw` — is
+/// refused by not being matched, so adding a `Stmt` variant cannot widen this
+/// by accident. `Shape.made = Shape.made + 1` is the motivating admission: a
+/// static-field bump between `this.tag = tag` and the subclass's `this.w = w`,
+/// which cannot reach the half-built instance because `this` never appears in
+/// it.
+fn stmt_is_this_free_expr(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(e) => !expr_mentions_this(e),
+        _ => false,
+    }
+}
+
+/// Is `stmt` a `super(...)` whose arguments cannot observe `this`?
+fn stmt_is_safe_super_call(stmt: &Stmt, param_ids: &std::collections::HashSet<u32>) -> bool {
+    match stmt {
+        Stmt::Expr(Expr::SuperCall(args)) => args
+            .iter()
+            .all(|a| prologue_rhs_cannot_observe_this(a, param_ids)),
+        _ => false,
+    }
+}
+
+/// `None` = the class is DISQUALIFIED (its constructor's effect on `this`
+/// cannot be bounded). `Some(set)` = qualified, and `set` is the field names
+/// its prologue unconditionally assigns — possibly EMPTY, which is a real and
+/// useful answer for a fieldless subclass like `Marker` whose whole body is
+/// `super(x, y)`. The two are different facts and the pre-#7512-followup code
+/// conflated them into one empty set, which is why a chain could not be
+/// analysed a class at a time.
+fn ctor_prologue_assigned_fields_inner(
+    class: &perry_hir::Class,
+    allow_heritage: bool,
+) -> Option<std::collections::HashSet<String>> {
+    // A dynamic, native, or lexically-shadowed parent is out of scope in both
+    // arms: `super()` then runs a built-in or a runtime-resolved constructor
+    // whose effect on `this` this analysis cannot see.
+    if class.native_extends.is_some()
         || class.extends_expr.is_some()
+        || class.heritage_lexically_shadowed
         || !class.decorators.is_empty()
     {
-        return empty;
+        return None;
     }
-    let Some(ctor) = class.constructor.as_ref() else {
-        return empty;
-    };
+    let has_heritage = class.extends.is_some() || class.extends_name.is_some();
+    if has_heritage && !allow_heritage {
+        return None;
+    }
+    // Checked BEFORE the missing-constructor early return: a field initializer
+    // runs during the init phase whether or not the class declares a ctor, and
+    // it may legally read `this.<f>` of an earlier field.
     let all_fields_bare = class.fields.iter().all(|f| {
         f.init.is_none() && f.key_expr.is_none() && f.decorators.is_empty() && !f.is_private
     });
     if !all_fields_bare {
-        return empty;
+        return None;
     }
+    let Some(ctor) = class.constructor.as_ref() else {
+        // No constructor of its own: it assigns nothing, but it also cannot
+        // observe anything. A chain containing it is still analysable — its
+        // raw-f64 fields simply go uncovered, which the caller's coverage test
+        // then rejects.
+        return Some(std::collections::HashSet::new());
+    };
     let params_plain = ctor.params.iter().all(|p| {
         p.default.is_none() && !p.is_rest && p.decorators.is_empty() && p.arguments_object.is_none()
     });
     if !params_plain {
-        return empty;
+        return None;
     }
     let param_ids: std::collections::HashSet<_> = ctor.params.iter().map(|p| p.id).collect();
     let mut assigned = std::collections::HashSet::new();
-    for stmt in &ctor.body {
+    let mut body = ctor.body.as_slice();
+    if allow_heritage {
+        // A leading `super(...)` is not a prologue assignment, so the maximal
+        // leading run used to truncate at statement 0. Skip it — the argument
+        // check is what keeps the parent from being handed the half-built
+        // instance.
+        if let Some(first) = body.first() {
+            if stmt_is_safe_super_call(first, &param_ids) {
+                body = &body[1..];
+            } else if has_heritage {
+                // A derived constructor that opens with anything else may run
+                // arbitrary code before `super()`.
+                return None;
+            }
+        } else if has_heritage {
+            return None;
+        }
+    }
+    let mut rest = body;
+    while let Some(stmt) = rest.first() {
         match prologue_assigned_field(stmt, &param_ids) {
             Some(property) => {
                 assigned.insert(property.to_string());
+                rest = &rest[1..];
             }
             None => break,
         }
     }
-    if assigned.is_empty() {
-        return empty;
+    if allow_heritage {
+        // Everything after the run runs BEFORE a subclass's own field writes,
+        // so it must not be able to read a raw-f64 slot that is still holding
+        // the allocator's `undefined` fill.
+        if !rest.iter().all(stmt_is_this_free_expr) {
+            return None;
+        }
     }
     if class
         .setters
         .iter()
         .any(|(name, _)| assigned.contains(name))
     {
-        return empty;
+        return None;
     }
-    assigned
+    Some(assigned)
+}
+
+/// [`ctor_prologue_param_assigned_fields`] for a class that DOES extend a plain
+/// user class — the shape the no-heritage rule above refuses outright.
+///
+/// Refusing it is #7512 repeating one level up. A subclass instance never gets
+/// an at-allocation typed-shape declaration, so *every* raw-f64 field store in
+/// *every* constructor on its chain — including the base class's own
+/// `this.x = x`, which is textually in a heritage-free class — misses its
+/// `GC_OBJ_TYPED_LAYOUT_INTACT` guard and falls back to `js_put_value_set`.
+/// Measured on `shapes.ts`: 528 000 by-name field stores, and a two-class
+/// probe (`gc-handoff/bench/shapes_baseclass_field.ts`) runs **2.0x** slower
+/// than the hand-flattened single class doing identical work.
+///
+/// The extra obligations heritage brings, and how each is discharged:
+///
+/// * **A leading `super(...)` is not a prologue assignment**, so the maximal
+///   leading run truncated at statement 0 and came back empty. It is skipped
+///   here instead — but only when every argument satisfies
+///   [`prologue_rhs_cannot_observe_this`], so the parent constructor cannot be
+///   handed the half-built instance.
+/// * **A non-leaf constructor's trailing statements run BEFORE the leaf's field
+///   writes.** `Shape`'s body finishes before `Rect` assigns `this.w`, so a
+///   trailing `this.w` read there would see a raw-f64-masked slot that still
+///   holds `undefined`'s NaN-box bits and yield `NaN` instead of `undefined`.
+///   The heritage arm therefore requires the ctor body to contain **no `This`
+///   at all after the prologue run** — a whole-subtree scan, not a top-level
+///   one. (The no-heritage arm keeps its existing, laxer rule: a class that is
+///   never extended has no later writer, and one that IS extended is caught by
+///   this same check when the chain is walked from the leaf.)
+/// * **An early `return` would skip a later assignment**, leaving a raw-f64
+///   field unwritten, so any `Return` anywhere in the body is rejected.
+/// Per-class prologue sets for `leaf`'s whole inheritance chain, root → leaf,
+/// or `None` if ANY class on it is disqualified.
+pub(crate) fn chain_prologue_assigned_fields(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    leaf: &str,
+) -> Option<Vec<(String, std::collections::HashSet<String>)>> {
+    let mut chain: Vec<&perry_hir::Class> = Vec::new();
+    let mut cur = classes.get(leaf).copied();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while let Some(c) = cur {
+        if !seen.insert(c.name.clone()) || chain.len() > 64 {
+            return None;
+        }
+        chain.push(c);
+        cur = match c.extends_name.as_deref() {
+            // A named parent this module cannot resolve is a class whose
+            // constructor we cannot analyse — refuse rather than assume it is
+            // inert.
+            Some(parent) => match classes.get(parent).copied() {
+                Some(pc) => Some(pc),
+                None => return None,
+            },
+            None => None,
+        };
+    }
+    chain.reverse();
+    let mut out = Vec::with_capacity(chain.len());
+    for c in chain {
+        let assigned = ctor_prologue_assigned_fields_inner(c, true)?;
+        out.push((c.name.clone(), assigned));
+    }
+    Some(out)
 }
 
 /// Walk the inheritance chain from the root down and apply each class's
@@ -250,6 +477,14 @@ pub(crate) fn apply_field_initializers_recursive(
     // message` on a `PropertySignature`). The authoritative chain is root →
     // leaf and carries each ancestor's resolved fields, so we use both its
     // ORDER (for the mode filter) and its FIELDS (per class below).
+    // #7512-followup: computed once for the LEAF, then consulted per class in
+    // the chain below. `Some` only when the chain form is what authorizes the
+    // at-allocation declaration, so a chain that stays on the old path keeps
+    // exactly its old elision set.
+    let chain_prologue_assigned: Option<Vec<(String, std::collections::HashSet<String>)>> =
+        chain_prologue_assigned_fields(ctx.classes, class_name).filter(|chain| {
+            crate::typed_shape::class_chain_layout_declarable_at_allocation(ctx.classes, chain)
+        });
     let mut chain_field_override: std::collections::HashMap<String, Vec<perry_hir::ClassField>> =
         std::collections::HashMap::new();
     // Collect the inheritance chain from root down.
@@ -381,12 +616,28 @@ pub(crate) fn apply_field_initializers_recursive(
         // obligations. Computed from the leaf-authoritative `ctx.classes` entry
         // (an ancestor resolved only through `chain_field_override` has no
         // visible ctor here and gets the conservative empty set).
-        let prologue_assigned = ctx
-            .classes
-            .get(&class_name_in_chain)
-            .copied()
-            .map(ctor_prologue_param_assigned_fields)
-            .unwrap_or_default();
+        // #7512-followup: when the LEAF's whole chain is declarable at
+        // allocation, the two consumers of this set must agree — the declared
+        // raw-f64 mask is live from birth, so a field-init `undefined` write
+        // into one of those slots would fail `layout_raw_f64_bits` and
+        // downgrade the descriptor on the spot, making the declaration
+        // worthless. So use the chain-aware per-class set exactly when the
+        // chain form is what authorized the declaration.
+        let prologue_assigned = chain_prologue_assigned
+            .as_ref()
+            .and_then(|chain| {
+                chain
+                    .iter()
+                    .find(|(name, _)| *name == class_name_in_chain)
+                    .map(|(_, set)| set.clone())
+            })
+            .unwrap_or_else(|| {
+                ctx.classes
+                    .get(&class_name_in_chain)
+                    .copied()
+                    .map(ctor_prologue_param_assigned_fields)
+                    .unwrap_or_default()
+            });
         let mut init_pairs: Vec<(String, Expr)> = Vec::new();
         let mut init_pairs_computed: Vec<(Expr, Expr)> = Vec::new();
         for field in &class_fields {

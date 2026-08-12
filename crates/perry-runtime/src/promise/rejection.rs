@@ -37,7 +37,7 @@
 
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     static REJECTIONS: RefCell<RejectionTracker> = RefCell::new(RejectionTracker::default());
     /// Re-entrancy guard: a listener invoked from a checkpoint can run
     /// arbitrary JS (including code that drains microtasks); it must not

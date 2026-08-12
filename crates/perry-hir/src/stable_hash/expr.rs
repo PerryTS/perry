@@ -442,6 +442,7 @@ impl SH for Expr {
             Expr::SetValueAt { set, idx } => { tag(h, 308); set.as_ref().hash(h); idx.as_ref().hash(h); }
             Expr::Sequence(es) => { tag(h, 309); es.hash(h); }
             Expr::DateNow => tag(h, 310),
+            Expr::ArrayIterationPatched => tag(h, 7760),
             Expr::DateNew(es) => { tag(h, 311); es.hash(h); }
             Expr::BoxedPrimitiveNew {
                 kind,

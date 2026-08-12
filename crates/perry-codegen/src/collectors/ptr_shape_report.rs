@@ -126,6 +126,28 @@ pub(super) const ALIAS_NOT_SINGLE_LET: ShapeDenial = ShapeDenial {
     issue: None,
 };
 
+/// #7112: `find_new_candidates` excludes cell-backed locals before the
+/// containment walk, so without an entry they look indistinguishable from
+/// values the analysis never considered.
+pub(super) const BOXED_BINDING: ShapeDenial = ShapeDenial {
+    rule: RULE1,
+    reason: "the allocation's binding is boxed (captured, async/generator, or \
+             otherwise cell-backed), so the function-local slot proof cannot \
+             anchor to it.",
+    tier: Tier::CompilerLimitation,
+    issue: None,
+};
+
+/// #7112: module globals are outside `Ptr<Shape>`'s function-local
+/// containment region and are filtered before any per-candidate denial runs.
+pub(super) const MODULE_GLOBAL_BINDING: ShapeDenial = ShapeDenial {
+    rule: RULE1,
+    reason: "the allocation is stored in a module-global binding, outside the \
+             function-local containment region this analysis proves.",
+    tier: Tier::CompilerLimitation,
+    issue: None,
+};
+
 // ── Class admission ────────────────────────────────────────────────────────
 
 pub(super) const ADMIT_ACCESSOR: ShapeDenial = ShapeDenial {
@@ -869,6 +891,35 @@ pub(super) fn candidate_seeds(
     // moves between buckets depending on what the package source happens to
     // do.
     out.retain(|id, _| !preamble.is_module_record(*id));
+
+    // #7112: the proof's scan above must stay exactly as cheap as it was for
+    // ordinary builds. Only an enabled report re-scans without the two storage
+    // filters, then records the candidates that disappeared before the
+    // containment walk could attach a denial. A direct `Let { init: New }` is
+    // a real shape candidate; unlike an arbitrary non-object local, silence
+    // here cannot honestly mean "not applicable".
+    if opt_report::enabled() && !suppressed() {
+        let mut unfiltered = HashMap::new();
+        super::find_new_candidates(stmts, &HashSet::new(), &HashMap::new(), &mut unfiltered);
+        unfiltered.retain(|id, _| !preamble.is_module_record(*id));
+        let names = local_names(stmts);
+        let depths = loop_depths(stmts);
+        for (id, class_name) in unfiltered {
+            if out.contains_key(&id) {
+                continue;
+            }
+            let denial = if boxed_vars.contains(&id) {
+                BOXED_BINDING
+            } else if module_globals.contains_key(&id) {
+                MODULE_GLOBAL_BINDING
+            } else {
+                // `find_new_candidates` currently has exactly these two
+                // filters; an included candidate has no prefilter denial.
+                continue;
+            };
+            deny_local(id, &names, &depths, Some(&class_name), denial);
+        }
+    }
     out
 }
 

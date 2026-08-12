@@ -25,6 +25,35 @@ fn well_known_symbol_method_name(sym_key: usize) -> Option<&'static str> {
     None
 }
 
+/// Does `obj` carry an OWN symbol-keyed property under `sym`, **without
+/// invoking** an accessor for it?
+///
+/// [`own_symbol_property`] answers the same question by performing the read,
+/// which for an accessor property means calling the user getter. A caller that
+/// only wants to know whether the builtin behaviour has been shadowed — the
+/// `[...arr]` dense fast path in `array::flat_clone` — must not run that getter,
+/// because the slow path it falls back to will read the property again and the
+/// getter would then observe two calls where the spec mandates one.
+///
+/// Deliberately mirrors [`own_symbol_property`]'s two lookups in the same order
+/// (accessor table, then the raw `SYMBOL_PROPERTIES` data table) so the two can
+/// never disagree about existence; only the *invocation* differs.
+pub(crate) unsafe fn has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool {
+    if accessors::symbol_accessor_property(obj_f64, sym_f64).is_some() {
+        return true;
+    }
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return false;
+    }
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    match guard.as_ref().and_then(|map| map.get(&obj_key)) {
+        Some(entries) => entries.iter().any(|&(sk, _)| sk == sym_key),
+        None => false,
+    }
+}
+
 /// #1758: the OWN symbol-property lookup — the raw `SYMBOL_PROPERTIES`
 /// side-table read keyed by the object's address (no class-ref / no prototype
 /// chain). Used by `js_object_get_symbol_property` and by

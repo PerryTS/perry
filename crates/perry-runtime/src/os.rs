@@ -1197,9 +1197,10 @@ pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
         let times_handle = scope.root_raw_mut_ptr(times);
 
         let packed = b"model\0speed\0times\0";
-        let obj =
-            js_object_alloc_with_shape(CPU_INFO_SHAPE_ID, 3, packed.as_ptr(), packed.len() as u32);
-        let times = times_handle.get_raw_mut_ptr::<ObjectHeader>();
+        // #7341: the alloc and the re-read are one step.
+        let (obj, times) = times_handle.across_mut::<ObjectHeader, _>(|| {
+            js_object_alloc_with_shape(CPU_INFO_SHAPE_ID, 3, packed.as_ptr(), packed.len() as u32)
+        });
         js_object_set_field(obj, 0, JSValue::from_bits(model_handle.get_nanbox_u64()));
         js_object_set_field(obj, 1, JSValue::number(info.speed));
         js_object_set_field(obj, 2, JSValue::pointer(times as *const u8));

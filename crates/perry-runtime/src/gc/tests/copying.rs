@@ -1,5 +1,7 @@
 mod adaptive_tenuring;
 mod all_pointer_elements_7469;
+mod deferred_finalize_7635;
+mod latch;
 mod pointer_publish_7154;
 mod promise_side_tables;
 mod survival_and_malloc;
@@ -7,6 +9,16 @@ mod weak_holder_registry;
 mod weak_semantics;
 use super::super::*;
 use super::support::*;
+
+/// Element/field count whose backing store exceeds the POINTER-BEARING
+/// born-tenured threshold, so `arena_alloc_gc` births it in old-gen.
+///
+/// Derived from the constant the allocator itself consults rather than written
+/// out, so a future retune moves these fixtures with it instead of silently
+/// turning them into nursery allocations — which is how they would stop
+/// covering the old-gen invariant they exist for rather than fail.
+const OLD_BORN_ELEMENTS: u32 =
+    (crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES / 8) as u32 + 64;
 
 fn deactivate_malloc_registry_for_tests() {
     MALLOC_STATE.with(|s| {
@@ -133,6 +145,7 @@ impl TemporaryRustMutableRootScanner {
                 source: MutableRootScannerSource::RuntimeMutableScanner,
                 budgeted_scanner: None,
                 budgeted_state_factory: None,
+                name: "test_rust_mutable_root_scanner",
             });
             previous_len
         });
@@ -487,7 +500,12 @@ fn test_copying_minor_rewrites_exact_object_pointer_slot_only() {
     assert_eq!(third, 33.0);
     assert!(crate::arena::pointer_in_nursery(obj_after));
     assert!(crate::arena::pointer_in_nursery(child_after));
-    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 2);
+    // ONE read, not two: #7645 removed the eligibility preflight's traversal
+    // of the same graph, so the pointer slot is now visited only by the copy
+    // phase. This assertion is the unit-level witness of that counter drop —
+    // it must go back to 2 if the preflight walk ever returns.
+    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 1);
+    assert!(trace.copying_nursery.preflight_skipped);
     assert_eq!(trace.layout_scans.unknown_layout_slots_read, 0);
 }
 
@@ -521,7 +539,12 @@ fn test_copying_minor_rewrites_exact_closure_pointer_capture_only() {
     assert_eq!(third, 30.0);
     assert!(crate::arena::pointer_in_nursery(closure_after));
     assert!(crate::arena::pointer_in_nursery(child_after));
-    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 2);
+    // ONE read, not two: #7645 removed the eligibility preflight's traversal
+    // of the same graph, so the pointer slot is now visited only by the copy
+    // phase. This assertion is the unit-level witness of that counter drop —
+    // it must go back to 2 if the preflight walk ever returns.
+    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 1);
+    assert!(trace.copying_nursery.preflight_skipped);
     assert_eq!(trace.layout_scans.unknown_layout_slots_read, 0);
 }
 
@@ -1367,7 +1390,7 @@ fn large_object_old_born_array_slot_write_keeps_young_child_alive() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = young_leaf();
-    let arr = crate::array::js_array_alloc(4096);
+    let arr = crate::array::js_array_alloc(OLD_BORN_ELEMENTS);
 
     assert!(crate::arena::pointer_in_old_gen(arr as usize));
     crate::array::js_array_set_f64_extend(arr, 0, f64::from_bits(ptr_bits(child)));
@@ -1404,11 +1427,14 @@ fn large_object_array_literal_direct_store_keeps_young_child_alive_and_excludes_
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = young_leaf();
     let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
-    let arr = crate::array::js_array_alloc_literal(4096);
+    let arr = crate::array::js_array_alloc_literal(OLD_BORN_ELEMENTS);
     let parent_total = unsafe { (*header_from_user_ptr(arr as *const u8)).size as usize };
 
     assert!(crate::arena::pointer_in_old_gen(arr as usize));
-    assert!(is_large_object_total_size(parent_total));
+    assert!(is_large_object_total_size_for_type(
+        parent_total,
+        GC_TYPE_ARRAY
+    ));
     let elements = unsafe {
         (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
     };
@@ -1445,11 +1471,14 @@ fn large_object_inline_push_store_keeps_young_child_alive_and_excludes_parent() 
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = young_leaf();
     let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
-    let arr = crate::array::js_array_alloc(4096);
+    let arr = crate::array::js_array_alloc(OLD_BORN_ELEMENTS);
     let parent_total = unsafe { (*header_from_user_ptr(arr as *const u8)).size as usize };
 
     assert!(crate::arena::pointer_in_old_gen(arr as usize));
-    assert!(is_large_object_total_size(parent_total));
+    assert!(is_large_object_total_size_for_type(
+        parent_total,
+        GC_TYPE_ARRAY
+    ));
 
     let elements = unsafe {
         (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64
@@ -1502,7 +1531,7 @@ fn large_object_clone_direct_copy_keeps_young_child_alive_and_excludes_parent() 
     let clone = unsafe {
         crate::object::js_object_clone_with_extra(
             f64::from_bits(ptr_bits(src as usize)),
-            4096,
+            OLD_BORN_ELEMENTS,
             std::ptr::null(),
             0,
         )
@@ -1513,7 +1542,10 @@ fn large_object_clone_direct_copy_keeps_young_child_alive_and_excludes_parent() 
     };
 
     assert!(crate::arena::pointer_in_old_gen(clone as usize));
-    assert!(is_large_object_total_size(parent_total));
+    assert!(is_large_object_total_size_for_type(
+        parent_total,
+        GC_TYPE_ARRAY
+    ));
     assert!(
         remembered_set_size() > 0,
         "old-born clone field copy should dirty old-page metadata"

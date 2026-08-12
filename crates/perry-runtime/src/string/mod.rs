@@ -73,8 +73,8 @@ pub(crate) use compare::{
     js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes, utf16_cmp_bytes,
 };
 pub use concat::{
-    js_string_concat, js_string_concat_box, js_string_concat_chain, js_string_concat_value,
-    js_value_concat_string,
+    js_string_add_value, js_string_concat, js_string_concat_box, js_string_concat_chain,
+    js_string_concat_value, js_value_add_string, js_value_concat_string,
 };
 pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;
@@ -280,6 +280,18 @@ pub(crate) fn materialize_dispatch_key(key: PerryStringRef) -> *const StringHead
     }
 }
 
+/// Intern a short ASCII literal into the current thread's intern table.
+///
+/// Allocates only on the first call per thread per content; afterwards it is a
+/// hash probe returning the canonical pointer, which the intern table's root
+/// scanner already keeps marked and rewritten. Used for runtime-owned constant
+/// property names (`"value"` / `"done"` — see [`crate::iter_result`]) so they
+/// are pointer-identical to the same literals elsewhere in the program.
+#[inline]
+pub(crate) fn intern_ascii_literal(bytes: &[u8]) -> *const StringHeader {
+    intern::intern_dispatch_bytes(0, bytes.as_ptr(), bytes.len(), 0, false)
+}
+
 /// Header for heap-allocated strings
 ///
 /// `utf16_len` is at offset 0 so codegen can inline `.length` as a single i32 load.
@@ -305,6 +317,29 @@ pub struct StringHeader {
     /// Bit flags: STRING_FLAG_HAS_LONE_SURROGATES = 1
     pub flags: u32,
 }
+
+/// ABI pin for the codegen-side inline string fast paths.
+///
+/// `perry-codegen` emits raw loads at these offsets instead of calling into
+/// the runtime — `expr/property_get.rs` reads `utf16_len` for the inline
+/// `.length`, and `lower_string_method.rs`'s inline `charCodeAt` (#7592)
+/// additionally reads `byte_len` (for the runtime's own
+/// `is_ascii_string` predicate, `utf16_len == byte_len`) and the payload at
+/// `size_of::<StringHeader>()`.
+///
+/// `perry-codegen` does not depend on `perry-runtime`, so the two sides
+/// cannot share a constant. This assertion is the link: reordering, resizing,
+/// or padding this struct fails the runtime BUILD here, at the definition,
+/// rather than silently miscompiling every `.length` and `charCodeAt` in
+/// every user program. The literals are duplicated in
+/// `lower_string_method.rs`'s `STRING_HEADER_*` constants, which name this
+/// item.
+const STRING_HEADER_ABI_MATCHES_CODEGEN: () = {
+    assert!(std::mem::size_of::<StringHeader>() == 20);
+    assert!(std::mem::offset_of!(StringHeader, utf16_len) == 0);
+    assert!(std::mem::offset_of!(StringHeader, byte_len) == 4);
+};
+const _: () = STRING_HEADER_ABI_MATCHES_CODEGEN;
 
 // ── UTF-8 ↔ UTF-16 conversion helpers ──────────────────────────────────
 
@@ -469,7 +504,30 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     let raw = crate::arena::arena_alloc_gc(payload_size, 8, crate::gc::GC_TYPE_STRING);
     let ptr = raw as *mut StringHeader;
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    zero_alignment_padding_tail(raw, payload_size);
     (ptr, data)
+}
+
+/// [`string_storage_alloc`] with **no collection point**: `Some` means the
+/// bytes came out of the nursery block that was already open, so nothing on
+/// the heap moved and any raw string pointer the caller read *before* this
+/// call is still valid. `None` means the caller must root its operands and
+/// re-issue through [`string_storage_alloc`].
+///
+/// See `arena::arena_alloc_gc_no_collect` for why the guarantee holds.
+#[inline(always)]
+pub(crate) fn string_storage_alloc_no_collect(
+    capacity: u32,
+) -> Option<(*mut StringHeader, *mut u8)> {
+    let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+    let raw = crate::arena::arena_alloc_gc_no_collect(payload_size, 8, crate::gc::GC_TYPE_STRING);
+    if raw.is_null() {
+        return None;
+    }
+    let ptr = raw as *mut StringHeader;
+    let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    zero_alignment_padding_tail(raw, payload_size);
+    Some((ptr, data))
 }
 
 #[inline]
@@ -478,7 +536,57 @@ pub(crate) fn string_storage_alloc_longlived(capacity: u32) -> (*mut StringHeade
     let raw = crate::arena::arena_alloc_gc_longlived(payload_size, 8, crate::gc::GC_TYPE_STRING);
     let ptr = raw as *mut StringHeader;
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    zero_alignment_padding_tail(raw, payload_size);
     (ptr, data)
+}
+
+/// #7647: `arena_alloc_gc`/`arena_alloc_gc_longlived`/`arena_alloc_gc_old` all
+/// round a request's total size UP to 8-byte alignment
+/// (`gc_padded_total_size` in `arena/allocators.rs`), so a payload whose own
+/// natural size is not already a multiple of 8 gets up to 7 trailing bytes
+/// that are part of the allocation (`GcHeader.size`, what the collector and
+/// every heap-walking pass treat as this object's true extent) but were
+/// never requested by, or written by, the caller.
+///
+/// For every other `GC_TYPE_*` this trailing pad is a non-issue in practice
+/// because the type's own construction writes every declared field (an
+/// Object/Closure/Array literal has no "unstated" slot) -- and where it
+/// legitimately can, it is already handled: `js_array_grow`'s
+/// `[old_capacity, new_capacity)` slack is explicitly `TAG_HOLE`-filled, with
+/// a comment naming this exact hazard. A string is different: only
+/// `capacity` bytes of text are ever written by `init_string_header` and its
+/// callers' `copy_nonoverlapping`s, so the alignment pad beyond `capacity`
+/// -- unlike the array case, invisible to any `StringHeader` field -- is
+/// genuinely never initialized.
+///
+/// That is harmless to every *string* API: `.length`, indexing, iteration,
+/// and every consumer in this crate are bounded by `byte_len`/`capacity`,
+/// never `GcHeader.size`. It is NOT harmless to `PERRY_GC_FROMSPACE_SCAN`
+/// (`gc/fromspace_scan.rs`), which -- by design, and deliberately consulting
+/// no layout state -- trusts `GcHeader.size` as the payload's true extent
+/// and scans every word up to it looking for stale from-space references.
+/// Leftover bytes from whatever the arena block last held there can, and
+/// measurably do, occasionally decode as a plausible NaN-boxed or bare
+/// pointer: the #7647 parse-then-churn gate fixture hit this on roughly
+/// 1 in 40 parsed-record strings on a clean, correct build, reported as a
+/// false "dangling reference" though nothing ever reads that byte range
+/// through a real string operation.
+///
+/// Zeroing the pad is O(<=7 bytes) per allocation, negligible next to the
+/// content copy it sits beside, and makes a string's declared size fully
+/// reflect written bytes -- closing the blind spot at this crate's one
+/// normal string-storage choke point rather than asking every probe that
+/// reaches for the scan to design around it.
+#[inline]
+fn zero_alignment_padding_tail(raw: *mut u8, requested_payload_size: usize) {
+    unsafe {
+        let header = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let allocated_payload = ((*header).size as usize).saturating_sub(crate::gc::GC_HEADER_SIZE);
+        let padding = allocated_payload.saturating_sub(requested_payload_size);
+        if padding > 0 {
+            std::ptr::write_bytes(raw.add(requested_payload_size), 0, padding);
+        }
+    }
 }
 
 #[inline]

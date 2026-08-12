@@ -1,0 +1,9 @@
+### Fixed
+
+- **`js_object_set_field` by index left the written slot outside the collector's view (#7164).** `perry_ffi::alloc_object()` allocates with `field_count = 0` and `INLINE_SLOT_FLOOR` physical slots. The documented by-index writer bounds-checks `field_index` against `max(field_count, INLINE_SLOT_FLOOR)` — so it *accepts* an index at or above `field_count` — but never widened `field_count` to cover it.
+
+  `object::gc_field_slot_range` bounds the collector's view of an object's payload by `field_count`, and `heap_payload_slot_selection` short-circuits to `Empty` on an empty payload **before** consulting the per-object pointer mask. A pointer written through the by-index setter was therefore invisible to both tracing (never marked → swept while still live) and to evacuation rewriting (a stale from-space pointer left in a live slot). That is the crash in the issue: the bogus `0x9` slot the copying minor SIGSEGVs on is downstream wreckage, not the defect.
+
+  This is the by-index counterpart of the "#7154 publication order" invariant that `field_set_by_name/tail.rs` already enforces at two sites; only the by-index path was missing it. Widening before the store is safe because the existing bounds check already holds `field_index` below the physical capacity, and every physical slot is `undefined`-initialized at allocation, so the widened range can only ever expose non-pointer sentinels.
+
+  The regression test asserts the defect **deterministically**, without racing a collector: it checks the collector's own child-slot enumerator (`gc_child_slots` — the function every mark/scan/evacuation pass calls) reports the written slot at all. Before the fix it enumerated `[]`. It then runs a real copying minor gated on `copied_objects > 0`, so a run that collected nothing cannot report success.

@@ -61,6 +61,27 @@ pub(crate) fn lower_let(
     ty: &perry_hir::types::Type,
     mutable: bool,
 ) -> Result<()> {
+    // #7771: inside an element-shape fast clone, the tracked
+    // `const r = arr[j]` binding is VIRTUAL. The matcher admitted the body
+    // only because every use of `r` is a tracked `r.field` read, and each of
+    // those lowers through `element_shape_loop_fact_for_property_get` to a
+    // bare element load — so the binding itself emits nothing. Lowering the
+    // generic `IndexGet` here would put a runtime-call diamond inside the
+    // clone, fail its call-free admission scan, and DELETE the clone rather
+    // than slow it (#7690's lesson). Skipping is sound: nothing reads `r`
+    // bare inside the clone (matcher), the clone is call-free so no GC
+    // observes the slot mid-loop, `const` scoping means nothing after the
+    // loop can read it, and a residual-check side exit re-runs the current
+    // iteration in the slow clone, whose OWN `Let` binds the slot before any
+    // use. The fact is popped before the slow clone lowers, so this arm
+    // cannot fire there.
+    if ctx
+        .element_shape_loop_facts
+        .iter()
+        .any(|fact| fact.element_binding == Some(id))
+    {
+        return Ok(());
+    }
     // `let C = SomeClass` aliases the local `C` to the class
     // `SomeClass` for `new C()` site rerouting. The HIR lowers
     // class identifiers referenced as values to `Expr::ClassRef`,
@@ -268,6 +289,29 @@ pub(crate) fn lower_let(
     } else {
         ty.clone()
     };
+
+    // #7773/#7506: a numeric local inherits a DECLARED-ONLY proof from its
+    // initializer. `const v = o.x` reaches this as `Any` refined to `Number`,
+    // while TypeScript's inferred `const sum = o.x + o.y` already reaches the
+    // HIR as `Number`; neither form proves what the runtime slots contain.
+    // Record both as violable so a later arithmetic consumer re-checks the
+    // local instead of laundering a possibly boxed value through its type.
+    if matches!(
+        refined_ty,
+        perry_hir::types::Type::Number | perry_hir::types::Type::Int32
+    ) {
+        if init.is_some_and(|e| crate::type_analysis::numeric_proof_is_declared_only(ctx, e)) {
+            ctx.declared_only_numeric_locals.insert(id);
+        }
+    }
+
+    // (#7854 also recorded the array/string half of this — a local whose
+    // `Array`/`String` type came only from the RECEIVER'S ANNOTATION — in
+    // `declared_only_array_locals`, so the `.length` fast arm could refuse it.
+    // #7862 gave that arm a property-semantic fallback, which is what the
+    // refusal existed to avoid, so both the set and its one consumer are gone;
+    // see the `.length` arm in `expr/property_get.rs`. The NUMERIC half above
+    // stays: its consumer is an arithmetic op with no guarded fallback.)
 
     // Track closure func_id → local_id mapping so the closure
     // call site in lower_call can look up rest param info.

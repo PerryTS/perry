@@ -1,8 +1,8 @@
 use super::{NativeAbiTransitionOp, NativeAbiTransitionRecord};
 use crate::native_value::{
     verify_native_rep_records, AliasState, BoundsProof, BoundsState, BufferAccessMode,
-    BufferViewRep, LoweredValue, MaterializationReason, NativeAbiDirection, NativeAbiTypeRecord,
-    NativeFactUse, NativeRep, NativeRepRecord, NativeValueState, SemanticKind,
+    BufferViewPointerState, BufferViewRep, LoweredValue, MaterializationReason, NativeAbiDirection,
+    NativeAbiTypeRecord, NativeFactUse, NativeRep, NativeRepRecord, NativeValueState, SemanticKind,
 };
 use crate::types::{DOUBLE, F32, I32, I64, PTR};
 
@@ -33,6 +33,7 @@ fn record() -> NativeRepRecord {
         access_mode: None,
         buffer_access: None,
         native_owned_view: None,
+        buffer_view_pointer_state: None,
         materialization_reason: None,
         fallback_reason: None,
         native_value_state: NativeValueState::RegionLocal,
@@ -463,6 +464,55 @@ fn accepts_unchecked_native_proven_and_guarded_bounds() {
         guard_id: "loop_guard".to_string(),
     });
     assert!(verify_native_rep_records(&[proven, guarded]).is_ok());
+}
+
+#[test]
+fn rejects_native_access_through_invalidated_buffer_view_pointer() {
+    let mut r = record();
+    r.access_mode = Some(BufferAccessMode::UncheckedNative);
+    r.bounds_state = Some(BoundsState::Proven {
+        proof: BoundsProof::ExplicitGuard,
+    });
+    r.alias_state = Some(AliasState::NoAliasProven);
+    r.buffer_view_pointer_state = Some(BufferViewPointerState::Invalidated {
+        reason: MaterializationReason::MutableAlias,
+    });
+
+    let err = verify_native_rep_records(&[r]).expect_err("stale pointer must be rejected");
+    assert!(err
+        .to_string()
+        .contains("invalidated buffer-view data pointer"));
+}
+
+#[test]
+fn rejects_scalar_cached_view_access_without_pointer_lifetime_evidence() {
+    let mut r = record();
+    r.access_mode = Some(BufferAccessMode::CheckedNative);
+    r.bounds_state = Some(BoundsState::Proven {
+        proof: BoundsProof::ExplicitGuard,
+    });
+    r.notes = vec!["proven_view=checked_inline; guards=none".to_string()];
+
+    let err = verify_native_rep_records(&[r])
+        .expect_err("scalar access through a cached view must carry pointer-lifetime evidence");
+    assert!(err
+        .to_string()
+        .contains("native buffer-view access omitted pointer-lifetime evidence"));
+}
+
+#[test]
+fn accepts_runtime_fallback_after_buffer_view_pointer_invalidation() {
+    let mut r = record();
+    r.access_mode = Some(BufferAccessMode::DynamicFallback);
+    r.bounds_state = Some(BoundsState::Unknown);
+    r.materialization_reason = Some(MaterializationReason::MutableAlias);
+    r.fallback_reason = Some(MaterializationReason::MutableAlias);
+    r.native_value_state = NativeValueState::DynamicFallback;
+    r.buffer_view_pointer_state = Some(BufferViewPointerState::Invalidated {
+        reason: MaterializationReason::MutableAlias,
+    });
+
+    assert!(verify_native_rep_records(&[r]).is_ok());
 }
 
 #[test]

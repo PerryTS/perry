@@ -26,6 +26,7 @@
 //! in #7502; where a mechanic has no native-side counterpart today, that issue
 //! names it.
 
+use perry_codegen::testing::root_slots;
 use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
@@ -49,6 +50,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -883,14 +885,49 @@ fn immutable_index_alias_binds_once_but_keeps_incremental_root_barrier() {
     );
     assert!(
         main_ir.contains(
-            "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT seq_cst, align 4"
+            "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT monotonic, align 4"
         ) && main_ir.contains("shadow.root.barrier"),
-        "an inactive incremental collector should skip the TLS-backed root barrier call"
+        "the relaxed global gate should let an inactive incremental collector skip the \
+         TLS-backed root barrier call"
     );
 }
 
+/// A flat-const nested array literal reserves one shadow slot per pointer-
+/// capable local, every reserved slot is either bound or cleared, and NONE of
+/// them comes from #7487's temp-root pool.
+///
+/// # What this test used to say, and why it was wrong twice over (#7504)
+///
+/// It was `flat_const_row_aliases_do_not_reserve_shadow_slots`, and it asserted
+/// `js_shadow_frame_enter(i32 1)` — "only the flat-const table root should
+/// reserve a shadow slot". Two separate defects:
+///
+/// 1. **The count is a module-level total, and #7487 gave temporaries a claim
+///    on it.** That is #7504's subject, and it is the half this test can settle:
+///    measured here, the temp pool contributes **zero** binds and zero
+///    reservations, so the three reserved slots are entirely the locals'. The
+///    two causes the issue asked to separate are separated, and only one of them
+///    is present.
+/// 2. **The property itself is not the contract, and satisfying it would be a
+///    GC bug.** `kernel` is lowered as a real heap array (`js_inline_arena_*`),
+///    so `krow = kernel[0]` holds a heap pointer and `k = krow[1]` is an `Any`
+///    codegen cannot prove numeric. Leaving either unrooted is #6968 exactly.
+///    The assertion presumed a flat-const lowering that emits the rows as
+///    static data; this fixture does not receive one. That gap is real and
+///    worth its own issue, but it is an OPTIMIZATION gap, not a hygiene
+///    regression, and asserting it here made a rooting suite red for a
+///    performance reason.
+///
+/// The second assertion had also gone quietly toothless: it forbade
+/// `js_shadow_slot_set(i32 1`, while #7013 moved the per-slot traffic to
+/// `js_shadow_slot_bind`. The row aliases were touching slot 1 the whole time,
+/// through a spelling the negative did not name.
+///
+/// What is asserted now is the hygiene property this suite exists for: no slot
+/// is reserved and then left untouched. A reserved-but-never-bound slot is the
+/// #7184 shape — the collector scans a frame entry that no store ever reached.
 #[test]
-fn flat_const_row_aliases_do_not_reserve_shadow_slots() {
+fn flat_const_locals_reserve_and_use_every_slot_they_claim() {
     let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(&flat_const_row_alias_shadow_module(), entry_opts()).unwrap(),
@@ -898,19 +935,43 @@ fn flat_const_row_aliases_do_not_reserve_shadow_slots() {
     .expect("LLVM IR should be UTF-8");
     let main_ir = function_slice(&ir, "main");
 
-    // PRE-EXISTING RED, not caused by #7088: verified by running this suite
-    // against pristine `origin/main` sources, where the same assertion fails
-    // with three reserved slots instead of one. Two row aliases now take a
-    // persistent shadow slot each. This suite runs nightly/at-tag rather than
-    // per-PR, which is how it went red unnoticed. Kept asserting the intended
-    // property, with the string updated for `js_shadow_frame_enter`.
+    let reserved = root_slots::frame_slot_count(main_ir);
     assert!(
-        main_ir.contains("call ptr @js_shadow_frame_enter(i32 1)"),
-        "only the flat-const table root should reserve a shadow slot"
+        reserved > 0,
+        "with an empty frame the per-slot loop below iterates zero times and \
+         certifies nothing — this assertion has no subject:\n{main_ir}"
     );
+    assert_eq!(
+        root_slots::temp_root_slot_binds(main_ir),
+        0,
+        "#7504's separation: this fixture has no allocating call between \
+         operands, so the pooled temp roots contribute nothing here and all {} \
+         reserved slots belong to locals. If that changes, the numbers below \
+         must be re-derived rather than adjusted:\n{main_ir}",
+        reserved,
+    );
+
+    let touched: std::collections::BTreeSet<u32> = (0..reserved)
+        .filter(|idx| {
+            main_ir.contains(&format!("call void @js_shadow_slot_bind(i32 {idx}, ptr %"))
+                || main_ir.contains(&format!("call void @js_shadow_slot_set(i32 {idx}"))
+        })
+        .collect();
+    assert_eq!(
+        touched.len() as u32,
+        reserved,
+        "every reserved shadow slot must be bound or cleared; slot(s) {:?} of \
+         {reserved} were reserved and never touched, which is the #7184 shape — \
+         the collector scans a frame entry no store reached:\n{main_ir}",
+        (0..reserved)
+            .filter(|idx| !touched.contains(idx))
+            .collect::<Vec<_>>(),
+    );
+
     assert!(
-        !main_ir.contains("call void @js_shadow_slot_set(i32 1"),
-        "row aliases of flat-const tables must not touch shadow slots"
+        root_slots::value_slot_binds(main_ir) > 0,
+        "the row aliases hold heap arrays read out of `kernel`; leaving them \
+         unrooted is #6968:\n{main_ir}"
     );
 }
 
@@ -1058,6 +1119,33 @@ fn canonical_str_shadow_module() -> Module {
     }
 }
 
+fn declared_string_lie_self_append_module() -> Module {
+    let mut module = canonical_str_shadow_module();
+    module.name = "declared_string_lie_self_append.ts".to_string();
+    module.functions[0].name = "probe_declared_string_lie".to_string();
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "value".to_string(),
+            ty: Type::String,
+            mutable: true,
+            // Models `let value: string = (42 as any)`: the annotation selects
+            // the string self-append lowering, but the slot bits are numeric.
+            init: Some(Expr::Number(42.0)),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(1)),
+                right: Box::new(Expr::Number(1.0)),
+            }),
+        )),
+        Stmt::Return(Some(Expr::LocalGet(1))),
+    ];
+    module
+}
+
 /// Phase 3a invariants (default flag state, `PERRY_CANONICAL_STR_LOCALS` on):
 /// a canonical-Str local keeps EXACTLY the pre-phase GC protocol — same
 /// double slot, same `js_shadow_slot_bind` — while the string ops tag-
@@ -1096,7 +1184,7 @@ fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
     }
     let heap_arm_start = block_def_offset(fn_ir, "strapp.heap");
     let heap_arm_end =
-        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.rcold") + 1;
+        heap_arm_start + block_def_offset(&fn_ir[heap_arm_start + 1..], "strapp.rnotheap") + 1;
     let heap_arm = &fn_ir[heap_arm_start..heap_arm_end];
     assert!(
         heap_arm.contains("call i64 @js_string_append"),
@@ -1116,5 +1204,32 @@ fn canonical_str_local_keeps_shadow_binding_and_tag_dispatched_ops() {
     assert!(
         !fn_ir.contains("plen.check_gc"),
         "canonical-Str .length must not fall into the generic receiver tower:\n{fn_ir}"
+    );
+}
+
+/// #7841: a TypeScript annotation may select the self-append lowering, but it
+/// cannot decide whether `+` means numeric addition or string concatenation.
+/// The real slot tag makes that decision at runtime. Keep the load-bearing
+/// heap-string arm direct while routing the annotation-lie arm through the
+/// spec-complete dynamic operator.
+#[test]
+fn declared_string_self_append_keeps_dynamic_lie_arm() {
+    let _pin = NativeRootsPin::shadow();
+    let ir = String::from_utf8(
+        compile_module(&declared_string_lie_self_append_module(), empty_opts()).unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let fn_ir = function_slice(
+        &ir,
+        "perry_fn_declared_string_lie_self_append_ts__probe_declared_string_lie",
+    );
+
+    assert!(
+        fn_ir.contains("call i64 @js_string_append"),
+        "a real heap-string destination must retain the in-place append arm:\n{fn_ir}"
+    );
+    assert!(
+        fn_ir.contains("call double @js_dynamic_string_or_number_add"),
+        "a non-string destination must use the actual runtime `+` operator:\n{fn_ir}"
     );
 }

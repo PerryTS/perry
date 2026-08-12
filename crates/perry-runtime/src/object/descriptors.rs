@@ -379,6 +379,15 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     && super::class_prototype_ref_id(obj_value).is_none()
                     && super::class_registry::lookup_static_method_in_chain(class_id, "name")
                         .is_none()
+                    // #7190: an own static `name` — installed by
+                    // `Object.defineProperty(C, "name", { value })` — must win
+                    // over the class-registry name, the same way it already
+                    // wins for `C.name` itself. Without this the VALUE read and
+                    // the DESCRIPTOR disagreed: `C.name` reported the redefined
+                    // string while `getOwnPropertyDescriptor(C, "name")` still
+                    // reported the declared one, which is the state that makes
+                    // a mismatch look like the define never happened.
+                    && !super::class_registry::class_has_own_dynamic_prop(class_id, "name")
                 {
                     if let Some(class_name) = super::class_registry::class_name_for_id(class_id) {
                         let s = crate::string::js_string_from_bytes(
@@ -469,7 +478,16 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     if let Some(v) =
                         super::class_registry::class_own_static_field_value(class_id, &method_name)
                     {
-                        return build_data_descriptor(v, true, true, true);
+                        // #7190: a key installed by `Object.defineProperty`
+                        // reports the attributes it was defined with; a
+                        // declared `static x = …` field keeps (true, true, true).
+                        let (writable, enumerable, configurable) =
+                            super::class_registry::class_static_defined_attrs(
+                                class_id,
+                                &method_name,
+                            )
+                            .unwrap_or((true, true, true));
+                        return build_data_descriptor(v, writable, enumerable, configurable);
                     }
                 }
             }

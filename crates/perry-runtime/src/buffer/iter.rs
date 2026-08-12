@@ -88,21 +88,8 @@ pub extern "C" fn js_buffer_entries(buf_f64: f64) -> f64 {
 
 /// Build the `{ value, done }` iterator-result object.  `value`
 /// arrives as a NaN-boxed JSValue; `done` is a JS boolean.
-unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-
-    // keys array so destructuring + for-of can find named slots.
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::object::js_object_set_keys(obj, keys);
-
-    js_object_set_field(obj, 0, value);
-    js_object_set_field(obj, 1, JSValue::bool(done));
-    js_nanbox_pointer(obj as i64)
-}
+// #7564: was a local five-allocation copy with unrooted intermediates.
+use crate::iter_result::make_iter_result;
 
 unsafe fn make_pair_array(idx: u32, byte: u8) -> f64 {
     let pair = crate::array::js_array_alloc(2);

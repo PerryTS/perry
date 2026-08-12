@@ -56,12 +56,20 @@ impl RuntimeState {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Fast-path pointer to this thread's state. `Cell<*mut _>` has no drop
     /// glue, so this TLS slot never registers a destructor — `with` on it
     /// compiles down to the raw TLS address computation + load, and it
     /// remains accessible from other TLS destructors during thread
     /// teardown.
+    ///
+    /// #7469: "the raw TLS address computation" is an out-of-line
+    /// `_tlv_get_addr` call on Darwin, and [`state`] is on the miss path of
+    /// every inline-cache property read. It was **83% of `interp`'s remaining
+    /// `_tlv_get_addr` calls** — the largest single site left after the
+    /// registries were converted. This module is itself a consolidation
+    /// (#6759 folded N side tables into one state behind one TLS pointer);
+    /// what it could not do is make that one pointer free to reach.
     static STATE_PTR: Cell<*mut RuntimeState> = const { Cell::new(std::ptr::null_mut()) };
     /// Owns the allocation behind [`STATE_PTR`]; its destructor frees the
     /// state at thread exit (and nulls the fast-path pointer first, so a
