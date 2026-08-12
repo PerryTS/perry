@@ -269,6 +269,110 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     );
 }
 
+/// #7902: `pic.miss` must be DOMINATED by `pic.token`, so the way compares can
+/// use the values that block already computed instead of re-deriving them.
+///
+/// #7883 routed all four failure edges — small-handle receiver, non-object
+/// receiver, MRU token mismatch, cached slot out of bounds — into one block,
+/// which left `token` / `token_nonnull` / `epoch_eq` live on only some of them
+/// and forced the block to reload the whole header ladder. That block is not
+/// cold: on a receiver rotation wider than the MRU entry it runs on nearly
+/// every read, so the duplicate ladder was hot code. The fix is purely
+/// structural — send the two receiver-validation failures to `pic.miss.cold`
+/// (they can never resolve a way, since `way_hit` requires a real object) and
+/// the dominance follows.
+///
+/// Assert the *consequences*, not the block names alone: a re-derivation would
+/// show up as a second `@PERRY_IC_EPOCH` load and as the small-handle sentinel
+/// `select`, and both must be gone.
+#[test]
+fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
+    let ir = emit(false, None);
+    assert!(
+        ir.contains("@perry_ic_"),
+        "test premise: the generic read reaches the inline PIC:\n{ir}"
+    );
+    assert!(
+        ir.contains("\npic.miss.cold"),
+        "the two receiver-validation failures need their own landing block, \
+         otherwise pic.miss is not dominated by pic.token:\n{ir}"
+    );
+    let epoch_loads = ir.matches("load i64, ptr @PERRY_IC_EPOCH").count();
+    assert_eq!(
+        epoch_loads, 1,
+        "one generic read must load @PERRY_IC_EPOCH exactly once; a second \
+         load means the way block re-derived the epoch predicate:\n{ir}"
+    );
+    assert!(
+        !ir.contains("ptrtoint ptr @perry_ic_"),
+        "the small-handle sentinel select only existed because an invalid \
+         receiver could reach the way compares; it must be gone:\n{ir}"
+    );
+    // The header predicates: each load/compare pair must appear exactly once.
+    for (needle, what) in [
+        ("icmp eq i8 ", "the GC_TYPE_OBJECT compare"),
+        ("icmp eq i32 %", "the closure-magic / object_type compares"),
+    ] {
+        let n = ir.matches(needle).count();
+        assert!(
+            n <= 2,
+            "{what} appears {n} times — the miss block is re-deriving the \
+             receiver header again:\n{ir}"
+        );
+    }
+}
+
+/// #7902: the cached-slot bound is `slot < FLOOR || slot < field_count`, not
+/// `slot < max(field_count, FLOOR)`.
+///
+/// Identical predicate; the point is that the `max` had to be materialised, and
+/// the `csel` that did it sat on the dependency chain out of the `field_count`
+/// load — the single hottest instruction in `interp.ts`'s `evalNode`. If
+/// someone "simplifies" this back to a `max`, nothing else in the suite
+/// notices.
+#[test]
+fn cached_slot_bound_is_a_disjunction_not_a_materialised_max() {
+    let ir = emit(false, None);
+    assert!(
+        ir.contains("icmp ult i64 ") && ir.contains(", 4"),
+        "test premise: the emitted bound compares a slot against \
+         INLINE_SLOT_FLOOR:\n{ir}"
+    );
+    assert!(
+        !ir.contains(", i64 4, i64 %"),
+        "a `select …, i64 4, i64 %fc` is the materialised max this deliberately \
+         does not emit:\n{ir}"
+    );
+}
+
+/// #7902: the way `(token, slot)` reduction is a balanced tree, so the slot
+/// select chain is `log2(PIC_WAYS)` deep instead of `PIC_WAYS` deep. Its last
+/// node feeds the bounds compare that gates the branch out of `pic.ways`, so
+/// the chain depth is directly on the critical path.
+///
+/// At most one way can hold a given token — `pic_prime_get` evicts a duplicate
+/// before writing one, and a zero token is excluded by `token_nonnull` — so
+/// reassociating is value-preserving.
+#[test]
+fn way_slot_reduction_is_a_balanced_tree() {
+    use crate::expr::property_get::generic_dispatch::PIC_WAYS;
+    let ir = emit(false, None);
+    let ways = ir
+        .find("\npic.ways")
+        .unwrap_or_else(|| panic!("expected a pic.ways block:\n{ir}"));
+    let end = ir[ways..].find("\npic.").map(|o| o + ways).unwrap_or(ir.len());
+    let body = &ir[ways..end];
+    // A left fold emits PIC_WAYS selects whose 3rd operand is the previous
+    // select; the tree emits PIC_WAYS lane selects against the literal 0 plus
+    // PIC_WAYS-1 merges. Count the "select against 0" lanes: a fold has one.
+    let lanes = body.matches(", i64 0\n").count();
+    assert_eq!(
+        lanes, PIC_WAYS,
+        "expected one `select … , i64 <slot>, i64 0` per way (a balanced tree); \
+         a left fold produces exactly one:\n{body}"
+    );
+}
+
 /// #7189 — `B.ns` where the imported module says `export * as ns from "./m.ts"`.
 ///
 /// The member's value is another module's namespace OBJECT, so there is no

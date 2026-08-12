@@ -624,8 +624,14 @@ pub(crate) fn lower_generic_property_get(
     // `token_nonnull` are the values `pic.token` computed, from the same memory
     // with no intervening store, so the predicate is unchanged.
     let mut way_hit = ctx.block().and(I1, &epoch_eq, &token_nonnull);
-    let mut way_any = String::from("false");
-    let mut way_slot = String::from("0");
+    // Reduced as a BALANCED TREE, not as a left fold. At most one way can hold
+    // a given token (`pic_prime_get` evicts a duplicate before it writes one,
+    // and a zero token is excluded by `token_nonnull`), so the association is
+    // free to change — but the fold made `way_slot` a chain of `PIC_WAYS`
+    // dependent `csel`s whose last node is the operand of the bounds compare
+    // that gates the branch out of this block. On `interp.ts` that node was the
+    // hottest instruction in `evalNode` (#7902). The tree halves the chain.
+    let mut lanes: Vec<(String, String)> = Vec::with_capacity(PIC_WAYS);
     for w in 0..PIC_WAYS {
         let tok_ptr = ctx.block().gep(
             I64,
@@ -640,9 +646,27 @@ pub(crate) fn lower_generic_property_get(
             &[(I64, &(PIC_WAY_BASE + w * 2 + 1).to_string())],
         );
         let way_slot_val = ctx.block().load(I64, &slot_ptr);
-        way_slot = ctx.block().select(I1, &eq, I64, &way_slot_val, &way_slot);
-        way_any = ctx.block().or(I1, &way_any, &eq);
+        let lane_slot = ctx.block().select(I1, &eq, I64, &way_slot_val, "0");
+        lanes.push((eq, lane_slot));
     }
+    while lanes.len() > 1 {
+        let mut merged: Vec<(String, String)> = Vec::with_capacity(lanes.len().div_ceil(2));
+        for pair in lanes.chunks(2) {
+            match pair {
+                [(a_any, a_slot), (b_any, b_slot)] => {
+                    let any = ctx.block().or(I1, a_any, b_any);
+                    let slot = ctx.block().select(I1, a_any, I64, a_slot, b_slot);
+                    merged.push((any, slot));
+                }
+                [single] => merged.push(single.clone()),
+                _ => unreachable!("chunks(2) yields one or two elements"),
+            }
+        }
+        lanes = merged;
+    }
+    let (way_any, way_slot) = lanes
+        .pop()
+        .expect("PIC_WAYS is non-zero, so the reduction leaves exactly one lane");
     way_hit = ctx.block().and(I1, &way_hit, &way_any);
     // Same per-receiver inline-capacity bound the MRU hit path applies: a slot
     // primed from a larger-capacity sibling of the same shape must not drive a
