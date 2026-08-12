@@ -768,11 +768,30 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
         // ShapeId. Shape-cached literals are stamped at birth; anything
         // else is stamped HERE on first observation (self-healing), so one
         // logical shape can never split into a pre-stamp address token and
-        // a post-stamp id token within a site. Class instances keep the
-        // keys-address token (their `parent_class_id` is inheritance data).
+        // a post-stamp id token within a site.
+        //
+        // ★ #6759 C3 rung 1 deliberately does NOT relax this `class_id == 0`
+        // gate, even though rung 1 gives class instances a shape word. This
+        // token is not a PIC token — it is compared against a CODEGEN-SUPPLIED
+        // KEYS POINTER (`@perry_class_keys_C`) by the typed_feedback guard
+        // family: `guards.rs::method_direct_call_contract` requires
+        // `shape_addr == expected_keys as usize`, and the class-field /
+        // element-shape contracts do the same. An id can never equal that
+        // pointer, so returning one here fails every such guard CLOSED —
+        // memory-safe, but it silently deletes the direct-method-call route
+        // and the class-field fast paths. (Both are pinned:
+        // `typed_feedback_method_direct_guard_passes_for_exact_registered_method`
+        // and `typed_feedback_class_field_get_guard_requires_raw_f64_layout_when_requested`
+        // go red the moment this gate is dropped.)
+        //
+        // Switching those consumers from a keys pointer to a ShapeId is
+        // rung 3 — nine unvalidated consumers, its own review. The PIC-token
+        // half of the observable rung 1 wanted comes from `ic_miss.rs`, which
+        // primes what the emitted PIC actually computes; this function feeds
+        // observation and guards, which are a different population.
         let shape = if class_id == 0 {
-            let stamp = (*ptr).parent_class_id;
-            if crate::object::shapes::is_shape_id(stamp) {
+            let stamp = crate::object::shapes::object_shape_stamp(ptr);
+            if stamp != 0 {
                 stamp as usize
             } else if crate::regex::regex_header_has_magic(
                 addr as *const crate::regex::RegExpHeader,
@@ -789,10 +808,12 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
                     if keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
                         || keys_header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
                     {
-                        let id =
-                            crate::object::shapes::shape_id_for_keys_ensure(keys, (*keys).length);
+                        let id = crate::object::shapes::stamp_object_shape(
+                            ptr as *mut ObjectHeader,
+                            keys,
+                            (*keys).length,
+                        );
                         if id != 0 {
-                            (*(ptr as *mut ObjectHeader)).parent_class_id = id;
                             id as usize
                         } else {
                             keys as usize

@@ -709,14 +709,13 @@ pub extern "C" fn js_object_get_field_ic_miss(
             // #6804: stamp the receiver's stable ShapeId at PIC-miss
             // resolution, so the id-keyed FIELD_CACHE (and the future
             // id-comparing PIC) see a stamped object from its first read.
-            if (*obj).class_id == 0
-                && !crate::object::shapes::is_shape_id((*obj).parent_class_id)
-                && !crate::regex::regex_header_has_magic(obj as *const crate::regex::RegExpHeader)
-            {
-                let id = crate::object::shapes::shape_id_for_keys_ensure(keys, key_count as u32);
-                if id != 0 {
-                    (*(obj as *mut ObjectHeader)).parent_class_id = id;
-                }
+            // #6759 C3 rung 1: class instances are stamped here too.
+            if crate::object::shapes::object_shape_stamp(obj) == 0 {
+                crate::object::shapes::stamp_object_shape(
+                    obj as *mut ObjectHeader,
+                    keys,
+                    key_count as u32,
+                );
             }
             for i in 0..key_count {
                 let k_bits = (*keys_data.add(i)).to_bits();
@@ -753,14 +752,21 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     // process-rooted, address-stable), because that compare
                     // is unvalidated and a recycled owned-array address
                     // would read the wrong slot.
-                    let stamp = (*obj).parent_class_id;
+                    //
+                    // #6759 C3 rung 1: `object_shape_stamp` carries no
+                    // `class_id` discriminant, so a stamped CLASS INSTANCE
+                    // primes an id token too — which is what the emitted PIC
+                    // already computes for it (its `is_stamp` test is the
+                    // range test alone). Priming the keys pointer for a
+                    // stamped receiver would be a permanent miss.
+                    let stamp = crate::object::shapes::object_shape_stamp(obj);
                     // #6080a: stamp the current GC epoch alongside either
                     // token kind. The emitted hit predicate only consults it
                     // for pointer tokens, but priming it unconditionally
                     // keeps `cache[2]` coherent when a site re-primes from
                     // one token kind to the other.
                     let epoch = PERRY_IC_EPOCH.load(std::sync::atomic::Ordering::Relaxed) as i64;
-                    if (*obj).class_id == 0 && crate::object::shapes::is_shape_id(stamp) {
+                    if stamp != 0 {
                         let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
                         pic_prime_get(cache, token, i as i64, epoch);
                     } else if keys_cacheable_for_pic(keys) {
@@ -1413,36 +1419,32 @@ mod c3c_pic_tests {
     /// exact inputs of the emitted `cache[2] == @PERRY_IC_EPOCH` guard, so
     /// this proves the guard CAN fail (a primed entry goes stale), not just
     /// that priming writes something.
+    ///
+    /// ★ #6759 C3 rung 1 shrank this path's PRODUCTION population to nothing
+    /// reachable from source. Class instances used to be the last receivers
+    /// priming a raw keys pointer (plain objects took the #6804 id token since
+    /// then); rung 1 stamps them too, so `js_object_get_field_ic_miss` now
+    /// mints-then-primes an id for every receiver whose mint succeeds. The
+    /// pointer arm survives as the id-exhaustion fallback (`alloc_shape_id`
+    /// returns 0 after 2^30 shape births) and as what the emitted hit
+    /// predicate still computes for an as-yet-unstamped receiver — neither is
+    /// constructible from a `.ts` fixture, so the epoch mechanics are driven
+    /// through `pic_prime_get` directly. The end-to-end half below asserts the
+    /// rung-1 behaviour instead: a class instance primes an ID token, which is
+    /// what the emitted PIC computes for it once it carries a stamp.
     #[test]
     fn pointer_token_prime_stamps_epoch_and_goes_stale_on_bump() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             use std::sync::atomic::Ordering;
-            // A CLASS instance (class_id != 0) is the population that still
-            // primes raw keys pointers — plain objects take the #6804
-            // shape-ID token, which the epoch guard deliberately skips.
-            let obj = crate::object::js_object_alloc(0x6080, 8);
-            let key = crate::string::js_string_from_bytes(b"pic6080_x".as_ptr(), 9);
-            crate::object::js_object_set_field_by_name(obj, key, 7.0);
-            let keys = (*obj).keys_array;
-            assert!(!keys.is_null(), "test premise: field append built keys");
-            let gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            (*gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
-
+            // The pointer arm, driven directly (see the note above).
             let mut cache = [0i64; super::PIC_CACHE_WORDS];
-            let v = super::js_object_get_field_ic_miss(obj, key, &mut cache);
-            assert_eq!(v, 7.0);
-            assert_eq!(
-                cache[0], keys as i64,
-                "class instance must prime the raw keys pointer token"
-            );
-            let primed_epoch = cache[2];
-            assert_eq!(
-                primed_epoch,
-                super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
-                "prime must snapshot the LIVE epoch"
-            );
-            assert!(primed_epoch >= 1, "epoch starts at 1, never 0");
+            let fake_keys = 0x6080_0000_1000i64;
+            let live = super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64;
+            super::pic_prime_get(&mut cache, fake_keys, 3, live);
+            assert_eq!(cache[0], fake_keys, "pointer token must land in way 0");
+            assert_eq!(cache[2], live, "prime must snapshot the LIVE epoch");
+            assert!(cache[2] >= 1, "epoch starts at 1, never 0");
 
             super::pic_epoch_bump();
             assert_ne!(
@@ -1451,14 +1453,51 @@ mod c3c_pic_tests {
                 "a bump must strand every pointer-token prime (the emitted \
                  hit predicate then misses and re-primes)"
             );
+        }
+    }
 
-            // Re-priming heals: the miss handler stamps the NEW epoch.
+    /// #6759 C3 rung 1: a CLASS instance is stamped at its first by-name
+    /// resolve and therefore primes an ID token, not its keys pointer. The
+    /// emitted PIC discriminates on the ShapeId RANGE alone (it never loads
+    /// `class_id` for this), so priming the keys pointer for a stamped
+    /// receiver would be a permanent miss — this test is what keeps the
+    /// runtime's choice and the IR's choice the same.
+    #[test]
+    fn a_class_instance_primes_an_id_token_after_rung1() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            use std::sync::atomic::Ordering;
+            let obj = crate::object::js_object_alloc(0x6080, 8);
+            let key = crate::string::js_string_from_bytes(b"pic6080_x".as_ptr(), 9);
+            crate::object::js_object_set_field_by_name(obj, key, 7.0);
+            let keys = (*obj).keys_array;
+            assert!(!keys.is_null(), "test premise: field append built keys");
+            assert_eq!((*obj).class_id, 0x6080, "test premise: a class instance");
+
+            let mut cache = [0i64; super::PIC_CACHE_WORDS];
             let v = super::js_object_get_field_ic_miss(obj, key, &mut cache);
             assert_eq!(v, 7.0);
+
+            let stamp = crate::object::shapes::object_shape_stamp(obj);
+            assert!(
+                stamp != 0,
+                "the miss handler did not stamp a class instance — rung 1 is inert"
+            );
+            assert_eq!(
+                cache[0] as u64,
+                stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT,
+                "a stamped class instance must prime the ID token the emitted \
+                 PIC computes for it, not its keys pointer"
+            );
+            assert_ne!(
+                cache[0], keys as i64,
+                "primed the keys pointer for a stamped receiver — every hit at \
+                 this site would miss forever"
+            );
             assert_eq!(
                 cache[2],
                 super::PERRY_IC_EPOCH.load(Ordering::Relaxed) as i64,
-                "re-prime must heal the epoch snapshot"
+                "cache[2] must stay coherent across token kinds"
             );
         }
     }

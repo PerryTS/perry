@@ -1510,15 +1510,17 @@ pub(crate) fn get_field_by_name_object_tail(
         // #6759 C3c: prefer the header-stamped stable shape id as the cache
         // key — it survives owned grow-reallocs AND GC moves of the keys
         // array, both of which change `keys_id` and orphaned the entry.
-        // Unstamped objects (stamp 0 / class instances) keep the address
-        // key; either way every hit below re-validates the stored key, so a
-        // colliding or foreign key can only miss, never mis-resolve.
-        let stamp = (*obj).parent_class_id;
-        let shape_key = if (*obj).class_id == 0 && super::super::shapes::is_shape_id(stamp) {
-            stamp as usize
-        } else {
-            keys_id
-        };
+        // Unstamped objects keep the address key; either way every hit below
+        // re-validates the stored key, so a colliding or foreign key can only
+        // miss, never mis-resolve.
+        //
+        // #6759 C3 rung 1: `object_shape_stamp` has no `class_id` gate, so a
+        // stamped CLASS INSTANCE keys on its id here too — which is the point
+        // of the rung: a delete-compacted instance clears its stamp and mints
+        // a fresh id, so it can no longer collide with a pristine sibling's
+        // cache entries.
+        let stamp = super::super::shapes::object_shape_stamp(obj);
+        let shape_key = if stamp != 0 { stamp as usize } else { keys_id };
 
         // Clamp the keys length to capacity so a bogus/oversized length can't
         // drive the wide-key map build or the linear scan below into unbounded
@@ -1629,19 +1631,14 @@ pub(crate) fn get_field_by_name_object_tail(
                 // object's stable shape id (allocating the record on first
                 // touch) and key the entry on it, so the entry survives the
                 // grow-reallocs and GC moves that retire `keys_id`.
+                // #6759 C3 rung 1: class instances are stamped here too.
                 {
-                    let store_key = if (*obj).class_id == 0 {
-                        let id =
-                            super::super::shapes::shape_id_for_keys_ensure(keys, key_count as u32);
-                        if id != 0 {
-                            (*(obj as *mut ObjectHeader)).parent_class_id = id;
-                            id as usize
-                        } else {
-                            keys_id
-                        }
-                    } else {
-                        keys_id
-                    };
+                    let id = super::super::shapes::stamp_object_shape(
+                        obj as *mut ObjectHeader,
+                        keys,
+                        key_count as u32,
+                    );
+                    let store_key = if id != 0 { id as usize } else { keys_id };
                     let store_idx =
                         (store_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
                     let cache = &mut *st.field_lookup.field_cache.get();

@@ -1667,19 +1667,21 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
 
 #[inline]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
-    // #6759 C3c: a stamped shape id (plain objects reuse the otherwise-dead
-    // `parent_class_id` word) described the OLD keys array — clear it on a
-    // pointer CHANGE so the stamp invariant (`stamp != 0 ⟹ stamp == id of
-    // current keys`) holds; the resolve paths re-stamp on their next
-    // successful lookup. A same-pointer update (in-place append) keeps the
-    // stamp: slots are append-only, existing mappings stay valid — and the
-    // C3a grow-migration keeps the id itself alive across reallocs, so the
-    // fresh stamp after a grow resolves to the SAME id.
-    if (*obj).class_id == 0
-        && (*obj).keys_array != keys_array
-        && shapes::is_shape_id((*obj).parent_class_id)
-    {
-        (*obj).parent_class_id = 0;
+    // #6759 C3c: a stamped shape id (carried in the `parent_class_id` word)
+    // described the OLD keys array — clear it on a pointer CHANGE so the stamp
+    // invariant (`stamp != 0 ⟹ stamp == id of current keys`) holds; the resolve
+    // paths re-stamp on their next successful lookup. A same-pointer update
+    // (in-place append) keeps the stamp: slots are append-only, existing
+    // mappings stay valid — and the C3a grow-migration keeps the id itself
+    // alive across reallocs, so the fresh stamp after a grow resolves to the
+    // SAME id.
+    //
+    // #6759 C3 rung 1: no `class_id == 0` gate. The word is a ShapeId iff
+    // `is_shape_id` says so, for class instances too — and `clear_object_shape_stamp`
+    // tests exactly that, so an instance still carrying its allocation-time
+    // `parent_class_id` (never in the ShapeId range) is left alone.
+    if (*obj).keys_array != keys_array {
+        shapes::clear_object_shape_stamp(obj);
     }
     // #6893: the object's typed-shape layout descriptor is keyed by its
     // keys_array (shared per shape via SHAPE_LAYOUTS). A keys_array pointer

@@ -389,9 +389,13 @@ pub extern "C" fn js_object_delete_field(
         //    object. Ids are never reused, so clearing here (plus the
         //    record drop above) makes every stale id-keyed cache entry a
         //    permanent miss; the next resolve stamps a fresh id.
-        if (*obj).class_id == 0 && crate::object::shapes::is_shape_id((*obj).parent_class_id) {
-            (*obj).parent_class_id = 0;
-        }
+        //
+        //    #6759 C3 rung 1: this now fires for CLASS INSTANCES too — the
+        //    whole point of the rung. A delete on a class instance is exactly
+        //    the case the shape word had no way to express: `class_id` is
+        //    preserved by design (vtable/instanceof identity) and the keys
+        //    pointer was the only compaction evidence in the header.
+        crate::object::shapes::clear_object_shape_stamp(obj);
 
         1
     }
@@ -604,8 +608,8 @@ pub extern "C" fn js_object_rest(
 #[cfg(test)]
 mod shape_transition_tests_6759 {
     //! #6759 C3: what a `delete` does to an object's SHAPE IDENTITY, pinned for
-    //! both object representations — because they differ, and the difference is
-    //! the entry gate for the header shrink (#7916).
+    //! both object representations — because rung 1 made them AGREE, and that
+    //! agreement is the entry gate for the header shrink (#7916).
     //!
     //! `perry-codegen`'s `class_field_inline_guard` speculates that a receiver's
     //! packed slot layout is its class's canonical one. `delete` breaks that
@@ -614,11 +618,20 @@ mod shape_transition_tests_6759 {
     //! the class's `@perry_class_keys_*` token. Replacing that pointer compare
     //! with a one-word ShapeId compare — which is what makes the header shrink
     //! a load *removal* instead of a load-for-probe trade — requires a class
-    //! instance to HAVE a shape word. It does not: `parent_class_id` is the
-    //! shape word only when `class_id == 0`.
+    //! instance to HAVE a shape word.
     //!
-    //! These tests state both facts so that a future change to either is a
-    //! deliberate edit rather than a silent drift.
+    //! Before rung 1 it did not: `parent_class_id` was the shape word only when
+    //! `class_id == 0`, so the sibling test below asserted the ABSENCE of one
+    //! and named its own replacement. Rung 1 removed the `class_id` gate, so
+    //! both representations now mint a fresh id across a delete and these tests
+    //! state the same property twice, once per representation.
+    //!
+    //! Rung 1 is deliberately runtime-only: the guard has NOT switched to the
+    //! id compare (that is rung 3), and codegen's inline `new C()` still writes
+    //! a constant `parent_cid`, so an instance is stamped LAZILY at its first
+    //! by-name resolve rather than at birth (rung 2). The tests below therefore
+    //! resolve a field before reading the stamp — a fresh instance legitimately
+    //! reads as unstamped.
     use super::*;
     use crate::object::shapes::is_shape_id;
 
@@ -669,14 +682,20 @@ mod shape_transition_tests_6759 {
         }
     }
 
-    /// The gap. A class instance has NO shape word to mint into: `class_id` is
-    /// preserved by design (it is the vtable/instanceof identity) and
-    /// `parent_class_id` is inheritance data, so the ONLY header evidence that a
-    /// compaction happened is the `keys_array` pointer. That is why
-    /// `class_field_inline_guard` loads it, and why the #7916 header shrink
-    /// cannot delete it before #6759 C3 gives class instances a shape word.
+    /// #6759 C3 rung 1 — the replacement the pre-rung-1 test named.
+    ///
+    /// This is the assertion `delete_leaves_a_class_instance_with_no_shape_word_to_transition`
+    /// asked to be replaced by. A class instance now HAS a shape word, so a
+    /// `delete` on it transitions the same way a plain object's does: the
+    /// compaction clears the stamp, and the next resolve mints a genuinely
+    /// fresh id (ids are never reused) rather than reviving the class's
+    /// canonical one.
+    ///
+    /// The old test's other half — that `class_id` is preserved and the keys
+    /// POINTER moves — is kept below, because both are still true and both are
+    /// still what `class_field_inline_guard` compares until rung 3.
     #[test]
-    fn delete_leaves_a_class_instance_with_no_shape_word_to_transition() {
+    fn delete_mints_a_fresh_shape_id_for_a_class_instance() {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_6760;
         const PARENT: u32 = 0x0C3C_6761;
@@ -693,11 +712,21 @@ mod shape_transition_tests_6759 {
                 js_object_set_field(obj, i as u32, JSValue::from_bits(v.to_bits()));
             }
             let keys_before = (*obj).keys_array;
-            let parent_before = (*obj).parent_class_id;
             assert_eq!((*obj).class_id, CID, "test premise: a class instance");
             assert!(
-                !is_shape_id(parent_before),
-                "test premise: the header word is inheritance data, not a shape stamp"
+                !is_shape_id((*obj).parent_class_id),
+                "test premise: a FRESH instance carries its allocation-time \
+                 parent_class_id — rung 1's stamp is lazy, not a birth stamp"
+            );
+
+            // Lazy stamp: the first by-name resolve installs a ShapeId over the
+            // (now readerless — rung 0/#7981) inheritance word.
+            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_y"));
+            let before = (*obj).parent_class_id;
+            assert!(
+                is_shape_id(before),
+                "a class instance was NOT stamped by its first by-name resolve \
+                 (got {before:#x}) — rung 1's whole subject is inert"
             );
 
             assert_eq!(js_object_delete_field(obj, key("del6759_x")), 1);
@@ -708,23 +737,146 @@ mod shape_transition_tests_6759 {
                 30.0,
                 "test premise: the delete did not compact the slots"
             );
-            // Only the keys pointer records it.
+            // The stamp is cleared eagerly …
+            assert_eq!(
+                (*obj).parent_class_id,
+                0,
+                "the stamp still describes the PRE-delete key list"
+            );
+            // … and re-minted, distinctly, on the next resolve.
+            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_z"));
+            let after = (*obj).parent_class_id;
+            assert!(
+                is_shape_id(after),
+                "no shape id re-minted after the delete (got {after:#x})"
+            );
+            assert_ne!(
+                after, before,
+                "the delete re-used the pre-delete ShapeId — a shape-id compare \
+                 would accept a compacted class instance as its own class's shape"
+            );
+
+            // Still true, and still what the guard compares until rung 3.
             assert_ne!(
                 (*obj).keys_array,
                 keys_before,
-                "the keys pointer is the guard's ONLY compaction evidence and it did not change"
+                "the keys pointer is the guard's compaction evidence and it did not change"
             );
             assert_eq!(
                 (*obj).class_id,
                 CID,
-                "class_id changed — a class-id compare would now catch the delete"
+                "class_id must survive a delete — it is the vtable/instanceof identity"
+            );
+        }
+    }
+
+    /// Two pristine instances of the same class share ONE ShapeId (their
+    /// canonical keys array is shared), and a delete on one moves only that
+    /// one. This is the property a rung-3 id compare rests on, stated
+    /// separately from the mint test so a regression names which half broke.
+    #[test]
+    fn class_siblings_share_one_shape_id_until_one_is_deleted_from() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_6762;
+        let packed = b"sib6759_a\0sib6759_b\0sib6759_c";
+        unsafe {
+            let mk = || {
+                crate::object::js_object_alloc_class_with_keys(
+                    CID,
+                    0,
+                    3,
+                    packed.as_ptr(),
+                    packed.len() as u32,
+                )
+            };
+            let a = mk();
+            let b = mk();
+            let _ = crate::object::js_object_get_field_by_name(a, key("sib6759_b"));
+            let _ = crate::object::js_object_get_field_by_name(b, key("sib6759_b"));
+            let id_a = (*a).parent_class_id;
+            let id_b = (*b).parent_class_id;
+            assert!(
+                is_shape_id(id_a) && is_shape_id(id_b),
+                "both must be stamped"
             );
             assert_eq!(
-                (*obj).parent_class_id,
-                parent_before,
-                "the header word changed — if this is now a minted ShapeId, \
-                 class_field_inline_guard can switch to a one-word compare and \
-                 this test should be replaced by that assertion (#6759 C3)"
+                id_a, id_b,
+                "same-class siblings must share one ShapeId — otherwise an \
+                 id-comparing PIC is monomorphic-per-OBJECT and never hits"
+            );
+
+            assert_eq!(js_object_delete_field(a, key("sib6759_a")), 1);
+            let _ = crate::object::js_object_get_field_by_name(a, key("sib6759_c"));
+            assert_ne!(
+                (*a).parent_class_id,
+                id_b,
+                "the compacted instance kept its siblings' ShapeId"
+            );
+            assert_eq!(
+                (*b).parent_class_id,
+                id_b,
+                "the untouched sibling's stamp moved — a delete is not a \
+                 class-wide shape transition"
+            );
+        }
+    }
+
+    /// #6759 C3 rung 1 risk check: stamping OVERWRITES the header's
+    /// `parent_class_id`, so the class-parent chain must be served entirely by
+    /// the class-id-keyed registry (rung 0 / #7981 removed the last header
+    /// reader). A 3-level chain must still resolve after every level's header
+    /// word has been clobbered by a stamp.
+    #[test]
+    fn a_stamped_class_instance_still_resolves_a_three_level_parent_chain() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const BASE: u32 = 0x0C3C_6770;
+        const MID: u32 = 0x0C3C_6771;
+        const LEAF: u32 = 0x0C3C_6772;
+        let packed = b"chain6759_p\0chain6759_q";
+        unsafe {
+            let leaf = crate::object::js_object_alloc_class_with_keys(
+                LEAF,
+                MID,
+                2,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            // The registry edges are registered by the allocator (codegen's
+            // inline `new C()` path registers them from the module-init
+            // prelude instead); MID→BASE has no instance here, so register it
+            // the way that prelude does.
+            crate::object::register_class(MID, BASE);
+            assert_eq!(
+                (*leaf).parent_class_id,
+                MID,
+                "test premise: the header word starts as inheritance data"
+            );
+
+            let boxed = crate::value::js_nanbox_pointer(leaf as i64);
+            let truthy = |v: f64| crate::value::js_is_truthy(v) != 0;
+            assert!(truthy(crate::object::js_instanceof(boxed, LEAF)));
+            assert!(truthy(crate::object::js_instanceof(boxed, MID)));
+            assert!(truthy(crate::object::js_instanceof(boxed, BASE)));
+
+            // Clobber the word with a stamp.
+            let _ = crate::object::js_object_get_field_by_name(leaf, key("chain6759_p"));
+            assert!(
+                is_shape_id((*leaf).parent_class_id),
+                "test premise: the resolve did not stamp, so nothing is being tested"
+            );
+
+            assert!(
+                truthy(crate::object::js_instanceof(boxed, LEAF)),
+                "own class lost after stamping"
+            );
+            assert!(
+                truthy(crate::object::js_instanceof(boxed, MID)),
+                "direct parent lost after the header word was overwritten — the \
+                 parent edge is not coming from the registry"
+            );
+            assert!(
+                truthy(crate::object::js_instanceof(boxed, BASE)),
+                "grandparent lost after the header word was overwritten"
             );
         }
     }

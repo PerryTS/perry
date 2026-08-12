@@ -550,12 +550,10 @@ pub(super) fn set_field_by_name_object_tail(
             transition_cache_insert(0, interned_key, new_keys as usize, 0);
             // #6804: birth-stamp the new dynamic shape (once per shape
             // birth — the transition edge above serves the siblings).
-            if (*obj).class_id == 0 {
-                let id = super::shapes::shape_id_for_keys_ensure(new_keys, 1);
-                if id != 0 {
-                    (*obj).parent_class_id = id;
-                }
-            }
+            // #6759 C3 rung 1: no `class_id == 0` gate — a keyless class
+            // instance gaining its first by-name property is stamped like
+            // any other receiver.
+            super::shapes::stamp_object_shape(obj, new_keys, 1);
             return;
         }
 

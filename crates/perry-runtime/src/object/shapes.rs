@@ -126,6 +126,100 @@ pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32)
         .shape_id
 }
 
+// ---------------------------------------------------------------------------
+// #6759 C3 rung 1 — THE SHAPE WORD IS UNIFORM.
+//
+// `ObjectHeader.parent_class_id` IS the shape word. Before this rung the stamp
+// was additionally gated on `class_id == 0`, so a CLASS INSTANCE had no shape
+// word at all: its only header evidence of a key-set change was the
+// `keys_array` POINTER, which is exactly why `class_field_inline_guard`
+// compares that pointer, and why the #7916 header shrink could not delete it.
+//
+// The gate is gone. The rule is now, for every receiver kind:
+//
+//     the word is a ShapeId  <=>  is_shape_id(word)
+//
+// which is already what all three emitted PICs test — they discriminate on the
+// range alone (`property_get/generic_dispatch.rs`, `expr/proxy_reflect.rs` ×2),
+// never on `class_id`. So relaxing the runtime gates makes the runtime agree
+// with the IR rather than introducing a new mode.
+//
+// This is only sound because rung 0 (#7981) removed the LAST reader of the
+// header word as inheritance data (`thread.rs::serialize_object` now takes the
+// parent edge from the class-id-keyed registry). Every parent-chain walk in the
+// tree goes through `get_parent_class_id(class_id)`; nothing reads the header
+// word for inheritance. Overwriting a class instance's `parent_class_id` with a
+// ShapeId therefore loses no information — the registry still has the edge, and
+// it was registered from a compile-time constant either by the allocator or by
+// the `js_register_class_parent` module-init prelude.
+//
+// The stamp is LAZY: a class instance is stamped at its first by-name resolve,
+// so a freshly `new`'d instance still reads as unstamped and falls back to the
+// keys-pointer token. Eager birth stamping in codegen is rung 2.
+// ---------------------------------------------------------------------------
+
+/// True when `obj` really is an `ObjectHeader` whose word 2 may be written.
+///
+/// A `RegExpHeader` aliases `GC_TYPE_OBJECT` with a DIFFERENT layout — its
+/// offset 8 is the low half of `pattern_ptr`, and offset 4 is the high half of
+/// `regex_ptr`, which reads as `class_id == 0` on every 48-bit-address target.
+/// So the old `class_id == 0` gate never excluded a RegExp either; two of the
+/// four mint sites carried an explicit magic check and two did not. Routing
+/// every site through this predicate closes that gap in the same edit that
+/// removes the `class_id` discriminant.
+#[inline]
+pub(crate) unsafe fn shape_word_is_writable(obj: *const crate::object::ObjectHeader) -> bool {
+    !crate::regex::regex_header_has_magic(obj as *const crate::regex::RegExpHeader)
+}
+
+/// The receiver's ShapeId, or 0 when it carries none (unstamped, or the word
+/// still holds inheritance data left over from allocation).
+#[inline]
+pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader) -> u32 {
+    let word = (*obj).parent_class_id;
+    if is_shape_id(word) {
+        word
+    } else {
+        0
+    }
+}
+
+/// Stamp `obj` with the stable ShapeId of `keys`, minting the shape record on
+/// first touch. Returns the id, or 0 when the receiver is not stampable (a
+/// RegExp alias) or the id range is exhausted — in which case the caller keeps
+/// its keys-address fallback, which is never a correctness difference.
+#[inline]
+pub(crate) unsafe fn stamp_object_shape(
+    obj: *mut crate::object::ObjectHeader,
+    keys: *const ArrayHeader,
+    key_count: u32,
+) -> u32 {
+    if !shape_word_is_writable(obj) {
+        return 0;
+    }
+    let id = shape_id_for_keys_ensure(keys, key_count);
+    if id != 0 {
+        (*obj).parent_class_id = id;
+    }
+    id
+}
+
+/// Drop the stamp iff the word currently holds one, leaving a real
+/// `parent_class_id` untouched. Returns true when a stamp was cleared.
+///
+/// Ids are never reused, so clearing makes every stale id-keyed cache entry a
+/// permanent miss; the next resolve re-stamps from whatever record the live
+/// keys array has then.
+#[inline]
+pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHeader) -> bool {
+    if is_shape_id((*obj).parent_class_id) {
+        (*obj).parent_class_id = 0;
+        true
+    } else {
+        false
+    }
+}
+
 /// Build (or extend) the slot map for `keys` covering `key_count` keys.
 unsafe fn index_range(shape: &mut Shape, keys: *const ArrayHeader, key_count: u32) {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
