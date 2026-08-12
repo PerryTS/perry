@@ -709,7 +709,11 @@ def _scan_tree(extra: dict[str, str] | None = None) -> list[dict]:
         for rel, body in tree.items():
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body)
+            # Explicit UTF-8: a bare write_text() encodes with the host locale
+            # (cp1252 on a Windows runner), which is the #7977 class. The
+            # fixtures are ASCII today, so this is the latent half — the read
+            # side of the same shape is what took `windows-build` down.
+            path.write_text(body, encoding="utf-8", newline="")
         holders, _ = scan(root)
         return holders
 

@@ -263,6 +263,23 @@ jobs:
           python3 scripts/check_gc_doc_claims.py --self-test
           python3 scripts/check_gc_doc_claims.py
 
+      # #7977. The audits above ALSO run as `windows-build`'s first step, where
+      # a bare `read_text()` decodes cp1252 and dies on the 15 runtime sources
+      # carrying 0x81/0x8d/0x8f/0x90/0x9d. That took the whole Windows job down
+      # — including the only Windows run of the perry-runtime unit tests —
+      # before any of it executed. #7882 fixed three of the four readers; this
+      # is what stops the fourth miss from being found on Windows again.
+      #
+      # It runs HERE, on Linux, in a REQUIRED context, precisely because the
+      # defect is invisible on Linux at runtime: the scan is static, so the
+      # class is caught per-PR rather than only when a Windows runner gets to
+      # it. `--self-test` plants each shape, so the checker can say no.
+      - name: Windows-portable text I/O in the Windows-CI audits
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_locale_independent_io.py --self-test
+          python3 scripts/check_locale_independent_io.py
+
       # Node is a correctness input (see CLAUDE.md "TypeScript Parity Status"):
       # an oracle that cannot run a gap test drops it from the gate instead of
       # failing it. #6367 made `.node-version` the single pin, and the pin has
@@ -1111,6 +1128,15 @@ jobs:
 
       - name: GC structural audits (Windows)
         shell: bash
+        env:
+          # #7977 belt-and-braces. These scripts read Rust sources that contain
+          # bytes cp1252 has no mapping for; the ACTUAL fix is an explicit
+          # `encoding="utf-8"` at every call site, enforced on Linux by
+          # `scripts/check_locale_independent_io.py` in `lint`. This makes a
+          # future miss in a script that gate does not yet cover degrade to
+          # "works anyway" instead of taking the whole job — and with it the
+          # only Windows run of the perry-runtime unit tests — down at step one.
+          PYTHONUTF8: "1"
         run: |
           set -euo pipefail
           python scripts/gc_runtime_root_holders.py --self-test

@@ -1366,7 +1366,7 @@ class RebaseStableProvenanceTests(unittest.TestCase):
 
     def test_the_shipped_baseline_records_a_code_tree(self):
         baseline = Path(__file__).resolve().parents[1] / "benchmarks" / "gc_ratchet" / "baseline" / "gc-ratchet-v1.json"
-        artifact = json.loads(baseline.read_text())
+        artifact = json.loads(baseline.read_text(encoding="utf-8"))
         self.assertIn(
             "code_tree",
             artifact,
