@@ -218,6 +218,17 @@ pub(crate) fn retag_young_for_in_place_promotion() -> InPlacePromotion {
 /// `OLD_ARENA` — has not run. The caller owns the two remaining obligations
 /// (clear the marks the trace set, and do not consume the remembered set); see
 /// `gc::copying`'s rollback for why the list is exactly that long.
+///
+/// ★ The retag is NOT only a relabel. `retag_block_space` to
+/// `HeapGeneration::Old` also **registers old-gen page metadata** for every
+/// page of the block (`register_old_block_pages`), and relabelling back to
+/// `Nursery` does not take it away — the entries are removed by
+/// `unregister_old_block_pages`, which is what every other "this block stops
+/// being old-gen" path calls. Omitting it leaves the whole young generation
+/// carrying zeroed `OLD_GEN_PAGE_META` entries: measured as +4–10% peak RSS
+/// across the rolled-back half of the corpus (`tree_wide` 67.8 → 74.8 MB), and
+/// worse than the footprint, a page registered as old-gen while its block is
+/// young again is a lie the dirty scan and the defrag page selector both read.
 pub(crate) fn undo_in_place_promotion_retag(promotion: &InPlacePromotion) {
     for block in &promotion.blocks {
         let space = match block.source {
@@ -226,6 +237,10 @@ pub(crate) fn undo_in_place_promotion_retag(promotion: &InPlacePromotion) {
             PromotionSource::Survivor(_) => HeapSpace::Survivor1,
         };
         retag_block_space(block.base, block.size, HeapGeneration::Nursery, space);
+        let first_page = generation_page_for_addr(block.base);
+        let last_page = generation_page_for_addr(block.base + block.size - 1);
+        let pages: Vec<usize> = (first_page..=last_page).collect();
+        super::page_meta::unregister_old_block_pages(&pages);
     }
 }
 

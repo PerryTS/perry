@@ -617,6 +617,7 @@ fn a_first_cycle_attempt_that_its_own_trace_refutes_rolls_back_and_evacuates() {
 
     let attempts_before = first_cycle_promotion_attempts();
     let rollbacks_before = first_cycle_promotion_rollbacks();
+    let old_pages_before = crate::arena::old_page_summary().pages;
 
     // One live leaf in a nursery sized for many: survival is far under the
     // threshold, so the attempt's own trace refutes it.
@@ -663,6 +664,17 @@ fn a_first_cycle_attempt_that_its_own_trace_refutes_rolls_back_and_evacuates() {
             "the relocated survivor must be a live object"
         );
     }
+    // The retag is not only a relabel: it REGISTERS old-gen page metadata for
+    // every page of every young block (`register_old_block_pages`). Rolling
+    // back has to unregister them, or the whole young generation is left
+    // carrying old-gen page entries — a lie the dirty scan and the defrag page
+    // selector both read, and +4–10% peak RSS across the corpus when it was
+    // missing.
+    assert_eq!(
+        crate::arena::old_page_summary().pages,
+        old_pages_before,
+        "a rolled-back attempt must leave no old-gen page metadata behind"
+    );
 }
 
 // ---------------------------------------------------------------------------
