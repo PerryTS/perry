@@ -119,11 +119,24 @@
 #                 objects copied, and the whole step passes. The collector was
 #                 never the problem.
 #
-#   ubuntu-24.04-arm  REAL DEFECT, filed as #7984. `PERRY_STACKMAP_WALKER=verify`
-#                 caught the fast fp-chain walker and the unwinder resolving the
-#                 same root to addresses 96 bytes apart. This arm is red because
-#                 it found the bug it was built to find; it must STAY red until
-#                 #7984 is fixed. Do not skip it.
+#   ubuntu-24.04-arm  REAL DEFECT, filed as #7984 and FIXED (#7997).
+#                 `PERRY_STACKMAP_WALKER=verify` caught the fast fp-chain
+#                 walker and the unwinder resolving the same root 96 bytes
+#                 apart, and the fast walker — the one that runs when `verify`
+#                 is off — was the wrong one. Two blind spots in
+#                 `fp_to_sp_offset`, both only reachable with SVE on, which is
+#                 what `-mcpu=native` turns on for a Neoverse-class core and
+#                 nothing on macOS or x86-64 ever does: a callee-save store
+#                 ended the prologue's stack-adjustment run, and
+#                 `addvl sp, sp, #-N` was not decoded at all. The 96 was never
+#                 a constant — it is that frame's missed tail, and it scales
+#                 with the vector length (208 at VL = 64 B).
+#
+#                 This arm should now be GREEN. If it goes red again, read the
+#                 report `verify` prints before assuming a regression: it names
+#                 the frame, the base register, both resolved bases and the
+#                 prologue words, which is enough to say which walker is wrong
+#                 without a second run.
 #
 #   windows-latest    REAL DEFECT, filed as #7985 (`perry.exe` cannot link
 #                 against the official LLVM 22 release: /MT-vs-/MD CRT mismatch,
@@ -133,11 +146,11 @@
 #                 `D:\a\_temp` as a remote host — was a workflow bug and is
 #                 fixed here with `--force-local`.
 #
-# So: after #7970 the macOS and ubuntu-latest arms should pass and the other two
-# should remain red on their filed defects. This workflow is therefore NOT a
-# promotion candidate yet — promoting it while #7984/#7985 are open would block
-# every PR. Promote only once all four arms are green, and per CLAUDE.md, run it
-# green once BEFORE adding it to branch protection.
+# So: after #7970 and #7997 three of the four arms should pass and only
+# windows-latest should remain red, on #7985. This workflow is therefore still
+# NOT a promotion candidate — promoting it while #7985 is open would block every
+# PR. Promote only once all four arms are green, and per CLAUDE.md, run it green
+# once BEFORE adding it to branch protection.
 name: gc-native-roots
 on:
   # Must run where it can actually gate something. Branch-scoped triggers were
