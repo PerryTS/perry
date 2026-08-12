@@ -497,10 +497,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
     }
 }
 
-/// The body of [`js_string_concat_chain`], monomorphised on the scratch-array
-/// size. `0 < n <= MAX_PARTS` and `!parts.is_null()` are preconditions the
-/// dispatcher establishes.
-/// #7901 counter: how many chains took the unrooted fast path below. A gate
+/// #7912 counter: how many chains took the unrooted fast path below. A gate
 /// that cannot see its subject run is not a gate — the unit tests assert this
 /// moves, so a refactor that quietly stops taking the fast path is red rather
 /// than "still correct, just slow again".
@@ -608,6 +605,12 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
     }
 }
 
+/// The body of [`js_string_concat_chain`], monomorphised on the scratch-array
+/// size. `0 < n <= MAX_PARTS` and `!parts.is_null()` are preconditions the
+/// dispatcher establishes.
+///
+/// The `#7912` fast arm above answers first for an all-heap-string chain;
+/// everything below is the original rooted path, reached when it declines.
 fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *mut StringHeader {
     debug_assert!(n > 0 && n <= MAX_PARTS);
     if let Some(result) = concat_chain_all_heap_strings_no_collect::<MAX_PARTS>(parts, n) {

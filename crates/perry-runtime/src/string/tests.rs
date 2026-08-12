@@ -627,7 +627,7 @@ fn string_add_value_picks_the_operator_from_the_bits() {
     }
 }
 
-/// #7901: the unrooted `js_string_concat_chain` fast path.
+/// #7912: the unrooted `js_string_concat_chain` fast path.
 ///
 /// The change it covers replaces ~2N transient-handle round trips per chain
 /// with a proof: `string_storage_alloc_no_collect` returns `Some` only when

@@ -1831,7 +1831,7 @@ fn batched_flush_matches_eager_registration() {
 }
 
 // ---------------------------------------------------------------------------
-// #7901: `arena_alloc_gc_no_collect` — the "allocate without a collection
+// #7912: `arena_alloc_gc_no_collect` — the "allocate without a collection
 // point" entry point.
 //
 // Its whole value is a guarantee, not a speed: a caller holding raw heap
