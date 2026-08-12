@@ -475,12 +475,7 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 pub(crate) fn gc_moving_safepoint_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     // Default ON; the kill switch is an explicit `=0`/`off`/`false`.
-    *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_GC_MOVING_SAFEPOINT").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
+    *CACHED.get_or_init(|| super::env_default_on_enabled("PERRY_GC_MOVING_SAFEPOINT"))
 }
 
 /// Phase 4 of the moving-GC project: gate the INCREMENTAL old-gen collector (the
@@ -515,10 +510,7 @@ pub(crate) fn gc_incremental_enabled() -> bool {
         // default; the synchronous collector remains for manual gc(),
         // emergency reclaim, and as the PERRY_GC_INCREMENTAL=0 escape hatch
         // (bisection / max-throughput batch workloads).
-        !matches!(
-            std::env::var("PERRY_GC_INCREMENTAL").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
+        super::env_default_on_enabled("PERRY_GC_INCREMENTAL")
     })
 }
 
@@ -744,12 +736,7 @@ pub(super) fn gc_trace_enabled() -> bool {
     }
 
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_TRACE").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
-    })
+    *CACHED.get_or_init(|| super::env_flag_enabled("PERRY_GC_TRACE"))
 }
 
 #[cfg(test)]
@@ -1058,13 +1045,25 @@ pub(super) enum SafepointOnlyContract {
 pub(super) fn gc_safepoint_only_contract() -> SafepointOnlyContract {
     use std::sync::OnceLock;
     static CACHED: OnceLock<SafepointOnlyContract> = OnceLock::new();
-    *CACHED.get_or_init(
-        || match std::env::var("PERRY_GC_SAFEPOINT_ONLY").as_deref() {
-            Ok("1") | Ok("on") | Ok("true") => SafepointOnlyContract::Heal,
-            Ok("strict") => SafepointOnlyContract::Strict,
-            _ => SafepointOnlyContract::Off,
-        },
-    )
+    *CACHED.get_or_init(|| {
+        safepoint_only_contract_from_value(std::env::var("PERRY_GC_SAFEPOINT_ONLY").ok().as_deref())
+    })
+}
+
+/// Pure value→contract mapping (#7991), so both directions are testable without
+/// touching the process environment. The boolean arm shares the one GC
+/// boolean-ish vocabulary; `strict` is this knob's own third state.
+pub(super) fn safepoint_only_contract_from_value(raw: Option<&str>) -> SafepointOnlyContract {
+    if matches!(
+        raw.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("strict")
+    ) {
+        return SafepointOnlyContract::Strict;
+    }
+    if super::env_flag_from_value(raw) {
+        return SafepointOnlyContract::Heal;
+    }
+    SafepointOnlyContract::Off
 }
 
 /// Contract enforcement chokepoint, called once at every synchronous
@@ -2152,7 +2151,7 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
         }
         // 10-25% freed → keep step unchanged (marginal churn).
         GC_STEP_BYTES.with(|c| c.set(step));
-        if std::env::var_os("PERRY_GC_DIAG").is_some() {
+        if crate::gc::gc_diag_enabled() {
             eprintln!(
                 "[gc-step] pre_in_use={} post_in_use={} sweep_freed={} block_reclaim={} pct={}% step={}→{}",
                 pre_in_use, post_in_use, sweep_freed_bytes, block_reclaim, pct_freed, old_step, step
@@ -3362,7 +3361,7 @@ pub(super) fn gc_drain_active_budgeted_cycle() {
             break;
         }
     }
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!("[gc-drain] WARNING: parked budgeted cycle could not be drained before synchronous collection");
     }
 }

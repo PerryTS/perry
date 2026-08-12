@@ -425,7 +425,7 @@ pub(super) fn maybe_print_evacuation_policy_diag(
     decision: EvacuationPolicyDecision,
     evacuation: EvacuationTraceStats,
 ) {
-    if std::env::var_os("PERRY_GC_DIAG").is_none() {
+    if !crate::gc::gc_diag_enabled() {
         return;
     }
     if !decision.considered && decision.reason != "barriers_inactive" {
@@ -992,7 +992,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
 
     // Reset every block that ended up with zero live objects.
     // Diagnostic: PERRY_GC_DIAG=1 reports block-level liveness.
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         let live_general = (0..resettable_general_n)
             .filter(|&i| block_has_live[i])
             .count();
@@ -1029,7 +1029,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // better than hole-by-hole reuse.
     if reclaim_dead_old_blocks {
         old_free_rebuild_from_live_old_blocks(&block_has_live, old_block_start);
-        if std::env::var_os("PERRY_GC_DIAG").is_some() {
+        if crate::gc::gc_diag_enabled() {
             eprintln!("[gc-old-free] reusable_bytes={}", old_free_bytes());
         }
     }
@@ -1386,7 +1386,7 @@ impl ArenaSweepObjectsState {
                 &self.block_has_live,
                 self.old_block_start,
             );
-            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+            if crate::gc::gc_diag_enabled() {
                 eprintln!("[gc-old-free] reusable_bytes={}", super::old_free_bytes());
             }
         }
@@ -1413,7 +1413,7 @@ impl ArenaSweepObjectsState {
     }
 
     fn maybe_print_diag(&self) {
-        if std::env::var_os("PERRY_GC_DIAG").is_none() {
+        if !crate::gc::gc_diag_enabled() {
             return;
         }
         let live_general = (0..self.resettable_general_n)

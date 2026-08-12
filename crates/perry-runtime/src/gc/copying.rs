@@ -710,7 +710,7 @@ impl CopyingNurseryCollector {
         // refuses to move would silently stay in from-space across a copying
         // minor. `pointer_bearing_large_object_threshold_is_movable` pins that.
         if total < GC_HEADER_SIZE || total > MAX_YOUNG_MOVE_BYTES {
-            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+            if crate::gc::gc_diag_enabled() {
                 eprintln!(
                     "[gc-move-guard] refusing wild young move user={:#x} obj_type={} size={}",
                     old_user as usize,
@@ -932,7 +932,7 @@ fn untraced_promotion_instrument_veto() -> Option<&'static str> {
     if super::fromspace_scan::fromspace_scan_enabled() {
         return Some("fromspace_scan");
     }
-    if std::env::var_os("PERRY_GC_VERIFY_MARK").is_some() {
+    if crate::gc::gc_verify_mark_enabled() {
         return Some("verify_mark");
     }
     if super::barrier::incremental_mark_in_progress_on_this_thread() {
@@ -1326,7 +1326,7 @@ pub(super) fn run_copied_minor_attempt(
         trace.root_sources.native_stack_fallback.scanned =
             matches!(decision, ConservativeStackScanDecision::Scan);
     }
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         let reason = match eligibility.fallback_reason {
             CopiedMinorFallbackReason::None => "none",
             CopiedMinorFallbackReason::NotAttempted => "not_attempted",
@@ -1690,7 +1690,7 @@ pub(super) fn run_copied_minor_attempt(
     // young objects, check that no MARKED (survived) object references an
     // UNMARKED (about-to-be-freed) child — i.e. a live parent whose child is
     // being swept. Non-fatal; logs parent/child obj_types.
-    if std::env::var_os("PERRY_GC_VERIFY_MARK").is_some() {
+    if crate::gc::gc_verify_mark_enabled() {
         super::verify::verify_marked_heap_report_nonfatal("copying-minor");
     }
 
@@ -1923,7 +1923,7 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.copied_bytes,
         collector.stats.survivor_live_bytes,
     );
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-copy-minor] ran in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} trigger={:?} declared_safepoint={}",
             collector.stats.in_place_promotion,

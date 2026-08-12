@@ -27,8 +27,29 @@ KNOB_RE = re.compile(
     rf"{NEVER_SHIPPED_NURSERY}|PERRY_WRITE_BARRIERS|PERRY_SHADOW_STACK|"
     rf"PERRY_RS4GC|PERRY_STACKMAP_WALKER|PERRY_CONSERVATIVE_STACK_SCAN)\b"
 )
+# A knob is "owned" either by a direct environment read or by one of the two
+# shared boolean-ish readers (#7991) — the latter ARE environment reads, one
+# indirection away, and a knob routed through them must not read as unparsed.
 PARSER_RE = re.compile(
-    r'(?:std::env::var(?:_os)?|env_var)\(\s*"(PERRY_[A-Z0-9_]+)"\s*\)'
+    r"(?:std::env::var(?:_os)?|env_var|env_flag_enabled|env_default_on_enabled)"
+    r'\(\s*"(PERRY_[A-Z0-9_]+)"\s*\)'
+)
+
+# #7991: a GC knob read for mere PRESENCE is a bug, not a style choice.
+# `var_os("PERRY_GC_DIAG").is_some()` made `PERRY_GC_DIAG=0` turn diagnostics
+# ON — and `off`, `false` and the empty string with it — which silently
+# collapsed an A/B arm during #7803 triage: the investigator's "clean" control
+# arm was instrumented exactly like the arm it was controlling for.  A knob
+# that fails toward a confident wrong answer is worse than one that fails
+# loudly, so the shape is rejected outright rather than reviewed case by case.
+#
+# Boolean GC knobs go through `gc::env_flag_enabled` (default-OFF, #5093
+# vocabulary) or `gc::env_default_on_enabled` (default-ON kill switch).  Both
+# are pure functions of the raw value underneath, so both directions are
+# testable without touching the process environment
+# (`gc/tests/env_knob_parse.rs`).
+PRESENCE_ONLY_RE = re.compile(
+    r'std::env::var_os\(\s*"(PERRY_[A-Z0-9_]+)"\s*\)\s*\.\s*is_(?:some|none)\s*\(\s*\)'
 )
 
 PARSER_ROOTS = (
@@ -60,6 +81,12 @@ SCRIPT_OWNED = {
     "PERRY_GC_EVIDENCE_DIR": "scripts/run_memory_stability_tests.sh",
 }
 
+# Presence-only reads that are knowingly kept, name -> written reason.  It is
+# EMPTY and should stay that way: every new hit is a red build.  An entry that
+# matches nothing also fails, so a fix must delete its own exemption rather
+# than leave a stale licence behind.
+PRESENCE_ONLY_ALLOWED: dict[str, str] = {}
+
 
 def strip_rust_comments(source: str) -> str:
     """Remove comments so a deleted parser cannot survive as coverage."""
@@ -84,6 +111,35 @@ def parsed_knobs(root: Path) -> dict[str, set[str]]:
         for name in PARSER_RE.findall(source):
             found[name].add(rel)
     return found
+
+
+def presence_only_reads(root: Path) -> dict[str, set[str]]:
+    """GC-family knobs read for presence rather than value (#7991)."""
+    found: dict[str, set[str]] = defaultdict(set)
+    for path in production_rust_files(root):
+        rel = path.relative_to(root).as_posix()
+        source = strip_rust_comments(path.read_text(encoding="utf-8"))
+        for name in PRESENCE_ONLY_RE.findall(source):
+            if KNOB_RE.fullmatch(name):
+                found[name].add(rel)
+    return found
+
+
+def presence_only_problems(found: dict[str, set[str]]) -> list[str]:
+    problems = []
+    for name in sorted(set(found) - set(PRESENCE_ONLY_ALLOWED)):
+        paths = ", ".join(sorted(found[name]))
+        problems.append(
+            f"{name}: read for presence (var_os(..).is_some()/.is_none()) in {paths}; "
+            f"'{name}=0' would ENABLE it. Use gc::env_flag_enabled (default-OFF) or "
+            f"gc::env_default_on_enabled (default-ON kill switch)."
+        )
+    for name in sorted(set(PRESENCE_ONLY_ALLOWED) - set(found)):
+        problems.append(
+            f"{name}: presence-only exemption is stale — no such read remains, "
+            f"so delete its PRESENCE_ONLY_ALLOWED entry"
+        )
+    return problems
 
 
 def claim_files(root: Path):
@@ -123,13 +179,17 @@ def problems_for(
 def self_test() -> int:
     live = "PERRY_GC_" + "LIVE"
     deleted = "PERRY_GEN_GC_" + "DELETED"
+    indirect = "PERRY_GC_" + "INDIRECT"
+    killswitch = "PERRY_GC_" + "KILLSWITCH"
     source = (
         f'let _ = std::env::var("{live}");\n'
         f'// let _ = std::env::var("{deleted}");\n'
+        f'let _ = super::env_flag_enabled("{indirect}");\n'
+        f'let _ = env_default_on_enabled("{killswitch}");\n'
     )
     extracted = set(PARSER_RE.findall(strip_rust_comments(source)))
     failures = []
-    if extracted != {live}:
+    if extracted != {live, indirect, killswitch}:
         failures.append(f"comment stripping admitted the wrong parser set: {sorted(extracted)}")
 
     claims = {live: {"docs/current.md"}, deleted: {"scripts/live.sh"}}
@@ -143,11 +203,54 @@ def self_test() -> int:
     if historical not in HISTORICAL_DOCS:
         failures.append("the historical generational plan lost its exact exemption")
 
+    # #7991: the presence-only detector must be able to say no. Sabotage it
+    # with the exact shape that shipped, and with the value-parsed shape that
+    # replaced it, and require it to distinguish them.
+    bug = "PERRY_GC_" + "SABOTAGE"
+    presence_source = f'if std::env::var_os("{bug}").is_some() {{}}'
+    negated_source = f'if !std::env::var_os("{bug}").is_none() {{}}'
+    fixed_source = f'if env_flag_enabled("{bug}") {{}}'
+    commented_source = f'// if std::env::var_os("{bug}").is_some() {{}}'
+    for label, source, expect_hit in (
+        ("presence is_some", presence_source, True),
+        ("presence is_none", negated_source, True),
+        ("value-parsed", fixed_source, False),
+        ("commented out", commented_source, False),
+    ):
+        hit = bool(PRESENCE_ONLY_RE.findall(strip_rust_comments(source)))
+        if hit != expect_hit:
+            failures.append(
+                f"presence-only detector misread the {label} shape "
+                f"(saw hit={hit}, wanted {expect_hit})"
+            )
+    if not presence_only_problems({bug: {"runtime.rs"}}):
+        failures.append("an unexempted presence-only GC read passed")
+    PRESENCE_ONLY_ALLOWED[bug] = "self-test"
+    try:
+        if presence_only_problems({bug: {"runtime.rs"}}):
+            failures.append("an exempted presence-only read was still rejected")
+        if not any("stale" in p for p in presence_only_problems({})):
+            failures.append("a stale presence-only exemption passed")
+    finally:
+        del PRESENCE_ONLY_ALLOWED[bug]
+    if PRESENCE_ONLY_ALLOWED:
+        failures.append(
+            "PRESENCE_ONLY_ALLOWED is no longer empty; every GC knob must be "
+            "value-parsed"
+        )
+    # A non-GC name must NOT be flagged: this checker owns the GC family only.
+    non_gc = "PERRY_" + "DEBUG"
+    if KNOB_RE.fullmatch(non_gc):
+        failures.append("KNOB_RE claimed a non-GC knob; the family boundary moved")
+
     for failure in failures:
         print(f"GC env-knob self-test FAILED: {failure}", file=sys.stderr)
     if failures:
         return 1
-    print("GC env-knob self-test: OK (dead and commented parsers are rejected)")
+    print(
+        "GC env-knob self-test: OK (dead and commented parsers are rejected; the "
+        "presence-only detector distinguishes a sabotaged read from a fixed one)"
+    )
     return 0
 
 
@@ -160,7 +263,9 @@ def main() -> int:
 
     parsers = parsed_knobs(REPO)
     claims = claimed_knobs(REPO)
+    presence = presence_only_reads(REPO)
     problems = problems_for(claims, parsers, REPO)
+    problems.extend(presence_only_problems(presence))
     if problems:
         print("GC environment-knob drift check FAILED:", file=sys.stderr)
         for problem in problems:
@@ -173,7 +278,8 @@ def main() -> int:
         return 1
     print(
         f"GC environment-knob drift check OK: {len(claims)} claimed knobs, "
-        f"{len(parsers)} live env parsers, {len(HISTORICAL_DOCS)} historical documents exempt"
+        f"{len(parsers)} live env parsers, {len(HISTORICAL_DOCS)} historical documents "
+        f"exempt, 0 presence-only GC reads"
     )
     return 0
 

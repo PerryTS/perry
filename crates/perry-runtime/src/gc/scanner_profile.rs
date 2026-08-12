@@ -37,7 +37,7 @@ pub(super) fn scanner_profile_enabled() -> bool {
         if cached != 0 {
             return cached == 2;
         }
-        let on = std::env::var_os("PERRY_GC_DIAG").is_some();
+        let on = crate::gc::gc_diag_enabled();
         cell.set(if on { 2 } else { 1 });
         on
     })

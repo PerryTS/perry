@@ -363,7 +363,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                     crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
                 }
             });
-            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+            if crate::gc::gc_diag_enabled() {
                 eprintln!(
                     "[gc-block-release] removed {} blocks ({} bytes): pooled={} bytes, deallocated={} bytes",
                     stats.removed_blocks,

@@ -3,12 +3,29 @@ use super::*;
 /// Number of most-recent pause samples retained per thread (#6187).
 pub const GC_RECENT_PAUSE_WINDOW: usize = 32;
 
-/// Is `PERRY_GC_DIAG` set? Read once and cached, so a diagnostic call site can
+/// Is `PERRY_GC_DIAG` ON? Read once and cached, so a diagnostic call site can
 /// sit on a path that runs before/around `main` without paying a `getenv` each
 /// time. Diagnostic-only: nothing may branch on this for behaviour.
+///
+/// #7991: this used to be `var_os(..).is_some()` — *presence*, not value — so
+/// `PERRY_GC_DIAG=0` turned diagnostics ON. That is not cosmetic: it silently
+/// collapsed an A/B arm during #7803 triage, because the investigator's "clean"
+/// control arm got the same diagnostics as the instrumented one. A knob that
+/// fails toward a confident wrong answer is worse than one that fails loudly.
+/// The value semantics are #5093's, shared with every other GC knob via
+/// [`super::env_flag_from_value`].
 pub fn gc_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("PERRY_GC_DIAG").is_some())
+    *ENABLED.get_or_init(|| env_flag_enabled("PERRY_GC_DIAG"))
+}
+
+/// Is `PERRY_GC_VERIFY_MARK` ON? Cached for the same reason as
+/// [`gc_diag_enabled`], and value-parsed for the same reason (#7991): the three
+/// mark-verifier call sites were presence-only, so `=0` armed a verifier that
+/// walks the whole heap.
+pub(crate) fn gc_verify_mark_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| env_flag_enabled("PERRY_GC_VERIFY_MARK"))
 }
 
 pub struct GcStats {

@@ -307,7 +307,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
         return;
     }
     let previous = MEAN_SURVIVING_OBJECT_BYTES.replace(mean);
-    if previous != mean && std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if previous != mean && crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes {} -> {} \
              (scale {} permille, band {} B)",
@@ -523,7 +523,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
     // mark-sweep, including refusals. A policy that silently declines is
     // indistinguishable from one that never ran (#7024/#7025), and the
     // refusal reason is the number a future tuning decision needs.
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         let classified = eden_live_bytes.saturating_add(eden_dead_bytes);
         let pct = if classified == 0 {
             0
@@ -547,7 +547,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
 }
 
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap scale {from}x -> {to}x (eden_live_bytes={eden_live_bytes})"
         );
@@ -559,7 +559,7 @@ fn set_survivals(current: u8, next: u8, eden_live_bytes: usize, why: &str) {
         return;
     }
     TENURING_SURVIVALS.with(|s| s.set(next));
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] survivals {} -> {} ({why}, eden_live_bytes={} desired={})",
             current,

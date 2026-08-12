@@ -532,7 +532,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
 
     let recycled = push_set_and_evict(retired);
 
-    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+    if crate::gc::gc_diag_enabled() {
         let stats = quarantine_stats();
         eprintln!(
             "[gc-fromspace-protect] mode={:?} retired_set=#{} blocks={} sets_held={}/{} bytes_protected={} bytes_poisoned={} blocks_recycled={}",

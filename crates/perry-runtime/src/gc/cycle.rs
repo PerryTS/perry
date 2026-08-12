@@ -1583,7 +1583,7 @@ impl GcCycleState {
         // Diagnostic (PERRY_GC_VERIFY_MARK): marks are final for this minor and
         // sweep has not yet run — report any OLD parent whose young/malloc child
         // is UNMARKED (about to be swept live = dropped remembered-set edge).
-        if std::env::var_os("PERRY_GC_VERIFY_MARK").is_some() {
+        if crate::gc::gc_verify_mark_enabled() {
             super::verify::verify_minor_unmarked_young_children_report("minor-prelude");
         }
 

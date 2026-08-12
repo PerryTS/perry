@@ -159,11 +159,7 @@ fn shape_layout_keyed_enabled() -> bool {
     static E: OnceLock<bool> = OnceLock::new();
     // Default ON; `PERRY_SHAPE_LAYOUT_KEYED=0` restores the per-object maps
     // (A/B validation).
-    *E.get_or_init(|| {
-        std::env::var("PERRY_SHAPE_LAYOUT_KEYED")
-            .map(|v| v != "0")
-            .unwrap_or(true)
-    })
+    *E.get_or_init(|| super::env_default_on_enabled("PERRY_SHAPE_LAYOUT_KEYED"))
 }
 
 /// keys_array only exists on genuine shaped objects (`ObjectFields`). Arrays,

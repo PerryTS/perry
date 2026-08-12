@@ -37,12 +37,7 @@ pub(super) fn classifier_verify_enabled() -> bool {
         return false;
     }
     static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *CACHED.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_VERIFY_CLASSIFIER").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
-    })
+    *CACHED.get_or_init(|| super::env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER"))
 }
 
 thread_local! {
