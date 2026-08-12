@@ -153,6 +153,33 @@ pub(crate) fn lower_generic_property_get(
     let invalid_label = ctx.block_label(invalid_idx);
     let class_ref_label = ctx.block_label(class_ref_idx);
     let final_merge_label = ctx.block_label(final_merge_idx);
+    // `.length` on a receiver whose static type is not a proven string.
+    //
+    // The three-arm string-length dispatch in `property_get.rs` (SSO length
+    // byte / heap `utf16_len` load / property-semantic slow call) is already
+    // fully RUNTIME-guarded — it tests the NaN-box tag and only takes an
+    // inline arm for a value that IS a string — yet it is gated on
+    // `is_string_expr`, a compile-time proof. A receiver the front end cannot
+    // type (`rec.tag.length` where `rec` is an object-literal type, a JSON
+    // `any`, an array element) therefore lands in this generic tower instead,
+    // where a heap string can never be served: the PIC requires a
+    // GC_TYPE_OBJECT receiver by construction (#72), so EVERY such read misses
+    // to `js_object_get_field_ic_miss` and walks a ladder built for objects —
+    // closure-magic deref, buffer and typed-array registry probes, then
+    // `js_object_get_field_by_name`'s own dispatch, which decodes the key with
+    // `str::from_utf8` again before reaching the string arm. On `pipeline.ts`
+    // that one read was ~9% of total run time.
+    //
+    // Both string tags are disjoint from POINTER_TAG, so serving them here is
+    // a pure short-circuit: a primitive string's `length` is non-writable and
+    // non-configurable, cannot be shadowed by an own property, and is exactly
+    // what the runtime ladder computes. Everything else keeps the tower.
+    let inline_string_length = property == "length";
+    let strlen_heap_idx = if inline_string_length {
+        Some(ctx.new_block("pget.strlen_heap"))
+    } else {
+        None
+    };
     // #7883: the POINTER/STRING test goes FIRST, and the two rare tags are
     // discriminated in a cold block off its false edge. The three tag classes
     // are pairwise disjoint — `is_valid` is `(tag & 0xFFFD) == 0x7FFD`, true
@@ -204,6 +231,22 @@ pub(crate) fn lower_generic_property_get(
             (I64, &key_handle),
         ],
     );
+
+    // Split the heap-string receiver off before the PIC. Placed AFTER the
+    // typed-feedback observation on purpose: the site keeps recording every
+    // receiver it sees, so a mixed object/string site cannot be mis-profiled
+    // as monomorphic-object by the arm that is no longer traced here.
+    if let Some(heap_idx) = strlen_heap_idx {
+        let strlen_heap_label = ctx.block_label(heap_idx);
+        let not_string_idx = ctx.new_block("pget.recv_obj");
+        let not_string_label = ctx.block_label(not_string_idx);
+        let is_heap_string =
+            ctx.block()
+                .icmp_eq(I64, &obj_tag, crate::nanbox::STRING_TAG_TOP16_I64);
+        ctx.block()
+            .cond_br(&is_heap_string, &strlen_heap_label, &not_string_label);
+        ctx.current_block = not_string_idx;
+    }
 
     // Issue #51: monomorphic inline cache. Per-site `[8 x i64]` global
     // holds [shape_token, cached_slot_index, primed_epoch, ...unused].
@@ -757,24 +800,49 @@ pub(crate) fn lower_generic_property_get(
     // the PIC entirely (PIC would read garbage memory). The
     // key handle has already been extracted above.
     ctx.current_block = sso_idx;
-    let sso_val = ctx.block().call(
-        DOUBLE,
-        "js_object_get_field_by_name_f64",
-        &[(I64, &obj_bits), (I64, &key_handle)],
-    );
+    let sso_val = if inline_string_length {
+        // `.length` of an SSO string is the length byte in bits 40..47 of the
+        // NaN-box itself — the same extract `js_object_get_field_by_name_f64`
+        // performs, minus the call and the key decode.
+        let len_shifted = ctx.block().lshr(I64, &obj_bits, "40");
+        let len_byte = ctx.block().and(I64, &len_shifted, "255");
+        ctx.block().uitofp(I64, &len_byte, DOUBLE)
+    } else {
+        ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_by_name_f64",
+            &[(I64, &obj_bits), (I64, &key_handle)],
+        )
+    };
     let sso_end_label = ctx.block().label.clone();
     ctx.block().br(&final_merge_label);
 
+    // Heap string `.length`: `utf16_len` is the leading `u32` of
+    // `StringHeader` — the identical load the proven-string lowering in
+    // `property_get.rs` emits (`strlen.heap`). `safe_load_i32_from_ptr`
+    // keeps a sub-page handle off the load.
+    let strlen_heap_arm = if let Some(heap_idx) = strlen_heap_idx {
+        ctx.current_block = heap_idx;
+        let len_i32 = ctx.block().safe_load_i32_from_ptr(&obj_handle);
+        let heap_len = ctx.block().uitofp(I32, &len_i32, DOUBLE);
+        let heap_end_label = ctx.block().label.clone();
+        ctx.block().br(&final_merge_label);
+        Some((heap_len, heap_end_label))
+    } else {
+        None
+    };
+
     // Outer merge joins PIC result + invalid-receiver undefined
-    // + SSO result + class-ref dispatch result.
+    // + SSO result + class-ref dispatch result (+ heap-string `.length`).
     ctx.current_block = final_merge_idx;
-    Ok(ctx.block().phi(
-        DOUBLE,
-        &[
-            (&pic_val, &pic_end_label),
-            (&undef_val, &invalid_end_label),
-            (&sso_val, &sso_end_label),
-            (&class_ref_result, &class_ref_end_label),
-        ],
-    ))
+    let mut incoming: Vec<(&str, &str)> = vec![
+        (&pic_val, &pic_end_label),
+        (&undef_val, &invalid_end_label),
+        (&sso_val, &sso_end_label),
+        (&class_ref_result, &class_ref_end_label),
+    ];
+    if let Some((heap_len, heap_end_label)) = strlen_heap_arm.as_ref() {
+        incoming.push((heap_len, heap_end_label));
+    }
+    Ok(ctx.block().phi(DOUBLE, &incoming))
 }

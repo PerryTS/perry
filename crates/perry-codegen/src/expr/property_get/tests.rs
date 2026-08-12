@@ -529,3 +529,100 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         );
     }
 }
+
+/// A module whose init reads `o.<property>` where `o` is an `Any` local — the
+/// generic tower, same shape as `module_with_nullish_read` but with a
+/// caller-chosen key.
+fn module_reading(property: &str) -> Module {
+    let mut m = Module::new("read.ts");
+    m.init = vec![
+        Stmt::Let {
+            id: 1,
+            name: "o".to_string(),
+            ty: perry_hir::types::Type::Any,
+            mutable: false,
+            init: Some(Expr::Undefined),
+        },
+        Stmt::Expr(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: property.to_string(),
+            byte_offset: 0,
+        }),
+    ];
+    m.init_kind = ModuleInitKind::Eager;
+    m
+}
+
+fn emit_read(property: &str) -> String {
+    String::from_utf8(compile_module(&module_reading(property), ir_opts(false, None)).unwrap())
+        .expect("LLVM IR should be UTF-8")
+}
+
+/// A `.length` read whose receiver codegen cannot prove is a string must still
+/// serve a string inline.
+///
+/// The proven-string lowering in `property_get.rs` already emits a
+/// runtime-guarded three-arm dispatch, but it is gated on `is_string_expr` — a
+/// compile-time proof. Without a proof the read lands in this tower, where a
+/// heap string can never hit the PIC (it requires a GC_TYPE_OBJECT receiver by
+/// construction, #72) and every read pays the full
+/// `js_object_get_field_ic_miss` object ladder. Assert BOTH string arms exist:
+/// the heap block, and the SSO arm's inline length-byte extract in place of the
+/// `js_object_get_field_by_name_f64` call.
+#[test]
+fn generic_length_read_serves_a_string_inline() {
+    let ir = emit_read("length");
+    assert!(
+        ir.contains("\npget.strlen_heap"),
+        "a `.length` read must split heap strings off before the PIC:\n{ir}"
+    );
+    // 32767 = STRING_TAG >> 48. The split must test the tag, not something the
+    // optimiser could fold away.
+    assert!(
+        ir.contains("icmp eq i64") && ir.contains("32767"),
+        "the heap-string split must compare the receiver tag to STRING_TAG:\n{ir}"
+    );
+    let sso = ir
+        .find("\npget.recv_sso")
+        .unwrap_or_else(|| panic!("expected an SSO receiver block:\n{ir}"));
+    let sso_body = &ir[sso..];
+    let sso_end = sso_body[1..]
+        .find("\n\n")
+        .map(|i| i + 1)
+        .unwrap_or(sso_body.len());
+    let sso_body = &sso_body[..sso_end];
+    assert!(
+        sso_body.contains("lshr i64") && sso_body.contains(", 40"),
+        "the SSO arm must extract the inline length byte, not call the \
+         by-name helper:\n{sso_body}"
+    );
+    assert!(
+        !sso_body.contains("js_object_get_field_by_name_f64"),
+        "the SSO `.length` arm must not call back into the runtime:\n{sso_body}"
+    );
+    // Everything that is NOT a string keeps the tower.
+    assert!(
+        ir.contains("@perry_ic_") && ir.contains("js_object_get_field_ic_miss"),
+        "non-string receivers must still reach the inline PIC and its miss \
+         handler:\n{ir}"
+    );
+}
+
+/// The short-circuit is keyed on the property name: any other key on a string
+/// receiver (`s.charCodeAt`, `s.constructor`) still needs the runtime, so no
+/// other read may grow the string blocks.
+#[test]
+fn generic_non_length_read_keeps_the_whole_tower() {
+    let ir = emit_read("charCodeAt");
+    assert!(
+        !ir.contains("pget.strlen_heap"),
+        "only `.length` may take the inline string arm:\n{ir}"
+    );
+    let sso = ir
+        .find("\npget.recv_sso")
+        .unwrap_or_else(|| panic!("expected an SSO receiver block:\n{ir}"));
+    assert!(
+        ir[sso..].contains("js_object_get_field_by_name_f64"),
+        "a non-`length` SSO read must still call the by-name helper:\n{ir}"
+    );
+}
