@@ -62,7 +62,7 @@
 
 use super::page_meta::{
     generation_page_base, register_promoted_page_headers, register_promoted_page_run,
-    retag_block_space, GENERATION_PAGE_SIZE,
+    retag_block_space, retag_block_space_deferring_old_page_registration, GENERATION_PAGE_SIZE,
 };
 use super::*;
 
@@ -173,7 +173,13 @@ pub(crate) struct InPlacePromotionStats {
 /// Returns the blocks captured. An empty result means there was nothing to
 /// promote and the caller must fall back to the ordinary copying path (in
 /// particular it must NOT skip the from-space reset).
-pub(crate) fn retag_young_for_in_place_promotion() -> InPlacePromotion {
+/// `defer_old_page_registration` is for the speculative first-cycle attempt,
+/// which may undo this retag — see
+/// [`retag_block_space_deferring_old_page_registration`] for why it is sound
+/// exactly there and for what it costs when it is not deferred.
+pub(crate) fn retag_young_for_in_place_promotion(
+    defer_old_page_registration: bool,
+) -> InPlacePromotion {
     sync_inline_arena_state();
     let mut promotion = InPlacePromotion::default();
 
@@ -198,12 +204,21 @@ pub(crate) fn retag_young_for_in_place_promotion() -> InPlacePromotion {
     }
 
     for block in &promotion.blocks {
-        retag_block_space(
-            block.base,
-            block.size,
-            HeapGeneration::Old,
-            HeapSpace::PromotedYoung,
-        );
+        if defer_old_page_registration {
+            retag_block_space_deferring_old_page_registration(
+                block.base,
+                block.size,
+                HeapGeneration::Old,
+                HeapSpace::PromotedYoung,
+            );
+        } else {
+            retag_block_space(
+                block.base,
+                block.size,
+                HeapGeneration::Old,
+                HeapSpace::PromotedYoung,
+            );
+        }
     }
     promotion
 }
@@ -219,16 +234,15 @@ pub(crate) fn retag_young_for_in_place_promotion() -> InPlacePromotion {
 /// (clear the marks the trace set, and do not consume the remembered set); see
 /// `gc::copying`'s rollback for why the list is exactly that long.
 ///
-/// ★ The retag is NOT only a relabel. `retag_block_space` to
-/// `HeapGeneration::Old` also **registers old-gen page metadata** for every
-/// page of the block (`register_old_block_pages`), and relabelling back to
-/// `Nursery` does not take it away — the entries are removed by
-/// `unregister_old_block_pages`, which is what every other "this block stops
-/// being old-gen" path calls. Omitting it leaves the whole young generation
-/// carrying zeroed `OLD_GEN_PAGE_META` entries: measured as +4–10% peak RSS
-/// across the rolled-back half of the corpus (`tree_wide` 67.8 → 74.8 MB), and
-/// worse than the footprint, a page registered as old-gen while its block is
-/// young again is a lie the dirty scan and the defrag page selector both read.
+/// ★ The retag is NOT only a relabel — an `Old` retag also mints an old-gen
+/// page-metadata entry per 4 KB of the block. This undo does not have to take
+/// them away, because the speculative attempt never mints them: it retags
+/// through [`retag_block_space_deferring_old_page_registration`], which is
+/// sound exactly there and saves 1–6 MB of peak RSS that removing the entries
+/// afterwards would NOT have saved (a `HashMap` never returns its capacity).
+/// `a_first_cycle_attempt_that_its_own_trace_refutes_rolls_back_and_evacuates`
+/// asserts the old-gen page count is unchanged across a rollback, so a future
+/// retag that starts minting them again turns that test red.
 pub(crate) fn undo_in_place_promotion_retag(promotion: &InPlacePromotion) {
     for block in &promotion.blocks {
         let space = match block.source {
@@ -237,10 +251,6 @@ pub(crate) fn undo_in_place_promotion_retag(promotion: &InPlacePromotion) {
             PromotionSource::Survivor(_) => HeapSpace::Survivor1,
         };
         retag_block_space(block.base, block.size, HeapGeneration::Nursery, space);
-        let first_page = generation_page_for_addr(block.base);
-        let last_page = generation_page_for_addr(block.base + block.size - 1);
-        let pages: Vec<usize> = (first_page..=last_page).collect();
-        super::page_meta::unregister_old_block_pages(&pages);
     }
 }
 

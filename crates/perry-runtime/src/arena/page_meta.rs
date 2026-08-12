@@ -532,6 +532,44 @@ pub(crate) fn retag_block_space(
     generation: HeapGeneration,
     space: HeapSpace,
 ) {
+    retag_block_space_inner(base, size, generation, space, true);
+}
+
+/// Relabel a block WITHOUT minting the old-gen page-metadata entries an
+/// `Old` retag normally mints (#7937).
+///
+/// For a retag that may be UNDONE — the speculative first-cycle promotion,
+/// which decides from its own trace and rolls back if the trace disagrees —
+/// eager registration is both wasted and expensive: it mints one zeroed
+/// `OldPageMeta` per 4 KB of the whole young generation, and a `HashMap` never
+/// gives its capacity back, so removing the entries afterwards does not undo
+/// the footprint. Measured: `tree_wide` +6 MB, `tree` +3 MB, `churn` +1 MB of
+/// peak RSS for blocks that were handed straight back to the nursery.
+///
+/// Deferring it is sound for that caller specifically because a speculative
+/// attempt requires `skip_remembering` (see `gc::copying`), which is the proof
+/// that NO remembered-set insertion can happen between the retag and the
+/// finish — and the remembered set is the only reader that would want a
+/// promoted page's metadata before it exists. If the attempt commits,
+/// `finish_in_place_promotion` mints the entries on the way past: both
+/// `register_promoted_page_headers`/`_run` (per live page) and its closing
+/// `retag_block_space(.., Old, HeapSpace::Old)` (every page) create them.
+pub(crate) fn retag_block_space_deferring_old_page_registration(
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+) {
+    retag_block_space_inner(base, size, generation, space, false);
+}
+
+fn retag_block_space_inner(
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+    register_old_pages: bool,
+) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }
@@ -562,7 +600,7 @@ pub(crate) fn retag_block_space(
             }
         }
     });
-    if matches!(generation, HeapGeneration::Old) {
+    if register_old_pages && matches!(generation, HeapGeneration::Old) {
         register_old_block_pages(base, size);
     }
     invalidate_generation_cache();

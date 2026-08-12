@@ -664,12 +664,12 @@ fn a_first_cycle_attempt_that_its_own_trace_refutes_rolls_back_and_evacuates() {
             "the relocated survivor must be a live object"
         );
     }
-    // The retag is not only a relabel: it REGISTERS old-gen page metadata for
-    // every page of every young block (`register_old_block_pages`). Rolling
-    // back has to unregister them, or the whole young generation is left
-    // carrying old-gen page entries — a lie the dirty scan and the defrag page
-    // selector both read, and +4–10% peak RSS across the corpus when it was
-    // missing.
+    // The retag is not only a relabel: an `Old` retag normally MINTS one
+    // old-gen page-metadata entry per 4 KB of every block it touches, and a
+    // `HashMap` never gives that capacity back — so an attempt that may be
+    // undone must not mint them in the first place (measured: +1 MB `churn`,
+    // +3 MB `tree`, +6 MB `tree_wide` of peak RSS when it did). Registering
+    // eagerly here turns this red.
     assert_eq!(
         crate::arena::old_page_summary().pages,
         old_pages_before,

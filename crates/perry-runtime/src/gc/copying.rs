@@ -1479,7 +1479,7 @@ fn run_copied_minor_attempt(
         && !untraced_promotion_instrument_veto()
         && super::should_attempt_first_cycle_promotion();
     let promotion = if super::should_promote_young_in_place() || speculate_first_cycle {
-        crate::arena::retag_young_for_in_place_promotion()
+        crate::arena::retag_young_for_in_place_promotion(speculate_first_cycle)
     } else {
         crate::arena::InPlacePromotion::default()
     };
