@@ -170,8 +170,11 @@ pub fn compile_module_units_native(
             + skeleton.len();
         let (effective_target, args) =
             crate::linker::native_plan_args(target, est, part.funcs.len());
-        objs.push(
+        let unit_bytes =
             crate::inprocess::optimize_and_emit_module(&module, &effective_target, &args)
+                .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
+        objs.push(
+            crate::linker::finish_native_emission(unit_bytes, &effective_target, &args)
                 .map_err(|e| anyhow!("unit {i}: {e:#}"))?,
         );
         log::debug!(
@@ -239,7 +242,13 @@ pub fn compile_module_native(
     let module = build_native_module(&context, llmod)?;
     debug_dump(&module, module_prefix);
     let (effective_target, args) = plan_for(llmod, target);
-    crate::inprocess::optimize_and_emit_module(&module, &effective_target, &args)
+    // #7982: under the statepoint backends the plan asks for `-S`, so this
+    // returns assembler TEXT. It must go through the compact-map rewrite and
+    // the assembler before it can be called an object — the textual path has
+    // always done this, the native path silently did not, and the link died
+    // with `ld: unknown file type`.
+    let bytes = crate::inprocess::optimize_and_emit_module(&module, &effective_target, &args)?;
+    crate::linker::finish_native_emission(bytes, &effective_target, &args)
 }
 
 /// The debug view under native construction: `PERRY_SAVE_LL=<dir>` (which
@@ -300,7 +309,9 @@ pub fn compile_module_diff(
     match native {
         Err(e) => {
             eprintln!("perry: [ir-diff] native construction FAILED (text arm still used): {e:#}");
-            crate::inprocess::optimize_and_emit_module(&m_text, &effective_target, &args)
+            let bytes =
+                crate::inprocess::optimize_and_emit_module(&m_text, &effective_target, &args)?;
+            crate::linker::finish_native_emission(bytes, &effective_target, &args)
         }
         Ok(m_native) => {
             debug_dump(&m_native, module_prefix);
@@ -341,41 +352,33 @@ pub fn compile_module_diff(
                     eprintln!("perry: [ir-diff] arms dumped under {dir}");
                 }
             }
-            Ok(bytes_text)
+            // The verdict above is over the bytes LLVM emitted, which under
+            // the statepoint plan (`-S`) are assembly. The RETURNED artifact
+            // still has to be an object, or the link dies with `ld: unknown
+            // file type` (#7982) — the diff arm shared the native arm's bug
+            // and was never reached in CI, because the native arm failed
+            // first.
+            crate::linker::finish_native_emission(bytes_text, &effective_target, &args)
         }
     }
 }
 
-/// The one-line define header for `f`, matching `LlFunction::to_ir`'s
-/// rendering (linkage, return type, params, inline/try attributes) so the
-/// reader applies identical linkage and function attributes.
+/// The `define ... {` line for `f`, delegated to the single renderer
+/// [`crate::function::LlFunction::define_header`].
+///
+/// **#7982 — this used to be a COPY of `to_ir`'s header, and the copy
+/// drifted.** It was written against a `to_ir` that had neither
+/// `"frame-pointer"="non-leaf"` nor `gc "statepoint-example"`; both were added
+/// to `to_ir` afterwards and never here. Missing the GC strategy means RS4GC
+/// never runs on a natively-constructed module: it verifies, links and
+/// executes correctly on any program that does not collect, while having **no
+/// precise roots at all** — #7332's shape, invisible to a behaviour-parity
+/// smoke arm by construction. The only symptom was the diff arm's byte
+/// mismatch (149,105 text vs 50,995 native on the spike), and the diff arm was
+/// never reached because the native arm failed earlier.
+///
+/// The fix is structural rather than a test for agreement: there is now one
+/// renderer, so the next attribute added to the header reaches both paths.
 fn synth_define_header(f: &crate::function::LlFunction, force_external: bool) -> String {
-    let params = f
-        .params
-        .iter()
-        .map(|(t, n)| format!("{t} {n}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    // Codegen units promote internal/private definitions so cross-unit
-    // calls bind — mirror of `render_fn_external`.
-    let linkage = if f.linkage.is_empty() || force_external {
-        String::new()
-    } else {
-        format!("{} ", f.linkage)
-    };
-    let attrs = if f.force_inline {
-        " alwaysinline"
-    } else if f.inline_hint {
-        " inlinehint"
-    } else {
-        ""
-    };
-    let personality = match f.personality {
-        Some(p) => format!(" personality ptr @{}", p),
-        None => String::new(),
-    };
-    format!(
-        "define {}{} @{}({}){}{} {{",
-        linkage, f.return_type, f.name, params, attrs, personality
-    )
+    f.define_header(force_external)
 }

@@ -93,6 +93,19 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
     /// so anything else is a dialect drift and bails loudly.
     pub(super) fn landingpad(&mut self, dst: &str, rest: &str) -> Result<()> {
         let body = rest.trim();
+        // #7982: RS4GC-era codegen emits `landingpad token cleanup` for the
+        // pads it introduces — a cleanup-only pad with a `token` result. Both
+        // shapes coexist in one module today (the spike carries 11 token pads
+        // and one `{ptr, i32} catch`), which is why this is a second arm and
+        // not a replacement. `token` is not an inkwell `BasicType`, so the pad
+        // is built through llvm-sys and its result is deliberately NOT entered
+        // into `self.vals`: nothing consumes it (no `resume` exists anywhere in
+        // the corpora), and a future consumer would name type `token` and fail
+        // loudly in `basic_type` rather than silently getting a placeholder of
+        // the wrong type.
+        if body == "token cleanup" {
+            return self.token_cleanup_landingpad(dst);
+        }
         let clause_pos = body
             .find("catch")
             .ok_or_else(|| anyhow!("landingpad without a catch clause: {body}"))?;
@@ -123,6 +136,36 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             )
             .map_err(be)?;
         self.vals.insert(dst.trim().to_string(), v);
+        Ok(())
+    }
+
+    /// `%r = landingpad token cleanup`. Built through llvm-sys because inkwell
+    /// 0.9's `build_landing_pad` takes a `BasicType`, and `token` is not one.
+    fn token_cleanup_landingpad(&mut self, dst: &str) -> Result<()> {
+        let pf = self
+            .func
+            .get_personality_function()
+            .ok_or_else(|| anyhow!("landingpad in a function with no personality"))?;
+        let name = std::ffi::CString::new(dst.trim().trim_start_matches('%'))
+            .map_err(|_| anyhow!("landingpad name is not a valid C string: {dst}"))?;
+        // SAFETY: every ref comes from the live context/builder/function this
+        // reader is already constructing into, and the builder is positioned
+        // at the pad block (the caller bails before the first block label).
+        unsafe {
+            use inkwell::values::AsValueRef;
+            let token_ty = llvm_sys::core::LLVMTokenTypeInContext(self.ctx.raw());
+            let lp = llvm_sys::core::LLVMBuildLandingPad(
+                self.builder.as_mut_ptr(),
+                token_ty,
+                pf.as_value_ref(),
+                0,
+                name.as_ptr(),
+            );
+            if lp.is_null() {
+                bail!("LLVMBuildLandingPad returned null for `{dst}`");
+            }
+            llvm_sys::core::LLVMSetCleanup(lp, 1);
+        }
         Ok(())
     }
 }

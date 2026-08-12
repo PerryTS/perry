@@ -91,7 +91,17 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 90
     steps:
+      # #7982: `fetch-depth: 0`. The "Corpus currency" step below asks git how
+      # many IR-affecting commits have landed since the corpora were last
+      # refreshed — and on the default depth-1 checkout that question has
+      # exactly one commit to answer from, so `git log -- <path>` finds nothing
+      # and the count printed was a confident **0** no matter how stale the
+      # files were. A diagnostic that cannot report the problem it exists to
+      # report is worse than no diagnostic; it was reassuring three readers
+      # while the corpora sat 151 commits behind.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install LLVM 22 (pinned major — fail loudly on drift)
         run: |
@@ -127,11 +137,22 @@ jobs:
       # THAT IR — not the IR this commit emits. When the end-to-end arm below
       # goes red while these stay green, that gap is the first thing to check,
       # so print it rather than leaving the next reader to rediscover it.
-      - name: Corpus currency (diagnostic, not a gate)
+      # #7982: the FORM census is the gate (it runs in `lint` and fails when a
+      # form the reader has a branch for is absent from the corpora). This step
+      # keeps the age number, which is the other half of the picture and the
+      # one a human reads when the end-to-end arm goes red while the unit gates
+      # stay green. It needs `fetch-depth: 0` above to be anything but zero.
+      - name: Corpus currency (diagnostic; the gate is `lint`'s form census)
         if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
+          python3 scripts/check_llvm_corpus_currency.py
           newest=$(git log -1 --format=%ct -- experiments/llvm-inprocess-spike/*.ll)
+          if [ -z "${newest}" ]; then
+            echo "::error::corpus currency could not read git history — is this a"\
+                 "shallow checkout again? (#7982: depth 1 made this print 0 forever)"
+            exit 1
+          fi
           behind=$(git log --oneline --since="@${newest}" -- crates/perry-codegen/src \
             crates/perry-hir/src crates/perry-transform/src | wc -l | tr -d ' ')
           echo "tracked .ll corpora last refreshed: $(git log -1 --format='%h %ad' \

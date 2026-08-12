@@ -670,7 +670,26 @@ impl LlFunction {
         body + allocas + self.name.len() + 64
     }
 
-    pub fn to_ir(&self) -> String {
+    /// The `define ... {` line, and the ONLY place it is rendered.
+    ///
+    /// **#7982.** The in-process native path used to synthesize its own copy of
+    /// this (`native_emit::synth_define_header`). It was written against an
+    /// older `to_ir` and silently missed the two attributes added afterwards —
+    /// `"frame-pointer"="non-leaf"` and `gc "statepoint-example"`. Missing the
+    /// GC strategy means RS4GC never runs on a natively-constructed module: it
+    /// verifies, links and executes correctly on any program that does not
+    /// collect, while having **no precise roots at all**. Nothing observable
+    /// distinguishes that from a correct build until a collection frees
+    /// something live (#7332's shape).
+    ///
+    /// So the two callers now share one renderer rather than being tested for
+    /// agreement: a copy that can drift eventually does, and this one took two
+    /// attributes and an unknown number of releases to be noticed.
+    ///
+    /// `force_external` is the codegen-unit case: unit splitting promotes
+    /// internal/private definitions so cross-unit calls bind (mirror of
+    /// `render_fn_external`).
+    pub fn define_header(&self, force_external: bool) -> String {
         let param_str = self
             .params
             .iter()
@@ -678,7 +697,7 @@ impl LlFunction {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let linkage = if self.linkage.is_empty() {
+        let linkage = if self.linkage.is_empty() || force_external {
             String::new()
         } else {
             format!("{} ", self.linkage)
@@ -716,8 +735,8 @@ impl LlFunction {
             Some(p) => format!(" personality ptr @{}", p),
             None => String::new(),
         };
-        let mut ir = format!(
-            "define {}{} @{}({}){}{}{}{} {{\n",
+        format!(
+            "define {}{} @{}({}){}{}{}{} {{",
             linkage,
             self.return_type,
             self.name,
@@ -726,7 +745,12 @@ impl LlFunction {
             frame_pointer,
             gc_strategy,
             personality
-        );
+        )
+    }
+
+    pub fn to_ir(&self) -> String {
+        let mut ir = self.define_header(false);
+        ir.push('\n');
         self.for_each_final_line::<std::convert::Infallible>(&mut |line| {
             ir.push_str(line);
             ir.push('\n');
@@ -763,10 +787,14 @@ impl LlFunction {
         // exception from the runtime rather than the pad payload. Only the type
         // is load-bearing, and only to RS4GC.
         //
-        // Conditioned on the same fact as `gc_strategy` above — a function that
+        // Conditioned on exactly the predicate `define_header` uses for the GC
+        // strategy (#7982 moved that rendering into one place) — a function that
         // does not carry the strategy must keep the Itanium form, or its pad
         // becomes untypeable for ordinary EH lowering.
-        let ir = if !gc_strategy.is_empty() && crate::codegen::helpers::rs4gc_enabled() {
+        let ir = if self.stack_map_requested
+            && crate::codegen::helpers::native_stack_roots_enabled()
+            && crate::codegen::helpers::rs4gc_enabled()
+        {
             retype_landing_pads_for_statepoints(&ir)
         } else {
             ir
@@ -955,4 +983,59 @@ pub enum FinalItem<'a> {
     Text(&'a str),
     /// A typed instruction — the native backend constructs it directly.
     Inst(&'a crate::inst::LlInst),
+}
+
+#[cfg(test)]
+mod define_header_tests {
+    use super::*;
+
+    fn probe() -> LlFunction {
+        LlFunction::new(
+            "perry_fn_probe",
+            crate::types::DOUBLE,
+            vec![(crate::types::DOUBLE, "%a".to_string())],
+        )
+    }
+
+    /// `to_ir`'s first line and `define_header(false)` are the same string —
+    /// asserted, not assumed, because they were two independent renderers
+    /// until #7982 and the copy silently lost `gc "statepoint-example"`.
+    /// A natively-constructed module without that strategy gets no RS4GC pass
+    /// and therefore no precise roots, and it looks entirely correct until a
+    /// collection frees something live.
+    #[test]
+    fn to_ir_opens_with_exactly_the_shared_define_header() {
+        for force_inline in [false, true] {
+            for personality in [None, Some("perry_eh_personality")] {
+                let mut f = probe();
+                f.force_inline = force_inline;
+                f.personality = personality;
+                let ir = f.to_ir();
+                let first = ir.lines().next().expect("to_ir emits a header line");
+                assert_eq!(
+                    first,
+                    f.define_header(false),
+                    "to_ir's header and define_header must be one renderer \
+                     (force_inline={force_inline}, personality={personality:?})"
+                );
+            }
+        }
+    }
+
+    /// `force_external` drops only the linkage keyword. The codegen-unit path
+    /// depends on that and on nothing else changing.
+    #[test]
+    fn force_external_drops_linkage_and_leaves_every_other_attribute() {
+        let mut f = probe();
+        f.linkage = "internal".to_string();
+        let internal = f.define_header(false);
+        let external = f.define_header(true);
+        assert!(internal.starts_with("define internal "));
+        assert!(!external.contains("internal"));
+        assert_eq!(
+            internal.replacen("internal ", "", 1),
+            external,
+            "force_external must remove the linkage keyword and change nothing else"
+        );
+    }
 }

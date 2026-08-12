@@ -249,6 +249,21 @@ jobs:
           python3 scripts/check_gc_env_knobs.py --self-test
           python3 scripts/check_gc_env_knobs.py
 
+      # #7982. The in-process LLVM reader's unit gate builds three tracked `.ll`
+      # corpora and asserts they RAN — which proves the tests ran, not that they
+      # test today's IR. All three froze on 2026-08-03 and carried zero
+      # `addrspace(1)` while RS4GC made it the shape of every GC root, so the
+      # unit gate stayed green through three `main` failures of the end-to-end
+      # arm. This asserts every IR form the reader carries a dedicated branch
+      # for is present in the corpora: a form that disappears fails here, and
+      # the fix is either a refresh (scripts/refresh_llvm_inprocess_corpora.sh)
+      # or deleting the now-untested branch.
+      - name: llvm-inprocess corpus currency
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_llvm_corpus_currency.py --self-test
+          python3 scripts/check_llvm_corpus_currency.py
+
       # #7877, second round. The knob audit above covers env-var names; it says
       # nothing about the paths and numbers the same pages state. Both drifted:
       # the memory-model source map pointed at a `gc.rs` deleted in the module

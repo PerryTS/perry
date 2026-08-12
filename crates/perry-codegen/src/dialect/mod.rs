@@ -19,7 +19,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicType, BasicTypeEnum, FunctionType};
+use inkwell::types::BasicTypeEnum;
 use inkwell::values::{
     AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
     InstructionValue, PhiValue,
@@ -27,6 +27,9 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 mod eh;
+mod types;
+
+use types::{basic_type, constant, fn_type_of, indirect_fn_type, strip_label, ty_and_val};
 #[cfg(test)]
 mod tests;
 
@@ -163,6 +166,12 @@ struct ParsedHeader {
     /// `personality ptr @NAME` clause, if the define carries one (#7302:
     /// every function containing try/catch does).
     personality: Option<String>,
+    /// `gc "statepoint-example"` — the GC strategy name (#7982). This is not
+    /// decoration: it is what makes RS4GC rewrite the function's
+    /// `addrspace(1)` values into statepoint sequences, so dropping it would
+    /// build a module that verifies, runs, and has no precise roots. The
+    /// native path must reproduce it or it is not building the same program.
+    gc_strategy: Option<String>,
 }
 
 fn parse_header(header: &str) -> Result<ParsedHeader> {
@@ -228,6 +237,24 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
         personality = Some(unquote(pname));
     }
 
+    // `gc "statepoint-example"` — same treatment as `personality`, and for the
+    // same reason: it carries a space, so the whitespace-split attribute loop
+    // below would see `gc` and `"statepoint-example"` as two junk attributes.
+    let mut gc_strategy = None;
+    if let Some(pos) = attr_str.find("gc \"") {
+        let tail = attr_str[pos..].to_string();
+        attr_str = attr_str[..pos].trim_end().to_string();
+        let name = tail
+            .trim_start_matches("gc ")
+            .trim()
+            .trim_matches('"')
+            .to_string();
+        if name.is_empty() {
+            bail!("malformed gc strategy clause: {tail}");
+        }
+        gc_strategy = Some(name);
+    }
+
     let mut params = Vec::new();
     for p in split_top_level(params_str) {
         let p = p.trim();
@@ -246,6 +273,7 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
         params,
         attr_str,
         personality,
+        gc_strategy,
     })
 }
 
@@ -289,6 +317,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 .ok_or_else(|| anyhow!("personality @{pname} not declared"))?;
             func.set_personality_function(pf);
         }
+        // The GC strategy drives RS4GC, which is the whole reason
+        // `addrspace(1)` appears in this IR; a native module that dropped it
+        // would verify, run, and quietly have no precise roots (#7982).
+        if let Some(strategy) = &h.gc_strategy {
+            func.set_gc(strategy);
+        }
         let attr_str = h.attr_str;
         for a in attr_str.split_whitespace() {
             match a {
@@ -299,6 +333,21 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 // policy) — a corpus still carrying one is stale and must
                 // say so loudly.
                 "alwaysinline" | "inlinehint" | "noinline" => add_enum_attr(ctx, func, a),
+                // String attributes: `"frame-pointer"="non-leaf"`, and the
+                // valueless `"key"` form LLVM also accepts.
+                other if other.starts_with('"') => {
+                    let (k, v) = match other.split_once("\"=\"") {
+                        Some((k, v)) => (k.trim_matches('"'), v.trim_matches('"')),
+                        None => (other.trim_matches('"'), ""),
+                    };
+                    if k.is_empty() {
+                        bail!("malformed string attribute `{other}`");
+                    }
+                    func.add_attribute(
+                        inkwell::attributes::AttributeLoc::Function,
+                        ctx.create_string_attribute(k, v),
+                    );
+                }
                 other => bail!("unknown define attribute `{other}`"),
             }
         }
@@ -497,8 +546,8 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 let (vty, vtok) = ty_and_val(&parts[0])?;
                 let ty = basic_type(self.ctx, vty)?;
                 let v = self.val(ty, vtok)?;
-                let (_pty, ptok) = ty_and_val(&parts[1])?;
-                let p = self.val(self.ctx.ptr_type(AddressSpace::default()).into(), ptok)?;
+                let (pty, ptok) = ty_and_val(&parts[1])?;
+                let p = self.val(basic_type(self.ctx, pty)?, ptok)?;
                 let inst = self
                     .builder
                     .build_store(p.into_pointer_value(), v)
@@ -564,13 +613,13 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             bail!("bad load");
         }
         let ty = basic_type(self.ctx, parts[0].trim())?;
-        let (_pty, pval) = ty_and_val(&parts[1])?;
+        let (pty, pval) = ty_and_val(&parts[1])?;
         // An atomic load's ordering keyword trails the pointer operand
         // (`ptr @g seq_cst`), measured in the corpus census.
         let mut ptoks = pval.split_whitespace();
         let ptok = ptoks.next().ok_or_else(|| anyhow!("bad load pointer"))?;
         let ordering = ptoks.next();
-        let p = self.val(self.ctx.ptr_type(AddressSpace::default()).into(), ptok)?;
+        let p = self.val(basic_type(self.ctx, pty)?, ptok)?;
         let v = self
             .builder
             .build_load(ty, p.into_pointer_value(), dst.trim_start_matches('%'))
@@ -772,6 +821,25 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .map_err(be)?;
         match trailing_attr {
             "" => {}
+            // `"gc-leaf-function"` (#7982): RS4GC reads it to decide the call
+            // needs no statepoint. Dropping it would not fail the verifier —
+            // it would produce a module with strictly MORE statepoints than
+            // the textual path, i.e. a silent divergence the object-byte diff
+            // would then have to catch. Same string-attribute grammar as the
+            // define line.
+            other if other.starts_with('"') => {
+                let (k, v) = match other.split_once("\"=\"") {
+                    Some((k, v)) => (k.trim_matches('"'), v.trim_matches('"')),
+                    None => (other.trim_matches('"'), ""),
+                };
+                if k.is_empty() {
+                    bail!("malformed callsite string attribute `{other}`");
+                }
+                site.add_attribute(
+                    inkwell::attributes::AttributeLoc::Function,
+                    self.ctx.create_string_attribute(k, v),
+                );
+            }
             other => bail!("unknown callsite attribute `{other}`"),
         }
         match site.try_as_basic_value() {
@@ -1665,205 +1733,6 @@ fn split_top_level(s: &str) -> Vec<String> {
         out.push(cur.trim().to_string());
     }
     out
-}
-
-/// `"i64 %r5"` -> `("i64", "%r5")`, honoring types with spaces (`[4 x i8]`,
-/// `<4 x i32>`) and bracketed values (`<4 x i32> <i32 0, i32 1, ...>`): the
-/// TYPE is parsed greedily from the left (balanced brackets, then trailing
-/// `*`s), the remainder is the value.
-fn ty_and_val(s: &str) -> Result<(&str, &str)> {
-    let s = s.trim();
-    let bytes = s.as_bytes();
-    let ty_end = if bytes[0] == b'[' || bytes[0] == b'<' || bytes[0] == b'{' {
-        let (open, close) = match bytes[0] {
-            b'[' => (b'[', b']'),
-            b'<' => (b'<', b'>'),
-            _ => (b'{', b'}'),
-        };
-        let mut depth = 0usize;
-        let mut end = 0usize;
-        for (i, &c) in bytes.iter().enumerate() {
-            if c == open {
-                depth += 1;
-            } else if c == close {
-                depth -= 1;
-                if depth == 0 {
-                    end = i + 1;
-                    break;
-                }
-            }
-        }
-        if end == 0 {
-            bail!("unbalanced type brackets in `{s}`");
-        }
-        // Trailing pointer stars (pre-opaque spellings).
-        while end < bytes.len() && bytes[end] == b'*' {
-            end += 1;
-        }
-        end
-    } else {
-        s.find(' ')
-            .ok_or_else(|| anyhow!("expected `type value`, got `{s}`"))?
-    };
-    Ok((s[..ty_end].trim(), s[ty_end..].trim()))
-}
-
-fn strip_label(s: &str) -> Result<&str> {
-    s.trim()
-        .strip_prefix("label %")
-        .map(str::trim)
-        .ok_or_else(|| anyhow!("expected `label %...`, got `{s}`"))
-}
-
-fn basic_type<'ctx>(ctx: &'ctx Context, tok: &str) -> Result<BasicTypeEnum<'ctx>> {
-    let tok = tok.trim();
-    Ok(match tok {
-        "double" => ctx.f64_type().into(),
-        "float" => ctx.f32_type().into(),
-        "i64" => ctx.i64_type().into(),
-        "i32" => ctx.i32_type().into(),
-        "i16" => ctx.i16_type().into(),
-        "i8" => ctx.i8_type().into(),
-        "i1" => ctx.bool_type().into(),
-        "i128" => ctx.i128_type().into(),
-        "ptr" => ctx.ptr_type(AddressSpace::default()).into(),
-        _ => {
-            // `[N x T]`
-            if let Some(body) = tok.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
-                let (n, elem) = body
-                    .split_once(" x ")
-                    .ok_or_else(|| anyhow!("bad array type `{tok}`"))?;
-                let n: u32 = n.trim().parse()?;
-                let elem_ty = basic_type(ctx, elem)?;
-                return Ok(elem_ty.array_type(n).into());
-            }
-            // `<N x T>` (SIMD in expr/channel.rs)
-            if let Some(body) = tok.strip_prefix('<').and_then(|t| t.strip_suffix('>')) {
-                let (n, elem) = body
-                    .split_once(" x ")
-                    .ok_or_else(|| anyhow!("bad vector type `{tok}`"))?;
-                let n: u32 = n.trim().parse()?;
-                return Ok(match basic_type(ctx, elem)? {
-                    BasicTypeEnum::IntType(t) => t.vec_type(n).into(),
-                    BasicTypeEnum::FloatType(t) => t.vec_type(n).into(),
-                    BasicTypeEnum::PointerType(t) => t.vec_type(n).into(),
-                    other => bail!("unsupported vector element {other:?}"),
-                });
-            }
-            // Pre-opaque pointer spellings (`i8*`, `double**`, `(sig)*`) all
-            // collapse to `ptr` under LLVM 15+ semantics.
-            if tok.ends_with('*') {
-                return Ok(ctx.ptr_type(AddressSpace::default()).into());
-            }
-            bail!("unknown type `{tok}`")
-        }
-    })
-}
-
-fn fn_type_of<'ctx>(
-    ctx: &'ctx Context,
-    ret_tok: &str,
-    params: &[inkwell::types::BasicMetadataTypeEnum<'ctx>],
-) -> Result<FunctionType<'ctx>> {
-    Ok(match ret_tok {
-        "void" => ctx.void_type().fn_type(params, false),
-        _ => basic_type(ctx, ret_tok)?.fn_type(params, false),
-    })
-}
-
-/// Function type for an indirect call site. `sig_str` is either just the
-/// return type (`double`) or `RET (T1, T2, ...)`; when only the return type
-/// is present the parameter types are taken from the argument list.
-fn indirect_fn_type<'ctx>(
-    ctx: &'ctx Context,
-    sig_str: &str,
-    arg_types: &[inkwell::types::BasicMetadataTypeEnum<'ctx>],
-) -> Result<FunctionType<'ctx>> {
-    let sig_str = sig_str.trim();
-    if let Some(open) = sig_str.find('(') {
-        let ret_tok = sig_str[..open].trim();
-        let close = rmatch_paren(sig_str, open)?;
-        let params_str = &sig_str[open + 1..close];
-        let mut params: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
-        let mut varargs = false;
-        for p in split_top_level(params_str) {
-            if p.trim() == "..." {
-                varargs = true;
-                continue;
-            }
-            params.push(basic_type(ctx, p.trim())?.into());
-        }
-        Ok(match ret_tok {
-            "void" => ctx.void_type().fn_type(&params, varargs),
-            _ => basic_type(ctx, ret_tok)?.fn_type(&params, varargs),
-        })
-    } else {
-        fn_type_of(ctx, sig_str, arg_types)
-    }
-}
-
-fn constant<'ctx>(
-    ctx: &'ctx Context,
-    module: &Module<'ctx>,
-    ty: BasicTypeEnum<'ctx>,
-    tok: &str,
-) -> Result<BasicValueEnum<'ctx>> {
-    if let Some(g) = tok.strip_prefix('@') {
-        let name = unquote(g);
-        if let Some(f) = module.get_function(&name) {
-            return Ok(f.as_global_value().as_pointer_value().into());
-        }
-        if let Some(gv) = module.get_global(&name) {
-            return Ok(gv.as_pointer_value().into());
-        }
-        bail!("reference to unknown global @{name}");
-    }
-    Ok(match tok {
-        "null" => ctx.ptr_type(AddressSpace::default()).const_null().into(),
-        "undef" => match ty {
-            BasicTypeEnum::FloatType(t) => t.get_undef().into(),
-            BasicTypeEnum::IntType(t) => t.get_undef().into(),
-            BasicTypeEnum::PointerType(t) => t.get_undef().into(),
-            other => bail!("undef of unsupported type {other:?}"),
-        },
-        "poison" => match ty {
-            BasicTypeEnum::FloatType(t) => t.get_poison().into(),
-            BasicTypeEnum::IntType(t) => t.get_poison().into(),
-            BasicTypeEnum::PointerType(t) => t.get_poison().into(),
-            other => bail!("poison of unsupported type {other:?}"),
-        },
-        "true" => ctx.bool_type().const_int(1, false).into(),
-        "false" => ctx.bool_type().const_int(0, false).into(),
-        "zeroinitializer" => match ty {
-            BasicTypeEnum::FloatType(t) => t.const_zero().into(),
-            BasicTypeEnum::IntType(t) => t.const_zero().into(),
-            BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
-            BasicTypeEnum::PointerType(t) => t.const_null().into(),
-            other => bail!("zeroinitializer of unsupported type {other:?}"),
-        },
-        _ => match ty {
-            BasicTypeEnum::FloatType(t) => {
-                // LLVM hex-float form is raw IEEE-754 bits — exactly how
-                // NaN-boxed constants must survive.
-                if let Some(hex) = tok.strip_prefix("0x") {
-                    let bits = u64::from_str_radix(hex, 16)
-                        .map_err(|_| anyhow!("bad hex float `{tok}`"))?;
-                    t.const_float(f64::from_bits(bits)).into()
-                } else {
-                    t.const_float(
-                        tok.parse::<f64>()
-                            .map_err(|_| anyhow!("bad float `{tok}`"))?,
-                    )
-                    .into()
-                }
-            }
-            BasicTypeEnum::IntType(t) => {
-                let v: i128 = tok.parse().map_err(|_| anyhow!("bad integer `{tok}`"))?;
-                t.const_int(v as u64, v < 0).into()
-            }
-            other => bail!("cannot materialize `{tok}` as {other:?}"),
-        },
-    })
 }
 
 fn int_pred(p: &str) -> Result<IntPredicate> {
