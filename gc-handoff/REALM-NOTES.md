@@ -110,11 +110,24 @@ sabotage was then reverted **and rebuilt**: 8 passed, 0 failed.
 
 ## The multi-agent probe
 
-`test-files/test_issue_7988_thread_realm_prototype.ts`. The **main thread warms
-both intrinsics before any agent starts** — without that the worker might be the
-thread that fills the shared cell and the probe passes on the broken tree. Then
-an agent pollutes its own realm (`Object.prototype[7]`, `Array.prototype[8]`)
-and reads `[1,2,3][7]` / `[1,2,3][8]` through the chain.
+`test-files/test_issue_7988_thread_realm_prototype.ts`. The **main thread
+pollutes its OWN realm first** (`Array.prototype[4]`, `Object.prototype[5]`),
+which is what forces both addresses to be resolved and memoized before any agent
+starts — without that the worker is simply the first thread to fill the shared
+cell and the probe passes on the broken tree. Each agent then asserts BOTH
+directions:
+
+* **LEAK** — `[1,2,3][4]` inside the agent must not see the main realm's
+  prototype index. Pre-fix it read `"mainArr"`: the agent walked the MAIN
+  thread's `Array.prototype`, dereferencing a `GcHeader` in an arena it does not
+  own.
+* **BLINDNESS** — the agent's own `Array.prototype[8] = v` must be visible to
+  its own reads. Pre-fix `undefined`.
+
+Measured with one compiler and two `.a` pairs: pre-fix 5/5
+`spawn agent: mainArr/undefined/undefined/obj1 match: false` + `allMatch: false`;
+post-fix 5/5 `undefined/undefined/arr1/obj1 match: true` + `allMatch: true`, and
+6/6 identical md5 over repeat runs.
 
 Neither the gap suite nor the compile corpus exercises `perry/thread` at all, so
 **both are vacuous gates for this class of change**. Do not cite corpus-green as
