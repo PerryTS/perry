@@ -51,4 +51,4 @@
   minor — 201 822 objects *promoted* into old-gen — **no longer happens at
   all**. Instructions retired −31.9 %, peak RSS 94.5 MB → 57.8 MB. At 480
   batches the three minors go 770/943/766 ‰ → 24/9/14 ‰, instructions retired
-  −45.5 %, peak RSS 189.0 MB → 91.1 MB.
+  −45.5 %, peak RSS 189.1 MB → 91.1 MB.
