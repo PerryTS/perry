@@ -1,7 +1,11 @@
 //! Policy for whole-block in-place promotion (#7742).
 //!
 //! The mechanism lives in `arena/promote.rs`; this is the decision layer, and
-//! the decision is made from a **measurement**, not a guess.
+//! every steady-state decision is made from a **measurement**, not a guess.
+//! The sole exception is the first copying minor: #7937 gives it one bounded
+//! speculative promotion so it does not copy a whole live nursery merely to
+//! obtain the measurement. It still traces, so that same cycle establishes the
+//! ratio used by every later decision.
 //!
 //! # The measurement
 //!
@@ -33,6 +37,21 @@
 //! traces**, so it measures the ratio too: the feedback never goes stale, and a
 //! workload that flips from live to garbage pays at most ONE nursery of
 //! retained garbage before the policy turns itself off.
+//!
+//! # Bootstrap before the first measurement
+//!
+//! `retain`'s first copying minor copied 245,752 objects / 17.7 MB at a 992‰
+//! survival rate, consuming 58% of the program's total GC pause. Cycle 1 then
+//! promoted those same survivor blocks in place: the copy bought only the
+//! predictor. An unmeasured thread now speculates only about the promotion
+//! decision: cycle 0 promotes whole but still runs the normal trace, which
+//! establishes the first real survival ratio. A low observation therefore
+//! turns cycle 1 off immediately.
+//!
+//! The wrong-guess cost is exactly one nursery of retained garbage, charged by
+//! [`note_in_place_promotion`] from the cycle's exact liveness census against
+//! [`PROMOTED_DEAD_BYTES`]. It cannot silently grow into an optimistic run, and
+//! it never skips the trace without prior survival evidence.
 //!
 //! Two further bounds:
 //!
@@ -147,8 +166,9 @@ pub(super) const PROMOTED_DEAD_BUDGET_BYTES: usize = 32 * 1024 * 1024;
 
 thread_local! {
     /// Young-survival ratio of the most recent copying minor, in permille.
-    /// `None` until one has run — the first copying minor is always a real
-    /// evacuation, because nothing has been measured yet.
+    /// `None` until a copying minor has traced. It admits one speculative
+    /// in-place promotion, which itself traces and replaces `None` with the
+    /// first real observation before the next decision.
     static LAST_YOUNG_SURVIVAL_PERMILLE: Cell<Option<u64>> = const { Cell::new(None) };
     /// Dead bytes promoted in place since the last full collection.
     static PROMOTED_DEAD_BYTES: Cell<usize> = const { Cell::new(0) };
@@ -241,7 +261,9 @@ pub(super) fn should_promote_young_in_place() -> bool {
     }
     LAST_YOUNG_SURVIVAL_PERMILLE
         .with(Cell::get)
-        .is_some_and(|permille| permille >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE)
+        .map_or(true, |permille| {
+            permille >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE
+        })
 }
 
 /// The untraced-promotion budget, and therefore **the worst-case retained
@@ -500,6 +522,14 @@ impl InPlacePromotionTestGuard {
         let guard = Self::enabled(1000);
         UNTRACED_PROMOTED_BYTES.with(|c| c.set(0));
         TEST_UNTRACED_OPT_IN.with(|c| c.set(true));
+        guard
+    }
+
+    /// Opt into the unmeasured bootstrap cycle (#7937). It may promote, but it
+    /// has no observation that would permit the untraced sub-path.
+    pub(super) fn speculative_first() -> Self {
+        let guard = Self::enabled(1000);
+        LAST_YOUNG_SURVIVAL_PERMILLE.with(|c| c.set(None));
         guard
     }
 }

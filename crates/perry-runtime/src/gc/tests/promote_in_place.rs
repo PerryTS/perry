@@ -13,12 +13,12 @@
 //!    swept-live-object crash one cycle later.
 
 use super::super::promote_in_place::{
-    clear_young_survival_for_tests, note_untraced_promotion, parse_promote_in_place,
-    promoted_dead_bytes_since_full, seed_promoted_dead_bytes_for_tests,
-    seed_untraced_promoted_bytes_for_tests, seed_young_survival_for_tests,
-    untraced_promotion_budget_with, InPlacePromotionTestGuard, PROMOTED_DEAD_BUDGET_BYTES,
-    PROMOTE_SURVIVAL_THRESHOLD_PERMILLE, UNTRACED_PROMOTION_CEILING_BYTES,
-    UNTRACED_PROMOTION_FLOOR_BYTES, UNTRACED_PROMOTION_SURVIVAL_PERMILLE,
+    note_untraced_promotion, parse_promote_in_place, promoted_dead_bytes_since_full,
+    seed_promoted_dead_bytes_for_tests, seed_untraced_promoted_bytes_for_tests,
+    seed_young_survival_for_tests, untraced_promotion_budget_with, InPlacePromotionTestGuard,
+    PROMOTED_DEAD_BUDGET_BYTES, PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
+    UNTRACED_PROMOTION_CEILING_BYTES, UNTRACED_PROMOTION_FLOOR_BYTES,
+    UNTRACED_PROMOTION_SURVIVAL_PERMILLE,
 };
 use super::super::*;
 use super::support::*;
@@ -85,22 +85,28 @@ fn a_promoting_cycle_still_measures_so_the_predictor_cannot_go_stale() {
 }
 
 #[test]
-fn an_unmeasured_thread_never_promotes() {
-    // Both no-promote arms, and they are genuinely different states: `None` is
-    // "no copying minor has run on this thread", 0 permille is a MEASUREMENT of
-    // "almost nothing survived". The first copying minor of a process is in the
-    // former, and it must evacuate and measure rather than promote on no
-    // evidence — so the `None` arm needs asserting in its own right.
-    let _guard = InPlacePromotionTestGuard::enabled(1000);
-    clear_young_survival_for_tests();
+fn an_unmeasured_thread_promotes_traced_and_the_measurement_corrects_it() {
+    let _guard = InPlacePromotionTestGuard::speculative_first();
     assert!(
-        !should_promote_young_in_place(),
-        "an unmeasured thread has no basis for promoting"
+        should_promote_young_in_place(),
+        "cycle 0 must avoid the object-by-object evacuation used only to obtain a predictor"
     );
+    assert!(
+        !should_promote_young_untraced(),
+        "no observation means cycle 0 must trace rather than speculate about liveness"
+    );
+
+    // The same cycle's low measurement immediately corrects the speculation
+    // for cycle 1.
+    note_young_survival(16 * 1024 * 1024, 16 * 1024);
+    assert!(!should_promote_young_in_place());
+
+    // `Some(0)` remains distinct from the bootstrap `None`: a measured-dead
+    // nursery is evidence and must never earn another speculation.
     seed_young_survival_for_tests(0);
     assert!(
         !should_promote_young_in_place(),
-        "a measured 0 permille must not promote either"
+        "a measured 0 permille must not promote"
     );
 }
 
@@ -191,6 +197,50 @@ fn in_place_promotion_leaves_the_object_at_its_address_in_old_gen() {
     assert!(
         meta.live_object_count > 0 && meta.live_bytes > 0,
         "the promoted object must be indexed as live on its old page, got {meta:?}"
+    );
+}
+
+/// #7937 live-subject gate: cycle 0 must actually promote real objects without
+/// copying while still establishing a real measurement. A pure policy test
+/// alone could stay green while a prerequisite in `copying.rs` made the
+/// production path unreachable.
+#[test]
+fn first_copying_minor_promotes_and_measures_without_copying() {
+    let _guard = CopyingNurseryTestGuard::new(4);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _promote = InPlacePromotionTestGuard::speculative_first();
+
+    let untraced_before = untraced_promotion_cycles();
+    let first = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(first));
+
+    let cycle0 = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&cycle0, true, CopiedMinorFallbackReason::None, false);
+    assert!(
+        cycle0.copying_nursery.in_place_promotion,
+        "cycle 0 must promote whole rather than evacuating object by object"
+    );
+    assert_eq!(
+        cycle0.copying_nursery.copied_objects, 0,
+        "the speculative cycle must not copy any object"
+    );
+    assert!(
+        cycle0.copying_nursery.in_place_promoted_objects > 0,
+        "live subject: cycle 0 must have promoted at least one object"
+    );
+    assert_eq!(
+        untraced_promotion_cycles(),
+        untraced_before,
+        "cycle 0 has no survival evidence and must not skip the trace"
+    );
+    assert_eq!(
+        (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+        first,
+        "the speculative promotion must keep the object at its address"
+    );
+    assert!(
+        last_young_survival_permille().is_some(),
+        "cycle 0 must establish the first real survival observation"
     );
 }
 
