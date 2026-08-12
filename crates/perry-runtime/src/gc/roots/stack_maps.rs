@@ -1545,3 +1545,14 @@ mod unwind_contract;
 #[cfg(test)]
 #[path = "stack_maps_decode_tests.rs"]
 mod decode_tests;
+
+// The only test anywhere that runs BOTH aarch64 walkers over a frame whose
+// layout is known, and requires each to land on the word the record names.
+// Same platform set as `fp_chain` itself.
+#[cfg(all(
+    test,
+    any(target_vendor = "apple", target_os = "linux"),
+    target_arch = "aarch64"
+))]
+#[path = "stack_maps_walker_agreement.rs"]
+mod walker_agreement;
