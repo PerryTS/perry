@@ -407,6 +407,31 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         Err(_) => return f64::from_bits(TAG_UNDEFINED),
     };
 
+    // #7930: TypedArrayHeader starts with `length: u32`, at the same payload
+    // offset where ObjectHeader stores its object-type word. Classify the
+    // receiver through the authoritative side table before any header-shaped
+    // dispatch below: a two-element typed array otherwise reads as
+    // `OBJECT_TYPE_ERROR == 2`, so `.length` / `.byteLength` enter the Error
+    // branch and return `undefined` even though construction was correct.
+    //
+    // Delegate to the normal by-name typed-array path rather than duplicating
+    // its property semantics here. It gives an own expando/accessor precedence
+    // over the inherited `length` accessor and handles prototype mutations,
+    // indexed keys, `buffer`, and the remaining typed-array builtins. Creating
+    // the StringHeader may collect, so keep the old-generation typed-array
+    // receiver live and re-read its address after that allocation.
+    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_raw_const_ptr(ptr as *const crate::typedarray::TypedArrayHeader);
+        let (key, typed) = receiver.across_const(|| {
+            crate::string::js_string_from_bytes(name_slice.as_ptr(), name_slice.len() as u32)
+        });
+        return crate::object::js_object_get_field_by_name_f64(
+            typed as *const crate::object::ObjectHeader,
+            key,
+        );
+    }
+
     // Check if this is a ClosureHeader (CLOSURE_MAGIC at offset 12).
     // ClosureHeader layout: func_ptr (8B), capture_count u32 (4B), type_tag u32 (4B), captures at 16+
     // ObjectHeader layout: object_type u32 (4B), class_id u32 (4B), parent_class_id u32 (4B), field_count u32 (4B), keys_array (8B), ...
@@ -824,6 +849,30 @@ mod length_handle_band_tests {
             js_value_length_property_f64(boxed_obj).to_bits(),
             seven_value.to_bits(),
             "a source-level property read must not coerce its value"
+        );
+    }
+
+    /// #7930: `TypedArrayHeader::length` shares payload offset zero with an
+    /// `ObjectHeader`'s type word. A two-element typed array must be classified
+    /// by its registry entry before that word can masquerade as
+    /// `OBJECT_TYPE_ERROR == 2` in the generic property getter.
+    #[test]
+    fn length_two_typed_array_never_enters_error_object_dispatch() {
+        let typed =
+            crate::typedarray::js_typed_array_new(crate::typedarray::KIND_INT32 as i32, 2.5);
+        assert_eq!(
+            crate::typedarray::js_typed_array_length(typed),
+            2,
+            "test premise: ToIndex truncates the fractional constructor length"
+        );
+
+        let boxed = crate::value::js_nanbox_pointer(typed as i64);
+        assert_eq!(js_value_length_property_f64(boxed), 2.0);
+        assert_eq!(
+            unsafe {
+                js_dynamic_object_get_property(boxed, b"byteLength".as_ptr() as *const i8, 10)
+            },
+            8.0
         );
     }
 }
