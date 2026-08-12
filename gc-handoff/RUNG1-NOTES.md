@@ -307,6 +307,24 @@ mappings stay valid), and a *clone*-on-append re-mints an id that describes the
 same prefix. The one key-set change a stamp must not survive is the
 **compaction**, and that is exactly where A and B overlap.
 
+### 5c. ★ Near-miss worth recording: I nearly gated on a sabotaged binary
+
+After §5a I ran `git checkout --` on `class_field_inline_guard.rs` and moved
+straight on to launching the gap suite with `PERRY_SKIP_BUILD=1`. **The source
+was restored; the release binary was not.** `$HOME/cargo-targets/rung1/release/perry`
+was still the `ka_ok`-sabotaged compiler, and the gap run was 54/554 tests into
+grading my change against it before I noticed. Killed and rebuilt.
+
+This is CLAUDE.md's "Verifying a runtime change" trap in a shape the section
+does not name: not a stale ARCHIVE from the wrong `cargo build` line, but a
+stale BINARY from a sabotage I had already reverted in source. `git status`
+was clean, which is precisely the tell that means nothing. The corpus numbers
+in §4 were taken *before* the sabotage and are unaffected; the gap run was
+restarted against a freshly built clean compiler.
+
+Rule for the next agent: **a sabotage cycle ends with a rebuild, not with
+`git checkout --`.** Treat the restore and the rebuild as one step.
+
 **E and G are accelerator-only and I am not claiming otherwise.** E swaps the
 FIELD_CACHE key from the keys address to the stamp; every hit re-validates the
 stored key, so the delta is that entries survive grow-reallocs and GC moves —
