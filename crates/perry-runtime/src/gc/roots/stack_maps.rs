@@ -422,7 +422,12 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
                 // interleaved stores nor the `addvl`, which is why this was an
                 // ARM-Linux-runner-only failure that no macOS arm could see.
                 if writes_sp_by_vector_length(word) {
-                    return None;
+                    // The multiplier is in the instruction; the unit is not.
+                    // Read it once from the kernel — `?` fails the whole
+                    // decode where it cannot be read, because half a frame
+                    // size is a wrong answer, not a partial one.
+                    fp_offset = Some(offset + sve_sp_allocation_bytes(word)?);
+                    continue;
                 }
                 // A store INTO the frame does not move sp, so it cannot end
                 // the run of stack adjustments — and LLVM interleaves exactly
@@ -491,10 +496,77 @@ fn is_frame_store_through_sp(word: u32) -> bool {
 /// (`addvl`) or `01011` (`addpl`), [10:5] imm6, [4:0] Rd.
 #[cfg(target_arch = "aarch64")]
 fn writes_sp_by_vector_length(word: u32) -> bool {
-    const OPCODE_MASK: u32 = 0xFFE0_F800;
-    const ADDVL: u32 = 0x0420_5000;
-    const ADDPL: u32 = 0x0420_5800;
-    word & 0x1F == u32::from(DWARF_REG_SP_AARCH64) && matches!(word & OPCODE_MASK, ADDVL | ADDPL)
+    word & 0x1F == u32::from(DWARF_REG_SP_AARCH64)
+        && matches!(word & SVE_ADD_OPCODE_MASK, SVE_ADDVL | SVE_ADDPL)
+}
+
+#[cfg(target_arch = "aarch64")]
+const SVE_ADD_OPCODE_MASK: u32 = 0xFFE0_F800;
+#[cfg(target_arch = "aarch64")]
+const SVE_ADDVL: u32 = 0x0420_5000;
+#[cfg(target_arch = "aarch64")]
+const SVE_ADDPL: u32 = 0x0420_5800;
+
+/// How many bytes an `addvl`/`addpl` writing SP takes OFF the stack.
+///
+/// `addvl Rd, Rn, #imm6` is `Rd = Rn + imm6 * VL`, where VL is the vector
+/// length in bytes; `addpl` uses an eighth of it (the predicate length). A
+/// prologue allocation is a NEGATIVE multiplier, so a non-negative one is not
+/// an allocation and is refused rather than guessed at.
+///
+/// `None` — vector length unavailable, or not an allocation — fails the whole
+/// decode, which puts the frame on the platform unwinder. Half a frame size is
+/// a wrong answer, not a partial one.
+#[cfg(target_arch = "aarch64")]
+fn sve_sp_allocation_bytes(word: u32) -> Option<usize> {
+    // imm6, bits [10:5], signed.
+    let raw = ((word >> 5) & 0x3F) as i32;
+    let multiplier = if raw & 0x20 != 0 { raw - 0x40 } else { raw };
+    let allocation = usize::try_from(-multiplier).ok().filter(|n| *n > 0)?;
+    let vector_length = sve_vector_length_bytes()?;
+    match word & SVE_ADD_OPCODE_MASK {
+        SVE_ADDVL => allocation.checked_mul(vector_length),
+        // `addpl`'s unit is VL/8, and a vector length is always a multiple of
+        // 16 bytes, so the division is exact.
+        SVE_ADDPL => allocation.checked_mul(vector_length / 8),
+        _ => None,
+    }
+}
+
+/// The calling thread's SVE vector length in bytes.
+///
+/// Read from the kernel rather than executed: `rdvl` would be the direct way
+/// and it faults on a core without SVE, which is most of them — including
+/// every Apple one, where this returns `None` and any `addvl` in a decoded
+/// prologue therefore fails closed. `prctl(PR_SVE_GET_VL)` costs one syscall,
+/// answers on a thread that has never touched SVE, and is cached for the
+/// process because nothing in Perry calls `PR_SVE_SET_VL`.
+///
+/// The walking thread is the right thread to ask: the prologue whose `addvl`
+/// is being decoded executed on it, with this same length.
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+fn sve_vector_length_bytes() -> Option<usize> {
+    static VECTOR_LENGTH: OnceLock<Option<usize>> = OnceLock::new();
+    *VECTOR_LENGTH.get_or_init(|| {
+        // <linux/prctl.h>
+        const PR_SVE_GET_VL: i32 = 51;
+        const PR_SVE_VL_LEN_MASK: i32 = 0xffff;
+        unsafe extern "C" {
+            fn prctl(option: i32, ...) -> i32;
+        }
+        let raw = unsafe { prctl(PR_SVE_GET_VL) };
+        // Negative is -1/errno: no SVE, or a kernel without the interface. A
+        // zero length would be nonsense; refuse it rather than scale by it.
+        (raw > 0).then(|| (raw & PR_SVE_VL_LEN_MASK) as usize)
+    })
+}
+
+#[cfg(all(target_arch = "aarch64", not(target_os = "linux")))]
+fn sve_vector_length_bytes() -> Option<usize> {
+    // No non-Linux aarch64 target Perry supports implements SVE, and neither
+    // backend for them emits `addvl`. Fail closed if one ever does, rather
+    // than invent a length.
+    None
 }
 
 #[cfg(not(target_arch = "aarch64"))]

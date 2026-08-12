@@ -488,6 +488,15 @@ mod sve_prologue_tests {
         out
     }
 
+    /// What `addvl sp, sp, #-2` costs on THIS host, and `None` where the
+    /// vector length cannot be read — which is every core without SVE,
+    /// including all Apple ones. Deriving the expectation instead of writing a
+    /// constant is what makes these tests pin the SCALING rather than one
+    /// machine's answer.
+    fn two_vector_lengths() -> Option<usize> {
+        super::super::sve_vector_length_bytes().map(|vl| 2 * vl)
+    }
+
     //     124790: str   d10, [sp, #-128]!
     //     124794: stp   d9, d8, [sp, #16]
     //     124798: stp   x29, x30, [sp, #32]
@@ -552,7 +561,7 @@ mod sve_prologue_tests {
     /// caught the fp-chain walker and the unwinder 96 bytes apart on
     /// `ubuntu-24.04-arm`.
     #[test]
-    fn an_sve_stack_adjustment_fails_closed() {
+    fn an_sve_stack_adjustment_is_scaled_by_the_vector_length_or_fails_closed() {
         assert_eq!(
             decode(&[
                 ADD_X29_SP_0X20,
@@ -561,16 +570,38 @@ mod sve_prologue_tests {
                 ADDVL_SP_SP_M2,
                 BL,
             ]),
-            None,
-            "a frame whose size depends on the SVE vector length must fall \
-             back to the unwinder, not report the part it could read"
+            two_vector_lengths().map(|bytes| 0x20 + 0x50 + bytes),
+            "`addvl sp, sp, #-2` allocates two vector lengths; where the \
+             length cannot be read the whole decode must fail so the frame \
+             goes to the unwinder, never report the 0x70 it could read"
         );
+    }
+
+    /// The multiplier is read from the instruction and the unit from the
+    /// kernel, so the two must be pinned separately — a decoder that ignored
+    /// `imm6` would still pass the test above on a host with VL = 16 and one
+    /// `addvl`.
+    #[test]
+    fn the_sve_multiplier_comes_from_the_instruction() {
+        let Some(vl) = super::super::sve_vector_length_bytes() else {
+            return; // no SVE on this host; the fail-closed arm covers it
+        };
+        assert_eq!(
+            super::super::sve_sp_allocation_bytes(ADDVL_SP_SP_M2),
+            Some(2 * vl)
+        );
+        // `addvl sp, sp, #-1`: imm6 = -1 in bits [10:5].
+        let addvl_m1 = (ADDVL_SP_SP_M2 & !(0x3F << 5)) | (0x3F << 5);
+        assert_eq!(super::super::sve_sp_allocation_bytes(addvl_m1), Some(vl));
+        // A POSITIVE multiplier is a deallocation, not a prologue allocation.
+        let addvl_p2 = (ADDVL_SP_SP_M2 & !(0x3F << 5)) | (2 << 5);
+        assert_eq!(super::super::sve_sp_allocation_bytes(addvl_p2), None);
     }
 
     /// The whole measured prologue, verbatim: the two defects compose, and the
     /// answer is still `None` rather than a partially-correct number.
     #[test]
-    fn the_measured_neoverse_n2_prologue_fails_closed() {
+    fn the_measured_neoverse_n2_prologue_decodes_or_fails_closed() {
         assert_eq!(
             decode(&[
                 STR_D10_SP_M128_PRE,
@@ -586,7 +617,9 @@ mod sve_prologue_tests {
                 ADDVL_SP_SP_M2,
                 BL,
             ]),
-            None
+            two_vector_lengths().map(|bytes| 0x20 + 0x50 + bytes),
+            "the whole measured prologue: 0x20 from the `add`, 0x50 from the \
+             `sub` behind five callee-save pairs, and two vector lengths"
         );
     }
 

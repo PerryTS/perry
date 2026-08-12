@@ -141,26 +141,109 @@ either side of the frameless one still resolve **exactly** in both walkers.
 So hypothesis (c) via a frameless frame is **refuted as a producer of this
 message**; it produces the other one.
 
-## Where that leaves it
+## ANSWER: the unwinder is right, and the fp-chain walker was blind twice
 
-Every mechanism reproducible off the target agrees. The divergence needs the
-real `ubuntu-24.04-arm` binary, and the gate that found it could not say which
-walker was wrong.
+Reproduced end to end on aarch64 Linux (Ubuntu 24.04 arm64 under colima, LLVM
+22.1.8 from apt.llvm.org, `--profile perry-dev`, the issue's own RUSTFLAGS).
+The default `-mcpu=native` on that host resolves to an Apple core without SVE
+and **passes** — all 14 probes, all of `verify`. Forcing the tuning the GitHub
+ARM runner gets reproduces it:
 
-**Step one (PR #7997)**: make the gate say. Both walkers now report a
-`ResolvedRoot` — address, the frame return address it was matched on, the
-record's function, the map's base register and offset, and the base that walker
-resolved that register to — and `verify` prints all of it, calls an
-equal-slot-count disagreement a *base* disagreement rather than a missed frame,
-and on aarch64 dumps `fp_to_sp_offset`'s decode plus the prologue words it
-read. That is enough to settle (a) vs (b) vs (c) from one CI run.
+```
+PERRY_TARGET_CPU=neoverse-n2   -> diverges
+PERRY_TARGET_CPU=neoverse-n1   -> passes
+```
 
-Gate on the report itself: the prologue dump only runs for a function address
-the parsed map vouches for (`function_starts`). Reading instructions from an
-address supplied by the data under suspicion is how a diagnostic becomes a
-SIGSEGV with no output — measured, in the first draft of this file's tests.
+That is the whole "why only this runner": Perry tunes a host build with
+`-mcpu=native`; a Neoverse-class core turns SVE on, and SVE changes the shape
+of the prologue LLVM emits. No Apple arm can ever see it, and no x86-64 arm
+either.
+
+### The frame
+
+`main` — the module body, 100 stack-map records — built `-mcpu=neoverse-n2`,
+read out of the binary with `objdump -d` (`PERRY_DEBUG_SYMBOLS=1`, which
+suppresses the final strip):
+
+```
+124790: fc180fea  str   d10, [sp, #-128]!
+124794: 6d0123e9  stp   d9, d8, [sp, #16]
+124798: a9027bfd  stp   x29, x30, [sp, #32]
+12479c: 910083fd  add   x29, sp, #0x20      <- fp established; decoder reads 32
+1247a0: a9036ffc  stp   x28, x27, [sp, #48] <- NOT a `sub sp`: the run ENDED here
+1247a4: a90467fa  stp   x26, x25, [sp, #64]
+1247a8: a9055ff8  stp   x24, x23, [sp, #80]
+1247ac: a90657f6  stp   x22, x21, [sp, #96]
+1247b0: a9074ff4  stp   x20, x19, [sp, #112]
+1247b4: d10143ff  sub   sp, sp, #0x50       <- 80 bytes, DROPPED
+1247b8: 043f57df  addvl sp, sp, #-2         <- 2 x VL more, DROPPED
+```
+
+Two independent defects, both in `fp_to_sp_offset`:
+
+1. **A callee-save store ended the accumulation run.** It does not move sp, so
+   it says nothing about whether the prologue's stack adjustments are over —
+   but the rule was "the first instruction that is not a `sub sp` ends the
+   run". LLVM interleaves those stores with the frame-pointer setup whenever
+   SVE is on, so the 80-byte local allocation behind them was dropped.
+2. **`addvl sp, sp, #-N` was not decoded at all.** Its unit is the runtime SVE
+   vector length, which is not in the instruction.
+
+### Which walker is right, arithmetically
+
+From the report the new instrument prints, under qemu `-cpu max` (VL = 64 B):
+
+```
+fp-chain: [0x400000800af0, 0x400000800b08]
+unwinder: [0x400000800a20, 0x400000800a38]
+same slot count, so this is a base disagreement, not a missed frame;
+  fp-chain minus unwinder = [208, 208] byte(s)
+frames visited: fp-chain 9, unwinder 10; records matched: fp-chain 1, unwinder 1
+  slot 0x400000800af0 = base 0x400000800ab0 +64 | ip ... (fn 0xaaaaaabc4790 + 0x22c)
+    fp_to_sp_offset(fn) = Some(32), prologue words: fc180fea 6d0123e9 a9027bfd
+      910083fd a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 d10143ff
+```
+
+Same function, same ip, same record, same offsets — so it is a base
+disagreement, and the bases are `0x…ab0` (fast) and `0x…9e0` (unwinder).
+
+    caller_fp        = fast base + decoded  = 0x…ab0 + 32   = 0x…ad0
+    true x29-body_sp = 32 + 0x50 + 2*64                     = 240
+    true body_sp     = 0x…ad0 - 240                         = 0x…9e0   <- the unwinder's base
+
+**The unwinder's base is the frame's real body SP, derived independently from
+the prologue the fast walker misread.** That is the proof, not an appeal to the
+unwinder being the reference implementation.
+
+### 96 is not a constant
+
+It is that frame's missed tail, and it scales with the vector length:
+
+| host | missed | = |
+|---|---|---|
+| `ubuntu-24.04-arm` (Cobalt 100, VL = 16 B) | 96 | 0x50 + 1 x 16 |
+| qemu `-cpu max` (VL = 64 B) | 208 | 0x50 + 2 x 64 |
+
+So the issue's open question 2 — "is 96 constant?" — is answered: no, and a fix
+keyed on 96 would have been wrong on every other vector length.
+
+### The fix
+
+1. Stores through sp with no writeback (`stp`/`str`, enumerated by opcode) are
+   transparent to the accumulation run. Unrecognised instructions still end it,
+   so the safe direction is preserved.
+2. `addvl`/`addpl` writing sp is decoded: the multiplier from `imm6`, the unit
+   from `prctl(PR_SVE_GET_VL)`, cached. Where the length cannot be read — every
+   core without SVE, including all Apple ones — the whole decode fails and the
+   frame goes to the platform unwinder, which reads DWARF CFI and needs no VG
+   for an fp-based frame.
+
+Fail-closed matters here in a way that a "return the part I could read" fallback
+would not: reporting 0x70 for a frame whose body SP is 240 bytes down is exactly
+the silent wrong answer this bug is.
 
 ## Reproduction recipe, for the next person
+
 
 Nothing here needs an aarch64 Linux host except the last line:
 
