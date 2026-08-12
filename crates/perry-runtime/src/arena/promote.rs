@@ -61,7 +61,8 @@
 //! running total and reports it in the GC trace.
 
 use super::page_meta::{
-    generation_page_base, register_promoted_page_run, retag_block_space, GENERATION_PAGE_SIZE,
+    generation_page_base, register_promoted_page_headers, register_promoted_page_run,
+    retag_block_space, GENERATION_PAGE_SIZE,
 };
 use super::*;
 
@@ -354,6 +355,26 @@ fn install_block_into(arena: &mut Arena, block: ArenaBlock) {
     arena.blocks.push(block);
 }
 
+/// Hand one page's finished run to the index, either DESCRIBED (untraced
+/// promotion — the parse can reconstruct it) or STORED (traced promotion — only
+/// the about-to-be-cleared marks know which objects are live).
+#[allow(clippy::too_many_arguments)]
+fn flush_page_run(
+    describe: bool,
+    page: usize,
+    first: usize,
+    last: usize,
+    count: usize,
+    headers: &[usize],
+    bytes: usize,
+) {
+    if describe {
+        register_promoted_page_run(page, first, last, count, bytes);
+    } else {
+        register_promoted_page_headers(page, headers, bytes);
+    }
+}
+
 /// Linear walk of one promoted block: stamp `GC_FLAG_TENURED` on every header,
 /// and register the live ones with the old-gen page index in per-page bulk
 /// runs. Returns `(objects, live_objects, live_bytes)`.
@@ -372,11 +393,23 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
     let mut live_objects = 0usize;
     let mut live_bytes = 0usize;
 
-    // One page's worth of live headers, flushed whenever the page changes. The
-    // walk is in address order, so a page's headers are contiguous in it.
+    // One page's worth of live headers, flushed whenever the page changes.
+    // The walk is in address order, so a page's headers are a contiguous
+    // ascending run.
+    //
+    // On the UNTRACED path (`AssumeAllLive`) that run is DESCRIBED by its first
+    // and last address instead of stored — every walkable object between them
+    // is on the page, so the pair is exact and the list is re-derivable by the
+    // same parse the sweep already uses. On the TRACED path the marks are the
+    // only record of which objects are live and `clear_marks` destroys them, so
+    // the list is stored as before. See `register_promoted_page_run`.
+    let describe = matches!(liveness, PromotionLiveness::AssumeAllLive);
     let mut run_page: Option<usize> = None;
-    let mut run_headers: Vec<usize> = Vec::new();
+    let mut run_first = 0usize;
+    let mut run_last = 0usize;
+    let mut run_count = 0usize;
     let mut run_bytes = 0usize;
+    let mut run_headers: Vec<usize> = Vec::new();
 
     let mut offset = 0usize;
     while offset < block.offset {
@@ -427,20 +460,42 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
                 }
                 if run_page != Some(page) {
                     if let Some(previous) = run_page {
-                        register_promoted_page_run(previous, &run_headers, run_bytes);
+                        flush_page_run(
+                            describe,
+                            previous,
+                            run_first,
+                            run_last,
+                            run_count,
+                            &run_headers,
+                            run_bytes,
+                        );
                     }
                     run_page = Some(page);
-                    run_headers.clear();
+                    run_first = header_addr;
+                    run_count = 0;
                     run_bytes = 0;
+                    run_headers.clear();
                 }
-                run_headers.push(header_addr);
+                run_last = header_addr;
+                run_count += 1;
                 run_bytes += overlap_end - overlap_start;
+                if !describe {
+                    run_headers.push(header_addr);
+                }
             }
         }
         offset = aligned + total;
     }
     if let Some(previous) = run_page {
-        register_promoted_page_run(previous, &run_headers, run_bytes);
+        flush_page_run(
+            describe,
+            previous,
+            run_first,
+            run_last,
+            run_count,
+            &run_headers,
+            run_bytes,
+        );
     }
     debug_assert_eq!(
         offset, block.offset,

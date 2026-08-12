@@ -931,6 +931,9 @@ impl GcCycleState {
         let trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
         let start = Instant::now();
         crate::arena::old_pages_begin_gc_cycle();
+        // The one constructor that sweeps old-gen, so the one that invalidates
+        // a promoted run's bounds. See the fn's doc for why no minor needs it.
+        crate::arena::materialize_all_promoted_page_runs();
         clear_mark_seeds();
         // Allocate-black for the WHOLE cycle, from the first build slice on:
         // the mark barrier only engages at the END of BuildValidPointerSet

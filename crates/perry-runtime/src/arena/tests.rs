@@ -24,7 +24,7 @@ fn general_block_offset(idx: usize) -> usize {
     ARENA.with(|a| unsafe { (&*a.get()).blocks[idx].offset })
 }
 
-fn run_with_fresh_arenas(test: impl FnOnce() + Send + 'static) {
+pub(super) fn run_with_fresh_arenas(test: impl FnOnce() + Send + 'static) {
     std::thread::spawn(test)
         .join()
         .expect("arena test panicked");
@@ -1468,6 +1468,23 @@ fn deferred_registration_flush_sites() {
              the whole walk. Flushing per call would be the same flush repeated \
              256 times per 1 MiB block — and cannot be needed, because nothing \
              between the walk's start and its end allocates into old-gen",
+        ),
+        (
+            "register_promoted_page_headers",
+            "the TRACED promotion's eager arm, split out of \
+             register_promoted_page_run. Same argument: one call per PAGE from \
+             `finish_in_place_promotion`'s single linear walk, which flushes \
+             once before the whole walk, and nothing between the walk's start \
+             and its end allocates into old-gen",
+        ),
+        (
+            "expand_promoted_run",
+            "expands a DESCRIBED promoted page into the object list. Every \
+             caller has already flushed: the four readers/removers do so as \
+             their #7624 obligation, `materialize_all_promoted_page_runs` runs \
+             immediately after `old_pages_begin_gc_cycle`, and \
+             `register_promoted_page_run` is inside the promotion walk covered \
+             by the entry above",
         ),
         (
             "flush_deferred_old_page_registrations",

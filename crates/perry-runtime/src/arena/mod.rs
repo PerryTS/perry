@@ -24,6 +24,8 @@ mod walk;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_promoted_runs;
 
 // Cross-sibling shared types/thread-locals (used by sibling modules via
 // `use super::*;`). These are not part of the crate-public surface
@@ -127,19 +129,21 @@ pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_res
 // page_meta.rs (public + pub(crate) classification/page-meta API)
 pub(crate) use page_meta::{
     classify_heap_generation, classify_heap_space, classify_heap_space_in_range,
-    generation_page_for_addr, old_arena_page_index_remove_object,
-    old_arena_source_blocks_for_pages, old_arena_walk_objects_on_pages, old_object_page_overlaps,
-    old_page_account_dirty_slot, old_page_account_dirty_slots, old_page_account_promoted_object,
-    old_page_account_swept_object, old_page_clear_dirty, old_page_mark_dirty,
-    old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
-    old_pages_reset_sweep_accounting, unregister_old_object_pages, HeapGeneration, HeapSpace,
-    OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    generation_page_for_addr, materialize_all_promoted_page_runs,
+    old_arena_page_index_remove_object, old_arena_source_blocks_for_pages,
+    old_arena_walk_objects_on_pages, old_object_page_overlaps, old_page_account_dirty_slot,
+    old_page_account_dirty_slots, old_page_account_promoted_object, old_page_account_swept_object,
+    old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
+    old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, unregister_old_object_pages,
+    HeapGeneration, HeapSpace, OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta,
+    OldPageSummary,
 };
 
 #[cfg(test)]
 pub(crate) use page_meta::{
     deferred_old_page_registrations_len, generation_page_base,
     old_arena_page_index_clear_for_tests, old_page_meta_for_tests,
-    old_page_meta_snapshot_calls_for_tests, reset_old_page_meta_snapshot_calls_for_tests,
+    old_page_meta_snapshot_calls_for_tests, pending_promoted_page_runs,
+    reset_old_page_meta_snapshot_calls_for_tests,
     DEFERRED_OLD_PAGE_REGISTRATION_CAP, GENERATION_CLASS_SHIFT, GENERATION_PAGE_SIZE,
 };
