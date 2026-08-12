@@ -373,55 +373,6 @@ impl CopyingNurseryPreflight {
     }
 }
 
-#[derive(Default)]
-pub(super) struct StickyRememberedSet {
-    pub(super) old_pages: crate::fast_hash::PtrHashSet<usize>,
-    pub(super) external_pages: Vec<(usize, usize)>,
-}
-
-impl StickyRememberedSet {
-    pub(super) fn remember_slot(
-        &mut self,
-        parent_header: *mut GcHeader,
-        slot: *mut u64,
-        external: bool,
-    ) {
-        if parent_header.is_null() || slot.is_null() {
-            return;
-        }
-        let page = crate::arena::generation_page_for_addr(slot as usize);
-        if external {
-            // #7538: an owner's external buffer can contribute thousands of
-            // slots (a lazy JSON array's sparse element cache is one 8-byte
-            // slot per element), and they are visited in address order — so
-            // one adjacent-duplicate check collapses a whole page's worth of
-            // pushes into a single entry. `restore` dedupes again inside
-            // `mark_dirty_external_slot_page`; this keeps the intermediate
-            // Vec from growing with the element count.
-            let entry = (parent_header as usize, page);
-            if self.external_pages.last() != Some(&entry) {
-                self.external_pages.push(entry);
-            }
-        } else {
-            self.old_pages.insert(page);
-        }
-    }
-
-    pub(super) fn restore(&self) {
-        for &page in &self.old_pages {
-            mark_dirty_old_page(page);
-        }
-        for &(header, page) in &self.external_pages {
-            mark_dirty_external_slot_page(header, page);
-        }
-    }
-
-    pub(super) fn extend(&mut self, other: StickyRememberedSet) {
-        self.old_pages.extend(other.old_pages);
-        self.external_pages.extend(other.external_pages);
-    }
-}
-
 pub(super) struct CopyingNurseryCollector {
     pub(super) ptrs: CopyingPointerSet,
     pub(super) worklist: Vec<*mut GcHeader>,
@@ -1360,43 +1311,7 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     gc_collect_minor_copying_fast_path_with_eligibility(trace, start, eligibility, trigger_kind)
 }
 
-/// How a copied-minor attempt ended. `RolledBack` is only ever produced by the
-/// #7937 speculative first-cycle promotion, and it means the heap is in exactly
-/// the state it was in when the attempt began.
-enum CopiedMinorAttempt {
-    Done(Option<CopiedMinorFastPathOutcome>),
-    RolledBack,
-}
-
-pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
-    trace: &mut Option<GcCycleTrace>,
-    start: Instant,
-    eligibility: CopiedMinorEligibility,
-    trigger_kind: GcTriggerKind,
-) -> Option<CopiedMinorFastPathOutcome> {
-    match run_copied_minor_attempt(trace, start, eligibility, trigger_kind, true) {
-        CopiedMinorAttempt::Done(outcome) => outcome,
-        // #7937: the first-cycle promotion attempt read its own trace and the
-        // ratio said evacuate. The retag is undone and the marks are cleared,
-        // so re-deriving eligibility observes the same heap the first attempt
-        // did and the second attempt is an ordinary copying minor. It is
-        // re-derived rather than reused because `CopiedMinorEligibility` owns
-        // the pointer classifier the first attempt consumed; the only cost is
-        // one more preflight, on a cycle that by construction has almost
-        // nothing live to walk.
-        CopiedMinorAttempt::RolledBack => {
-            let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
-            match run_copied_minor_attempt(trace, start, eligibility, trigger_kind, false) {
-                CopiedMinorAttempt::Done(outcome) => outcome,
-                CopiedMinorAttempt::RolledBack => {
-                    unreachable!("a non-speculative copied-minor attempt cannot roll back")
-                }
-            }
-        }
-    }
-}
-
-fn run_copied_minor_attempt(
+pub(super) fn run_copied_minor_attempt(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
     eligibility: CopiedMinorEligibility,
@@ -1454,29 +1369,14 @@ fn run_copied_minor_attempt(
     // answers "may this cycle move objects at all", a question the retag does
     // not change.
     // #7937: the FIRST copying minor has no previous cycle to read, so the
-    // steady-state policy above always declines — and on the fully-live
-    // workloads that one cycle is 58–81% of all GC pause. It may instead
-    // ATTEMPT the promotion and decide from its own trace, because on a
-    // promoting cycle the trace IS a mark pass over the blocks it would keep.
-    //
-    // Two preconditions, and both are about making the rollback's obligations
-    // provably empty rather than about liveness:
-    //
-    // * `malloc_registry_empty_at_start` is what makes `skip_remembering` true
-    //   below, and `skip_remembering` is what stops the attempt from touching
-    //   the remembered set at all — `visit_slot_with_parent`'s
-    //   `sticky.remember_slot` is gated on it, and so is
-    //   `rebuild_evacuated_old_to_young_remembered_set`. Without it a rollback
-    //   would have to un-remember, and a dropped old→young edge is a
-    //   swept-live-object crash a cycle later.
-    // * `untraced_promotion_instrument_veto` keeps the stress/verify
-    //   instruments off this path: each of them takes the trace as its subject,
-    //   and a rolled-back attempt would show them a trace that produced nothing
-    //   followed by a second one — the "instrument stopped exercising its
-    //   subject" shape, in a mode whose whole purpose is to exercise it.
+    // steady-state policy above always declines. It may instead ATTEMPT the
+    // promotion and decide from its own trace — see
+    // `should_attempt_first_cycle_promotion` for why, and for why both extra
+    // preconditions here are about making the ROLLBACK's obligations provably
+    // empty rather than about liveness.
     let speculate_first_cycle = may_speculate
         && ptrs.malloc_registry_empty_at_start
-        && !untraced_promotion_instrument_veto()
+        && untraced_promotion_instrument_veto().is_none()
         && super::should_attempt_first_cycle_promotion();
     let promotion = if super::should_promote_young_in_place() || speculate_first_cycle {
         crate::arena::retag_young_for_in_place_promotion(speculate_first_cycle)
@@ -1717,26 +1617,14 @@ fn run_copied_minor_attempt(
     trace_phase_record(trace, "copying_nursery", phase_start);
 
     // #7937: the attempt's own trace has finished, so the ratio it was missing
-    // now exists. This is the decision point the steady-state policy cannot
-    // have — it commits before the trace and corrects on the NEXT cycle; here
-    // the correction is available within the cycle, and nothing has been handed
-    // to old-gen yet.
-    //
-    // Rolling back restores the pre-cycle state exactly, and the list of things
-    // to restore is exactly two long:
-    //
-    // * the retag (`undo_in_place_promotion_retag`) — the only physical
-    //   commitment, since nothing moved and no block changed arenas;
-    // * the marks the trace set (`clear_marks` over `marked_headers` +
-    //   `moved_headers`, which is where `mark_promoted_young` puts every object
-    //   it touched).
-    //
-    // Everything else the attempt did is a PROVABLE no-op on a promoting cycle
-    // and needs no undoing: after the retag no address classifies as `Nursery`,
-    // so `move_young` is unreachable, every root rewrite and slot rewrite is a
-    // no-op, and `skip_remembering` (a precondition of speculating at all) means
-    // no remembered-set entry was created or consumed. `remembered_set_clear()`
-    // and the from-space reset are both below this point.
+    // now exists. Nothing has been handed to old-gen yet, so rolling back
+    // restores the pre-cycle state, and the list is exactly two long: the retag
+    // (the only physical commitment) and the marks. Everything else the attempt
+    // did is a PROVABLE no-op on a promoting cycle — after the retag no address
+    // classifies as `Nursery`, so `move_young` is unreachable and every root
+    // and slot rewrite is a no-op, and `skip_remembering` (a precondition of
+    // attempting) means no remembered-set entry was created or consumed.
+    // `remembered_set_clear()` and the from-space reset are both below here.
     if speculate_first_cycle && promoting_in_place {
         let holds_up =
             super::first_cycle_promotion_holds_up(from_space_bytes, collector.live_from_bytes);
