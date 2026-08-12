@@ -64,6 +64,50 @@ declaration form is the **default** and there is nothing to wire.
 runtime should check `tls_hot.rs` first — that objection has been obsolete since
 #7469.** It is currently repeated verbatim in at least two issues.
 
+### Measured cost of the per-thread read
+
+One compiler, two `libperry_runtime.a` + `libperry_stdlib.a` pairs, swapped with
+`PERRY_RUNTIME_DIR`, `PERRY_NO_AUTO_OPTIMIZE=1` so the pinned archive is what
+gets linked. Nine interleaved rounds on the quiet M1 mini
+(`perry@perry-macos.local`, load ~1.4 throughout), with a third binary that is a
+**byte-identical copy of the fixed arm** as the A/A noise floor. Medians of
+rounds 2-9 (round 1 discarded as warm-up):
+
+| phase | what it exercises | baseline | fixed | A/A control |
+|---|---|---|---|---|
+| `fieldSets` (4M × set+get, runtime key) | `object_prototype_addr_matches` on the by-name set fast path | **398 ms** | **403 ms** | 403 ms |
+| `fills` (20k × `new Array(512).fill(r)`) | `note_array_index_write` → `array_prototype_addr()` | 38 ms | 38 ms | 38 ms |
+| `misses` (4M × absent-key read) | `field_get_set/accessors.rs`'s `object_prototype_addr()` | 3-4 ms | 3-4 ms | 3-4 ms |
+
+Checksums identical across arms. The A/A control lands on the same median as
+the fixed arm, so the noise floor is under 1 ms on a ~400 ms measurement
+(< 0.25 %) and the +5 ms is real, not drift.
+
+**+1.3 % on a microbenchmark that does nothing but property set/get** — about
+0.6 ns, ~2 cycles, per accessor call. That is the cost of one extra load and a
+bound check on top of a `hot()` resolution LLVM CSEs across the function. The
+array-fill phase did not move measurably; the `misses` phase is too small to
+resolve and is reported as such rather than as a win.
+
+### Sabotage record
+
+The isolation gate was verified able to fail, on a **rebuilt** binary rather
+than an edited tree. A temporary process-global mirror was added to
+`resolve_prototype_addr` (first thread to resolve decides for the process),
+`cargo test --release -p perry-runtime prototype_addr_cache` rebuilt, and the
+result was exactly one failure:
+
+```
+a_second_agents_prototype_addresses_are_its_own ... FAILED
+  assertion `left != right` failed: two live agents must memoize their OWN Array.prototype ...
+  left: 3109324032744   right: 3109324032744
+test result: FAILED. 7 passed; 1 failed
+```
+
+The other seven cases — the #6981 forwarding/rewrite algebra on privately-owned
+cells — are unaffected by the sabotage, which is the intended decomposition. The
+sabotage was then reverted **and rebuilt**: 8 passed, 0 failed.
+
 ## The multi-agent probe
 
 `test-files/test_issue_7988_thread_realm_prototype.ts`. The **main thread warms
@@ -75,6 +119,36 @@ and reads `[1,2,3][7]` / `[1,2,3][8]` through the chain.
 Neither the gap suite nor the compile corpus exercises `perry/thread` at all, so
 **both are vacuous gates for this class of change**. Do not cite corpus-green as
 evidence for a `perry/thread` fix.
+
+The first version of this probe was itself vacuous, and it took an A/B against a
+real pre-fix `.a` to notice: its warm-up (`main[1] = 9`, `main[7]`) resolves
+NEITHER address, so the spawned agent was simply the first thread to fill the
+shared cell, and the probe printed the expected string 5/5 on the broken
+runtime. Two lessons worth carrying:
+
+* **A `perry/thread` probe must state which main-thread operation resolves the
+  state under test, and print it.** Guessing wrong is silent.
+* `note_array_index_write` is NOT reached by an ordinary `arr[i] = v`; the
+  reachable-from-JS callers are the bulk fill/extend helpers and an indexed
+  write *to the prototype object itself*. `array_oob_prototype_get`'s call to
+  `array_prototype_addr()` sits **behind** `ARRAY_PROTO_HAS_INDEX`, so an
+  out-of-bounds read on a clean realm resolves nothing.
+
+### Perry-only tests need a stored expected output, not a tolerated failure
+
+`run_parity_tests.sh` compares against Node, and `perry/thread` has no Node
+equivalent, so a `perry/thread` test scores `parity_fail` forever. Four already
+do on `main` — `parity_known_failures.py` reports
+`test_issue_{4449_thread_promise_void, 7302_thread_throws,
+7769_thread_class_dispatch, 7981_thread_shape_stamp_parent}` as unlisted
+failures on macOS, and none is in `test-parity/known_failures.json`.
+
+The harness already has the mechanism: `test-parity/expected/<name>.txt` is
+compared against Perry's output *and exit code* instead of against Node
+(`run_parity_tests.sh:1438`; the `threaded-fd-semantics-*` files use it). This
+PR's probe ships one, so it PASSES the parity suite rather than being tolerated
+by it. **The four siblings should get the same treatment** — as written they are
+four tests whose next regression is already absorbed.
 
 ## Inventory: other process-globals that should be per-realm
 
@@ -147,6 +221,28 @@ deep-copy. The realm-isolation work in this note is a **precondition** for
 `node:worker_threads` behaving sanely once the surface exists — a `Worker` that
 runs on an OS thread inherits every entry in the inventory table above — but it
 closes approximately zero of the 167.
+
+## Two gates found RED on `main` while doing this (neither caused here)
+
+* `check_thread_locals.py` (the `lint` job, a REQUIRED context) — #7987
+  (`23a8aad31`) added `BLOCK_PERSIST_FORCE_MARKS` to
+  `crates/perry-runtime/src/gc/trace.rs` without re-recording the file's count,
+  so the ratchet reads "2 recorded, 3 found". Re-recorded in this PR as its own
+  commit, because nothing can go green until it is.
+* `check_test_registration.py` — three DARK TESTS from #7962 and #7978 exist on
+  disk but are in no registry, so `gc_repsel_matrix.sh` (gc-stress,
+  gc-moving-witnesses, gc-ptr-shape-off-witness) never runs them:
+  `test_gap_gc_container_value_rooting`,
+  `test_gap_gc_define_properties_key_rooting`,
+  `test_gap_gc_define_property_descriptor_rooting`. Deliberately NOT fixed here
+  — registering them would newly run three GC-rooting witnesses under every
+  matrix arm, which is their authors' call, not this PR's. Filed for whoever
+  owns #7949/#7978.
+
+`Tests` has been failing on `main` for at least five consecutive days
+(2026-08-08 .. 2026-08-12), which is how both of these survived.
+
+## #6763 scoping (continued)
 
 Recommendation: keep #6763 as an umbrella and split it by subsystem
 (`BroadcastChannel`, `MessagePort`/`MessageChannel` + transfer lists,
