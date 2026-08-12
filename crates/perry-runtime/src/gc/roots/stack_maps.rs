@@ -399,11 +399,48 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
                     fp_offset = Some(offset + immediate_of(word));
                     continue;
                 }
-                // The prologue's stack adjustments are contiguous; the first
-                // instruction after them that is not a `sub sp` ends the run.
-                // Anything later that touches sp is a body operation (a dynamic
-                // alloca, a call-argument area) which the stack map's own
-                // offsets already account for.
+                // #7984: an SVE stack adjustment scales by the RUNTIME vector
+                // length, which is nowhere in the instruction. There is no
+                // correct number to return, so return none of one — the
+                // caller falls back to the platform unwinder, which reads the
+                // frame's DWARF CFI and does not need VG for an fp-based
+                // frame.
+                //
+                // This is not hypothetical and it is not rare. Perry tunes a
+                // host build with `-mcpu=native`; on any Neoverse-class core
+                // that turns SVE on, and LLVM then emits the module body's
+                // prologue as (measured on `01_nursery_churn`, aarch64 Linux,
+                // `-mcpu=neoverse-n2`):
+                //
+                //     add   x29, sp, #0x20     <- fp established here
+                //     stp   x28, x27, [sp, #48]
+                //     ... four more callee-save pairs ...
+                //     sub   sp, sp, #0x50      <- 80 bytes
+                //     addvl sp, sp, #-2        <- and 2 x VL more
+                //
+                // The same probe built `-mcpu=neoverse-n1` has neither the
+                // interleaved stores nor the `addvl`, which is why this was an
+                // ARM-Linux-runner-only failure that no macOS arm could see.
+                if writes_sp_by_vector_length(word) {
+                    return None;
+                }
+                // A store INTO the frame does not move sp, so it cannot end
+                // the run of stack adjustments — and LLVM interleaves exactly
+                // these between the frame-pointer setup and the local-area
+                // allocation in the shape above. Treating one as the end of
+                // the prologue is what made the decoder report 0x20 for a
+                // frame whose body SP is 144 bytes below the frame pointer,
+                // placing every SP-relative root in it 112 bytes too high.
+                if is_frame_store_through_sp(word) {
+                    continue;
+                }
+                // Anything else ends the prologue. Something later that
+                // touches sp is a body operation (a dynamic alloca, a
+                // call-argument area) which the stack map's own offsets
+                // already account for — and a frame that needs a base pointer
+                // for either reason records its roots against x19, which
+                // `chain_walkable` refuses for the whole image, so this walker
+                // never sees one.
                 break;
             }
         }
@@ -413,6 +450,51 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
         }
     }
     fp_offset
+}
+
+/// `stp`/`str` with SP as the base register and no writeback.
+///
+/// These are the callee-save spills LLVM emits, and they do not modify sp — so
+/// one appearing after the frame-pointer setup says nothing about whether the
+/// prologue's stack adjustments are finished. Enumerated rather than inferred:
+/// an instruction this does not recognise ends the run, which is the safe
+/// direction. Every opcode below was read out of a real aarch64-Linux binary
+/// (`objdump -d`, `01_nursery_churn` built `-mcpu=neoverse-n2`), not from
+/// memory.
+#[cfg(target_arch = "aarch64")]
+fn is_frame_store_through_sp(word: u32) -> bool {
+    // Base register, bits [9:5]. 31 is SP in a load/store base position (it is
+    // never XZR there), so no ambiguity to resolve.
+    if (word >> 5) & 0x1F != u32::from(DWARF_REG_SP_AARCH64) {
+        return false;
+    }
+    matches!(
+        word & 0xFFC0_0000,
+        0xA900_0000     // stp  Xt1, Xt2, [sp, #imm]   (measured: a9036ffc)
+        | 0x6D00_0000   // stp  Dt1, Dt2, [sp, #imm]   (measured: 6d0123e9)
+        | 0xAD00_0000   // stp  Qt1, Qt2, [sp, #imm]
+        | 0xF900_0000   // str  Xt,       [sp, #imm]
+        | 0xFD00_0000   // str  Dt,       [sp, #imm]
+        | 0x3D80_0000 // str  Qt,       [sp, #imm]
+    )
+}
+
+/// `addvl`/`addpl` writing SP — an adjustment in units of the runtime SVE
+/// vector length.
+///
+/// The instruction carries a multiplier, not a byte count, so the frame's real
+/// size is unknowable from the text. `fp_to_sp_offset` fails closed on one
+/// rather than returning the unscaled figure.
+///
+/// Encoding, verified against `043f57df` = `addvl sp, sp, #-2` in a real
+/// binary: bits [31:24] `0000_0100`, [23:21] `001`, [20:16] Rn, [15:11] `01010`
+/// (`addvl`) or `01011` (`addpl`), [10:5] imm6, [4:0] Rd.
+#[cfg(target_arch = "aarch64")]
+fn writes_sp_by_vector_length(word: u32) -> bool {
+    const OPCODE_MASK: u32 = 0xFFE0_F800;
+    const ADDVL: u32 = 0x0420_5000;
+    const ADDPL: u32 = 0x0420_5800;
+    word & 0x1F == u32::from(DWARF_REG_SP_AARCH64) && matches!(word & OPCODE_MASK, ADDVL | ADDPL)
 }
 
 #[cfg(not(target_arch = "aarch64"))]

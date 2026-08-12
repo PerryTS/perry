@@ -357,3 +357,84 @@ fn a_wrong_frame_offset_is_caught() {
         );
     }
 }
+
+// A frame that saves x30 but never establishes x29. Legal on Linux — it is
+// what any C library built without `-fno-omit-frame-pointer` emits — and the
+// shape `fp_to_sp_offset` cannot decode, so it stands in for #7984's SVE
+// prologue, which cannot be executed on a core without SVE.
+core::arch::global_asm!(
+    ".p2align 4",
+    concat!(".globl ", asm_symbol!("perry_walker_probe_no_fp")),
+    concat!(asm_symbol!("perry_walker_probe_no_fp"), ":"),
+    ".cfi_startproc",
+    "sub sp, sp, #96",
+    ".cfi_def_cfa_offset 96",
+    "str x30, [sp, #88]",
+    ".cfi_offset w30, -8",
+    "mov x2, x0",
+    "mov x3, #0xF00D",
+    "movk x3, #0xCAFE, lsl #16",
+    "str x3, [sp, #8]",
+    "mov x0, sp",
+    "adr x1, 4f",
+    "blr x2",
+    "4:",
+    "ldr x30, [sp, #88]",
+    "add sp, sp, #96",
+    "ret",
+    ".cfi_endproc",
+);
+
+unsafe extern "C" {
+    fn perry_walker_probe_no_fp(callback: Probe);
+}
+
+/// When the prologue cannot be decoded, the fast walker declines and the
+/// unwinder still resolves the root.
+///
+/// This is the fallback #7984's fix rests on: on an SVE host the module body's
+/// prologue ends in `addvl sp, sp, #-N`, whose byte count is the runtime vector
+/// length, so `fp_to_sp_offset` returns `None` rather than the part it could
+/// read — and the walk has to end up on the platform unwinder, which reads
+/// DWARF CFI and needs no vector length for an fp-based frame.
+///
+/// The probe here is frameless rather than SVE because an `addvl` cannot be
+/// executed on a core without SVE, and the two reach the same code path: an
+/// undecodable prologue for a matched SP-relative record. The *decoding* half
+/// is pinned on the real `addvl` bytes in `stack_maps_decode_tests.rs`.
+///
+/// Note what this asserts about the unwinder: not merely that it ran, but that
+/// it landed on the word holding the sentinel. A fallback that finds nothing
+/// would be a collector with no roots, which is worse than the bug.
+#[test]
+fn an_undecodable_prologue_declines_the_fast_walk_and_the_unwinder_still_answers() {
+    let frame = Frame {
+        function_address: perry_walker_probe_no_fp as *const () as usize,
+        stack_size: 96,
+        fp_to_sp: 0,
+    };
+    PROBE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        state.frame = frame;
+        state.offset = 8;
+        state.ran = false;
+        state.fast = None;
+        state.slow = Vec::new();
+    });
+    unsafe { perry_walker_probe_no_fp(run_probe) };
+    let (body_sp, fast, slow) = PROBE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        assert!(state.ran, "the probe callback never ran");
+        (
+            state.body_sp,
+            state.fast.take(),
+            std::mem::take(&mut state.slow),
+        )
+    });
+    assert!(
+        fast.is_none(),
+        "a prologue with no `add x29, sp` must abandon the fast walk, not \
+         invent a frame base for it"
+    );
+    check("frameless frame", "unwinder", &slow, body_sp + 8, frame);
+}

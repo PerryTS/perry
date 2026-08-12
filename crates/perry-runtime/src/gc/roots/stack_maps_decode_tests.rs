@@ -468,3 +468,141 @@ mod fp_offset_trailing_sub_tests {
         );
     }
 }
+
+/// #7984: the prologue shape LLVM emits when SVE is on.
+///
+/// Every word here was read out of a real aarch64-Linux binary with
+/// `objdump -d` — `benchmarks/gc_ratchet/probes/01_nursery_churn.ts` built by
+/// this compiler with `PERRY_TARGET_CPU=neoverse-n2`, function `main`, which is
+/// the module body and carries 100 stack-map records. The same probe built
+/// `-mcpu=neoverse-n1` produces neither the interleaved stores nor the `addvl`,
+/// which is why this was an ARM-Linux-runner-only failure.
+#[cfg(all(test, target_arch = "aarch64"))]
+mod sve_prologue_tests {
+    use super::super::fp_to_sp_offset;
+
+    fn decode(words: &[u32]) -> Option<usize> {
+        let buf = words.to_vec().into_boxed_slice();
+        let out = fp_to_sp_offset(buf.as_ptr() as usize);
+        drop(buf);
+        out
+    }
+
+    //     124790: str   d10, [sp, #-128]!
+    //     124794: stp   d9, d8, [sp, #16]
+    //     124798: stp   x29, x30, [sp, #32]
+    //     12479c: add   x29, sp, #0x20
+    //     1247a0: stp   x28, x27, [sp, #48]
+    //     1247a4: stp   x26, x25, [sp, #64]
+    //     1247a8: stp   x24, x23, [sp, #80]
+    //     1247ac: stp   x22, x21, [sp, #96]
+    //     1247b0: stp   x20, x19, [sp, #112]
+    //     1247b4: sub   sp, sp, #0x50
+    //     1247b8: addvl sp, sp, #-2
+    //     1247bc: bl    js_inline_arena_state
+    const STR_D10_SP_M128_PRE: u32 = 0xFC18_0FEA;
+    const STP_D9_D8_SP_16: u32 = 0x6D01_23E9;
+    const STP_X29_X30_SP_32: u32 = 0xA902_7BFD;
+    const ADD_X29_SP_0X20: u32 = 0x9100_83FD;
+    const STP_X28_X27_SP_48: u32 = 0xA903_6FFC;
+    const STP_X26_X25_SP_64: u32 = 0xA904_67FA;
+    const STP_X24_X23_SP_80: u32 = 0xA905_5FF8;
+    const STP_X22_X21_SP_96: u32 = 0xA906_57F6;
+    const STP_X20_X19_SP_112: u32 = 0xA907_4FF4;
+    const SUB_SP_SP_0X50: u32 = 0xD101_43FF;
+    const ADDVL_SP_SP_M2: u32 = 0x043F_57DF;
+    const BL: u32 = 0x9418_FFE3;
+
+    /// A callee-save store does not move sp, so it cannot end the prologue's
+    /// run of stack adjustments.
+    ///
+    /// Before #7984 the first `stp` after the frame-pointer setup ended the
+    /// run, so this frame decoded as 0x20 when its body SP is 0x50 further
+    /// down — placing every SP-relative root in it 80 bytes too high, silently,
+    /// on the walker that runs when `verify` is off.
+    #[test]
+    fn callee_save_stores_do_not_end_the_stack_adjustment_run() {
+        assert_eq!(
+            decode(&[
+                STR_D10_SP_M128_PRE,
+                STP_D9_D8_SP_16,
+                STP_X29_X30_SP_32,
+                ADD_X29_SP_0X20,
+                STP_X28_X27_SP_48,
+                STP_X26_X25_SP_64,
+                STP_X24_X23_SP_80,
+                STP_X22_X21_SP_96,
+                STP_X20_X19_SP_112,
+                SUB_SP_SP_0X50,
+                BL,
+            ]),
+            Some(0x20 + 0x50),
+            "the `sub sp, sp, #0x50` behind five callee-save pairs must still \
+             be folded into the frame base"
+        );
+    }
+
+    /// An SVE stack adjustment is in units of the runtime vector length, so
+    /// there is no correct byte count to return. Fail closed and let the
+    /// platform unwinder — which reads DWARF CFI, and needs no VG for an
+    /// fp-based frame — answer for this frame.
+    ///
+    /// Returning the un-scaled value instead is #7984: `main` decoded as 0x20
+    /// against a real `x29 - body_sp` of 0x90, and `PERRY_STACKMAP_WALKER=verify`
+    /// caught the fp-chain walker and the unwinder 96 bytes apart on
+    /// `ubuntu-24.04-arm`.
+    #[test]
+    fn an_sve_stack_adjustment_fails_closed() {
+        assert_eq!(
+            decode(&[
+                ADD_X29_SP_0X20,
+                STP_X28_X27_SP_48,
+                SUB_SP_SP_0X50,
+                ADDVL_SP_SP_M2,
+                BL,
+            ]),
+            None,
+            "a frame whose size depends on the SVE vector length must fall \
+             back to the unwinder, not report the part it could read"
+        );
+    }
+
+    /// The whole measured prologue, verbatim: the two defects compose, and the
+    /// answer is still `None` rather than a partially-correct number.
+    #[test]
+    fn the_measured_neoverse_n2_prologue_fails_closed() {
+        assert_eq!(
+            decode(&[
+                STR_D10_SP_M128_PRE,
+                STP_D9_D8_SP_16,
+                STP_X29_X30_SP_32,
+                ADD_X29_SP_0X20,
+                STP_X28_X27_SP_48,
+                STP_X26_X25_SP_64,
+                STP_X24_X23_SP_80,
+                STP_X22_X21_SP_96,
+                STP_X20_X19_SP_112,
+                SUB_SP_SP_0X50,
+                ADDVL_SP_SP_M2,
+                BL,
+            ]),
+            None
+        );
+    }
+
+    /// `addvl` into a scratch register is not a stack adjustment and must not
+    /// disable the frame. LLVM emits `addvl x8, sp, #2` all over an SVE
+    /// function body to address spill slots; only a write to SP moves the
+    /// frame. (`043f57df` is `addvl sp,…`; clearing the destination field to
+    /// x8 gives the body form.)
+    #[test]
+    fn addvl_into_a_scratch_register_is_not_a_stack_adjustment() {
+        let addvl_x8 = (ADDVL_SP_SP_M2 & !0x1F) | 8;
+        assert_eq!(
+            decode(&[ADD_X29_SP_0X20, SUB_SP_SP_0X50, addvl_x8, BL]),
+            Some(0x20 + 0x50),
+            "only `addvl` writing SP is undecodable; one writing x8 is a body \
+             address computation"
+        );
+    }
+}
