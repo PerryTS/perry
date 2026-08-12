@@ -29,7 +29,7 @@ registered=9
 GET https://registry.example.com/v1/alerts [alerts|read|get|abs] {-} #2
 ```
 
-## 1. #7803 does not reproduce
+## 1. #7803's reproducer does not reproduce (but read §3-§5 before quoting this)
 
 The filed condition, verbatim from the issue (quarantine **OFF**):
 
@@ -38,7 +38,8 @@ PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 \
 PERRY_GC_PROTECT_FROMSPACE=0 PERRY_GC_DIAG=1 /tmp/zod-w
 ```
 
-Three runs, all **exit 0**, stdout byte-identical to the plain run:
+Three dedicated runs, all **exit 0**, stdout byte-identical to the plain run
+(a fourth, seed 1 inside the section-4 sweep, also passed — 4/4 in total):
 
 | run | forced_collections | copying_minors | moved_objects | loop_polls | wall |
 |---|---|---|---|---|---|
@@ -136,7 +137,7 @@ Seed 4 re-run: **passes**, 2/2 — the same seed that failed in the sweep.
 Consistent with §1's non-determinism: the seed biases the schedule, it does not
 fix it. So the correct statement is "the corpus fails intermittently under a
 rate-1 unprotected schedule", and any single passing run (including #7803's own
-seed 1, now 6/6 clean) is weak evidence.
+seed 1, now 4/4 clean) is weak evidence.
 
 > Aside, found while trying to hold that A/B still: **`PERRY_GC_DIAG=0` turns
 > diagnostics ON.** `telemetry.rs:11` reads it with
@@ -208,7 +209,7 @@ Re-running the three failing seeds on the same binary:
 |---|---|---|
 | 4 | FAIL | pass, 2/2 |
 | 15 | FAIL (abort) | pass, 3/3 |
-| 1 (#7803's) | pass | pass, 6/6 |
+| 1 (#7803's) | pass | pass, 4/4 |
 
 So a per-seed verdict is not reproducible on this workload, and neither
 "#7803's seed passes" nor "seed 4 fails" is a durable statement. The durable
