@@ -275,6 +275,57 @@ fn lower_array_index_get_via_runtime_key(
     }
 }
 
+/// Read a string-valued key from a receiver admitted by an erased Array type.
+///
+/// The ordinary array ABI takes an already-unboxed `ArrayHeader*`, which loses
+/// an SSO String's tag/payload before the runtime can validate the claim. Keep
+/// the receiver boxed until that immediate representation is separated; heap
+/// Strings remain real pointers and are classified inside the array-key helper,
+/// while every other value retains the established fallback.
+fn lower_claimable_array_string_key_get(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_double: &str,
+) -> String {
+    let string_idx = ctx.new_block("aidxkey.sso");
+    let array_idx = ctx.new_block("aidxkey.raw");
+    let merge_idx = ctx.new_block("aidxkey.merge");
+    let string_label = ctx.block_label(string_idx);
+    let array_label = ctx.block_label(array_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let bits = ctx.block().bitcast_double_to_i64(arr_box);
+    let top16 = ctx.block().lshr(I64, &bits, "48");
+    let is_sso_string = ctx.block().icmp_eq(I64, &top16, "32761"); // SHORT_STRING_TAG
+    ctx.block()
+        .cond_br(&is_sso_string, &string_label, &array_label);
+
+    ctx.current_block = string_idx;
+    let string_value = ctx.block().call(
+        DOUBLE,
+        "js_string_index_get_boxed",
+        &[(DOUBLE, arr_box), (DOUBLE, idx_double)],
+    );
+    let string_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = array_idx;
+    let arr_handle = unbox_to_i64(ctx.block(), arr_box);
+    let array_value = ctx.block().call(
+        DOUBLE,
+        "js_array_get_index_or_string",
+        &[(I64, &arr_handle), (DOUBLE, idx_double)],
+    );
+    let array_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[(&string_value, &string_end), (&array_value, &array_end)],
+    )
+}
+
 fn is_async_dispose_symbol_index(index: &Expr) -> bool {
     let Expr::SymbolFor(symbol_name) = index else {
         return false;
@@ -1153,20 +1204,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // records that the same guard is what makes a typed-array-valued
             // member receiver safe on this path.)
             //
-            // Restricted to a NON-string, NON-symbol key, and that restriction is
-            // load-bearing rather than tidy. The string-key arm of the array
-            // branch is `js_array_get_index_or_string`, whose string half calls
-            // `js_object_get_field_by_name` on the receiver — and that answers
-            // `undefined` for `s["0"]` on a heap STRING receiver, where JS
-            // answers the character. That is a pre-existing wrong answer on
-            // `main` — reachable today through a plain non-union declared
-            // receiver, filed as #7891 with a minimal repro — and a claim must
-            // not widen the set of shapes that reach it. With
-            // the restriction, a string or symbol key takes exactly the generic
-            // path it takes today; only the numeric read moves.
-            let claimed_array = recv_unknown
-                && !index_is_static_string_or_symbol
-                && crate::type_analysis::declared_array_property_claim(ctx, object);
+            // Restricted to a NON-string, NON-symbol key because only the
+            // numeric array tier has its own receiver guard. String-valued
+            // keys on an array claim are handled below by an SSO-tag guard;
+            // heap strings remain pointers and are classified inside the
+            // established array-key fallback before object lookup.
+            let declared_array_claim =
+                crate::type_analysis::declared_array_property_claim(ctx, object);
+            let claimed_array =
+                recv_unknown && !index_is_static_string_or_symbol && declared_array_claim;
             let recv_unknown = recv_unknown && !claimed_array;
             if recv_unknown && !index_is_static_string_or_symbol {
                 // #7640 section B: receiver live across an unconstrained index.
@@ -1188,7 +1234,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //      generic object field access via js_object_get_field_by_name_f64
             //   3. Anything else → fall back to dynamic object field
             //      access by stringifying the index at runtime
-            if is_array_expr(ctx, object) || claimed_array {
+            if is_array_expr(ctx, object) || declared_array_claim {
                 // #321: a symbol-keyed array read (`arr[Symbol.iterator]`) must
                 // NOT take the numeric fast path below — `fptosi` on the symbol
                 // value yields a garbage index (returned a number). Route symbol
@@ -1209,18 +1255,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     });
                 }
                 if !is_numeric_expr(ctx, index) {
-                    // #7640 section B: `!is_numeric_expr` does not restrict the
-                    // index to a safe shape — `arr[f()]` is exactly this arm.
+                    // #7891: this route must retain the receiver's NaN-box tag.
+                    // `is_array_expr` trusts an erased declaration, so the
+                    // runtime value can be a String. The ordinary array helper
+                    // takes an already unboxed ArrayHeader pointer; its
+                    // string-key arm therefore answered `undefined` for a
+                    // string-valued receiver's canonical key (`xs["0"]`) and
+                    // could not represent SSO strings at all. The local tag
+                    // guard routes the immediate SSO encoding to the boxed
+                    // string index helper. Heap strings remain pointers and the
+                    // array helper classifies them before object lookup; every
+                    // other shape keeps the existing fallback. Numeric keys
+                    // retain the guarded array tier below.
+                    //
+                    // #7640 section B: `!is_numeric_expr` also does not restrict
+                    // the index to a safe shape — `arr[f()]` is exactly this arm.
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         let (arr_box, idx_double) = (vals[0].clone(), vals[1].clone());
-                        let arr_handle = {
-                            let blk = ctx.block();
-                            unbox_to_i64(blk, &arr_box)
-                        };
-                        Ok(ctx.block().call(
-                            DOUBLE,
-                            "js_array_get_index_or_string",
-                            &[(I64, &arr_handle), (DOUBLE, &idx_double)],
+                        Ok(lower_claimable_array_string_key_get(
+                            ctx,
+                            &arr_box,
+                            &idx_double,
                         ))
                     });
                 }

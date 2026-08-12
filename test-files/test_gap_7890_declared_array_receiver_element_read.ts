@@ -164,8 +164,9 @@ console.log(scan(mkAlias([1, 2, 3] as any), "a"));
 console.log(scan(mkAlias({ length: 3 }), "a"));
 
 // A STRING-literal key on the same receiver shape is deliberately NOT admitted
-// to the array arm by #7890 — see `index_get.rs`. It stays on the generic path,
-// which is what these rows pin.
+// to the numeric array tier by #7890 — see `index_get.rs`. #7891 routes it
+// through an SSO-tag guard plus heap-header classification so a violated
+// declaration keeps enough receiver identity for string indexing.
 function stringKey(b: Bag): string {
   return (
     "" + b.items["length"] + "/" + b.items["nope"] + "/" + typeof b.items["constructor"]

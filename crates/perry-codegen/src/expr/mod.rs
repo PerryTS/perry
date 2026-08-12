@@ -1944,6 +1944,8 @@ mod dyn_extern_i18n;
 mod env_clones;
 mod fs_await;
 mod index_get;
+#[cfg(test)]
+mod index_get_claim_tests;
 mod masked_window;
 mod ptr_numarray_access;
 mod ta_param_f64_read;

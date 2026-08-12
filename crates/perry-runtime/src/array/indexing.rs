@@ -523,6 +523,27 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
 }
 
 fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringHeader) -> f64 {
+    // #7891: an erased Array declaration can feed this ABI a heap StringHeader.
+    // The receiver arrived unboxed and no longer carries STRING_TAG, so recover
+    // its runtime kind from the GC header before ordinary by-name lookup. A
+    // canonical index reads the UTF-16 code unit; `length`, `constructor`, OOB
+    // and non-index keys fall through to the established String property path.
+    // (SSO strings have no pointer/header and are separated by codegen.)
+    if !arr.is_null() && !key.is_null() {
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        {
+            if header.obj_type == crate::gc::GC_TYPE_STRING {
+                let key_value = crate::value::JSValue::string_ptr(key as *mut crate::StringHeader);
+                let indexed = crate::string::js_string_index_get(
+                    arr as *const crate::StringHeader,
+                    f64::from_bits(key_value.bits()),
+                );
+                if indexed.to_bits() != crate::value::TAG_UNDEFINED {
+                    return indexed;
+                }
+            }
+        }
+    }
     let value =
         crate::object::js_object_get_field_by_name(arr as *const crate::object::ObjectHeader, key);
     f64::from_bits(value.bits())
@@ -1903,5 +1924,24 @@ mod keys_len_cap_tests {
             capacity,
             "cap must bound a bogus oversized length to the array's capacity"
         );
+    }
+}
+
+#[cfg(test)]
+mod claimed_array_string_receiver_tests {
+    use super::array_get_property_by_key;
+
+    #[test]
+    fn numeric_string_key_reads_a_heap_string_before_by_name_fallback() {
+        let receiver = crate::string::js_string_from_bytes(b"ss".as_ptr(), 2);
+        let zero = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
+        let indexed = array_get_property_by_key(receiver.cast(), zero);
+        assert_eq!(
+            crate::builtins::jsvalue_string_content(indexed).as_deref(),
+            Some("s")
+        );
+
+        let length = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        assert_eq!(array_get_property_by_key(receiver.cast(), length), 2.0);
     }
 }
