@@ -129,6 +129,17 @@ Six shapes, each exposed by fixing the previous one:
    Fixed structurally (one `LlFunction::define_header`), pinned in `function.rs`
    which compiles WITHOUT the feature, so per-PR CI sees it.
 
+   ★ The pin took THREE attempts, and the first two failed the same way the bug
+   did. (a) The `to_ir == define_header` agreement test cannot see a dropped
+   `gc "statepoint-example"` at all — one renderer means both sides change
+   identically; sabotage passed. (b) A dedicated strategy test that BRANCHED on
+   `native_stack_roots_enabled()` never ran its ON arm under `cargo test`: no
+   module has called `set_native_roots_for_target`, so the predicate is false in
+   the test process and the sabotage passed again. Only (c), pinning both
+   lowerings with `NativeRootsPin::{native,shadow}` and asserting
+   `stack_map_slot_count` in each arm so neither is vacuous, goes red on the
+   sabotage. Reproduced this PR's own bug class twice inside its own test.
+
 ### Are the `.ll` corpora live or still frozen? — **LIVE**
 
 Refreshed to 497 / 1082 / 420 `addrspace(1)` sites (were 0/0/0). Two mechanisms

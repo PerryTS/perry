@@ -1022,6 +1022,80 @@ mod define_header_tests {
         }
     }
 
+    /// The property that was actually lost, asserted directly (#7982) — in
+    /// **both** lowerings, neither of them dark.
+    ///
+    /// The header/`to_ir` agreement test above cannot see this: with one shared
+    /// renderer, dropping `gc "statepoint-example"` changes both sides
+    /// identically and that test stays green. Verified by doing exactly that.
+    ///
+    /// The first version of this test read `native_stack_roots_enabled()` and
+    /// branched on it. Under `cargo test` that predicate is false — no module
+    /// has called `set_native_roots_for_target` — so the ON arm, the one that
+    /// matters, never executed and the same sabotage passed a second time. That
+    /// is the failure mode this whole change is about, reproduced inside its own
+    /// test. `NativeRootsPin` exists for precisely this; both arms now run every
+    /// time, and each carries a liveness assertion that its lowering was
+    /// actually selected.
+    #[test]
+    fn the_gc_strategy_appears_exactly_when_the_function_asks_for_a_stack_map() {
+        use crate::codegen::helpers::NativeRootsPin;
+        const STRATEGY: &str = "gc \"statepoint-example\"";
+
+        {
+            let _native = NativeRootsPin::native();
+            let plain = probe();
+            assert!(
+                !plain.define_header(false).contains(STRATEGY),
+                "a function that never reserved a stack-map slot must not claim \
+                 a GC strategy, even under the native-roots lowering"
+            );
+
+            let mut mapped = probe();
+            mapped.enable_shadow_frame(0);
+            assert!(
+                mapped.reserve_shadow_slot().is_some(),
+                "a shadow-framed function must yield a root slot"
+            );
+            assert_eq!(
+                mapped.stack_map_slot_count, 1,
+                "under the native-roots pin the reservation must take the \
+                 stack-map path — otherwise the assertion below is vacuous"
+            );
+            assert!(
+                mapped.define_header(false).contains(STRATEGY),
+                "a stack-map function's define line MUST name the GC strategy. \
+                 Without it RS4GC never runs on the module, which verifies, \
+                 links and executes correctly on any program that does not \
+                 collect while having NO precise roots at all — #7332's shape, \
+                 and exactly what the in-process native backend shipped until \
+                 #7982"
+            );
+        }
+
+        {
+            let _shadow = NativeRootsPin::shadow();
+            let mut mapped = probe();
+            mapped.enable_shadow_frame(0);
+            assert!(
+                mapped.reserve_shadow_slot().is_some(),
+                "a shadow-framed function must yield a root slot in this \
+                 lowering too"
+            );
+            assert_eq!(
+                mapped.stack_map_slot_count, 0,
+                "under the shadow-stack pin the reservation must NOT take the \
+                 stack-map path"
+            );
+            assert!(
+                !mapped.define_header(false).contains(STRATEGY),
+                "the shadow-stack lowering must NOT name a GC strategy — RS4GC \
+                 is not the backend in that build, and claiming it would run the \
+                 pass over IR that has no addrspace(1) roots to rewrite"
+            );
+        }
+    }
+
     /// `force_external` drops only the linkage keyword. The codegen-unit path
     /// depends on that and on nothing else changing.
     #[test]
