@@ -159,8 +159,9 @@ back to full mark-sweep rather than trusting an empty remembered set.
 4. **Explicit/host requests** — user `gc()` and warning/critical OS memory pressure.
 
 Device/container budgets scale trigger and reclaim ceilings down. Released
-blocks enter a bounded per-thread reuse pool before allocator return; see the
-current GC page for pressure-level and pool limitations.
+blocks are reused thread-locally under a process-wide byte cap before allocator
+return; see the current GC page for the pressure levels and the pool's cap and
+drain behaviour.
 
 ## Escape hatches and diagnostics
 
