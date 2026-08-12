@@ -171,6 +171,10 @@ thread_local! {
     /// Old-gen occupancy when the last real measurement landed — the base the
     /// untraced budget's relative half is taken against.
     static OLD_GEN_AT_LAST_MEASUREMENT: Cell<usize> = const { Cell::new(0) };
+    /// #7937 live-subject counters for the first-cycle attempt and its
+    /// rollback.
+    static FIRST_CYCLE_PROMOTION_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
+    static FIRST_CYCLE_PROMOTION_ROLLBACKS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Record that `bytes` of young capacity became old-gen, so the next
@@ -213,8 +217,46 @@ pub(super) fn parse_promote_in_place(raw: Option<&str>) -> bool {
     }
 }
 
-/// Should this copying minor promote the young generation whole, in place?
-pub(super) fn should_promote_young_in_place() -> bool {
+/// Young-survival ratio, in permille, at or above which the FIRST copying
+/// minor of a thread keeps the promotion it attempted (#7937).
+///
+/// # Why this is not [`PROMOTE_SURVIVAL_THRESHOLD_PERMILLE`]
+///
+/// 950 bounds a PREDICTION: the steady-state policy commits to a promotion
+/// from the previous cycle's ratio, and a workload that flips costs one
+/// nursery of retained garbage before the re-measurement turns it off. It has
+/// to be conservative because it can be wrong repeatedly.
+///
+/// Cycle 0 is not predicting. It attempts the promotion, TRACES (its trace is
+/// a mark pass over the very blocks it would keep), and then reads the ratio it
+/// just measured — so the number here answers a different question: *given* the
+/// measured ratio, is keeping this nursery cheaper than evacuating it? Keeping
+/// costs `(1 − ratio) × young bytes` of old-gen garbage ONCE, bounded by the
+/// scavenge nursery cap, and charged to [`PROMOTED_DEAD_BUDGET_BYTES`] like
+/// every other promotion. At 500‰ over a 16 MB cap that is ≤ 8 MB — a quarter
+/// of that budget — against a copy of every surviving object.
+///
+/// # The measured population it separates
+///
+/// Cycle-0 young survival over `gc-handoff/bench` + `gc-handoff/apps`
+/// (`gc-handoff/c0/cycles.py`, 2026-08-12, `origin/main` @ `8260a9e50`):
+///
+/// | ‰ | programs |
+/// |--:|---|
+/// | 0–3 | `churn`, `churn_alloc`, `push_cls`, `push_num`, `cycles`, `pipeline`, `tree`, `tree_wide` |
+/// | 25 | `shapes` |
+/// | **770** | **`asyncpipe`** |
+/// | 992–1000 | `retain`, `retain1`, `retain_wide`, `retain_wide1`, `deeplist` |
+///
+/// The band between 25 and 770 is empty and 500 is its midpoint. `asyncpipe`
+/// is the reason the steady-state 950 is the wrong number here and was
+/// measured, not assumed: promoting its one cycle is −12% instructions retired
+/// and −17% peak RSS, while rolling it back would make it pay a 172 415-object
+/// mark pass for nothing.
+pub(super) const FIRST_CYCLE_PROMOTE_SURVIVAL_PERMILLE: u64 = 500;
+
+/// The guards every in-place promotion shares, whatever supplies the ratio.
+fn in_place_promotion_admissible() -> bool {
     // In test builds the path is opt-in per thread. The unit suite drives
     // `gc_collect_minor` directly and asserts object IDENTITY across it
     // ("the survivor is at a new address"), so a policy keyed on the whole
@@ -236,9 +278,71 @@ pub(super) fn should_promote_young_in_place() -> bool {
     if gc_force_evacuate_enabled() {
         return false;
     }
-    if PROMOTED_DEAD_BYTES.with(Cell::get) >= PROMOTED_DEAD_BUDGET_BYTES {
+    PROMOTED_DEAD_BYTES.with(Cell::get) < PROMOTED_DEAD_BUDGET_BYTES
+}
+
+/// May the FIRST copying minor of this thread *attempt* a promotion? (#7937)
+///
+/// The steady-state policy declines here by construction — it reads the
+/// previous cycle's ratio and there is no previous cycle — and cycle 0 is the
+/// largest single GC pause on the fully-live workloads precisely because of
+/// that (58–81% of all GC pause on the `retain*` cluster).
+///
+/// This answers only "may it try". The decision itself is taken AFTER the
+/// trace, from this cycle's own measurement, by
+/// [`first_cycle_promotion_holds_up`] — see `gc::copying` for the rollback and
+/// the proof that it restores the pre-cycle state exactly.
+pub(super) fn should_attempt_first_cycle_promotion() -> bool {
+    if LAST_YOUNG_SURVIVAL_PERMILLE.with(Cell::get).is_some() {
         return false;
     }
+    in_place_promotion_admissible()
+}
+
+/// Did the attempt's own trace agree with it?
+///
+/// `young_bytes` is the from-space size the cycle started with, `live_bytes`
+/// what the trace marked. Below the threshold the caller rolls the promotion
+/// back and re-runs the cycle as an ordinary evacuation.
+pub(super) fn first_cycle_promotion_holds_up(young_bytes: usize, live_bytes: usize) -> bool {
+    if young_bytes == 0 {
+        return false;
+    }
+    let permille = (live_bytes as u64)
+        .saturating_mul(1000)
+        .checked_div(young_bytes as u64)
+        .unwrap_or(0);
+    permille >= FIRST_CYCLE_PROMOTE_SURVIVAL_PERMILLE
+}
+
+/// Count a first-cycle attempt and how it resolved. These are the live-subject
+/// counters: a corpus that never attempted the path proves nothing about it,
+/// and one that attempted and never rolled back proves nothing about the
+/// rollback — which is the half that can corrupt the heap.
+pub(super) fn note_first_cycle_promotion(rolled_back: bool) {
+    FIRST_CYCLE_PROMOTION_ATTEMPTS.with(|c| c.set(c.get().saturating_add(1)));
+    if rolled_back {
+        FIRST_CYCLE_PROMOTION_ROLLBACKS.with(|c| c.set(c.get().saturating_add(1)));
+    }
+}
+
+pub fn first_cycle_promotion_attempts() -> u64 {
+    FIRST_CYCLE_PROMOTION_ATTEMPTS.with(Cell::get)
+}
+
+pub fn first_cycle_promotion_rollbacks() -> u64 {
+    FIRST_CYCLE_PROMOTION_ROLLBACKS.with(Cell::get)
+}
+
+/// Should this copying minor promote the young generation whole, in place?
+pub(super) fn should_promote_young_in_place() -> bool {
+    if !in_place_promotion_admissible() {
+        return false;
+    }
+    // `None` — no copying minor has run on this thread — deliberately does NOT
+    // promote here. That case is `should_attempt_first_cycle_promotion`, which
+    // decides from its own trace rather than from a measurement it does not
+    // have.
     LAST_YOUNG_SURVIVAL_PERMILLE
         .with(Cell::get)
         .is_some_and(|permille| permille >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE)

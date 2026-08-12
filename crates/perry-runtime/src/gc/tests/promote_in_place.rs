@@ -13,12 +13,13 @@
 //!    swept-live-object crash one cycle later.
 
 use super::super::promote_in_place::{
-    clear_young_survival_for_tests, note_untraced_promotion, parse_promote_in_place,
-    promoted_dead_bytes_since_full, seed_promoted_dead_bytes_for_tests,
+    clear_young_survival_for_tests, first_cycle_promotion_holds_up, note_untraced_promotion,
+    parse_promote_in_place, promoted_dead_bytes_since_full, seed_promoted_dead_bytes_for_tests,
     seed_untraced_promoted_bytes_for_tests, seed_young_survival_for_tests,
-    untraced_promotion_budget_with, InPlacePromotionTestGuard, PROMOTED_DEAD_BUDGET_BYTES,
-    PROMOTE_SURVIVAL_THRESHOLD_PERMILLE, UNTRACED_PROMOTION_CEILING_BYTES,
-    UNTRACED_PROMOTION_FLOOR_BYTES, UNTRACED_PROMOTION_SURVIVAL_PERMILLE,
+    should_attempt_first_cycle_promotion, untraced_promotion_budget_with,
+    InPlacePromotionTestGuard, PROMOTED_DEAD_BUDGET_BYTES, PROMOTE_SURVIVAL_THRESHOLD_PERMILLE,
+    UNTRACED_PROMOTION_CEILING_BYTES, UNTRACED_PROMOTION_FLOOR_BYTES,
+    UNTRACED_PROMOTION_SURVIVAL_PERMILLE,
 };
 use super::super::*;
 use super::support::*;
@@ -526,6 +527,142 @@ fn a_low_survival_cycle_still_evacuates_and_moves_the_object() {
         "the ordinary copying path must still relocate"
     );
     assert!(crate::arena::pointer_in_nursery(after));
+}
+
+// ---------------------------------------------------------------------------
+// #7937: the FIRST copying minor decides from its own trace
+// ---------------------------------------------------------------------------
+
+#[test]
+fn only_an_unmeasured_thread_may_attempt_the_first_cycle_promotion() {
+    let _guard = InPlacePromotionTestGuard::enabled(1000);
+    clear_young_survival_for_tests();
+    assert!(
+        should_attempt_first_cycle_promotion(),
+        "no copying minor has run, so there is nothing for the steady-state \
+         policy to read and the attempt is the only way to find out"
+    );
+    // Once ANY measurement exists the steady-state policy owns the decision —
+    // including a measurement of "almost nothing survived", which is a
+    // genuinely different state from `None`.
+    for measured in [0u64, 500, 1000] {
+        seed_young_survival_for_tests(measured);
+        assert!(
+            !should_attempt_first_cycle_promotion(),
+            "{measured} permille is a measurement; the first-cycle attempt must \
+             not re-run on a thread that already has one"
+        );
+    }
+}
+
+#[test]
+fn the_first_cycle_attempt_shares_every_guard_the_steady_state_policy_has() {
+    // The dead-byte budget is the one that can differ between the two — it is
+    // read by both, and a first-cycle attempt that ignored it would park a
+    // nursery of garbage the budget exists to bound.
+    let _guard = InPlacePromotionTestGuard::enabled(1000);
+    clear_young_survival_for_tests();
+    assert!(should_attempt_first_cycle_promotion());
+    seed_promoted_dead_bytes_for_tests(PROMOTED_DEAD_BUDGET_BYTES);
+    assert!(
+        !should_attempt_first_cycle_promotion(),
+        "the running dead-byte budget must bound the first cycle too"
+    );
+}
+
+#[test]
+fn first_cycle_threshold_separates_the_measured_cycle0_population() {
+    // Cycle-0 young survival measured over gc-handoff/bench + gc-handoff/apps
+    // (gc-handoff/c0/cycles.py, 2026-08-12). This is the claim
+    // FIRST_CYCLE_PROMOTE_SURVIVAL_PERMILLE rests on, and the band between the
+    // two groups is empty — 25 to 770 — so the constant is not a tuning dial
+    // any more than the steady-state one is.
+    let young = 16 * 1024 * 1024usize;
+    // churn, churn_alloc, push_cls, push_num, cycles, pipeline, tree,
+    // tree_wide, shapes.
+    for permille in [0u64, 1, 2, 3, 25] {
+        assert!(
+            !first_cycle_promotion_holds_up(young, young * permille as usize / 1000),
+            "{permille} permille at cycle 0 must roll back and evacuate"
+        );
+    }
+    // asyncpipe (770), then retain/retain1/retain_wide/retain_wide1/deeplist.
+    for permille in [770u64, 992, 1000] {
+        assert!(
+            first_cycle_promotion_holds_up(young, young * permille as usize / 1000),
+            "{permille} permille at cycle 0 must keep the promotion"
+        );
+    }
+    // An empty young generation is not a fully-live one: 0/0 must not read as
+    // 1000 permille and keep a promotion of nothing.
+    assert!(!first_cycle_promotion_holds_up(0, 0));
+}
+
+/// The rollback is the half that can corrupt the heap, so it is driven end to
+/// end rather than asserted about: an unmeasured thread whose nursery is mostly
+/// garbage must ATTEMPT the promotion, read its own trace, undo the retag, and
+/// come out the far side having EVACUATED — object relocated, still live, still
+/// in the nursery.
+///
+/// A rollback that forgot to undo the retag would leave the survivor at its old
+/// address in old-gen, so `assert_ne!` on the address is the teeth; a rollback
+/// that forgot `clear_marks` would leave the second attempt's trace unable to
+/// mark anything, so `copied_objects` would read 0.
+#[test]
+fn a_first_cycle_attempt_that_its_own_trace_refutes_rolls_back_and_evacuates() {
+    let _guard = CopyingNurseryTestGuard::new(4);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _promote = InPlacePromotionTestGuard::enabled(1000);
+    clear_young_survival_for_tests();
+
+    let attempts_before = first_cycle_promotion_attempts();
+    let rollbacks_before = first_cycle_promotion_rollbacks();
+
+    // One live leaf in a nursery sized for many: survival is far under the
+    // threshold, so the attempt's own trace refutes it.
+    let child = young_leaf();
+    for _ in 0..64 {
+        let _garbage = young_leaf();
+    }
+    js_shadow_slot_set(0, ptr_bits(child));
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_eq!(
+        first_cycle_promotion_attempts() - attempts_before,
+        1,
+        "the first cycle must have ATTEMPTED the promotion — a test that never \
+         entered the path proves nothing about it"
+    );
+    assert_eq!(
+        first_cycle_promotion_rollbacks() - rollbacks_before,
+        1,
+        "and its own trace must have refuted it"
+    );
+    assert!(
+        !trace.copying_nursery.in_place_promotion,
+        "the cycle that actually ran is the rolled-back-to evacuation"
+    );
+    assert!(
+        trace.copying_nursery.copied_objects >= 1,
+        "the second attempt must have marked and copied the survivor; zero here \
+         means the rollback left stale marks behind"
+    );
+
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(after, child, "a rolled-back cycle still evacuates");
+    assert!(
+        crate::arena::pointer_in_nursery(after),
+        "undoing the retag must put the block back in the young generation — a \
+         survivor in old-gen here means the rollback did not run"
+    );
+    unsafe {
+        assert_ne!(
+            (*header_from_user_ptr(after as *const u8)).size,
+            0,
+            "the relocated survivor must be a live object"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

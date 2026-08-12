@@ -1360,12 +1360,49 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     gc_collect_minor_copying_fast_path_with_eligibility(trace, start, eligibility, trigger_kind)
 }
 
+/// How a copied-minor attempt ended. `RolledBack` is only ever produced by the
+/// #7937 speculative first-cycle promotion, and it means the heap is in exactly
+/// the state it was in when the attempt began.
+enum CopiedMinorAttempt {
+    Done(Option<CopiedMinorFastPathOutcome>),
+    RolledBack,
+}
+
 pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
     eligibility: CopiedMinorEligibility,
-    _trigger_kind: GcTriggerKind,
+    trigger_kind: GcTriggerKind,
 ) -> Option<CopiedMinorFastPathOutcome> {
+    match run_copied_minor_attempt(trace, start, eligibility, trigger_kind, true) {
+        CopiedMinorAttempt::Done(outcome) => outcome,
+        // #7937: the first-cycle promotion attempt read its own trace and the
+        // ratio said evacuate. The retag is undone and the marks are cleared,
+        // so re-deriving eligibility observes the same heap the first attempt
+        // did and the second attempt is an ordinary copying minor. It is
+        // re-derived rather than reused because `CopiedMinorEligibility` owns
+        // the pointer classifier the first attempt consumed; the only cost is
+        // one more preflight, on a cycle that by construction has almost
+        // nothing live to walk.
+        CopiedMinorAttempt::RolledBack => {
+            let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
+            match run_copied_minor_attempt(trace, start, eligibility, trigger_kind, false) {
+                CopiedMinorAttempt::Done(outcome) => outcome,
+                CopiedMinorAttempt::RolledBack => {
+                    unreachable!("a non-speculative copied-minor attempt cannot roll back")
+                }
+            }
+        }
+    }
+}
+
+fn run_copied_minor_attempt(
+    trace: &mut Option<GcCycleTrace>,
+    start: Instant,
+    eligibility: CopiedMinorEligibility,
+    _trigger_kind: GcTriggerKind,
+    may_speculate: bool,
+) -> CopiedMinorAttempt {
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
         trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;
@@ -1396,7 +1433,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         );
     }
     if !eligibility.eligible {
-        return None;
+        return CopiedMinorAttempt::Done(None);
     }
     let preflight_skipped = eligibility.preflight_skipped;
     let malloc_sweep_due = eligibility.malloc_sweep_due;
@@ -1416,7 +1453,32 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // preflight above ran against the pre-retag labels, which is correct — it
     // answers "may this cycle move objects at all", a question the retag does
     // not change.
-    let promotion = if super::should_promote_young_in_place() {
+    // #7937: the FIRST copying minor has no previous cycle to read, so the
+    // steady-state policy above always declines — and on the fully-live
+    // workloads that one cycle is 58–81% of all GC pause. It may instead
+    // ATTEMPT the promotion and decide from its own trace, because on a
+    // promoting cycle the trace IS a mark pass over the blocks it would keep.
+    //
+    // Two preconditions, and both are about making the rollback's obligations
+    // provably empty rather than about liveness:
+    //
+    // * `malloc_registry_empty_at_start` is what makes `skip_remembering` true
+    //   below, and `skip_remembering` is what stops the attempt from touching
+    //   the remembered set at all — `visit_slot_with_parent`'s
+    //   `sticky.remember_slot` is gated on it, and so is
+    //   `rebuild_evacuated_old_to_young_remembered_set`. Without it a rollback
+    //   would have to un-remember, and a dropped old→young edge is a
+    //   swept-live-object crash a cycle later.
+    // * `untraced_promotion_instrument_veto` keeps the stress/verify
+    //   instruments off this path: each of them takes the trace as its subject,
+    //   and a rolled-back attempt would show them a trace that produced nothing
+    //   followed by a second one — the "instrument stopped exercising its
+    //   subject" shape, in a mode whose whole purpose is to exercise it.
+    let speculate_first_cycle = may_speculate
+        && ptrs.malloc_registry_empty_at_start
+        && !untraced_promotion_instrument_veto()
+        && super::should_attempt_first_cycle_promotion();
+    let promotion = if super::should_promote_young_in_place() || speculate_first_cycle {
         crate::arena::retag_young_for_in_place_promotion()
     } else {
         crate::arena::InPlacePromotion::default()
@@ -1649,6 +1711,40 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     }
     trace_phase_record(trace, "copying_nursery", phase_start);
 
+    // #7937: the attempt's own trace has finished, so the ratio it was missing
+    // now exists. This is the decision point the steady-state policy cannot
+    // have — it commits before the trace and corrects on the NEXT cycle; here
+    // the correction is available within the cycle, and nothing has been handed
+    // to old-gen yet.
+    //
+    // Rolling back restores the pre-cycle state exactly, and the list of things
+    // to restore is exactly two long:
+    //
+    // * the retag (`undo_in_place_promotion_retag`) — the only physical
+    //   commitment, since nothing moved and no block changed arenas;
+    // * the marks the trace set (`clear_marks` over `marked_headers` +
+    //   `moved_headers`, which is where `mark_promoted_young` puts every object
+    //   it touched).
+    //
+    // Everything else the attempt did is a PROVABLE no-op on a promoting cycle
+    // and needs no undoing: after the retag no address classifies as `Nursery`,
+    // so `move_young` is unreachable, every root rewrite and slot rewrite is a
+    // no-op, and `skip_remembering` (a precondition of speculating at all) means
+    // no remembered-set entry was created or consumed. `remembered_set_clear()`
+    // and the from-space reset are both below this point.
+    if speculate_first_cycle && promoting_in_place {
+        let holds_up =
+            super::first_cycle_promotion_holds_up(from_space_bytes, collector.live_from_bytes);
+        super::note_first_cycle_promotion(!holds_up);
+        if !holds_up {
+            unsafe {
+                collector.clear_marks();
+            }
+            crate::arena::undo_in_place_promotion_retag(&promotion);
+            return CopiedMinorAttempt::RolledBack;
+        }
+    }
+
     // Weak semantics for the copied-minor fast path. This path bypasses
     // cycle.rs's `WeakProcessing` subphase entirely, so before this block
     // existed NOTHING here tombstoned dead weak targets — and the scan
@@ -1761,6 +1857,8 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         .bytes
         .saturating_sub(promotion_stats.live_bytes);
     collector.stats.in_place_sparse_blocks = promotion_stats.sparse_blocks;
+    collector.stats.in_place_dead_blocks = promotion_stats.dead_blocks;
+    collector.stats.in_place_dead_block_bytes = promotion_stats.dead_block_bytes;
     if let Some(trace) = trace.as_mut() {
         trace.old_pages = crate::arena::old_page_summary();
     }
@@ -1943,10 +2041,10 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         );
     }
     super::scanner_profile::report_and_reset("copying_minor");
-    Some(CopiedMinorFastPathOutcome {
+    CopiedMinorAttempt::Done(Some(CopiedMinorFastPathOutcome {
         freed_bytes,
         malloc_swept: malloc_sweep_due,
-    })
+    }))
 }
 
 fn finalize_dead_copied_minor_from_space_side_allocations() {

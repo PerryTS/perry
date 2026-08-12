@@ -252,6 +252,15 @@ pub(super) struct CopyingNurseryTraceStats {
     /// promotion is the wrong answer for. Non-zero here means the policy
     /// threshold is admitting cycles it should not.
     pub(super) in_place_sparse_blocks: usize,
+    /// #7937: promoted blocks with ZERO live objects, and their bytes. The
+    /// blocks a promotion kept for nothing — no live object needed their
+    /// addresses held still, so the ordinary from-space reset would have
+    /// recycled them. Distinct from `in_place_sparse_blocks` (under 50% live)
+    /// and the distinction is load-bearing: measured on a speculatively
+    /// promoting cycle 0, `churn` reads 17 sparse of 18 blocks but 15 FULLY
+    /// dead, `tree_wide` 61 sparse and 60 fully dead.
+    pub(super) in_place_dead_blocks: usize,
+    pub(super) in_place_dead_block_bytes: usize,
     /// Young-survival ratio (permille) this cycle measured — the input the
     /// NEXT cycle's promotion decision is taken from.
     pub(super) young_survival_permille: u64,
@@ -1070,6 +1079,8 @@ impl GcCycleTrace {
             "in_place_promoted_blocks": self.copying_nursery.in_place_promoted_blocks,
             "in_place_dead_bytes": self.copying_nursery.in_place_dead_bytes,
             "in_place_sparse_blocks": self.copying_nursery.in_place_sparse_blocks,
+            "in_place_dead_blocks": self.copying_nursery.in_place_dead_blocks,
+            "in_place_dead_block_bytes": self.copying_nursery.in_place_dead_block_bytes,
             "young_survival_permille": self.copying_nursery.young_survival_permille,
             "remembering_skipped": self.copying_nursery.remembering_skipped,
         });

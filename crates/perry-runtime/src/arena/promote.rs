@@ -161,6 +161,11 @@ pub(crate) struct InPlacePromotionStats {
     /// Blocks whose live fraction was below 50% — the shape that would have
     /// been better served by evacuation. Zero on every benchmark measured.
     pub(crate) sparse_blocks: usize,
+    /// Blocks with ZERO live objects, and their bytes. These are the blocks a
+    /// promotion keeps for nothing: no live object needs their addresses held
+    /// still, so the ordinary from-space reset would have recycled them.
+    pub(crate) dead_blocks: usize,
+    pub(crate) dead_block_bytes: usize,
 }
 
 /// Retag every in-use young block as old-gen `PromotedYoung`.
@@ -201,6 +206,27 @@ pub(crate) fn retag_young_for_in_place_promotion() -> InPlacePromotion {
         );
     }
     promotion
+}
+
+/// Put every block [`retag_young_for_in_place_promotion`] captured back in the
+/// young generation, in the space it came from (#7937).
+///
+/// This is the whole of the physical rollback for a speculative first-cycle
+/// promotion, and it is complete because the retag is the whole of the physical
+/// commitment: nothing moved, no block changed arenas, no bump pointer moved,
+/// and `finish_in_place_promotion` — the only step that hands a block to
+/// `OLD_ARENA` — has not run. The caller owns the two remaining obligations
+/// (clear the marks the trace set, and do not consume the remembered set); see
+/// `gc::copying`'s rollback for why the list is exactly that long.
+pub(crate) fn undo_in_place_promotion_retag(promotion: &InPlacePromotion) {
+    for block in &promotion.blocks {
+        let space = match block.source {
+            PromotionSource::Eden => HeapSpace::NurseryEden,
+            PromotionSource::Survivor(0) => HeapSpace::Survivor0,
+            PromotionSource::Survivor(_) => HeapSpace::Survivor1,
+        };
+        retag_block_space(block.base, block.size, HeapGeneration::Nursery, space);
+    }
 }
 
 /// Bytes still in use in blocks that classify as young generation. The premise
@@ -278,6 +304,10 @@ pub(crate) fn finish_in_place_promotion(
         stats.live_bytes += live_bytes;
         if taken.offset > 0 && live_bytes * 2 < taken.offset {
             stats.sparse_blocks += 1;
+        }
+        if taken.offset > 0 && live_objects == 0 {
+            stats.dead_blocks += 1;
+            stats.dead_block_bytes += taken.offset;
         }
         moved_blocks.push(taken);
     }

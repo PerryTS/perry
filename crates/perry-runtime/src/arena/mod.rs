@@ -105,8 +105,8 @@ pub use reset::{arena_reset_all_blocks_to_zero, arena_reset_empty_blocks};
 #[cfg(debug_assertions)]
 pub(crate) use promote::young_in_use_bytes_after_retag;
 pub(crate) use promote::{
-    finish_in_place_promotion, retag_young_for_in_place_promotion, InPlacePromotion,
-    InPlacePromotionStats, PromotionLiveness,
+    finish_in_place_promotion, retag_young_for_in_place_promotion, undo_in_place_promotion_retag,
+    InPlacePromotion, InPlacePromotionStats, PromotionLiveness,
 };
 
 // quarantine.rs (#7154 from-space protection; default-off)

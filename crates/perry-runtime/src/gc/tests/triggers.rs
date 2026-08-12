@@ -288,6 +288,63 @@ fn test_old_reclaim_band_is_proportional_and_promotion_credits_baseline() {
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(prev));
 }
 
+/// #7937: the ABSOLUTE first-crossing arm is granularity-sensitive, and the
+/// RETAINING latch is what stops that from costing a futile full.
+///
+/// `baseline` is credited by every promotion, so `old_in_use >= T && baseline
+/// < T` is a race between two quantities moving in the same direction at
+/// different step sizes — whether it fires depends on the promotion SCHEDULE,
+/// not on the heap. The numbers below are the ones measured on `retain.ts`
+/// when the first copying minor started promoting in place: `old_in_use =
+/// 52.3 MB`, `baseline = 35.5 MB`, `T = 48 MB`, proportional arm correctly
+/// declining, and it bought two full mark-sweeps costing 588 ms.
+///
+/// Both states are asserted: with the young generation dying the arm still
+/// fires (it is the only thing that makes the first full happen at all), and
+/// with the young generation provably retaining it does not.
+#[test]
+fn the_absolute_old_reclaim_arm_stands_down_on_a_retaining_heap() {
+    let _guard = GcTestIsolationGuard::new();
+    let threshold = gc_old_gen_reclaim_threshold_dyn_bytes();
+    // The measured `retain` state, re-derived against whatever the threshold
+    // resolves to on this host so the test cannot drift away from it.
+    let old_in_use = threshold + threshold / 12;
+    let baseline = threshold - threshold / 4;
+    assert!(
+        old_in_use.saturating_sub(baseline) < gc_old_reclaim_growth_band_bytes(baseline),
+        "the proportional arm must be declining, or this test is not about the \
+         absolute one"
+    );
+
+    // Young generation dying: the arm is the only thing that can schedule the
+    // first full, so it must still fire.
+    note_copying_minor_young_survival(0);
+    assert!(!major_pacing_retaining());
+    assert!(
+        old_reclaim_pressure_due(old_in_use, baseline),
+        "on a heap whose young generation is dying the absolute crossing must \
+         still schedule a full"
+    );
+
+    // Young generation retaining: a full mark-sweep cannot lower the number
+    // being watched, so firing here is the #7592 futile-full shape.
+    note_copying_minor_young_survival(1000);
+    assert!(major_pacing_retaining());
+    assert!(
+        !old_reclaim_pressure_due(old_in_use, baseline),
+        "a retaining heap's old-gen growth is credited live data; the absolute \
+         crossing must defer to the proportional arm"
+    );
+
+    // Deferred, not removed: the proportional arm still bounds the exposure.
+    let far_past = baseline + gc_old_reclaim_growth_band_bytes(baseline);
+    assert!(
+        old_reclaim_pressure_due(far_past, baseline),
+        "the proportional arm must still fire while retaining, or old-gen \
+         growth would be unbounded"
+    );
+}
+
 /// #7592: a handoff full must not repeat without the copying minor it exists to
 /// enable.
 ///

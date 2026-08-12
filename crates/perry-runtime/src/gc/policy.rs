@@ -1404,8 +1404,33 @@ pub(super) fn gc_old_reclaim_growth_band_bytes(baseline: usize) -> usize {
 
 #[inline]
 pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bool {
-    (old_in_use >= gc_old_gen_reclaim_threshold_dyn_bytes()
-        && baseline < gc_old_gen_reclaim_threshold_dyn_bytes())
+    let threshold = gc_old_gen_reclaim_threshold_dyn_bytes();
+    // #7937: the absolute first-crossing arm is exempted while the heap is
+    // measurably RETAINING, for the reason #7592 already exempted the
+    // proportional arm two functions down — and it is the arm that actually
+    // fires.
+    //
+    // `baseline` is credited by every promotion
+    // (`credit_promoted_bytes_to_old_baseline`), so `old_in_use >= T &&
+    // baseline < T` is a race between two quantities that move in the same
+    // direction at different granularities. Whether it fires therefore depends
+    // on the SIZE OF THE PROMOTION STEPS, not on any property of the heap.
+    // Measured on `retain.ts` (#7937, `gc-handoff/CYCLE0-NOTES.md`): same
+    // program, same live set, same total promotion — changing the schedule from
+    // (18.7 MB, 34.6 MB) to (17.7 MB, 17.8 MB) makes it fire twice and buys two
+    // full mark-sweeps costing 588 ms against a 55 ms GC budget, at
+    // `old_in_use=52.3 MB, baseline=35.5 MB, T=48 MB` with the proportional arm
+    // correctly declining (`band=128 MB`) and `retaining=true`.
+    //
+    // That is the futile-full shape #7592 removed one trigger over: a heap
+    // whose young generation is not dying is retaining live data, and a full
+    // mark-sweep cannot lower the number being watched. The proportional arm
+    // still bounds the exposure, so this defers reclamation, it does not remove
+    // it — the same trade the RETAINING multiplier already makes.
+    let crossed_absolute_threshold = old_in_use >= threshold
+        && baseline < threshold
+        && !GC_MAJOR_PACING_RETAINING.with(|c| c.get());
+    crossed_absolute_threshold
         || old_in_use.saturating_sub(baseline) >= gc_old_reclaim_growth_band_bytes(baseline)
 }
 
