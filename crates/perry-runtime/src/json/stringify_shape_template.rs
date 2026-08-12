@@ -172,10 +172,12 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // every property by name, so a 6-key record reports `field_count == 4`.
     //
     // The old `min(keys_len, field_count)` therefore truncated EVERY element of
-    // a homogeneous array to the first 4 properties with no diagnostic — silent
-    // data loss in `JSON.stringify(JSON.parse(x))` (#7264). Latent since the
-    // template landed (v0.5.65); exposed for ordinary 5–8-field records when
-    // #6712 lowered `INLINE_SLOT_FLOOR` from 8 to 4.
+    // a homogeneous array to the first `INLINE_SLOT_FLOOR` properties with no
+    // diagnostic — silent data loss in `JSON.stringify(JSON.parse(x))` (#7264).
+    // Latent since the template landed (v0.5.65); exposed for ordinary
+    // 5–8-field records when #6712 lowered `INLINE_SLOT_FLOOR` from 8 to 4
+    // (#7916 then lowered it again to 2, which is why this must never go back
+    // to reading `field_count`).
     //
     // `min` was never needed for the opposite skew either: a pre-sized object
     // (`js_object_alloc(0, 8)` holding 2 real keys) has `field_count > keys_len`,

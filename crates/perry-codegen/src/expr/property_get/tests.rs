@@ -332,16 +332,18 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
 /// notices.
 #[test]
 fn cached_slot_bound_is_a_disjunction_not_a_materialised_max() {
+    let floor = crate::target_layout::INLINE_SLOT_FLOOR_LIT;
     let ir = emit(false, None);
     assert!(
-        ir.contains("icmp ult i64 ") && ir.contains(", 4"),
+        ir.lines()
+            .any(|l| l.contains("icmp ult i64 ") && l.ends_with(&format!(", {floor}"))),
         "test premise: the emitted bound compares a slot against \
-         INLINE_SLOT_FLOOR:\n{ir}"
+         INLINE_SLOT_FLOOR ({floor}):\n{ir}"
     );
     assert!(
-        !ir.contains(", i64 4, i64 %"),
-        "a `select …, i64 4, i64 %fc` is the materialised max this deliberately \
-         does not emit:\n{ir}"
+        !ir.contains(&format!(", i64 {floor}, i64 %")),
+        "a `select …, i64 {floor}, i64 %fc` is the materialised max this \
+         deliberately does not emit:\n{ir}"
     );
 }
 

@@ -1375,7 +1375,7 @@ mod tests {
         // The array fast path built its shape template with
         // `min(keys_len, field_count)`. `field_count` is PHYSICAL — it never
         // exceeds the object's inline slot allocation, so an object grown by
-        // name past `INLINE_SLOT_FLOOR` reports the floor (4) while the
+        // name past `INLINE_SLOT_FLOOR` reports the floor while the
         // remaining values live in overflow storage. `JSON.parse`'s tape
         // materializer produces exactly that shape (`js_object_alloc(0, 0)` +
         // `js_object_set_field_by_name` per key), so `JSON.stringify` of a

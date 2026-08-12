@@ -46,9 +46,61 @@ pub fn object_header_size_bytes(target_triple: &str) -> u64 {
     }
 }
 
+/// Minimum number of inline field slots `perry-runtime` allocates for EVERY
+/// object, mirroring `perry_runtime::object::INLINE_SLOT_FLOOR`.
+///
+/// perry-codegen deliberately does not depend on perry-runtime (the same reason
+/// `PIC_CACHE_WORDS` is duplicated), so the pairing is held by
+/// `inline_slot_floor_matches_runtime` here and
+/// `inline_slot_floor_matches_codegen` in `perry-runtime/src/object/tests.rs`:
+/// change one and both fail.
+///
+/// Two independent consumers, with OPPOSITE failure modes — which is why they
+/// must share one constant rather than two spellings of the same digit:
+///
+/// - **`lower_call/new_alloc.rs`** sizes the inline-`new` bump allocation as
+///   `max(field_count, INLINE_SLOT_FLOOR)` slots. A value SMALLER than the
+///   runtime's makes the runtime's bound checks admit slots the emitted
+///   allocation never reserved → writes into the neighbouring arena object.
+/// - **the emitted property bounds checks** (`expr/property_get`,
+///   `expr/proxy_reflect`) gate a raw inline slot load/store on
+///   `slot < max(field_count, INLINE_SLOT_FLOOR)`. A value LARGER than the
+///   runtime's widens those raw accesses past the allocation.
+///
+/// So codegen must be exactly equal, not conservatively either way.
+pub const INLINE_SLOT_FLOOR: u64 = 2;
+
+/// `INLINE_SLOT_FLOOR` as the string literal the IR emitters splice in.
+pub const INLINE_SLOT_FLOOR_LIT: &str = "2";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Paired with `inline_slot_floor_matches_codegen` in
+    /// `perry-runtime/src/object/tests.rs` (#7916).
+    #[test]
+    fn inline_slot_floor_matches_runtime() {
+        assert_eq!(
+            INLINE_SLOT_FLOOR, 2,
+            "perry-runtime's object::INLINE_SLOT_FLOOR is 2; update both sides together"
+        );
+        assert_eq!(
+            INLINE_SLOT_FLOOR_LIT,
+            INLINE_SLOT_FLOOR.to_string(),
+            "the spliced literal must be the constant"
+        );
+        // The inline-`new` allocation is `GcHeader + ObjectHeader + 8 * slots`
+        // and the bump allocator's offset invariant requires a multiple of 8.
+        for triple in ["aarch64-apple-darwin", "arm64_32-apple-watchos"] {
+            let total = 8 + object_header_size_bytes(triple) + 8 * INLINE_SLOT_FLOOR;
+            assert_eq!(
+                total % 8,
+                0,
+                "{triple}: floor-sized allocation must be 8-aligned"
+            );
+        }
+    }
 
     #[test]
     fn object_header_size_matches_pointer_width() {

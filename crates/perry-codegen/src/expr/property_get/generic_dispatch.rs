@@ -18,9 +18,10 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 /// **Must equal `perry_runtime::object::field_get_set::PIC_CACHE_WORDS`** —
 /// the runtime writes this memory through a `*mut [i64; PIC_CACHE_WORDS]`, so a
 /// smaller global here is an out-of-bounds store. perry-codegen does not depend
-/// on perry-runtime (the same reason `INLINE_SLOT_FLOOR` is spelled `4` inline
-/// below), so the pairing is held by `pic_cache_layout_matches_runtime` here and
-/// `pic_cache_words_match_codegen` in the runtime: change one and both fail.
+/// on perry-runtime (the same reason `INLINE_SLOT_FLOOR` is duplicated in
+/// `target_layout`), so the pairing is held by `pic_cache_layout_matches_runtime`
+/// here and `pic_cache_words_match_codegen` in the runtime: change one and both
+/// fail.
 pub(crate) const PIC_CACHE_WORDS: usize = 12;
 /// First word of the polymorphic way array (words 0..2 are the MRU entry and
 /// word 3 is the gate). Mirrors the runtime's `PIC_WAY_BASE`.
@@ -40,13 +41,15 @@ pub(crate) const PIC_WAY_STATE: usize = 3;
 /// Spelled as the equivalent disjunction `slot < FLOOR || slot < field_count`
 /// rather than as a `max` followed by one compare. The predicate is identical
 /// for every input (`x < max(a, b)` ⟺ `x < a ∨ x < b`), but the `max` had to be
-/// materialised — `mov w, #4` / `cmp` / `csel` — and that `csel` was the single
-/// hottest instruction in `interp.ts` (4.65% of `evalNode`, #7907), because it
-/// sits on the dependency chain out of the `field_count` load. The disjunction
-/// has no such node: LLVM folds the pair into `cmp` + `ccmp`, and the
-/// `slot < 4` half does not depend on the load at all.
+/// materialised — `mov w, #FLOOR` / `cmp` / `csel` — and that `csel` was the
+/// single hottest instruction in `interp.ts` (4.65% of `evalNode`, #7907),
+/// because it sits on the dependency chain out of the `field_count` load. The
+/// disjunction has no such node: LLVM folds the pair into `cmp` + `ccmp`, and
+/// the `slot < FLOOR` half does not depend on the load at all.
 fn emit_slot_in_bounds(ctx: &mut FnCtx<'_>, slot: &str, field_count: &str) -> String {
-    let below_floor = ctx.block().icmp_ult(I64, slot, "4"); // INLINE_SLOT_FLOOR
+    let below_floor = ctx
+        .block()
+        .icmp_ult(I64, slot, crate::target_layout::INLINE_SLOT_FLOOR_LIT);
     let below_count = ctx.block().icmp_ult(I64, slot, field_count);
     ctx.block().or(I1, &below_floor, &below_count)
 }
@@ -535,7 +538,7 @@ pub(crate) fn lower_generic_property_get(
     // slots live in its OVERFLOW map) — a slot primed from a
     // larger-capacity sibling must not drive a raw load past this
     // receiver's field region. `alloc_limit = max(field_count,
-    // INLINE_SLOT_FLOOR=4)` mirrors the miss handler's cacheability
+    // INLINE_SLOT_FLOOR)` mirrors the miss handler's cacheability
     // rule; an out-of-bounds slot falls to the miss path, which reads
     // the overflow map correctly (and records the guard failure —
     // `record_guard_pass` only fires after the bounds check passes).

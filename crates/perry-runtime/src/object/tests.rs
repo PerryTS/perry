@@ -618,6 +618,96 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
     }
 }
 
+/// #7916: the per-object footprint accounting this issue is about, pinned as an
+/// executable fact rather than a comment.
+///
+/// A two-field object literal is `GcHeader (8) + ObjectHeader (32) + 8 *
+/// max(field_count, INLINE_SLOT_FLOOR)`. At `INLINE_SLOT_FLOOR = 4` that is
+/// **72 bytes to store 16 bytes of payload** and `gc-handoff/bench/retain.ts`
+/// writes 216 MB to hold 48 MB of doubles. Lowering the floor to 2 removes the
+/// two unusable slots.
+///
+/// This reads the size the ALLOCATOR recorded (`GcHeader::size`), not a
+/// recomputation of the same formula, so it fails if any allocation path
+/// silently stops honouring the floor.
+#[test]
+fn two_field_literal_footprint_is_exactly_accounted() {
+    assert_eq!(
+        std::mem::size_of::<ObjectHeader>(),
+        32,
+        "the ObjectHeader half of the accounting: 4 u32 + 2 pointers"
+    );
+    assert_eq!(crate::gc::GC_HEADER_SIZE, 8);
+
+    let keys = b"a\0b\0";
+    let obj = js_object_alloc_with_shape(0x7916_0001, 2, keys.as_ptr(), keys.len() as u32);
+    assert!(!obj.is_null());
+    let recorded = unsafe {
+        let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc).size as usize
+    };
+    let expected = crate::gc::GC_HEADER_SIZE
+        + std::mem::size_of::<ObjectHeader>()
+        + 8 * std::cmp::max(2, crate::object::INLINE_SLOT_FLOOR);
+    assert_eq!(
+        recorded, expected,
+        "a 2-field literal must occupy exactly {expected} bytes"
+    );
+    assert_eq!(
+        recorded, 56,
+        "#7916: the 2-field literal footprint is 56 bytes (was 72 at floor 4). \
+         Raising INLINE_SLOT_FLOOR back to 4 re-adds 16 bytes of unusable slots \
+         to every small object"
+    );
+}
+
+/// Paired with `inline_slot_floor_matches_runtime` in
+/// `perry-codegen/src/target_layout.rs` (#7916).
+///
+/// perry-codegen cannot depend on perry-runtime, so it carries its own copy of
+/// this constant and uses it BOTH to size the inline-`new` bump allocation and
+/// to emit `slot < max(field_count, FLOOR)` bounds checks around raw inline
+/// slot loads/stores. The two failure modes point in opposite directions
+/// (codegen too small under-allocates; codegen too large over-reads), so the
+/// values must be exactly equal — pin the number on both sides.
+#[test]
+fn inline_slot_floor_matches_codegen() {
+    assert_eq!(
+        crate::object::INLINE_SLOT_FLOOR,
+        2,
+        "perry-codegen's target_layout::INLINE_SLOT_FLOOR is 2; update both sides together"
+    );
+}
+
+/// #7916: lowering the floor must not change what `{}` + by-name growth does,
+/// only where the inline/overflow boundary sits. Fields placed past the
+/// boundary go to overflow storage and must still read back — the property
+/// that makes the floor a footprint dial rather than a correctness one.
+#[test]
+fn by_name_growth_past_the_floor_reads_back() {
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        assert!(!obj.is_null());
+        let names: [&[u8]; 6] = [b"k0", b"k1", b"k2", b"k3", b"k4", b"k5"];
+        for (i, n) in names.iter().enumerate() {
+            let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+            js_object_set_field_by_name(obj, key, i as f64);
+        }
+        for (i, n) in names.iter().enumerate() {
+            let key = crate::string::js_string_from_bytes(n.as_ptr(), n.len() as u32);
+            let got = js_object_get_field_by_name(obj, key);
+            assert!(
+                got.is_number() && got.as_number() == i as f64,
+                "field {} ({}) read back as {:#x}; the inline/overflow boundary \
+                 must be invisible to reads",
+                i,
+                std::str::from_utf8(n).unwrap(),
+                got.bits()
+            );
+        }
+    }
+}
+
 #[test]
 fn test_object_alloc_and_fields() {
     let obj = js_object_alloc(1, 3);

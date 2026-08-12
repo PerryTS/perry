@@ -127,10 +127,12 @@ pub extern "C" fn js_object_alloc_with_parent(
     }
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    // Allocate at least 8 field slots to match js_object_set_field_by_name's alloc_limit
-    // assumption (max(field_count, 8)). Without this, empty objects ({}) with field_count=0
-    // would have 0 field slots but js_object_set_field_by_name writes up to 8 fields inline,
-    // causing heap buffer overflow into adjacent arena objects.
+    // Allocate at least INLINE_SLOT_FLOOR field slots to match
+    // js_object_set_field_by_name's alloc_limit assumption
+    // (max(field_count, INLINE_SLOT_FLOOR)). Without this, empty objects ({})
+    // with field_count=0 would have 0 field slots but
+    // js_object_set_field_by_name writes up to the floor inline, causing a heap
+    // buffer overflow into adjacent arena objects.
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
