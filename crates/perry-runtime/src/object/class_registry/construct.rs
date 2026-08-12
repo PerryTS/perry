@@ -632,16 +632,29 @@ pub unsafe extern "C" fn js_new_function_construct(
             // #2889: `new (rebound RegExp)(pattern, flags)`.
             #[cfg(feature = "regex-engine")]
             "RegExp" => {
-                let pattern = if args.is_empty() {
-                    std::ptr::null_mut()
+                let flags_value = if args.len() < 2 {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
                 } else {
-                    crate::builtins::js_string_coerce(args[0])
+                    args[1]
                 };
-                let flags = if args.len() < 2 || args[1].to_bits() == crate::value::TAG_UNDEFINED {
-                    std::ptr::null_mut()
-                } else {
-                    crate::builtins::js_string_coerce(args[1])
-                };
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let flags_value_handle = scope.root_nanbox_f64(flags_value);
+                let (pattern, flags_value) = flags_value_handle.across_nanbox(|| {
+                    if args.is_empty() {
+                        std::ptr::null_mut()
+                    } else {
+                        crate::builtins::js_string_coerce(args[0])
+                    }
+                });
+                let pattern_handle = scope.root_string_ptr(pattern);
+                let (flags, pattern) =
+                    pattern_handle.across_const::<crate::StringHeader, _>(|| {
+                        if flags_value.to_bits() == crate::value::TAG_UNDEFINED {
+                            std::ptr::null_mut()
+                        } else {
+                            crate::builtins::js_string_coerce(flags_value)
+                        }
+                    });
                 let re = crate::regex::js_regexp_new(pattern, flags);
                 return crate::value::js_nanbox_pointer(re as i64);
             }
