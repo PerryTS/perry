@@ -125,8 +125,8 @@ cycle from nursery/RSS pressure and measured movable candidates, and it requires
 generated write barriers to be active.
 
 **The copying minor** — the default nursery path — stores an exact short age in
-the header instead, and its promotion threshold is *adaptive*: a survivor-
-occupancy feedback loop picks the largest number of survivals whose projected
+the header instead, and its promotion threshold is *adaptive*: a
+survivor-occupancy feedback loop picks the largest number of survivals whose projected
 survivor occupancy still fits, capped at 4, and locks to 1 (promote on first
 copy) when the aging round is measurably filtering nothing. There is no fixed
 `PROMOTION_AGE` and no knob; `crates/perry-runtime/src/gc/tenuring.rs` is the

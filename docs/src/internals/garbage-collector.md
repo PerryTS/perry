@@ -90,6 +90,8 @@ collection resets both. `PERRY_GC_PROMOTE_IN_PLACE=0` reverts to
 object-by-object evacuation, and the knobs that exist to make objects *move*
 (`PERRY_GC_FORCE_EVACUATE`, a resolved `PERRY_GC_SCHEDULE_SEED`) turn the path
 off outright rather than silently stop exercising their own subject.
+<!-- gc-symbol: in_place_promotion_leaves_the_object_at_its_address_in_old_gen in crates/perry-runtime/src/gc/tests/promote_in_place.rs -->
+<!-- gc-symbol: promote_in_place_knob_parses_both_states in crates/perry-runtime/src/gc/tests/promote_in_place.rs -->
 
 **Born-old thresholds are type-dependent.** A pointer-free allocation above
 16 KiB
@@ -142,6 +144,7 @@ bounded number of holders per step (`FullWeakProcessingState` in
 `crates/perry-runtime/src/weakref.rs`), so the work is O(registered weak
 holders) rather than O(arena) and a budgeted cycle can return to the mutator
 between holders.
+<!-- gc-symbol: full_atomic_finalize_slices_weak_holders_with_tiny_budget in crates/perry-runtime/src/gc/tests/cycle_state.rs -->
 
 ## Budgets, memory pressure, and released blocks
 
@@ -169,7 +172,10 @@ on an unconstrained desktop/server process, scaled to one eighth of a
 device/container budget with a 1 MiB floor. Overflow is returned to the
 allocator, thread exit drains that thread's pool, and a critical-pressure drain
 request is sticky: it survives unsafe/deferred periods and empties the pool when
-the owed full collection finishes its arena reclamation. Reported heap usage (`js_arena_stats`,
+the owed full collection finishes its arena reclamation.
+<!-- gc-symbol: block_pool_cap_is_process_wide_across_live_threads in crates/perry-runtime/src/arena/tests.rs -->
+<!-- gc-symbol: deferred_critical_pressure_drains_after_the_owed_full_cycle in crates/perry-runtime/src/gc/tests/block_pool_pressure.rs -->
+Reported heap usage (`js_arena_stats`,
 `process.memoryUsage().heapUsed`) is an exact post-collection **live census**
 plus incremental deltas, not a sum of block high-water offsets.
 
@@ -209,6 +215,11 @@ script, workflow, or translation catalog that names a deleted knob.
 `scripts/check_gc_doc_claims.py` does the same job for the rest of this page:
 every path it cites must exist, every number carries a `gc-fact` marker naming
 the constant it came from, and the marker is compared against that constant.
+Several behavioural claims above additionally carry a `gc-symbol` marker naming
+the **test** that proves them — weak-holder slicing, the process-wide pool cap,
+the sticky critical-pressure drain, and in-place promotion. Deleting or renaming
+one of those tests fails `lint`, and changing the behaviour fails `cargo-test`;
+neither can go quiet while this page keeps claiming the old thing.
 
 ## Validation and CI authority
 
