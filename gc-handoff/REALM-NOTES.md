@@ -153,7 +153,11 @@ four tests whose next regression is already absorbed.
 ## Inventory: other process-globals that should be per-realm
 
 Ranked. Every entry is a `static` (not a `thread_local!`) holding an address or
-a per-realm identity. Not yet fixed — filed for follow-up.
+a per-realm identity. Filed as **#8001** (rows 1, 8 and the untriaged tail),
+**#8002** (rows 3-5) and **#8003** (rows 6, 7 and the ruled-out set). Row 2
+(`GLOBAL_THIS_PTR`) is left un-filed: `THREAD_GLOBAL_THIS` already shields the
+common read path and the remaining exposure is the scanner's, which is better
+fixed alongside #8001's `scan_class_inheritance_roots_mut`.
 
 | # | Declaration | File | Hazard | Symptom for agent B |
 |---|---|---|---|---|
@@ -236,8 +240,7 @@ closes approximately zero of the 167.
   `test_gap_gc_define_properties_key_rooting`,
   `test_gap_gc_define_property_descriptor_rooting`. Deliberately NOT fixed here
   — registering them would newly run three GC-rooting witnesses under every
-  matrix arm, which is their authors' call, not this PR's. Filed for whoever
-  owns #7949/#7978.
+  matrix arm, which is their authors' call, not this PR's. Filed as **#8004** for whoever owns #7949/#7978.
 
 `Tests` has been failing on `main` for at least five consecutive days
 (2026-08-08 .. 2026-08-12), which is how both of these survived.
