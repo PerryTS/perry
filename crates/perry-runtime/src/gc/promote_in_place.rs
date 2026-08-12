@@ -239,20 +239,25 @@ pub(super) fn parse_promote_in_place(raw: Option<&str>) -> bool {
 /// # The measured population it separates
 ///
 /// Cycle-0 young survival over `gc-handoff/bench` + `gc-handoff/apps`
-/// (`gc-handoff/c0/cycles.py`, 2026-08-12, `origin/main` @ `8260a9e50`):
+/// (`gc-handoff/c0/cycles.py`, 2026-08-12, `origin/main` @ `d78efca41`):
 ///
 /// | ‰ | programs |
 /// |--:|---|
-/// | 0–3 | `churn`, `churn_alloc`, `push_cls`, `push_num`, `cycles`, `pipeline`, `tree`, `tree_wide` |
-/// | 25 | `shapes` |
-/// | **770** | **`asyncpipe`** |
+/// | 0–1 | `tree`, `tree_wide`, `cycles`, `push_num`, `pipeline`, `churn`, `churn_alloc`, `push_cls` |
+/// | 23–25 | `interp`, `iso_miss`, `shapes`, `asyncpipe` |
 /// | 992–1000 | `retain`, `retain1`, `retain_wide`, `retain_wide1`, `deeplist` |
 ///
-/// The band between 25 and 770 is empty and 500 is its midpoint. `asyncpipe`
-/// is the reason the steady-state 950 is the wrong number here and was
-/// measured, not assumed: promoting its one cycle is −12% instructions retired
-/// and −17% peak RSS, while rolling it back would make it pay a 172 415-object
-/// mark pass for nothing.
+/// 500 sits in the empty band, which on this reading runs 25 → 992 and would
+/// admit the steady-state 950 too.
+///
+/// ★ It is set below 950 anyway, and the reason is a MEASURED moving target
+/// rather than a preference: three days earlier `asyncpipe`'s cycle 0 measured
+/// **770‰** over 172 415 objects, i.e. squarely between the modes, and at 950
+/// it would have paid a 172 415-object mark pass and then rolled back. #7959
+/// changed its shape (25‰ over 6 686 objects) and the outlier vanished. A
+/// cycle-0 threshold that only works while the corpus happens to be bimodal is
+/// fitted to a coincidence; this one is justified by its exposure instead —
+/// see above.
 pub(super) const FIRST_CYCLE_PROMOTE_SURVIVAL_PERMILLE: u64 = 500;
 
 /// The guards every in-place promotion shares, whatever supplies the ratio.

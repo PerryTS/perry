@@ -13,27 +13,35 @@ runs *before* the trace, after which no address classifies as `Nursery`, so
 `FIRST_CYCLE_PROMOTE_SURVIVAL_PERMILLE` (500) the attempt **rolls back** and the
 cycle re-runs as an ordinary copying minor.
 
-Measured on `gc-handoff/bench` + `gc-handoff/apps` (19/19 byte-exact against
-`node --experimental-strip-types`, exit 0), instructions retired and peak RSS —
-both load-independent, which the dev box at load 35–75 required:
+Measured on `gc-handoff/bench` + `gc-handoff/apps` against `main` @ `d78efca41`
+(19/19 byte-exact against `node --experimental-strip-types`, exit 0, both arms
+built here), instructions retired and peak RSS — both load-independent, which
+the dev box at load 35–97 required:
 
-| program | cycles | instructions | peak RSS |
-|---|---|--:|--:|
-| `retain1` | 3 → **2** | **−31%** | **−4%** |
-| `retain_wide1` | 4 → **3** | **−24%** | 0 |
-| `retain` | 5 → **4** | **−23%** | 0 |
-| `deeplist` | 3 → **2** | **−17%** | **−3%** |
-| `retain_wide` | 8 → **6** | **−14%** | 0 |
-| `asyncpipe` | 1 → 1 | **−11%** | **−17%** |
-| `shapes` | 1 → 1 | +1.3% | 0 |
-| everything else | unchanged | ±1% | 0 |
+| program | cycles | full | instructions | peak RSS |
+|---|---|--:|--:|--:|
+| `retain1` | 4 → **2** | 1 → **0** | **−77.0%** | **−28.3%** |
+| `deeplist` | 4 → **2** | 1 → **0** | **−76.9%** | **−29.0%** |
+| `retain_wide1` | 5 → **3** | 1 → **0** | **−66.0%** | **−5.1%** |
+| `retain_wide` | 9 → **7** | 2 → **1** | **−41.4%** | **−2.8%** |
+| `retain` | 8 → **5** | 2 → **1** | **−41.0%** | **−10.8%** |
+| `asyncpipe` | 1 → 1 | 0 | +2.1% | +0.3% |
+| `shapes` | 1 → 1 | 0 | +1.5% | +0.8% |
+| `churn` `churn_alloc` `push_cls` `push_num` `cycles` `tree` `tree_wide` `interp` `iso_miss` `pipeline` `churn_read` `fib40` | unchanged | 0 | ±0.1% | ±0.5% |
 
-Cycle-0 pause itself falls 20–40% on that cluster (best-of-5 minimum). **No
-program gains a cycle or a full collection.** `shapes`' +1.3% is exactly the
-wasted mark of a rolled-back attempt over its 6 536 live objects — the price of
-the measurement, paid once, on the one program in the corpus whose cycle 0 has a
-non-trivial live set below the threshold. Wall clock is deliberately not quoted:
-the dev box ran at load 35–97, and absolute seconds belong to the quiet mini.
+**No program gains a cycle or a full collection**, and five lose one or two of
+each. The two regressions are the wasted mark of a rolled-back attempt over
+6 536 and 6 686 live objects — the price of the measurement, paid once. Wall
+clock is deliberately not quoted: the dev box ran at load 35–97, and absolute
+seconds belong to the quiet mini.
+
+★ Part of that headline is `main` being in a bad state rather than this change
+being that good. Between `8260a9e50` and `d78efca41` the `retain` cluster
+regressed on `main` alone — `retain` 2 840 M → 12 421 M instructions with 0 → 2
+`old_gen_bytes` fulls, `retain1` 1 396 M → 3 724 M, `deeplist` 1 172 M →
+3 910 M — and the fulls are the same granularity-sensitive arm described below.
+Measured against the earlier base, this change is worth −14% to −31%. Both
+numbers are real; the second is the one to quote for the mechanism.
 
 #### The rollback, and why its obligation list is two items long
 
@@ -99,9 +107,11 @@ asserted by `the_absolute_old_reclaim_arm_stands_down_on_a_retaining_heap`.
 * `FIRST_CYCLE_PROMOTE_SURVIVAL_PERMILLE` is 500 rather than the steady-state
   950 because it bounds a different thing: 950 bounds a *prediction* that can be
   wrong repeatedly, while cycle 0 is reading its own measurement and can only be
-  wrong once, for at most `(1 − ratio) ×` the scavenge nursery cap. The measured
-  cycle-0 population has an empty band between 25‰ (`shapes`) and 770‰
-  (`asyncpipe`); 500 is its midpoint, and `asyncpipe` is why the steady-state
-  number is the wrong one here — promoting its single cycle is −11%
-  instructions and −17% RSS, while rolling it back would buy a 172 415-object
-  mark pass for nothing.
+  wrong once, for at most `(1 − ratio) ×` the scavenge nursery cap. On today's
+  corpus the cycle-0 population is bimodal with an empty 25→992 band and 950
+  would classify it identically — but three days ago `asyncpipe`'s cycle 0
+  measured **770‰ over 172 415 objects**, squarely between the modes, and at 950
+  it would have paid that whole mark pass and then rolled back. #7959 changed
+  its shape and the outlier vanished. A threshold that only works while the
+  corpus happens to be bimodal is fitted to a coincidence; this one is justified
+  by its exposure.

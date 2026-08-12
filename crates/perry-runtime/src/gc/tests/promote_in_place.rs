@@ -574,19 +574,20 @@ fn the_first_cycle_attempt_shares_every_guard_the_steady_state_policy_has() {
 fn first_cycle_threshold_separates_the_measured_cycle0_population() {
     // Cycle-0 young survival measured over gc-handoff/bench + gc-handoff/apps
     // (gc-handoff/c0/cycles.py, 2026-08-12). This is the claim
-    // FIRST_CYCLE_PROMOTE_SURVIVAL_PERMILLE rests on, and the band between the
-    // two groups is empty — 25 to 770 — so the constant is not a tuning dial
-    // any more than the steady-state one is.
+    // FIRST_CYCLE_PROMOTE_SURVIVAL_PERMILLE rests on.
     let young = 16 * 1024 * 1024usize;
     // churn, churn_alloc, push_cls, push_num, cycles, pipeline, tree,
-    // tree_wide, shapes.
-    for permille in [0u64, 1, 2, 3, 25] {
+    // tree_wide (0-1), then interp, iso_miss, shapes, asyncpipe (23-25).
+    for permille in [0u64, 1, 23, 25] {
         assert!(
             !first_cycle_promotion_holds_up(young, young * permille as usize / 1000),
             "{permille} permille at cycle 0 must roll back and evacuate"
         );
     }
-    // asyncpipe (770), then retain/retain1/retain_wide/retain_wide1/deeplist.
+    // 770 is what `asyncpipe` measured before #7959 changed its shape — a
+    // reading squarely BETWEEN the modes, which is why this threshold is set
+    // from its exposure rather than from the gap the corpus happens to have
+    // today. Then retain/retain1/retain_wide/retain_wide1/deeplist.
     for permille in [770u64, 992, 1000] {
         assert!(
             first_cycle_promotion_holds_up(young, young * permille as usize / 1000),
