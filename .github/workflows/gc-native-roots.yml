@@ -515,7 +515,7 @@ jobs:
                 "/tmp/rs4gc-$name" > "/tmp/walker-$name-$mode.out" \
                                   2> "/tmp/walker-$name-$mode.err" \
                 || { echo "::error::$name crashed under PERRY_STACKMAP_WALKER=$mode"; \
-                     tail -20 "/tmp/walker-$name-$mode.err"; exit 1; }
+                     tail -120 "/tmp/walker-$name-$mode.err"; exit 1; }
               diff "/tmp/rs4gc-$name.oracle" "/tmp/walker-$name-$mode.out" \
                 || { echo "::error::$name diverged from the pinned oracle under PERRY_STACKMAP_WALKER=$mode"; exit 1; }
               checked=$((checked+1))
