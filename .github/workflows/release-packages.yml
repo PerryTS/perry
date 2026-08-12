@@ -428,6 +428,12 @@ jobs:
         # needs the prebuilt `libperry_ext_*.a` sitting next to
         # libperry_runtime.a so `perry compile` can link them without a
         # workspace checkout (see optimized_libs.rs::resolve_prebuilt_ext_libs).
+        # #7358: keep the compiler and both shipped wrapper archives in each
+        # Cargo invocation. Building an ext staticlib alone gives its bundled
+        # runtime/shared dependencies a different feature union from stdlib;
+        # the link deduper then cannot remove the whole second copy, and the
+        # HTTP accept loop reads a different async reactor from the one the JS
+        # event loop drives.
         # Best-effort per crate: a wrapper that can't build on this host must
         # not fail the whole release — the packaging glob below ships
         # whatever was produced.
@@ -437,7 +443,8 @@ jobs:
             [ -d "$d" ] || continue
             name=$(basename "$d")
             echo "::group::build $name"
-            cargo build --profile dist --target ${{ matrix.target }} -p "$name" \
+            cargo build --profile dist --target ${{ matrix.target }} \
+              -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
           done
