@@ -89,41 +89,42 @@ pub(crate) fn resolve_prebuilt_ext_libs(
                 libs.push(path);
             }
             None => {
-                // #7629 — a tokio-using wrapper CANNOT be repaired by building
-                // it on its own. `cargo build -p perry-ext-http` resolves
-                // feature unification over that crate's graph alone, so its
-                // bundled tokio is a different compilation than the prebuilt
-                // stdlib's, and the two `tokio::runtime::context::CONTEXT`
-                // thread-locals that result make the program SIGABRT at its
-                // first socket ("there is no reactor running"). Building it
-                // *with* perry-stdlib-static would fix tokio but silently
-                // overwrite the prebuilt stdlib with this invocation's feature
-                // set — dropping the `external-*-pump` features the no-auto
-                // flow depends on, trading an abort for a hang. Neither repair
-                // is available from here, so say what is wrong and what
-                // produces a coherent pair. (The link-time check in
-                // `compile/shared_tokio.rs` catches the same defect when the
-                // archive IS on disk but came from a separate invocation.)
+                // #7629 — a tokio-using wrapper cannot be repaired from here.
+                // Building it alone gives it its own tokio compilation (cargo
+                // unifies features per invocation); building it *with*
+                // perry-stdlib-static would fix tokio but silently overwrite
+                // the prebuilt stdlib with this invocation's feature set,
+                // dropping the `external-*-pump` features the no-auto flow
+                // depends on — trading an abort for a hang.
+                //
+                // So warn, build anyway, and let the link-time check in
+                // `compile/shared_tokio.rs` decide: it compares the tokio
+                // compilation ids in the actual archives, which is evidence
+                // rather than a prediction. Refusing here instead would also
+                // fail the cases where the two invocations happen to unify to
+                // the same tokio, and those link and run correctly.
                 if binding_needs_shared_tokio(module.strip_prefix("node:").unwrap_or(module)) {
                     eprintln!(
-                        "error: `{}` needs {} and it is not on disk, but \
-                         PERRY_NO_AUTO_OPTIMIZE=1 forbids the rebuild that would produce \
-                         one matching the prebuilt libperry_stdlib.a.\n  \
-                         Building `{}` on its own would bundle a SECOND tokio compilation \
-                         and the program would abort at its first socket with \"there is \
-                         no reactor running\" (#507, #7629), so it is refused here.\n  \
-                         fix: build the wrapper in the SAME cargo invocation as the stdlib \
-                         archive:\n    \
+                        "warning: `{}` needs {}, which is not on disk. \
+                         PERRY_NO_AUTO_OPTIMIZE=1 forbids the specialized rebuild, so the \
+                         wrapper can only be built in its OWN cargo invocation — and cargo \
+                         resolves feature unification per invocation, so its bundled tokio \
+                         is very likely a different compilation than the prebuilt \
+                         libperry_stdlib.a's. Two tokio compilations means two \
+                         `tokio::runtime::context::CONTEXT` thread-locals and the program \
+                         aborts at its first socket with \"there is no reactor running\" \
+                         (#507, #7629).\n  \
+                         The link refuses that pair once the archives can be compared, so \
+                         this build may fail after the wrapper finishes. To get it right \
+                         the first time, build the wrapper in the SAME cargo invocation as \
+                         the stdlib archive:\n    \
                          cargo build --release -p perry -p perry-runtime-static \
                          -p perry-stdlib-static -p {}\n  \
-                         (add the matching `--features perry-stdlib/external-*-pump` this \
-                         module needs — see run_parity_tests.sh's BUILD_PACKAGES for the \
-                         canonical set)\n  \
-                         or: unset PERRY_NO_AUTO_OPTIMIZE and let auto-optimize build a \
-                         coherent set itself.",
-                        module, filename, binding.krate, binding.krate
+                         (plus the `--features perry-stdlib/external-*-pump` this module \
+                         needs), or unset PERRY_NO_AUTO_OPTIMIZE and let auto-optimize \
+                         build a coherent set itself.",
+                        module, filename, binding.krate
                     );
-                    std::process::exit(1);
                 }
                 if let Some(workspace_root) = find_perry_workspace_root() {
                     if let Some(path) = build_missing_prebuilt_ext_lib(

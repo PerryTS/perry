@@ -117,20 +117,42 @@ archive is present in `PERRY_RUNTIME_DIR` before running anything — with the
 exact command, instead of leaving the operator to decode six SIGABRTs.
 
 **(d) A second, independent defect the first one was hiding.**
-With coherent tokio, the no-auto gap path still failed — now at *link*, with
-five undefined `_js_ext_zlib_*`. The `external-*-pump` features are a property
-of the ONE prebuilt stdlib, while ext-archive selection is per-import: a stdlib
-built with `external-zlib-pump` references `js_ext_zlib_process_pending`
-unconditionally, so it cannot link a test that does not import `node:zlib`. The
+With coherent tokio the no-auto gap path still failed — now at *link*, with five
+undefined `_js_ext_zlib_*`. The `external-*-pump` features are a property of the
+ONE prebuilt stdlib, while ext-archive selection is per-import: a stdlib built
+with `external-zlib-pump` references `js_ext_zlib_process_pending`
+unconditionally, so it cannot link a test that does not import `node:zlib`; a
+stdlib built *without* the pumps links, but the wrapper's queues are never
+drained. **No subset of pump features serves a mixed corpus.** The
 auto-optimize path never hits this because it enables a pump only when it is
-also routing that module. `run_parity_tests.sh` now exports the in-tree
-`PERRY_FORCE_WELL_KNOWN=events,http,net,ws,zlib` for that path, which unions
-those modules into `well_known_iteration_set` regardless of imports.
+also routing that module.
 
-This is worth stating plainly: the harness comment claiming the ext-package
-build "compensates" for no-auto was **not true before this change** — the
-recipe it describes fails to link. That branch of the harness had never been
-run green.
+Worth stating plainly: the harness comment claiming its ext-package build
+"compensates" for no-auto was **not true** — the recipe it describes fails to
+link. That branch had never been run green.
+
+The first attempt was `PERRY_FORCE_WELL_KNOWN=events,http,net,ws,zlib`, the
+in-tree mechanism for unioning modules into `well_known_iteration_set`
+regardless of imports. It works, and it is 17x too slow to keep — measured on
+one trivial gap test, same host, back to back:
+
+| | compile |
+|---|---|
+| no-auto, no force | **2.2 s** |
+| no-auto + `PERRY_FORCE_WELL_KNOWN` | **37.7 s** |
+
+(five extra archives, 193 MB, through strip-dedup on every link). At 554 tests
+that turns a ~30 min gap run into ~5 h, which defeats the entire point of
+`PERRY_SKIP_BUILD=1`. Measuring this before keeping it is the reason it is not
+in the final change.
+
+What landed instead: the **23 of 554** gap tests that import an ext-routed
+module (`http|https|http2|net|ws|zlib|events`, matched in both spellings, both
+quote styles, and through `require(...)` — `net_connect_bound_value` reaches
+`net` only via `createRequire`) drop `PERRY_NO_AUTO_OPTIMIZE` for their own
+compile. The other 531 keep the 2.2 s prebuilt path. Scoped to the `all` suite:
+node-suite selects one module at a time, so its prebuilt stdlib and its ext
+archives already agree.
 
 ## 2b. Validation
 
