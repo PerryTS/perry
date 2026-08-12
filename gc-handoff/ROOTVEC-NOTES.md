@@ -130,10 +130,14 @@ failure mode is the exact late-surfacing shape the class is known for.
 
 ### Compiled probe
 
-`test-files/test_gap_gc_container_value_rooting.ts` drives all three helpers
-from compiled TypeScript, with `churn()` inside every callback so a back-edge
-poll is emitted in user JS *and* the retired from-space bytes are recycled after
-it. Run under `PERRY_GC_SCHEDULE_RATE=1`.
+Two programs — `test-files/test_gap_gc_container_value_rooting.ts` (the two
+`groupBy` helpers) and `test-files/test_gap_gc_define_properties_key_rooting.ts`
+— each with `churn()` inside every callback so a back-edge poll is emitted in
+user JS *and* the retired from-space bytes are recycled after it. They are
+separate programs on purpose; see #7963 and the note at the bottom of the second
+file. Under the witness configuration each exits **138** with a
+`[gc-fromspace-protect] FAULT` on a pristine `origin/main` build and **0**,
+byte-exact against node 26.5.1, on this branch.
 
 ## Sweep (issue item 5): the rest of the population
 
