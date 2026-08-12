@@ -156,6 +156,68 @@ was already converted by #6943/#7341 and needs nothing.
 The broader "cold arms never root anything" population the #6949 scope note
 describes is still open and is not what this branch claims to close.
 
-## #7803
+## Validation results
 
-See the PR body / final report.
+| check | result |
+|---|---|
+| `cargo test -p perry-runtime --lib` | 2215 passed, 0 failed, 4 ignored (#7946's flakiness did not appear; nothing to A/B) |
+| gap corpus: all 36 `test_gap_gc_*.ts` + 5 `test_gap_{proxy,reflect}*.ts`, byte-exact vs node 26.5.1, default **and** `PERRY_GC_PROTECT_FROMSPACE=1 DEPTH=800` | **41/41** |
+| the two new probes under `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_PROTECT_FROMSPACE=1 DEPTH=800` | exit 0, byte-exact; pristine `main` exits **138** with a from-space FAULT |
+| the two new probes under `PERRY_GC_VERIFY_EVACUATION=1` (+ schedule) | exit 0, output byte-exact |
+| `cargo fmt --check`, `scripts/check_file_size.sh`, `scripts/gc_runtime_root_holders.py`, `scripts/raw_handle_debt.py` | all clean (debt reads 3 *below* baseline) |
+
+**Instrument liveness** — a run with zero copying minors protects nothing, so it
+is reported rather than assumed:
+
+* `test_gap_gc_container_value_rooting`: 164 safepoints / 164 copying minors /
+  **67,889 objects moved**, 164 quarantined retired sets.
+* `test_gap_gc_define_properties_key_rooting`: 60 / 60 / **33,302 moved**, 60
+  retired sets.
+* Across the 41-program corpus the quarantine printed a retired-set line in 20
+  of the 41 programs (185 sets total). The other 21 ran no copying minor at all,
+  so for those the protected arm is a no-regression check and not a rooting
+  witness. Stated rather than glossed.
+
+One corpus row (`test_gap_gc_string_literal_operand_rooting`) first read as a
+`protect-diff`; the diff was a `[gc]` heap-accounting line my stderr filter
+missed (`^\[gc-` did not match `[gc] blocks: …`). Re-filtered it is identical.
+
+## #7803 — could not be reproduced; shares a *candidate* cause
+
+`test-files/gc-dep-corpus/main.ts` **does not link** on this box, identically on
+a pristine `origin/main` build and on this branch:
+
+```
+Undefined symbols for architecture arm64:
+  "_perry_fn_node_modules_zod_src_v4_core_index_ts__NEVER", ...
+  "_perry_fn_node_modules_zod_src_v4_core_index_ts___brand", ...
+```
+
+— the `export * from "./core.js"` re-export set in the currently pinned
+`zod@4.3.5` (`package.json` has `"zod": "^4.3.5"`; the corpus was written
+against the zod of #7280/#7311, 2026-05). Same failure with and without
+auto-optimize, and with `PERRY_RUNTIME_DIR` pinned to either arm. So #7803's
+reproducer is not runnable as written and I could not confirm or refute it.
+
+What *is* established: the zod workload routes through
+`js_object_define_properties` — `node_modules/zod/src/v4/core/util.ts:316`
+(`return Object.defineProperties({}, mergedDescriptors)`) and
+`node_modules/zod/src/v4/classic/errors.ts:28` — which is one of the two sites
+this branch fixes. #7803's symptom is
+`Cannot read properties of undefined (reading 'toString')`, i.e. a property read
+that came back `undefined` where an object was expected, which is exactly what a
+stale key string in that loop produces: the property gets defined under a
+garbage name and the later read misses. That makes #7949 a **candidate** cause
+of #7803, not a confirmed one. Retest #7803 once the corpus links again.
+
+## Left open
+
+* **#7963** (filed) — a separate, pre-existing from-space fault in the
+  `Object.defineProperty` / descriptor-getter family. Reproduces with a
+  hand-written `Object.defineProperty` loop, i.e. with none of this branch's
+  code on the path; it is the wider window #6949's scope note defers. This is
+  why the #7949 gap coverage ships as two programs instead of one.
+* `js_typed_array_filter` (see the sweep table) — real, deliberately not fixed
+  here.
+* The `gc-dep-corpus` link break described above; worth its own issue or a
+  corpus regeneration.
