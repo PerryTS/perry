@@ -446,3 +446,35 @@ no `delete`, no keys array. But a prior is not evidence, so the control arm
 (all seven rung-1 `class_id` gates restored, same tree otherwise — a tighter
 control than a pristine `main` build, and it costs no extra disk) is being built
 and both tests re-run on it. Verdict recorded below.
+
+### 7e. Control-arm A/B verdict: **zero of the eight are rung 1**
+
+Control arm = all seven rung-1 `class_id` gates restored (§5b's A–G applied
+together), same tree otherwise, same target dir, same `node_modules` symlink,
+ext archives evicted, `PERRY_NO_AUTO_OPTIMIZE=1`, `PERRY_RUNTIME_DIR` pinned.
+A tighter control than a pristine `main` build, and it costs no extra disk.
+
+| test | control | rung 1 | stdout |
+|---|---|---|---|
+| `test_gap_specabi_reassign` | DIFF vs node | DIFF vs node | **byte-identical between arms** |
+| `test_gap_zlib_3285_params` | DIFF vs node | DIFF vs node | **byte-identical between arms** |
+
+★ **The A/B asserts its own subject was live**, which is the part that makes it
+a proof rather than a presence check: on the control build the five rung-1
+acceptance tests all FAIL
+(`delete_mints_a_fresh_shape_id_for_a_class_instance`,
+`class_siblings_share_one_shape_id_…`,
+`a_stamped_class_instance_still_resolves_a_three_level_parent_chain`,
+`a_class_instance_primes_an_id_token_after_rung1`,
+`a_compacted_class_instance_primes_a_token_…`) while
+`delete_mints_a_fresh_shape_id_for_a_plain_object` still PASSES — i.e. the arm
+is genuinely *pre-rung-1*, not merely broken. Had I run the A/B without that
+check, "identical on both arms" would have been consistent with the control
+never having been built.
+
+**Conclusion: 8 of 8 reported regressions are pre-existing.** Six are
+#7932/#7629 by exact panic signature; two are byte-identical across an A/B whose
+control is proven live. The 10 status changes are oracle coverage (§7c) and the
+1 improvement is unattributed. `gap_snapshot.json` is deliberately NOT updated —
+accepting these would launder six tracked crashes through the expected-output
+channel, which `run_gap_tests.sh` explicitly forbids.
