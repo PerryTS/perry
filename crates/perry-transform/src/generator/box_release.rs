@@ -258,7 +258,10 @@ mod tests {
         let inner = vec![Stmt::Return(Some(local_get(7)))];
         let body = vec![Stmt::Return(Some(closure(inner, Vec::new())))];
         let ids = closure_visible_ids(&body).expect("not poisoned");
-        assert!(ids.contains(&7), "auto-detected capture must escape: {ids:?}");
+        assert!(
+            ids.contains(&7),
+            "auto-detected capture must escape: {ids:?}"
+        );
     }
 
     /// An explicit capture list entry counts even if the body never mentions it.

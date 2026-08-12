@@ -889,15 +889,16 @@ pub fn transform_generator_function_with_extra_captures(
         // closure-visible is kept.
         let release_ids: Vec<LocalId> = {
             let post_visible = closure_visible_ids(&next_resume_body).and_then(|mut ids| {
-                let routes_ok = catches.iter().all(|route| {
-                    match closure_visible_ids(&route.body) {
-                        Some(r) => {
-                            ids.extend(r);
-                            true
-                        }
-                        None => false,
-                    }
-                });
+                let routes_ok =
+                    catches
+                        .iter()
+                        .all(|route| match closure_visible_ids(&route.body) {
+                            Some(r) => {
+                                ids.extend(r);
+                                true
+                            }
+                            None => false,
+                        });
                 if routes_ok {
                     Some(ids)
                 } else {
