@@ -29,7 +29,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: node-compat-matrix-${{ github.ref }}
+  # #7966: keyed per RUN for non-PR events. A group that is constant across
+  # scheduled runs lets only the first one execute -- GitHub keeps at most one
+  # PENDING run per group and cancels the rest with `jobs: 0`, regardless of
+  # `cancel-in-progress`. PR runs keep the shared per-ref group so superseded
+  # pushes still coalesce. Enforced by scripts/gc_gate_wiring_check.py.
+  group: node-compat-matrix-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: false
 
 env:

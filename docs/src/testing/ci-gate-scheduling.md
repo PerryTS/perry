@@ -55,13 +55,37 @@ watching — aged out.
 were the obvious reading, and both are wrong. Getting this right matters, because
 each wrong reading has a "fix" that would make things worse.
 
-**Not the concurrency block.** `gc-ratchet.yml`'s `concurrency:` comment records two
-prior attempts (#7205): a shared group with unconditional `cancel-in-progress`
-cancelled three consecutive `main` runs, and scoping `cancel-in-progress` to pull
-requests did not fix it either, because GitHub allows at most one *pending* run per
-group. Keying the group on `github.sha` for push events **did** fix cancellation.
-The failure mode simply moved: runs stopped cancelling each other and started
-queueing forever instead. **Those blocks are correct. Do not "fix" them again.**
+**Not the concurrency block — *as it stood in #7856*.** `gc-ratchet.yml`'s
+`concurrency:` comment records two prior attempts (#7205): a shared group with
+unconditional `cancel-in-progress` cancelled three consecutive `main` runs, and
+scoping `cancel-in-progress` to pull requests did not fix it either, because GitHub
+allows at most one *pending* run per group. Keying the group on `github.sha` for push
+events **did** fix cancellation. The failure mode simply moved: runs stopped
+cancelling each other and started queueing forever instead.
+
+> **⚠️ SUPERSEDED BY #7966 — this paragraph used to end "Those blocks are correct. Do
+> not 'fix' them again." That sentence was true when written and false three days
+> later, and it is exactly the sentence that would send the next reader past the real
+> bug.**
+>
+> The `github.sha` arm is guarded on `github.event_name == 'push'`. #7856 — the change
+> this very document describes — moved the main-line arm from `push: branches: [main]`
+> to `schedule:`. The guard stopped matching, the expression fell through to
+> `github.ref` (constant `refs/heads/main`), and **#7205 came straight back on the arm
+> #7856 created.** Measured 2026-08-12, identically on all ten gates: oldest run
+> `queued` holding the group, the next two `cancelled` with `jobs: 0`, newest
+> `pending`. `gate-freshness` itself was cancelled the same way.
+>
+> Groups are now keyed on `github.run_id` for every non-pull-request event, which is
+> the only context value unconditionally distinct across scheduled runs.
+> `scripts/gc_gate_wiring_check.py` (in the required `lint` context) now rejects a
+> `schedule:` workflow whose concurrency group lacks `github.run_id`, so this cannot
+> relapse a fourth time silently.
+>
+> **The lesson is about the sentence, not the YAML.** "Do not fix this again" is a
+> claim about the future, and a scheduling change three days later invalidated it. A
+> repaired invariant should be written down as an *executable check*, not as an
+> instruction to the next human to stop looking.
 
 **Not macOS capacity.** This was the natural inference — the gates that went dark
 are the macOS ones — but the job-level numbers refute it. At the moment of
@@ -173,3 +197,57 @@ stale gate, a fresh gate, a gate with no successful run at all, and a gate whose
 recent success is a `pull_request` run (the exact shape that made `gc-root-dominance`
 look healthy while its `main` arm was dark), and asserts the verdict for each. A
 green `--self-test` means the detector works, not that nothing was tried.
+
+## The queue in front of the schedule (#7966)
+
+A six-hourly sweep only helps if the queue drains faster than six hours. On
+2026-08-12 it did not, and the reason was not the gates:
+
+| metric | value |
+|---|---|
+| queued runs | 1,529 |
+| concurrent runs observed | 12–14 |
+| queued by event | 794 `pull_request`, 181 `push`, 19 `schedule` |
+| distinct head branches among queued PR runs | 63 |
+| **branches that still existed** | **2** |
+
+GitHub does not reliably cancel a queued run when its pull request merges and the
+branch auto-deletes. Perry squash-merges, auto-deletes branches, and fans each PR out
+to ~11 workflows, so roughly **790 runs — 51% of the entire queue — were work for
+already-merged PRs**, holding runner slots ahead of ten `main` gates that had not
+completed in 32+ hours. No amount of scheduling cadence recovers from that; the
+garbage has to be removed.
+
+`ci-queue-reaper.yml` runs `scripts/reap_stale_ci_runs.py` every 30 minutes. It
+cancels a run only when all of these hold: `event == "pull_request"`, `status ==
+"queued"`, and the head branch has **no open pull request**. A `push`, `schedule`,
+tag or `workflow_dispatch` run is therefore structurally out of reach, and an
+in-flight run is left alone because it has already consumed the scarce thing. The
+predicate keys on open PRs rather than on branch existence, which is what keeps fork
+PRs safe — a fork's head branch never appears in this repo's refs.
+
+**It cannot bootstrap.** The reaper queues like everything else, so it will not dig
+the repo out of an already-saturated queue. The first drain is a manual
+`python3 scripts/reap_stale_ci_runs.py --apply` (dry run is the default); the
+schedule keeps it clear afterwards.
+
+## Why "the gate was dark" is not the same as "the gate would have caught it"
+
+#7966 landed alongside #7965, a 2.2–4.8× regression that reached `main` while
+`gc-ratchet` was dark. The tempting conclusion — the dark gate let it through — does
+not survive checking, and recording why matters more than the incident:
+
+- `gc-ratchet`'s gating metrics are heap/cycle/copy/promote/freed counts. **There is
+  no full-mark-sweep or major-cycle count**, and the counter that actually found
+  #7965 (`collection_kind: "full"` going 0 → 2) is not one of them. No gate in the
+  repo ratchets a collection-*kind* count.
+- The two dimensions that did move — wall time and RSS — are explicitly
+  `"gating": false` in the `shared_ci` profile CI runs, with the rationale recorded
+  in `tolerances.json`. They gate only under `pinned_host`, which CI never uses.
+- The workloads that showed it (`retain`, `deeplist`, …) are the gc-handoff corpus,
+  not `gc-ratchet`'s fixed 14 probes.
+
+So the human counter census was not a lucky substitute for a starved gate; **it was
+the only instrument that covered that dimension at all.** Restoring gate freshness
+does not close #7965's third ask, and a freshness dashboard that is entirely green
+would still not have caught it.

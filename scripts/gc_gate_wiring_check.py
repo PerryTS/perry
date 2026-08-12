@@ -295,6 +295,51 @@ def check_gate(text: str, job_id: str, wf_name: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Self-test: the checker must be able to fail, too.
 # ---------------------------------------------------------------------------
+def check_schedule_group(text: str, wf_name: str) -> list[str]:
+    """A scheduled workflow's concurrency group must vary per RUN.
+
+    Hazard 3 in CLAUDE.md, third relapse (#7966). `cancel-in-progress: false`
+    does not protect a main-line run: GitHub allows at most one PENDING run per
+    concurrency group and cancels the previously pending one when a new run
+    enters, regardless of that setting. So a group expression that evaluates to
+    a CONSTANT for scheduled runs lets exactly one run — whichever grabbed the
+    group first — ever execute, and silently cancels every later one with
+    `jobs: 0`.
+
+    #7205 fixed this for the `push: branches: [main]` arm by keying the group on
+    `github.sha`, guarded by `github.event_name == 'push'`. #7856 then moved the
+    main-line arm of ten gates from `push` to `schedule`, and the guard stopped
+    matching: the expression fell through to `github.ref`, constant
+    `refs/heads/main`, and #7205 came straight back on the new arm. Measured
+    2026-08-12: all ten gates showed the identical signature — oldest run
+    `queued` holding the group, the next two `cancelled` with zero jobs, newest
+    `pending` — and `gate-freshness` itself, the alarm for exactly this, was
+    cancelled the same way.
+
+    `github.run_id` is unique per run and is the only context value that is
+    unconditionally distinct for scheduled runs, so that is what this requires.
+    A workflow that genuinely wants scheduled runs to coalesce has to say so by
+    failing this check and arguing the exemption in review.
+    """
+    if "schedule" not in workflow_triggers(text):
+        return []
+    conc = _block(text, "concurrency", 0)
+    if not conc:
+        return []
+    group = scalar(conc, "group", 2)
+    if not group:
+        return []
+    if "github.run_id" in group:
+        return []
+    return [
+        f"{wf_name}: has a `schedule:` trigger but its concurrency group does "
+        f"not contain `github.run_id`, so it is CONSTANT across scheduled runs. "
+        f"GitHub keeps at most one pending run per group and cancels the rest "
+        f"with zero jobs, so only one scheduled run can ever execute (#7205, "
+        f"relapsed as #7966). group: {group}"
+    ]
+
+
 CLEAN = """\
 name: X
 on:
@@ -427,6 +472,62 @@ def _self_test() -> int:
     if not got or "not found" not in got[0]:
         failures.append(f"missing job: expected a not-found problem, got {got}")
 
+    # ---- hazard 3 relapse: constant concurrency group on a scheduled run ----
+    # (#7966) These exercise check_schedule_group, not check_gate, so they get
+    # their own harness. The sabotage case is first: a checker that cannot fail
+    # on the real shape is worth nothing, and CLEAN carries that exact shape.
+    def expect_group(name: str, text: str, want_problem: bool):
+        nonlocal cases
+        cases += 1
+        got = check_schedule_group(text, "fixture.yml")
+        if want_problem and not got:
+            failures.append(f"{name}: expected a constant-group problem, got none")
+        if not want_problem and got:
+            failures.append(f"{name}: expected clean, got {got}")
+
+    # CLEAN is `group: x-${{ github.ref }}` with a schedule trigger -- constant
+    # across scheduled runs, which is precisely the #7966 shape.
+    expect_group("constant ref group under schedule", CLEAN, True)
+
+    # The #7205 spelling that #7856 invalidated: guarded on `push`, so a
+    # scheduled run falls through to the constant ref.
+    expect_group(
+        "push-guarded sha group under schedule",
+        CLEAN.replace(
+            "  group: x-${{ github.ref }}",
+            "  group: x-${{ github.event_name == 'push' && github.sha || github.ref }}",
+        ),
+        True,
+    )
+
+    # The fix.
+    expect_group(
+        "run_id group under schedule",
+        CLEAN.replace(
+            "  group: x-${{ github.ref }}",
+            "  group: x-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        ),
+        False,
+    )
+
+    # No schedule trigger -> the hazard does not apply.
+    expect_group(
+        "constant group without a schedule trigger",
+        CLEAN.replace("  schedule:\n    - cron: '0 4 * * *'", "  push:\n    tags: ['v*']"),
+        False,
+    )
+
+    # No concurrency block at all -> nothing can supersede anything.
+    expect_group(
+        "schedule with no concurrency block",
+        CLEAN.replace(
+            "concurrency:\n  group: x-${{ github.ref }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
+            "",
+        ),
+        False,
+    )
+
     if failures:
         for f in failures:
             print(f"SELF-TEST FAIL: {f}", file=sys.stderr)
@@ -463,6 +564,15 @@ def main() -> int:
             continue
         problems.extend(check_gate(path.read_text(), job, wf))
 
+    # The constant-group hazard is not specific to the GC gates -- it hits any
+    # scheduled workflow, and it took out `gate-freshness` (the alarm) too. So
+    # this arm sweeps every workflow file rather than just GATES.
+    wf_dir = REPO_ROOT / ".github" / "workflows"
+    scanned = 0
+    for path in sorted(wf_dir.glob("*.yml")):
+        scanned += 1
+        problems.extend(check_schedule_group(path.read_text(), path.name))
+
     if problems:
         print("GC GATE WIRING: one or more gates cannot fail where it matters.\n", file=sys.stderr)
         for p in problems:
@@ -473,7 +583,11 @@ def main() -> int:
         )
         return 1
 
-    print(f"GC gate wiring OK ({len(GATES)} gates main-line-reachable and able to fail)")
+    print(
+        f"GC gate wiring OK ({len(GATES)} gates main-line-reachable and able to "
+        f"fail; {scanned} workflows checked for constant scheduled-run "
+        f"concurrency groups)"
+    )
     return 0
 
 
