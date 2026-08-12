@@ -17,18 +17,23 @@ Measured on `gc-handoff/bench` + `gc-handoff/apps` (19/19 byte-exact against
 `node --experimental-strip-types`, exit 0), instructions retired and peak RSS —
 both load-independent, which the dev box at load 35–75 required:
 
-| program | instructions | peak RSS |
-|---|--:|--:|
-| `retain1` | **−31%** | −4% |
-| `retain_wide1` | **−25%** | 0 |
-| `retain` | **−23%** | 0 |
-| `deeplist` | **−18%** | 0 |
-| `retain_wide` | **−14%** | 0 |
-| `asyncpipe` | **−11%** | **−17%** |
-| everything else | ±0.4% | ±0 |
+| program | cycles | instructions | peak RSS |
+|---|---|--:|--:|
+| `retain1` | 3 → **2** | **−31%** | **−4%** |
+| `retain_wide1` | 4 → **3** | **−24%** | 0 |
+| `retain` | 5 → **4** | **−23%** | 0 |
+| `deeplist` | 3 → **2** | **−17%** | **−3%** |
+| `retain_wide` | 8 → **6** | **−14%** | 0 |
+| `asyncpipe` | 1 → 1 | **−11%** | **−17%** |
+| `shapes` | 1 → 1 | +1.3% | 0 |
+| everything else | unchanged | ±1% | 0 |
 
-Cycle-0 pause itself falls 20–40% on that cluster (best-of-5 minimum), and
-`retain` drops a whole cycle (5 → 4) while `retain1` and `deeplist` drop to 2.
+Cycle-0 pause itself falls 20–40% on that cluster (best-of-5 minimum). **No
+program gains a cycle or a full collection.** `shapes`' +1.3% is exactly the
+wasted mark of a rolled-back attempt over its 6 536 live objects — the price of
+the measurement, paid once, on the one program in the corpus whose cycle 0 has a
+non-trivial live set below the threshold. Wall clock is deliberately not quoted:
+the dev box ran at load 35–97, and absolute seconds belong to the quiet mini.
 
 #### The rollback, and why its obligation list is two items long
 
@@ -42,14 +47,24 @@ is a **precondition** of attempting at all, which is why the attempt is gated on
 `untraced_promotion_instrument_veto`, so the stress/verify instruments are never
 shown a discarded trace.
 
-★ The retag is not only a relabel: `retag_block_space` to `HeapGeneration::Old`
-also *registers old-gen page metadata* for every page of the block, and
-relabelling back does not remove it. Undoing that is the second half of the
-rollback; without it the whole young generation is left carrying old-gen page
-entries — worth +4–10% peak RSS, and a lie the dirty scan and the defrag page
-selector both read. Both halves are **sabotage-verified**: deleting either one
-turns `a_first_cycle_attempt_that_its_own_trace_refutes_rolls_back_and_evacuates`
-red (`copied_objects: 0` and `old_pages: 256 vs 0` respectively).
+★ A retag is not only a relabel: `retag_block_space` to `HeapGeneration::Old`
+also mints one zeroed `OldPageMeta` per **4 KB** of every block it touches, so a
+speculative attempt mints one for the whole young generation. Measured cost when
+it did: `tree_wide` 67.8 → 74.8 MB, `tree` 35.8 → 39.3, `churn` 25.0 → 26.6 —
++4–10% peak RSS on the 11 programs whose cycle 0 rolls back. **Removing the
+entries in the rollback does not give it back** — a `HashMap` never returns its
+capacity, and 61 MB of young generation is 15 616 pages in a table grown to
+32 768 slots. So the attempt does not mint them:
+`retag_block_space_deferring_old_page_registration`, sound exactly there because
+a speculative attempt requires `skip_remembering`, which is the proof that no
+remembered-set insertion — the only reader that wants a promoted page's metadata
+before it exists — can happen between the retag and the finish. On commit,
+`finish_in_place_promotion` mints them on the way past.
+
+Both halves of the rollback are **sabotage-verified**: deleting the retag undo,
+or minting the page metadata eagerly, each turns
+`a_first_cycle_attempt_that_its_own_trace_refutes_rolls_back_and_evacuates` red
+(`copied_objects: 0` and `old_pages: 256 vs 0` respectively).
 
 #### The `old_gen_bytes` absolute arm is granularity-sensitive, and that had to be fixed first
 
