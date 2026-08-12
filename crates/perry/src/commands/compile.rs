@@ -49,6 +49,7 @@ mod update_config;
 pub(crate) mod resolve;
 mod resources;
 mod sandbox_buildrs;
+mod shared_tokio;
 mod strip_dedup;
 mod targets;
 pub mod well_known;

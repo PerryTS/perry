@@ -5974,6 +5974,35 @@ pub fn run_with_parse_cache(
         None
     };
 
+    // #7629 — refuse a link whose wrapper archives bundle a different tokio
+    // compilation than the stdlib archive. Two tokios means two
+    // `tokio::runtime::context::CONTEXT` thread-locals, and the wrapper reads
+    // the one perry-stdlib's runtime never entered: the binary links cleanly
+    // and SIGABRTs at its first socket with "there is no reactor running".
+    // The #507 rebuild already prevents that by construction on the
+    // auto-optimize path; this catches every path that bypasses it.
+    {
+        let report = super::shared_tokio::verify_shared_tokio(
+            stdlib_lib.as_deref(),
+            &optimized_libs.well_known_libs,
+        );
+        if !report.mismatched.is_empty() {
+            let stdlib_path = stdlib_lib.clone().unwrap_or_default();
+            return Err(anyhow!(
+                "{}",
+                super::shared_tokio::mismatch_error_message(&report, &stdlib_path)
+            ));
+        }
+        if verbose > 0 && report.compared_anything() {
+            for checked in &report.checked {
+                eprintln!(
+                    "  shared-tokio: {} bundles {} (matches stdlib)",
+                    checked.name, checked.tokio_id
+                );
+            }
+        }
+    }
+
     // Build & run the per-platform link command. Tier 2.1 final extraction
     // (v0.5.342) — see crates/perry/src/commands/compile/link.rs.
     let link_cache_status = build_and_run_link(

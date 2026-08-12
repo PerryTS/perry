@@ -1043,17 +1043,19 @@ pub(super) fn scan_remembered_dirty_slots_copying(
 #[cold]
 #[inline(never)]
 unsafe fn pinned_young_move_under_skipped_preflight(header: *mut GcHeader) -> ! {
+    // #7990: the report is built in `gc/pin.rs` from the header's own flags,
+    // because those flags are the only evidence that distinguishes an
+    // incomplete pin latch from a dangling pointer into recycled memory — and
+    // this message used to assert the former as fact while `gc_pin_sites.py`,
+    // the tool it told the reader to run, answered OK.
     eprintln!(
-        "[gc-pin-latch] FATAL: copying minor is about to relocate a PINNED young \
-         object on a preflight-skipped cycle. header={:#x} obj_type={} size={} \
-         flags={:#04x}\n\
-         The young-pin latch (gc/pin.rs) is incomplete: some site sets \
-         GC_FLAG_PINNED without going through gc::pin_object. Find it with \
-         `python3 scripts/gc_pin_sites.py` and route it through pin_object (#7645).",
-        header as usize,
-        (*header).obj_type,
-        (*header).size,
-        (*header).gc_flags,
+        "{}",
+        super::pin::pinned_young_move_report(
+            header as usize,
+            (*header).obj_type,
+            (*header).size,
+            (*header).gc_flags,
+        )
     );
     std::process::abort()
 }

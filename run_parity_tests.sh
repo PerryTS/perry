@@ -627,6 +627,20 @@ else
 fi
 BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
 BUILD_FEATURES=()
+# #7629 — every tokio-using `perry-ext-*` wrapper this run will link, by
+# staticlib stem. Two jobs:
+#   1. they must be in the SAME `cargo build` as perry-stdlib-static, or cargo
+#      resolves feature unification separately for each invocation and the
+#      wrapper bundles a different tokio compilation than the stdlib archive.
+#      Two tokios means two `tokio::runtime::context::CONTEXT` thread-locals;
+#      the wrapper reads the one perry-stdlib's runtime never entered and the
+#      test SIGABRTs with "there is no reactor running" (exit 134, CRASH not
+#      FAIL). Perry refuses such a link since #7629, so a split build now shows
+#      up as a compile error rather than six aborting binaries.
+#   2. under PERRY_SKIP_BUILD=1 nothing is built at all, so their presence in
+#      PERRY_RUNTIME_DIR is a precondition — checked below with the exact
+#      command instead of leaving the operator to decode a link error per test.
+REQUIRED_EXT_LIBS=()
 needs_wasm_host=0
 # The default `test-files/` corpus (the gap suite) under PERRY_NO_AUTO_OPTIMIZE
 # links the prebuilt `full` stdlib, which is NOT compiled with the
@@ -640,6 +654,7 @@ needs_wasm_host=0
 # whole well-known set rather than switching on it.
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]]; then
     BUILD_PACKAGES+=(-p perry-ext-events -p perry-ext-http -p perry-ext-net -p perry-ext-ws -p perry-ext-zlib)
+    REQUIRED_EXT_LIBS+=(perry_ext_events perry_ext_http perry_ext_net perry_ext_ws perry_ext_zlib)
     BUILD_FEATURES+=(
         perry-stdlib/external-events-construct
         perry-stdlib/external-http-server-pump
@@ -648,6 +663,17 @@ if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]]; then
         perry-stdlib/external-ws-pump
         perry-stdlib/external-zlib-pump
     )
+    # …and every one of those archives must then be on the link line of EVERY
+    # test, not just the tests that import the module. `external-zlib-pump`
+    # makes perry-stdlib's `js_stdlib_process_pending` reference
+    # `js_ext_zlib_process_pending` unconditionally, so a test that imports
+    # only `node:http` failed to link with five undefined `_js_ext_zlib_*`
+    # symbols — the pumps are a property of the ONE prebuilt stdlib, while
+    # archive selection is per-import. The auto-optimize path never hits this
+    # because it enables a pump only when it is also routing that module.
+    # `PERRY_FORCE_WELL_KNOWN` is the in-tree mechanism for exactly this: it
+    # unions modules into `well_known_iteration_set` regardless of imports.
+    export PERRY_FORCE_WELL_KNOWN="${PERRY_FORCE_WELL_KNOWN:-events,http,net,ws,zlib}"
 fi
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
@@ -657,6 +683,7 @@ if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
             # HTTP fixtures can also emit net + ws well-known owners via the codegen
             # FFI registry, so build those wrappers too (#4373).
             BUILD_PACKAGES+=(-p perry-ext-http -p perry-ext-net -p perry-ext-ws)
+            REQUIRED_EXT_LIBS+=(perry_ext_http perry_ext_net perry_ext_ws)
             BUILD_FEATURES+=(perry-stdlib/external-http-server-pump perry-stdlib/external-http-client-pump)
             ;;
     esac
@@ -688,14 +715,22 @@ if [[ "$TEST_SUITE" == "node-suite" ]]; then
             ;;
     esac
 fi
-needs_ext_net=0
 if [[ "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
         ""|net|net/*)
             # node-suite/net commonly runs with PERRY_NO_AUTO_OPTIMIZE=1.
             # That path links prebuilt well-known archives, so build ext-net
-            # once up front instead of failing on unresolved js_net_* symbols.
-            needs_ext_net=1
+            # up front instead of failing on unresolved js_net_* symbols.
+            #
+            # #7629: this used to be its OWN `cargo build -p perry-ext-net`
+            # after the main one. A second invocation resolves tokio's feature
+            # unification over perry-ext-net's graph alone, so the archive it
+            # produced bundled a different tokio than libperry_stdlib.a — and
+            # `net.createServer().listen()` then aborted inside tokio's
+            # `TcpListener::bind` ("there is no reactor running"). Folding it
+            # into BUILD_PACKAGES is the whole fix: one invocation, one tokio.
+            BUILD_PACKAGES+=(-p perry-ext-net)
+            REQUIRED_EXT_LIBS+=(perry_ext_net)
             ;;
     esac
 fi
@@ -719,11 +754,39 @@ if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_wasm_host" -eq 1 ]]; then
         exit 1
     fi
 fi
-if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_ext_net" -eq 1 ]]; then
-    echo "Building net extension (release)..."
-    ext_net_jobs="${CARGO_BUILD_JOBS:-1}"
-    if ! cargo build --release --quiet -p perry-ext-net -j "$ext_net_jobs" 2>/dev/null; then
-        echo -e "${RED}Failed to build net extension library${NC}"
+# #7629 — PERRY_SKIP_BUILD=1 exports PERRY_NO_AUTO_OPTIMIZE=1 and then builds
+# NOTHING, so every wrapper archive the run needs must already be in
+# PERRY_RUNTIME_DIR *and* must have come from the same `cargo build` as the
+# stdlib archive beside it. Presence is what this can check cheaply; perry's
+# own link-time check (crates/perry/src/commands/compile/shared_tokio.rs)
+# compares the bundled tokio compilations and refuses an incoherent pair.
+#
+# Without this, a missing wrapper sent perry down `build_missing_prebuilt_ext_lib`,
+# which built it in a fresh one-crate invocation — the exact split that made six
+# gap tests SIGABRT on `main` for weeks while every CI shard stayed green
+# (the gap job runs on ubuntu and its archives come from one invocation).
+if [[ "$PERRY_SKIP_BUILD" == "1" && "${#REQUIRED_EXT_LIBS[@]}" -gt 0 ]]; then
+    missing_ext_libs=()
+    missing_ext_pkgs=()
+    for ext_stem in "${REQUIRED_EXT_LIBS[@]}"; do
+        if [[ "$HOST_PLATFORM" == "windows" ]]; then
+            ext_file="${ext_stem}.lib"
+        else
+            ext_file="lib${ext_stem}.a"
+        fi
+        if [[ ! -f "$PERRY_RUNTIME_DIR_SHELL/$ext_file" ]]; then
+            missing_ext_libs+=("$ext_file")
+            missing_ext_pkgs+=("-p" "${ext_stem//_/-}")
+        fi
+    done
+    if [[ "${#missing_ext_libs[@]}" -gt 0 ]]; then
+        echo -e "${RED}PERRY_SKIP_BUILD=1 but these ext archives are missing from $PERRY_RUNTIME_DIR_SHELL:${NC}" >&2
+        printf '  %s\n' "${missing_ext_libs[@]}" >&2
+        echo "Build them in ONE invocation with the runtime/stdlib archives — a separate" >&2
+        echo "per-crate build gives the wrapper its own tokio compilation and the tests" >&2
+        echo "abort with \"there is no reactor running\" (#7629):" >&2
+        echo "  cargo build --release ${BUILD_PACKAGES[*]} ${BUILD_FEATURE_ARGS[*]}" >&2
+        echo "Or re-run with PERRY_SKIP_BUILD=0 to have this script do it." >&2
         exit 1
     fi
 fi

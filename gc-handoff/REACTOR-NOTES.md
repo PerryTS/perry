@@ -1,0 +1,188 @@
+# #7629 / #7990 — working notes
+
+Worktree `/Users/amlug/projects/perry/wt-reactor`, branched from `origin/main`
+at `55fd197d5` (v0.5.1500). `CARGO_TARGET_DIR=$HOME/cargo-targets/reactor`.
+Host: macOS arm64.
+
+---
+
+## 1. #7629 — root cause: TWO tokio compilations in one binary
+
+The six aborting gap tests are **one defect**, and it is a *build-graph* defect,
+not a runtime one.
+
+`perry-ext-http` / `perry-ext-net` / `perry-ext-ws` / `perry-ext-fastify` are
+`crate-type = ["staticlib"]`. A staticlib physically bundles every Rust crate it
+depends on, tokio included. `libperry_stdlib.a` bundles tokio too, and
+perry-stdlib is the crate that owns the process's one runtime
+(`common::async_bridge`). Both archives land in the final link.
+
+tokio's runtime context —
+`tokio::runtime::context::CONTEXT` — is a `thread_local!`, so its symbol is
+mangled with the **compiling crate instance's** metadata hash. Two tokio
+compilations therefore mean **two independent CONTEXT variables**.
+perry-stdlib's runtime enters one; the wrapper reads the other, finds it empty,
+and panics. Shipping profiles are `panic = "abort"`, so that is a SIGABRT
+(exit 134) → the harness classifies it CRASH, not FAIL.
+
+This is not a new discovery, it is a **documented invariant that nothing
+checked**. `optimized_libs/driver.rs` states it verbatim (#507):
+
+> If they're built in a different target-dir than perry-stdlib … the mangled
+> hash on `tokio::runtime::context::CONTEXT` differs between the two
+> staticlibs — both end up in the final binary as distinct TLS variables.
+> perry-stdlib's runtime sets one; `Handle::current()` from inside the wrapper
+> reads the other (empty) one and panics with "there is no reactor running".
+
+### Measured, on this tree
+
+`ar t <archive> | grep -o 'tokio-[0-9a-f]*'` reads the tokio compilation id
+straight out of the member names.
+
+| build | `libperry_stdlib.a` | `libperry_ext_http.a` | `libperry_ext_net.a` | result |
+|---|---|---|---|---|
+| auto-optimize (`target/perry-auto-…`) | `tokio-692c87888a21349c` | `tokio-692c87888a21349c` | — | **PASS 3/3** |
+| `PERRY_NO_AUTO_OPTIMIZE=1` | `tokio-5aeb62139069856e` | `tokio-01c4c58f10c605f6` | `tokio-59c9ffcfa9028790` | **exit 134, 3/3** |
+
+Three different tokios in the second row, because each archive came from its own
+`cargo build -p <one crate>` invocation. Cargo resolves feature unification per
+invocation, so a one-crate build gets its own tokio compilation.
+
+### Which paths violate the invariant
+
+1. **`optimized_libs/no_auto.rs::build_missing_prebuilt_ext_lib`** — literally
+   `cargo build --release -p perry-ext-http`. Reached whenever
+   `PERRY_NO_AUTO_OPTIMIZE=1` and the archive is not on disk. This is the one
+   that produced both witnesses here.
+2. **`run_parity_tests.sh`'s node-suite net step** — a second
+   `cargo build --release -p perry-ext-net -j1` *after* the main build.
+3. **The driver's own fallback** when the #507 rebuild produced no archive; it
+   already prints "CONTEXT panic risk on tokio I/O" and proceeds anyway.
+4. **Any hand-run `cargo build -p perry-ext-http`** before a
+   `PERRY_SKIP_BUILD=1` gap run — which is what the reporting agents did, since
+   `PERRY_SKIP_BUILD=1` exports `PERRY_NO_AUTO_OPTIMIZE=1` and then builds
+   nothing.
+
+### Does `listener.rs:304` need a separate fix?
+
+**No.** Same cause, same fix. The one-frame difference is only *where the
+wrapper first touched the reactor*: perry-ext-http calls `tokio::spawn`
+directly at `server.rs:911`, while perry-ext-net calls `TcpListener::bind`,
+whose `PollEvented::new` reaches `Handle::current()` one frame deeper inside
+tokio. Both were reproduced here and both are explained by the same three-way
+tokio split above.
+
+### Why CI never saw it
+
+`conformance-smoke` (the 8 gap shards) runs on `ubuntu-latest` and builds every
+archive in **one** `cargo build` invocation, so the invariant holds there by
+accident. The last `test.yml` run on `main` has all 8 gap shards green while
+these six abort on a macOS dev box. That is why "the gap suite is red on main"
+and "CI is green" were both true.
+
+---
+
+## 2. The fix
+
+Three parts, in order of how much they matter.
+
+**(a) A link-time check that can fail.**
+`crates/perry/src/commands/compile/shared_tokio.rs` parses the `ar` container
+in-process (no `llvm-ar` dependency — a gate whose tool may be absent is a gate
+that silently stops gating), reads each archive's `tokio-<hash>` compilation id
+out of the member names, and compares `libperry_stdlib.a` against every
+tokio-using wrapper on the link line. A mismatch is a hard error naming **both
+ids** and the single `cargo build` that fixes it. The check reports what it
+compared (`SharedTokioReport::compared_anything`), so a run that compared
+nothing is distinguishable from a run that found no mismatch.
+
+Only wrappers where `binding_needs_shared_tokio` is true are checked — the same
+predicate the #507 rebuild uses to decide what to fold into its invocation, so
+the check and the fix cannot drift apart. A CPU-only wrapper (bcrypt, argon2)
+never enters a tokio context, and requiring a shared compilation there would
+fail links that work.
+
+**(b) Stop manufacturing the mismatch.**
+`build_missing_prebuilt_ext_lib` now refuses to build a tokio-using wrapper on
+its own under `PERRY_NO_AUTO_OPTIMIZE`, and says what to run instead. It cannot
+repair the situation itself: building the wrapper *with* `perry-stdlib-static`
+would fix tokio but silently overwrite the prebuilt stdlib with this
+invocation's feature set, dropping the `external-*-pump` features the no-auto
+flow needs — trading an abort for a hang.
+
+**(c) Make the harness's own builds coherent.**
+`run_parity_tests.sh`: fold `-p perry-ext-net` into `BUILD_PACKAGES` instead of
+a second invocation, and under `PERRY_SKIP_BUILD=1` verify every required ext
+archive is present in `PERRY_RUNTIME_DIR` before running anything — with the
+exact command, instead of leaving the operator to decode six SIGABRTs.
+
+---
+
+## 3. #7990 — the FATAL message was wrong, and the header says why
+
+Not the same cause as #7629 (that one is a link-graph defect; this is inside the
+collector). What is shared is the shape: **an error that names a cause its own
+tool refutes.**
+
+`gc_pin_sites.py` reports OK on this tree, and both of its allowlisted
+exceptions are test-only (`gc/malloc.rs`'s `push_test_object`, and the latch
+sabotage test), so neither can be reached from a user program. The only
+production writers of `GC_FLAG_PINNED` are `pin_object` and
+`pin_object_non_young`. The message's stated cause is therefore refuted, exactly
+as the issue says.
+
+### What the reported header actually says
+
+```
+obj_type=8 size=731 flags=0x37   (MARKED|ARENA|PINNED|INTERNED|TENURED)
+```
+
+Two of those decode differently than the issue assumed:
+
+* **`TENURED` on a "young" object is not an anomaly.** `gc/types.rs` is explicit:
+  *"Non-moving generational: tenured objects stay physically in nursery (no
+  copying / forwarding-pointer machinery), but the trace pretends they're
+  old-gen."* So TENURED + nursery-resident is the ordinary state.
+
+* **`INTERNED` on a `GC_TYPE_MAP` is a contradiction.** `GC_FLAG_INTERNED` is
+  written in exactly one file — `string/intern.rs`, two sites — and only on
+  strings. Every other reference reads it, or *preserves* it across a move
+  (`copying.rs:748`, `oldgen.rs:1932`). Nothing ever sets it on a Map.
+
+So the header is **not a coherent live Map**. It reads like memory that once
+held an interned string. That points at the #7154 rooting class — the same
+class the rest of the sweep produces on other seeds — reaching the collector
+rather than surfacing later in JS, *not* at pin bookkeeping. It also explains
+the ~1-in-16 rate: an unrooted *register* only goes bad when a collection lands
+in its window, so it is intermittent; a bad *cache* would be reproducible.
+
+Note also that the latch check in `move_young` runs **before** the existing
+size/plausibility guard a few lines below it, so a garbage header is
+attributed to the pin latch before anything asks whether it is a plausible
+object at all.
+
+### What changed
+
+`gc/pin.rs` grows `header_incoherence()` and `pinned_young_move_report()`, and
+`copying.rs`'s reporter calls them. The message now:
+
+* decodes the flags byte by name (no more hand-decoding `0x37`);
+* prints a **coherence verdict** computed from the header at the instant of the
+  abort — the only moment that evidence exists;
+* explains TENURED-on-young instead of leaving it looking suspicious;
+* lists five candidates in the order the evidence separates them, with the
+  pin-site scan **last** and a note saying why it led before;
+* points the incoherent case at `PERRY_GC_ZEAL=1 PERRY_GC_PROTECT_FROMSPACE=1
+  PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`, because the default depth of 4 misses
+  a window hundreds of collections wide.
+
+Unit tests in `pin.rs` pin all of that, including a case built from #7990's
+exact header bytes and a case proving the verdict can come out "consistent"
+(a verdict that can only say one thing is decoration).
+
+### What is NOT closed on #7990
+
+The underlying fault. This change makes the abort *point at the right
+investigation*; it does not find the unrooted slot. Deliberately no CI gate:
+at ~6% of runs, a gate would go red on a healthy tree often enough to teach
+people to ignore it — the same reasoning that declined to gate #7803's 19%.
