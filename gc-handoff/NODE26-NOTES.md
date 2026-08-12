@@ -1,6 +1,6 @@
 # Node 26 everywhere — inventory, verdicts, and what must be regenerated
 
-Status: IN PROGRESS (written incrementally; see "Open" at the bottom).
+Status: COMPLETE. PR https://github.com/PerryTS/perry/pull/7967
 
 Owner directive: "We want Node 26 everywhere." Project oracle is **26.5.1**
 (`.node-version`, authoritative).
