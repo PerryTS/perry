@@ -1,6 +1,7 @@
 //! Lowering of variable declarations that may carry destructuring patterns.
 
 use super::*;
+use swc_common::Spanned;
 
 use super::var_decl_sources::*;
 
@@ -231,6 +232,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            ctx.record_local_source_span(id, ident.id.span);
             if !mutable {
                 ctx.mark_local_immutable(id);
             }
@@ -435,6 +437,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            ctx.record_local_source_span(id, decl.name.span());
             if !mutable {
                 ctx.mark_local_immutable(id);
             }

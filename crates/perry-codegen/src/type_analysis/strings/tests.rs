@@ -107,6 +107,7 @@ fn concat_probe_ir(property: &str) -> String {
         class_display_names: HashMap::new(),
         closure_source_text: HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: HashMap::new(),
     };
     let opts = CompileOptions {

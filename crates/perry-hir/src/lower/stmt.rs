@@ -6,6 +6,7 @@
 
 use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -179,7 +180,7 @@ pub(crate) fn collect_for_of_pattern_leaves(
     match pat {
         ast::Pat::Ident(ident) => {
             let name = ident.id.sym.to_string();
-            let id = ctx.define_local(name.clone(), Type::Any);
+            let id = ctx.define_local_spanned(name.clone(), Type::Any, ident.id.span);
             out.push((name, id));
         }
         ast::Pat::Array(arr_pat) => {
@@ -196,7 +197,7 @@ pub(crate) fn collect_for_of_pattern_leaves(
                 match prop {
                     ast::ObjectPatProp::Assign(assign) => {
                         let name = assign.key.sym.to_string();
-                        let id = ctx.define_local(name.clone(), Type::Any);
+                        let id = ctx.define_local_spanned(name.clone(), Type::Any, assign.key.span);
                         out.push((name, id));
                     }
                     ast::ObjectPatProp::KeyValue(kv) => {
@@ -1188,6 +1189,7 @@ pub(crate) fn lower_stmt(
                             Some(id) => id,
                             None => ctx.define_local(binding_name.clone(), Type::Any),
                         };
+                        ctx.record_local_source_span(class_local_id, class_decl.ident.span);
                         module.init.push(Stmt::Let {
                             id: class_local_id,
                             name: binding_name,
@@ -1514,7 +1516,11 @@ pub(crate) fn lower_stmt(
                                 let name = get_binding_name(&decl.name)?;
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-                                let id = ctx.define_local(name.clone(), Type::Any);
+                                let id = ctx.define_local_spanned(
+                                    name.clone(),
+                                    Type::Any,
+                                    decl.name.span(),
+                                );
                                 ctx.var_hoisted_ids.insert(id);
                                 module.init.push(Stmt::Let {
                                     id,
@@ -1554,7 +1560,11 @@ pub(crate) fn lower_stmt(
                                 let ty = for_init_binding_type(ctx, decl, &name);
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-                                let id = ctx.define_local(name.clone(), ty.clone());
+                                let id = ctx.define_local_spanned(
+                                    name.clone(),
+                                    ty.clone(),
+                                    decl.name.span(),
+                                );
                                 module.init.push(Stmt::Let {
                                     id,
                                     name,
@@ -1596,7 +1606,11 @@ pub(crate) fn lower_stmt(
                                         .as_ref()
                                         .map(|e| lower_expr(ctx, e))
                                         .transpose()?;
-                                    let id = ctx.define_local(name.clone(), ty.clone());
+                                    let id = ctx.define_local_spanned(
+                                        name.clone(),
+                                        ty.clone(),
+                                        decl.name.span(),
+                                    );
                                     Some(Box::new(Stmt::Let {
                                         id,
                                         name,
@@ -1662,7 +1676,11 @@ pub(crate) fn lower_stmt(
                 let mut binding_stmts: Vec<Stmt> = Vec::new();
                 let param = if let Some(ref pat) = catch_clause.param {
                     let param_name = get_pat_name(pat)?;
-                    let param_id = ctx.define_local(param_name.clone(), Type::Any);
+                    let param_id = if matches!(pat, ast::Pat::Ident(_)) {
+                        ctx.define_local_spanned(param_name.clone(), Type::Any, pat.span())
+                    } else {
+                        ctx.define_local(param_name.clone(), Type::Any)
+                    };
                     // Destructured catch binding — `catch ([a, b = d()])` /
                     // `catch ({ message })`: bind the pattern leaves off the
                     // exception value before the user body runs.

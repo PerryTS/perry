@@ -60,6 +60,7 @@ pub(super) fn lower_nested_fn_decl(
         ctx.lookup_local(&func_name)
             .unwrap_or_else(|| ctx.define_local(func_name.clone(), Type::Any))
     };
+    ctx.record_local_source_span(local_id, fn_decl.ident.span);
 
     let scope_mark = ctx.enter_scope();
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
@@ -78,7 +79,7 @@ pub(super) fn lower_nested_fn_decl(
             continue;
         }
         let is_rest = is_rest_param(&param.pat);
-        let param_id = ctx.define_local(param_name.clone(), Type::Any);
+        let param_id = ctx.define_local_spanned(param_name.clone(), Type::Any, param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
         params.push(Param {

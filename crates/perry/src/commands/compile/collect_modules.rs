@@ -472,11 +472,10 @@ fn collect_module_one(
     // left untouched.
     let was_cjs_wrapped =
         (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
-    // #5247: when `--debug-symbols` is on, capture where the original module
-    // body lands inside the wrapped output so source-location resolution can
-    // map a wrapped-coordinate byte offset back to an original-source line.
-    // `None` unless we both wrapped this module AND debug symbols are on, so
-    // the default build does no extra work.
+    // #5247 / #7036: when source locations are requested, capture where the
+    // original module body lands inside the wrapped output so debug frames and
+    // opt reports can map a wrapped-coordinate byte offset back to an
+    // original-source line. The default build does no extra work.
     let mut cjs_wrap_body_prefix_lines: Option<u32> = None;
     let source = if was_cjs_wrapped {
         if ctx.debug_symbols {

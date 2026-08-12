@@ -6,6 +6,7 @@
 
 use crate::types::{LocalId, Type};
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -1191,6 +1192,7 @@ pub(crate) fn lower_module_decl(
                             } else {
                                 ctx.define_local(name.clone(), ty.clone())
                             };
+                            ctx.record_local_source_span(id, decl.name.span());
                             module.init.push(Stmt::Let {
                                 id,
                                 name: name.clone(),
@@ -1269,6 +1271,7 @@ pub(crate) fn lower_module_decl(
                             } else {
                                 ctx.define_local(name.clone(), ty.clone())
                             };
+                            ctx.record_local_source_span(id, decl.name.span());
                             module.init.push(Stmt::Let {
                                 id,
                                 name: name.clone(),

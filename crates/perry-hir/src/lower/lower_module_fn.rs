@@ -627,6 +627,7 @@ pub fn lower_module_full(
                 && ctx.lookup_local(&func_name).is_none()
             {
                 let local_id = ctx.define_local(func_name.clone(), Type::Any);
+                ctx.record_local_source_span(local_id, fn_decl.ident.span);
                 ctx.function_valued_locals.insert(local_id);
                 module.init.push(Stmt::Let {
                     id: local_id,
@@ -1288,6 +1289,8 @@ pub fn lower_module_full(
             module.enums.push(en);
         }
     }
+
+    module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
 
     Ok((module, ctx.next_class_id))
 }

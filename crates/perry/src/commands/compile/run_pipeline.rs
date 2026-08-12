@@ -303,9 +303,11 @@ pub fn run_with_parse_cache(
         .clone()
         .or_else(|| object_cache::cache_dir_override(&ctx.cache_root));
     ctx.cache_dir = object_cache::resolve_cache_dir(&ctx.cache_root, cache_dir_override.as_deref());
-    // #5247: propagate `--debug-symbols` so `collect_modules` records the
-    // CJS-wrap source mapping needed to render original-source line numbers.
-    ctx.debug_symbols = args.debug_symbols;
+    // #5247 / #7036: ask `collect_modules` to retain the CJS wrapper source
+    // mapping whenever a later consumer needs original-source line numbers.
+    // Text opt reports use the mapping for declaration snippets but do not
+    // otherwise enable debug locations or symbols.
+    ctx.debug_symbols = args.debug_symbols || opt_report_format == Some(OptReportFormat::Text);
 
     let build_cache_probe =
         BuildCacheProbe::new(&args, &project_root, &ctx.cache_root, &ctx.cache_dir);
@@ -4304,15 +4306,19 @@ pub fn run_with_parse_cache(
                 // the module's original source so codegen can map a Call's byte
                 // offset to a 1-based line.
                 debug_locations: args.debug_symbols,
-                // #5247: source consulted to turn a node's `byte_offset` into a
-                // line. For a CommonJS module the offsets are in WRAPPED-source
+                // #5247 / #7036: source consulted to turn a node's `byte_offset`
+                // into a debug frame or opt-report snippet. For a CommonJS
+                // module the offsets are in WRAPPED-source
                 // coordinates (perry parsed the injected-IIFE text), so we hand
                 // codegen the WRAPPED source — counting newlines up to a wrapped
                 // offset against the original would be off by the preamble byte
                 // length. `debug_source_line_offset` (below) then converts the
                 // wrapped line back to the original line. Non-wrapped modules
-                // read the original from disk.
-                module_source: if args.debug_symbols {
+                // read the original from disk. Text reports need this source;
+                // JSON reports only need the offset already carried by HIR.
+                module_source: if args.debug_symbols
+                    || opt_report_format == Some(OptReportFormat::Text)
+                {
                     match ctx.cjs_wrap_debug_sources.get(path) {
                         Some(w) => Some(w.wrapped_source.clone()),
                         None => std::fs::read_to_string(path).ok(),
@@ -4325,7 +4331,9 @@ pub fn run_with_parse_cache(
                 // Codegen subtracts this from the wrapped line number so the
                 // rendered location is in original-source coordinates. `0` for
                 // non-wrapped modules (and the entire default build).
-                debug_source_line_offset: if args.debug_symbols {
+                debug_source_line_offset: if args.debug_symbols
+                    || opt_report_format == Some(OptReportFormat::Text)
+                {
                     ctx.cjs_wrap_debug_sources
                         .get(path)
                         .map(|w| w.prefix_line_count)

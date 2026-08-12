@@ -103,6 +103,23 @@ pub fn inline_functions(
     extra_class_fields: &HashMap<(String, String), String>,
     extra_anon_classes: &HashMap<String, &Class>,
 ) {
+    let first_fresh_id = find_max_local_id_in_module(module).saturating_add(1);
+    let span_remaps = crate::source_spans::RemapSession::start(first_fresh_id);
+    inline_functions_inner(
+        module,
+        extra_methods,
+        extra_class_fields,
+        extra_anon_classes,
+    );
+    span_remaps.finish(&mut module.local_source_spans);
+}
+
+fn inline_functions_inner(
+    module: &mut Module,
+    extra_methods: &HashMap<(String, String), MethodCandidate>,
+    extra_class_fields: &HashMap<(String, String), String>,
+    extra_anon_classes: &HashMap<String, &Class>,
+) {
     // ── Cross-module anon-class propagation ──
     // Anon-shape classes (`__AnonShape_<hash>`) are content-addressed by
     // their canonical shape key, so the same shape across modules produces
@@ -798,5 +815,48 @@ mod tests {
 
         let class_names: Vec<&str> = module.classes.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(class_names, vec!["__AnonShape_aaa", "__AnonShape_bbb"]);
+    }
+
+    #[test]
+    fn inlined_body_local_keeps_its_source_span() {
+        let original_id = 7;
+        let span = perry_hir::LocalSourceSpan { start: 30, end: 35 };
+        let body = vec![
+            Stmt::Let {
+                id: original_id,
+                name: "boxed".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Object(Vec::new())),
+            },
+            Stmt::Return(Some(Expr::LocalGet(original_id))),
+        ];
+        let mut module = Module::new("inline-spans.ts");
+        module.functions.push(function(1, body));
+        module.init.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::FuncRef(1)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }));
+        module.local_source_spans.insert(original_id, span);
+
+        inline_functions(
+            &mut module,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let cloned_id = module
+            .init
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::Let { id, name, .. } if name == "boxed" => Some(*id),
+                _ => None,
+            })
+            .expect("the function body should be inlined into module init");
+        assert_ne!(cloned_id, original_id);
+        assert_eq!(module.local_source_spans.get(&cloned_id), Some(&span));
     }
 }

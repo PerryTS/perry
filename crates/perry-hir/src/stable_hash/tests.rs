@@ -21,6 +21,20 @@ fn same_hir_hashes_identically() {
 }
 
 #[test]
+fn report_only_local_spans_do_not_change_the_stable_hash() {
+    let module = empty_module();
+    let mut with_span = module.clone();
+    with_span
+        .local_source_spans
+        .insert(4, LocalSourceSpan { start: 10, end: 15 });
+    assert_eq!(
+        hash_module(&module),
+        hash_module(&with_span),
+        "source-only report metadata must not invalidate an object-cache key"
+    );
+}
+
+#[test]
 fn behavior_change_changes_hash() {
     let mut m1 = empty_module();
     let mut m2 = empty_module();

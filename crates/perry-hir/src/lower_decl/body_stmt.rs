@@ -1,5 +1,6 @@
 use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::analysis::*;
@@ -372,6 +373,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // in-factory construction is per-evaluation on both paths.
                 if fresh_binding {
                     let class_local = ctx.define_local(class_name.clone(), Type::Any);
+                    ctx.record_local_source_span(class_local, class_decl.ident.span);
                     result.push(Stmt::Let {
                         id: class_local,
                         name: class_name.clone(),
@@ -405,6 +407,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // packages (no collision) are byte-for-byte unaffected.
                 if !fresh_binding && ctx.lookup_local(&class_name).is_some() {
                     let class_local = ctx.define_local(class_name.clone(), Type::Any);
+                    ctx.record_local_source_span(class_local, class_decl.ident.span);
                     result.push(Stmt::Let {
                         id: class_local,
                         name: class_name.clone(),
@@ -668,7 +671,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                 let name = get_binding_name(&decl.name)?;
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-                                let id = ctx.define_local(name.clone(), Type::Any);
+                                let id = ctx.define_local_spanned(
+                                    name.clone(),
+                                    Type::Any,
+                                    decl.name.span(),
+                                );
                                 ctx.var_hoisted_ids.insert(id);
                                 result.push(Stmt::Let {
                                     id,
@@ -710,7 +717,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                 // #7547: same type computation as an ordinary
                                 // `let`/`const`, not a hardcoded `Any`.
                                 let ty = crate::destructuring::for_init_decl_type(ctx, decl);
-                                let id = ctx.define_local(name.clone(), ty.clone());
+                                let id = ctx.define_local_spanned(
+                                    name.clone(),
+                                    ty.clone(),
+                                    decl.name.span(),
+                                );
                                 result.push(Stmt::Let {
                                     id,
                                     name,
@@ -756,7 +767,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                     // unblocks every expression computed from
                                     // it — see `for_init_decl_type`.
                                     let ty = crate::destructuring::for_init_decl_type(ctx, decl);
-                                    let id = ctx.define_local(name.clone(), ty.clone());
+                                    let id = ctx.define_local_spanned(
+                                        name.clone(),
+                                        ty.clone(),
+                                        decl.name.span(),
+                                    );
                                     Some(Box::new(Stmt::Let {
                                         id,
                                         name,
@@ -813,7 +828,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 let mut binding_stmts: Vec<Stmt> = Vec::new();
                 let param = if let Some(ref pat) = catch_clause.param {
                     let param_name = get_pat_name(pat)?;
-                    let param_id = ctx.define_local(param_name.clone(), Type::Any);
+                    let param_id = if matches!(pat, ast::Pat::Ident(_)) {
+                        ctx.define_local_spanned(param_name.clone(), Type::Any, pat.span())
+                    } else {
+                        ctx.define_local(param_name.clone(), Type::Any)
+                    };
                     ctx.shadow_native_instance_if_present(&param_name);
                     ctx.shadow_native_module_if_present(&param_name);
                     // Destructured catch binding — `catch ([a, b = d()])` /
@@ -1587,7 +1606,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         match &decl.name {
                             ast::Pat::Ident(ident) => {
                                 let name = ident.id.sym.to_string();
-                                let id = ctx.define_local(name.clone(), item_hir_type.clone());
+                                let id = ctx.define_local_spanned(
+                                    name.clone(),
+                                    item_hir_type.clone(),
+                                    ident.id.span,
+                                );
                                 if var_decl.kind == ast::VarDeclKind::Const {
                                     // `for (const x of …) { x = 1; }` → TypeError.
                                     ctx.mark_local_immutable(id);
@@ -1604,7 +1627,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                     for elem_pat in arr_pat.elems.iter().flatten() {
                                         if let ast::Pat::Ident(ident) = elem_pat {
                                             let name = ident.id.sym.to_string();
-                                            let id = ctx.define_local(name.clone(), Type::Any);
+                                            let id = ctx.define_local_spanned(
+                                                name.clone(),
+                                                Type::Any,
+                                                ident.id.span,
+                                            );
                                             ids.push((name, id));
                                         }
                                     }
@@ -1620,7 +1647,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             }
                             _ => {
                                 let name = get_binding_name(&decl.name)?;
-                                let id = ctx.define_local(name.clone(), Type::Any);
+                                let id = ctx.define_local_spanned(
+                                    name.clone(),
+                                    Type::Any,
+                                    decl.name.span(),
+                                );
                                 vec![(name, id)]
                             }
                         }

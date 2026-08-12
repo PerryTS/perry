@@ -134,6 +134,7 @@ fn module_with_classes_and_params(
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -7513,6 +7514,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -7687,6 +7689,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -7779,6 +7782,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     };
     match case {
@@ -7893,6 +7897,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -7970,6 +7975,7 @@ fn typed_i1_i32_predicate_module() -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
@@ -8096,6 +8102,7 @@ fn typed_i32_return_module(case: &str) -> Module {
         class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
+        local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }

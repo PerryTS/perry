@@ -410,10 +410,11 @@ pub struct CompileOptions {
     /// `js_set_call_location(file, line)` so the thrown TypeError's `.stack`
     /// shows `at <file>:<line>`.
     pub debug_locations: bool,
-    /// #5247: this module's original source text, used at codegen to resolve a
-    /// `Call`'s `byte_offset` to a 1-based line number. Only set when
-    /// `debug_locations` is on (avoids cloning source for every module in the
-    /// common build). `None` falls back to the `<anonymous>` frame.
+    /// #5247 / #7036: this module's original source text, used at codegen to
+    /// resolve byte offsets for debug call frames and text optimization-report
+    /// snippets. Set only when either consumer is active (avoids cloning source
+    /// for every module in the common build). `None` falls back to the
+    /// `<anonymous>` frame or a raw byte offset.
     pub module_source: Option<String>,
     /// #5247 (CJS-wrap coordinate skew): for a CommonJS module rewritten by
     /// `cjs_wrap`, `module_source` is the WRAPPED text and `byte_offset`s are in

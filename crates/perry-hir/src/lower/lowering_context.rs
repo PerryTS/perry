@@ -70,6 +70,9 @@ pub(crate) struct MixinFn {
 pub struct LoweringContext {
     /// Counter for generating unique local IDs
     pub(crate) next_local_id: LocalId,
+    /// User-visible declaration spans keyed by the `LocalId` allocated during
+    /// lowering. Synthetic compiler locals intentionally have no entry.
+    pub(crate) local_source_spans: HashMap<LocalId, LocalSourceSpan>,
     /// Counter for generating unique global IDs
     // #854: initialized in `new` but not yet read by the lowerer (globals are
     // allocated through a different path today). Kept for the ID-counter set.

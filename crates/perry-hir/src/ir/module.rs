@@ -3,6 +3,19 @@
 use super::*;
 use crate::types::{FuncId, Type};
 
+/// Source range of a user-visible local binding.
+///
+/// Offsets use SWC's 1-based `BytePos` coordinates. Keeping this metadata in a
+/// side table lets optimization reports resolve a `LocalId` without making
+/// source locations part of every HIR statement or expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalSourceSpan {
+    /// Inclusive start byte position.
+    pub start: u32,
+    /// Exclusive end byte position.
+    pub end: u32,
+}
+
 /// A complete HIR module (corresponds to one TypeScript file)
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -138,6 +151,13 @@ pub struct Module {
     /// generator registry, which drives `%AsyncGeneratorFunction%` / `%Async
     /// Generator%` intrinsic resolution. Populated by `transform_generators`.
     pub async_generator_funcs: std::collections::HashSet<crate::types::FuncId>,
+    /// Source declaration spans for user-visible locals, keyed by `LocalId`.
+    ///
+    /// This is observational metadata for diagnostics and optimization
+    /// reports. It deliberately does not participate in the stable HIR hash:
+    /// moving a declaration without changing its HIR must not invalidate an
+    /// otherwise reusable object file.
+    pub local_source_spans: std::collections::HashMap<crate::types::LocalId, LocalSourceSpan>,
     /// Number of leading parameter-prologue statements (default-param guards +
     /// destructuring binding stmts) in each generator / async-generator
     /// function body, keyed by func_id. Per spec, generator parameter binding
@@ -184,6 +204,7 @@ impl Module {
             class_display_names: std::collections::HashMap::new(),
             closure_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
+            local_source_spans: std::collections::HashMap::new(),
             gen_param_prologue_len: std::collections::HashMap::new(),
         }
     }

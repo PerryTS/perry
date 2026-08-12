@@ -35,11 +35,9 @@
 //!
 //! ## What it can and cannot see
 //!
-//! v1 reports **function + variable name**, because HIR carries names but not
-//! source spans (`Stmt::Let` is `{id, name, ty, mutable, init}`). A
-//! `LocalId -> Span` side-table populated during AST→HIR lowering would add
-//! `file:line` and source snippets; that is tracked separately and is
-//! strictly additive to this output.
+//! HIR carries a report-only `LocalId -> LocalSourceSpan` side table. The text
+//! renderer resolves it to `file:line:column` plus a source snippet, while the
+//! stable JSON schema continues to expose the existing `byte_offset` field.
 
 mod callbacks;
 mod render;
@@ -48,7 +46,7 @@ pub(crate) use callbacks::scan_module;
 pub use render::{render_json, render_text};
 
 use std::cell::RefCell;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// `PERRY_OPT_REPORT` gate. Off unless the value is one of `1` / `text` /
 /// `json` (`0`, `off`, `false`, empty, and unset are all off).
@@ -136,6 +134,9 @@ pub(crate) mod test_support {
             FORCED.store(true, Ordering::Relaxed);
             claim_recording_thread();
             let _ = super::take_entries();
+            if let Ok(mut sources) = super::report_sources().lock() {
+                sources.clear();
+            }
             // The drain above may itself have collapsed leftovers; zero the
             // counter so a hand-built render test never reads a neighbour's.
             super::MASKED_BY_DEDUP.store(0, Ordering::Relaxed);
@@ -152,6 +153,9 @@ pub(crate) mod test_support {
             FORCED.store(false, Ordering::Relaxed);
             claim_recording_thread();
             let _ = super::take_entries();
+            if let Ok(mut sources) = super::report_sources().lock() {
+                sources.clear();
+            }
             super::MASKED_BY_DEDUP.store(0, Ordering::Relaxed);
             Session { _guard: guard }
         }
@@ -454,10 +458,10 @@ pub struct Entry {
     pub invoked_per_element: Option<String>,
     /// Extra collector-specific context (class name, offending use site).
     pub detail: Option<String>,
-    /// Byte offset in the module source, when the HIR node happens to carry
-    /// one. Only `Expr::New` does today (#5253, captured for constructor
-    /// TypeErrors), so this is populated for allocation sites and `None` for
-    /// ordinary locals — HIR drops positions at lowering.
+    /// Byte offset in the module source. Allocation sites use their node's
+    /// offset; named locals resolve through `Module::local_source_spans` to
+    /// their declaration identifier. The field predates declaration spans, so
+    /// JSON consumers get the new information without a schema change.
     pub byte_offset: Option<u32>,
     /// For [`Outcome::Consumed`]: which codegen lowering applied the proof
     /// (`ptr_shape_set`, `ptr_shape_update`, …). `None` for every other
@@ -590,6 +594,9 @@ struct Scope {
     function: String,
     region: RegionKind,
     invoked_per_element: Option<String>,
+    /// Report-only declaration locations inherited by every nested region in
+    /// this module. `Arc` keeps region entry O(1).
+    local_source_spans: Arc<std::collections::HashMap<u32, perry_hir::LocalSourceSpan>>,
     /// #7170 R0: this region is a function that carries a **return-shape fact**
     /// (`collectors/ptr_shape_returns.rs`, #7107), so its `return new C(...)`
     /// sites already feed an existing mechanism.
@@ -670,6 +677,7 @@ pub(crate) fn enter_function_region(function: &str, return_shape_producer: bool)
         function: function.to_string(),
         region: RegionKind::Function,
         invoked_per_element: None,
+        local_source_spans: current_local_source_spans(),
         return_shape_producer,
     };
     let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
@@ -700,6 +708,35 @@ fn current_module() -> String {
             .map(|sc| sc.module.clone())
             .unwrap_or_else(|| String::from("<unknown>"))
     })
+}
+
+fn current_local_source_spans() -> Arc<std::collections::HashMap<u32, perry_hir::LocalSourceSpan>> {
+    SCOPE.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|sc| Arc::clone(&sc.local_source_spans))
+            .unwrap_or_default()
+    })
+}
+
+fn local_byte_offset(local_id: Option<u32>, explicit: Option<u32>) -> Option<u32> {
+    let local = || {
+        let id = local_id?;
+        SCOPE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .and_then(|sc| sc.local_source_spans.get(&id))
+                .map(|span| span.start)
+        })
+    };
+    match explicit {
+        // Zero denotes a synthesized node. Prefer a real binding declaration
+        // when this entry has one, but preserve the existing zero for unbound
+        // allocation-site rows.
+        Some(0) => local().or(Some(0)),
+        Some(offset) => Some(offset),
+        None => local(),
+    }
 }
 
 /// Kind of the lowering region currently being emitted, for the one
@@ -734,6 +771,7 @@ pub(crate) fn enter(module: &str, function: &str, region: RegionKind) -> ScopeGu
         function: function.to_string(),
         region,
         invoked_per_element: None,
+        local_source_spans: current_local_source_spans(),
         return_shape_producer: false,
     };
     let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
@@ -768,6 +806,7 @@ pub(crate) fn enter_closure(
         function: function.to_string(),
         region: RegionKind::Closure,
         invoked_per_element: per_element_role(Some(func_id)),
+        local_source_spans: current_local_source_spans(),
         return_shape_producer,
     };
     let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
@@ -811,6 +850,41 @@ fn per_element_role(func_id: Option<u32>) -> Option<String> {
 // ── Sink ───────────────────────────────────────────────────────────────────
 
 static SINK: OnceLock<Mutex<Vec<Entry>>> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+pub(super) struct ReportSource {
+    pub source: String,
+    pub line_offset: u32,
+}
+
+static REPORT_SOURCES: OnceLock<Mutex<std::collections::HashMap<String, ReportSource>>> =
+    OnceLock::new();
+
+fn report_sources() -> &'static Mutex<std::collections::HashMap<String, ReportSource>> {
+    REPORT_SOURCES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+pub(crate) fn register_module_source(module: &str, source: &str, line_offset: u32) {
+    if !enabled() {
+        return;
+    }
+    if let Ok(mut sources) = report_sources().lock() {
+        sources.insert(
+            module.to_string(),
+            ReportSource {
+                source: source.to_string(),
+                line_offset,
+            },
+        );
+    }
+}
+
+pub(super) fn source_snapshot() -> std::collections::HashMap<String, ReportSource> {
+    report_sources()
+        .lock()
+        .map(|sources| sources.clone())
+        .unwrap_or_default()
+}
 
 fn sink() -> &'static Mutex<Vec<Entry>> {
     SINK.get_or_init(|| Mutex::new(Vec::new()))
@@ -903,7 +977,7 @@ fn deny_in_scope(d: Denial<'_>, alloc_context: Option<String>, alloc_ordinal: Op
         loop_depth: d.loop_depth,
         invoked_per_element: per_element,
         detail: d.detail,
-        byte_offset: d.byte_offset,
+        byte_offset: local_byte_offset(d.local_id, d.byte_offset),
         site: None,
         alloc_context,
         alloc_ordinal,
@@ -935,7 +1009,7 @@ pub(crate) fn deny_named(function: &str, region: RegionKind, d: Denial<'_>) {
         loop_depth: d.loop_depth,
         invoked_per_element: None,
         detail: d.detail,
-        byte_offset: d.byte_offset,
+        byte_offset: local_byte_offset(d.local_id, d.byte_offset),
         site: None,
         alloc_context: None,
         alloc_ordinal: None,
@@ -945,8 +1019,26 @@ pub(crate) fn deny_named(function: &str, region: RegionKind, d: Denial<'_>) {
 /// Open a module-wide fallback scope. Region scopes nest inside it and
 /// restore it on drop, so a site with no region of its own still knows which
 /// module it is in.
-pub(crate) fn enter_module(module: &str) -> ScopeGuard {
-    enter(module, "<module>", RegionKind::ModuleInit)
+pub(crate) fn enter_module(module: &perry_hir::Module) -> ScopeGuard {
+    if !enabled() {
+        return ScopeGuard {
+            previous: None,
+            active: false,
+        };
+    }
+    let scope = Scope {
+        module: module.name.clone(),
+        function: String::from("<module>"),
+        region: RegionKind::ModuleInit,
+        invoked_per_element: None,
+        local_source_spans: Arc::new(module.local_source_spans.clone()),
+        return_shape_producer: false,
+    };
+    let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
+    ScopeGuard {
+        previous,
+        active: true,
+    }
 }
 
 /// Record a value that *did* get an unboxed representation, attributed to the
@@ -995,7 +1087,7 @@ pub(crate) fn select(
         loop_depth,
         invoked_per_element: per_element,
         detail,
-        byte_offset: None,
+        byte_offset: local_byte_offset(local_id, None),
         site: None,
         alloc_context: None,
         alloc_ordinal: None,
@@ -1033,7 +1125,7 @@ pub(crate) fn select_explicit(
         loop_depth: 0,
         invoked_per_element: None,
         detail: None,
-        byte_offset: None,
+        byte_offset: local_byte_offset(local_id, None),
         site: None,
         alloc_context: None,
         alloc_ordinal: None,
@@ -1104,7 +1196,7 @@ pub(crate) fn consume(
         loop_depth: 0,
         invoked_per_element: None,
         detail: Some(format!("consumed at {site}")),
-        byte_offset: None,
+        byte_offset: local_byte_offset(local_id, None),
         site: Some(site.to_string()),
         alloc_context: None,
         alloc_ordinal: None,
@@ -1154,7 +1246,7 @@ pub(crate) fn unconsumed(u: Unconsumed<'_>) {
         loop_depth: 0,
         invoked_per_element: None,
         detail: u.detail,
-        byte_offset: None,
+        byte_offset: local_byte_offset(u.local_id, None),
         site: None,
         alloc_context: None,
         alloc_ordinal: None,
@@ -1239,6 +1331,32 @@ mod tests {
     #[test]
     fn deeper_loops_outrank_shallower_ones() {
         assert!(entry("f", 3, None).rank() < entry("f", 1, None).rank());
+    }
+
+    #[test]
+    fn local_span_populates_the_existing_byte_offset_field() {
+        let session = test_support::Session::start();
+        let mut module = perry_hir::Module::new("span.ts");
+        module
+            .local_source_spans
+            .insert(7, perry_hir::LocalSourceSpan { start: 24, end: 29 });
+        let _module_scope = enter_module(&module);
+        deny(Denial {
+            position: Position::Local,
+            name: "boxed",
+            local_id: Some(7),
+            analysis: Analysis::PtrShape,
+            rule: "rule 2 (containment)",
+            reason: "escapes",
+            tier: Tier::Fixable,
+            issue: None,
+            loop_depth: 0,
+            detail: None,
+            byte_offset: None,
+        });
+        let entries = session.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].byte_offset, Some(24));
     }
 
     /// One analysis, one spelling. The summary rows use [`Analysis::as_str`]

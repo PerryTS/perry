@@ -58,7 +58,7 @@ pub(crate) fn predefine_for_head(
             match &decl.name {
                 ast::Pat::Ident(ident) => {
                     let name = ident.id.sym.to_string();
-                    let id = ctx.define_local(name.clone(), elem_ty);
+                    let id = ctx.define_local_spanned(name.clone(), elem_ty, ident.id.span);
                     if var_decl.kind == ast::VarDeclKind::Const {
                         // `for (const k in/of …) { k = 1; }` → TypeError.
                         ctx.mark_local_immutable(id);

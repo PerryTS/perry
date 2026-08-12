@@ -207,10 +207,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // callbacks before any region is lowered, so their denials carry the
     // per-element hotness column. No-op when the report is off.
     crate::opt_report::scan_module(hir);
+    if let Some(source) = opts.module_source.as_deref() {
+        crate::opt_report::register_module_source(&hir.name, source, opts.debug_source_line_offset);
+    }
     // Module-wide fallback attribution scope. Per-region scopes nest inside
     // it and restore it on drop, so decisions taken outside any region (the
     // specialized-ABI entry decision) still know their module.
-    let _opt_report_module_scope = crate::opt_report::enter_module(&hir.name);
+    let _opt_report_module_scope = crate::opt_report::enter_module(hir);
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target

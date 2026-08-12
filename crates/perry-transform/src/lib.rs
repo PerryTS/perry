@@ -14,6 +14,7 @@ pub mod generator;
 pub mod i18n;
 pub mod inline;
 pub mod prop_cse;
+mod source_spans;
 pub mod state_desugar;
 pub mod unroll;
 

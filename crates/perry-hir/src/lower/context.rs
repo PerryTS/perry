@@ -70,6 +70,7 @@ impl LoweringContext {
         let tagged_template_site_salt = stable_module_salt(&module_identity);
         Self {
             next_local_id: 0,
+            local_source_spans: HashMap::new(),
             next_global_id: 0,
             next_func_id: 0,
             next_class_id: start_class_id, // Start from the provided ID to avoid collisions across modules
@@ -791,6 +792,34 @@ impl LoweringContext {
         }
         self.locals.push((name, id, ty));
         id
+    }
+
+    /// Define a user-visible local and retain its source declaration span for
+    /// diagnostics and optimization reports.
+    pub(crate) fn define_local_spanned(
+        &mut self,
+        name: String,
+        ty: Type,
+        span: swc_common::Span,
+    ) -> LocalId {
+        let id = self.define_local(name, ty);
+        self.record_local_source_span(id, span);
+        id
+    }
+
+    /// Attach a declaration span to an already-created local. This covers
+    /// forward/hoisted registrations whose `LocalId` is allocated before the
+    /// declaration itself is lowered.
+    pub(crate) fn record_local_source_span(&mut self, id: LocalId, span: swc_common::Span) {
+        if span.lo.0 == 0 || span.hi.0 <= span.lo.0 {
+            return;
+        }
+        self.local_source_spans
+            .entry(id)
+            .or_insert(LocalSourceSpan {
+                start: span.lo.0,
+                end: span.hi.0,
+            });
     }
 
     pub(crate) fn define_sloppy_implicit_global(&mut self, name: String) -> LocalId {

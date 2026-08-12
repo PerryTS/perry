@@ -8,7 +8,7 @@
 #![cfg(test)]
 
 use super::*;
-use crate::ir::EnumValue;
+use crate::ir::{EnumValue, Stmt};
 use crate::types::{Type, TypeParam};
 
 fn make_ctx() -> LoweringContext {
@@ -23,6 +23,68 @@ fn test_lower_define_and_lookup_local() {
     assert_eq!(ctx.lookup_local("y"), None);
     // Verify the type is stored correctly
     assert_eq!(ctx.lookup_local_type("x"), Some(&Type::Number));
+}
+
+#[test]
+fn local_declaration_span_survives_ast_to_hir_lowering() {
+    let source = "function build() {\n  const boxed = makeValue();\n  return boxed;\n}\n";
+    let module = perry_parser::parse_typescript(source, "span.ts").expect("source parses");
+    let hir = super::lower_module(&module, "span.ts", "span.ts").expect("source lowers");
+    let function = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "build")
+        .expect("function is lowered");
+    let local_id = function
+        .body
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Let { id, name, .. } if name == "boxed" => Some(*id),
+            _ => None,
+        })
+        .expect("boxed local is lowered");
+    let span = hir
+        .local_source_spans
+        .get(&local_id)
+        .expect("boxed local retains its declaration span");
+    let start = source.find("boxed").expect("binding occurs") as u32 + 1;
+    assert_eq!(span.start, start);
+    assert_eq!(span.end, start + "boxed".len() as u32);
+}
+
+#[test]
+fn source_spans_cover_export_loop_catch_and_method_bindings() {
+    let source = r#"export const exportedBox = {};
+function build(paramBox: unknown) {
+  for (let loopBox = 0; loopBox < 1; loopBox++) {}
+  try { throw 1; } catch (caughtBox) {}
+  const objBox = { method(methodBox: unknown) { return methodBox; } };
+  return paramBox;
+}
+"#;
+    let module = perry_parser::parse_typescript(source, "span-kinds.ts").expect("source parses");
+    let hir =
+        super::lower_module(&module, "span-kinds.ts", "span-kinds.ts").expect("source lowers");
+    let starts: std::collections::HashSet<u32> = hir
+        .local_source_spans
+        .values()
+        .map(|span| span.start)
+        .collect();
+
+    for name in [
+        "exportedBox",
+        "paramBox",
+        "loopBox",
+        "caughtBox",
+        "objBox",
+        "methodBox",
+    ] {
+        let expected = source.find(name).expect("binding occurs") as u32 + 1;
+        assert!(
+            starts.contains(&expected),
+            "missing declaration span for {name} at {expected}: {starts:?}"
+        );
+    }
 }
 
 #[test]

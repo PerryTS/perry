@@ -17,6 +17,7 @@
 
 use crate::types::{LocalId, Type};
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::analysis::{
@@ -233,7 +234,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         let param_name = get_pat_name(param)?;
         let is_rest = is_rest_param(param);
         let param_ty = get_pat_type(param, ctx);
-        let param_id = ctx.define_local(param_name.clone(), param_ty.clone());
+        let param_id = ctx.define_local_spanned(param_name.clone(), param_ty.clone(), param.span());
         ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
             id: param_id,
@@ -544,6 +545,9 @@ fn lower_named_fn_expr(
         ctx.exit_scope(wrapper_scope);
         return Ok(inner);
     }
+    if let Some(ident) = &fn_expr.ident {
+        ctx.record_local_source_span(self_id, ident.span);
+    }
 
     let wrapper_func_id = ctx.fresh_func();
     let body = vec![
@@ -629,7 +633,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             continue;
         }
         let is_rest = is_rest_param(&param.pat);
-        let param_id = ctx.define_local(param_name.clone(), Type::Any);
+        let param_id = ctx.define_local_spanned(param_name.clone(), Type::Any, param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
             id: param_id,

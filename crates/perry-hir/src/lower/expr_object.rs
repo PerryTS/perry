@@ -15,6 +15,7 @@
 
 use crate::types::{LocalId, Type};
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::analysis::{
@@ -243,7 +244,7 @@ fn lower_method_prop(
             continue;
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
-        let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+        let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
             id: param_id,
@@ -531,7 +532,8 @@ fn lower_accessor_prop(
         if param_name != "this" {
             let param_type = extract_param_type_with_ctx(pat, Some(ctx));
             let param_default = get_param_default(ctx, pat)?;
-            let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+            let param_id =
+                ctx.define_local_spanned(param_name.clone(), param_type.clone(), pat.span());
             ctx.shadow_native_instance_if_present(&param_name);
             params.push(Param {
                 id: param_id,

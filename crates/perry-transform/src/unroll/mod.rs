@@ -105,6 +105,7 @@ pub fn unroll_static_loops(module: &mut Module) {
     // unrolled iteration's `() => captured` read the same global.)
     let mut next_local_id = compute_max_local_id(module).saturating_add(1);
     let mut next_func_id = compute_max_func_id(module).saturating_add(1);
+    let mut source_span_remaps = Vec::new();
 
     let mut init_changed = false;
     unroll_in_stmts(
@@ -112,6 +113,7 @@ pub fn unroll_static_loops(module: &mut Module) {
         &mut init_changed,
         &mut next_local_id,
         &mut next_func_id,
+        &mut source_span_remaps,
     );
     if init_changed {
         module.init_was_unrolled = true;
@@ -123,6 +125,7 @@ pub fn unroll_static_loops(module: &mut Module) {
             &mut changed,
             &mut next_local_id,
             &mut next_func_id,
+            &mut source_span_remaps,
         );
         if changed {
             f.was_unrolled = true;
@@ -136,6 +139,7 @@ pub fn unroll_static_loops(module: &mut Module) {
                 &mut changed,
                 &mut next_local_id,
                 &mut next_func_id,
+                &mut source_span_remaps,
             );
             if changed {
                 ctor.was_unrolled = true;
@@ -148,6 +152,7 @@ pub fn unroll_static_loops(module: &mut Module) {
                 &mut changed,
                 &mut next_local_id,
                 &mut next_func_id,
+                &mut source_span_remaps,
             );
             if changed {
                 m.was_unrolled = true;
@@ -160,6 +165,7 @@ pub fn unroll_static_loops(module: &mut Module) {
                 &mut changed,
                 &mut next_local_id,
                 &mut next_func_id,
+                &mut source_span_remaps,
             );
             if changed {
                 g.was_unrolled = true;
@@ -172,6 +178,7 @@ pub fn unroll_static_loops(module: &mut Module) {
                 &mut changed,
                 &mut next_local_id,
                 &mut next_func_id,
+                &mut source_span_remaps,
             );
             if changed {
                 s.was_unrolled = true;
@@ -182,6 +189,19 @@ pub fn unroll_static_loops(module: &mut Module) {
         // initializer) doesn't need walking; complex initializers would
         // benefit from unroll if they contained loops, but the gain is
         // marginal and we'd need an Expr-level unroll variant. Skip.
+    }
+
+    // An unrolled body gets fresh LocalIds for every per-iteration binding.
+    // Keep the report-only source side table in sync so an optimization
+    // decision about one of those clones still points to the declaration in
+    // the original source. Apply the mappings in production order: nested
+    // loops may clone an id that was itself minted by an earlier unroll.
+    for (old_id, new_id) in source_span_remaps {
+        if old_id != new_id {
+            if let Some(span) = module.local_source_spans.get(&old_id).copied() {
+                module.local_source_spans.insert(new_id, span);
+            }
+        }
     }
 }
 
@@ -200,6 +220,7 @@ fn unroll_in_stmts(
     changed: &mut bool,
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
+    source_span_remaps: &mut Vec<(LocalId, LocalId)>,
 ) {
     // #2308: compute the set of loop-body-declared ids that escape their
     // loop (function-scoped `var`s read outside the loop body) ONCE per
@@ -217,7 +238,14 @@ fn unroll_in_stmts(
     // both wasteful and wrong (a nested block can't see all the `var`'s
     // use sites). The `_rec` variant carries the same set down.
     let protected = compute_loop_escaping_ids(stmts);
-    unroll_in_stmts_rec(stmts, changed, next_local_id, next_func_id, &protected);
+    unroll_in_stmts_rec(
+        stmts,
+        changed,
+        next_local_id,
+        next_func_id,
+        &protected,
+        source_span_remaps,
+    );
 }
 
 fn unroll_in_stmts_rec(
@@ -226,6 +254,7 @@ fn unroll_in_stmts_rec(
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
     protected: &std::collections::HashSet<LocalId>,
+    source_span_remaps: &mut Vec<(LocalId, LocalId)>,
 ) {
     let mut i = 0;
     while i < stmts.len() {
@@ -242,9 +271,16 @@ fn unroll_in_stmts_rec(
             next_local_id,
             next_func_id,
             protected,
+            source_span_remaps,
         );
 
-        if let Some(unrolled) = try_unroll_for(&stmts[i], next_local_id, next_func_id, protected) {
+        if let Some(unrolled) = try_unroll_for(
+            &stmts[i],
+            next_local_id,
+            next_func_id,
+            protected,
+            source_span_remaps,
+        ) {
             // Replace stmts[i] with `unrolled`'s contents.
             let inserted = unrolled.len();
             stmts.splice(i..=i, unrolled);
@@ -267,6 +303,7 @@ fn recurse_into_nested(
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
     protected: &std::collections::HashSet<LocalId>,
+    source_span_remaps: &mut Vec<(LocalId, LocalId)>,
 ) {
     match stmt {
         Stmt::If {
@@ -274,22 +311,57 @@ fn recurse_into_nested(
             else_branch,
             ..
         } => {
-            unroll_in_stmts_rec(then_branch, changed, next_local_id, next_func_id, protected);
+            unroll_in_stmts_rec(
+                then_branch,
+                changed,
+                next_local_id,
+                next_func_id,
+                protected,
+                source_span_remaps,
+            );
             if let Some(eb) = else_branch {
-                unroll_in_stmts_rec(eb, changed, next_local_id, next_func_id, protected);
+                unroll_in_stmts_rec(
+                    eb,
+                    changed,
+                    next_local_id,
+                    next_func_id,
+                    protected,
+                    source_span_remaps,
+                );
             }
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-            unroll_in_stmts_rec(body, changed, next_local_id, next_func_id, protected);
+            unroll_in_stmts_rec(
+                body,
+                changed,
+                next_local_id,
+                next_func_id,
+                protected,
+                source_span_remaps,
+            );
         }
         Stmt::For { body, .. } => {
             // Inner-first: unroll any qualifying loops inside this for's
             // body before deciding whether to unroll this for itself.
-            unroll_in_stmts_rec(body, changed, next_local_id, next_func_id, protected);
+            unroll_in_stmts_rec(
+                body,
+                changed,
+                next_local_id,
+                next_func_id,
+                protected,
+                source_span_remaps,
+            );
         }
         Stmt::Switch { cases, .. } => {
             for c in cases {
-                unroll_in_stmts_rec(&mut c.body, changed, next_local_id, next_func_id, protected);
+                unroll_in_stmts_rec(
+                    &mut c.body,
+                    changed,
+                    next_local_id,
+                    next_func_id,
+                    protected,
+                    source_span_remaps,
+                );
             }
         }
         Stmt::Try {
@@ -298,16 +370,44 @@ fn recurse_into_nested(
             finally,
             ..
         } => {
-            unroll_in_stmts_rec(body, changed, next_local_id, next_func_id, protected);
+            unroll_in_stmts_rec(
+                body,
+                changed,
+                next_local_id,
+                next_func_id,
+                protected,
+                source_span_remaps,
+            );
             if let Some(c) = catch {
-                unroll_in_stmts_rec(&mut c.body, changed, next_local_id, next_func_id, protected);
+                unroll_in_stmts_rec(
+                    &mut c.body,
+                    changed,
+                    next_local_id,
+                    next_func_id,
+                    protected,
+                    source_span_remaps,
+                );
             }
             if let Some(f) = finally {
-                unroll_in_stmts_rec(f, changed, next_local_id, next_func_id, protected);
+                unroll_in_stmts_rec(
+                    f,
+                    changed,
+                    next_local_id,
+                    next_func_id,
+                    protected,
+                    source_span_remaps,
+                );
             }
         }
         Stmt::Labeled { body, .. } => {
-            recurse_into_nested(body, changed, next_local_id, next_func_id, protected);
+            recurse_into_nested(
+                body,
+                changed,
+                next_local_id,
+                next_func_id,
+                protected,
+                source_span_remaps,
+            );
         }
         _ => {}
     }
@@ -322,6 +422,7 @@ fn try_unroll_for(
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
     protected: &std::collections::HashSet<LocalId>,
+    source_span_remaps: &mut Vec<(LocalId, LocalId)>,
 ) -> Option<Vec<Stmt>> {
     let (init, condition, update, body) = match stmt {
         Stmt::For {
@@ -410,7 +511,12 @@ fn try_unroll_for(
         for s in &mut cloned {
             substitute_localget_with_int_in_stmt(s, iv_id, value);
         }
-        refresh_local_ids(&mut cloned, next_local_id, next_func_id, protected);
+        let remap = refresh_local_ids(&mut cloned, next_local_id, next_func_id, protected);
+        source_span_remaps.extend(
+            remap
+                .into_iter()
+                .filter(|(old_id, new_id)| old_id != new_id),
+        );
         out.extend(cloned);
     }
     Some(out)
@@ -688,7 +794,7 @@ fn refresh_local_ids(
     next_id: &mut LocalId,
     next_func_id: &mut FuncId,
     protected: &std::collections::HashSet<LocalId>,
-) {
+) -> HashMap<LocalId, LocalId> {
     // #2308: seed the remap with identity mappings for every protected
     // (loop-escaping `var`) id. `alloc_fresh` reuses an existing remap
     // entry instead of minting a new id, so a protected declaration keeps
@@ -705,6 +811,7 @@ fn refresh_local_ids(
     for s in stmts.iter_mut() {
         refresh_in_stmt(s, &mut remap, next_id, next_func_id);
     }
+    remap
 }
 
 fn alloc_fresh(remap: &mut HashMap<LocalId, LocalId>, next_id: &mut LocalId, id: &mut LocalId) {
@@ -975,7 +1082,7 @@ fn refresh_in_expr(
 mod tests {
     use super::*;
     use perry_hir::types::Type;
-    use perry_hir::BinaryOp;
+    use perry_hir::{BinaryOp, LocalSourceSpan};
 
     fn ivar(id: LocalId) -> Expr {
         Expr::LocalGet(id)
@@ -996,7 +1103,14 @@ mod tests {
         // These tests exercise a single for-loop in isolation with no
         // enclosing scope, so there are no escaping ids to protect (#2308).
         let protected = std::collections::HashSet::new();
-        try_unroll_for(stmt, &mut next_id, &mut next_func_id, &protected)
+        let mut source_span_remaps = Vec::new();
+        try_unroll_for(
+            stmt,
+            &mut next_id,
+            &mut next_func_id,
+            &protected,
+            &mut source_span_remaps,
+        )
     }
 
     /// Test helper: wrap `unroll_in_stmts` with the same throwaway counters.
@@ -1005,7 +1119,14 @@ mod tests {
         const FUNC_START: FuncId = 10_000;
         let mut next_id: LocalId = START;
         let mut next_func_id: FuncId = FUNC_START;
-        unroll_in_stmts(stmts, changed, &mut next_id, &mut next_func_id);
+        let mut source_span_remaps = Vec::new();
+        unroll_in_stmts(
+            stmts,
+            changed,
+            &mut next_id,
+            &mut next_func_id,
+            &mut source_span_remaps,
+        );
     }
 
     /// Build `for (let i = lo; i <= hi; i++) { body }`.
@@ -1525,5 +1646,35 @@ mod tests {
             3,
             "each copy's `let x` must be a distinct id"
         );
+    }
+
+    #[test]
+    fn unrolled_local_copies_keep_their_source_span() {
+        let i = 1u32;
+        let x = 2u32;
+        let span = LocalSourceSpan { start: 42, end: 43 };
+        let body = vec![Stmt::Let {
+            id: x,
+            name: "x".into(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(ivar(i)),
+        }];
+
+        let mut module = Module::new("unroll-spans.ts");
+        module.init = vec![make_for(i, 0, 3, body, CompareOp::Lt)];
+        module.local_source_spans.insert(x, span);
+
+        unroll_static_loops(&mut module);
+
+        assert_eq!(module.init.len(), 3);
+        for stmt in &module.init {
+            let id = match stmt {
+                Stmt::Let { id, .. } => *id,
+                other => panic!("expected Stmt::Let, got {other:?}"),
+            };
+            assert_ne!(id, x, "each copy should have a fresh LocalId");
+            assert_eq!(module.local_source_spans.get(&id), Some(&span));
+        }
     }
 }

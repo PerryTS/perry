@@ -39,6 +39,9 @@ impl SH for Module {
             class_display_names,
             closure_source_text,
             async_generator_funcs,
+            // Observational source metadata does not affect emitted code and
+            // therefore must not invalidate the object cache.
+            local_source_spans: _,
             gen_param_prologue_len,
         } = self;
         name.hash(h);

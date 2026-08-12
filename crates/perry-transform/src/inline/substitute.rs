@@ -8,6 +8,15 @@ pub fn substitute_locals(
     param_map: &HashMap<LocalId, Expr>,
     next_local_id: &mut LocalId,
 ) {
+    crate::source_spans::record_expr_remaps(param_map);
+    substitute_locals_inner(expr, param_map, next_local_id);
+}
+
+fn substitute_locals_inner(
+    expr: &mut Expr,
+    param_map: &HashMap<LocalId, Expr>,
+    next_local_id: &mut LocalId,
+) {
     match expr {
         Expr::LocalGet(id) => {
             if let Some(replacement) = param_map.get(id) {
@@ -16,7 +25,7 @@ pub fn substitute_locals(
             return;
         }
         Expr::LocalSet(id, value) => {
-            substitute_locals(value, param_map, next_local_id);
+            substitute_locals_inner(value, param_map, next_local_id);
             if let Some(Expr::LocalGet(new_id)) = param_map.get(id) {
                 *id = *new_id;
             }
@@ -69,10 +78,10 @@ pub fn substitute_locals(
         } => {
             for p in params.iter_mut() {
                 if let Some(d) = &mut p.default {
-                    substitute_locals(d, param_map, next_local_id);
+                    substitute_locals_inner(d, param_map, next_local_id);
                 }
             }
-            substitute_locals_in_stmts(body, param_map, next_local_id);
+            substitute_locals_in_stmts_inner(body, param_map, next_local_id);
             captures.retain_mut(|id| match param_map.get(id) {
                 Some(Expr::LocalGet(new_id)) => {
                     *id = *new_id;
@@ -100,7 +109,7 @@ pub fn substitute_locals(
     // The walker is exhaustive on Expr — adding a new variant to ir.rs
     // without updating walker.rs is a compile error.
     walk_expr_children_mut(expr, &mut |child| {
-        substitute_locals(child, param_map, next_local_id)
+        substitute_locals_inner(child, param_map, next_local_id)
     });
 }
 
@@ -289,6 +298,15 @@ pub fn substitute_locals_in_stmts(
     param_map: &HashMap<LocalId, Expr>,
     next_local_id: &mut LocalId,
 ) {
+    crate::source_spans::record_expr_remaps(param_map);
+    substitute_locals_in_stmts_inner(stmts, param_map, next_local_id);
+}
+
+fn substitute_locals_in_stmts_inner(
+    stmts: &mut Vec<Stmt>,
+    param_map: &HashMap<LocalId, Expr>,
+    next_local_id: &mut LocalId,
+) {
     for stmt in stmts.iter_mut() {
         match stmt {
             Stmt::Let { id, init, .. } => {
@@ -297,26 +315,26 @@ pub fn substitute_locals_in_stmts(
                     *id = *new_id;
                 }
                 if let Some(expr) = init {
-                    substitute_locals(expr, param_map, next_local_id);
+                    substitute_locals_inner(expr, param_map, next_local_id);
                 }
             }
             Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
-                substitute_locals(expr, param_map, next_local_id);
+                substitute_locals_inner(expr, param_map, next_local_id);
             }
             Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                substitute_locals(condition, param_map, next_local_id);
-                substitute_locals_in_stmts(then_branch, param_map, next_local_id);
+                substitute_locals_inner(condition, param_map, next_local_id);
+                substitute_locals_in_stmts_inner(then_branch, param_map, next_local_id);
                 if let Some(else_b) = else_branch {
-                    substitute_locals_in_stmts(else_b, param_map, next_local_id);
+                    substitute_locals_in_stmts_inner(else_b, param_map, next_local_id);
                 }
             }
             Stmt::While { condition, body } => {
-                substitute_locals(condition, param_map, next_local_id);
-                substitute_locals_in_stmts(body, param_map, next_local_id);
+                substitute_locals_inner(condition, param_map, next_local_id);
+                substitute_locals_in_stmts_inner(body, param_map, next_local_id);
             }
             Stmt::For {
                 init,
@@ -326,18 +344,18 @@ pub fn substitute_locals_in_stmts(
             } => {
                 if let Some(init_stmt) = init {
                     let mut init_vec = vec![*init_stmt.clone()];
-                    substitute_locals_in_stmts(&mut init_vec, param_map, next_local_id);
+                    substitute_locals_in_stmts_inner(&mut init_vec, param_map, next_local_id);
                     if init_vec.len() == 1 {
                         **init_stmt = init_vec.remove(0);
                     }
                 }
                 if let Some(cond) = condition {
-                    substitute_locals(cond, param_map, next_local_id);
+                    substitute_locals_inner(cond, param_map, next_local_id);
                 }
                 if let Some(upd) = update {
-                    substitute_locals(upd, param_map, next_local_id);
+                    substitute_locals_inner(upd, param_map, next_local_id);
                 }
-                substitute_locals_in_stmts(body, param_map, next_local_id);
+                substitute_locals_in_stmts_inner(body, param_map, next_local_id);
             }
             Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 // Issue #569: remap each id in the prealloc list. Inlining

@@ -483,7 +483,9 @@ pub struct CompileArgs {
     /// fast paths silently do not fire. This prints, per value: its position
     /// (local / param / return / allocation site), the representation it got,
     /// the collector rule that denied it, an actionability tier, and a static
-    /// hotness proxy. Wins are reported too, so you can see the ratio.
+    /// hotness proxy. Named locals include their declaration file, line,
+    /// column, and source snippet. Wins are reported too, so you can see the
+    /// ratio.
     ///
     /// `--opt-report` prints human-readable text; `--opt-report=json` emits a
     /// stable schema for tooling (CI can diff two builds to catch a silent
@@ -1016,24 +1018,23 @@ pub struct CompilationContext {
     /// overridden. Keyed by the full `process.env.<NAME>` string.
     pub define: HashMap<String, DefineValue>,
     /// #5247 (CJS-wrap coordinate skew): for each CommonJS module rewritten by
-    /// `cjs_wrap::wrap_commonjs_for_target`, the ORIGINAL (pre-wrap) source
+    /// `cjs_wrap::wrap_commonjs_for_target`, the final wrapped source
     /// text plus the number of newline characters the injected wrapper prefix
-    /// prepended before the original module body. Under `--debug-symbols`,
-    /// codegen resolves a node's `byte_offset` (which is in WRAPPED
-    /// coordinates) to a line by deducting this prefix line count and looking
-    /// up the original source — so a throw renders `at <module>:<original-line>`
+    /// prepended before the original module body. Under `--debug-symbols` or a
+    /// text opt report, codegen resolves a node's wrapped-coordinate
+    /// `byte_offset` to a line by deducting this prefix line count and looking
+    /// up the wrapped source — so a throw renders `at <module>:<original-line>`
     /// rather than a line shifted by the preamble. Empty unless
-    /// `--debug-symbols` is set (the map is only populated then), keeping the
-    /// default build allocation-free.
+    /// source locations are requested, keeping the default build allocation-free.
     pub cjs_wrap_debug_sources: HashMap<PathBuf, CjsWrapDebugSource>,
-    /// #5247: mirror of the CLI `--debug-symbols` flag, set after construction.
-    /// Gates the CJS-wrap source mapping capture in `collect_modules` so the
-    /// default build never records `cjs_wrap_debug_sources`.
+    /// #5247 / #7036: whether a later compiler stage needs source locations.
+    /// Gates CJS-wrap source mapping capture for debug symbols and text opt
+    /// reports, so the default build never records `cjs_wrap_debug_sources`.
     pub debug_symbols: bool,
 }
 
-/// #5247: source mapping for a CJS-wrapped module, used only by the
-/// `--debug-symbols` source-location path. See `cjs_wrap_debug_sources`.
+/// #5247 / #7036: source mapping for a CJS-wrapped module, used by debug
+/// locations and text opt reports. See `cjs_wrap_debug_sources`.
 #[derive(Debug, Clone)]
 pub struct CjsWrapDebugSource {
     /// The WRAPPED module source text (the injected-IIFE text perry parsed).

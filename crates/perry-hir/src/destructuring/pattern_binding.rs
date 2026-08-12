@@ -424,6 +424,7 @@ pub(crate) fn lower_pattern_binding_into(
                 // binding so it shadows (never aliases) an outer hoisted `var`.
                 None => ctx.define_local(name.clone(), ty.clone()),
             };
+            ctx.record_local_source_span(id, ident.id.span);
             if !mutable {
                 ctx.mark_local_immutable(id);
             }
@@ -671,6 +672,7 @@ pub(crate) fn lower_pattern_binding_into(
                             }
                             None => ctx.define_local(name.clone(), ty.clone()),
                         };
+                        ctx.record_local_source_span(id, assign.key.span);
 
                         let init_value = if let Some(default_expr) = &assign.value {
                             // Materialize the property read into a temp so we
