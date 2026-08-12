@@ -244,6 +244,20 @@ jobs:
           python3 scripts/check_gc_env_knobs.py --self-test
           python3 scripts/check_gc_env_knobs.py
 
+      # #7877, second round. The knob audit above covers env-var names; it says
+      # nothing about the paths and numbers the same pages state. Both drifted:
+      # the memory-model source map pointed at a `gc.rs` deleted in the module
+      # split (with line numbers), and CLAUDE.md carried "~55 registered
+      # scanners" against a population of 123 in two places, of which only one
+      # got corrected by hand. Numbers on the current pages now carry `gc-fact`
+      # markers naming the constant they came from, and this re-derives them.
+      # Build-free, so it belongs in `lint`, which IS a required context.
+      - name: GC documentation claim audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_gc_doc_claims.py --self-test
+          python3 scripts/check_gc_doc_claims.py
+
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
       # in the quarantine sweep had rooting ALREADY -- what was missing was
@@ -1081,6 +1095,8 @@ jobs:
           set -euo pipefail
           python scripts/gc_runtime_root_holders.py --self-test
           python scripts/gc_runtime_root_holders.py
+          python scripts/check_gc_doc_claims.py --self-test
+          python scripts/check_gc_doc_claims.py
           python scripts/check_thread_locals.py --self-test
           python scripts/check_thread_locals.py
           python -m unittest discover -s tests -p 'test_gc_ratchet.py' -v

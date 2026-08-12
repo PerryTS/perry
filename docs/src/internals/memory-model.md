@@ -18,13 +18,25 @@ Every JavaScript value in Perry is a single 64-bit word. The encoding piggy-back
 | `0x7FFC…0002` | `null` | — (singleton) |
 | `0x7FFC…0003` | `false` | — (singleton) |
 | `0x7FFC…0004` | `true` | — (singleton) |
+| `0x7FF9` | Short string (0–5 bytes) | length in bits 40–47, the bytes in bits 0–39 — no allocation |
 | `0x7FFA` | BigInt | low 48 bits = heap pointer |
+| `0x7FFB` | JS handle | low 48 bits = handle id (V8-backed objects) |
 | `0x7FFD` | Object / Array / Closure | low 48 bits = heap pointer |
 | `0x7FFE` | Int32 | low 32 bits = signed int |
 | `0x7FFF` | String | low 48 bits = heap pointer |
 | anything else | `f64` | the full 64 bits are the number |
 
-Source: `crates/perry-runtime/src/value.rs`.
+<!-- gc-fact: POINTER_TAG = 0x7FFD_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
+<!-- gc-fact: STRING_TAG = 0x7FFF_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
+<!-- gc-fact: INT32_TAG = 0x7FFE_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
+<!-- gc-fact: BIGINT_TAG = 0x7FFA_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
+<!-- gc-fact: SHORT_STRING_TAG = 0x7FF9_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
+<!-- gc-fact: TAG_UNDEFINED = 0x7FFC_0000_0000_0001 in crates/perry-runtime/src/value/tags.rs -->
+
+Source: `crates/perry-runtime/src/value/tags.rs` (the singleton and pointer tags),
+with the rest of the `value/` module tree for the encode/decode helpers.
+`TAG_HOLE` and `TAG_TDZ` are two further `0x7FFC` singletons the runtime uses
+internally; they are not user-observable values.
 
 Three consequences worth noting:
 
@@ -99,14 +111,31 @@ enumerates the holders and refuses unclassified or stale inventory entries.
 
 Most JS allocations die young — object literals in a loop body, short-lived closures, intermediate strings. A generational collector exploits this by collecting the nursery frequently and the old gen rarely.
 
-Perry uses two-bit aging encoded in `gc_flags` (`gc/types.rs`):
+Aging is recorded two different ways, because the two minor paths need different
+things from it.
 
-- First minor GC an object survives: `GC_FLAG_HAS_SURVIVED` is set.
-- Second minor GC it survives: `GC_FLAG_TENURED` is set, and the object is logically promoted to old-gen.
+**The non-copying minor** uses two flag bits in `gc_flags`
+(`crates/perry-runtime/src/gc/types.rs`): `GC_FLAG_HAS_SURVIVED` on the first
+minor an object survives, `GC_FLAG_TENURED` on the second, at which point the
+object is logically promoted. The two-bit scheme avoids a counter field in the
+header, and a tenured object initially stays physically where it is — that
+promotion is a flag flip, not a copy. Whether such objects are then evacuated
+into `OLD_ARENA` (with every reference rewritten) is a policy decision taken per
+cycle from nursery/RSS pressure and measured movable candidates, and it requires
+generated write barriers to be active.
 
-`PROMOTION_AGE = 2`. The two-bit scheme avoids needing a counter field in the header.
+**The copying minor** — the default nursery path — stores an exact short age in
+the header instead, and its promotion threshold is *adaptive*: a survivor-
+occupancy feedback loop picks the largest number of survivals whose projected
+survivor occupancy still fits, capped at 4, and locks to 1 (promote on first
+copy) when the aging round is measurably filtering nothing. There is no fixed
+`PROMOTION_AGE` and no knob; `crates/perry-runtime/src/gc/tenuring.rs` is the
+definition.
 
-Tenured objects initially stay physically where they are in the nursery — promotion is a flag flip, not a copy. A telemetry-driven **evacuation policy** copies tenured non-pinned objects into `OLD_ARENA` and rewrites all references to point at the new locations only when generated write barriers are active and nursery/RSS pressure plus measured movable candidates justify the extra work. Low-pressure cycles, cycles with no movable candidates, and cycles without generated write barriers skip evacuation and reference rewriting.
+When a copying minor's whole young generation measures (near-)entirely live it
+does not copy at all: the blocks change generation in place. The current GC page
+covers that path, its thresholds, and its footprint budgets —
+[Aging, promotion, and where an object is born](garbage-collector.md#aging-promotion-and-where-an-object-is-born).
 
 ### Write barriers and the remembered set
 
@@ -263,14 +292,39 @@ hold onto under pressure.
 
 ## Source map
 
-| Topic | File |
-|---|---|
-| NaN-boxing constants and helpers | `crates/perry-runtime/src/value.rs` |
-| `GcHeader`, type/flag constants | `crates/perry-runtime/src/gc.rs:14` |
-| `gc_malloc` | `crates/perry-runtime/src/gc.rs:606` |
-| Shadow stack | `crates/perry-runtime/src/gc.rs:493`–`583` |
-| Minor GC | `crates/perry-runtime/src/gc.rs:1192` |
-| Write barrier | `crates/perry-runtime/src/gc.rs:3773` |
-| Registered root scanners | `crates/perry-runtime/src/gc.rs:3232`–`3940` |
-| Conservative pin set | `crates/perry-runtime/src/gc.rs:3747` |
-| Design plan (pre-implementation) | `docs/generational-gc-plan.md` |
+Paths, not line numbers: a line number is a claim nothing re-derives, and every
+row of this table once pointed into a `gc.rs` that no longer exists.
+
+| Topic | File | Symbol to look for |
+|---|---|---|
+| NaN-boxing tags | `crates/perry-runtime/src/value/tags.rs` | `POINTER_TAG`, `STRING_TAG` |
+| `GcHeader`, type/flag constants | `crates/perry-runtime/src/gc/types.rs` | `GcHeader` |
+| `gc_malloc` | `crates/perry-runtime/src/gc/malloc.rs` | `gc_malloc` |
+| Shadow frames (fallback root lowering) | `crates/perry-runtime/src/gc/roots/shadow_stack.rs` | `js_shadow_frame_push` |
+| Registered root scanners | `crates/perry-runtime/src/gc/roots.rs` | `gc_register_mutable_root_scanner` |
+| Copying minor | `crates/perry-runtime/src/gc/copying.rs` | `move_young` |
+| Whole-block in-place promotion | `crates/perry-runtime/src/arena/promote.rs` | `finish_in_place_promotion` |
+| Promotion policy | `crates/perry-runtime/src/gc/promote_in_place.rs` | `PROMOTE_SURVIVAL_THRESHOLD_PERMILLE` |
+| Adaptive tenuring threshold | `crates/perry-runtime/src/gc/tenuring.rs` | `tenuring_survivals` |
+| Write barriers | `crates/perry-runtime/src/gc/barrier_store.rs` | `runtime_write_barrier_slot` |
+| Explicit pinning | `crates/perry-runtime/src/gc/pin.rs` | `pin_object` |
+| Conservative-pin predicate | `crates/perry-runtime/src/gc/verify.rs` | `is_conservatively_pinned` |
+| Collection triggers and pacing | `crates/perry-runtime/src/gc/policy.rs` | `gc_check_trigger` |
+| Current operations page | `docs/src/internals/garbage-collector.md` | — |
+| Design plan (historical) | `docs/generational-gc-plan.md` | — |
+
+<!-- gc-symbol: GcHeader in crates/perry-runtime/src/gc/types.rs -->
+<!-- gc-symbol: gc_malloc in crates/perry-runtime/src/gc/malloc.rs -->
+<!-- gc-symbol: js_shadow_frame_push in crates/perry-runtime/src/gc/roots/shadow_stack.rs -->
+<!-- gc-symbol: gc_register_mutable_root_scanner in crates/perry-runtime/src/gc/roots.rs -->
+<!-- gc-symbol: move_young in crates/perry-runtime/src/gc/copying.rs -->
+<!-- gc-symbol: finish_in_place_promotion in crates/perry-runtime/src/arena/promote.rs -->
+<!-- gc-symbol: tenuring_survivals in crates/perry-runtime/src/gc/tenuring.rs -->
+<!-- gc-symbol: runtime_write_barrier_slot in crates/perry-runtime/src/gc/barrier_store.rs -->
+<!-- gc-symbol: pin_object in crates/perry-runtime/src/gc/pin.rs -->
+<!-- gc-symbol: is_conservatively_pinned in crates/perry-runtime/src/gc/verify.rs -->
+<!-- gc-symbol: gc_check_trigger in crates/perry-runtime/src/gc/policy.rs -->
+
+Those rows are not decorative: each is bound to a `gc-symbol` marker above and
+re-derived by `scripts/check_gc_doc_claims.py`, so a rename that leaves this
+table behind fails `lint` instead of quietly pointing readers at nothing.

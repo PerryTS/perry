@@ -496,8 +496,9 @@ identical retention.)
 
 **A retention row is not evidence of a collector regression until it has been
 classified.** Two properties of the measurement point made this metric move for
-reasons that had nothing to do with what the collector retained. #7558 removed
-the first; the second is still live.
+reasons that had nothing to do with what the collector retained. Both are now
+gone — #7558 removed the first, #7886 the second — and both are kept here
+because the triage advice they justified changed with them.
 
 1. ~~**The measurement forces the conservative native-stack scan.**~~ **Removed
    by #7558.** Every probe reads `process.memoryUsage()` immediately after an
@@ -509,14 +510,23 @@ the first; the second is still live.
    `gc()` consumes precise roots, and `classify` reports excess `0.00%` on all
    twelve probes. **`classify` is now also the check that this term has not come
    back** — a non-zero `excess` column means somebody re-added a forced scan.
-2. **`js_arena_stats` sums block *offsets*, not live bytes.** UNCHANGED, and it
-   is why (1) was so expensive. A block's bump pointer never moves backwards,
-   and a block holding one marked object cannot be reset — so a single stale
-   stack word cost a whole **1 MiB nursery block**, an amplification of roughly
-   26,000x. (This is the nursery's version of the old-generation accounting bug
-   #7437/#7443 fixed by subtracting swept holes.) The amplifier is still there
-   for any *other* source of over-retention, which is why a whole-block jump in
-   `heap_used_bytes` still means "one object too many", not "1 MiB too much".
+2. ~~**`js_arena_stats` sums block *offsets*, not live bytes.**~~ **Removed by
+   #7886 (#7879).** It is why (1) was so expensive while both were live: a
+   block's bump pointer never moves backwards and a block holding one marked
+   object cannot be reset, so a single stale stack word cost a whole **1 MiB
+   nursery block**, an amplification of roughly 26,000x. (That was the nursery's
+   version of the old-generation accounting bug #7437/#7443 fixed by subtracting
+   swept holes.) `js_arena_stats` now reports `arena_live_allocated_bytes()`: a
+   GC publishes an exact object census, and between collections bump growth and
+   free-list reuse adjust it, so `heap_used_bytes` is exact immediately after the
+   probe's `gc()` — which is where every probe reads it. The block high-water sum
+   still exists as `arena_in_use_bytes()`, deliberately, as a
+   placement/fragmentation quantity; it is no longer what the gate compares.
+
+   **Consequence for triage: a whole-block jump in `heap_used_bytes` is no longer
+   the expected shape of one retained object.** A move of ~1 MiB now means about
+   1 MiB of objects. The measurement immediately below predates this change and
+   is kept as the dated evidence it was.
 
 Measured across the 74 commits between the 2026-08-05 pin (`5e236e6e2`) and
 v0.5.1321, both endpoints built identically and both reproducing the pinned

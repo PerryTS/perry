@@ -201,9 +201,15 @@ pub(super) fn effective_next_arena_trigger() -> usize {
     base.min(super::tenuring::scavenge_nursery_cap_effective_bytes())
 }
 
+/// Default base nursery high-water cap, in MiB. Named rather than inline
+/// because `docs/src/internals/garbage-collector.md` documents it and
+/// `scripts/check_gc_doc_claims.py` re-derives the documented number from this
+/// definition.
+pub(super) const SCAVENGE_NURSERY_CAP_DEFAULT_MB: usize = 16;
+
 /// Nursery high-water cap used only when `PERRY_GC_SCAVENGE` is on (default
-/// 16 MB; override with `PERRY_GC_SCAVENGE_NURSERY_MB`). See
-/// `effective_next_arena_trigger`.
+/// [`SCAVENGE_NURSERY_CAP_DEFAULT_MB`]; override with
+/// `PERRY_GC_SCAVENGE_NURSERY_MB`). See `effective_next_arena_trigger`.
 pub(super) fn gc_scavenge_nursery_cap_bytes() -> usize {
     use std::sync::OnceLock;
     static CACHED: OnceLock<usize> = OnceLock::new();
@@ -212,7 +218,7 @@ pub(super) fn gc_scavenge_nursery_cap_bytes() -> usize {
             .ok()
             .and_then(|s| s.trim().parse::<usize>().ok())
             .filter(|&mb| mb > 0)
-            .unwrap_or(16)
+            .unwrap_or(SCAVENGE_NURSERY_CAP_DEFAULT_MB)
             .saturating_mul(1024 * 1024)
     })
 }
