@@ -1369,27 +1369,28 @@ impl GcCycleState {
                 if budget == 0 {
                     return;
                 }
-                // Re-scan every root with the marks nearly final (see the
-                // enum doc). Reuses the RootScan machinery unbudgeted —
-                // bounded by root-set size, not heap size. consider_evacuation
-                // is false: pinning decisions were made in the original scan,
-                // and budgeted cycles are non-moving anyway.
+                // Re-scan every root with the marks nearly final (see the enum
+                // doc). DELIBERATELY ATOMIC and NOT bounded by the step budget:
+                // the scan is bounded by root-set size, but the drain below is
+                // bounded by the newly-reachable graph, which a root installed
+                // after the initial scan can make arbitrarily large. Measured
+                // rather than claimed — `final_remark_max_us` in
+                // `[gc-step-bounds]`; docs/src/internals/gc-step-bounds.md has
+                // the bound and rejected alternatives (#7903).
+                // consider_evacuation is false: pinning was decided already.
                 {
+                    let _remark_timer = instruments::FinalRemarkTimer::start();
                     let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                     let minor_only = self.minor.is_some();
                     let remark_scan = self.root_scan.get_or_insert_with(RootScanCycleState::new);
-                    loop {
-                        if remark_scan.step_current_subphase(
-                            valid_ptrs,
-                            &mut self.trace,
-                            /* consider_evacuation = */ false,
-                            usize::MAX,
-                            /* allow_synchronous_scanners = */ true,
-                            minor_only,
-                        ) {
-                            break;
-                        }
-                    }
+                    while !remark_scan.step_current_subphase(
+                        valid_ptrs,
+                        &mut self.trace,
+                        /* consider_evacuation = */ false,
+                        usize::MAX,
+                        /* allow_synchronous_scanners = */ true,
+                        minor_only,
+                    ) {}
                     self.root_scan = None;
                     // Trace everything the remark newly discovered so
                     // WeakProcessing (and the full path's RS rebuild) read a

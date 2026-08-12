@@ -1102,6 +1102,43 @@ fn emit_incremental_liveness_diag() {
         poll_arm::poll_arm_events(),
         poll_arm::poll_armed_count(),
     );
+    emit_step_bounds_diag();
+}
+
+/// What the "time-budgeted" collector actually cost, as opposed to what it was
+/// asked to cost (#7903).
+///
+/// `js_gc_step_us` and mutator assist can only consult the clock BETWEEN work
+/// units, so a budget is only as good as the largest single unit. These are the
+/// measured maxima plus the liveness counters for the sliced weak path:
+///
+/// * `step_max_us` — longest single budgeted step.
+/// * `final_remark_max_us` / `final_remarks` — the deliberately ATOMIC phase,
+///   reported separately so a heap-sized pause cannot hide inside the general
+///   maximum.
+/// * `weak_records` / `weak_max_records_per_step` — FinalizationRegistry
+///   records scanned, and the worst single step's share of them. Before #7903
+///   one registry was one work unit, so this maximum was the whole registry.
+/// * `weak_steps_sliced` — steps that ended PARTWAY THROUGH a registry. **This
+///   is the subject-was-live counter**: a run reporting zero has not exercised
+///   the sliced path, whatever else it reports.
+/// * `weak_registry_restarts` / `weak_registry_atomic_finishes` — cursors
+///   invalidated by mutator restructuring, and the bounded fallback taken when
+///   one registry exhausted its restart budget.
+fn emit_step_bounds_diag() {
+    eprintln!(
+        "[gc-step-bounds] step_max_us={} final_remark_max_us={} final_remarks={} \
+         weak_records={} weak_max_records_per_step={} weak_steps_sliced={} \
+         weak_registry_restarts={} weak_registry_atomic_finishes={}",
+        instruments::step_max_us(),
+        instruments::final_remark_max_us(),
+        instruments::final_remark_count(),
+        instruments::weak_records_scanned(),
+        instruments::weak_max_records_per_step(),
+        instruments::weak_steps_sliced(),
+        instruments::weak_registry_restarts(),
+        instruments::weak_registry_atomic_finishes(),
+    );
 }
 
 /// Print what the rate-1 schedule endpoint actually did, and **fail the

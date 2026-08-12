@@ -21,6 +21,7 @@ use crate::value::{
 };
 use std::cell::RefCell;
 
+pub(crate) mod sliced;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -871,71 +872,10 @@ unsafe fn resolve_weak_holder_copied(
     }
 }
 
-/// Resumable full/fallback weak processing. The holder registry is snapshotted
-/// once, then each call consumes at most `budget` holders. This makes the work
-/// O(registered weak holders), rather than O(all arena objects), and lets a
-/// budgeted GC return to the mutator between holders.
-///
-/// Snapshotting is intentional: budgeted cycles are non-moving, while
-/// synchronous moving cycles pass an unlimited budget and cannot expose a
-/// mutator window. Holders allocated after the snapshot are allocate-black and
-/// therefore cannot lose a target in the current cycle; the next collection
-/// processes them.
-pub(crate) struct FullWeakProcessingState {
-    holders: Vec<usize>,
-    cursor: usize,
-}
-
-impl FullWeakProcessingState {
-    pub(crate) fn new() -> Self {
-        let holders = WEAK_HOLDERS.with(|holders| holders.borrow().iter().copied().collect());
-        #[cfg(test)]
-        test_support::reset_full_weak_processing_work_units();
-        Self { holders, cursor: 0 }
-    }
-
-    /// Process up to `budget` registered holders. A FinalizationRegistry is
-    /// one holder/work unit; its record array stays atomic so unregistering
-    /// cannot interleave with and reorder an in-progress registry scan.
-    pub(crate) fn step(
-        &mut self,
-        valid_ptrs: &crate::gc::ValidPointerSet,
-        minor_only: bool,
-        enqueue_callbacks: bool,
-        budget: usize,
-    ) -> bool {
-        if budget == 0 {
-            return self.cursor == self.holders.len();
-        }
-        let stop = self.holders.len().min(self.cursor.saturating_add(budget));
-        let liveness = FullCycleLiveness {
-            valid_ptrs,
-            minor_only,
-        };
-        while self.cursor < stop {
-            let addr = self.holders[self.cursor];
-            self.cursor += 1;
-            #[cfg(test)]
-            test_support::note_full_weak_processing_work_unit();
-            match unsafe { resolve_weak_holder_full(valid_ptrs, addr, minor_only) } {
-                HolderDisposition::Drop => {
-                    WEAK_HOLDERS.with(|holders| {
-                        holders.borrow_mut().remove(&addr);
-                    });
-                }
-                HolderDisposition::Keep => {}
-                HolderDisposition::Process(current) => unsafe {
-                    dispatch_weak_holder(
-                        current as *mut ObjectHeader,
-                        &liveness,
-                        enqueue_callbacks,
-                    );
-                },
-            }
-        }
-        self.cursor == self.holders.len()
-    }
-}
+/// Resumable full/fallback weak processing. Lives in [`sliced`], which carries
+/// the whole rationale for why a FinalizationRegistry's record array is now
+/// cursored rather than atomic (#7903).
+pub(crate) use sliced::FullWeakProcessingState;
 
 /// Validate a registry entry before dereferencing it. Full cycles can prove
 /// every unmarked holder dead. Fallback minors may only prove that for nursery
@@ -1119,14 +1059,64 @@ unsafe fn process_finreg_after_mark(
     liveness: &dyn WeakLiveness,
     enqueue_callbacks: bool,
 ) {
+    let Some(identity) = finreg_entries_identity(registry, liveness) else {
+        return;
+    };
+    process_finreg_record_range(registry, liveness, enqueue_callbacks, 0, identity.len);
+}
+
+/// The value word of a registry's `entries` field plus that array's length.
+///
+/// This pair is the *identity* a sliced record cursor is validated against —
+/// see `sliced`'s module docs. Both mutator-side mutation paths change one of
+/// the two (`unregister` installs a rebuilt array, `register` pushes), so a
+/// match means the indices held across a mutator window still denote the same
+/// records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FinregEntriesIdentity {
+    bits: u64,
+    len: usize,
+}
+
+/// # Safety
+/// `registry` must be a live `CLASS_ID_FINALIZATION_REGISTRY` object.
+unsafe fn finreg_entries_identity(
+    registry: *mut ObjectHeader,
+    liveness: &dyn WeakLiveness,
+) -> Option<FinregEntriesIdentity> {
+    let bits = object_field_bits(registry, FINREG_ENTRIES_FIELD);
+    let entries = liveness.as_live_array(bits)?;
+    Some(FinregEntriesIdentity {
+        bits,
+        len: js_array_length(entries) as usize,
+    })
+}
+
+/// Scan `count` records starting at `start`. Returns how many indices were
+/// visited — the work-unit charge, which counts skipped (dead / non-record)
+/// slots too, because reading and rejecting one is the same cost as processing
+/// it and a budget that only charged for hits would not bound anything.
+///
+/// # Safety
+/// `registry` must be a live `CLASS_ID_FINALIZATION_REGISTRY` object.
+unsafe fn process_finreg_record_range(
+    registry: *mut ObjectHeader,
+    liveness: &dyn WeakLiveness,
+    enqueue_callbacks: bool,
+    start: usize,
+    count: usize,
+) -> usize {
     let callback = f64::from_bits(object_field_bits(registry, FINREG_CALLBACK_FIELD));
     let entries_bits = object_field_bits(registry, FINREG_ENTRIES_FIELD);
     let Some(entries) = liveness.as_live_array(entries_bits) else {
-        return;
+        return 0;
     };
     let len = js_array_length(entries) as usize;
+    let stop = len.min(start.saturating_add(count));
     let registry_value = f64::from_bits(JSValue::pointer(registry as *const u8).bits());
-    for i in 0..len {
+    let mut scanned = 0usize;
+    for i in start..stop {
+        scanned += 1;
         let record_value = js_array_get_f64(entries, i as u32);
         let Some(record) = liveness
             .as_live_object_with_class(record_value.to_bits(), CLASS_ID_FINALIZATION_RECORD)
@@ -1141,6 +1131,7 @@ unsafe fn process_finreg_after_mark(
             enqueue_callbacks,
         );
     }
+    scanned
 }
 
 unsafe fn process_finreg_record_after_mark(

@@ -243,3 +243,157 @@ pub fn budgeted_step_skips() -> (u64, u64, u64, u64) {
         SKIP_RESUME_BLOCKED.load(Ordering::Relaxed),
     )
 }
+
+// ---------------------------------------------------------------------------
+// #7903 — step-boundedness telemetry
+//
+// `js_gc_step_us` can only check its clock BETWEEN work units, so the honest
+// question about a "time-budgeted" collector is not "what budget was requested"
+// but "how long did the longest single step actually take, and what was it
+// doing". These counters answer that directly, and they are the liveness proof
+// for the slicing work: a run where `weak_steps_sliced` is zero has not
+// exercised the sliced path at all, however green it looks.
+// ---------------------------------------------------------------------------
+
+/// Longest single `cycle.state.step(...)` observed, microseconds.
+static STEP_MAX_US: AtomicU64 = AtomicU64::new(0);
+/// Longest single ATOMIC final-remark (root re-scan + transitive drain).
+///
+/// Deliberately a separate number from `STEP_MAX_US`: final remark is an
+/// intentionally atomic phase whose cost is bounded by the newly-reachable
+/// graph, not by the step budget. Folding it into the general maximum would let
+/// a heap-sized pause hide behind "the collector's worst step".
+static REMARK_MAX_US: AtomicU64 = AtomicU64::new(0);
+static REMARK_COUNT: AtomicU64 = AtomicU64::new(0);
+/// FinalizationRegistry records scanned during weak processing.
+static WEAK_RECORDS: AtomicU64 = AtomicU64::new(0);
+/// Most records charged to a single weak-processing step.
+static WEAK_MAX_RECORDS_PER_STEP: AtomicU64 = AtomicU64::new(0);
+/// Steps that ended PARTWAY THROUGH one registry's record array — the sliced
+/// path actually running. Zero means the slicing never happened.
+static WEAK_STEPS_SLICED: AtomicU64 = AtomicU64::new(0);
+/// A registry's record cursor was invalidated by mutator restructuring.
+static WEAK_REGISTRY_RESTARTS: AtomicU64 = AtomicU64::new(0);
+/// A registry hit the restart cap and was finished in one atomic pass.
+static WEAK_REGISTRY_ATOMIC_FINISHES: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn bump_max(slot: &AtomicU64, value: u64) {
+    let mut cur = slot.load(Ordering::Relaxed);
+    while value > cur {
+        match slot.compare_exchange_weak(cur, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(observed) => cur = observed,
+        }
+    }
+}
+
+/// Record one budgeted step's wall duration.
+#[inline]
+pub(crate) fn note_budgeted_step_duration(us: u64) {
+    bump_max(&STEP_MAX_US, us);
+}
+
+/// Record one atomic final-remark's wall duration.
+#[inline]
+pub(crate) fn note_final_remark_duration(us: u64) {
+    bump_max(&REMARK_MAX_US, us);
+    REMARK_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record the FinalizationRegistry records one weak-processing step charged,
+/// and whether that step stopped mid-registry.
+#[inline]
+pub(crate) fn note_weak_step_records(records: u64, sliced: bool) {
+    if records > 0 {
+        WEAK_RECORDS.fetch_add(records, Ordering::Relaxed);
+        bump_max(&WEAK_MAX_RECORDS_PER_STEP, records);
+    }
+    if sliced {
+        WEAK_STEPS_SLICED.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[inline]
+pub(crate) fn note_weak_registry_restart() {
+    WEAK_REGISTRY_RESTARTS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub(crate) fn note_weak_registry_atomic_finish() {
+    WEAK_REGISTRY_ATOMIC_FINISHES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Longest single budgeted step, microseconds.
+pub fn step_max_us() -> u64 {
+    STEP_MAX_US.load(Ordering::Relaxed)
+}
+
+/// Longest single atomic final remark, microseconds.
+pub fn final_remark_max_us() -> u64 {
+    REMARK_MAX_US.load(Ordering::Relaxed)
+}
+
+/// Atomic final remarks performed.
+pub fn final_remark_count() -> u64 {
+    REMARK_COUNT.load(Ordering::Relaxed)
+}
+
+/// FinalizationRegistry records scanned during weak processing.
+pub fn weak_records_scanned() -> u64 {
+    WEAK_RECORDS.load(Ordering::Relaxed)
+}
+
+/// Most records charged to a single weak-processing step.
+pub fn weak_max_records_per_step() -> u64 {
+    WEAK_MAX_RECORDS_PER_STEP.load(Ordering::Relaxed)
+}
+
+/// Steps that ended partway through one registry's record array.
+pub fn weak_steps_sliced() -> u64 {
+    WEAK_STEPS_SLICED.load(Ordering::Relaxed)
+}
+
+/// Record cursors invalidated by mutator restructuring.
+pub fn weak_registry_restarts() -> u64 {
+    WEAK_REGISTRY_RESTARTS.load(Ordering::Relaxed)
+}
+
+/// Registries that hit the restart cap and were finished atomically.
+pub fn weak_registry_atomic_finishes() -> u64 {
+    WEAK_REGISTRY_ATOMIC_FINISHES.load(Ordering::Relaxed)
+}
+
+/// Reset the #7903 step-boundedness counters. Test-only: the process-wide
+/// statics would otherwise leak between in-process test cases.
+#[cfg(test)]
+pub(crate) fn reset_step_bound_counters() {
+    STEP_MAX_US.store(0, Ordering::Relaxed);
+    REMARK_MAX_US.store(0, Ordering::Relaxed);
+    REMARK_COUNT.store(0, Ordering::Relaxed);
+    WEAK_RECORDS.store(0, Ordering::Relaxed);
+    WEAK_MAX_RECORDS_PER_STEP.store(0, Ordering::Relaxed);
+    WEAK_STEPS_SLICED.store(0, Ordering::Relaxed);
+    WEAK_REGISTRY_RESTARTS.store(0, Ordering::Relaxed);
+    WEAK_REGISTRY_ATOMIC_FINISHES.store(0, Ordering::Relaxed);
+}
+
+/// Times one atomic final remark and records it on drop.
+///
+/// An RAII guard rather than a pair of calls so that an early `return` out of
+/// the phase cannot silently drop the sample — an unmeasured atomic phase is
+/// exactly the state #7903 exists to end.
+pub(crate) struct FinalRemarkTimer(std::time::Instant);
+
+impl FinalRemarkTimer {
+    #[inline]
+    pub(crate) fn start() -> Self {
+        Self(std::time::Instant::now())
+    }
+}
+
+impl Drop for FinalRemarkTimer {
+    fn drop(&mut self) {
+        note_final_remark_duration(self.0.elapsed().as_micros().min(u128::from(u64::MAX)) as u64);
+    }
+}

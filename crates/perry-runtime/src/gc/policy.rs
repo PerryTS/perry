@@ -3271,7 +3271,14 @@ fn gc_budgeted_step_work_units_inner_with_progress(
             return BudgetedStepOutcome::Result(gc_idle_step_result());
         };
 
+        // #7903: the step's own wall duration, not the budget that was asked
+        // for. `js_gc_step_us` can only consult its clock BETWEEN units, so the
+        // only honest statement about pause is a measured maximum.
+        let step_started = std::time::Instant::now();
         let step = cycle.state.step(GcWorkBudget::bounded(work_units));
+        super::instruments::note_budgeted_step_duration(
+            step_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+        );
         super::instruments::note_incremental_step();
         if step.completed {
             super::instruments::note_incremental_completion();

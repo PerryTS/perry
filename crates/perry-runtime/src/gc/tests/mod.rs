@@ -40,6 +40,7 @@ mod scan_fallback;
 mod schedule;
 mod shadow_stack_ops;
 mod smoke;
+mod step_bounds;
 pub(super) mod support;
 mod teardown;
 mod telemetry_verifier;
