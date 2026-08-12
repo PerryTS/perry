@@ -1854,20 +1854,17 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.copied_objects,
         collector.stats.promoted_objects,
     );
-    // #7592: promoted bytes are live by construction — credit them to the
-    // old-reclaim baseline BEFORE the pressure check below, or the check reads
-    // the stale baseline and schedules a full that is guaranteed to free
-    // nothing (see `credit_promoted_bytes_to_old_baseline`).
+    // #7592: credit the bytes this minor moved into old-gen to the old-reclaim
+    // baseline BEFORE the pressure check below, or the check reads a stale
+    // baseline and schedules a full that is guaranteed to free nothing (see
+    // `credit_promoted_bytes_to_old_baseline`).
     //
-    // #7902: "live by construction" is a MARKED-liveness claim, and an untraced
-    // promotion makes none — it uses `PromotionLiveness::AssumeAllLive`. Those
-    // bytes are the uncertain class the untraced budget bounds, so crediting
-    // them here would tell old-reclaim pacing that a cohort nobody has looked
-    // at is clean, and defer the very collection that could decide it. Charge
-    // only what a traced cycle actually marked.
-    if !untraced {
-        credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
-    }
+    // #7965: UNCONDITIONAL, including for an untraced promotion — see
+    // `credit_promoted_bytes_to_old_baseline`, which carries the argument. In
+    // one line: the baseline is the base of a GROWTH measurement, not a
+    // liveness claim, and withholding it pins that base at 0 on exactly the
+    // workloads that reach this path.
+    credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
     // Everything outside from-space retains its pre-minor accounting. Remove
     // the from-space share of that accounting, then add back exactly the
     // objects that survived by copy or promotion. This also preserves objects

@@ -502,6 +502,112 @@ fn an_untraced_promotion_indexes_the_objects_it_could_not_prove_live() {
     }
 }
 
+/// #7965: an UNTRACED promotion must credit the old-reclaim baseline.
+///
+/// The baseline is the base of a GROWTH measurement, not a liveness claim, so
+/// "an untraced cycle proved nothing" is not a reason to withhold it — see
+/// `credit_promoted_bytes_to_old_baseline`. #7902 withheld it and pinned the
+/// baseline at 0 on every fully-live workload, which cost `retain` two full
+/// mark-sweeps and 2 841 M → 8 237 M instructions retired.
+///
+/// Two halves, because either alone is a presence check:
+///
+/// 1. the real collector, driven through the same entry point as production,
+///    must move the baseline by exactly the bytes it moved into old-gen — and
+///    the counters must show the UNTRACED path is what ran;
+/// 2. the CONSEQUENCE, replayed on `retain`'s measured promotion schedule: the
+///    credited baseline keeps `old_reclaim_pressure_due` false at every step,
+///    and the same schedule against an uncredited baseline fires. Without that
+///    second half a green run would not distinguish "the credit works" from
+///    "this schedule never approached a trigger".
+#[test]
+fn an_untraced_promotion_credits_the_old_reclaim_baseline() {
+    {
+        let _guard = CopyingNurseryTestGuard::new(4);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _promote = InPlacePromotionTestGuard::untraced();
+
+        let child = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(child));
+
+        let before = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+        // Live subject: the UNTRACED promotion path ran and moved something.
+        // A cycle that evacuated, or promoted with a trace, would exercise the
+        // arm this test is not about.
+        assert!(
+            trace.copying_nursery.in_place_promotion
+                && untraced_promotion_cycles() > 0
+                && trace.copying_nursery.promoted_bytes > 0,
+            "the untraced promotion must have run and promoted something \
+             (in_place={}, untraced_cycles={}, promoted_bytes={}); declined because: {}",
+            trace.copying_nursery.in_place_promotion,
+            untraced_promotion_cycles(),
+            trace.copying_nursery.promoted_bytes,
+            crate::gc::copying::last_untraced_decline_reason()
+        );
+
+        let after = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
+        assert_eq!(
+            after.saturating_sub(before),
+            trace.copying_nursery.promoted_bytes,
+            "#7965: the baseline must advance by exactly the bytes this cycle \
+             relocated into old-gen, whether or not it traced them"
+        );
+    }
+
+    let _iso = GcTestIsolationGuard::new();
+
+    // The mechanism as arithmetic, independent of which arm happens to fire
+    // and of the `GC_MAJOR_PACING_RETAINING` latch: a baseline pinned at zero
+    // collapses the band's proportional half, so an adaptive band degenerates
+    // into the constant floor however large the live old generation grows.
+    let floor_band = gc_old_reclaim_growth_band_bytes(0);
+    assert!(
+        gc_old_reclaim_growth_band_bytes(512 * 1024 * 1024) > floor_band,
+        "the proportional half is what a zero baseline collapses; without it \
+         this test is not about the same quantity"
+    );
+
+    // `retain`'s measured promotion steps (#7965 trace, `PERRY_GC_DIAG=1`).
+    // Cycle 0 evacuates and every following cycle promotes the whole young
+    // generation untraced, so on a workload like this NOTHING else credits the
+    // baseline — which is why withholding the credit pins it at zero forever.
+    const RETAIN_UNTRACED_PROMOTION_BYTES: [usize; 4] =
+        [18_742_816, 26_213_656, 35_650_552, 37_747_640];
+
+    let previous = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(0));
+    let mut old_in_use = 0usize;
+    let mut uncredited_fired = false;
+    for step in RETAIN_UNTRACED_PROMOTION_BYTES.iter().cycle().take(16) {
+        old_in_use += step;
+        credit_promoted_bytes_to_old_baseline(*step);
+        let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.get());
+        assert!(
+            !old_reclaim_pressure_due(old_in_use, baseline),
+            "a full scheduled purely because promotion moved bytes into old-gen \
+             is guaranteed to free nothing (old_in_use={old_in_use}, baseline={baseline})"
+        );
+        // The same occupancy read against a baseline nobody credits — the
+        // #7902 state.
+        uncredited_fired |= old_reclaim_pressure_due(old_in_use, 0);
+    }
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(previous));
+
+    // The subject was genuinely at risk: a heap made ENTIRELY of objects a
+    // minor just relocated there does schedule a full once the baseline stops
+    // tracking it. Without this the loop above would not distinguish "the
+    // credit works" from "this schedule never approached a trigger".
+    assert!(
+        uncredited_fired,
+        "#7965: an uncredited baseline must make this schedule due — if it does \
+         not, the assertions above prove nothing about the credit"
+    );
+}
+
 #[test]
 fn a_low_survival_cycle_still_evacuates_and_moves_the_object() {
     // NOTE: `CopyingNurseryTestGuard::new` takes the copying-nursery isolation

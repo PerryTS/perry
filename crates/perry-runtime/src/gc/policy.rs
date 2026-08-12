@@ -1577,6 +1577,39 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
 /// quickly now wait for the growth band instead of the next threshold
 /// crossing. That is deliberate — a promoted-then-dead cohort big enough to
 /// matter moves the band by its own size.
+///
+/// # ★ Every promotion is credited, including an UNTRACED one (#7965)
+///
+/// #7902 made the call site skip this for a `PromotionLiveness::AssumeAllLive`
+/// promotion, reasoning that "live by construction" is a marked-liveness claim
+/// an untraced cycle does not make. The premise is right and the conclusion
+/// does not follow, because **this baseline is not a liveness claim**. It is
+/// the base of a growth measurement: `old_in_use - baseline` is meant to read
+/// "how much has old-gen grown since the last reclaim decision", and bytes a
+/// minor has just relocated there are growth that decision has already seen.
+///
+/// Withholding it does not defer a little reclamation, it degenerates the
+/// predicate. A fully-live young generation promotes untraced on *every*
+/// cycle, so on exactly the workloads that reach the untraced path nothing
+/// else credits the baseline and it stays pinned at 0. Then
+/// `old_in_use - baseline` collapses into `old_in_use` — absolute occupancy,
+/// not growth — and [`gc_old_reclaim_growth_band_bytes`]'s proportional half
+/// (`baseline / OLD_RECLAIM_GROWTH_DIVISOR`) collapses with it, leaving the
+/// constant floor. **A constant band pacing a collector whose per-cycle cost is
+/// O(live)** is the quadratic shape #7592 removed here and #7594 removed one
+/// generation down. Measured on `retain` (#7965): 0 fulls → 1–2 fulls,
+/// 2 841 M → 8 237 M instructions retired, +25% peak RSS, and the same on
+/// `retain1` / `retain_wide` / `retain_wide1` / `deeplist`.
+///
+/// The uncertain cohort #7902 is right to worry about — assumed-live bytes
+/// parked in old-gen by a predictor that has since been contradicted — is
+/// bounded by the three instruments #7902 itself added, none of which paces on
+/// this quantity: `untraced_promotion_budget_bytes` forces a measuring cycle,
+/// `implied_dead_bytes` charges that run against `PROMOTED_DEAD_BUDGET_BYTES`,
+/// and [`request_old_reclaim_for_untraced_promotions`] schedules the reclaim
+/// outright when the measurement contradicts the predictor. Those act on
+/// evidence about the cohort; a pinned pacing base acts on every program that
+/// retains, whether or not anything about it is uncertain.
 pub(super) fn credit_promoted_bytes_to_old_baseline(promoted_bytes: usize) {
     if promoted_bytes == 0 {
         return;
