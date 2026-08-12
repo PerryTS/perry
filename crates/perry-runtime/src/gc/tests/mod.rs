@@ -34,6 +34,7 @@ mod oldgen;
 mod os_tag;
 mod promote_in_place;
 mod root_words;
+mod rooted_container_values;
 mod roots;
 mod runtime_roots;
 mod scan_fallback;

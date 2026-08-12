@@ -43,8 +43,21 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
     if desc_obj.is_null() || !is_valid_obj_ptr(desc_obj as *const u8) {
         return target;
     }
+    // #7949: everything below spans allocations — `propertyIsEnumerable` and
+    // the `[[Get]]` can run user accessors, `str_from_value` coerces (and so
+    // allocates for every key shape except an already-heap string), and
+    // `js_object_define_property` grows the target. The receiver, the
+    // properties bag, the own-names array and the collected key list are all
+    // rooted for the duration, and each is re-read out of its root after every
+    // call that could have moved it. A bare `Vec<f64>` of keys is invisible to
+    // every scanner, so under an evacuating collection the second loop used to
+    // define properties under stale key strings.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let descriptors_handle = scope.root_nanbox_f64(descriptors);
+
     // Snapshot the descriptor object's own keys array. We collect into a
-    // Vec<f64> first so adding properties via `js_object_define_property`
+    // rooted list first so adding properties via `js_object_define_property`
     // (which can resize the target's keys_array) can't perturb iteration
     // — descriptors and target are usually different objects, but a
     // defensive copy costs ~ngc and protects against a user who passes
@@ -55,25 +68,37 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
     // (so accessors on the properties bag run). Using the full own-key set is
     // wrong for native namespaces like `Math` (whose `E`/`PI`/... are
     // non-enumerable) and for any object with non-enumerable own props.
-    let names_value = js_object_get_own_property_names(descriptors);
-    let names_arr =
-        crate::value::js_nanbox_get_pointer(names_value) as *const crate::array::ArrayHeader;
-    let mut keys: Vec<f64> = Vec::new();
-    if !names_arr.is_null() {
-        let len = crate::array::js_array_length(names_arr) as usize;
-        for i in 0..len {
-            let k = crate::array::js_array_get(names_arr, i as u32);
-            let k_f64 = f64::from_bits(k.bits());
-            // Skip non-enumerable own keys (spec step: descriptor must be
-            // enumerable). `propertyIsEnumerable` returns false for absent or
-            // non-enumerable keys.
-            const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-            if js_object_property_is_enumerable(descriptors, k_f64).to_bits() == TAG_TRUE {
-                keys.push(k_f64);
-            }
+    let names_handle = scope.root_nanbox_f64(js_object_get_own_property_names(
+        descriptors_handle.get_nanbox_f64(),
+    ));
+    let mut keys = crate::gc::RootedValues::new(&scope);
+    let names_len = {
+        let names_arr = crate::value::js_nanbox_get_pointer(names_handle.get_nanbox_f64())
+            as *const crate::array::ArrayHeader;
+        if names_arr.is_null() {
+            0
+        } else {
+            crate::array::js_array_length(names_arr) as usize
+        }
+    };
+    for i in 0..names_len {
+        let names_arr = crate::value::js_nanbox_get_pointer(names_handle.get_nanbox_f64())
+            as *const crate::array::ArrayHeader;
+        let k = crate::array::js_array_get(names_arr, i as u32);
+        let k_handle = scope.root_nanbox_f64(f64::from_bits(k.bits()));
+        // Skip non-enumerable own keys (spec step: descriptor must be
+        // enumerable). `propertyIsEnumerable` returns false for absent or
+        // non-enumerable keys.
+        const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+        let enumerable = js_object_property_is_enumerable(
+            descriptors_handle.get_nanbox_f64(),
+            k_handle.get_nanbox_f64(),
+        );
+        if enumerable.to_bits() == TAG_TRUE {
+            keys.push(k_handle.get_nanbox_f64());
         }
     }
-    for k in keys {
+    for i in 0..keys.len() {
         // Read the descriptor through `[[Get]]` so accessors on the properties
         // bag are honored, then ToPropertyDescriptor + DefinePropertyOrThrow.
         //
@@ -83,8 +108,9 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
         // instance, etc. `Object.create({}, new Date(0))` previously bit-cast the
         // Date's `DateCell` pointer to an `ObjectHeader` and segfaulted. The
         // dynamic getter dispatches on the receiver's real type.
-        let key_str = str_from_value(k);
+        let key_str_handle = scope.root_nanbox_f64(box_string_ptr(str_from_value(keys.get(i))));
         let descriptor = unsafe {
+            let key_str = unbox_string_ptr(key_str_handle.get_nanbox_f64());
             if key_str.is_null() {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             } else {
@@ -92,15 +118,42 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
                     (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key_str).byte_len as usize;
                 crate::value::js_dynamic_object_get_property(
-                    descriptors,
+                    descriptors_handle.get_nanbox_f64(),
                     name_ptr as *const i8,
                     name_len,
                 )
             }
         };
-        js_object_define_property(target, k, descriptor);
+        let descriptor_handle = scope.root_nanbox_f64(descriptor);
+        js_object_define_property(
+            target_handle.get_nanbox_f64(),
+            keys.get(i),
+            descriptor_handle.get_nanbox_f64(),
+        );
     }
-    target
+    target_handle.get_nanbox_f64()
+}
+
+/// NaN-box a coerced key string so a `RuntimeHandleScope` can root it (the
+/// handle stack rewrites STRING_TAG slots on evacuation). A null pointer boxes
+/// as `undefined`, which [`unbox_string_ptr`] maps back to null.
+fn box_string_ptr(ptr: *const crate::string::StringHeader) -> f64 {
+    if ptr.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(0x7FFF_0000_0000_0000 | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF))
+    }
+}
+
+/// Inverse of [`box_string_ptr`]. Read this immediately before the use — the
+/// pointer is a copy, and the next allocation can move the string.
+fn unbox_string_ptr(value: f64) -> *const crate::string::StringHeader {
+    let bits = value.to_bits();
+    if bits >> 48 == 0x7FFF {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader
+    } else {
+        std::ptr::null()
+    }
 }
 
 /// Coerce an arbitrary key value (f64 — usually a STRING_TAG NaN-box) to a

@@ -1,6 +1,7 @@
 use super::*;
 use std::any::Any;
 
+mod rooted_values;
 mod runtime_handles;
 mod scan_mode;
 mod scanner_shims;
@@ -11,6 +12,7 @@ pub(super) use stack_maps::initialize as initialize_stack_maps;
 pub(super) use stack_maps::native_maps_active as native_stack_maps_active;
 pub(super) use stack_maps::record_native_stack_walk_source;
 
+pub use rooted_values::RootedValues;
 pub(super) use runtime_handles::{
     new_runtime_handle_root_scan_state, scan_runtime_handle_roots_mut,
     scan_runtime_handle_roots_mut_step,
