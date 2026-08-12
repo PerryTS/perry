@@ -193,3 +193,76 @@ minors moving 110,912 objects.
   own setup rather than in the code under test, and a test that fights the
   harness is not evidence. The window it targeted is covered end-to-end by the
   compiled probe's third arm.
+
+## Acceptance corpus
+
+All 37 `test_gap_gc_*.ts` plus the 5 `test_gap_{proxy,reflect}*.ts` programs,
+compiled against the fixed runtime (`PERRY_NO_AUTO_OPTIMIZE=1`,
+`PERRY_RUNTIME_DIR` pinned), byte-compared to node 26.5.1 in the default
+configuration AND under `PERRY_GC_PROTECT_FROMSPACE=1
+PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`:
+
+```
+==== pass=42 fail=0 node-skip=0 quarantine-live=20 ====
+```
+
+`quarantine-live=20` is the honest half: only 20 of the 42 programs ran a
+copying minor at all, so for the other 22 the protected arm is a
+no-regression check and not a rooting witness. (#7962 reported the same 20-of-41
+split.)
+
+## #7964 — verdict: COMPILER GAP, not a stale pin. Do not regenerate.
+
+Reproduced on this branch (the change is runtime-only, so this is the state of
+`main`): `test-files/gc-dep-corpus/main.ts` fails to link with **45 distinct**
+undefined `_perry_fn_node_modules_zod_...` symbols.
+
+Evidence for "compiler gap":
+
+1. **The mangled module in every failing symbol is the BARREL, not the
+   definer.** `_perry_fn_node_modules_zod_src_v4_core_index_ts__NEVER` says
+   Perry believes `NEVER` is *defined by* `core/index.ts`. `core/index.ts` is
+   16 lines of `export * from …` / `export * as ns from …` and defines nothing.
+   The actual definition is `core/core.ts:13`.
+2. **The consumer shape is a named re-export from an `export *` barrel.**
+   `v4/classic/external.ts` does
+   `export { globalRegistry, config, $brand, clone, prettifyError, … } from "../core/index.js";`
+   — every one of those names reaches `core/index.ts` only through
+   `export * from "./core.js" | "./api.js" | "./registries.js" | "./errors.js"`.
+   Perry emits the reference and never the forwarding definition.
+3. **It is not a type-only-export leak.** The failing set mixes `const` exports
+   (`NEVER`, `globalRegistry`, `$brand`) with `function` exports (`config`,
+   `clone`, `prettifyError`, `_gt`, `_minLength`, …), so "erased type export
+   still got a symbol" does not explain it.
+4. **The pin has not drifted.** `package.json` asks for `zod@^4.3.5` and
+   `node_modules/zod/package.json` is `4.3.5` — exactly the version named in
+   #7964. Nothing in the corpus pins a commit that could have moved underneath
+   it.
+
+Two minimal reproducers I built (in `/tmp`, deliberately not added to the repo —
+see the collision note below) both LINK, so the gap needs more of zod's shape
+than one hop: `leaf.ts` → `barrel.ts` (`export *`) → `top.ts` links, and adding
+a `bridge.ts` (`export { X } from "./barrel.js"`) still links. The remaining
+candidates are the barrel's multi-source `export *` set, its
+`export * as ns from`, and the `core/index.ts` ↔ `core/api.ts` cycle.
+
+**Collision:** `/Users/amlug/projects/perry/wt-codex-7964` is another agent's
+worktree on branch `fix/7964-zod-star-reexports`, already carrying uncommitted
+edits to `perry-hir/src/lower/module_decl.rs`, `perry-hir/src/dynamic_import.rs`
+and `perry-codegen/src/codegen/helpers.rs`, plus fixtures
+`test-files/test_gap_export_star_variable_reexport.ts` and
+`test-files/_helpers/issue_7964_{leaf,barrel,bridge,top}.ts` — the same four-file
+shape I arrived at independently. I stopped at the verdict rather than shipping a
+second implementation of the same fix.
+
+## #7803 — still blocked
+
+The corpus does not link, so #7803's reproducer still cannot be run. Nothing on
+this branch changes that (the fix is runtime-side; the failure is in module
+lowering/codegen). The candidate connection stands and is now slightly stronger:
+zod's `Object.defineProperties` calls
+(`src/v4/core/util.ts:316`, `src/v4/classic/errors.ts:28`) go through the helper
+#7949 fixed, and its `Object.defineProperty` calls go through the window this
+branch fixes; #7803's `Cannot read properties of undefined (reading 'toString')`
+is what a stale key or a stale receiver in either loop produces. **Candidate,
+not confirmed** — retest once #7964 lands.
