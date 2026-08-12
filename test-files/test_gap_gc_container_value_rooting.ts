@@ -1,13 +1,15 @@
 // #7949: JS values retained in ordinary Rust containers across allocating calls.
 //
 // `Object.groupBy` / `Map.groupBy` accumulate every `(key, item)` pair into a
-// `Vec<(f64, f64)>` while calling a USER CALLBACK once per element, and
-// `Object.defineProperties` accumulates the descriptor bag's own keys into a
-// `Vec<f64>` and then walks them across a `[[Get]]` that can run a user getter.
-// A `Vec` on the Rust heap is neither a shadow slot nor a temp root nor
-// reachable from any registered scanner, so an evacuating minor landing inside
-// one of those callbacks can neither keep the already-collected values alive
-// nor rewrite their addresses.
+// `Vec<(f64, f64)>` while calling a USER CALLBACK once per element. A `Vec` on
+// the Rust heap is neither a shadow slot nor a temp root nor reachable from any
+// registered scanner, so an evacuating minor landing inside one of those
+// callbacks can neither keep the already-collected values alive nor rewrite
+// their addresses.
+//
+// (`Object.defineProperties`, the third helper #7949 names, is covered by
+// `test_gap_gc_define_properties_key_rooting.ts` — deliberately a separate
+// program, see the note at the bottom of that file.)
 //
 // Why this class needs a hand-built probe: `scripts/gc_root_dominance_check.py`
 // reads emitted LLVM IR, and a Rust-side container is structurally invisible to
@@ -75,31 +77,6 @@ function mapGroupBy(): string {
   return parts.join("|");
 }
 
-// Object.defineProperties: the own-key list is collected first, then each key
-// spans a `[[Get]]` on the properties bag (a user getter here, so a safepoint
-// poll lands inside it) plus the define itself.
-function definePropertiesWithGetters(): string {
-  const bag: any = {};
-  for (let i = 0; i < 12; i++) {
-    const index = i;
-    Object.defineProperty(bag, "prop-" + index, {
-      enumerable: true,
-      configurable: true,
-      get: function (): any {
-        churn(index);
-        return { value: "value-" + index, enumerable: true, configurable: true };
-      },
-    });
-  }
-  const target: any = {};
-  Object.defineProperties(target, bag);
-  const parts: string[] = [];
-  for (const key of Object.keys(target).sort()) {
-    parts.push(key + "=" + target[key]);
-  }
-  return parts.join("|");
-}
-
 function expectedObjectGroupBy(): string {
   const buckets: string[][] = [[], [], []];
   for (let i = 0; i < 18; i++) {
@@ -124,18 +101,5 @@ function expectedMapGroupBy(): string {
   return parts.join("|");
 }
 
-function expectedDefineProperties(): string {
-  const parts: string[] = [];
-  for (let i = 0; i < 12; i++) {
-    parts.push("prop-" + i + "=value-" + i);
-  }
-  parts.sort();
-  return parts.join("|");
-}
-
 console.log("objectGroupBy", objectGroupBy() === expectedObjectGroupBy() ? "ok" : "BAD");
 console.log("mapGroupBy", mapGroupBy() === expectedMapGroupBy() ? "ok" : "BAD");
-console.log(
-  "defineProperties",
-  definePropertiesWithGetters() === expectedDefineProperties() ? "ok" : "BAD",
-);

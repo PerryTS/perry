@@ -10,12 +10,31 @@ use super::{
     revoked_return, throw_type_error, POINTER_MASK, POINTER_TAG, PROXIES, TAG_NULL, TAG_UNDEFINED,
 };
 
+/// #7949: root the caller's key list before touching the heap.
+///
+/// `js_array_push_f64` grows the result array, and growing it allocates — so
+/// with a plain `&[f64]` every key *after* the first collection point named
+/// from-space. The keys are strings and symbols the caller usually obtained
+/// from a user `ownKeys` trap, so they are exactly the young objects a copying
+/// minor relocates.
 fn alloc_key_array(keys: &[f64]) -> f64 {
-    let mut arr = crate::array::js_array_alloc(keys.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut rooted = crate::gc::RootedValues::with_capacity(&scope, keys.len());
     for &k in keys {
-        arr = crate::array::js_array_push_f64(arr, k);
+        rooted.push(k);
     }
-    f64::from_bits(POINTER_TAG | ((arr as u64) & POINTER_MASK))
+    let arr_handle = scope.root_nanbox_f64(f64::from_bits(
+        POINTER_TAG | ((crate::array::js_array_alloc(keys.len() as u32) as u64) & POINTER_MASK),
+    ));
+    for i in 0..rooted.len() {
+        let arr = (arr_handle.get_nanbox_f64().to_bits() & POINTER_MASK)
+            as *mut crate::array::ArrayHeader;
+        let grown = crate::array::js_array_push_f64(arr, rooted.get(i));
+        arr_handle.set_nanbox_f64(f64::from_bits(
+            POINTER_TAG | ((grown as u64) & POINTER_MASK),
+        ));
+    }
+    arr_handle.get_nanbox_f64()
 }
 
 fn is_string_key(v: f64) -> bool {
@@ -228,27 +247,46 @@ pub(crate) fn proxy_own_property_symbols(proxy_boxed: f64) -> f64 {
 
 /// `Object.keys(proxy)` — EnumerableOwnPropertyNames: string keys whose proxy
 /// `[[GetOwnProperty]]` reports `enumerable: true`.
+///
+/// #7949: `js_reflect_get_own_property_descriptor` fires the proxy's
+/// `getOwnPropertyDescriptor` trap — arbitrary user JS, once per key — and the
+/// `enumerable` probe allocates a string. Both the not-yet-visited keys and the
+/// keys already accepted into the result have to survive that, so they live in
+/// rooted lists rather than `Vec<f64>`s.
 pub(crate) fn proxy_enum_own_keys(proxy_boxed: f64) -> f64 {
-    let keys = read_array(js_proxy_own_keys(proxy_boxed));
-    let mut out: Vec<f64> = Vec::new();
-    for k in keys {
-        if !is_string_key(k) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proxy_handle = scope.root_nanbox_f64(proxy_boxed);
+    let mut keys = crate::gc::RootedValues::new(&scope);
+    for k in read_array(js_proxy_own_keys(proxy_handle.get_nanbox_f64())) {
+        keys.push(k);
+    }
+    let mut out = crate::gc::RootedValues::new(&scope);
+    for i in 0..keys.len() {
+        if !is_string_key(keys.get(i)) {
             continue;
         }
-        let desc = super::js_reflect_get_own_property_descriptor(proxy_boxed, k);
+        let desc = super::js_reflect_get_own_property_descriptor(
+            proxy_handle.get_nanbox_f64(),
+            keys.get(i),
+        );
         if desc.to_bits() == TAG_UNDEFINED {
             continue;
         }
-        let ptr = (desc.to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
+        let desc_handle = scope.root_nanbox_f64(desc);
+        // Intern "enumerable" first; the descriptor read after it is then the
+        // post-collection address.
+        let ek = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+        let ptr =
+            (desc_handle.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
         if ptr.is_null() {
             continue;
         }
-        let ek = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
         if crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(ptr, ek)) != 0
         {
-            out.push(k);
+            out.push(keys.get(i));
         }
     }
     let _ = TAG_NULL;
-    alloc_key_array(&out)
+    let snapshot: Vec<f64> = out.iter().collect();
+    alloc_key_array(&snapshot)
 }
