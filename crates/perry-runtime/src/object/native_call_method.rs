@@ -1774,7 +1774,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // add to the js_weak* helpers instead of throwing "has is not a
         // function". The class_id guard + routing live in weakref.rs.
         if let Some(r) =
-            crate::weakref::try_weak_method_dispatch(obj, object(), method_name, args_ptr, args_len)
+            crate::object::try_weak_method_dispatch(obj, object(), method_name, args_ptr, args_len)
         {
             return r;
         }

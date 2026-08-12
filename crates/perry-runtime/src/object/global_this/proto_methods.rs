@@ -77,6 +77,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         return;
     }
+    // #7947: WeakRef / FinalizationRegistry prototypes get brand-checking
+    // thunks, so `WeakRef.prototype.deref.call(wr)`, `wr.deref.bind(wr)` and
+    // `typeof wr.deref` resolve instead of answering `undefined`.
+    if super::super::weakref_proto_thunks::install_weakref_proto_methods(builtin_name, proto_obj) {
+        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        return;
+    }
     // #4795: TC39 explicit-resource-management stacks.
     if super::super::disposable_proto_thunks::install_disposable_proto_methods(
         builtin_name,

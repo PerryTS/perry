@@ -256,7 +256,7 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
         // comparing `class_id`, matching the `is_registered_map`/
         // `is_registered_set` safety bar above.
         let receiver = crate::value::js_nanbox_pointer(addr as i64);
-        if let Some(class_id) = crate::weakref::weak_class_id_from_receiver(receiver) {
+        if let Some(class_id) = crate::object::weak_class_id_from_receiver(receiver) {
             let name = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
                 "WeakMap"
             } else {

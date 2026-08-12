@@ -322,7 +322,7 @@ pub extern "C" fn js_object_get_field_by_name(
     {
         unsafe {
             let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-            if let Some(cid) = crate::weakref::weak_class_id_from_receiver(boxed) {
+            if let Some(cid) = crate::object::weak_class_id_from_receiver(boxed) {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
                 let name = std::slice::from_raw_parts(name_ptr, name_len);
@@ -339,6 +339,37 @@ pub extern "C" fn js_object_get_field_by_name(
                         if let Some(v) =
                             super::super::collection_proto_thunks::collection_proto_method_value(
                                 builtin,
+                                method_name,
+                            )
+                        {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // #7947: the same VALUE read for a `WeakRef` / `FinalizationRegistry`
+    // instance — `typeof wr.deref`, `const d = wr.deref`, `wr.deref.bind(wr)`.
+    // These wrappers had no prototype thunks at all before #7947, so every such
+    // read answered `undefined` (and `.bind` threw "Bind must be called on a
+    // function"). Own keys keep precedence — fresh instances carry only the
+    // `__perry_wr_target` / `__perry_fr_*` sentinels.
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+    {
+        unsafe {
+            let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+            if let Some(cid) = crate::object::weak_wrapper_class_id(boxed) {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = std::slice::from_raw_parts(name_ptr, name_len);
+                if let Ok(method_name) = std::str::from_utf8(name) {
+                    if !super::super::own_key_present(obj as *mut ObjectHeader, key) {
+                        if let Some(v) =
+                            super::super::weakref_proto_thunks::weakref_proto_method_value_for(
+                                cid,
                                 method_name,
                             )
                         {

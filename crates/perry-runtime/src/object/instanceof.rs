@@ -1369,7 +1369,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     const CLASS_ID_WEAKMAP_RESERVED: u32 = 0xFFFF002C;
     const CLASS_ID_WEAKSET_RESERVED: u32 = 0xFFFF002D;
     if class_id == CLASS_ID_WEAKMAP_RESERVED {
-        return if crate::weakref::weak_class_id_from_receiver(value)
+        return if crate::object::weak_class_id_from_receiver(value)
             == Some(crate::weakref::CLASS_ID_WEAKMAP)
         {
             true_val
@@ -1378,7 +1378,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         };
     }
     if class_id == CLASS_ID_WEAKSET_RESERVED {
-        return if crate::weakref::weak_class_id_from_receiver(value)
+        return if crate::object::weak_class_id_from_receiver(value)
             == Some(crate::weakref::CLASS_ID_WEAKSET)
         {
             true_val

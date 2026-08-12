@@ -231,11 +231,16 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
         }
     }
-    if let Some(cid) = crate::weakref::weak_class_id_from_receiver(value) {
-        let tag = if cid == crate::weakref::CLASS_ID_WEAKSET {
-            "WeakSet"
-        } else {
-            "WeakMap"
+    // #7947: `WeakRef` / `FinalizationRegistry` were missing here, so
+    // `Object.prototype.toString.call(new WeakRef(x))` answered
+    // `[object Object]` instead of `[object WeakRef]`. Same reserved-class_id
+    // question as WeakMap/WeakSet, just two more arms.
+    if let Some(cid) = crate::object::weak_wrapper_class_id(value) {
+        let tag = match cid {
+            crate::weakref::CLASS_ID_WEAKSET => "WeakSet",
+            crate::weakref::CLASS_ID_WEAKREF => "WeakRef",
+            crate::weakref::CLASS_ID_FINALIZATION_REGISTRY => "FinalizationRegistry",
+            _ => "WeakMap",
         };
         let formatted = format!("[object {}]", tag);
         let str_ptr =

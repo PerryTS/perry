@@ -141,6 +141,7 @@ mod temporal_proto;
 mod typed_array_define;
 mod typed_array_proto_thunks;
 mod util_types;
+mod weakref_proto_thunks;
 mod websocket_global;
 mod with_env;
 // Issue #1103 follow-up: behavior-preserving split of the residual top-level
@@ -197,6 +198,12 @@ pub(crate) use typed_array_define::{
     TypedArrayOwnIndex,
 };
 pub use util_types::*;
+// #7947: weak-wrapper method dispatch (moved out of `weakref.rs`, which is at
+// the 2000-line gate) plus the WeakRef/FinalizationRegistry arms and thunks.
+pub use weakref_proto_thunks::{
+    delegate_if_not_weak_collection, dispatch_foreign_weak_receiver, is_weak_wrapper,
+    try_weak_method_dispatch, weak_class_id_from_receiver, weak_wrapper_class_id,
+};
 pub use with_env::*;
 // Re-exports for the residual-helper split (issue #1103 follow-up). Explicit
 // named re-exports keep existing `crate::object::X` / bare-name call sites in
