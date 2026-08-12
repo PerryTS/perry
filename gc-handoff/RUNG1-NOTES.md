@@ -25,8 +25,8 @@ the word is a ShapeId  <=>  is_shape_id(word)
 ```
 
 ★ **The emitted IR already spelled it that way.** All three PICs
-(`property_get/generic_dispatch.rs:536-546`, `expr/proxy_reflect.rs:536-546`
-and `:862-871`) derive their receiver token as
+(`property_get/generic_dispatch.rs:479-491`, `expr/proxy_reflect.rs:536-546`
+and `:862-872`) derive their receiver token as
 
 ```
 is_stamp = (parent_class_id - 0x8000_0000) <u 0x4000_0000
@@ -56,7 +56,7 @@ build.** Measured, not argued — see §3.
 `typed_feedback` observation and the guard family in `typed_feedback/guards.rs`,
 whose contracts require `shape_addr == expected_keys as usize`
 (`method_direct_call_contract:131`, and the class-field / element-shape
-contracts at `:268` and `:523`). Returning an id there fails **every** such
+contracts at `:271` and `:525`). Returning an id there fails **every** such
 guard **closed** — memory-safe, but it silently deletes the direct-method-call
 route and the class-field fast paths, i.e. exactly the tier this ladder exists
 to make cheaper.
@@ -122,10 +122,16 @@ Routing all four through `stamp_object_shape` closes that in the same edit.
 
 ## 2. Cost
 
-`git diff --stat origin/main`: **7 files, +411 / −108** — of which ~150 lines
-are new tests and ~90 are the shapes.rs doc block. Production logic delta is
-roughly **60 lines net**, well inside the brief's ~150 estimate. Runtime-only,
-as costed.
+`git diff --stat origin/main`, code only (the 7 `crates/perry-runtime/src`
+files): **+494 / −106**. Of that, ~225 lines are new tests, ~95 is the
+shapes.rs doc block, and the rest is comment. **Production logic delta is
+roughly 60 lines net** — well inside the brief's ~150 estimate, and runtime-only
+exactly as costed. No public API changed (every new item is `pub(crate)`; no
+`#[no_mangle]`/`pub extern` signature moved), so no dependent crate can break on
+it.
+
+Rung 1 did **not** turn out to be larger than costed, so there was no reason to
+stop and hand back.
 
 ---
 
