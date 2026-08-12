@@ -378,7 +378,9 @@ def main() -> int:
     facts = sum(
         len(FACT_RE.findall((REPO / rel).read_text(encoding="utf-8"))) for rel in CURRENT_DOCS
     )
-    print(f"check_gc_doc_claims: OK — {len(CURRENT_DOCS)} documents, {facts} facts re-derived")
+    # ASCII only: this runs on the Windows structural-audit arm, whose console
+    # encoding is not guaranteed to be UTF-8.
+    print(f"check_gc_doc_claims: OK - {len(CURRENT_DOCS)} documents, {facts} facts re-derived")
     return 0
 
 
