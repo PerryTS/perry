@@ -333,3 +333,36 @@ null→first-key edge) than the resolve paths would; sabotaging it only delays t
 stamp. Neither has a behavioural assertion, and building a hit-counter probe for
 them was judged out of proportion for rung 1. Rung 3, which makes the id
 load-bearing in a guard, will need E pinned.
+
+---
+
+## 6. Handoff — what rung 2 and rung 3 inherit
+
+1. ★ **Rung 3's first job is `object_shape()`, not the guard.** SHAPE-NOTES §3c
+   lists nine consumers of the keys token; the one that *blocks* is
+   `typed_feedback::object_shape()`, because the guard contracts compare its
+   return against a codegen keys pointer. Until those contracts take an id,
+   `object_shape()` cannot return one, and rung 1 leaves that gate in place with
+   a comment naming the two tests. Do that migration and the guard switch
+   together, or the intermediate state is a silent fast-path deletion.
+2. **Rung 2's stamp must reach the same word rung 1 clears.** Eager birth
+   stamping writes `@perry_class_shape_C | (field_count << 32)` at
+   `new_alloc.rs:543`. `set_object_keys_array` and `delete_rest` already clear
+   it for class instances after this PR, so rung 2 is purely "arrive stamped"
+   — no new invalidation is needed.
+3. **The read PIC's epoch guard is now nearly bypassed** (§3b). If rung 3 makes
+   ids load-bearing in a *guard* (not just a cache), the trust chain is
+   `shapes::prune_dead_shape_keys` + `scan_shape_table_rekey_mut`, not the
+   epoch. Worth an explicit test that a recycled keys-array address cannot
+   inherit a dead record's id.
+4. **Per-thread shape tables, process-global ids, process-global PIC caches.**
+   Two threads adopting the same `CLASS_KEYS_BY_ID` array mint *different* ids
+   for it (each thread's table allocates from the shared monotonic counter), so
+   a `@perry_ic_N` global can thrash between two ids for one shape. Not a
+   correctness bug (ids are globally unique, so no false hit) and pre-existing
+   for plain objects since #6804 — but rung 3 should measure it before relying
+   on id-token hit rates.
+5. **SHAPE-NOTES §8's four loose ends are all still open**, including the static
+   write PIC's missing epoch check — which matters *less* after rung 1 (that PIC
+   now mostly sees id tokens) but is still an unintended asymmetry.
+6. Sites E and G have no behavioural pin (§5b). Rung 3 needs E pinned.
