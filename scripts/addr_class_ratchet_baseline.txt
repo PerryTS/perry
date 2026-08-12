@@ -235,7 +235,7 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/descriptors.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/accessors.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 3
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 2
+lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/has_property.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_set_by_name/attr_variants.rs | 2

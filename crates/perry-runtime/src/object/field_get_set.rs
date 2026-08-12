@@ -239,10 +239,13 @@ mod crypto_key;
 mod enumeration;
 mod field_ops;
 mod get_field_by_name;
+#[cfg(test)]
+mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
 mod has_property;
 mod ic_miss;
 mod map_set_receiver;
+mod probe_dispatch;
 
 /// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline
 /// cache backing `js_object_get_field_by_name`'s slow tail.
