@@ -165,6 +165,41 @@ fn bounded_loop_cond(idx: u32, condition: Expr, body: Vec<Stmt>) -> Stmt {
     }
 }
 
+/// The #7761 guarded lowering of `for (const r of rows)`: the lazy arm starts
+/// with `GetIterator(rows)`, while the byte-identical fast arm aliases `rows`
+/// and performs the ordinary E5 index loop.
+fn guarded_for_of(
+    root: u32,
+    iterator: u32,
+    fast_alias: u32,
+    fast_index: u32,
+    lazy_tail: Vec<Stmt>,
+    fast_body: Vec<Stmt>,
+) -> Stmt {
+    let mut lazy = vec![Stmt::Let {
+        id: iterator,
+        name: format!("__iterator_{iterator}"),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::GetIterator(Box::new(Expr::LocalGet(root)))),
+    }];
+    lazy.extend(lazy_tail);
+    Stmt::If {
+        condition: Expr::ArrayIterationPatched,
+        then_branch: lazy,
+        else_branch: Some(vec![
+            Stmt::Let {
+                id: fast_alias,
+                name: format!("__arr_{fast_alias}"),
+                ty: Type::Array(Box::new(Type::Named("C".to_string()))),
+                mutable: false,
+                init: Some(Expr::LocalGet(root)),
+            },
+            bounded_loop(fast_index, fast_alias, fast_body),
+        ]),
+    }
+}
+
 /// `const <name> = <arr>[<idx>];`
 fn let_elem(id: u32, name: &str, arr: u32, idx: u32) -> Stmt {
     let_elem_ty(id, name, arr, idx, Type::Named("C".to_string()))
@@ -848,6 +883,137 @@ fn reads_through_an_array_alias_are_licensed() {
          `for…of` form"
     );
     assert!(promoted.contains_key(&2), "and the producer with it");
+}
+
+/// #7777: #7761 wrapped a proven-array `for…of` in a runtime iterator-patch
+/// branch. The lazy `GetIterator(rows)` is an escape, but it is mutually
+/// exclusive with the E5 index arm, and here neither the array nor any group
+/// member is used after the join. The producer, explicit indexed reader, and
+/// guarded fast-arm reader therefore remain the census fixture's three facts.
+///
+/// Sabotage: route the outer statement list through ordinary `walk_stmts`, or
+/// delete `walk_terminal_array_iteration_guard`, and the GetIterator source
+/// voids all three facts exactly as main did in #7777.
+#[test]
+fn terminal_guarded_for_of_retains_the_index_arm_facts() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        store_x(2),
+        push(1, Expr::LocalGet(2)),
+        bounded_loop(4, 1, vec![let_elem(5, "indexed", 1, 4), read_x(5)]),
+        guarded_for_of(
+            1,
+            20,
+            30,
+            31,
+            Vec::new(),
+            vec![let_elem(32, "iterated", 30, 31), read_x(32)],
+        ),
+        Stmt::Return(Some(Expr::Number(0.0))),
+    ];
+    let promoted = promote(&stmts, &classes);
+    assert!(promoted.contains_key(&2), "the pushed producer");
+    assert!(promoted.contains_key(&5), "the explicit indexed reader");
+    assert!(
+        promoted.contains_key(&32),
+        "the mutually-exclusive guarded index reader"
+    );
+}
+
+/// A custom iterator receives the actual array and may transition an element
+/// before the branch rejoins. A later indexed reader would then consume a
+/// stale shape proof, even if the iterator patch were restored before that
+/// later loop.
+///
+/// Sabotage: remove the `following_refs` half of the temporal-boundary check
+/// and both guarded and post-join readers promote.
+#[test]
+fn guarded_for_of_does_not_export_facts_across_its_join() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+        guarded_for_of(
+            1,
+            20,
+            30,
+            31,
+            Vec::new(),
+            vec![let_elem(32, "guarded", 30, 31), read_x(32)],
+        ),
+        bounded_loop(40, 1, vec![let_elem(41, "after", 1, 40), read_x(41)]),
+    ];
+    assert!(
+        elements(&stmts, &classes).is_empty(),
+        "GetIterator can reshape an element before the post-join indexed read"
+    );
+    assert!(promote(&stmts, &classes).is_empty());
+}
+
+/// The array can reach the producer object before `GetIterator` returns. A
+/// direct producer/alias access in the lazy arm is therefore just as unsafe as
+/// an array access after the join.
+///
+/// Sabotage: remove the lazy-arm `group_members` intersection and the producer
+/// retains a fact across the arbitrary iterator call.
+#[test]
+fn guarded_for_of_lazy_arm_cannot_reuse_a_group_member() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+        guarded_for_of(
+            1,
+            20,
+            30,
+            31,
+            vec![read_x(2)],
+            vec![let_elem(32, "guarded", 30, 31), read_x(32)],
+        ),
+    ];
+    assert!(elements(&stmts, &classes).is_empty());
+    assert!(promote(&stmts, &classes).is_empty());
+}
+
+/// A guarded escape inside a loop is not terminal: after the lazy arm mutates
+/// an element, the backedge can reach facts from the next iteration. Only the
+/// outer region statement list is eligible for the temporal exception.
+///
+/// Sabotage: invoke the special guard walker from recursive `walk_stmts` and
+/// this nested form starts issuing facts.
+#[test]
+fn a_nested_guarded_for_of_remains_an_escape() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![guarded_for_of(
+                1,
+                20,
+                30,
+                31,
+                Vec::new(),
+                vec![let_elem(32, "guarded", 30, 31), read_x(32)],
+            )],
+        },
+    ];
+    assert!(elements(&stmts, &classes).is_empty());
+    assert!(promote(&stmts, &classes).is_empty());
 }
 
 // ── CodeRabbit review reproducers (PR #7149) ───────────────────────────────
