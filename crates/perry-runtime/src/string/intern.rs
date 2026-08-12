@@ -261,8 +261,12 @@ pub fn scan_intern_table_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_intern_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Interned strings can be relocated by this collection; pointer-identity
-    // verdicts in the store-plan cache would go stale — flush them.
-    crate::object::prop_plan::prop_plan_epoch_bump();
+    // verdicts in the store-plan cache would go stale — flush them. This is a
+    // relocation, NOT a property change, so it bumps only the pointer-identity
+    // epoch: a cache that re-derives its addresses every lookup (`#7910`'s
+    // `Object.prototype` `then` verdict) must not be flushed at loop-poll
+    // cadence by the incremental collector.
+    crate::object::prop_plan::prop_plan_gc_epoch_bump();
     with_intern_table(|table| unsafe {
         for i in 0..INTERN_TABLE_SIZE {
             let entry = &mut (*table)[i];

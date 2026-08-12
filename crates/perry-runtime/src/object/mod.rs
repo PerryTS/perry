@@ -84,7 +84,7 @@ pub(crate) use native_module_registry::nm_ctor_lookup;
 // (`fs/promises` → `fs.constants`, `sys` → `util`).
 pub(crate) use native_module_registry::{js_nm_install_fs, js_nm_install_util};
 mod native_module_stream;
-mod native_this_alias;
+pub(crate) mod native_this_alias;
 mod object_literal_ops;
 mod object_ops;
 pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
