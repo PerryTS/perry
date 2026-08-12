@@ -241,17 +241,21 @@ Retitle it around the rate, or close it in favour of a fresh issue that quotes
   localize it (`PERRY_GC_PROTECT_FROMSPACE=1`, depth 800) *suppresses* the
   failure on this workload (§3), which is #7803's own hypothesis (1) confirmed
   on a second seed. A 24-seed sweep over the PROTECTED arm — the issue's
-  suggested way out — was **still running when this note was written** (7 of 24
-  seeds, no protected-arm fault yet). That is a partial result, not a negative
-  one: re-read `/tmp/zod-fuzz-prot.log` before quoting it, and note that at
-  ~4 min/run a protected sweep wide enough to matter is a multi-hour job.
+  suggested way out — reached **11 of 24 seeds with no protected-arm fault**
+  before this note was closed out; it was still running, so treat that as a
+  partial result, not a negative one, and re-read `/tmp/zod-fuzz-prot.log`
+  before quoting it. At ~4 min/run a protected sweep wide enough to matter is a
+  multi-hour job, and §5's arithmetic applies to it too: 11 clean protected runs
+  do not clear a 19% failure rate.
 * **Phase localization is inconclusive.** A marker-instrumented copy of the
   corpus (`/tmp/zod-probe`, `console.error` between and inside `describeAll` /
-  `parseLoop` / `parseRegistered`) survived every seed it was given — the
-  markers themselves allocate and perturb the schedule, which is the recurring
-  problem with this bug.
-* **The pin-latch abort (§4) has no owner.** Distinct from the rooting class,
-  self-detecting, and its printed remediation is refuted by its own tool.
+  `parseLoop` / `parseRegistered`) passed **10 of 10** seeds, every one reaching
+  `PHASE: parseRegistered done`. The markers themselves allocate and perturb the
+  schedule, so this is the recurring problem with this bug rather than evidence
+  about which phase is at fault — a probe dense enough to localize the failure
+  is dense enough to prevent it.
+* **The pin-latch abort (§4)** is filed as **#7990**. Distinct from the rooting
+  class, self-detecting, and its printed remediation is refuted by its own tool.
 * No fix is proposed here, so nothing is landed beyond this note. There is
   deliberately no new gate: a gate for a 19%-of-runs intermittent failure would
   be flaky in CI, and CLAUDE.md's four-ways-a-gate-cannot-fail applies in
