@@ -116,6 +116,20 @@ stack pointer of the frame whose return address `_Unwind_GetIP` reports** on
 both implementations, which is what `stack_maps_unwind_contract.rs` asserts
 (#7392) — confirmed independently here on aarch64 Linux.
 
+That contract has, as far as CI goes, never run on this target: `cargo-test`
+runs on `ubuntu-latest` (x86-64), so `unwind_cfa_is_the_frames_stack_pointer`
+has no aarch64-Linux arm. Since the failing runner is Ubuntu 24.04 and the
+first measurement above was Debian bookworm, the same binary was re-run against
+**both** libgcc lines to rule out a difference:
+
+| libgcc | CFA vs the frame's real body SP |
+|---|---|
+| `12.2.0-14+deb12u1` (bookworm) | exact, every frame |
+| `14.2.0-4ubuntu2~24.04.1` (noble) | exact, every frame |
+
+So the unwinder half of the contract holds on the failing distro's own
+unwinder.
+
 A second harness added a **frameless** intermediate frame (saves `x30`, never
 establishes `x29` — legal on Linux, and what any C library built without
 `-fno-omit-frame-pointer` emits; not legal on Darwin, where the ABI requires
