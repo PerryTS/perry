@@ -2,7 +2,7 @@
 use super::header::{array_numeric_layout, NumericArrayLayout};
 use super::*;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 
@@ -41,41 +41,21 @@ fn throw_array_not_extensible_add(index: u32) -> ! {
     ));
 }
 
-/// Lazily-memoized address of the `Array.prototype` array, and a sticky flag
-/// recording whether anyone has installed an indexed property on it. An
-/// out-of-bounds element read on an ordinary array must fall through to
-/// `Array.prototype[index]` (ECMA-262 OrdinaryGet → prototype chain), but in
-/// real code nobody adds numeric indices to `Array.prototype`, so the hot OOB
-/// path stays a single relaxed atomic load until the (rare) write flips the
-/// flag. `usize::MAX` marks the address as not-yet-computed.
-///
-/// ***THIS IS A RAW ADDRESS OF A MOVABLE OBJECT*** (#6981). `Array.prototype`
-/// relocates two different ways, and BOTH leave this cache pointing at a
-/// `GC_FLAG_FORWARDED` stub while every reader resolves its own receiver
-/// through `clean_arr_ptr` (which follows forwarding):
-///
-///   1. `js_array_grow` — an indexed write past the dense capacity
-///      (`Array.prototype[300] = v`) reallocates and forwards the old head;
-///   2. the copying young-gen minor — it evacuates the prototype and forwards.
-///
-/// A stale cache is not merely a wrong value: `array_oob_prototype_get`'s
-/// self-recursion guard is `proto != receiver`, and after a move those are two
-/// different addresses **for the same object**, so the guard stops firing and
-/// `js_array_get_f64` ⇄ `array_oob_prototype_get` recurse until the stack guard
-/// page (SIGSEGV, "excessive recursion"). Hence the two defences below:
-/// `array_prototype_addr` resolves the forwarding chain and self-heals, and
-/// `scan_prototype_addr_cache_roots_mut` lets the collector rewrite the slot so
-/// the address stays live even once the from-space stub is recycled.
-static ARRAY_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Sticky flag: someone installed an indexed property on `Array.prototype`.
+/// An out-of-bounds element read on an ordinary array must fall through to
+/// `Array.prototype[index]` (ECMA-262 OrdinaryGet -> prototype chain), but in
+/// real code nobody adds numeric indices there, so the hot OOB path stays a
+/// single relaxed atomic load until the (rare) write flips this. The address
+/// it is compared against lives in [`super::prototype_addr`], which also owns
+/// the GC hazard that address carries (#6981).
 static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
 /// Same idea for `Object.prototype`: a numeric index installed there
 /// (`Object.prototype[2] = 2`, or a defineProperty accessor) shows through
-/// array HOLES and OOB reads (chain: arr → Array.prototype →
+/// array HOLES and OOB reads (chain: arr -> Array.prototype ->
 /// Object.prototype; test262 concat/S15.4.4.4_A3_T3). Flipped by the object
 /// index-write/defineProperty hooks; consulted by the typed-feedback guards
 /// and the hole/OOB read fallbacks.
-static OBJECT_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OBJECT_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
 /// Sticky summary of the process-wide conditions that invalidate codegen's
@@ -88,103 +68,6 @@ pub static PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED: AtomicU8 = AtomicU8::new(0);
 #[inline]
 pub(crate) fn invalidate_array_index_fast_path() {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
-}
-
-/// GC root scanner for the two memoized prototype addresses (#6981).
-///
-/// `ARRAY_PROTO_ADDR` / `OBJECT_PROTO_ADDR` hold raw addresses of movable
-/// objects, so a relocating cycle must REWRITE them exactly like the other
-/// address-holding side tables (`CLASS_PROTOTYPE_OBJECTS`,
-/// `TYPED_ARRAY_VIEW_META`, …). Forwarding-chain healing alone is not
-/// sufficient: once the from-space stub is swept and its block recycled the
-/// `GC_FLAG_FORWARDED` bit is gone, and the cache would then name an unrelated
-/// live object. Both intrinsics are reachable from `globalThis`, so the marking
-/// half of this visit is redundant; the rewriting half is the point.
-pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    for cache in [&ARRAY_PROTO_ADDR, &OBJECT_PROTO_ADDR] {
-        let cached = cache.load(Ordering::Relaxed);
-        if cached == usize::MAX || cached == 0 {
-            continue;
-        }
-        let mut addr = cached;
-        if visitor.visit_usize_slot(&mut addr) {
-            // GC_STORE_AUDIT(ROOT): this IS the collector's root-rewrite of a
-            // registered side-table slot, running inside a root scan with the
-            // mutator stopped. `visit_usize_slot` returns true only when it
-            // relocated the object, and the value written is the visitor's own
-            // to-space address — barriering it would push an edge into the
-            // remembered set that this very cycle is rebuilding.
-            cache.store(addr, Ordering::Relaxed);
-        }
-    }
-}
-
-/// Test-only handles on the two memoized prototype addresses, so the #6981
-/// regression tests can install a synthetic forwarded stub without touching the
-/// realm's real intrinsics.
-#[cfg(test)]
-pub(crate) fn test_array_proto_addr_cache() -> &'static AtomicUsize {
-    &ARRAY_PROTO_ADDR
-}
-
-#[cfg(test)]
-pub(crate) fn test_object_proto_addr_cache() -> &'static AtomicUsize {
-    &OBJECT_PROTO_ADDR
-}
-
-/// Re-read a memoized prototype address through the GC forwarding chain and
-/// write the healed address back, so every caller compares (and dereferences)
-/// the object's CURRENT location. See the `ARRAY_PROTO_ADDR` doc for why an
-/// unresolved cache is a hang, not just a wrong answer (#6981).
-///
-/// `note_array_index_write` calls this on every indexed array write until the
-/// prototype is polluted, so the not-forwarded case must stay call-free: the
-/// `try_read_gc_header` probe is `#[inline(always)]` and reduces to two range
-/// compares plus one load of a `gc_flags` byte at a fixed, permanently-hot
-/// address. It also classifies the address band before dereferencing, so the
-/// not-yet-resolved sentinel (`usize::MAX`) and any non-heap value fall
-/// straight through.
-#[inline]
-fn heal_prototype_addr(cache: &AtomicUsize, cached: usize) -> usize {
-    let forwarded = unsafe {
-        crate::value::addr_class::try_read_gc_header(cached)
-            .is_some_and(|header| header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0)
-    };
-    if !forwarded {
-        return cached;
-    }
-    let resolved = crate::value::resolve_forwarding(cached);
-    if resolved != cached {
-        cache.store(resolved, Ordering::Relaxed);
-    }
-    resolved
-}
-
-pub(crate) fn object_prototype_addr() -> usize {
-    let cached = OBJECT_PROTO_ADDR.load(Ordering::Relaxed);
-    if cached != usize::MAX {
-        return heal_prototype_addr(&OBJECT_PROTO_ADDR, cached);
-    }
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-    let addr = if ctor_value.is_pointer() {
-        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
-        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-        let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
-        if proto_value.is_pointer() {
-            proto_value.as_pointer::<u8>() as usize
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-    // Cache only a successful resolution — an early call (before globalThis
-    // init) must retry later rather than pinning 0.
-    if addr != 0 {
-        OBJECT_PROTO_ADDR.store(addr, Ordering::Relaxed);
-    }
-    addr
 }
 
 /// Record (if `obj` is the canonical `Object.prototype`) that it now carries
@@ -201,12 +84,6 @@ pub(crate) fn note_object_prototype_index_write(obj: usize) {
 
 pub(crate) fn object_prototype_has_index_flag() -> bool {
     OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
-}
-
-/// `true` when `addr` is the canonical `Object.prototype` (cheap: cached
-/// atomic + compare; lazily computes the address on first use).
-pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
-    addr != 0 && addr == object_prototype_addr()
 }
 
 /// Sticky flag: user code replaced or deleted `Array.prototype[Symbol.iterator]`.
@@ -254,35 +131,6 @@ pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
 
 pub(crate) fn array_proto_iterator_modified() -> bool {
     ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed)
-}
-
-pub(crate) fn array_prototype_addr() -> usize {
-    let cached = ARRAY_PROTO_ADDR.load(Ordering::Relaxed);
-    if cached != usize::MAX {
-        return heal_prototype_addr(&ARRAY_PROTO_ADDR, cached);
-    }
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-    let addr = if ctor_value.is_pointer() {
-        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
-        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-        let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
-        if proto_value.is_pointer() {
-            proto_value.as_pointer::<u8>() as usize
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-    // Don't poison the cache with 0: during runtime init the global `Array`
-    // constructor may not be materialized yet (symbol writes on other builtin
-    // prototypes call into here via `note_array_proto_iterator_write`).
-    // Re-derive until it resolves.
-    if addr != 0 {
-        ARRAY_PROTO_ADDR.store(addr, Ordering::Relaxed);
-    }
-    addr
 }
 
 /// Record (if `arr` is `Array.prototype`) that the prototype now carries an

@@ -1,8 +1,8 @@
 //! #6981 — the memoized `Array.prototype` / `Object.prototype` addresses are
 //! raw pointers to MOVABLE objects, so they must survive relocation.
 //!
-//! `array::indexing` memoizes both intrinsic addresses in process-global
-//! `AtomicUsize` caches. `Array.prototype` relocates two ways, and both leave a
+//! `array::prototype_addr` memoizes both intrinsic addresses in process-global
+//! `AtomicUsize` cells. `Array.prototype` relocates two ways, and both leave a
 //! `GC_FLAG_FORWARDED` stub at the memoized address:
 //!
 //!   * `js_array_grow` — `Array.prototype[300] = v` reallocates the dense
@@ -19,41 +19,45 @@
 //!
 //! Two independent defences, one test each:
 //!
-//!   1. `array_prototype_addr` / `object_prototype_addr` heal the cache through
-//!      the forwarding chain. This is what covers `js_array_grow`, which the
-//!      collector never sees.
+//!   1. `memoized_prototype_addr` heals the cell through the forwarding chain.
+//!      This is what covers `js_array_grow`, which the collector never sees.
 //!   2. `scan_prototype_addr_cache_roots_mut` is a registered mutable root
-//!      scanner, so a relocating cycle REWRITES the slot. Healing alone is not
+//!      scanner, so a relocating cycle REWRITES the cell. Healing alone is not
 //!      enough here: once the from-space stub is swept and its block recycled
 //!      the forwarded bit is gone, and the cache would name an unrelated live
 //!      object.
 //!
-//! The tests install a *synthetic* stub in the cache and restore the previous
-//! value on the way out, so they never disturb the realm's real intrinsics.
+//! # Why these run on private cells (#7955)
+//!
+//! Both defences used to be driven by planting a synthetic stub in the SHIPPED
+//! `static`s and reading it back. That made every assertion here depend on no
+//! other libtest thread touching the realm's real intrinsics in between — and
+//! two things routinely do: `array_prototype_addr()` / `object_prototype_addr()`
+//! HEAL the cell in place, and any collection's registered
+//! `scan_prototype_addr_cache_roots_mut` REWRITES it. Either overwrites the
+//! plant, and the test reports a stale-cache failure that says nothing about
+//! the code under test. The save/restore guard made it worse rather than
+//! better: restoring the value read at test entry stamps a stale address over
+//! whatever another thread resolved meanwhile.
+//!
+//! Both defences are algebra over an `&AtomicUsize`, so each case now owns its
+//! cell and the shipped `static`s are never written from a test. What that
+//! decomposition would otherwise lose — "the collector rewrites every cell an
+//! accessor reads" — is not recovered by a test at all but by CONSTRUCTION:
+//! `PROTOTYPE_ADDR_CACHES` is one table, the scanner iterates it and the
+//! accessors index it. `the_shipped_cells_are_the_ones_the_scanner_visits`
+//! pins the table itself, read-only, so it cannot be raced either.
 
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Save/restore both prototype-address caches around a test body.
-struct ProtoAddrCacheGuard {
-    array: usize,
-    object: usize,
-}
-
-impl ProtoAddrCacheGuard {
-    fn new() -> Self {
-        Self {
-            array: crate::array::test_array_proto_addr_cache().load(Ordering::Relaxed),
-            object: crate::array::test_object_proto_addr_cache().load(Ordering::Relaxed),
-        }
-    }
-}
-
-impl Drop for ProtoAddrCacheGuard {
-    fn drop(&mut self) {
-        crate::array::test_array_proto_addr_cache().store(self.array, Ordering::Relaxed);
-        crate::array::test_object_proto_addr_cache().store(self.object, Ordering::Relaxed);
-    }
+/// A memoized-prototype-address cell owned by ONE test.
+///
+/// `memoized_prototype_addr` / `rewrite_prototype_addr_slot` take the cell as
+/// an argument, so the #6981 algebra is exercised exactly as shipped without
+/// any test writing to the realm's real intrinsic cells.
+fn private_cache_cell() -> AtomicUsize {
+    AtomicUsize::new(usize::MAX)
 }
 
 /// Allocate a nursery object to stand in for the intrinsic.
@@ -98,25 +102,9 @@ fn forwarded_pair() -> (usize, usize) {
     (from as usize, to)
 }
 
-fn cache_of(which: &str) -> &'static AtomicUsize {
-    if which == "array" {
-        crate::array::test_array_proto_addr_cache()
-    } else {
-        crate::array::test_object_proto_addr_cache()
-    }
-}
-
-fn read_addr(which: &str) -> usize {
-    if which == "array" {
-        crate::array::array_prototype_addr()
-    } else {
-        crate::array::object_prototype_addr()
-    }
-}
-
 /// DEFENCE 1. A memoized address that has been forwarded — by `js_array_grow`
 /// or by an evacuating cycle — must read back as the object's CURRENT address,
-/// and the cache must be healed in place so the next reader pays nothing.
+/// and the cell must be healed in place so the next reader pays nothing.
 ///
 /// Without the heal this returns the from-space stub, which is a different
 /// address for the same object than every `clean_arr_ptr`-resolved receiver —
@@ -124,38 +112,46 @@ fn read_addr(which: &str) -> usize {
 /// self-recursion guard.
 #[test]
 fn prototype_addr_reads_through_a_forwarding_stub() {
-    let _guard = ProtoAddrCacheGuard::new();
     // Not exposed at this level: `from`/`to` come back as plain `usize`s from
     // `forwarded_pair`, which carries its own trigger guard, and nothing else
     // in this loop body allocates.
-
     for which in ["array", "object"] {
+        let cell = private_cache_cell();
         let (from, to) = forwarded_pair();
-        cache_of(which).store(from, Ordering::Relaxed);
+        cell.store(from, Ordering::Relaxed);
 
         assert_eq!(
-            read_addr(which),
-            to,
-            "{which}_prototype_addr must resolve the GC forwarding chain: a stale \
-             from-space address is a DIFFERENT address for the SAME object than \
-             every clean_arr_ptr-resolved receiver, which defeats the \
-             `proto != receiver` self-recursion guard in the hole/OOB read \
+            crate::array::test_memoized_prototype_addr(&cell),
+            Some(to),
+            "the {which} prototype cell must resolve the GC forwarding chain: a \
+             stale from-space address is a DIFFERENT address for the SAME \
+             object than every clean_arr_ptr-resolved receiver, which defeats \
+             the `proto != receiver` self-recursion guard in the hole/OOB read \
              fallback and hangs the mutator (#6981)"
         );
         assert_eq!(
-            cache_of(which).load(Ordering::Relaxed),
+            cell.load(Ordering::Relaxed),
             to,
-            "{which}_prototype_addr must write the healed address back so the \
-             hot path stays a single relaxed load"
+            "the read must write the healed address back so the hot path stays \
+             a single relaxed load"
         );
     }
+}
+
+/// A cell that has never resolved reports "not resolved" rather than healing
+/// the sentinel — that is what sends the accessor to the `globalThis`
+/// bootstrap instead of pinning a bogus prototype.
+#[test]
+fn an_unresolved_prototype_cell_reports_no_address() {
+    let cell = private_cache_cell();
+    assert_eq!(crate::array::test_memoized_prototype_addr(&cell), None);
+    assert_eq!(cell.load(Ordering::Relaxed), usize::MAX);
 }
 
 /// Multi-hop chains (grow, then grow again, then evacuate) must resolve all the
 /// way to the live head.
 #[test]
 fn prototype_addr_reads_through_a_multi_hop_forwarding_chain() {
-    let _guard = ProtoAddrCacheGuard::new();
     // `first` is live across `second`'s allocation, and both `first` and
     // `second` are live across `final_user`'s allocation — any of the three
     // could reach the block-full slow path's `gc_check_trigger()`.
@@ -169,21 +165,21 @@ fn prototype_addr_reads_through_a_multi_hop_forwarding_chain() {
         set_forwarding_address(header_from_user_ptr(second) as *mut GcHeader, final_user);
     }
 
-    crate::array::test_array_proto_addr_cache().store(first as usize, Ordering::Relaxed);
+    let cell = private_cache_cell();
+    cell.store(first as usize, Ordering::Relaxed);
     assert_eq!(
-        crate::array::array_prototype_addr(),
-        final_user as usize,
+        crate::array::test_memoized_prototype_addr(&cell),
+        Some(final_user as usize),
         "every forwarding hop must be followed (#6981)"
     );
 }
 
-/// DEFENCE 2. The collector must REWRITE the cache, not merely leave it
+/// DEFENCE 2. The collector must REWRITE the cell, not merely leave it
 /// resolvable — from-space is reset and handed back to the mutator at the end
 /// of the cycle, after which the forwarded bit is gone and healing cannot
 /// recover the address.
 #[test]
 fn prototype_addr_cache_is_rewritten_by_the_collector() {
-    let _guard = ProtoAddrCacheGuard::new();
     // `array_from` is live across the second `nursery_stand_in` call below
     // (its own allocation, unguarded on its own), and both from-pointers stay
     // live across the `evacuate` calls that follow.
@@ -197,24 +193,29 @@ fn prototype_addr_cache_is_rewritten_by_the_collector() {
     let valid_ptrs = build_valid_pointer_set();
     let array_to = evacuate(array_from);
     let object_to = evacuate(object_from);
-    crate::array::test_array_proto_addr_cache().store(array_from as usize, Ordering::Relaxed);
-    crate::array::test_object_proto_addr_cache().store(object_from as usize, Ordering::Relaxed);
+    let array_cell = private_cache_cell();
+    let object_cell = private_cache_cell();
+    array_cell.store(array_from as usize, Ordering::Relaxed);
+    object_cell.store(object_from as usize, Ordering::Relaxed);
 
-    crate::array::scan_prototype_addr_cache_roots_mut(&mut RuntimeRootVisitor::for_rewrite(
-        &valid_ptrs,
-    ));
+    for cell in [&array_cell, &object_cell] {
+        crate::array::test_rewrite_prototype_addr_slot(
+            cell,
+            &mut RuntimeRootVisitor::for_rewrite(&valid_ptrs),
+        );
+    }
 
     assert_eq!(
-        crate::array::test_array_proto_addr_cache().load(Ordering::Relaxed),
+        array_cell.load(Ordering::Relaxed),
         array_to,
-        "the ARRAY_PROTO_ADDR slot must be rewritten by the relocating cycle — \
+        "a memoized prototype cell must be rewritten by the relocating cycle — \
          it is a raw address of a movable object, exactly like the other \
          registered side tables (#6981)"
     );
     assert_eq!(
-        crate::array::test_object_proto_addr_cache().load(Ordering::Relaxed),
+        object_cell.load(Ordering::Relaxed),
         object_to,
-        "the OBJECT_PROTO_ADDR slot must be rewritten by the relocating cycle \
+        "the rewrite is per-cell, so both rows of PROTOTYPE_ADDR_CACHES get it \
          (#6981)"
     );
 }
@@ -243,22 +244,44 @@ fn prototype_addr_cache_scanner_is_registered() {
 /// a scanner that rewrote it would pin a bogus prototype for the whole process.
 #[test]
 fn prototype_addr_cache_scanner_leaves_the_unset_sentinel_alone() {
-    let _guard = ProtoAddrCacheGuard::new();
     let valid_ptrs = build_valid_pointer_set();
+    let cell = private_cache_cell();
 
-    crate::array::test_array_proto_addr_cache().store(usize::MAX, Ordering::Relaxed);
-    crate::array::test_object_proto_addr_cache().store(usize::MAX, Ordering::Relaxed);
+    crate::array::test_rewrite_prototype_addr_slot(
+        &cell,
+        &mut RuntimeRootVisitor::for_rewrite(&valid_ptrs),
+    );
 
-    crate::array::scan_prototype_addr_cache_roots_mut(&mut RuntimeRootVisitor::for_rewrite(
-        &valid_ptrs,
-    ));
+    assert_eq!(cell.load(Ordering::Relaxed), usize::MAX);
+}
 
+/// The WIRING, and deliberately read-only so it cannot be raced (#7955).
+///
+/// The cases above prove the algebra on cells they own; on its own that would
+/// leave nothing asserting that the shipped `static`s are the cells in play —
+/// the "gate runs but its subject never did" shape. `PROTOTYPE_ADDR_CACHES` is
+/// the single table the scanner iterates and the accessors index, so this
+/// pins the table: two DISTINCT cells (a copy-pasted row would give
+/// `Array.prototype`'s address to `object_prototype_addr()` and leave one cell
+/// unrewritten), each paired with the `globalThis` builtin whose `.prototype`
+/// its accessor resolves. Nothing here writes.
+#[test]
+fn the_shipped_cells_are_the_ones_the_scanner_visits() {
+    let wiring = crate::array::test_prototype_addr_cache_wiring();
     assert_eq!(
-        crate::array::test_array_proto_addr_cache().load(Ordering::Relaxed),
-        usize::MAX
+        wiring[0].1, b"Array",
+        "row 0 is what array_prototype_addr() indexes; it must bootstrap from \
+         globalThis.Array"
     );
     assert_eq!(
-        crate::array::test_object_proto_addr_cache().load(Ordering::Relaxed),
-        usize::MAX
+        wiring[1].1, b"Object",
+        "row 1 is what object_prototype_addr() indexes; it must bootstrap from \
+         globalThis.Object"
+    );
+    assert!(
+        !std::ptr::eq(wiring[0].0, wiring[1].0),
+        "the two intrinsics must memoize into DIFFERENT cells — sharing one \
+         cell makes the second accessor return the first intrinsic's address \
+         and leaves the collector with nothing to rewrite for it (#6981)"
     );
 }

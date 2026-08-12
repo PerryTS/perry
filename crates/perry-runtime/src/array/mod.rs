@@ -16,6 +16,7 @@ mod iter_methods;
 mod iter_object;
 mod iterator;
 mod jsvalue_api;
+mod prototype_addr;
 mod push_pop;
 mod reduce_right;
 mod search;
@@ -102,13 +103,14 @@ pub use self::immutable::{
     js_array_to_sorted_default, js_array_to_sorted_with_comparator, js_array_to_spliced,
     js_array_with, js_arraylike_copy_within,
 };
+#[cfg(test)]
+pub(crate) use self::indexing::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
-    array_prototype_addr, array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
+    array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
     invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
-    note_array_proto_iterator_write, note_object_prototype_index_write, object_prototype_addr,
-    object_prototype_addr_matches, object_prototype_has_index_flag,
-    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
+    note_array_proto_iterator_write, note_object_prototype_index_write,
+    object_prototype_has_index_flag, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
@@ -117,11 +119,6 @@ pub use self::indexing::{
     js_array_numeric_set_f64_unboxed, js_array_set_f64, js_array_set_f64_extend,
     js_array_set_f64_extend_strict, js_array_set_f64_unchecked, js_array_set_index_or_string,
     js_array_set_index_or_string_strict, js_array_set_string_key,
-    scan_prototype_addr_cache_roots_mut,
-};
-#[cfg(test)]
-pub(crate) use self::indexing::{
-    test_array_proto_addr_cache, test_keys_array_slot_fallbacks, test_object_proto_addr_cache,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
@@ -141,6 +138,15 @@ pub(crate) use self::iterator::is_builtin_iterator_class_id;
 pub(crate) use self::iterator::iter_bt_dump;
 pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
+};
+pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
+pub(crate) use self::prototype_addr::{
+    array_prototype_addr, object_prototype_addr, object_prototype_addr_matches,
+};
+#[cfg(test)]
+pub(crate) use self::prototype_addr::{
+    test_memoized_prototype_addr, test_prototype_addr_cache_wiring,
+    test_rewrite_prototype_addr_slot,
 };
 pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
