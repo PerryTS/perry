@@ -108,13 +108,6 @@
       "category": "ci-env",
       "reason": "node exits non-zero: cannot resolve the 'slugify' npm import without node_modules, so the oracle never runs and the test verifies nothing. Same class as test_ramda_sum. Was invisible under the old gate, which dropped node_fail from the denominator; needs a CI-side fixture (#1634)."
     },
-    "test_gap_stream_tee_tick_parity": {
-      "status": "parity_fail",
-      "issue": "6477",
-      "added": "2026-07-20",
-      "category": "bug-open",
-      "reason": "Web Streams tee cold-start fires one extra microtask tick before the first branch read on a pre-buffered+closed source (t2 vs Node's t1). Delicate cadence calibration (post-#6657 tee/pipe tick parity); a naive fix risks the Next.js Flight byte-parity #6657 tuned. Deferred to the streams pull-ordering work in #6477."
-    },
     "test_gap_v8_2_3680plus": {
       "status": "parity_fail",
       "issue": "3680",
