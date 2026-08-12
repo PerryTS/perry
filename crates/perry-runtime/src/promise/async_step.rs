@@ -14,7 +14,7 @@ use super::*;
 // evaporates" signature. Find it by diffing the unmatched-await backtraces of
 // a working run against a hanging one; the SUSPEND line carries the site.
 // A no-op (one cached bool check) when the env var is unset.
-thread_local! {
+crate::perry_thread_local! {
     static TRACE_ASYNC_ON: std::cell::Cell<i8> = const { std::cell::Cell::new(-1) };
     static TRACE_ASYNC_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static TRACE_ASYNC_AWAITED: std::cell::RefCell<std::collections::HashSet<usize>> =
@@ -69,6 +69,83 @@ pub(crate) fn trace_async_settle(promise: *const Promise, how: &str) {
 /// forwarded to `js_promise_then_checked`. Null (the "no handler" sentinel)
 /// becomes `undefined`, matching what `IsCallable(x) is false` resolves to
 /// on the `_checked` entry's own tag check.
+/// #7497: NaN-box a possibly-null promise / closure pointer so it can be parked
+/// in a `RuntimeHandleScope`, and read it back. NaN-boxed rather than
+/// `root_raw_*_ptr` because reading a raw handle back needs `get_raw_*_ptr`,
+/// which `scripts/raw_handle_debt.py` counts.
+#[inline]
+fn boxed_promise_or_undef(p: *mut Promise) -> f64 {
+    if p.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(p as i64)
+    }
+}
+
+#[inline]
+fn boxed_closure_or_undef(c: ClosurePtr) -> f64 {
+    if c.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(c as i64)
+    }
+}
+
+#[inline]
+fn unboxed_promise(h: &crate::gc::RuntimeHandle<'_>) -> *mut Promise {
+    let v = h.get_nanbox_f64();
+    if v.to_bits() == crate::value::TAG_UNDEFINED {
+        std::ptr::null_mut()
+    } else {
+        crate::value::js_nanbox_get_pointer(v) as *mut Promise
+    }
+}
+
+#[inline]
+fn unboxed_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
+    let v = h.get_nanbox_f64();
+    if v.to_bits() == crate::value::TAG_UNDEFINED {
+        std::ptr::null()
+    } else {
+        crate::value::js_nanbox_get_pointer(v) as ClosurePtr
+    }
+}
+
+/// #7497 (CodeRabbit): shared, rooted tail for `js_async_step_chain`'s three
+/// suspend paths. Each of them crosses `build_async_step_thunks` (two closure
+/// allocations) and, on two of them, `js_promise_resolved` as well, while
+/// holding the awaited promise, the two fresh thunks and `trap_next` — and
+/// `then_backpatch_result` both STORES into the thunks and RETURNS `trap_next`.
+/// `awaited_in` is the already-known awaited promise (the pending-inner path);
+/// pass null to have `make_awaited` produce it after the thunks exist.
+fn suspend_on_awaited(
+    step: ClosurePtr,
+    trap_next: *mut Promise,
+    awaited_in: *mut Promise,
+    make_awaited: impl FnOnce() -> *mut Promise,
+) -> *mut Promise {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let step_h = scope.root_nanbox_f64(boxed_closure_or_undef(step));
+    let trap_h = scope.root_nanbox_f64(boxed_promise_or_undef(trap_next));
+    let awaited_in_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited_in));
+    let (fulfill, reject) =
+        build_async_step_thunks(unboxed_closure(&step_h), unboxed_promise(&trap_h));
+    let fulfill_h = scope.root_nanbox_f64(boxed_closure_or_undef(fulfill));
+    let reject_h = scope.root_nanbox_f64(boxed_closure_or_undef(reject));
+    let awaited = if unboxed_promise(&awaited_in_h).is_null() {
+        make_awaited()
+    } else {
+        unboxed_promise(&awaited_in_h)
+    };
+    let awaited_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited));
+    then_backpatch_result(
+        unboxed_promise(&awaited_h),
+        unboxed_closure(&fulfill_h),
+        unboxed_closure(&reject_h),
+        unboxed_promise(&trap_h),
+    )
+}
+
 #[inline]
 fn closure_ptr_to_arg(ptr: ClosurePtr) -> f64 {
     if ptr.is_null() {
@@ -273,19 +350,35 @@ fn then_backpatch_result(
     trap_next: *mut Promise,
 ) -> *mut Promise {
     if trap_next.is_null() {
-        let result = super::then::js_promise_new_with_parent(awaited);
+        // #7497 (CodeRabbit): `js_promise_new_with_parent` allocates, and the two
+        // thunks it is about to be STORED into — plus the promise the handlers
+        // are attached to — are live across it. This is the publishing shape:
+        // without the re-read, a copying minor here writes a from-space `result`
+        // into two closures the collector goes on maintaining.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let awaited_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited));
+        let fulfill_h = scope.root_nanbox_f64(boxed_closure_or_undef(fulfill));
+        let reject_h = scope.root_nanbox_f64(boxed_closure_or_undef(reject));
+        let result_h = scope.root_nanbox_f64(boxed_promise_or_undef(
+            super::then::js_promise_new_with_parent(unboxed_promise(&awaited_h)),
+        ));
+        let result = unboxed_promise(&result_h);
         crate::closure::js_closure_set_capture_ptr(
-            fulfill as *mut crate::closure::ClosureHeader,
+            unboxed_closure(&fulfill_h) as *mut crate::closure::ClosureHeader,
             1,
             result as i64,
         );
         crate::closure::js_closure_set_capture_ptr(
-            reject as *mut crate::closure::ClosureHeader,
+            unboxed_closure(&reject_h) as *mut crate::closure::ClosureHeader,
             1,
             result as i64,
         );
-        super::then::js_promise_attach_handlers(awaited, fulfill, reject);
-        result
+        super::then::js_promise_attach_handlers(
+            unboxed_promise(&awaited_h),
+            unboxed_closure(&fulfill_h),
+            unboxed_closure(&reject_h),
+        );
+        unboxed_promise(&result_h)
     } else {
         // #6728: `trap_next` non-null means this is a SUBSEQUENT `await` (the
         // 2nd or later) in the activation — the result promise already exists
@@ -327,7 +420,30 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     // string) observes `[object Promise]` instead. The other arms of
     // this function already handle native pending Promises correctly
     // via the `js_value_is_promise` + thunk path.
+    // #7497: `step_closure` is a GC-heap closure that this function stores into
+    // a `Task::AsyncStep` at the end, after `adapt_foreign_promise_value`,
+    // `js_promise_new`, `build_async_step_thunks` and `js_promise_resolved` have
+    // all had a chance to collect. Pre-fix it rode through all of them in a
+    // register, so the ENQUEUED task could carry a pre-collection address — and
+    // the microtask runner, which correctly re-reads everything it pops, then
+    // faithfully dispatched that dead pointer. `PERRY_GC_PROTECT_FROMSPACE=1`
+    // reports it at `call_async_step_direct`, one frame away from the producer.
+    let step_scope = crate::gc::RuntimeHandleScope::new();
+    let step_handle = step_scope.root_nanbox_f64(if step_closure.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(step_closure as i64)
+    });
+    let rooted_step = || -> ClosurePtr {
+        let v = step_handle.get_nanbox_f64();
+        if v.to_bits() == crate::value::TAG_UNDEFINED {
+            std::ptr::null()
+        } else {
+            crate::value::js_nanbox_get_pointer(v) as ClosurePtr
+        }
+    };
     let value = adapt_foreign_promise_value(value);
+    let step_closure = rooted_step();
 
     // Reuse predicate. `next` reuse is sound only when AsyncStepChain
     // is being called from the body of the SAME step closure that the
@@ -413,32 +529,51 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     // that will queue the right Task when called.
                     bump(&MT_STEP_CHAIN_REUSE_MISS);
                     trace_async_suspend(inner);
-                    let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
-                    return then_backpatch_result(inner, fulfill, reject, trap_next);
+                    return suspend_on_awaited(rooted_step(), trap_next, inner, || {
+                        std::ptr::null_mut()
+                    });
                 }
             }
         } else {
             bump(&MT_STEP_CHAIN_REUSE_MISS);
-            let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
-            let p = js_promise_resolved(value);
-            return then_backpatch_result(p, fulfill, reject, trap_next);
+            return suspend_on_awaited(rooted_step(), trap_next, std::ptr::null_mut(), || {
+                js_promise_resolved(value)
+            });
         }
     } else {
         // Pointer-tagged but not a Promise (thenable etc.). Take the
         // fully-general path so assimilation runs.
         bump(&MT_STEP_CHAIN_REUSE_MISS);
-        let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
-        let p = js_promise_resolved(value);
-        return then_backpatch_result(p, fulfill, reject, trap_next);
+        return suspend_on_awaited(rooted_step(), trap_next, std::ptr::null_mut(), || {
+            js_promise_resolved(value)
+        });
     };
 
+    // #7497: `capture_context()` allocates, and `next` / `queued_value` are the
+    // OTHER two GC values this task carries, so root them across it too and take
+    // every address from a handle at the push.
+    let next_handle = step_scope.root_nanbox_f64(if next.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(next as i64)
+    });
+    let queued_value_handle = step_scope.root_nanbox_f64(queued_value);
+    let context = capture_context();
+    let next = {
+        let v = next_handle.get_nanbox_f64();
+        if v.to_bits() == crate::value::TAG_UNDEFINED {
+            std::ptr::null_mut()
+        } else {
+            crate::value::js_nanbox_get_pointer(v) as *mut Promise
+        }
+    };
     TASK_QUEUE.with(|q| {
         q.borrow_mut().push_back(Task::AsyncStep(
-            step_closure,
-            queued_value,
+            rooted_step(),
+            queued_value_handle.get_nanbox_f64(),
             next,
             is_error,
-            capture_context(),
+            context,
         ));
     });
     crate::event_pump::js_notify_main_thread();
@@ -507,8 +642,20 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
         // Mirror `js_promise_resolved`'s adoption probes here, but settle
         // the existing `trap_next` instead of allocating a fresh promise
         // so the runner's self-chain fast path still fires.
-        resolve_trap_next_with_adoption(trap.trap_next, value);
-        trap.trap_next
+        // #7497: `resolve_trap_next_with_adoption` settles the promise, which
+        // can enqueue jobs and allocate — and the RETURN VALUE of this function
+        // is that same promise. Returning the pre-call copy hands the async
+        // state machine a from-space `GC_TYPE_PROMISE`;
+        // `PERRY_GC_PROTECT_FROMSPACE=1` faults on it here under the
+        // auto-optimize link.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target_h = scope.root_nanbox_f64(boxed_promise_or_undef(trap.trap_next));
+        let value_h = scope.root_nanbox_f64(value);
+        // Pass the RE-READ address, not `trap.trap_next`: leaving the pre-root
+        // copy nameable is exactly the shape this whole PR is about, and the
+        // rooting above is not a licence to keep using the old binding.
+        resolve_trap_next_with_adoption(unboxed_promise(&target_h), value_h.get_nanbox_f64());
+        unboxed_promise(&target_h)
     } else {
         bump(&MT_STEP_DONE_REUSE_MISS);
         // An async fn always returns a FRESH promise — `js_promise_resolved`'s
@@ -519,9 +666,19 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
         if js_value_is_promise(value) != 0 {
             let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
             if !inner.is_null() {
-                let fresh = js_promise_new();
-                super::assimilate::enqueue_native_adoption_job(fresh, inner);
-                return fresh;
+                // #7497: `js_promise_new` allocates and `inner` is its adoption
+                // source, so root `inner` across it and re-read; likewise the
+                // fresh promise across `enqueue_native_adoption_job`.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let inner_h = scope.root_nanbox_f64(value);
+                let fresh_h =
+                    scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_promise_new() as i64));
+                super::assimilate::enqueue_native_adoption_job(
+                    crate::value::js_nanbox_get_pointer(fresh_h.get_nanbox_f64()) as *mut Promise,
+                    crate::value::js_nanbox_get_pointer(inner_h.get_nanbox_f64()) as *mut Promise,
+                );
+                return crate::value::js_nanbox_get_pointer(fresh_h.get_nanbox_f64())
+                    as *mut Promise;
             }
         }
         js_promise_resolved(value)
@@ -553,7 +710,16 @@ fn resolve_trap_next_with_adoption(target: *mut Promise, value: f64) {
     }
     // User thenable (e.g. Drizzle QueryPromise, #586): assimilate, then
     // chain the wrapper promise into `target`.
-    let assim = js_assimilate_thenable(value);
+    //
+    // #7497: `js_assimilate_thenable` runs the user `then` getter and allocates,
+    // and `target` is the RECEIVER of both settlements below. Root it (and the
+    // value) across the call and re-read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(boxed_promise_or_undef(target));
+    let value_h = scope.root_nanbox_f64(value);
+    let assim = js_assimilate_thenable(value_h.get_nanbox_f64());
+    let target = unboxed_promise(&target_h);
+    let value = value_h.get_nanbox_f64();
     if assim.to_bits() != value.to_bits() && js_value_is_promise(assim) != 0 {
         let inner = crate::value::js_nanbox_get_pointer(assim) as *mut Promise;
         if !inner.is_null() && inner != target {
@@ -621,23 +787,12 @@ pub extern "C" fn js_async_first_call(step_closure_nanbox: f64) -> f64 {
     // `trap_next` untouched. The outer's chain reuse on its OWN
     // resumption is unaffected (this restore at function exit puts
     // `prev` back).
-    let prev = INLINE_TRAP.with(|c| {
-        let old = c.get();
-        c.set(InlineTrap {
-            trap_next: std::ptr::null_mut(),
-            current_step: ptr as usize,
-        });
-        old
-    });
-    let result = {
-        crate::closure::js_closure_call2(
-            ptr,
-            f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
-            f64::from_bits(0x7FFC_0000_0000_0003), // TAG_FALSE
-        )
-    };
-    INLINE_TRAP.with(|c| c.set(prev));
-    result
+    call_async_step_body(
+        ptr,
+        f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
+        f64::from_bits(0x7FFC_0000_0000_0003), // TAG_FALSE
+        std::ptr::null_mut(),
+    )
 }
 
 /// #6709. Entry point for an async-generator activation. Like
@@ -663,17 +818,7 @@ pub extern "C" fn js_async_generator_resume(
 ) -> f64 {
     let ptr = crate::value::js_nanbox_get_pointer(step_closure_nanbox)
         as *mut crate::closure::ClosureHeader;
-    let prev = INLINE_TRAP.with(|c| {
-        let old = c.get();
-        c.set(InlineTrap {
-            trap_next: std::ptr::null_mut(),
-            current_step: ptr as usize,
-        });
-        old
-    });
-    let result = crate::closure::js_closure_call2(ptr, value, is_error);
-    INLINE_TRAP.with(|c| c.set(prev));
-    result
+    call_async_step_body(ptr, value, is_error, std::ptr::null_mut())
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -687,7 +832,7 @@ static KEEP_JS_ASYNC_GENERATOR_RESUME: extern "C" fn(f64, f64, f64) -> f64 =
 // return the cached thunks; otherwise we allocate. The thunks are
 // GC-rooted via `ASYNC_STEP_THUNK_CACHE_SCANNER` so they survive
 // collection until evicted by a different step closure.
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static LAST_ASYNC_STEP_THUNKS: std::cell::Cell<(usize, *mut crate::closure::ClosureHeader, *mut crate::closure::ClosureHeader)> =
         const { std::cell::Cell::new((0, std::ptr::null_mut(), std::ptr::null_mut())) };
 }
@@ -760,6 +905,23 @@ extern "C" fn async_step_fulfill_thunk(
     // cross-activation leak.
     let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
     let false_bits = f64::from_bits(0x7FFC_0000_0000_0003);
+    call_async_step_body(step, value, false_bits, captured_trap_next)
+}
+
+/// Invoke an async step while keeping every pointer needed after the call in
+/// mutable runtime roots. The step body is arbitrary user code and may relocate
+/// the activation promise as well as both pointers saved from the ambient
+/// `INLINE_TRAP`; re-read all three before restoring or forwarding.
+#[inline]
+fn call_async_step_body(
+    step: ClosurePtr,
+    value: f64,
+    is_error: f64,
+    captured_trap_next: *mut Promise,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let captured_h = scope.root_nanbox_f64(boxed_promise_or_undef(captured_trap_next));
+
     // #691 Phase 2: when this thunk is invoked from the pending-Promise
     // fallback in js_async_step_chain (await of a still-pending inner),
     // the runtime arrives here via Task::Inline dispatch which does NOT
@@ -774,10 +936,22 @@ extern "C" fn async_step_fulfill_thunk(
         });
         old
     });
-    let result = crate::closure::js_closure_call2(step, value, false_bits);
-    INLINE_TRAP.with(|c| c.set(prev));
-    forward_swallowed_rejection(result, captured_trap_next);
-    result
+    let prev_trap_h = scope.root_nanbox_f64(boxed_promise_or_undef(prev.trap_next));
+    let prev_step_h =
+        scope.root_nanbox_f64(boxed_closure_or_undef(prev.current_step as ClosurePtr));
+
+    // `step` is needed only by this call and is never used afterward. Any
+    // future post-call use must root it and re-read its relocated address.
+    let result = crate::closure::js_closure_call2(step, value, is_error);
+    let result_h = scope.root_nanbox_f64(result);
+    INLINE_TRAP.with(|c| {
+        c.set(InlineTrap {
+            trap_next: unboxed_promise(&prev_trap_h),
+            current_step: unboxed_closure(&prev_step_h) as usize,
+        })
+    });
+    forward_swallowed_rejection(result_h.get_nanbox_f64(), unboxed_promise(&captured_h));
+    result_h.get_nanbox_f64()
 }
 
 /// #5941: a thunk-resumed step that exits through its internal catch arm
@@ -831,20 +1005,7 @@ extern "C" fn async_step_reject_thunk(
     // async_step_fulfill_thunk for the full rationale).
     let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
     let true_bits = f64::from_bits(0x7FFC_0000_0000_0004);
-    // #691 Phase 2: see async_step_fulfill_thunk — same TLS-setup
-    // requirement on the rejection path.
-    let prev = INLINE_TRAP.with(|c| {
-        let old = c.get();
-        c.set(InlineTrap {
-            trap_next: captured_trap_next,
-            current_step: step as usize,
-        });
-        old
-    });
-    let result = crate::closure::js_closure_call2(step, value, true_bits);
-    INLINE_TRAP.with(|c| c.set(prev));
-    forward_swallowed_rejection(result, captured_trap_next);
-    result
+    call_async_step_body(step, value, true_bits, captured_trap_next)
 }
 
 const AFA_RESULT_PROMISE: u32 = 0;
@@ -1240,4 +1401,177 @@ fn array_from_async_push_and_continue(closure: *const crate::closure::ClosureHea
 /// Reuses `js_string_from_bytes` so the result is GC-tracked.
 fn make_static_string(bytes: &[u8]) -> *const crate::string::StringHeader {
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    crate::perry_thread_local! {
+        // Test-only pre-forwarding addresses intentionally have no mutable-root
+        // scanner: rewriting them would defeat this relocation fixture. The
+        // test also mutates INLINE_TRAP and must run in the runtime suite's
+        // required single-threaded mode (`RUST_TEST_THREADS=1`).
+        static RELOCATION_CASE: std::cell::Cell<[usize; 7]> = const {
+            std::cell::Cell::new([0; 7])
+        };
+    }
+
+    unsafe fn copy_promise_to_old(source: *mut Promise) -> *mut Promise {
+        let destination = crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<Promise>(),
+            std::mem::align_of::<Promise>(),
+            crate::gc::GC_TYPE_PROMISE,
+        ) as *mut Promise;
+        std::ptr::copy_nonoverlapping(source, destination, 1);
+        destination
+    }
+
+    unsafe fn copy_closure_to_old(
+        source: *const crate::closure::ClosureHeader,
+    ) -> *mut crate::closure::ClosureHeader {
+        let size = crate::closure::closure_payload_size((*source).capture_count as usize);
+        let destination = crate::arena::arena_alloc_gc_old(
+            size,
+            std::mem::align_of::<crate::closure::ClosureHeader>(),
+            crate::gc::GC_TYPE_CLOSURE,
+        ) as *mut crate::closure::ClosureHeader;
+        std::ptr::copy_nonoverlapping(source as *const u8, destination as *mut u8, size);
+        destination
+    }
+
+    unsafe fn forward(source: *mut u8, destination: *mut u8) {
+        let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        crate::gc::set_forwarding_address(header, destination);
+    }
+
+    extern "C" fn relocating_step(
+        _closure: *const crate::closure::ClosureHeader,
+        _value: f64,
+        _is_error: f64,
+    ) -> f64 {
+        let [captured_from, captured_to, previous_from, previous_to, step_from, step_to, rejected] =
+            RELOCATION_CASE.with(|case| case.get());
+        unsafe {
+            forward(captured_from as *mut u8, captured_to as *mut u8);
+            forward(previous_from as *mut u8, previous_to as *mut u8);
+            forward(step_from as *mut u8, step_to as *mut u8);
+        }
+
+        crate::gc::test_rewrite_runtime_handles_for_forwarded_objects();
+
+        // The real promise-root scanner rewrites the currently installed trap
+        // during a copying collection. Only the saved `prev` value is outside
+        // that scanner, which is the lifetime this test isolates.
+        INLINE_TRAP.with(|slot| {
+            let mut active = slot.get();
+            active.trap_next = captured_to as *mut Promise;
+            slot.set(active);
+        });
+
+        crate::value::js_nanbox_pointer(rejected as i64)
+    }
+
+    struct TrapGuard {
+        original_trap: InlineTrap,
+        forwarded_sources: [(*mut u8, usize); 3],
+    }
+
+    impl Drop for TrapGuard {
+        fn drop(&mut self) {
+            unsafe {
+                for (source, first_word) in self.forwarded_sources {
+                    source.cast::<usize>().write(first_word);
+                    let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                    (*header).gc_flags &= !crate::gc::GC_FLAG_FORWARDED;
+                }
+            }
+            INLINE_TRAP.with(|slot| slot.set(self.original_trap));
+            RELOCATION_CASE.with(|case| case.set([0; 7]));
+        }
+    }
+
+    #[test]
+    fn resumed_step_rereads_captured_and_saved_trap_roots_after_relocation() {
+        unsafe {
+            let captured_from = js_promise_new();
+            let captured_to = copy_promise_to_old(captured_from);
+            let previous_from = js_promise_new();
+            let previous_to = copy_promise_to_old(previous_from);
+            let previous_step_from =
+                crate::closure::js_closure_alloc(relocating_step as *const u8, 0);
+            let previous_step_to = copy_closure_to_old(previous_step_from);
+            let rejected = js_promise_rejected(73.0);
+
+            let step = crate::closure::js_closure_alloc(relocating_step as *const u8, 0);
+            let thunk = crate::closure::js_closure_alloc(async_step_fulfill_thunk as *const u8, 2);
+            crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
+            crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
+
+            let original = INLINE_TRAP.with(|slot| {
+                let original = slot.get();
+                slot.set(InlineTrap {
+                    trap_next: previous_from,
+                    current_step: previous_step_from as usize,
+                });
+                original
+            });
+            let forwarded_sources = [
+                captured_from as *mut u8,
+                previous_from as *mut u8,
+                previous_step_from as *mut u8,
+            ];
+            let forwarded_sources_with_words = forwarded_sources.map(|source| {
+                let first_word = source.cast::<usize>().read();
+                (source, first_word)
+            });
+            let guard = TrapGuard {
+                original_trap: original,
+                forwarded_sources: forwarded_sources_with_words,
+            };
+            RELOCATION_CASE.with(|case| {
+                case.set([
+                    captured_from as usize,
+                    captured_to as usize,
+                    previous_from as usize,
+                    previous_to as usize,
+                    previous_step_from as usize,
+                    previous_step_to as usize,
+                    rejected as usize,
+                ])
+            });
+
+            async_step_fulfill_thunk(thunk, 41.0);
+
+            assert_eq!(
+                (*captured_to).state,
+                PromiseState::Rejected,
+                "rejection forwarding must target the relocated activation promise"
+            );
+            let restored = INLINE_TRAP.with(|slot| slot.get());
+            assert_eq!(
+                restored.trap_next, previous_to,
+                "the restored trap promise must use its relocated address"
+            );
+            assert_eq!(
+                restored.current_step, previous_step_to as usize,
+                "the restored step closure must use its relocated address"
+            );
+
+            drop(guard);
+            for (source, first_word) in forwarded_sources_with_words {
+                assert_eq!(
+                    source.cast::<usize>().read(),
+                    first_word,
+                    "test teardown must restore the source object's first payload word"
+                );
+                let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                assert_eq!(
+                    (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED,
+                    0,
+                    "test teardown must clear the synthetic forwarding flag"
+                );
+            }
+        }
+    }
 }

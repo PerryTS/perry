@@ -5,24 +5,28 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
-static CLOSURE_PROPS: OnceLock<Mutex<HashMap<usize, HashMap<String, f64>>>> = OnceLock::new();
+per_test_global! {
+    static CLOSURE_PROPS: OnceLock<Mutex<HashMap<usize, HashMap<String, f64>>>> = OnceLock::new();
+}
 
 fn get_closure_props() -> &'static Mutex<HashMap<usize, HashMap<String, f64>>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// #3655: keys deleted off a closure via `delete fn.name` etc.
-///
-/// Functions carry built-in own data properties (`name`, `length`, and —
-/// for constructors — `prototype`) that aren't stored in `CLOSURE_PROPS`:
-/// they're synthesized from the arity/name registries on read. Those
-/// properties are spec'd `configurable: true`, so `delete fn.name` must make
-/// them disappear from every subsequent `hasOwnProperty` / `getOwnProperty*`
-/// / value read. We can't remove a synthesized slot, so we record the
-/// deletion here and have every property-protocol site consult it. test262's
-/// `verifyProperty` exercises exactly this (delete-then-`hasOwnProperty`)
-/// when checking `configurable`.
-static CLOSURE_DELETED_KEYS: OnceLock<Mutex<HashMap<usize, HashSet<String>>>> = OnceLock::new();
+per_test_global! {
+    /// #3655: keys deleted off a closure via `delete fn.name` etc.
+    ///
+    /// Functions carry built-in own data properties (`name`, `length`, and —
+    /// for constructors — `prototype`) that aren't stored in `CLOSURE_PROPS`:
+    /// they're synthesized from the arity/name registries on read. Those
+    /// properties are spec'd `configurable: true`, so `delete fn.name` must make
+    /// them disappear from every subsequent `hasOwnProperty` / `getOwnProperty*`
+    /// / value read. We can't remove a synthesized slot, so we record the
+    /// deletion here and have every property-protocol site consult it. test262's
+    /// `verifyProperty` exercises exactly this (delete-then-`hasOwnProperty`)
+    /// when checking `configurable`.
+    static CLOSURE_DELETED_KEYS: OnceLock<Mutex<HashMap<usize, HashSet<String>>>> = OnceLock::new();
+}
 
 fn get_closure_deleted_keys() -> &'static Mutex<HashMap<usize, HashSet<String>>> {
     CLOSURE_DELETED_KEYS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -62,17 +66,19 @@ pub fn closure_has_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// #36 / #321: `Object.setPrototypeOf(closure, protoObj)` side-table.
-///
-/// Maps a closure pointer to the NaN-box bits of the object that was set as
-/// its static prototype. effect's `Context.Tag(id)` returns a plain function
-/// `TagClass` whose `_op: "Tag"`, `[TagTypeId]`, and `[EffectTypeId]` live on
-/// `TagProto` (a regular object), wired by `Object.setPrototypeOf(TagClass,
-/// TagProto)`. Perry bakes class IDs at allocation time so it can't mutate a
-/// real prototype chain, but recording the (closure → proto) link here lets
-/// string- and symbol-keyed property reads on the closure walk to the proto's
-/// own properties — so `TagClass._op === "Tag"` and `isTag(TagClass)` hold.
-static CLOSURE_STATIC_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+per_test_global! {
+    /// #36 / #321: `Object.setPrototypeOf(closure, protoObj)` side-table.
+    ///
+    /// Maps a closure pointer to the NaN-box bits of the object that was set as
+    /// its static prototype. effect's `Context.Tag(id)` returns a plain function
+    /// `TagClass` whose `_op: "Tag"`, `[TagTypeId]`, and `[EffectTypeId]` live on
+    /// `TagProto` (a regular object), wired by `Object.setPrototypeOf(TagClass,
+    /// TagProto)`. Perry bakes class IDs at allocation time so it can't mutate a
+    /// real prototype chain, but recording the (closure → proto) link here lets
+    /// string- and symbol-keyed property reads on the closure walk to the proto's
+    /// own properties — so `TagClass._op === "Tag"` and `isTag(TagClass)` hold.
+    static CLOSURE_STATIC_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+}
 
 fn get_closure_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
     CLOSURE_STATIC_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -637,7 +643,7 @@ pub(crate) fn function_prototype_fallback_target(ptr: usize, prop: &str) -> Opti
     {
         return None;
     }
-    thread_local! {
+    crate::perry_thread_local! {
         static IN_FN_PROTO_FALLBACK: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
     }
@@ -843,6 +849,16 @@ mod tests_1802 {
 
     static SIDE_TABLE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Poison-tolerant acquisition: one test's assert failure must read as
+    /// ONE failure, not cascade `PoisonError` panics into every sibling that
+    /// serializes on this lock (#6965 — the observed second failure). The
+    /// guarded data is `()`, so poison carries no corruption to tolerate.
+    fn side_table_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        SIDE_TABLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// #1802: the side-table values must be visited in mark phases, not
     /// only during the metadata-rewrite tail. Pre-fix
     /// `scan_closure_dynamic_props_roots_mut` early-returned unless
@@ -857,7 +873,7 @@ mod tests_1802 {
         // threads, wiping this test's parked entry mid-assertion. Serialize
         // against those guards, THEN against this module's own tests.
         let _global = crate::gc::global_side_table_test_lock();
-        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
+        let _guard = side_table_test_lock();
         // A unique synthetic closure address (just an integer key — the
         // scanner doesn't deref it during value visitation; the
         // metadata-key visitor is a no-op for non-heap addresses).
@@ -896,7 +912,7 @@ mod tests_1802 {
         // threads, wiping this test's parked entry mid-assertion. Serialize
         // against those guards, THEN against this module's own tests.
         let _global = crate::gc::global_side_table_test_lock();
-        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
+        let _guard = side_table_test_lock();
         let owner: usize = 0xC10C_AB1E_0000_1803;
         let value_bits: u64 = 0x7FFD_AAAA_BBBB_CCCD;
         closure_set_dynamic_prop(owner, "errors", f64::from_bits(value_bits));
@@ -907,7 +923,22 @@ mod tests_1802 {
             let mut mark = |v: f64| {
                 if v.to_bits() == value_bits {
                     saw_value = true;
-                    lock_was_free = get_closure_props().try_lock().is_ok();
+                    // The regression under test is the SCANNER holding
+                    // CLOSURE_PROPS across visitor callbacks — a same-thread
+                    // hold, so `try_lock` can never succeed no matter how
+                    // long we wait. A one-shot `try_lock` also fails on
+                    // transient contention from an unrelated parallel test
+                    // thread's brief map access (#6965) — retry with a yield
+                    // so a foreign holder gets to release. `Poisoned` counts
+                    // as free: poison means a panicking holder already
+                    // RELEASED the mutex.
+                    lock_was_free = (0..4096).any(|_| match get_closure_props().try_lock() {
+                        Ok(_) | Err(std::sync::TryLockError::Poisoned(_)) => true,
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            std::thread::yield_now();
+                            false
+                        }
+                    });
                 }
             };
             let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
@@ -935,7 +966,7 @@ mod tests_1802 {
         // threads, wiping this test's parked entry mid-assertion. Serialize
         // against those guards, THEN against this module's own tests.
         let _global = crate::gc::global_side_table_test_lock();
-        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
+        let _guard = side_table_test_lock();
         let obj = crate::object::js_object_alloc(0, 0) as usize;
 
         assert_eq!(

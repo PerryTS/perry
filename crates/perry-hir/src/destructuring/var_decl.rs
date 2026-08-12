@@ -8,7 +8,12 @@ mod alias_tracking;
 mod binding_guards;
 mod native_fetch;
 mod native_new;
-mod type_infer;
+pub(crate) mod type_infer;
+/// #7547: for-init declarators reuse the ordinary declaration's type
+/// computation instead of hardcoding `Type::Any`. #7544 fixed the
+/// module-init path; this is the function-body path in
+/// `lower_decl/body_stmt.rs`, which that change did not reach.
+pub(crate) use type_infer::for_init_decl_type;
 
 use alias_tracking::track_decl_aliases;
 use binding_guards::apply_binding_guards;

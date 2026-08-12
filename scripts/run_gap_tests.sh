@@ -76,7 +76,33 @@ if [[ "$host_platform" == "linux" ]]; then
 else
   default_snapshot="test-parity/gap_snapshot.${host_platform}.json"
 fi
+if [[ -n "${GAP_SNAPSHOT:-}" ]]; then GAP_SNAPSHOT_EXPLICIT=1; fi
 GAP_SNAPSHOT="${GAP_SNAPSHOT:-$default_snapshot}"
+
+# #7566: a platform baseline that does not exist must SAY SO, not die in a
+# FileNotFoundError whose exit 1 is indistinguishable from a regression list.
+# On macOS there is no `gap_snapshot.macos.json`, so every local run of this
+# script ended in a traceback after doing all ~490 tests' worth of work — the
+# gate could neither pass nor fail, and the useful per-test results were only
+# recoverable by reading the log by hand.
+#
+# Falling back to the shared Linux baseline is the honest default: it is the
+# one the required CI gate uses, so a local run is measured against the same
+# bar. It is announced loudly rather than silently, because the two platforms
+# genuinely differ (macOS carries known host-local failures), and a run that
+# silently compared against another platform's expectations would be its own
+# kind of lie.
+if [[ ! -f "$GAP_SNAPSHOT" ]]; then
+  if [[ -n "${GAP_SNAPSHOT_EXPLICIT:-}" ]]; then
+    echo "ERROR: GAP_SNAPSHOT='$GAP_SNAPSHOT' does not exist." >&2
+    exit 2
+  fi
+  echo "NOTE: no $host_platform baseline at '$GAP_SNAPSHOT'; comparing against" >&2
+  echo "      test-parity/gap_snapshot.json (the shared baseline required CI uses)." >&2
+  echo "      Establish a $host_platform baseline with UPDATE_SNAPSHOT=1 if its" >&2
+  echo "      expected-failure set genuinely differs." >&2
+  GAP_SNAPSHOT="test-parity/gap_snapshot.json"
+fi
 
 # Run-scoped temp dir — fixed /tmp names would let concurrent runs (a second
 # PR, local + CI on the same box, or the future node-suite-guard alongside)
@@ -122,6 +148,36 @@ if [[ -s "$WORK/crashes.txt" ]]; then
   echo "it is reported here every run. Reproduce on LINUX — several crash classes" >&2
   echo "(e.g. handle-band derefs, #6271) are masked on macOS by its 2 TB heap floor." >&2
   echo "" >&2
+fi
+
+# #7526: a crash may never be PARKED in the snapshot. The block above reports
+# crashes every run, but reporting is not gating -- a SIGSEGV sat in
+# `gap_snapshot.json` as `status: "crash"` for a month, against two CLOSED
+# issues (#5433, #5917), laundered through the channel meant for cosmetic
+# output gaps. The policy is stated four comments up; this enforces it.
+#
+# The snapshot is for known *output* divergences. A crash is a hard defect and
+# must be fixed or tracked as one, never accepted here. This starts green (the
+# one offending entry was removed with the fix in #7530), so it can only go red
+# on a NEW attempt to park a crash.
+parked_crashes="$("$PYTHON_CMD" - "$GAP_SNAPSHOT" <<'PYEOF'
+import json, sys
+snap = json.load(open(sys.argv[1]))
+print(" ".join(sorted(
+    name for name, e in (snap.get("tests") or {}).items()
+    if isinstance(e, dict) and e.get("status") == "crash"
+)))
+PYEOF
+)"
+if [[ -n "$parked_crashes" ]]; then
+  echo "" >&2
+  echo "ERROR: the gap snapshot accepts a CRASH, which it must never do:" >&2
+  for t in $parked_crashes; do echo "  - $t" >&2; done
+  echo "" >&2
+  echo "A crash is a hard defect (SIGSEGV/SIGABRT/timeout), not a cosmetic gap." >&2
+  echo "Fix it, or track it as an OPEN defect and remove the test from the" >&2
+  echo "snapshot -- do not launder it through the expected-output channel." >&2
+  exit 2
 fi
 
 # Snapshot ratchet. UPDATE_SNAPSHOT=1 accepts the current state instead of

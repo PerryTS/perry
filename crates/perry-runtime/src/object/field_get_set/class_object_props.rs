@@ -54,7 +54,22 @@ pub(super) unsafe fn instance_constructor_value(
     if let Some(v) = own_data_field_by_name(obj, key) {
         return Some(v);
     }
-    let class_id = (*obj).class_id;
+    // #7757: a monomorphized specialization must present the GENERIC's
+    // reflective surface. `new Gen<number>()` is stamped with `Gen$num`'s id
+    // (`monomorph::mangle::generate_specialized_name`), so every arm below
+    // answered with the specialization -- making `a.constructor !== Gen` and,
+    // worse after #7632 gave both the same display name, two constructors that
+    // PRINT identically and compare unequal. TypeScript erases type arguments:
+    // at runtime there is exactly one `Gen`.
+    //
+    // This is the third and last identity surface to take the same origin edge
+    // `instanceof` uses (#7575), the display name uses (#7632) and the two
+    // prototype registries use (#7762). METHOD DISPATCH is deliberately not
+    // aliased -- it runs off the per-class-id vtable, so each specialization
+    // keeps its own monomorphized bodies.
+    let class_id = crate::object::class_generic_origin((*obj).class_id)
+        .filter(|generic| is_class_id_registered(*generic))
+        .unwrap_or((*obj).class_id);
     // #6530: a capture-carrying class has no ClassRef value — the
     // class VALUE is the per-evaluation class OBJECT registered at
     // `js_object_mark_class` time. Return that same object so

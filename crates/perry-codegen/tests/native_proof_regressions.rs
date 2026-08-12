@@ -1,5 +1,14 @@
 // See native_proof_buffer_views.rs — shared HIR builder toolkit, each file in
 // this family drives a different subset.
+//
+// LOWERING (#7493): this suite is overwhelmingly lowering-INDEPENDENT and
+// deliberately unpinned. The exceptions are named at the tests themselves:
+// three here pin `NativeRootsPin::shadow()` because they assert on the
+// shadow-frame slot's own emission, and fifteen in `invalidation` pin
+// `NativeRootsPin::native()` because their module-wide "no inbounds GEP" proxy
+// collides with the shadow lowering's inline slot addressing (see that file's
+// header).
+use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
 use perry_hir::{
@@ -8,7 +17,12 @@ use perry_hir::{
     ModuleInitKind, Param, Stmt, UnaryOp, UpdateOp,
 };
 
-static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[path = "native_proof_support/mod.rs"]
+mod native_proof_support;
+use native_proof_support::{
+    artifact_env_lock, artifact_for_module, assert_native_buffer_element_access, probe_body,
+    NativeRepsEnv,
+};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -28,6 +42,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -156,7 +171,7 @@ fn compile_artifact_json_for_module_with_opts_and_clone_rejections(
     all_typed_clone_rejections: bool,
 ) -> serde_json::Value {
     let name = module.name.clone();
-    let _guard = ARTIFACT_ENV_LOCK.lock().unwrap();
+    let _guard = artifact_env_lock();
     let dir = std::env::temp_dir().join(format!(
         "perry_native_reps_test_{}_{}",
         std::process::id(),
@@ -165,51 +180,15 @@ fn compile_artifact_json_for_module_with_opts_and_clone_rejections(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let old_reps = std::env::var_os("PERRY_NATIVE_REPS");
-    let old_reps_dir = std::env::var_os("PERRY_NATIVE_REPS_DIR");
-    let old_all_typed_clone_rejections =
-        std::env::var_os("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS");
-    std::env::set_var("PERRY_NATIVE_REPS", "1");
-    std::env::set_var("PERRY_NATIVE_REPS_DIR", &dir);
-    if all_typed_clone_rejections {
-        std::env::set_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS", "1");
-    } else {
-        std::env::remove_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS");
-    }
-
-    let compile_result = compile_module(&module, opts);
-
-    match old_reps {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS"),
-    }
-    match old_reps_dir {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS_DIR", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS_DIR"),
-    }
-    match old_all_typed_clone_rejections {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS"),
-    }
+    let compile_result = {
+        // Dropped — and so restored — before ANY fallible step below, and on
+        // an unwind out of `compile_module` itself.
+        let _env = NativeRepsEnv::install(&dir, all_typed_clone_rejections);
+        compile_module(&module, opts)
+    };
 
     compile_result.unwrap();
-    let paths: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    let mut parsed = Vec::new();
-    for path in paths {
-        if !path.extension().is_some_and(|ext| ext == "json") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        if value["module"] == name {
-            return value;
-        }
-        parsed.push(value["module"].clone());
-    }
-    panic!("native reps artifact for {name} not found in {dir:?}; saw modules {parsed:?}");
+    artifact_for_module(&dir, &name)
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
@@ -261,6 +240,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
@@ -704,14 +684,57 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
     for_loop_with_start_and_update(counter_id, int(0), bound, Some(increment(counter_id)), body)
 }
 
-fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
-    assert!(
-        ir.contains("call void @js_buffer_set"),
-        "stale-proof case should keep the checked Buffer store fallback:\n{ir}"
-    );
-    assert!(
-        !ir.contains("getelementptr inbounds i8"),
-        "stale-proof case must not emit an inbounds native buffer GEP:\n{ir}"
+// `assert_buffer_store_uses_dynamic_fallback` lives in `native_proof_support`
+// since #7505 — it used to prove "no native buffer GEP" with a MODULE-WIDE
+// `!ir.contains("getelementptr inbounds i8")`, which any unrelated `inbounds
+// i8` in the module satisfied.
+use native_proof_support::assert_buffer_store_uses_dynamic_fallback;
+
+#[test]
+fn array_isarray_reassigned_local_uses_runtime_predicate() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "number_to_array".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(int(0)),
+        },
+        Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![int(1)])))),
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(1)))),
+        Stmt::Let {
+            id: 2,
+            name: "array_to_number".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Array(vec![int(1)])),
+        },
+        Stmt::Expr(Expr::LocalSet(2, Box::new(int(0)))),
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(2)))),
+        Stmt::Let {
+            id: 3,
+            name: "unchanged_array".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Array(vec![int(1)])),
+        },
+        Stmt::Expr(Expr::ArrayIsArray(Box::new(local(3)))),
+        Stmt::Return(Some(int(0))),
+    ];
+    let ir = String::from_utf8(
+        compile_module(
+            &module("array_isarray_reassignment_7844.ts", body),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ir.matches("call double @js_array_is_array(").count(),
+        2,
+        "both reassigned locals must use the runtime predicate, while the unchanged array may \
+         retain its compile-time true fold:\n{ir}"
     );
 }
 
@@ -725,7 +748,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -758,7 +781,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -805,7 +828,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -1303,7 +1326,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert!(
         artifact["records"]
             .as_array()
@@ -1540,7 +1563,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -1592,7 +1615,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 15);
+    assert_eq!(artifact["schema_version"], 16);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -6688,6 +6711,11 @@ fn boxed_param_capture_module(name: &str) -> Module {
 
 #[test]
 fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
+    // Asserts the SHADOW-STACK spelling of the box-pointer slot: a plain
+    // `store i64 <bits>, ptr %slot`. Under native roots the same slot is a
+    // `ptr addrspace(1)` alloca and the store is `store ptr addrspace(1)
+    // %rs4gc.sN` — the identical root, a different lowering (#7493).
+    let _pin = NativeRootsPin::shadow();
     let module = boxed_local_capture_module("boxed_local_js_value_bits_ir.ts");
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
     let box_alloc = ir
@@ -6797,6 +6825,11 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
 
 #[test]
 fn boxed_param_slot_uses_i64_js_value_bits_until_helper_edges() {
+    // Asserts the SHADOW-STACK spelling of the box-pointer slot: a plain
+    // `store i64 <bits>, ptr %slot`. Under native roots the same slot is a
+    // `ptr addrspace(1)` alloca and the store is `store ptr addrspace(1)
+    // %rs4gc.sN` — the identical root, a different lowering (#7493).
+    let _pin = NativeRootsPin::shadow();
     let module = boxed_param_capture_module("boxed_param_js_value_bits_ir.ts");
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
     let box_alloc = ir
@@ -9956,8 +9989,8 @@ fn typed_f64_function_clone_emits_internal_clone_and_guarded_call() {
     )
     .unwrap();
     let public = "perry_fn_typed_f64_function_abi_ts__add";
-    let typed = "perry_fn_typed_f64_function_abi_ts__add__typed_f64";
-    let generic_body = "perry_fn_typed_f64_function_abi_ts__add__generic";
+    let typed = "perry_fn_typed_f64_function_abi_ts__add$typed_f64";
+    let generic_body = "perry_fn_typed_f64_function_abi_ts__add$generic";
     assert!(
         ir.contains(&format!("define internal double @{typed}")),
         "{ir}"
@@ -9983,8 +10016,8 @@ fn typed_f64_public_trampoline_dispatches_before_generic_body() {
     )
     .unwrap();
     let public = "perry_fn_typed_f64_function_abi_ts__add";
-    let typed = "perry_fn_typed_f64_function_abi_ts__add__typed_f64";
-    let generic_body = "perry_fn_typed_f64_function_abi_ts__add__generic";
+    let typed = "perry_fn_typed_f64_function_abi_ts__add$typed_f64";
+    let generic_body = "perry_fn_typed_f64_function_abi_ts__add$generic";
     let wrapper_ir = function_ir_section(&ir, public);
 
     assert!(
@@ -10056,7 +10089,7 @@ fn number_add_function_takes_the_typed_f64_clone_not_an_i64_body() {
         "a `number` function must not truncate its arguments on entry:\n{public}"
     );
     assert!(
-        ir.contains("__typed_f64"),
+        ir.contains("$typed_f64"),
         "the typed-f64 clone must be reachable once the i64 pass no longer \
          suppresses it:\n{ir}"
     );
@@ -10069,8 +10102,8 @@ fn typed_string_function_clone_emits_internal_clone_and_guarded_wrapper() {
     )
     .unwrap();
     let public = "perry_fn_typed_string_function_abi_ts__id";
-    let typed = "perry_fn_typed_string_function_abi_ts__id__typed_string";
-    let generic_body = "perry_fn_typed_string_function_abi_ts__id__generic";
+    let typed = "perry_fn_typed_string_function_abi_ts__id$typed_string";
+    let generic_body = "perry_fn_typed_string_function_abi_ts__id$generic";
     let caller = "perry_fn_typed_string_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let caller_ir = function_ir_section(&ir, caller);
@@ -10142,7 +10175,7 @@ fn typed_string_function_clone_rejects_unsupported_string_shapes() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_string") && !ir.contains("__generic"),
+            !ir.contains("$typed_string") && !ir.contains("$generic"),
             "{case} must stay on the ordinary JSValue ABI:\n{ir}"
         );
     }
@@ -10162,13 +10195,13 @@ fn artifact_records_typed_string_direct_call_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_fn_typed_string_function_abi_ts__id__typed_string",
+                                "typed_clone=perry_fn_typed_string_function_abi_ts__id$typed_string",
                             )
                         })
                     }) && notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "generic_body=perry_fn_typed_string_function_abi_ts__id__generic",
+                                "generic_body=perry_fn_typed_string_function_abi_ts__id$generic",
                             )
                         })
                     }) && notes
@@ -10190,8 +10223,8 @@ fn typed_f64_function_clone_accepts_mixed_raw_signature_and_direct_call() {
     )
     .unwrap();
     let public = "perry_fn_typed_f64_mixed_function_abi_ts__add";
-    let typed = "perry_fn_typed_f64_mixed_function_abi_ts__add__typed_f64";
-    let generic_body = "perry_fn_typed_f64_mixed_function_abi_ts__add__generic";
+    let typed = "perry_fn_typed_f64_mixed_function_abi_ts__add$typed_f64";
+    let generic_body = "perry_fn_typed_f64_mixed_function_abi_ts__add$generic";
     let caller = "perry_fn_typed_f64_mixed_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
@@ -10263,8 +10296,8 @@ fn typed_f64_function_clone_keeps_i32_locals_raw_until_f64_use() {
     )
     .unwrap();
     let public = "perry_fn_typed_f64_i32_local_function_abi_ts__add";
-    let typed = "perry_fn_typed_f64_i32_local_function_abi_ts__add__typed_f64";
-    let generic_body = "perry_fn_typed_f64_i32_local_function_abi_ts__add__generic";
+    let typed = "perry_fn_typed_f64_i32_local_function_abi_ts__add$typed_f64";
+    let generic_body = "perry_fn_typed_f64_i32_local_function_abi_ts__add$generic";
     let caller = "perry_fn_typed_f64_i32_local_function_abi_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
@@ -10331,7 +10364,7 @@ fn typed_f64_function_clone_rejects_any_and_unsafe_mixed_parameter_signatures() 
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_f64") && !ir.contains("__generic"),
+            !ir.contains("$typed_f64") && !ir.contains("$generic"),
             "{case} unsafe ABI surface must stay generic:\n{ir}"
         );
     }
@@ -10493,7 +10526,7 @@ fn artifact_records_typed_f64_function_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_fn_typed_f64_function_abi_ts__add__typed_f64",
+                                "typed_clone=perry_fn_typed_f64_function_abi_ts__add$typed_f64",
                             )
                         })
                     })
@@ -10509,8 +10542,8 @@ fn typed_i1_function_clone_emits_internal_clone_and_guarded_call() {
         String::from_utf8(compile_module(&typed_i1_clone_test_module(), empty_opts()).unwrap())
             .unwrap();
     let generic = "perry_fn_typed_i1_function_abi_ts__both";
-    let typed = "perry_fn_typed_i1_function_abi_ts__both__typed_i1";
-    let generic_body = "perry_fn_typed_i1_function_abi_ts__both__generic";
+    let typed = "perry_fn_typed_i1_function_abi_ts__both$typed_i1";
+    let generic_body = "perry_fn_typed_i1_function_abi_ts__both$generic";
     assert!(
         ir.contains(&format!("define internal i1 @{typed}(i1 %arg1, i1 %arg2)")),
         "typed bool clone should use i1 formal params and i1 return:\n{ir}"
@@ -10553,8 +10586,8 @@ fn typed_i1_public_trampoline_dispatches_before_generic_body() {
         String::from_utf8(compile_module(&typed_i1_clone_test_module(), empty_opts()).unwrap())
             .unwrap();
     let public = "perry_fn_typed_i1_function_abi_ts__both";
-    let typed = "perry_fn_typed_i1_function_abi_ts__both__typed_i1";
-    let generic_body = "perry_fn_typed_i1_function_abi_ts__both__generic";
+    let typed = "perry_fn_typed_i1_function_abi_ts__both$typed_i1";
+    let generic_body = "perry_fn_typed_i1_function_abi_ts__both$generic";
     let wrapper_ir = function_ir_section(&ir, public);
 
     assert!(
@@ -10626,7 +10659,7 @@ fn artifact_records_typed_i1_function_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_fn_typed_i1_artifact_ts__both__typed_i1",
+                                "typed_clone=perry_fn_typed_i1_artifact_ts__both$typed_i1",
                             )
                         })
                     }) && notes
@@ -10649,7 +10682,7 @@ fn typed_i1_function_clone_rejects_any_and_mixed_parameter_signatures() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_i1") && !ir.contains("__generic"),
+            !ir.contains("$typed_i1") && !ir.contains("$generic"),
             "{case} boolean ABI surface must stay generic:\n{ir}"
         );
     }
@@ -10661,7 +10694,7 @@ fn typed_i1_function_clone_rejects_mixed_direct_call_inputs() {
         String::from_utf8(compile_module(&typed_i1_mixed_callsite_module(), empty_opts()).unwrap())
             .unwrap();
     let generic = "perry_fn_typed_i1_function_abi_ts__both";
-    let typed = "perry_fn_typed_i1_function_abi_ts__both__typed_i1";
+    let typed = "perry_fn_typed_i1_function_abi_ts__both$typed_i1";
     let caller = "perry_fn_typed_i1_function_abi_ts__caller";
     let caller_ir = defined_function_ir_section(&ir, caller);
     assert!(
@@ -10689,8 +10722,8 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
     )
     .unwrap();
     let public = "perry_fn_typed_i1_numeric_predicate_ts__above";
-    let typed = "perry_fn_typed_i1_numeric_predicate_ts__above__typed_i1";
-    let generic_body = "perry_fn_typed_i1_numeric_predicate_ts__above__generic";
+    let typed = "perry_fn_typed_i1_numeric_predicate_ts__above$typed_i1";
+    let generic_body = "perry_fn_typed_i1_numeric_predicate_ts__above$generic";
     let caller = "perry_fn_typed_i1_numeric_predicate_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
@@ -10761,8 +10794,8 @@ fn typed_i1_i32_predicate_function_uses_i32_params_and_public_wrapper() {
         String::from_utf8(compile_module(&typed_i1_i32_predicate_module(), empty_opts()).unwrap())
             .unwrap();
     let public = "perry_fn_typed_i1_i32_predicate_ts__above_i32";
-    let typed = "perry_fn_typed_i1_i32_predicate_ts__above_i32__typed_i1";
-    let generic_body = "perry_fn_typed_i1_i32_predicate_ts__above_i32__generic";
+    let typed = "perry_fn_typed_i1_i32_predicate_ts__above_i32$typed_i1";
+    let generic_body = "perry_fn_typed_i1_i32_predicate_ts__above_i32$generic";
     let caller = "perry_fn_typed_i1_i32_predicate_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
@@ -10831,8 +10864,8 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
     .unwrap();
     const INT32_TAG_I64: &str = "9222809086901354496";
     let public = "perry_fn_typed_i32_return_positive_ts__mix_i32";
-    let typed = "perry_fn_typed_i32_return_positive_ts__mix_i32__typed_i32";
-    let generic_body = "perry_fn_typed_i32_return_positive_ts__mix_i32__generic";
+    let typed = "perry_fn_typed_i32_return_positive_ts__mix_i32$typed_i32";
+    let generic_body = "perry_fn_typed_i32_return_positive_ts__mix_i32$generic";
     let caller = "perry_fn_typed_i32_return_positive_ts__caller";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
@@ -10896,7 +10929,7 @@ fn artifact_records_typed_i32_function_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_fn_typed_i32_return_positive_ts__mix_i32__typed_i32",
+                                "typed_clone=perry_fn_typed_i32_return_positive_ts__mix_i32$typed_i32",
                             )
                         })
                     }) && notes
@@ -10919,7 +10952,7 @@ fn typed_i32_return_function_rejects_annotation_only_or_unsafe_shapes() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_i32") && !ir.contains("__generic"),
+            !ir.contains("$typed_i32") && !ir.contains("$generic"),
             "{case} must stay on the ordinary JSValue ABI:\n{ir}"
         );
     }
@@ -10933,8 +10966,8 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
     .unwrap();
     const INT32_TAG_I64: &str = "9222809086901354496";
     let public = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32";
-    let typed = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__typed_i32";
-    let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__generic";
+    let typed = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$typed_i32";
+    let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$generic";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
     let caller_ir =
@@ -11002,8 +11035,8 @@ fn typed_i32_method_public_trampoline_dispatches_before_generic_body() {
     )
     .unwrap();
     let public = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32";
-    let typed = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__typed_i32";
-    let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__generic";
+    let typed = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$typed_i32";
+    let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$generic";
     let wrapper_ir = function_ir_section(&ir, public);
 
     let typed_call = wrapper_ir
@@ -11046,12 +11079,12 @@ fn artifact_records_typed_i32_method_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__typed_i32",
+                                "typed_clone=perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$typed_i32",
                             )
                         })
                     }) && notes.iter().any(|note| {
                         note
-                            == "generic_method=perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__generic"
+                            == "generic_method=perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$generic"
                     }) && notes.iter().any(|note| note == "receiver_class=Bits")
                         && notes.iter().any(|note| note == "method=mix_i32")
                         && notes
@@ -11074,7 +11107,7 @@ fn typed_i32_method_clone_rejects_number_param_number_return_and_unsafe_add() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_i32"),
+            !ir.contains("$typed_i32"),
             "{case} method must stay off the typed-i32 method ABI:\n{ir}"
         );
     }
@@ -11087,8 +11120,8 @@ fn typed_f64_method_clone_keeps_i32_locals_raw_until_f64_use() {
     )
     .unwrap();
     let public = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix";
-    let typed = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix__typed_f64";
-    let generic_body = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix__generic";
+    let typed = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix$typed_f64";
+    let generic_body = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix$generic";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
     let caller_ir =
@@ -11133,8 +11166,8 @@ fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
     )
     .unwrap();
     let public = "perry_method_typed_string_method_eligible_ts__Labeler__pick";
-    let typed = "perry_method_typed_string_method_eligible_ts__Labeler__pick__typed_string";
-    let generic_body = "perry_method_typed_string_method_eligible_ts__Labeler__pick__generic";
+    let typed = "perry_method_typed_string_method_eligible_ts__Labeler__pick$typed_string";
+    let generic_body = "perry_method_typed_string_method_eligible_ts__Labeler__pick$generic";
     let caller = "perry_fn_typed_string_method_eligible_ts__probe";
     let wrapper_ir = function_ir_section(&ir, public);
     let caller_ir = defined_function_ir_section(&ir, caller);
@@ -11201,12 +11234,12 @@ fn artifact_records_typed_string_method_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_method_typed_string_method_eligible_ts__Labeler__pick__typed_string",
+                                "typed_clone=perry_method_typed_string_method_eligible_ts__Labeler__pick$typed_string",
                             )
                         })
                     }) && notes.iter().any(|note| {
                         note
-                            == "generic_method=perry_method_typed_string_method_eligible_ts__Labeler__pick__generic"
+                            == "generic_method=perry_method_typed_string_method_eligible_ts__Labeler__pick$generic"
                     }) && notes.iter().any(|note| note == "receiver_class=Labeler")
                         && notes.iter().any(|note| note == "method=pick")
                         && notes
@@ -11235,7 +11268,7 @@ fn typed_string_method_clone_rejects_unsupported_string_shapes() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_string") && !ir.contains("typed_string_method.fast"),
+            !ir.contains("$typed_string") && !ir.contains("typed_string_method.fast"),
             "{case} method must stay off the typed-string method ABI:\n{ir}"
         );
     }
@@ -11276,7 +11309,7 @@ fn typed_string_method_clone_rejects_dynamic_receiver_direct_call_site() {
     )
     .unwrap();
     let public = "perry_method_typed_string_method_dynamic_receiver_ts__Labeler__pick";
-    let typed = "perry_method_typed_string_method_dynamic_receiver_ts__Labeler__pick__typed_string";
+    let typed = "perry_method_typed_string_method_dynamic_receiver_ts__Labeler__pick$typed_string";
     let caller_ir = defined_function_ir_section(
         &ir,
         "perry_fn_typed_string_method_dynamic_receiver_ts__probe",
@@ -11301,8 +11334,8 @@ fn typed_i1_method_clone_emits_internal_clone_and_guarded_direct_call() {
     )
     .unwrap();
     let public = "perry_method_typed_i1_method_eligible_ts__Switch__check";
-    let generic_body = "perry_method_typed_i1_method_eligible_ts__Switch__check__generic";
-    let typed = "perry_method_typed_i1_method_eligible_ts__Switch__check__typed_i1";
+    let generic_body = "perry_method_typed_i1_method_eligible_ts__Switch__check$generic";
+    let typed = "perry_method_typed_i1_method_eligible_ts__Switch__check$typed_i1";
     assert!(
         ir.contains(&format!(
             "define internal i1 @{typed}(i1 %arg21, i1 %arg22)"
@@ -11366,8 +11399,8 @@ fn typed_i1_method_public_trampoline_dispatches_before_generic_body() {
     )
     .unwrap();
     let public = "perry_method_typed_i1_method_eligible_ts__Switch__check";
-    let typed = "perry_method_typed_i1_method_eligible_ts__Switch__check__typed_i1";
-    let generic_body = "perry_method_typed_i1_method_eligible_ts__Switch__check__generic";
+    let typed = "perry_method_typed_i1_method_eligible_ts__Switch__check$typed_i1";
+    let generic_body = "perry_method_typed_i1_method_eligible_ts__Switch__check$generic";
     let wrapper_ir = function_ir_section(&ir, public);
 
     assert!(
@@ -11414,13 +11447,13 @@ fn artifact_records_typed_i1_method_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_method_typed_i1_method_eligible_ts__Switch__check__typed_i1",
+                                "typed_clone=perry_method_typed_i1_method_eligible_ts__Switch__check$typed_i1",
                             )
                         })
                     }) && notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "generic_method=perry_method_typed_i1_method_eligible_ts__Switch__check__generic",
+                                "generic_method=perry_method_typed_i1_method_eligible_ts__Switch__check$generic",
                             )
                         })
                     }) && notes.iter().any(|note| note == "method=check")
@@ -11443,8 +11476,8 @@ fn typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call() {
     )
     .unwrap();
     let public = "perry_method_typed_i1_numeric_method_ts__Meter__above";
-    let generic_body = "perry_method_typed_i1_numeric_method_ts__Meter__above__generic";
-    let typed = "perry_method_typed_i1_numeric_method_ts__Meter__above__typed_i1";
+    let generic_body = "perry_method_typed_i1_numeric_method_ts__Meter__above$generic";
+    let typed = "perry_method_typed_i1_numeric_method_ts__Meter__above$typed_i1";
     let caller = "perry_fn_typed_i1_numeric_method_ts__probe";
     let wrapper_ir = function_ir_section(&ir, public);
     let typed_ir = defined_function_ir_section(&ir, typed);
@@ -11522,7 +11555,7 @@ fn typed_i1_method_clone_rejects_any_and_mixed_parameter_signatures() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_i1"),
+            !ir.contains("$typed_i1"),
             "{case} method must stay on the generic method ABI:\n{ir}"
         );
     }
@@ -11535,7 +11568,7 @@ fn typed_i1_method_clone_rejects_dynamic_receiver_call_site() {
     )
     .unwrap();
     let public = "perry_method_typed_i1_method_dynamic_ts__Switch__check";
-    let typed = "perry_method_typed_i1_method_dynamic_ts__Switch__check__typed_i1";
+    let typed = "perry_method_typed_i1_method_dynamic_ts__Switch__check$typed_i1";
     assert!(
         ir.contains(&format!("define internal i1 @{typed}")),
         "eligible method should still have an internal typed-i1 clone:\n{ir}"
@@ -11562,8 +11595,8 @@ fn typed_f64_method_clone_emits_internal_clone_and_guarded_direct_call() {
         String::from_utf8(compile_module(&typed_f64_method_clone_module(), empty_opts()).unwrap())
             .unwrap();
     let public = "perry_method_typed_f64_method_abi_ts__Calc__mix";
-    let generic_body = "perry_method_typed_f64_method_abi_ts__Calc__mix__generic";
-    let typed = "perry_method_typed_f64_method_abi_ts__Calc__mix__typed_f64";
+    let generic_body = "perry_method_typed_f64_method_abi_ts__Calc__mix$generic";
+    let typed = "perry_method_typed_f64_method_abi_ts__Calc__mix$typed_f64";
     assert!(
         ir.contains(&format!(
             "define internal double @{typed}(double %arg21, double %arg22)"
@@ -11618,8 +11651,8 @@ fn typed_f64_method_public_trampoline_dispatches_before_generic_body() {
         String::from_utf8(compile_module(&typed_f64_method_clone_module(), empty_opts()).unwrap())
             .unwrap();
     let public = "perry_method_typed_f64_method_abi_ts__Calc__mix";
-    let typed = "perry_method_typed_f64_method_abi_ts__Calc__mix__typed_f64";
-    let generic_body = "perry_method_typed_f64_method_abi_ts__Calc__mix__generic";
+    let typed = "perry_method_typed_f64_method_abi_ts__Calc__mix$typed_f64";
+    let generic_body = "perry_method_typed_f64_method_abi_ts__Calc__mix$generic";
     let wrapper_ir = function_ir_section(&ir, public);
 
     assert!(
@@ -11659,13 +11692,13 @@ fn artifact_records_typed_f64_method_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_method_typed_f64_method_abi_ts__Calc__mix__typed_f64",
+                                "typed_clone=perry_method_typed_f64_method_abi_ts__Calc__mix$typed_f64",
                             )
                         })
                     }) && notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "generic_method=perry_method_typed_f64_method_abi_ts__Calc__mix__generic",
+                                "generic_method=perry_method_typed_f64_method_abi_ts__Calc__mix$generic",
                             )
                         })
                     }) && notes.iter().any(|note| note == "method=mix")
@@ -11683,7 +11716,7 @@ fn typed_f64_method_clone_rejects_this_default_rest_and_any() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_f64"),
+            !ir.contains("$typed_f64"),
             "{case} method must stay on the generic method ABI:\n{ir}"
         );
     }
@@ -11691,13 +11724,19 @@ fn typed_f64_method_clone_rejects_this_default_rest_and_any() {
 
 #[test]
 fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
+    // NOT pinned, deliberately (#7493). #7493's sweep listed this among the
+    // failures `PERRY_RS4GC=0` heals; run alone it fails under BOTH lowerings,
+    // so that reading was an artifact of whole-suite ordering. It is a plain
+    // drifted assertion — the caller no longer emits a `$generic` call on guard
+    // failure — and is tracked in #7506, not here.
     let ir = String::from_utf8(
         compile_module(&typed_f64_receiver_method_positive_module(), empty_opts()).unwrap(),
     )
     .unwrap();
     let public = "perry_method_typed_f64_receiver_method_ts__Point__score";
-    let generic_body = "perry_method_typed_f64_receiver_method_ts__Point__score__generic";
-    let typed = "perry_method_typed_f64_receiver_method_ts__Point__score__typed_f64_recv";
+    let generic_body = "perry_method_typed_f64_receiver_method_ts__Point__score$generic";
+    let typed = "perry_method_typed_f64_receiver_method_ts__Point__score$typed_f64_recv";
+    let pshape_body = "perry_method_typed_f64_receiver_method_ts__Point__score$pshape";
     let caller = "perry_fn_typed_f64_receiver_method_ts__probe";
     let typed_ir = defined_function_ir_section(&ir, typed);
     let caller_ir = defined_function_ir_section(&ir, caller);
@@ -11719,7 +11758,9 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
             && typed_ir.contains("getelementptr i8, ptr")
             && typed_ir.matches("load double").count() >= 2
             && typed_ir.contains(" fadd ")
-            && typed_ir.contains(" fmul "),
+            && typed_ir.contains(" fmul ")
+            && !typed_ir.contains("js_number_coerce")
+            && !typed_ir.contains("js_dynamic_string_or_number_add"),
         "typed receiver clone should raw-load receiver fields and stay in f64 SSA:\n{typed_ir}"
     );
     let method_guard = caller_ir
@@ -11735,16 +11776,102 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
         method_guard < field_guard && field_guard < typed_call,
         "receiver clone must run only after method-direct and raw-f64 field guards:\n{caller_ir}"
     );
+    // #7506: this used to assert the guard-failure edge calls `$generic` BY
+    // NAME, and it drifted — the edge now calls `$pshape`, a Ptr<Shape> clone.
+    // That is a refinement, not a miscompile, but only for a reason a
+    // symbol-presence check cannot express, so the assertion is re-pointed at
+    // the PROPERTY the composition has to preserve (the #7492 shape).
+    //
+    // The three outcomes must stay three:
+    //
+    //   1. method-direct guard fails  -> fully dynamic `js_native_call_method_by_id`
+    //   2. raw-f64 field guard passes -> `$typed_f64_recv`, which raw-loads the
+    //      receiver's slots with NO coercion
+    //   3. raw-f64 field guard FAILS  -> a clone that may use the shape's slot
+    //      offsets but must NOT assume the slots hold canonical raw f64
+    //
+    // What makes (3) sound is not which symbol it is, it is that the callee
+    // preserves coercion semantics after loading. `$pshape` may use
+    // `inttoptr` + `getelementptr` + `load double` because the shape guarantees
+    // the OFFSETS, but it must tag-dispatch the `+` and then ToNumber that
+    // possibly boxed result before the following multiply. `$generic` is also
+    // acceptable here; what must never appear on this edge is
+    // `$typed_f64_recv`, whose whole premise is the guard that just failed.
+    let field_guard_branch = caller_ir[field_guard..]
+        .lines()
+        .find(|line| line.trim_start().starts_with("br i1 "))
+        .unwrap_or_else(|| panic!("field guards should feed a conditional branch:\n{caller_ir}"));
+    let mut field_guard_successors = field_guard_branch
+        .split("label %")
+        .skip(1)
+        .map(|part| part.split([',', ' ']).next().unwrap());
+    let success_label = field_guard_successors.next().unwrap_or_else(|| {
+        panic!("field-guard branch should have a success edge: {field_guard_branch}")
+    });
+    let failure_label = field_guard_successors.next().unwrap_or_else(|| {
+        panic!("field-guard branch should have a failure edge: {field_guard_branch}")
+    });
+    let basic_block = |label: &str| {
+        let marker = format!("\n{label}:\n");
+        let start = caller_ir
+            .find(&marker)
+            .unwrap_or_else(|| panic!("basic block `{label}` not found:\n{caller_ir}"))
+            + marker.len();
+        let rest = &caller_ir[start..];
+        &rest[..rest.find("\n\n").unwrap_or(rest.len())]
+    };
+    let success_block = basic_block(success_label);
+    let failure_block = basic_block(failure_label);
     assert!(
-        caller_ir.contains(&format!("call double @{generic_body}(")),
-        "receiver field or numeric arg guard failure should call the generic method body:\n{caller_ir}"
+        success_block.contains(&format!("call double @{typed}(i64 ")),
+        "the raw-f64 field-guard success edge must call the raw-f64 receiver clone:\n\
+         {success_block}"
     );
+    assert!(
+        !failure_block.contains(&format!("call double @{typed}(")),
+        "the raw-f64 field-guard failure edge must not call the raw-f64 receiver clone:\n\
+         {failure_block}"
+    );
+    let failure_edge_callee = [generic_body, pshape_body]
+        .into_iter()
+        .find(|sym| failure_block.contains(&format!("call double @{sym}(")))
+        .unwrap_or_else(|| {
+            panic!(
+                "raw-f64 field guard failure must reach a clone that does not \
+                 assume raw-f64 slots (`$generic` or `$pshape`):\n{failure_block}"
+            )
+        });
+    if failure_edge_callee == pshape_body {
+        let pshape_ir = defined_function_ir_section(&ir, pshape_body);
+        let dynamic_add = pshape_ir
+            .find("call double @js_dynamic_string_or_number_add(")
+            .unwrap_or_else(|| {
+                panic!("the Ptr<Shape> clone must tag-dispatch declared-only `+`:\n{pshape_ir}")
+            });
+        let result_coerce = pshape_ir
+            .find("call double @js_number_coerce(")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the Ptr<Shape> clone must ToNumber the possibly boxed `+` result:\n\
+                     {pshape_ir}"
+                )
+            });
+        let multiply = pshape_ir
+            .find(" fmul ")
+            .unwrap_or_else(|| panic!("expected score's multiply in `$pshape`:\n{pshape_ir}"));
+        assert!(
+            dynamic_add < result_coerce && result_coerce < multiply,
+            "the Ptr<Shape> clone reached on raw-f64 guard FAILURE must \
+             ToNumber the possibly boxed `+` result before multiplying it:\n\
+             {pshape_ir}"
+        );
+    }
     assert!(
         caller_ir.contains("call double @js_native_call_method_by_id"),
         "method-direct guard failure should retain dynamic method fallback:\n{caller_ir}"
     );
     assert!(
-        !ir.contains(&format!("define internal double @{}__typed_f64(", public)),
+        !ir.contains(&format!("define internal double @{}$typed_f64(", public)),
         "field-reading receiver methods should not use the receiver-less typed method ABI:\n{ir}"
     );
 }
@@ -11762,7 +11889,7 @@ fn artifact_records_typed_f64_receiver_method_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_method_typed_f64_receiver_method_ts__Point__score__typed_f64_recv",
+                                "typed_clone=perry_method_typed_f64_receiver_method_ts__Point__score$typed_f64_recv",
                             )
                         })
                     }) && notes.iter().any(|note| note == "receiver_arg=i64")
@@ -11794,7 +11921,7 @@ fn typed_f64_receiver_method_clone_rejects_unsafe_cases() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_f64_recv"),
+            !ir.contains("$typed_f64_recv"),
             "{case} receiver method must not get a raw receiver clone:\n{ir}"
         );
     }
@@ -11814,7 +11941,7 @@ fn typed_f64_receiver_method_clone_rejects_inherited_and_dynamic_call_sites() {
         let caller = format!("perry_fn_typed_f64_receiver_method_reject_{case}_ts__probe");
         let caller_ir = defined_function_ir_section(&ir, &caller);
         assert!(
-            !caller_ir.contains("__typed_f64_recv"),
+            !caller_ir.contains("$typed_f64_recv"),
             "{case} call site must not use the raw receiver clone:\n{caller_ir}"
         );
     }
@@ -11827,8 +11954,8 @@ fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
     )
     .unwrap();
     let public = "perry_closure_typed_f64_closure_abi_ts__300";
-    let generic_body = "perry_closure_typed_f64_closure_abi_ts__300__generic";
-    let typed = "perry_closure_typed_f64_closure_abi_ts__300__typed_f64";
+    let generic_body = "perry_closure_typed_f64_closure_abi_ts__300$generic";
+    let typed = "perry_closure_typed_f64_closure_abi_ts__300$typed_f64";
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!(
@@ -11890,11 +12017,11 @@ fn artifact_records_typed_f64_closure_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_closure_typed_f64_closure_abi_ts__300__typed_f64",
+                                "typed_clone=perry_closure_typed_f64_closure_abi_ts__300$typed_f64",
                             )
                         })
                     }) && notes.iter().any(|note| {
-                        note == "generic_closure=perry_closure_typed_f64_closure_abi_ts__300__generic"
+                        note == "generic_closure=perry_closure_typed_f64_closure_abi_ts__300$generic"
                     }) && notes.iter().any(|note| note == "closure_func_id=300")
                 })
         }),
@@ -11908,7 +12035,7 @@ fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
         compile_module(&typed_f64_closure_clone_module("capture"), empty_opts()).unwrap(),
     )
     .unwrap();
-    let typed = "perry_closure_typed_f64_closure_abi_ts__300__typed_f64";
+    let typed = "perry_closure_typed_f64_closure_abi_ts__300$typed_f64";
     let typed_ir = defined_function_ir_section(&ir, typed);
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
@@ -11930,7 +12057,7 @@ fn typed_f64_closure_clone_rejects_any_parameter_and_mutable_capture() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_f64"),
+            !ir.contains("$typed_f64"),
             "{case} closure must stay on the generic closure ABI:\n{ir}"
         );
     }
@@ -11943,8 +12070,8 @@ fn typed_i32_closure_clone_emits_internal_clone_and_guarded_direct_call() {
     )
     .unwrap();
     let public = "perry_closure_typed_i32_closure_eligible_ts__303";
-    let generic_body = "perry_closure_typed_i32_closure_eligible_ts__303__generic";
-    let typed = "perry_closure_typed_i32_closure_eligible_ts__303__typed_i32";
+    let generic_body = "perry_closure_typed_i32_closure_eligible_ts__303$generic";
+    let typed = "perry_closure_typed_i32_closure_eligible_ts__303$typed_i32";
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!(
@@ -12011,11 +12138,11 @@ fn artifact_records_typed_i32_closure_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_closure_typed_i32_closure_eligible_ts__303__typed_i32",
+                                "typed_clone=perry_closure_typed_i32_closure_eligible_ts__303$typed_i32",
                             )
                         })
                     }) && notes.iter().any(|note| {
-                        note == "generic_closure=perry_closure_typed_i32_closure_eligible_ts__303__generic"
+                        note == "generic_closure=perry_closure_typed_i32_closure_eligible_ts__303$generic"
                     }) && notes.iter().any(|note| note == "closure_func_id=303")
                         && notes
                             .iter()
@@ -12035,7 +12162,7 @@ fn typed_i32_closure_clone_accepts_immutable_i32_capture() {
         compile_module(&typed_i32_closure_clone_module("capture"), empty_opts()).unwrap(),
     )
     .unwrap();
-    let typed = "perry_closure_typed_i32_closure_capture_ts__303__typed_i32";
+    let typed = "perry_closure_typed_i32_closure_capture_ts__303$typed_i32";
     let typed_ir = defined_function_ir_section(&ir, typed);
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
@@ -12062,7 +12189,7 @@ fn typed_i32_closure_clone_rejects_annotation_unsafe_and_mutable_capture() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_i32"),
+            !ir.contains("$typed_i32"),
             "{case} closure must stay on the generic closure ABI:\n{ir}"
         );
     }
@@ -12093,8 +12220,8 @@ fn typed_i32_closure_clone_rejects_dynamic_callee_call_site() {
     .unwrap();
     let caller = "perry_fn_typed_i32_closure_dynamic_ts__probe";
     let public = "perry_closure_typed_i32_closure_dynamic_ts__303";
-    let generic_body = "perry_closure_typed_i32_closure_dynamic_ts__303__generic";
-    let typed = "perry_closure_typed_i32_closure_dynamic_ts__303__typed_i32";
+    let generic_body = "perry_closure_typed_i32_closure_dynamic_ts__303$generic";
+    let typed = "perry_closure_typed_i32_closure_dynamic_ts__303$typed_i32";
     let caller_ir = function_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
@@ -12125,8 +12252,8 @@ fn typed_i1_closure_clone_emits_internal_clone_and_guarded_direct_call() {
     )
     .unwrap();
     let public = "perry_closure_typed_i1_closure_eligible_ts__301";
-    let generic_body = "perry_closure_typed_i1_closure_eligible_ts__301__generic";
-    let typed = "perry_closure_typed_i1_closure_eligible_ts__301__typed_i1";
+    let generic_body = "perry_closure_typed_i1_closure_eligible_ts__301$generic";
+    let typed = "perry_closure_typed_i1_closure_eligible_ts__301$typed_i1";
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!(
@@ -12197,11 +12324,11 @@ fn artifact_records_typed_i1_closure_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_closure_typed_i1_closure_eligible_ts__301__typed_i1",
+                                "typed_clone=perry_closure_typed_i1_closure_eligible_ts__301$typed_i1",
                             )
                         })
                     }) && notes.iter().any(|note| {
-                        note == "generic_closure=perry_closure_typed_i1_closure_eligible_ts__301__generic"
+                        note == "generic_closure=perry_closure_typed_i1_closure_eligible_ts__301$generic"
                     }) && notes.iter().any(|note| note == "closure_func_id=301")
                         && notes
                             .iter()
@@ -12226,8 +12353,8 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
     )
     .unwrap();
     let public = "perry_closure_typed_i1_closure_numeric_predicate_ts__301";
-    let generic_body = "perry_closure_typed_i1_closure_numeric_predicate_ts__301__generic";
-    let typed = "perry_closure_typed_i1_closure_numeric_predicate_ts__301__typed_i1";
+    let generic_body = "perry_closure_typed_i1_closure_numeric_predicate_ts__301$generic";
+    let typed = "perry_closure_typed_i1_closure_numeric_predicate_ts__301$typed_i1";
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!(
@@ -12271,11 +12398,11 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_closure_typed_i1_closure_numeric_predicate_ts__301__typed_i1",
+                                "typed_clone=perry_closure_typed_i1_closure_numeric_predicate_ts__301$typed_i1",
                             )
                         })
                     }) && notes.iter().any(|note| {
-                        note == "generic_closure=perry_closure_typed_i1_closure_numeric_predicate_ts__301__generic"
+                        note == "generic_closure=perry_closure_typed_i1_closure_numeric_predicate_ts__301$generic"
                     }) && notes
                         .iter()
                         .any(|note| note == "typed_signature=i1(i64 closure, f64, ...)->i1")
@@ -12294,7 +12421,7 @@ fn typed_i1_closure_clone_accepts_immutable_boolean_capture() {
         compile_module(&typed_i1_closure_clone_module("capture"), empty_opts()).unwrap(),
     )
     .unwrap();
-    let typed = "perry_closure_typed_i1_closure_capture_ts__301__typed_i1";
+    let typed = "perry_closure_typed_i1_closure_capture_ts__301$typed_i1";
     let typed_ir = defined_function_ir_section(&ir, typed);
     assert!(
         typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
@@ -12316,7 +12443,7 @@ fn typed_i1_closure_clone_rejects_any_mixed_and_mutable_capture() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_i1"),
+            !ir.contains("$typed_i1"),
             "{case} closure must stay on the generic closure ABI:\n{ir}"
         );
     }
@@ -12330,8 +12457,8 @@ fn typed_i1_closure_clone_rejects_dynamic_callee_call_site() {
     .unwrap();
     let caller = "perry_fn_typed_i1_closure_dynamic_ts__probe";
     let public = "perry_closure_typed_i1_closure_dynamic_ts__301";
-    let generic_body = "perry_closure_typed_i1_closure_dynamic_ts__301__generic";
-    let typed = "perry_closure_typed_i1_closure_dynamic_ts__301__typed_i1";
+    let generic_body = "perry_closure_typed_i1_closure_dynamic_ts__301$generic";
+    let typed = "perry_closure_typed_i1_closure_dynamic_ts__301$typed_i1";
     let caller_ir = function_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
@@ -12362,8 +12489,8 @@ fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
     )
     .unwrap();
     let public = "perry_closure_typed_string_closure_eligible_ts__302";
-    let generic_body = "perry_closure_typed_string_closure_eligible_ts__302__generic";
-    let typed = "perry_closure_typed_string_closure_eligible_ts__302__typed_string";
+    let generic_body = "perry_closure_typed_string_closure_eligible_ts__302$generic";
+    let typed = "perry_closure_typed_string_closure_eligible_ts__302$typed_string";
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
         ir.contains(&format!(
@@ -12424,8 +12551,8 @@ fn typed_string_closure_clone_accepts_immutable_string_capture() {
     )
     .unwrap();
     let public = "perry_closure_typed_string_closure_capture_ts__302";
-    let generic_body = "perry_closure_typed_string_closure_capture_ts__302__generic";
-    let typed = "perry_closure_typed_string_closure_capture_ts__302__typed_string";
+    let generic_body = "perry_closure_typed_string_closure_capture_ts__302$generic";
+    let typed = "perry_closure_typed_string_closure_capture_ts__302$typed_string";
     let typed_ir = defined_function_ir_section(&ir, typed);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
@@ -12464,11 +12591,11 @@ fn artifact_records_typed_string_closure_clone_selection() {
                     notes.iter().any(|note| {
                         note.as_str().is_some_and(|text| {
                             text.contains(
-                                "typed_clone=perry_closure_typed_string_closure_eligible_ts__302__typed_string",
+                                "typed_clone=perry_closure_typed_string_closure_eligible_ts__302$typed_string",
                             )
                         })
                     }) && notes.iter().any(|note| {
-                        note == "generic_closure=perry_closure_typed_string_closure_eligible_ts__302__generic"
+                        note == "generic_closure=perry_closure_typed_string_closure_eligible_ts__302$generic"
                     }) && notes.iter().any(|note| note == "closure_func_id=302")
                         && notes.iter().any(|note| {
                             note == "typed_signature=string(i64 closure, string)->string"
@@ -12490,7 +12617,7 @@ fn typed_string_closure_clone_rejects_any_and_mutable_capture() {
         )
         .unwrap();
         assert!(
-            !ir.contains("__typed_string"),
+            !ir.contains("$typed_string"),
             "{case} closure must stay on the generic closure ABI:\n{ir}"
         );
     }
@@ -12504,8 +12631,8 @@ fn typed_string_closure_clone_rejects_dynamic_callee_call_site() {
     .unwrap();
     let caller = "perry_fn_typed_string_closure_dynamic_ts__probe";
     let public = "perry_closure_typed_string_closure_dynamic_ts__302";
-    let generic_body = "perry_closure_typed_string_closure_dynamic_ts__302__generic";
-    let typed = "perry_closure_typed_string_closure_dynamic_ts__302__typed_string";
+    let generic_body = "perry_closure_typed_string_closure_dynamic_ts__302$generic";
+    let typed = "perry_closure_typed_string_closure_dynamic_ts__302$typed_string";
     let caller_ir = function_ir_section(&ir, caller);
     let wrapper_ir = function_ir_section(&ir, public);
     assert!(
@@ -13883,6 +14010,294 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         !nonfinite.contains("call i64 @js_object_array_numeric_write_guard")
             && nonfinite.contains("call double @js_put_value_set_ic_miss"),
         "a potentially infinite/NaN result must retain ordinary boxed-number semantics:\n{nonfinite}"
+    );
+}
+
+/// #7396: `arr[i] = arr[j]` must take the INLINE numeric-store guard tier, not
+/// an out-of-line `js_typed_feedback_numeric_array_index_set_guard` call per
+/// element.
+///
+/// The inline tier (Repsel 4a.1) existed but was gated on
+/// `expr_produces_canonical_raw_f64(value)`. A guarded array READ lowers to a
+/// phi over `{raw slot load, boxed fallback}`, which is not statically
+/// canonical, so element-to-element stores — the most common numeric store
+/// there is — fell out of the tier. `bench_array_ops` paid the call 10.5M
+/// times; it was the largest single non-generated profile frame.
+///
+/// This asserts the codegen decision rather than wall-clock time, so it stays
+/// meaningful under any optimization level. Critically it asserts the tier is
+/// **live** (the deref block and the runtime numeric-bits test are present),
+/// not merely that nothing threw — a guard that silently stops firing is
+/// exactly the regression this pins.
+#[test]
+fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
+    // const arr: number[] = [1, 2, 3];
+    // arr[0] = arr[2];
+    let arr = 1u32;
+    let body = vec![
+        Stmt::Let {
+            id: arr,
+            name: "arr".to_string(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: false,
+            init: Some(Expr::Array(vec![int(1), int(2), int(3)])),
+        },
+        array_set(arr, int(0), index_get(arr, int(2))),
+    ];
+
+    let ir = compile_ir("element_to_element_numeric_store", body);
+
+    assert!(
+        ir.contains("idxset.guard.deref"),
+        "`arr[i] = arr[j]` must enter the INLINE numeric-store guard tier; a \
+         non-statically-canonical RHS must no longer gate it off (#7396):\n{ir}"
+    );
+    // The `is_numeric_value_bits` leg, inlined: reject the whole
+    // `0x7FF9..=0x7FFF` NaN-box tag range in one unsigned range compare.
+    // Load-bearing — a hole/OOB read yields `undefined` into a `number[]`.
+    assert!(
+        ir.contains(", 32761") && ir.contains("icmp ugt i64"),
+        "the inline tier must runtime-test that the stored value is numeric \
+         when it is not statically canonical raw f64 (#7396):\n{ir}"
+    );
+    // `is_valid_obj_ptr`'s upper bound, which `gc_header_for_user_addr` applies
+    // before the out-of-line guard dereferences anything.
+    assert!(
+        ir.contains("140737488355328"),
+        "the inline tier must bound the receiver address from ABOVE before \
+         dereferencing it for a store (#7396):\n{ir}"
+    );
+    // The helper stays as the cold arm: its first-touch path rebuilds an
+    // unmarked-but-numeric array into raw-f64 layout.
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "the out-of-line guard must remain as the cold fallback arm (#7396):\n{ir}"
+    );
+    // …but no longer dominates the store: it must sit in the cold block.
+    let cold = ir
+        .find("idxset.guard.cold")
+        .expect("inline tier must create a cold guard block");
+    let guard_call = ir
+        .find("call i32 @js_typed_feedback_numeric_array_index_set_guard")
+        .expect("cold arm must still call the guard");
+    assert!(
+        guard_call > cold,
+        "the guard call must sit INSIDE the cold arm, not ahead of the inline \
+         tier — otherwise the call is still paid per element (#7396):\n{ir}"
+    );
+}
+
+/// #7288: a SLOPPY-mode `obj.f = <number>` on a declared `number` field of a
+/// known class must take the inline class-field raw store, not a per-write
+/// inline-cache miss.
+///
+/// The strict/sloppy split is invisible in the source and comes from an upward
+/// walk for the nearest `package.json`: `"type": "module"` makes the file ESM,
+/// hence strict. So the identical `.ts` file compiled inside the Perry checkout
+/// (whose root `package.json` is `"type": "module"`) took the fast arm at 83 ms,
+/// and compiled in a user's scratch directory took the slow arm at 3.8 s — a
+/// 46x cliff with no diagnosable cause, and the reason
+/// `benchmarks/results/public-node-bun-v1.json` reported 79 ms for
+/// `09_method_calls` while a user running the same file saw 3.4 s.
+///
+/// Asserts the codegen decision, not wall-clock time, and asserts the arm is
+/// LIVE (the fast block exists) rather than merely that nothing threw. The
+/// sloppy-correct miss path is asserted too: `js_put_value_set` takes a
+/// `strict` operand and must receive 0, so a rejected write stays a silent
+/// no-op instead of throwing the way the strict route's
+/// `js_object_set_field_by_name` fallback would.
+#[test]
+fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
+    // The synthetic `Counter` constructor legitimately emits the STRICT
+    // class-field store (class bodies are always strict), so every assertion
+    // below is scoped to the probe function that holds the store under test.
+    fn probe_body(ir: &str) -> &str {
+        let start = ir
+            .find("define double @perry_fn_sloppy_class_field_store_ts__probe")
+            .expect("probe function must be emitted");
+        let rest = &ir[start..];
+        let end = rest[1..]
+            .find("\ndefine ")
+            .map(|offset| offset + 1)
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    fn ir_for(strict: bool) -> String {
+        let counter = class(217, "Counter", vec![class_field("value", Type::Number)]);
+        let module = module_with_classes_and_params(
+            "sloppy_class_field_store.ts",
+            vec![counter],
+            vec![param(1, "counter", Type::Named("Counter".to_string()))],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PutValueSet {
+                    target: Box::new(local(1)),
+                    key: Box::new(Expr::String("value".to_string())),
+                    value: Box::new(Expr::Number(7.0)),
+                    receiver: Box::new(local(1)),
+                    strict,
+                }),
+                Stmt::Return(Some(int(0))),
+            ],
+        );
+        compile_ir_for_module_with_opts(module, empty_opts()).unwrap()
+    }
+
+    let sloppy_module = ir_for(false);
+    let sloppy = probe_body(&sloppy_module);
+    assert!(
+        sloppy.contains("class_field_sloppy_set.fast"),
+        "a sloppy number-field store must reach the inline class-field raw \
+         store; the #6542 `!strict` bail was wider than the hazard it guarded \
+         (#7288):\n{sloppy}"
+    );
+    // The precheck that makes the fast arm mode-independent: it rejects a
+    // frozen receiver (OBJ_FLAG_FROZEN) and one carrying any property
+    // descriptor (OBJ_FLAG_HAS_DESCRIPTORS) — exactly the receivers whose
+    // store strict and sloppy disagree about.
+    assert!(
+        sloppy.contains("class_field_inline.deref"),
+        "the sloppy arm must be fronted by the #5093 shape/flags precheck, \
+         which is what makes the raw store safe in sloppy mode (#7288):\n{sloppy}"
+    );
+    // Miss arm: strict-aware runtime, strict = 0. Matched on the CALL, not the
+    // module's extern `declare` line — every runtime symbol is declared whether
+    // or not it is reached, so a `contains("@js_put_value_set")` would pass
+    // vacuously.
+    let miss_call = sloppy
+        .lines()
+        .find(|line| line.contains("call double @js_put_value_set("))
+        .unwrap_or_else(|| {
+            panic!("the sloppy arm's miss must CALL `js_put_value_set` (#7288):\n{sloppy}")
+        });
+    assert!(
+        miss_call.trim_end().ends_with("i32 0)"),
+        "the sloppy miss must pass strict = 0, so a rejected write is a silent \
+         no-op rather than a throw (#7288):\n  {miss_call}"
+    );
+    // The throwing strict fallback must not be reached on this arm.
+    assert!(
+        !sloppy.contains("call void @js_class_field_set_fallback"),
+        "the sloppy arm must not CALL `js_class_field_set_fallback`, whose \
+         `js_object_set_field_by_name` throws unconditionally on a \
+         non-writable slot (#7288):\n{sloppy}"
+    );
+
+    // Negative control: the strict arm is unchanged and keeps its own blocks,
+    // so the assertions above are testing the new path rather than a rename.
+    let strict_module = ir_for(true);
+    let strict = probe_body(&strict_module);
+    assert!(
+        !strict.contains("class_field_sloppy_set"),
+        "the strict arm must keep its existing lowering (#7288):\n{strict}"
+    );
+    assert!(
+        strict.contains("class_field_set.fast"),
+        "the strict arm must still take the class-field store fast path — if \
+         this fails the test is measuring nothing (#7288):\n{strict}"
+    );
+}
+
+/// P1 (#5094): the sibling of the test above for a POINTER-typed field.
+///
+/// #7288 took only the raw-f64 slots, so `node.next = other` in a sloppy script
+/// — the shape of every linked structure — stayed on the `PutValue` write IC
+/// whose miss is `js_put_value_set` → `js_object_set_field_by_name`: by-name
+/// dispatch and a `RuntimeHandleScope` for a store whose slot index is a
+/// compile-time constant.
+///
+/// Asserts the codegen decision AND that the GC bookkeeping survived, because
+/// that is the half where a mistake is a use-after-free rather than a slowdown:
+/// a pointer store into a boxed slot must still reach the write barrier. The
+/// value here is an opaque parameter read, so none of the three value-side
+/// elisions (`expr_produces_non_pointer_bits_by_construction` and friends) can
+/// fire and the emitted bookkeeping block must be present.
+#[test]
+fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
+    fn probe_body(ir: &str) -> &str {
+        let start = ir
+            .find("define double @perry_fn_sloppy_class_field_ptr_store_ts__probe")
+            .expect("probe function must be emitted");
+        let rest = &ir[start..];
+        let end = rest[1..]
+            .find("\ndefine ")
+            .map(|offset| offset + 1)
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    fn ir_for(strict: bool) -> String {
+        let node = class(
+            218,
+            "LNode",
+            vec![class_field("next", Type::Named("LNode".to_string()))],
+        );
+        let module = module_with_classes_and_params(
+            "sloppy_class_field_ptr_store.ts",
+            vec![node],
+            vec![
+                param(1, "node", Type::Named("LNode".to_string())),
+                param(2, "other", Type::Named("LNode".to_string())),
+            ],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PutValueSet {
+                    target: Box::new(local(1)),
+                    key: Box::new(Expr::String("next".to_string())),
+                    value: Box::new(local(2)),
+                    receiver: Box::new(local(1)),
+                    strict,
+                }),
+                Stmt::Return(Some(int(0))),
+            ],
+        );
+        compile_ir_for_module_with_opts(module, empty_opts()).unwrap()
+    }
+
+    let sloppy_module = ir_for(false);
+    let sloppy = probe_body(&sloppy_module);
+    assert!(
+        sloppy.contains("class_field_sloppy_set.boxed_fast"),
+        "a sloppy pointer-field store must reach the inline class-field boxed \
+         store (#5094 P1):\n{sloppy}"
+    );
+    assert!(
+        sloppy.contains("class_field_inline.deref"),
+        "the boxed arm must be fronted by the #5093 shape/flags precheck — it \
+         is what rejects the frozen / descriptor-bearing receivers sloppy and \
+         strict disagree about:\n{sloppy}"
+    );
+    let miss_call = sloppy
+        .lines()
+        .find(|line| line.contains("call double @js_put_value_set("))
+        .unwrap_or_else(|| {
+            panic!("the boxed arm's miss must CALL `js_put_value_set` (#5094):\n{sloppy}")
+        });
+    assert!(
+        miss_call.trim_end().ends_with("i32 0)"),
+        "the sloppy miss must pass strict = 0 (#5094):\n  {miss_call}"
+    );
+    // The GC half. An opaque parameter can carry a heap pointer, so the store
+    // must be followed by the pointer-tested bookkeeping block that reaches the
+    // remembered set. Without this assertion the test would pass just as
+    // happily on a lowering that dropped the barrier outright.
+    assert!(
+        sloppy.contains("class_field_set.gc_bookkeeping"),
+        "a boxed slot store of a possibly-pointer value must keep the \
+         pointer-tested write barrier / layout note (#5094):\n{sloppy}"
+    );
+    assert!(
+        !sloppy.contains("call void @js_class_field_set_fallback"),
+        "the sloppy arm must not CALL the throwing strict fallback:\n{sloppy}"
+    );
+
+    // Negative control: the strict arm keeps its own (unchanged) lowering.
+    let strict_module = ir_for(true);
+    let strict = probe_body(&strict_module);
+    assert!(
+        !strict.contains("class_field_sloppy_set"),
+        "the strict arm must keep its existing lowering:\n{strict}"
     );
 }
 

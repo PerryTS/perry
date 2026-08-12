@@ -1,5 +1,10 @@
 # Closing the perry/bun ratio on ECS workloads
 
+> **Historical performance case study.** Collector paths and source locations
+> below describe the May 2026 implementation. Use the
+> [current collector page](src/internals/garbage-collector.md) for today's
+> defaults and controls.
+
 **Status:** complete. Written 2026-05-03 after landing the final commit
 on `wip/ecs-loop-fixes`.
 **Goal:** every workload in [`@codehz/ecs`](https://github.com/codehz/ecs)
@@ -471,7 +476,7 @@ order of effort/impact:
    could short-circuit common `arr.length` / `str.length` / `map.size`
    paths via gc_type tag inline, before falling through to
    `js_object_get_field_by_name`. ~15-30 ms potential.
-4. **Finish the evac path (`PERRY_GEN_GC_EVACUATE=1`).** Off by default,
+4. **Finish the then-experimental evacuation path.** It was off by default,
    and broken — fails after ~1 round with "Component type 1 is not in
    this archetype." The blocker is correctness in `rewrite_forwarded_references` /
    `drain_trace_worklist_inner` (gc.rs). Multi-day work; would let

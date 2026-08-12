@@ -71,6 +71,17 @@ GATES = [
         "pass over emitted LLVM IR",
     ),
     (
+        ".github/workflows/gc-root-dominance.yml",
+        "gc-root-dominance-statepoints",
+        "scripts/gc_root_dominance_check.py --statepoints — the same static "
+        "pass over the NATIVE root lowering (gc.statepoint relocation "
+        "bundles), which has been the default on every walkable-frame target "
+        "since #7370. Registered here in the same change that added it: the "
+        "job above spent months being the checked one while the lowering it "
+        "reads stopped shipping, and an unregistered sibling is how that "
+        "repeats",
+    ),
+    (
         ".github/workflows/gc-ratchet.yml",
         "gc-ratchet",
         "the pinned GC counter ratchet",
@@ -82,6 +93,15 @@ GATES = [
         "PERRY_GC_SAFEPOINT_ONLY / PERRY_STACKMAP_WALKER) — the fan-in that "
         "makes one context speak for all three, so adding an arm later never "
         "needs a branch-protection edit",
+    ),
+    (
+        ".github/workflows/gc-parse-churn-gate.yml",
+        "gc-parse-churn-gate",
+        "scripts/gc_parse_churn_layout_gate.sh — the tape=0 + from-space-scan "
+        "parse-then-churn end-to-end check for the layout-state family "
+        "(#7630/#7633/#7635/#7643/#7644), the one shape #7643's workload-free "
+        "unit tests structurally cannot cover: a NEW materialiser path that "
+        "forgets to finalize at all",
     ),
 ]
 

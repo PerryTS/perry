@@ -28,6 +28,18 @@ workspace = true
 default = ["llvm-inprocess"]
 llvm-inprocess = ["dep:inkwell", "dep:llvm-sys"]
 
+# Test-support only (#7493): exposes `perry_codegen::testing`, whose
+# `NativeRootsPin` lets a test declare WHICH root lowering it asserts on. It is
+# a feature rather than a `#[doc(hidden)] pub` so that with the feature off the
+# pin, its thread-local and the branch it adds to `rs4gc_enabled()` are not in
+# the artifact at all — see `src/testing.rs`.
+#
+# The ONLY edge that enables it is the `[dev-dependencies]` entry below, which
+# cargo builds for test/bench targets only. `codegen::helpers::
+# testing_feature_gate_tests` fails the per-PR `cargo-test` job if any
+# non-dev manifest section ever turns it on.
+testing = []
+
 [dependencies]
 perry-hir.workspace = true
 perry-dispatch.workspace = true
@@ -41,3 +53,12 @@ serde_json.workspace = true
 
 inkwell = { version = "0.9.0", features = ["llvm22-1"], optional = true }
 llvm-sys = { version = "221", optional = true }
+
+# Self dev-dependency (#7493). This is the whole mechanism by which the
+# integration suites under `tests/` — which link this crate as an ordinary
+# external consumer — can see `perry_codegen::testing`. Cargo supports
+# dev-dependency cycles and resolves dev-dependency features ONLY when a
+# test/bench target is being built, so `cargo build`/`--release`/`--profile
+# dist` still compile the library with `testing` off.
+[dev-dependencies]
+perry-codegen = { path = ".", features = ["testing"] }

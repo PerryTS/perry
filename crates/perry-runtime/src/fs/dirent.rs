@@ -116,10 +116,28 @@ pub(crate) unsafe fn build_dirent_object(name: &str, parent_path: &str, kind: Di
     f64::from_bits(POINTER_TAG | (obj as u64 & 0x0000_FFFF_FFFF_FFFF))
 }
 
-/// Decode a NaN-boxed object's `withFileTypes` field as a boolean.
-/// Returns false when the options arg is undefined / not an object /
-/// the field is absent or falsy.
-pub(crate) unsafe fn options_with_file_types(options_value: f64) -> bool {
+/// Decode a NaN-boxed options value into a plain-object pointer.
+///
+/// Factored out because this file performs the decode in THREE places and
+/// every one of them has to be re-done *after* any allocation (#7274): the
+/// result is a bare address, so it says nothing once a collection has moved
+/// the object. Keeping one copy is what stops the three from drifting again —
+/// they already had, which is how `options_with_file_types` ended up
+/// dereferencing across `js_string_from_bytes` while its sibling
+/// `options_field_value` re-read through a handle.
+///
+/// # Not a root
+///
+/// This returns the address, it does not keep it alive. The caller owns the
+/// `RuntimeHandleScope`; this must be called on a value read back OUT of a
+/// live handle, never on a pre-allocation copy.
+///
+/// #7259: a POINTER_TAG payload can be a registry handle id rather than a heap
+/// address, and `< 0x1000` sits an order of magnitude below `HANDLE_BAND_MAX` —
+/// fetch/zlib/proxy ids passed it and were dereferenced as an ObjectHeader (the
+/// Linux-only fault class of #1843/#4004/#6271). `is_handle_band` also subsumes
+/// the null check that used to follow.
+unsafe fn options_object_ptr(options_value: f64) -> Option<*const crate::object::ObjectHeader> {
     let bits = options_value.to_bits();
     let value = crate::value::JSValue::from_bits(bits);
     let raw_ptr = if value.is_pointer() {
@@ -127,18 +145,40 @@ pub(crate) unsafe fn options_with_file_types(options_value: f64) -> bool {
     } else if bits >> 48 == 0x0000 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
     } else {
+        return None;
+    };
+    if crate::value::addr_class::is_handle_band(raw_ptr) {
+        return None;
+    }
+    Some(raw_ptr as *const crate::object::ObjectHeader)
+}
+
+/// Decode a NaN-boxed object's `withFileTypes` field as a boolean.
+/// Returns false when the options arg is undefined / not an object /
+/// the field is absent or falsy.
+///
+/// ★ #7274: `js_string_from_bytes` is a collection point, and under the C4b
+/// evacuation policy that collection MOVES. The object pointer therefore cannot
+/// be computed before it — this used to decode `obj_ptr` first, allocate the
+/// key, and then dereference the pre-collection address, reading swept
+/// from-space or an unrelated live object at the recycled address.
+/// `{ withFileTypes: true }` is a fresh object literal at the call site, i.e.
+/// exactly the young object a minor triggered by the very next allocation is
+/// most likely to relocate.
+///
+/// The allocation is hoisted above the decode and `options_value` is rooted, so
+/// the address is only ever produced from a slot the collector rewrote. This is
+/// the shape `options_field_value` (below) already used.
+pub(crate) unsafe fn options_with_file_types(options_value: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options_handle = scope.root_nanbox_f64(options_value);
+    // Allocate FIRST, decode after. `across_nanbox` binds the two together so
+    // there is no pre-collection address in scope to reach for by accident.
+    let (key, refreshed) = options_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"withFileTypes".as_ptr(), 13));
+    let Some(obj_ptr) = options_object_ptr(refreshed) else {
         return false;
     };
-    // #7259: a POINTER_TAG payload can be a registry handle id rather than a
-    // heap address, and `< 0x1000` sits an order of magnitude below
-    // `HANDLE_BAND_MAX` — fetch/zlib/proxy ids passed it and were dereferenced
-    // as an ObjectHeader (the Linux-only fault class of #1843/#4004/#6271).
-    // `is_handle_band` also subsumes the null check that used to follow.
-    if crate::value::addr_class::is_handle_band(raw_ptr) {
-        return false;
-    }
-    let obj_ptr = raw_ptr as *const crate::object::ObjectHeader;
-    let key = crate::string::js_string_from_bytes(b"withFileTypes".as_ptr(), 13);
     let val = crate::object::js_object_get_field_by_name(obj_ptr, key);
     crate::value::js_is_truthy(f64::from_bits(val.bits())) != 0
 }
@@ -174,22 +214,7 @@ pub(crate) unsafe fn options_field_value(
 ) -> Option<crate::value::JSValue> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let options_handle = scope.root_nanbox_f64(options_value);
-    let bits = options_handle.get_nanbox_f64().to_bits();
-    let value = crate::value::JSValue::from_bits(bits);
-    let raw_ptr = if value.is_pointer() {
-        value.as_pointer::<crate::object::ObjectHeader>() as usize
-    } else if bits >> 48 == 0x0000 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        return None;
-    };
-    // #7259: see `options_with_file_types` — a POINTER_TAG payload can be a
-    // registry handle id, and `is_handle_band` (not `< 0x1000`) is the floor
-    // that rejects the fetch/zlib/proxy bands. It subsumes the null check too.
-    if crate::value::addr_class::is_handle_band(raw_ptr) {
-        return None;
-    }
-    let obj_ptr = raw_ptr as *const crate::object::ObjectHeader;
+    let obj_ptr = options_object_ptr(options_handle.get_nanbox_f64())?;
     let keys = (*obj_ptr).keys_array;
     if !keys.is_null() {
         let key_count = crate::array::js_array_length(keys) as usize;
@@ -206,21 +231,12 @@ pub(crate) unsafe fn options_field_value(
             }
         }
     }
-    let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
-    let refreshed_bits = options_handle.get_nanbox_f64().to_bits();
-    let refreshed_value = crate::value::JSValue::from_bits(refreshed_bits);
-    let refreshed_ptr = if refreshed_value.is_pointer() {
-        refreshed_value.as_pointer::<crate::object::ObjectHeader>() as usize
-    } else if refreshed_bits >> 48 == 0x0000 {
-        (refreshed_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        return None;
-    };
-    // #7259: same handle-band floor after the GC-safe re-read of the handle.
-    if crate::value::addr_class::is_handle_band(refreshed_ptr) {
-        return None;
-    }
-    let refreshed_obj_ptr = refreshed_ptr as *const crate::object::ObjectHeader;
+    // The key allocation is a collection point; `obj_ptr` above is stale after
+    // it. `across_nanbox` re-reads the rooted options value and hands back the
+    // post-collection address (#7274 factored this decode into one helper).
+    let (key, refreshed) = options_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32));
+    let refreshed_obj_ptr = options_object_ptr(refreshed)?;
     let val = crate::object::js_object_get_field_by_name(refreshed_obj_ptr, key);
     if val.bits() == crate::value::TAG_UNDEFINED {
         None

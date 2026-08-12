@@ -20,7 +20,45 @@ use crate::expr::{
 };
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
+use crate::rooting::{with_rooted_group, RootedGroup};
 use crate::types::{DOUBLE, I1, I32, I64};
+
+/// Materialise the parallel `[N x double]` argument buffer
+/// `js_native_call_method_str_key` / `js_native_call_method_value` read, from
+/// values already rooted in `group`.
+///
+/// Re-reading every argument here rather than reusing whatever
+/// `RootedGroup::lower` returned is the point (#7210 (3)): this must run as
+/// the LAST thing before the consuming call, in each branch, so nothing that
+/// runs between rooting and the call — `unbox_str_handle`'s SSO
+/// materialization in the static-key branch, in particular — can leave a
+/// stale pointer sitting in this buffer. `RootedGroup::reread` re-derives the
+/// post-collection value for every operand, so this loop is itself call-free
+/// and cannot reopen the window it exists to close.
+fn build_dispatch_args_buffer(
+    ctx: &mut FnCtx<'_>,
+    group: &RootedGroup<'_>,
+    arg_idxs: &[usize],
+) -> Result<(String, String)> {
+    let n = arg_idxs.len();
+    if n == 0 {
+        return Ok(("null".to_string(), "0".to_string()));
+    }
+    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+    for (i, &idx) in arg_idxs.iter().enumerate() {
+        let v = group.reread(ctx, idx)?;
+        let slot = ctx
+            .block()
+            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+        ctx.block().store(DOUBLE, &v, &slot);
+    }
+    let ptr_reg = ctx.block().next_reg();
+    ctx.block().emit_raw(format!(
+        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+        ptr_reg, n, buf_reg
+    ));
+    Ok((ptr_reg, n.to_string()))
+}
 
 fn typed_i1_closure_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
     let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
@@ -231,66 +269,68 @@ pub fn try_lower_index_get_call(
             || crate::type_analysis::is_string_expr(ctx, index)
             || crate::type_analysis::is_definitely_string_expr(ctx, index);
 
-        let recv_box = lower_expr(ctx, object)?;
-        let key_box = lower_expr(ctx, index)?;
-        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered_args.push(lower_expr(ctx, a)?);
-        }
-        let n = lowered_args.len();
-        let (args_ptr, args_len) = if n == 0 {
-            ("null".to_string(), "0".to_string())
-        } else {
-            let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-            for (i, v) in lowered_args.iter().enumerate() {
-                let slot = ctx
-                    .block()
-                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                ctx.block().store(DOUBLE, v, &slot);
+        // #7210 (3): receiver, key and every argument are lowered in strict
+        // sequence — each held as a bare SSA register while the rest lower,
+        // which can allocate — and in the static-string-key arm
+        // `unbox_str_handle` allocates too (an SSO key materializes to a
+        // fresh heap `StringHeader`), sitting between the args buffer's
+        // would-be stores and the consuming call. Root [object, index,
+        // ...args] in one `RootedGroup` for the whole dispatch and build the
+        // args buffer LAST in each branch via `build_dispatch_args_buffer` —
+        // after `unbox_str_handle` in the static-key arm — so nothing can
+        // collect between the buffer's last store and the call that reads it.
+        return with_rooted_group(ctx, 2 + args.len(), |ctx, group| {
+            let recv_idx = group.lower(ctx, object, true)?;
+            let key_idx = group.lower(ctx, index, true)?;
+            let mut arg_idxs = Vec::with_capacity(args.len());
+            for a in args {
+                arg_idxs.push(group.lower(ctx, a, true)?);
             }
-            let ptr_reg = ctx.block().next_reg();
-            ctx.block().emit_raw(format!(
-                "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                ptr_reg, n, buf_reg
-            ));
-            (ptr_reg, n.to_string())
-        };
 
-        if is_static_string {
-            // Statically-known string key: extract the string handle and use
-            // the str-key entry (`this` bound by the dispatch tower).
-            let name_handle = {
-                let blk = ctx.block();
-                crate::expr::unbox_str_handle(blk, &key_box)
-            };
-            return Ok(Some(ctx.block().call(
+            if is_static_string {
+                // Statically-known string key: extract the string handle and
+                // use the str-key entry (`this` bound by the dispatch
+                // tower). Re-read the receiver AFTER `unbox_str_handle`,
+                // which allocates, and build the args buffer after that too.
+                let key_box = group.reread(ctx, key_idx)?;
+                let name_handle = {
+                    let blk = ctx.block();
+                    crate::expr::unbox_str_handle(blk, &key_box)
+                };
+                let recv_box = group.reread(ctx, recv_idx)?;
+                let (args_ptr, args_len) = build_dispatch_args_buffer(ctx, group, &arg_idxs)?;
+                return Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_method_str_key",
+                    &[
+                        (DOUBLE, &recv_box),
+                        (I64, &name_handle),
+                        (crate::types::PTR, &args_ptr),
+                        (I64, &args_len),
+                    ],
+                )));
+            }
+
+            // Dynamic key (`this[(cur)._op](cur)`, `obj[k]()` where `k` is a
+            // runtime value): pass the key value through, the runtime branches on
+            // its type and binds `this = obj` either way. Refs #321 (effect
+            // FiberRuntime op dispatch) — pre-fix this fell through to a plain
+            // closure-call that dropped `this`, so a method stored as a class
+            // field reached by dynamic key read `this === undefined`.
+            let recv_box = group.reread(ctx, recv_idx)?;
+            let key_box = group.reread(ctx, key_idx)?;
+            let (args_ptr, args_len) = build_dispatch_args_buffer(ctx, group, &arg_idxs)?;
+            Ok(Some(ctx.block().call(
                 DOUBLE,
-                "js_native_call_method_str_key",
+                "js_native_call_method_value",
                 &[
                     (DOUBLE, &recv_box),
-                    (I64, &name_handle),
+                    (DOUBLE, &key_box),
                     (crate::types::PTR, &args_ptr),
                     (I64, &args_len),
                 ],
-            )));
-        }
-
-        // Dynamic key (`this[(cur)._op](cur)`, `obj[k]()` where `k` is a
-        // runtime value): pass the key value through, the runtime branches on
-        // its type and binds `this = obj` either way. Refs #321 (effect
-        // FiberRuntime op dispatch) — pre-fix this fell through to a plain
-        // closure-call that dropped `this`, so a method stored as a class
-        // field reached by dynamic key read `this === undefined`.
-        return Ok(Some(ctx.block().call(
-            DOUBLE,
-            "js_native_call_method_value",
-            &[
-                (DOUBLE, &recv_box),
-                (DOUBLE, &key_box),
-                (crate::types::PTR, &args_ptr),
-                (I64, &args_len),
-            ],
-        )));
+            )))
+        });
     }
     Ok(None)
 }
@@ -407,7 +447,7 @@ pub fn try_lower_closure_typed_local_call(
                     // so the slot index crosses the diamond exactly as the
                     // bare register used to.
                     let prev_this = if callee_reads_this {
-                        Some(crate::expr::temp_root::implicit_this_save(ctx, &undef_this))
+                        Some(crate::rooting::implicit_this_save(ctx, &undef_this))
                     } else {
                         None
                     };
@@ -923,13 +963,16 @@ pub fn try_lower_closure_typed_local_call(
                     }
 
                     ctx.current_block = fallback_idx;
-                    ctx.block()
-                        .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+                    crate::expr::emit_typed_feedback_record_call(
+                        ctx.block(),
+                        "js_typed_feedback_record_fallback_call",
+                        &[(I64, &site_id)],
+                    );
                     // Guard failed: the receiver is some OTHER closure whose
                     // body codegen never saw — reset `this` here (and only
                     // here) when the static gating skipped the outer reset.
                     let fallback_prev_this = if prev_this.is_none() {
-                        Some(crate::expr::temp_root::implicit_this_save(ctx, &undef_this))
+                        Some(crate::rooting::implicit_this_save(ctx, &undef_this))
                     } else {
                         None
                     };
@@ -944,7 +987,7 @@ pub fn try_lower_closure_typed_local_call(
                     // slot (restored in the merge block) is still live and the
                     // temp-root depth matches on both paths into the merge.
                     if let Some(prev) = fallback_prev_this {
-                        crate::expr::temp_root::implicit_this_restore(ctx, prev);
+                        crate::rooting::implicit_this_restore(ctx, prev);
                     }
                     let after_fallback = ctx.block().label.clone();
                     if !ctx.block().is_terminated() {
@@ -960,7 +1003,7 @@ pub fn try_lower_closure_typed_local_call(
                         ],
                     );
                     if let Some(prev) = prev_this {
-                        crate::expr::temp_root::implicit_this_restore(ctx, prev);
+                        crate::rooting::implicit_this_restore(ctx, prev);
                     }
                     return Ok(Some(merged));
                 }
@@ -969,14 +1012,14 @@ pub fn try_lower_closure_typed_local_call(
             // params, or arity mismatch): the runtime-resolved callee may
             // read `this`, so the reset is unconditional here.
             // #7211: rooted save/restore across the runtime-resolved callee.
-            let prev_this = crate::expr::temp_root::implicit_this_save(ctx, &undef_this);
+            let prev_this = crate::rooting::implicit_this_save(ctx, &undef_this);
             let runtime_fn = format!("js_closure_call{}", lowered_args.len());
             let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
             for v in &lowered_args {
                 call_args.push((DOUBLE, v.as_str()));
             }
             let result = ctx.block().call(DOUBLE, &runtime_fn, &call_args);
-            crate::expr::temp_root::implicit_this_restore(ctx, prev_this);
+            crate::rooting::implicit_this_restore(ctx, prev_this);
             return Ok(Some(result));
         }
     }

@@ -276,17 +276,24 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     // registry ids, not heap `ObjectHeader`s, so the shape probe would
     // dereference unmapped memory.
     if !crate::value::addr_class::is_handle_band(ptr) {
-        let boxed =
-            f64::from_bits(crate::value::POINTER_TAG | ((ptr as u64) & crate::value::POINTER_MASK));
-        let href = crate::url::url_class::js_url_href_if_url(boxed);
-        if href.to_bits() != crate::value::TAG_UNDEFINED {
-            let s = js_jsvalue_to_string(href);
-            return crate::value::js_nanbox_string(s as i64);
-        }
-        let obj = ptr as *mut crate::object::ObjectHeader;
-        if crate::url::try_read_as_search_params(obj).is_some() {
-            let s = crate::url::search_params::js_url_search_params_to_string(obj);
-            return crate::value::js_nanbox_string(s as i64);
+        // See the matching note in `value/to_string.rs`: shape probes on a
+        // generic path, kept out of non-URL binaries so the parser can strip.
+        // `boxed` is bound inside the gate: it feeds only these probes.
+        #[cfg(feature = "url-engine")]
+        {
+            let boxed = f64::from_bits(
+                crate::value::POINTER_TAG | ((ptr as u64) & crate::value::POINTER_MASK),
+            );
+            let href = crate::url::url_class::js_url_href_if_url(boxed);
+            if href.to_bits() != crate::value::TAG_UNDEFINED {
+                let s = js_jsvalue_to_string(href);
+                return crate::value::js_nanbox_string(s as i64);
+            }
+            let obj = ptr as *mut crate::object::ObjectHeader;
+            if crate::url::try_read_as_search_params(obj).is_some() {
+                let s = crate::url::search_params::js_url_search_params_to_string(obj);
+                return crate::value::js_nanbox_string(s as i64);
+            }
         }
     }
 

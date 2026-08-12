@@ -15,15 +15,22 @@
 
 use crate::types::LlvmType;
 
+#[derive(Clone)]
 pub enum LoadFlavor {
     Plain,
     Aligned(u32),
     Volatile,
+    AtomicMonotonic(u32),
     AtomicSeqCst(u32),
     /// `!invariant.load !0` tagged (issue #52).
     Invariant,
 }
 
+/// `Clone` is what lets `root_reload.rs` carry a value's derivation RECIPE —
+/// the root load plus the pure bit ops above it — to the stale use and
+/// re-materialise it there (#7664). Cloning an instruction is cloning its
+/// operand tokens; nothing in a variant is an identity.
+#[derive(Clone)]
 pub enum LlInst {
     /// Pre-rendered instruction line, two-space indent included.
     Raw(String),
@@ -186,6 +193,12 @@ impl LlInst {
                 }
                 LoadFlavor::Volatile => {
                     let _ = write!(out, "  {dst} = load volatile {ty}, ptr {ptr}");
+                }
+                LoadFlavor::AtomicMonotonic(n) => {
+                    let _ = write!(
+                        out,
+                        "  {dst} = load atomic {ty}, ptr {ptr} monotonic, align {n}"
+                    );
                 }
                 LoadFlavor::AtomicSeqCst(n) => {
                     let _ = write!(

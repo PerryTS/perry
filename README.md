@@ -48,6 +48,29 @@ Look at the Rust column again: on convolution, fibonacci, and the array-write lo
 
 We publish *everything*, including the workloads where V8's JIT still beats us — no cherry-picked table can survive an open harness. Run it yourself: `./benchmarks/run_public_baseline.sh` ([methodology](benchmarks/README.md)).
 
+<details>
+<summary><b>The full published suite, generated from the artifact — including the rows we lose</b></summary>
+
+<!-- public-node-bun:start -->
+Generated from [`benchmarks/results/public-node-bun-v1.json`](benchmarks/results/public-node-bun-v1.json) at Perry commit `38ff7eccc2aa`.
+Lower wall-clock median is better; every row includes complete raw samples and passed correctness checks.
+
+| Benchmark | Perry | Node.js | Bun | Result | What it tests |
+|---|---:|---:|---:|---|---|
+| factorial | 94 ms | 95 ms | 95 ms | win vs both | Modular accumulation |
+| method_calls | 9 ms | 10 ms | 8 ms | mixed | Class method dispatch |
+| closure | 47 ms | 49 ms | 49 ms | win vs both | Closure creation and invocation |
+| binary_trees | 4 ms | 6 ms | 6 ms | win vs both | Tree allocation and traversal |
+| string_concat | 2 ms | 4 ms | 1 ms | mixed | String append loop |
+| prime_sieve | 28 ms | 6 ms | 5 ms | loss vs both | Sieve of Eratosthenes |
+| mandelbrot | 22 ms | 24 ms | 28 ms | win vs both | Complex-number iteration |
+| matrix_multiply | 85 ms | 33 ms | 33 ms | loss vs both | Matrix multiplication |
+| json_roundtrip | 184 ms | 380 ms | 220 ms | win vs both | Parse and stringify ~1 MB JSON |
+
+<!-- public-node-bun:end -->
+
+</details>
+
 ## Why developers pick Perry
 
 - **⚡ Native speed, zero warmup.** LLVM-optimized machine code with escape analysis, scalar replacement, and a generational GC — see the [numbers above](#performance).

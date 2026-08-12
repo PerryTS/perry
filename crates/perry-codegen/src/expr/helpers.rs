@@ -9,7 +9,7 @@ use perry_hir::{BinaryOp, Expr, UnaryOp};
 use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I64};
 
 /// Static-type predicate: the type's runtime array layout has no pointer
 /// payloads, so a pointer-mask layout note isn't necessary for stores.
@@ -122,6 +122,62 @@ pub(crate) fn expr_produces_non_pointer_bits_by_construction(ctx: &FnCtx<'_>, ex
     }
 }
 
+/// The expression's shape IS an allocation site: an object / array / closure
+/// literal, or a `new`.
+///
+/// Read the claim precisely, because the `Expr::New` arm makes it weaker than
+/// [`expr_produces_non_pointer_bits_by_construction`]'s mirror image. What a
+/// `new C()` *evaluates to* is a runtime question — a constructor return
+/// override (`js_ctor_return_override`) can hand back anything, including a
+/// heap string. So this is **not** a proof that the stored bits carry
+/// `POINTER_TAG`; it is a proof that the expression's purpose is to allocate
+/// one.
+///
+/// That is exactly, and only, what its two consumers need:
+///
+/// - **Picking arrays worth declaring all-pointer**
+///   (`collectors/all_pointer_arrays.rs`). A wrong guess costs scan time —
+///   `GC_LAYOUT_ALL_POINTERS` visits the same slots `GC_LAYOUT_UNKNOWN` does,
+///   and a non-pointer word is re-validated and rejected — never a stranded
+///   child.
+/// - **Eliding the per-push layout / numeric-write notes**
+///   (`expr/array_push.rs`). Neither elision rests on this predicate at all:
+///   both are proven by the header test emitted at the store.
+///
+/// It must NEVER gate `js_string_addref_if_heap_string`. That demote is dead
+/// only when the value provably is not a heap string — a claim the `New` arm
+/// does not make, and whose absence is silent corruption rather than a crash
+/// (a refcount==1 string aliased from an array slot, rewritten in place by a
+/// later `+=` on the source local). `array_push.rs` gates it separately on
+/// [`store_needs_string_addref`].
+///
+/// The `New` arm is load-bearing rather than a widening for its own sake: HIR
+/// rewrites a closed-shape object literal into
+/// `New { class_name: "__AnonShape_<hash>", … }` before codegen ever sees it,
+/// so without it the predicate misses the object-literal push loop this whole
+/// analysis exists for.
+///
+/// Takes no `FnCtx`: the test is purely syntactic, so the per-region fact
+/// collector (which runs before any lowering context exists) and the lowering
+/// site consult the same function and can never disagree about a store.
+pub(crate) fn expr_produces_fresh_heap_allocation(expr: &Expr) -> bool {
+    match expr {
+        Expr::Object(_) | Expr::Array(_) | Expr::Closure { .. } | Expr::New { .. } => true,
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_produces_fresh_heap_allocation(then_expr)
+                && expr_produces_fresh_heap_allocation(else_expr)
+        }
+        Expr::Sequence(exprs) => exprs
+            .last()
+            .is_some_and(expr_produces_fresh_heap_allocation),
+        _ => false,
+    }
+}
+
 /// Stores into statically numeric arrays may preserve the initial
 /// pointer-free layout only when the stored value's bits are known from
 /// expression construction, not from TypeScript's local type alone. Other
@@ -159,17 +215,71 @@ pub(crate) fn array_store_needs_write_barrier(ctx: &FnCtx<'_>, value: &Expr) -> 
 ///   user-address range and are rejected — and the evacuation rewrite path
 ///   routes through the same function.
 ///
-/// **Deliberately NOT elided: a pointer-valued store into a pointer-masked
-/// slot.** That would be a no-op under an intact descriptor, but the receiver
-/// is not guaranteed to have one — `lower_new_impl` has an exit
-/// (`lower_call/new.rs`, the standalone-ctor-symbol branch where
-/// `call_local_constructor_symbol` yields `None`) that returns a freshly
-/// allocated instance *without* emitting `js_gc_init_typed_shape_layout`. Such
-/// an object sits at `GC_LAYOUT_POINTER_FREE`, where the note is the only thing
-/// that ever sets the pointer-mask bit the collector reads. Closing that exit
-/// (#6921) is the prerequisite for the stronger elision.
+/// A pointer-valued store into a pointer-masked slot is handled separately, by
+/// [`class_field_store_layout_note_is_conforming`] — see there.
 pub(crate) fn class_field_store_needs_layout_note(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     !expr_produces_non_pointer_bits_by_construction(ctx, value)
+}
+
+/// Phase 4b.2 (#5094, refs #7510): is this class-field store's layout note a
+/// *provable no-op whenever the receiver carries an intact side-mask
+/// descriptor*?
+///
+/// [`class_field_store_needs_layout_note`] above elides the note for a value
+/// that is a non-pointer by construction. The complementary case — a **pointer
+/// stored into a slot the class's own compile-time pointer mask declares** —
+/// was deliberately left un-elided, because "the receiver has a descriptor" was
+/// not total: `lower_new_impl`'s standalone-ctor-symbol branch could return a
+/// freshly allocated instance with none, sitting at `GC_LAYOUT_POINTER_FREE`,
+/// where the note is the only thing that ever sets the pointer-mask bit the
+/// collector reads. **#6921 closed that exit** (`lower_call/new.rs` now emits
+/// the init there too), so the elision is available — but this returns only
+/// *elidable under a header test*, not *elidable outright*, and the emitter
+/// pairs it with that test. A descriptor-less receiver from any path this
+/// reasoning did not enumerate still takes the full note.
+///
+/// The test the emitter pairs this with is
+/// `_reserved & (STATE_MASK | TYPED_LAYOUT_INTACT) == SIDE_MASK | INTACT`, and
+/// together the two prove `layout_note_slot` would return `Conforms` without
+/// touching anything:
+///
+/// * The `#5093` inline precheck has already proven, on this path, that the
+///   receiver's `keys_array` equals **this class's** keys global and its
+///   `field_count` exceeds the slot index. So the descriptor reachable for it
+///   was installed from this class's mask globals — shared by shape under that
+///   same key (`SHAPE_LAYOUTS`), or per-object if that key was poisoned
+///   ambiguous, and in both cases from these same words.
+/// * `slot` is in that mask's `pointer_mask` and (checked in
+///   [`crate::typed_shape::layout_declares_pointer_slot`]) not in its
+///   `raw_f64_mask`, so neither `layout_note_slot` downgrade arm can fire: the
+///   raw-f64 arm is not this slot's, and the pointer arm's condition is
+///   `!pointer_mask.contains(slot)`.
+/// * `INTACT` set is exactly the runtime's own invariant that *some* descriptor
+///   is reachable; `SIDE_MASK` is the state a non-empty pointer mask installs.
+///   A cleared bit or any other state routes to the real note, which is the
+///   pre-change behaviour.
+///
+/// Deliberately keyed on the DECLARED field type, not on the value: the value
+/// is already known pointer-bearing at this point (the emitter's live
+/// `may_carry_heap_pointer` test gates the whole bookkeeping block), and the
+/// mask is what the collector will read.
+pub(crate) fn class_field_store_layout_note_is_conforming(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    field_index: u32,
+) -> bool {
+    // No keys global ⟹ no mask globals are emitted for this class and no
+    // descriptor is ever installed, so the header test could never pass. Skip
+    // the extra IR rather than emit a branch that is always taken.
+    if !ctx.class_keys_globals.contains_key(class_name) {
+        return false;
+    }
+    let layout = ctx
+        .class_init_chains
+        .get(class_name)
+        .map(|chain| crate::typed_shape::class_typed_layout_from_chain(chain))
+        .unwrap_or_else(|| crate::typed_shape::class_typed_layout(ctx.classes, class_name));
+    crate::typed_shape::layout_declares_pointer_slot(&layout, field_index)
 }
 
 /// `js_string_addref_if_heap_string` demotes a uniquely-owned (refcount==1)
@@ -187,6 +297,15 @@ pub(crate) fn class_field_store_needs_layout_note(ctx: &FnCtx<'_>, value: &Expr)
 /// in-place `+=` to rewrite underneath the stored slot — silent corruption
 /// with no crash to trace it back from.
 pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    store_needs_string_addref(ctx, value)
+}
+
+/// Receiver-independent form of [`class_field_store_needs_string_addref`]: the
+/// demote is keyed on the stored value alone, so an array element store asks
+/// exactly the same question. Used by the #7469 elided array push, which drops
+/// the layout note but must keep this call whenever the pushed value could be
+/// a heap string (a `new C()` with a constructor return override can be one).
+pub(crate) fn store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     !expr_cannot_produce_heap_string(ctx, value)
 }
 
@@ -213,6 +332,33 @@ fn expr_cannot_produce_heap_string(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
             .is_some_and(|last| expr_cannot_produce_heap_string(ctx, last)),
         _ => expr_produces_non_pointer_bits_by_construction(ctx, expr),
     }
+}
+
+/// #7469 — emit the at-allocation all-pointer element-layout declaration for
+/// `id`, when this region's fact graph admits it and `init_expr` really is the
+/// array literal the fact was proven against.
+///
+/// Called from the `Stmt::Let` tail with the lowered (NaN-boxed) initializer,
+/// which for an array literal is the fresh array's pointer. Re-testing
+/// `Expr::Array` here rather than trusting the id alone keeps the emission
+/// pinned to the single binding the collector proved: a fact that somehow named
+/// an id bound by something else emits nothing, instead of declaring an element
+/// layout for the wrong object.
+pub(crate) fn emit_all_pointer_array_declaration(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    init_expr: &Expr,
+    init_value: &str,
+) {
+    if init_value.is_empty()
+        || !matches!(init_expr, Expr::Array(_))
+        || !ctx.native_facts.declares_all_pointer_elements(id)
+    {
+        return;
+    }
+    let blk = ctx.block();
+    let handle = super::unbox_to_i64(blk, init_value);
+    blk.call_void("js_array_declare_all_pointer_elements", &[(I64, &handle)]);
 }
 
 /// `lower_expr` variant that hands an expected-type hint down to the
@@ -243,19 +389,13 @@ pub(crate) fn lower_expr_with_expected_type(
     }
 }
 
-/// Build a NaN-boxed Array JSValue from a slice of Expr arguments.
-pub(crate) fn proxy_build_args_array(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<String> {
-    let cap = (args.len() as u32).to_string();
-    let arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-    let mut current = arr;
-    for a in args {
-        let v = lower_expr(ctx, a)?;
-        current = ctx
-            .block()
-            .call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
-    }
-    Ok(current)
-}
+// `proxy_build_args_array` lived here and was deleted by #7615 slice 7. It
+// threaded the array's raw `*mut ArrayHeader` through its push loop in a bare
+// SSA register while each element — arbitrary user code — was lowered, which is
+// #7154's accumulator bug, and it had no way to root the CALLER's receiver
+// across the same loop. Its four call sites now build the array inside a
+// `crate::rooting::RootedGroup` that holds the receiver too
+// (`expr::proxy_reflect::build_args_array`).
 
 /// Build the `, !alias.scope !N, !noalias !M` suffix attached to Buffer
 /// load/store instructions on the GEP fast path. `scope_idx` is the per-

@@ -202,6 +202,33 @@ pub(crate) unsafe fn nm_dispatch_events(ctx: &NmCtx, module_name: &str, method_n
             let err = crate::error::js_typeerror_new(msg);
             crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
         }
+        // Module-level helpers. Their implementations live in perry-stdlib
+        // (`js_events_*` in `events/module_helpers.rs`), which depends on this
+        // crate, so they are reachable only through the pointer perry-stdlib
+        // registers at startup — the zlib/querystring/domain shape.
+        //
+        // Before this arm existed, every INDIRECT form of these helpers fell to
+        // `_ => undefined` while the statically-dispatched call went straight to
+        // the same FFI and was correct: `const c = events.listenerCount; c(e,"x")`
+        // and `events.listenerCount(...args)` both silently answered `undefined`
+        // where node returns a count. The static NativeModSig rows in
+        // perry-codegen (`net_events.rs`, `has_receiver: false`) are the list
+        // this mirrors.
+        (
+            "events",
+            "listenerCount" | "once" | "on" | "getEventListeners" | "getMaxListeners"
+            | "setMaxListeners" | "addAbortListener",
+        ) => {
+            let ptr =
+                crate::value::JS_NATIVE_EVENTS_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
         _ => f64::from_bits(JSValue::undefined().bits()),
     }
 }

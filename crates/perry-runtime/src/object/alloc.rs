@@ -127,10 +127,12 @@ pub extern "C" fn js_object_alloc_with_parent(
     }
 
     let header_size = std::mem::size_of::<ObjectHeader>();
-    // Allocate at least 8 field slots to match js_object_set_field_by_name's alloc_limit
-    // assumption (max(field_count, 8)). Without this, empty objects ({}) with field_count=0
-    // would have 0 field slots but js_object_set_field_by_name writes up to 8 fields inline,
-    // causing heap buffer overflow into adjacent arena objects.
+    // Allocate at least INLINE_SLOT_FLOOR field slots to match
+    // js_object_set_field_by_name's alloc_limit assumption
+    // (max(field_count, INLINE_SLOT_FLOOR)). Without this, empty objects ({})
+    // with field_count=0 would have 0 field slots but
+    // js_object_set_field_by_name writes up to the floor inline, causing a heap
+    // buffer overflow into adjacent arena objects.
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
@@ -349,6 +351,25 @@ pub extern "C" fn js_build_class_keys_array(
             *elements_ptr.add(i) = nanboxed;
             crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
         }
+    }
+    // #7510: every slot in `0..length` now holds an interned key string, and a
+    // canonical keys array is immutable for the rest of the program (growing a
+    // shape builds a NEW array — `shape_keys_grown`). Say that in the header
+    // instead of leaving the per-element pointer mask behind.
+    //
+    // The mask is correct but permanent: the shape cache anchors this array for
+    // the program's lifetime (#179), so its `LAYOUT_SLOT_MASKS` entry never
+    // drains. One such entry is enough to keep the whole per-object side table
+    // non-empty — and every probe of it on the allocation, store, death and
+    // trace paths then has to hash instead of taking the emptiness fast path.
+    // Since ~every program builds at least one shape, that made the fast path
+    // essentially dead: on `churn_alloc` it fired once in 40 million calls.
+    //
+    // The per-element notes above stay. They are what keeps the already-stored
+    // prefix traceable if allocating the *next* key string triggers a GC; the
+    // declaration can only be made once the last slot is filled, which is here.
+    unsafe {
+        crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
     }
     shape_cache_insert(shape_id, arr);
     remember_class_keys_array(class_id, field_count, arr);
@@ -735,6 +756,16 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         (*new_ptr).field_count = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*new_ptr).meta = ptr::null_mut();
+        // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array
+        // edge (#7683). This MUST precede the `js_array_alloc` below: that call
+        // allocates, so it can collect, and the collector reads this slot
+        // through `object::gc_keys_array_slot` as a child edge. Every sibling
+        // allocator in this file already nulls it here; this function was the
+        // one that did not, and `arena_alloc_gc_old`'s fast path deliberately
+        // reuses a swept, NON-zeroed hole (#7437), so the slot holds real
+        // leftover heap bytes rather than zeros.
+        // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array edge.
+        (*new_ptr).keys_array = ptr::null_mut();
         let fields_ptr = (new_ptr as *mut u8).add(header_size) as *mut u64;
         for i in 0..phys_slots as usize {
             // GC_STORE_AUDIT(INIT): freshly allocated clone field slot is initialized pointer-free.
@@ -767,6 +798,16 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     (*new_ptr).field_count = src_field_count;
     // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
     (*new_ptr).meta = ptr::null_mut();
+    // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array
+    // edge (#7683). This MUST precede the `js_array_alloc` below: that call
+    // allocates, so it can collect, and the collector reads this slot
+    // through `object::gc_keys_array_slot` as a child edge. Every sibling
+    // allocator in this file already nulls it here; this function was the
+    // one that did not, and `arena_alloc_gc_old`'s fast path deliberately
+    // reuses a swept, NON-zeroed hole (#7437), so the slot holds real
+    // leftover heap bytes rather than zeros.
+    // GC_STORE_AUDIT(INIT): freshly allocated clone starts with no keys-array edge.
+    (*new_ptr).keys_array = ptr::null_mut();
 
     // Copy source fields (as raw f64/u64 words — preserves NaN-boxing)
     let src_fields = (src_ptr as *const u8).add(header_size) as *const u64;

@@ -2,8 +2,17 @@
 // toolkit, and each file drives a different subset of it. Per-file pruning
 // would make the next test in this family re-add the builder it needs, so the
 // toolkit stays whole.
+//
+// LOWERING (#7493): one test here — `loop_length_bound_does_not_prove_
+// multibyte_buffer_read_inbounds` — pins `NativeRootsPin::native()`. It proves
+// the absence of a native buffer GEP with a module-wide
+// `!ir.contains("getelementptr inbounds i8")`, and the shadow-stack lowering's
+// own inline slot addressing emits that instruction for unrelated reasons, so
+// under `PERRY_RS4GC=0` it reports a proof leak that is not there. Same shape,
+// same reasoning and the same durable fix as the `invalidation` module: #7505.
 #![allow(dead_code)]
 
+use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{FunctionType, ObjectType, PropertyInfo, Type};
 use perry_hir::{
@@ -11,7 +20,15 @@ use perry_hir::{
     UpdateOp,
 };
 
-static ARTIFACT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[path = "native_proof_support/mod.rs"]
+mod native_proof_support;
+use native_proof_support::{
+    artifact_env_lock, artifact_for_module, assert_no_native_buffer_element_access, probe_body,
+    NativeRepsEnv,
+};
+
+#[path = "native_proof_buffer_views/pointer_lifetime.rs"]
+mod pointer_lifetime;
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -31,6 +48,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -147,7 +165,7 @@ fn compile_artifact_json_for_module_with_opts(
     opts: CompileOptions,
 ) -> serde_json::Value {
     let name = module.name.clone();
-    let _guard = ARTIFACT_ENV_LOCK.lock().unwrap();
+    let _guard = artifact_env_lock();
     let dir = std::env::temp_dir().join(format!(
         "perry_native_reps_test_{}_{}",
         std::process::id(),
@@ -156,40 +174,15 @@ fn compile_artifact_json_for_module_with_opts(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let old_reps = std::env::var_os("PERRY_NATIVE_REPS");
-    let old_reps_dir = std::env::var_os("PERRY_NATIVE_REPS_DIR");
-    std::env::set_var("PERRY_NATIVE_REPS", "1");
-    std::env::set_var("PERRY_NATIVE_REPS_DIR", &dir);
-
-    let compile_result = compile_module(&module, opts);
-
-    match old_reps {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS"),
-    }
-    match old_reps_dir {
-        Some(value) => std::env::set_var("PERRY_NATIVE_REPS_DIR", value),
-        None => std::env::remove_var("PERRY_NATIVE_REPS_DIR"),
-    }
+    let compile_result = {
+        // Restored before any fallible step below, and on an unwind out of
+        // `compile_module` itself.
+        let _env = NativeRepsEnv::install(&dir, false);
+        compile_module(&module, opts)
+    };
 
     compile_result.unwrap();
-    let paths: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    let mut parsed = Vec::new();
-    for path in paths {
-        if !path.extension().is_some_and(|ext| ext == "json") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        if value["module"] == name {
-            return value;
-        }
-        parsed.push(value["module"].clone());
-    }
-    panic!("native reps artifact for {name} not found in {dir:?}; saw modules {parsed:?}");
+    artifact_for_module(&dir, &name)
 }
 
 fn assert_typed_array_get_fallback_reason(artifact: &serde_json::Value, reason: &str) {
@@ -261,6 +254,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
@@ -597,16 +591,9 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
     for_loop_with_start_and_update(counter_id, int(0), bound, Some(increment(counter_id)), body)
 }
 
-fn assert_buffer_store_uses_dynamic_fallback(ir: &str) {
-    assert!(
-        ir.contains("call void @js_buffer_set"),
-        "stale-proof case should keep the checked Buffer store fallback:\n{ir}"
-    );
-    assert!(
-        !ir.contains("getelementptr inbounds i8"),
-        "stale-proof case must not emit an inbounds native buffer GEP:\n{ir}"
-    );
-}
+// This file's second copy of `assert_buffer_store_uses_dynamic_fallback` is
+// gone rather than re-fixed: since #7505 it lives in `native_proof_support`,
+// where the one reader both suites share cannot drift between them.
 
 #[test]
 fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
@@ -658,6 +645,19 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
     );
 }
 
+/// `i < buf.length` proves a ONE-byte access; a `readUInt32BE` at the same
+/// index reads four. The four-byte read must therefore stay checked.
+///
+/// LOWERING (#7505): unpinned. This used to prove "no native GEP" with a
+/// module-wide `!ir.contains("getelementptr inbounds i8")`, which the
+/// shadow-stack lowering's own inline slot addressing satisfied for reasons
+/// unrelated to any buffer — so under `PERRY_RS4GC=0` it reported a proof leak
+/// that was not there, and #7493 pinned it to native roots to stop the false
+/// alarm. It now asks the question it means: is there an `inbounds` GEP off
+/// this function's Buffer DATA slot? Asserted under both lowerings, and the
+/// reader's ability to answer "yes" is proved in
+/// `native_proof_regressions::invalidation::the_native_buffer_gep_detector_fires_on_a_proven_store`
+/// plus this file's own `native_proof_support` self-tests.
 #[test]
 fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
     let body = vec![
@@ -677,11 +677,24 @@ fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("loop_bound_multibyte_buffer_read.ts", body.clone());
-    assert!(
-        !ir.contains("getelementptr inbounds i8"),
-        "`i < buf.length` only proves one-byte Buffer access; multi-byte reads must not emit an inbounds GEP:\n{ir}"
-    );
+    for (pin_native, name) in [
+        (true, "loop_bound_multibyte_buffer_read.ts"),
+        (false, "loop_bound_multibyte_buffer_read_shadow.ts"),
+    ] {
+        let ir = {
+            let _pin = if pin_native {
+                NativeRootsPin::native()
+            } else {
+                NativeRootsPin::shadow()
+            };
+            compile_ir(name, body.clone())
+        };
+        assert_no_native_buffer_element_access(
+            probe_body(&ir),
+            "`i < buf.length` only proves a ONE-byte Buffer access; a \
+             four-byte read must not consume it",
+        );
+    }
 
     let artifact = compile_artifact_json("artifact_loop_bound_multibyte_buffer_read.ts", body);
     let records = artifact["records"].as_array().unwrap();

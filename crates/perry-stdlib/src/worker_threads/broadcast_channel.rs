@@ -64,7 +64,7 @@ extern "C" fn broadcast_add_event_listener(
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
     };
-    crate::common::async_bridge::ensure_pump_registered();
+    super::async_shim::ensure_pump_registered();
     BROADCAST_CHANNELS.with(|channels| {
         if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
             if event_name == "message" && !state.message_event_cbs.contains(&cb_bits) {
@@ -99,7 +99,7 @@ extern "C" fn broadcast_remove_event_listener(
 #[no_mangle]
 pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
     ensure_environment_data_gc_scanner();
-    crate::common::async_bridge::ensure_pump_registered();
+    super::async_shim::ensure_pump_registered();
     let id = NEXT_BROADCAST_ID.with(|n| {
         let mut n = n.borrow_mut();
         let id = *n;

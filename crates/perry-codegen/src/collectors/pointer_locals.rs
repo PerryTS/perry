@@ -237,10 +237,36 @@ pub fn collect_pointer_typed_locals(
             Expr::Undefined => Some(Type::Void),
             Expr::Null => Some(Type::Null),
             Expr::Bool(_) | Expr::Compare { .. } => Some(Type::Boolean),
+            // #6998: `Uint8ArrayGet` is NOT unconditionally numeric, and it is
+            // reachable — `const it = u8[Symbol.iterator]` lowers to
+            // `Uint8ArrayGet { array: LocalGet(u8), index: SymbolFor(…) }`
+            // (`lower/expr_member/member_tail.rs` folds every non-STRING key on
+            // a `Uint8Array`/`Buffer`-typed local onto this node, and a symbol
+            // key is not a string). Three of its lowerings hand back a heap
+            // value: a symbol key goes to `js_object_get_symbol_property`, an
+            // unproven key in JS-value context to
+            // `js_typed_array_index_get_dynamic`, and a non-numeric key in i32
+            // context to `js_object_get_index_polymorphic` — the last two fall
+            // through to string-keyed property lookup, and an expando holds
+            // anything. Typed `Number` here, such a local is classified
+            // non-pointer, gets NO shadow slot, and the value is live in the
+            // program and invisible to the collector (#6951's class).
+            //
+            // The proof is the same STRUCTURAL one the `IndexGet` typed-array
+            // arm below already uses, and it is structural on purpose: a
+            // `number`-declared index local is not evidence, because Perry does
+            // not enforce annotations (CLAUDE.md, *Known Limitations*), and
+            // `expr_is_known_non_pointer_shadow_value`'s sharper test needs an
+            // `FnCtx` this collector runs before. Answering `None` for an
+            // unproven key is the conservative direction: the local keeps a
+            // slot the collector rewrites harmlessly.
+            Expr::Uint8ArrayGet { index, .. } if index_is_definitely_numeric(index) => {
+                Some(Type::Number)
+            }
+            Expr::Uint8ArrayGet { .. } => None,
             Expr::Number(_)
             | Expr::Integer(_)
             | Expr::Uint8ArrayLength(_)
-            | Expr::Uint8ArrayGet { .. }
             | Expr::BufferLength(_)
             | Expr::BufferIndexGet { .. }
             | Expr::MathFloor(_)
@@ -1066,6 +1092,86 @@ pub fn collect_pointer_typed_locals(
 mod tests {
     use super::*;
     use perry_hir::{Function, Param, Stmt};
+
+    /// #6998: `const it = u8[Symbol.iterator]` binds a **heap** value —
+    /// `js_object_get_symbol_property` hands back the accessor — into a local
+    /// whose HIR type is `Any`. Typed `Number` here it would get no shadow
+    /// slot, so the value would be live in the program and invisible to the
+    /// collector.
+    ///
+    /// Reachability was established on the emitted HIR, not argued: the snippet
+    /// above lowers to
+    /// `Let { ty: Any, init: Uint8ArrayGet { array: LocalGet(0), index: SymbolFor(…) } }`.
+    #[test]
+    fn a_symbol_keyed_uint8array_read_keeps_its_shadow_slot() {
+        let stmts = vec![
+            Stmt::Let {
+                id: 0,
+                name: "u8".to_string(),
+                ty: Type::Named("Uint8Array".to_string()),
+                mutable: false,
+                init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(4))))),
+            },
+            Stmt::Let {
+                id: 1,
+                name: "it".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Uint8ArrayGet {
+                    array: Box::new(Expr::LocalGet(0)),
+                    index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
+                        "@@__perry_wk_iterator".to_string(),
+                    )))),
+                }),
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ];
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(
+            slots.contains_key(&1),
+            "a symbol-keyed Uint8Array read is a heap value and must keep a shadow slot; \
+             got slots for {:?}",
+            slots.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// The other side, and it is what stops the fix being "give every element
+    /// read a slot": a STRUCTURALLY numeric key can only reach the byte
+    /// accessor, so the local stays non-pointer and keeps no slot.
+    #[test]
+    fn a_numeric_keyed_uint8array_read_still_pays_no_slot() {
+        let stmts = vec![
+            Stmt::Let {
+                id: 0,
+                name: "u8".to_string(),
+                ty: Type::Named("Uint8Array".to_string()),
+                mutable: false,
+                init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(4))))),
+            },
+            Stmt::Let {
+                id: 1,
+                name: "b".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Uint8ArrayGet {
+                    array: Box::new(Expr::LocalGet(0)),
+                    index: Box::new(Expr::Binary {
+                        op: BinaryOp::BitAnd,
+                        left: Box::new(Expr::Integer(7)),
+                        right: Box::new(Expr::Integer(3)),
+                    }),
+                }),
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ];
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(
+            !slots.contains_key(&1),
+            "a structurally numeric key reads a byte — a slot there is the #6996 cost with \
+             nothing to protect; got slots for {:?}",
+            slots.keys().collect::<Vec<_>>()
+        );
+    }
 
     fn return_array_of_type(depth: usize, leaf: Type) -> Type {
         (0..depth).fold(leaf, |ty, _| Type::Array(Box::new(ty)))

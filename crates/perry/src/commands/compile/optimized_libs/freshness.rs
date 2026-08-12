@@ -11,6 +11,14 @@ fn needs_http2_constants(ctx: &CompilationContext) -> bool {
     ctx.native_module_imports.contains("http2") || ctx.uses_get_builtin_module
 }
 
+/// `node:test` drags in the whole runner, and with it the JSON serializer its
+/// snapshot assertions call. Keep it for a program that imports either entry
+/// point, or that can reach any builtin by runtime string via
+/// `process.getBuiltinModule`.
+fn needs_node_test(ctx: &CompilationContext) -> bool {
+    ctx.uses_node_test || ctx.uses_get_builtin_module
+}
+
 pub(crate) fn auto_optimized_archives_are_fresh(
     workspace_root: &Path,
     runtime_path: &Path,
@@ -104,7 +112,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|dyneval={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -133,6 +141,9 @@ pub(crate) fn auto_optimized_cache_key(
         // `perry-runtime/mod-http2-constants`, so key the cache on the shared
         // gate like the other optional runtime features.
         needs_http2_constants(ctx),
+        // `node:test` gates `perry-runtime/mod-node-test`, which changes the
+        // built archive, so it keys the cache like every other feature toggle.
+        needs_node_test(ctx),
         // #6559: dyn-eval presence changes the built archive, so it must
         // key the freshness stamp like every other runtime feature toggle.
         perry_hir::has_deferred_dynamic_code_sites(),
@@ -249,6 +260,9 @@ pub(crate) fn auto_optimized_cross_features(
     // known at runtime. Programs using neither path still link none of them.
     if needs_http2_constants(ctx) {
         cross_features.push("perry-runtime/mod-http2-constants".to_string());
+    }
+    if needs_node_test(ctx) {
+        cross_features.push("perry-runtime/mod-node-test".to_string());
     }
     // #6559: a deferred dynamic-code site (`eval(...)` / `new Function(...)`
     // with a runtime body) means the binary may construct functions from

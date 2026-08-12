@@ -291,17 +291,32 @@ Credential wizards store their output in `~/.perry/config.toml`.
 Check for and install Perry updates.
 
 ```bash
-perry update             # Update to latest
-perry update --check-only  # Check without installing
-perry update --force       # Ignore 24h cache
+perry update                # Update to latest
+perry update --check-only   # Check without installing
+perry update --force        # Ignore the cached answer
+perry update --mode auto    # Save how updates should behave, then exit
 ```
 
-Update sources (checked in order):
-1. Custom server (env/config)
-2. Perry Hub
-3. GitHub API
+`perry update` installs whatever the release infrastructure offers, whichever
+source the background check uses, and verifies its signature before replacing
+anything.
 
-Opt out of automatic update checks with `PERRY_NO_UPDATE_CHECK=1` or `CI=true`.
+`--mode` writes `[update] mode` to `~/.perry/config.toml`:
+
+| mode | behaviour |
+|---|---|
+| `off` | Never check, never say anything. |
+| `notify` | Mention a newer version at the end of a run. The default. |
+| `prompt` | Mention it, then ask. |
+| `auto` | Install at the end of a successful run. |
+
+`perry update` itself ignores the mode — asking for it explicitly is the point.
+`prompt` and `auto` refuse to install when the command failed, when a package
+manager owns this Perry, or when the install directory is not writable, and say
+which.
+
+Full reference, including where the check asks and the release cooldown:
+[Updates](updates.md).
 
 ## i18n
 

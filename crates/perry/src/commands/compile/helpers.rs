@@ -291,6 +291,7 @@ mod tests {
             is_exported: true,
             is_nested: false,
             alloc_width_hint: 0,
+            specialized_from: None,
             aliases: Vec::new(),
         };
         let project_root = PathBuf::from("/repo");
@@ -344,6 +345,7 @@ mod tests {
             is_exported: true,
             is_nested: false,
             alloc_width_hint: 0,
+            specialized_from: None,
             aliases: Vec::new(),
         };
         let project_root = PathBuf::from("/repo");

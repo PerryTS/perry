@@ -16,7 +16,36 @@
     "class from the host the baseline was captured on: retention and GC counters",
     "transfer because they are semantic, memory and time do not. 'pinned_host' is",
     "for a maintainer re-running the suite on the same quiet box, where memory and",
-    "time are comparable and are gated."
+    "time are comparable and are gated.",
+    "",
+    "'probe_overrides' takes ONE (probe, metric) cell out of the gating family.",
+    "A profile band answers 'what is this machine class's noise floor'; whether a",
+    "metric is deterministic enough to gate at all is a property of the WORKLOAD,",
+    "and those two questions were conflated until #7554. It may only ever set",
+    "gating to false, never true, and never touches the band: an excluded cell is",
+    "still measured, still compared, and still printed, it just cannot turn the",
+    "job red. Every entry carries evidence that is checked, not merely stored --",
+    "at least 21 runs (the same number every band above is justified by) and a",
+    "spread that is actually non-zero, so a cell cannot be excluded on a hunch.",
+    "The section is EMPTY, and that is the goal state. Its one entry --",
+    "12_large_live_set.heap_used_bytes, added by #7554 -- was deleted by #7558,",
+    "which removed the cause rather than the cell: explicit gc() no longer forces",
+    "the conservative native-stack scan, so that reading is bit-identical again",
+    "and gates again. An empty section is not a disarmed rule; the evidence",
+    "checks and the never-gate-nothing rule still fail any entry added back.",
+    "",
+    "#7559 -- A heap_used_bytes band used to NOT be a statement about how much",
+    "the collector retained. The reading is taken after the probe's own gc(),",
+    "which until #7558 was the one site that forced the conservative",
+    "native-stack scan, and js_arena_stats sums arena block OFFSETS, so one",
+    "stale stack word pinned a whole 1 MiB block. Across the 74 commits from the",
+    "2026-08-05 pin to v0.5.1321 this metric moved on five probes, always by",
+    "whole blocks, while the same probes' scan-off retention was byte-identical",
+    "on ten of twelve and fell on the other two. #7558 removed that term: on the",
+    "2026-08-08 re-pin every probe's conservative reading equals its precise one",
+    "(gc_ratchet.py classify, excess 0.00% on all twelve), so heap_used_bytes now",
+    "means what it says. `classify` is still the first step on a breach -- it is",
+    "now also the check that the term has not come back."
   ],
 
   "shared_ci": {
@@ -191,5 +220,7 @@
       "gating": true,
       "rationale": "GATED HERE ONLY. Worst cross-session spread of medians-of-7 was 0.751% on an idle box (load 1.7-2.0); worst raw within-session spread was 5.3%, which the median-of-7 damps out. 10% is ~13x the cross-session figure and ~2x the worst raw spread, so it will not fire on scheduler jitter but will catch the tens-of-percent slowdown a whole-stack conservative scan would introduce. The 15 ms floor covers the fastest probe (126 ms)."
     }
-  }
+  },
+
+  "probe_overrides": {}
 }

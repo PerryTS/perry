@@ -114,7 +114,7 @@ pub(crate) unsafe fn own_data_field_by_name(
     None
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static OBJECT_PROTOTYPE_LOOKUP_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -144,27 +144,58 @@ unsafe fn default_object_prototype_property_value(
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
     let _guard = object_prototype_lookup_guard()?;
-    let object_ctor = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_value = JSValue::from_bits(object_ctor.to_bits());
-    if !ctor_value.is_pointer() {
+    // #7498: THIS IS THE FRAME `PERRY_GC_PROTECT_FROMSPACE=1` FAULTS IN on the
+    // `[...obj.arr]` path — a 56-byte from-space `GC_TYPE_STRING`, i.e. `key`.
+    // Both arguments are GC-managed and both are live across the call below
+    // before their first use: the recursive `js_object_get_field_by_name` on
+    // `Object.prototype` can run an accessor, which is user code, and user code
+    // allocates. A copying minor there moves the key string and the receiver and
+    // rewrites only the slots it can see; a bare argument is not one.
+    // (#7795 removed the two resolution calls that used to allocate here as
+    // well — the rooting is still required for the prototype read itself.)
+    //
+    // Root both before the first of those calls and read each back at its
+    // point of use. NaN-boxed handles only, so this module adds no bare
+    // `get_raw_*_ptr` to `scripts/raw_handle_debt.py`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
+    let receiver_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
+    let key = || {
+        crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64()) as *const crate::StringHeader
+    };
+    let receiver_addr =
+        || crate::value::js_nanbox_get_pointer(receiver_h.get_nanbox_f64()) as usize;
+
+    // #7795: resolve `Object.prototype` from the memoized, GC-healed cache
+    // instead of re-running `globalThis.Object` (which interns an `"Object"`
+    // key string) plus a `closure_get_dynamic_prop("prototype")` on EVERY
+    // ordinary-object property MISS. `object_prototype_addr` performs exactly
+    // this resolution, caches only a successful one, heals the address through
+    // the forwarding chain, and is itself a registered GC root
+    // (`scan_prototype_addr_cache_roots_mut`) — the array index-read fast path
+    // already depends on it. `Object.prototype` is non-writable and
+    // non-configurable per spec, so the memo cannot go stale.
+    let proto_addr = crate::array::object_prototype_addr();
+    if proto_addr == 0 {
         return None;
     }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-    let proto_value = JSValue::from_bits(proto.to_bits());
-    if !proto_value.is_pointer() {
+    let proto_ptr = proto_addr as *mut ObjectHeader;
+    if proto_ptr as usize == receiver_addr() {
         return None;
     }
-    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
-    if proto_ptr.is_null() || proto_ptr as usize == receiver_addr {
-        return None;
-    }
-    let receiver = f64::from_bits(crate::value::js_nanbox_pointer(receiver_addr as i64).to_bits());
+    let receiver = crate::value::js_nanbox_pointer(receiver_addr() as i64);
     let previous_this = super::super::js_implicit_this_set(receiver);
+    // The DISPLACED `this` and the displaced accessor receiver both ride
+    // through `js_object_get_field_by_name` — which can run a getter — before
+    // being republished. Rooting the ACCESSOR_RECEIVER_OVERRIDE cell (#7231)
+    // protects the armed value, not these saved ones; that residual is what
+    // these two handles close.
+    let previous_this_h = scope.root_nanbox_f64(previous_this);
     let prev_override = accessor_receiver_override_begin(receiver);
-    let property = js_object_get_field_by_name(proto_ptr, key);
-    accessor_receiver_override_end(prev_override);
-    super::super::js_implicit_this_set(previous_this);
+    let prev_override_h = prev_override.map(|v| scope.root_nanbox_f64(v));
+    let property = js_object_get_field_by_name(proto_ptr, key());
+    accessor_receiver_override_end(prev_override_h.map(|h| h.get_nanbox_f64()));
+    super::super::js_implicit_this_set(previous_this_h.get_nanbox_f64());
     if property.is_undefined() {
         None
     } else {
@@ -196,7 +227,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
     default_object_prototype_property_value(obj as usize, key)
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Receiver to bind when an accessor getter is reached by walking a
     /// prototype chain. `js_object_get_field_by_name(proto, key)` re-derives the
     /// accessor receiver from its `obj` argument — which is the PROTOTYPE during
@@ -460,6 +491,28 @@ pub(crate) unsafe fn array_prototype_property_value(
     name: &str,
     receiver_addr: usize,
 ) -> Option<JSValue> {
+    // #7498 — THE FAULT `PERRY_GC_PROTECT_FROMSPACE=1` REPORTS FOR
+    // `[...obj.arr]`, measured with lldb: `EXC_BAD_ACCESS` on the `ldrsb` of
+    // the UTF-8 scan inside `js_string_from_bytes` below, reading a 56-byte
+    // retired-from-space `GC_TYPE_STRING`.
+    //
+    // `name` is not an owned string. `get_field_by_name_object_tail` slices it
+    // straight out of the key `StringHeader`'s payload
+    // (`slice::from_raw_parts(key_ptr, key_len)`), so it is a BORROW OF THE GC
+    // HEAP — and a borrow is exactly the thing the collector cannot see or
+    // rewrite. Every call below allocates: `js_get_global_this_builtin_value`
+    // interns `"Array"`, `closure_get_dynamic_prop` can run an accessor, and
+    // `js_string_from_bytes` reads its SOURCE bytes *after* its own
+    // `string_storage_alloc`. Any one of those can move the key out from under
+    // `name`.
+    //
+    // A `RuntimeHandleScope` cannot fix this: rooting the key would keep the
+    // object alive and rewrite the slot, but `name`'s pointer is a `&str`, not
+    // a slot. The only sound shape is to stop borrowing the heap — see
+    // [`HeapKeyBytes`].
+    let name_copy = super::HeapKeyBytes::copy_of(name.as_bytes());
+    let name: &str = std::str::from_utf8_unchecked(name_copy.as_bytes());
+
     let ctor = super::super::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
     let ctor_value = JSValue::from_bits(ctor.to_bits());
     if !ctor_value.is_pointer() {
@@ -471,26 +524,44 @@ pub(crate) unsafe fn array_prototype_property_value(
     if !proto_value.is_pointer() {
         return None;
     }
-    let proto_ptr = proto_value.as_pointer::<u8>() as usize;
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    if let Some(v) = own_data_field_by_name(proto_ptr as *const ObjectHeader, key) {
+    // #7498: `js_string_from_bytes` ALLOCATES, so `Array.prototype` and the
+    // receiver cannot be carried across it as bare `usize`s — and the key it
+    // produces is itself a fresh heap string this function then hands to two
+    // more calls that can collect (`js_object_get_field_by_name` runs getters;
+    // `default_object_prototype_property_value` interns another key). Root all
+    // three and read each back at its point of use.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto_h = scope.root_nanbox_f64(proto);
+    let receiver_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
+    let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(
+        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32),
+    ));
+    let proto_ptr = || crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as usize;
+    let receiver_addr =
+        || crate::value::js_nanbox_get_pointer(receiver_h.get_nanbox_f64()) as usize;
+    let key = || {
+        crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64()) as *const crate::StringHeader
+    };
+
+    if let Some(v) = own_data_field_by_name(proto_ptr() as *const ObjectHeader, key()) {
         return Some(v);
     }
     if let Some(v) = crate::array::array_named_property_get_by_name(
-        proto_ptr as *const crate::array::ArrayHeader,
+        proto_ptr() as *const crate::array::ArrayHeader,
         name,
     ) {
         return Some(JSValue::from_bits(v.to_bits()));
     }
-    if proto_ptr == receiver_addr {
-        return default_object_prototype_property_value(receiver_addr, key);
+    if proto_ptr() == receiver_addr() {
+        return default_object_prototype_property_value(receiver_addr(), key());
     }
-    let receiver = f64::from_bits(crate::value::js_nanbox_pointer(receiver_addr as i64).to_bits());
+    let receiver = crate::value::js_nanbox_pointer(receiver_addr() as i64);
     let prev_override = accessor_receiver_override_begin(receiver);
-    let v = js_object_get_field_by_name(proto_ptr as *const ObjectHeader, key);
-    accessor_receiver_override_end(prev_override);
+    let prev_override_h = prev_override.map(|v| scope.root_nanbox_f64(v));
+    let v = js_object_get_field_by_name(proto_ptr() as *const ObjectHeader, key());
+    accessor_receiver_override_end(prev_override_h.map(|h| h.get_nanbox_f64()));
     if v.is_undefined() {
-        default_object_prototype_property_value(receiver_addr, key)
+        default_object_prototype_property_value(receiver_addr(), key())
     } else {
         Some(v)
     }

@@ -1,0 +1,156 @@
+# Modules permitted to carry raw-handle debt, with their current ceiling.
+#
+# THE POINT OF THIS FILE IS THAT IT IS NOT A TOTAL. A single global number lets
+# debt move between modules unnoticed, and lets a brand-new file start dirty as
+# long as something else got cleaner. The rules here are per-module and all
+# three directions are closed:
+#
+#   1. A file NOT listed here must have ZERO bare reads. New code is therefore
+#      clean by construction -- `RuntimeHandle::across_{mut,const,nanbox}` is
+#      the only way in, which is what "non-optional" means for #7341's
+#      discipline (engine plan layer 3).
+#   2. A listed file must not EXCEED its ceiling.
+#   3. A listed file that reaches ZERO must be DELETED from this list. An entry
+#      that matches nothing FAILS the build -- the same rule as
+#      gc_root_dominance_allowlist.json -- so the list can only shrink and
+#      cleaning a module is permanent.
+#
+# Lower a ceiling whenever you convert a pair; never raise one. If a change
+# genuinely needs a new bare read in an unlisted file, the honest move is to
+# convert a pair elsewhere and say so in the PR, not to add a line here.
+#
+# ONE shape may join the list instead of converting: a LOOP whose collection
+# window is a user-visible trap/getter call (Proxy traps, accessors, valueOf)
+# re-reads every live handle at the top of each iteration. That re-read IS the
+# #7341 discipline -- `across_*` pairs exactly one allocating call with one
+# re-read and cannot express "re-read across two interleaved trap calls, every
+# iteration". Listing such a module is legitimate ONLY when the same change
+# converts enough pairs elsewhere that the global baseline does not rise; name
+# the loop and the trap in the PR. Current instances of this shape:
+#   - object/field_get_set/enumeration.rs -- proxy values/entries interleave
+#     (ownKeys, then per-key gOPD + get; #7467).
+#   - json/stringify_shape_template.rs -- the shape-template emit loop's
+#     collection window is `toJSON`, a user-visible trap, and `cur_obj()` /
+#     `cur_keys()` re-derive at every access across it (#7268). `across_*`
+#     pairs one call with one re-read and cannot express a helper called at
+#     many points inside the loop.
+#   - gc/tests/runtime_roots/json_shape_template.rs -- its assertions ARE
+#     pre/post address comparisons, which is what `across_*` exists to make
+#     unnameable; converting them would delete the test's subject.
+#   - gc/tests/runtime_roots/fs_options_object.rs -- same: its subject IS the
+#     sentinel's pre/post address comparison (#7274).
+#
+# 595 of 705 runtime modules were already clean when this was seeded, so the
+# rule above covers 84% of the crate on day one.
+#
+# Format: <count> <path>
+5 crates/perry-runtime/src/array/header.rs
+6 crates/perry-runtime/src/array/indexing.rs
+2 crates/perry-runtime/src/array/iter_methods.rs
+4 crates/perry-runtime/src/array/push_pop.rs
+14 crates/perry-runtime/src/array/sort.rs
+18 crates/perry-runtime/src/async_hooks.rs
+5 crates/perry-runtime/src/atomics.rs
+7 crates/perry-runtime/src/builtins/console.rs
+15 crates/perry-runtime/src/builtins/globals.rs
+5 crates/perry-runtime/src/bun_ffi/dlopen.rs
+3 crates/perry-runtime/src/child_process/v8_serde.rs
+5 crates/perry-runtime/src/dns.rs
+6 crates/perry-runtime/src/embedded.rs
+8 crates/perry-runtime/src/error.rs
+16 crates/perry-runtime/src/event_target.rs
+3 crates/perry-runtime/src/frame.rs
+3 crates/perry-runtime/src/fs/dir_glob_watch/watch.rs
+3 crates/perry-runtime/src/gc/tests/copying.rs
+4 crates/perry-runtime/src/gc/tests/helper_stores.rs
+47 crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
+3 crates/perry-runtime/src/gc/tests/runtime_roots/hook_dispatch_handles.rs
+1 crates/perry-runtime/src/gc/tests/runtime_roots/string_slice.rs
+10 crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs
+11 crates/perry-runtime/src/json/replacer.rs
+26 crates/perry-runtime/src/json/reviver.rs
+3 crates/perry-runtime/src/json/stringify.rs
+1 crates/perry-runtime/src/json/stringify_scalars.rs
+21 crates/perry-runtime/src/json_tape.rs
+26 crates/perry-runtime/src/map.rs
+2 crates/perry-runtime/src/module_require.rs
+7 crates/perry-runtime/src/node_stream/async_iterator.rs
+2 crates/perry-runtime/src/node_stream_dispatch.rs
+8 crates/perry-runtime/src/node_stream_iter_helpers.rs
+27 crates/perry-runtime/src/node_stream_pipeline.rs
+7 crates/perry-runtime/src/node_stream_tests.rs
+10 crates/perry-runtime/src/node_stream_tests_extra.rs
+4 crates/perry-runtime/src/node_submodules/mod.rs
+4 crates/perry-runtime/src/node_submodules/test.rs
+33 crates/perry-runtime/src/object/alloc.rs
+2 crates/perry-runtime/src/object/bigint_dispatch.rs
+5 crates/perry-runtime/src/object/class_registry/construct.rs
+2 crates/perry-runtime/src/object/delete_rest.rs
+12 crates/perry-runtime/src/object/descriptors.rs
+5 crates/perry-runtime/src/object/field_get_set/enumeration.rs
+2 crates/perry-runtime/src/object/field_get_set/get_field_by_name.rs
+3 crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs
+11 crates/perry-runtime/src/object/field_set_by_name/tail.rs
+2 crates/perry-runtime/src/object/global_this/ctor_thunks.rs
+9 crates/perry-runtime/src/object/global_this/populate.rs
+9 crates/perry-runtime/src/object/global_this_webassembly.rs
+1 crates/perry-runtime/src/object/mod.rs
+3 crates/perry-runtime/src/object/namespace_create.rs
+1 crates/perry-runtime/src/object/native_call_method/object_proto.rs
+4 crates/perry-runtime/src/object/native_call_method/primitive_methods.rs
+10 crates/perry-runtime/src/object/native_call_method/string_methods.rs
+4 crates/perry-runtime/src/object/native_module.rs
+19 crates/perry-runtime/src/object/native_module/async_hooks_exports.rs
+26 crates/perry-runtime/src/object/native_module/callable_exports.rs
+6 crates/perry-runtime/src/object/object_literal_ops.rs
+3 crates/perry-runtime/src/object/object_ops/define_property.rs
+3 crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs
+4 crates/perry-runtime/src/object/object_ops/from_entries.rs
+5 crates/perry-runtime/src/object/object_ops/keys_array.rs
+6 crates/perry-runtime/src/object/polymorphic_index.rs
+4 crates/perry-runtime/src/object/reflect_support.rs
+3 crates/perry-runtime/src/object/spill.rs
+2 crates/perry-runtime/src/object/typed_array_define.rs
+3 crates/perry-runtime/src/os.rs
+14 crates/perry-runtime/src/os_network.rs
+3 crates/perry-runtime/src/os_process_streams.rs
+13 crates/perry-runtime/src/plugin.rs
+12 crates/perry-runtime/src/process/env_misc.rs
+10 crates/perry-runtime/src/promise/microtasks.rs
+1 crates/perry-runtime/src/promise/native_async.rs
+3 crates/perry-runtime/src/promise/rejection.rs
+8 crates/perry-runtime/src/promise/then.rs
+8 crates/perry-runtime/src/proxy.rs
+8 crates/perry-runtime/src/regex.rs
+16 crates/perry-runtime/src/regex/exec.rs
+30 crates/perry-runtime/src/regex/exec_array.rs
+13 crates/perry-runtime/src/regex/match_all.rs
+22 crates/perry-runtime/src/regex/match_string.rs
+7 crates/perry-runtime/src/regex/replace_expand.rs
+3 crates/perry-runtime/src/regex/replace_fn.rs
+41 crates/perry-runtime/src/set.rs
+2 crates/perry-runtime/src/string/append.rs
+7 crates/perry-runtime/src/string/concat.rs
+1 crates/perry-runtime/src/string/mod.rs
+10 crates/perry-runtime/src/string/split.rs
+2 crates/perry-runtime/src/symbol/iterator.rs
+27 crates/perry-runtime/src/thread.rs
+7 crates/perry-runtime/src/timer.rs
+1 crates/perry-runtime/src/typed_feedback.rs
+4 crates/perry-runtime/src/typedarray/construct.rs
+2 crates/perry-runtime/src/typedarray/transform.rs
+4 crates/perry-runtime/src/url/node_compat.rs
+7 crates/perry-runtime/src/url/search_params.rs
+12 crates/perry-runtime/src/util_debuglog.rs
+19 crates/perry-runtime/src/util_parse_args.rs
+45 crates/perry-runtime/src/util_promisify.rs
+10 crates/perry-runtime/src/v8.rs
+6 crates/perry-runtime/src/value/dyn_index.rs
+6 crates/perry-runtime/src/value/dynamic_arith.rs
+3 crates/perry-runtime/src/value/to_string.rs
+19 crates/perry-runtime/src/wasi.rs
+6 crates/perry-runtime/src/weakref.rs
+23 crates/perry-runtime/src/webassembly.rs
+3 crates/perry-runtime/src/gc/tests/runtime_roots/json_shape_template.rs
+2 crates/perry-runtime/src/json/stringify_shape_template.rs
+4 crates/perry-runtime/src/gc/tests/runtime_roots/fs_options_object.rs

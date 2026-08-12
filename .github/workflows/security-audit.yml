@@ -58,6 +58,22 @@ jobs:
         #   PDF objects. Fixed in lopdf >=0.42.0, but lopdf is transitive
         #   via printpdf (perry-ext-pdf); printpdf's latest (0.9.1) still
         #   pins lopdf ^0.39, so there is no actionable upstream bump yet.
+        #   (Re-checked 2026-08-07: printpdf 0.10.1 — the version dependabot
+        #   proposes in #7412 — STILL pins lopdf 0.39.0, so that PR does not
+        #   close this. See #7555.)
+        # - RUSTSEC-2026-0235 (rkyv 0.7.46) — OOB reads validating archives
+        #   containing Rc/Arc. **Not in Perry's build graph at all.** `rkyv`
+        #   is an OPTIONAL feature of rust_decimal (`rkyv = ["dep:rkyv"]`);
+        #   perry-stdlib enables only `features = ["maths"]`, so it is never
+        #   activated. Verified three ways on 2026-08-07:
+        #     * `cargo tree -e normal -i rkyv` -> "did not match any packages"
+        #     * `cargo tree -p rust_decimal --depth 1 -e features` resolves to
+        #       arrayvec / serde / num-traits only
+        #     * zero `rkyv` artifacts in the dev or release deps directories
+        #   cargo-audit reads Cargo.lock, which lists optional dependencies
+        #   whether or not any feature activates them, so this is a
+        #   lockfile-only finding. Re-evaluate if anything ever enables the
+        #   `rkyv` or `rkyv-safe` feature of rust_decimal.
         #   perry-ext-pdf is a PDF *creation* API (createPdf/addText/…),
         #   not a parser of untrusted PDFs, so the deeply-nested-input
         #   surface is not reached. Tracking for a printpdf release that
@@ -74,7 +90,8 @@ jobs:
             --ignore RUSTSEC-2023-0071 \
             --ignore RUSTSEC-2026-0118 \
             --ignore RUSTSEC-2026-0119 \
-            --ignore RUSTSEC-2026-0187
+            --ignore RUSTSEC-2026-0187 \
+            --ignore RUSTSEC-2026-0235
 
   # Soak parity gate + external-tool pin gate. Always-run (deliberately not
   # path-filtered — nub hid this gate in a path-gated job and it silently

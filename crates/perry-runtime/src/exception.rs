@@ -153,7 +153,7 @@ impl ExceptionState {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static EXCEPTION_STATE: std::cell::UnsafeCell<ExceptionState> =
         std::cell::UnsafeCell::new(ExceptionState::new());
 }
@@ -328,6 +328,21 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         }
     });
     if !jb_ptr.is_null() {
+        // Windows MSVC: `longjmp` inspects `_JUMP_BUFFER.Frame` (the first
+        // 8 bytes of the jmp_buf) and, when it is nonzero, performs a REAL
+        // stack unwind via `RtlUnwindEx` instead of a register restore. Our
+        // one-arg `setjmp` extern leaves that slot holding whatever was in
+        // RDX at the call (the CRT `_setjmp` stores its second parameter),
+        // so the unwind target is garbage — measured 0xC0000028
+        // (STATUS_BAD_STACK) in a release binary, and GS-cookie aborts via
+        // `_report_gsfailure` under the panic=unwind test harness (#7356).
+        // Zero the slot to force the non-unwinding POSIX-style `longjmp`;
+        // that is exactly the semantics the savepoint restores above
+        // assume (skipped cleanups are replayed manually).
+        #[cfg(windows)]
+        unsafe {
+            (jb_ptr as *mut u64).write(0);
+        }
         unsafe { longjmp(jb_ptr, 1) }
     }
     // Invoke/landingpad handler: raise. The unwinder transfers control to

@@ -55,6 +55,26 @@ extern "C" {
 extern "C" {
     /// `setjmp(3)`. On glibc Linux this already doesn't save the
     /// signal mask, so it's the same fast path we want.
+    ///
+    /// ## Windows MSVC caveats (#7356)
+    ///
+    /// The symbol resolves to the CRT `_setjmp`, which imposes two extra
+    /// contracts the POSIX shape doesn't:
+    ///
+    /// 1. **16-byte alignment.** `_JUMP_BUFFER` saves Xmm6–Xmm15 with
+    ///    aligned stores; an 8-mod-16 buffer is an immediate
+    ///    STATUS_ACCESS_VIOLATION (measured). Every caller's buffer must
+    ///    be 16-aligned (`exception.rs`'s `JmpBuf` is `repr(align(16))`;
+    ///    tests here use `AlignedJmpBufBytes`).
+    /// 2. **`Frame` (the first 8 bytes) is garbage after this extern.**
+    ///    The CRT `_setjmp` stores its *second* parameter there, which a
+    ///    one-arg call leaves as whatever RDX held. `longjmp` treats a
+    ///    nonzero `Frame` as a request for a REAL `RtlUnwindEx` stack
+    ///    unwind — with a garbage target: STATUS_BAD_STACK in release
+    ///    binaries, GS-cookie aborts under the panic=unwind test
+    ///    harness. `js_throw` (the only `longjmp` site) zeroes the slot
+    ///    before jumping to force the non-unwinding POSIX semantics the
+    ///    runtime's savepoint restores assume.
     pub fn setjmp(env: *mut c_int) -> c_int;
 }
 
@@ -66,7 +86,8 @@ extern "C" {
 /// - Linux x86_64 glibc: `__jmp_buf` is 8 `i64` = 64 bytes plus
 ///   ~12 bytes of signal-state fields = ~152 bytes for `jmp_buf`.
 /// - Windows x64 MSVC: 16 doubles = 128 bytes for `_JBLEN`, padded
-///   to 256 bytes of `_JUMP_BUFFER`.
+///   to 256 bytes of `_JUMP_BUFFER` — and the buffer must be
+///   **16-byte aligned** (aligned XMM stores; see the extern's docs).
 ///
 /// We surface 192 here so callers can `const_assert!` against it.
 pub const JMP_BUF_MIN_BYTES: usize = 192;
@@ -74,6 +95,18 @@ pub const JMP_BUF_MIN_BYTES: usize = 192;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 256 bytes at the 16-byte alignment MSVC's `_setjmp` requires
+    /// (aligned XMM stores — an under-aligned buffer AVs on Windows,
+    /// #7356). Mirrors `exception.rs`'s `JmpBuf` / gc's snapshot buffer.
+    #[repr(C, align(16))]
+    struct AlignedJmpBufBytes([u8; 256]);
+
+    impl AlignedJmpBufBytes {
+        fn new() -> Self {
+            AlignedJmpBufBytes([0u8; 256])
+        }
+    }
 
     /// Round-trip test: call `setjmp` against a buffer that satisfies
     /// the minimum size requirement. We never `longjmp` here — the
@@ -83,12 +116,12 @@ mod tests {
     /// "first call, not coming from a longjmp."
     #[test]
     fn setjmp_smoke_via_c_int_buffer() {
-        // 64 `c_int`s = 256 bytes, well above `JMP_BUF_MIN_BYTES`.
-        let mut buf = [0 as c_int; 64];
+        // 256 bytes, well above `JMP_BUF_MIN_BYTES`, 16-aligned.
+        let mut buf = AlignedJmpBufBytes::new();
         // SAFETY: `buf` is exclusively owned, lives for the duration
         // of this call, and exceeds `JMP_BUF_MIN_BYTES`. We never
         // longjmp into it, so the saved state is never read.
-        let rv = unsafe { setjmp(buf.as_mut_ptr()) };
+        let rv = unsafe { setjmp(buf.0.as_mut_ptr() as *mut c_int) };
         assert_eq!(rv, 0, "first-time setjmp must return 0");
     }
 
@@ -101,8 +134,8 @@ mod tests {
     /// warning.
     #[test]
     fn setjmp_via_u64_buffer_cast() {
-        let mut buf = [0u64; 32]; // 256 bytes — matches gc.rs
-        let rv = unsafe { setjmp(buf.as_mut_ptr() as *mut c_int) };
+        let mut buf = AlignedJmpBufBytes::new(); // 256 bytes — matches gc.rs
+        let rv = unsafe { setjmp(buf.0.as_mut_ptr() as *mut u64 as *mut c_int) };
         assert_eq!(rv, 0);
     }
 
@@ -111,8 +144,8 @@ mod tests {
     /// `exception.rs::js_try_push`'s `JmpBuf { data: [i32; 64] }`).
     #[test]
     fn setjmp_via_i32_buffer_cast() {
-        let mut buf = [0i32; 64]; // 256 bytes — matches exception.rs
-        let rv = unsafe { setjmp(buf.as_mut_ptr() as *mut c_int) };
+        let mut buf = AlignedJmpBufBytes::new(); // 256 bytes — matches exception.rs
+        let rv = unsafe { setjmp(buf.0.as_mut_ptr() as *mut i32 as *mut c_int) };
         assert_eq!(rv, 0);
     }
 

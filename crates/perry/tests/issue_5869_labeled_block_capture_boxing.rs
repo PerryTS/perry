@@ -88,7 +88,7 @@ factory();
 /// Closure created INSIDE the labeled block, reassignment outside. Root
 /// cause of the former residual (un-ignored by the fix): a BOXED local's
 /// declared type stayed in `module_local_types`, so the typed-ABI closure
-/// specialization (`__typed_f64`) read the capture RAW while the generic
+/// specialization (`$typed_f64`) read the capture RAW while the generic
 /// variant went through `js_box_get` — and the dispatcher picked the typed
 /// body, returning box-pointer bits as a denormal. Boxed ids are now
 /// filtered out of `module_local_types`, so boxed captures always take the

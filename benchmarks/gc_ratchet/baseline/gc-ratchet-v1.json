@@ -3,27 +3,28 @@
   "kind": "gc-ratchet-baseline",
   "artifact_id": "gc-ratchet-v1",
   "not_the_public_baseline": "Internal Perry-vs-Perry GC ratchet. The public Node/Bun evidence is benchmarks/results/public-node-bun-v1.json, owned by benchmarks/run_public_baseline.sh. Never regenerate one from the other.",
-  "commit": "88dcee83b41d9c3824e748881ad1a5b047387de7",
-  "generated_at": "2026-07-30T06:47:15+00:00",
+  "commit": "98e9ecdb50075170e4be4469226b5379ebd67e73",
+  "code_tree": "d55c2f44d230c2eb25a40a187d7a941ee0afbed6",
+  "generated_at": "2026-08-12T06:33:42+00:00",
   "platform": "darwin-arm64",
   "host": {
     "platform": "darwin-arm64",
-    "hostname": "perry-macos.fritz.box",
+    "hostname": "perry-macos.local",
     "system": "Darwin",
     "release": "25.5.0",
     "machine": "arm64",
     "cpu_count": 8,
     "load_average": {
-      "1m": 1.19,
-      "5m": 1.48,
-      "15m": 2.14
+      "1m": 2.03,
+      "5m": 1.81,
+      "15m": 1.77
     },
     "cpu_brand": "Apple M1",
     "memory_bytes": 8589934592,
     "product_version": "26.5.1"
   },
   "toolchain": {
-    "perry_version": "perry 0.5.1265",
+    "perry_version": "perry 0.5.1484",
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "cc": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
@@ -31,25 +32,24 @@
     "env": {
       "PERRY_NO_AUTO_OPTIMIZE": "1",
       "PERRY_GEN_GC": null,
-      "PERRY_GEN_GC_EVACUATE": null,
       "PERRY_WRITE_BARRIERS": null
     },
     "binaries": {
       "perry": {
-        "path": "wt-ratchet-target/release/perry",
-        "size": 36187312,
-        "sha256": "f3de4f3edf8429f6646510143755f87f8cbab9d8356b98308fd095eb8e68d205"
+        "path": "~/artifacts-7843-main/perry",
+        "size": 111255808,
+        "sha256": "9c39c3dc6a9c90cccafd9be8e68f483f2c1f2607652f9cce4aa654b706318184"
       },
-      "runtime_dir": "wt-ratchet-target/release",
+      "runtime_dir": "~/artifacts-7843-main",
       "libperry_runtime.a": {
-        "path": "wt-ratchet-target/release/libperry_runtime.a",
-        "size": 30240784,
-        "sha256": "4f31a6fe96ba835d18be5157515025b700be350107d4b24db330277cc5cbc067"
+        "path": "~/artifacts-7843-main/libperry_runtime.a",
+        "size": 30923592,
+        "sha256": "dd4d82e98cda2087c6af46055c834fb2f41eab3c7894fcd724fa999372079066"
       },
       "libperry_stdlib.a": {
-        "path": "wt-ratchet-target/release/libperry_stdlib.a",
-        "size": 85427768,
-        "sha256": "237b63291f7c0c7573c14e758f37c08306d84a2a058af40447f8e5c2d95aba97"
+        "path": "~/artifacts-7843-main/libperry_stdlib.a",
+        "size": 80774200,
+        "sha256": "b76bd465e4d611ba2519b55d75afc0dc11b627fec979af616af4197f556f0531"
       }
     }
   },
@@ -65,7 +65,13 @@
       "05_closure_capture",
       "06_string_retention",
       "07_array_grow_evacuate",
-      "08_map_set_sidetables"
+      "08_map_set_sidetables",
+      "09_try_catch_roots",
+      "10_store_receiver_across_alloc",
+      "11_collect_at_depth",
+      "12_large_live_set",
+      "13_large_eden_survivors",
+      "14_grow_then_churn"
     ]
   },
   "tolerances": {
@@ -86,7 +92,36 @@
       "class from the host the baseline was captured on: retention and GC counters",
       "transfer because they are semantic, memory and time do not. 'pinned_host' is",
       "for a maintainer re-running the suite on the same quiet box, where memory and",
-      "time are comparable and are gated."
+      "time are comparable and are gated.",
+      "",
+      "'probe_overrides' takes ONE (probe, metric) cell out of the gating family.",
+      "A profile band answers 'what is this machine class's noise floor'; whether a",
+      "metric is deterministic enough to gate at all is a property of the WORKLOAD,",
+      "and those two questions were conflated until #7554. It may only ever set",
+      "gating to false, never true, and never touches the band: an excluded cell is",
+      "still measured, still compared, and still printed, it just cannot turn the",
+      "job red. Every entry carries evidence that is checked, not merely stored --",
+      "at least 21 runs (the same number every band above is justified by) and a",
+      "spread that is actually non-zero, so a cell cannot be excluded on a hunch.",
+      "The section is EMPTY, and that is the goal state. Its one entry --",
+      "12_large_live_set.heap_used_bytes, added by #7554 -- was deleted by #7558,",
+      "which removed the cause rather than the cell: explicit gc() no longer forces",
+      "the conservative native-stack scan, so that reading is bit-identical again",
+      "and gates again. An empty section is not a disarmed rule; the evidence",
+      "checks and the never-gate-nothing rule still fail any entry added back.",
+      "",
+      "#7559 -- A heap_used_bytes band used to NOT be a statement about how much",
+      "the collector retained. The reading is taken after the probe's own gc(),",
+      "which until #7558 was the one site that forced the conservative",
+      "native-stack scan, and js_arena_stats sums arena block OFFSETS, so one",
+      "stale stack word pinned a whole 1 MiB block. Across the 74 commits from the",
+      "2026-08-05 pin to v0.5.1321 this metric moved on five probes, always by",
+      "whole blocks, while the same probes' scan-off retention was byte-identical",
+      "on ten of twelve and fell on the other two. #7558 removed that term: on the",
+      "2026-08-08 re-pin every probe's conservative reading equals its precise one",
+      "(gc_ratchet.py classify, excess 0.00% on all twelve), so heap_used_bytes now",
+      "means what it says. `classify` is still the first step on a breach -- it is",
+      "now also the check that the term has not come back."
     ],
     "shared_ci": {
       "heap_used_bytes": {
@@ -259,32 +294,34 @@
         "gating": true,
         "rationale": "GATED HERE ONLY. Worst cross-session spread of medians-of-7 was 0.751% on an idle box (load 1.7-2.0); worst raw within-session spread was 5.3%, which the median-of-7 damps out. 10% is ~13x the cross-session figure and ~2x the worst raw spread, so it will not fire on scheduler jitter but will catch the tens-of-percent slowdown a whole-stack conservative scan would introduce. The 15 ms floor covers the fastest probe (126 ms)."
       }
-    }
+    },
+    "probe_overrides": {}
   },
-  "notes": "Baseline for the shadow-stack-root removal campaign: frozen state of the evacuating minor before any of that work lands. Captured on the pinned quiet host at load 1.3.",
+  "notes": "Accepted by the merges of #7886, #7888, and #7895: heapUsed now reports live bytes, medium array backing stores enter the nursery, and a retain-to-churn phase flip may carry one bounded untraced promotion before the next measured cycle disarms it. Two fresh seven-repeat runs at 98e9ecdb5 reproduced identical shared-CI counters; re-pinned for #7843.",
   "probes": {
     "01_nursery_churn": {
       "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
       "correctness": {
         "status": "pass",
-        "oracle_version": "v26.5.0",
+        "oracle_version": "v26.5.1",
         "reason": ""
       },
+      "run_env": {},
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            807000,
-            807000,
-            807000,
-            807000,
-            807000,
-            807000,
-            807000
+            211216,
+            211216,
+            211216,
+            211216,
+            211216,
+            211216,
+            211216
           ],
           "sample_count": 7,
-          "median": 807000,
-          "min": 807000,
-          "max": 807000,
+          "median": 211216,
+          "min": 211216,
+          "max": 211216,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -309,145 +346,145 @@
         },
         "rss_bytes": {
           "samples": [
-            28409856,
-            28524544,
-            28508160,
-            28475392,
-            28344320,
-            28540928,
-            28491776
+            30359552,
+            30375936,
+            30359552,
+            30375936,
+            30375936,
+            30359552,
+            30359552
           ],
           "sample_count": 7,
-          "median": 28491776,
-          "min": 28344320,
-          "max": 28540928,
-          "stdev": 64779.304975,
-          "spread": 196608,
-          "spread_pct": 0.690052
+          "median": 30359552,
+          "min": 30359552,
+          "max": 30375936,
+          "stdev": 8107.977266,
+          "spread": 16384,
+          "spread_pct": 0.053967
         },
         "peak_rss_bytes": {
           "samples": [
-            28835840,
-            28950528,
-            28934144,
-            28901376,
-            28770304,
-            28966912,
-            28917760
+            30769152,
+            30785536,
+            30769152,
+            30785536,
+            30785536,
+            30769152,
+            30769152
           ],
           "sample_count": 7,
-          "median": 28917760,
-          "min": 28770304,
-          "max": 28966912,
-          "stdev": 64779.304975,
-          "spread": 196608,
-          "spread_pct": 0.679887
+          "median": 30769152,
+          "min": 30769152,
+          "max": 30785536,
+          "stdev": 8107.977266,
+          "spread": 16384,
+          "spread_pct": 0.053248
         },
         "wall_ms": {
           "samples": [
-            182.261667,
-            176.400625,
-            176.785375,
-            176.868291,
-            181.023042,
-            177.289709,
-            176.276
+            45.173041,
+            45.133542,
+            44.775917,
+            44.878875,
+            44.760416,
+            45.10875,
+            44.815875
           ],
           "sample_count": 7,
-          "median": 176.868291,
-          "min": 176.276,
-          "max": 182.261667,
-          "stdev": 2.266981,
-          "spread": 5.985667,
-          "spread_pct": 3.384251
+          "median": 44.878875,
+          "min": 44.760416,
+          "max": 45.173041,
+          "stdev": 0.168154,
+          "spread": 0.412625,
+          "spread_pct": 0.919419
         },
         "minor_cycles": {
           "samples": [
-            14,
-            14
+            1,
+            1
           ],
           "sample_count": 2,
-          "median": 14,
-          "min": 14,
-          "max": 14,
+          "median": 1,
+          "min": 1,
+          "max": 1,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "step_cycles": {
           "samples": [
-            14,
-            14
+            1,
+            1
           ],
           "sample_count": 2,
-          "median": 14,
-          "min": 14,
-          "max": 14,
+          "median": 1,
+          "min": 1,
+          "max": 1,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_objects": {
           "samples": [
-            18961,
-            18961
+            6264,
+            6264
           ],
           "sample_count": 2,
-          "median": 18961,
-          "min": 18961,
-          "max": 18961,
+          "median": 6264,
+          "min": 6264,
+          "max": 6264,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            1091152,
-            1091152
+            431328,
+            431328
           ],
           "sample_count": 2,
-          "median": 1091152,
-          "min": 1091152,
-          "max": 1091152,
+          "median": 431328,
+          "min": 431328,
+          "max": 431328,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            4704,
-            4704
+            0,
+            0
           ],
           "sample_count": 2,
-          "median": 4704,
-          "min": 4704,
-          "max": 4704,
+          "median": 0,
+          "min": 0,
+          "max": 0,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            210824,
-            210824
+            0,
+            0
           ],
           "sample_count": 2,
-          "median": 210824,
-          "min": 210824,
-          "max": 210824,
+          "median": 0,
+          "min": 0,
+          "max": 0,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            29130768,
-            29130768
+            17393872,
+            17393872
           ],
           "sample_count": 2,
-          "median": 29130768,
-          "min": 29130768,
-          "max": 29130768,
+          "median": 17393872,
+          "min": 17393872,
+          "max": 17393872,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -458,24 +495,409 @@
       "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
       "correctness": {
         "status": "pass",
-        "oracle_version": "v26.5.0",
+        "oracle_version": "v26.5.1",
         "reason": ""
       },
+      "run_env": {},
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            5022864,
-            5022864,
-            5022864,
-            5022864,
-            5022864,
-            5022864,
-            5022864
+            3615488,
+            3615488,
+            3615488,
+            3615488,
+            3615488,
+            3615488,
+            3615488
           ],
           "sample_count": 7,
-          "median": 5022864,
-          "min": 5022864,
-          "max": 5022864,
+          "median": 3615488,
+          "min": 3615488,
+          "max": 3615488,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "heap_total_bytes": {
+          "samples": [
+            24117248,
+            24117248,
+            24117248,
+            24117248,
+            24117248,
+            24117248,
+            24117248
+          ],
+          "sample_count": 7,
+          "median": 24117248,
+          "min": 24117248,
+          "max": 24117248,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "rss_bytes": {
+          "samples": [
+            37306368,
+            37289984,
+            37289984,
+            37273600,
+            37289984,
+            37289984,
+            37273600
+          ],
+          "sample_count": 7,
+          "median": 37289984,
+          "min": 37273600,
+          "max": 37306368,
+          "stdev": 10467.353641,
+          "spread": 32768,
+          "spread_pct": 0.087873
+        },
+        "peak_rss_bytes": {
+          "samples": [
+            37732352,
+            37715968,
+            37715968,
+            37699584,
+            37715968,
+            37715968,
+            37699584
+          ],
+          "sample_count": 7,
+          "median": 37715968,
+          "min": 37699584,
+          "max": 37732352,
+          "stdev": 10467.353641,
+          "spread": 32768,
+          "spread_pct": 0.086881
+        },
+        "wall_ms": {
+          "samples": [
+            47.384833,
+            46.75175,
+            47.011959,
+            46.754292,
+            46.692209,
+            46.740708,
+            46.66225
+          ],
+          "sample_count": 7,
+          "median": 46.75175,
+          "min": 46.66225,
+          "max": 47.384833,
+          "stdev": 0.239897,
+          "spread": 0.722583,
+          "spread_pct": 1.545574
+        },
+        "minor_cycles": {
+          "samples": [
+            1,
+            1
+          ],
+          "sample_count": 2,
+          "median": 1,
+          "min": 1,
+          "max": 1,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            1,
+            1
+          ],
+          "sample_count": 2,
+          "median": 1,
+          "min": 1,
+          "max": 1,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            35943,
+            35943
+          ],
+          "sample_count": 2,
+          "median": 35943,
+          "min": 35943,
+          "max": 35943,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            2568760,
+            2568760
+          ],
+          "sample_count": 2,
+          "median": 2568760,
+          "min": 2568760,
+          "max": 2568760,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_bytes": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "freed_bytes": {
+          "samples": [
+            15256464,
+            15256464
+          ],
+          "sample_count": 2,
+          "median": 15256464,
+          "min": 15256464,
+          "max": 15256464,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        }
+      }
+    },
+    "03_cross_gen_writes": {
+      "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+      "correctness": {
+        "status": "pass",
+        "oracle_version": "v26.5.1",
+        "reason": ""
+      },
+      "run_env": {},
+      "metrics": {
+        "heap_used_bytes": {
+          "samples": [
+            528,
+            528,
+            528,
+            528,
+            528,
+            528,
+            528
+          ],
+          "sample_count": 7,
+          "median": 528,
+          "min": 528,
+          "max": 528,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "heap_total_bytes": {
+          "samples": [
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096
+          ],
+          "sample_count": 7,
+          "median": 22020096,
+          "min": 22020096,
+          "max": 22020096,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "rss_bytes": {
+          "samples": [
+            25788416,
+            25804800,
+            25788416,
+            25788416,
+            25788416,
+            25788416,
+            25804800
+          ],
+          "sample_count": 7,
+          "median": 25788416,
+          "min": 25788416,
+          "max": 25804800,
+          "stdev": 7401.536741,
+          "spread": 16384,
+          "spread_pct": 0.063532
+        },
+        "peak_rss_bytes": {
+          "samples": [
+            29196288,
+            29212672,
+            29212672,
+            29196288,
+            29196288,
+            29196288,
+            29212672
+          ],
+          "sample_count": 7,
+          "median": 29196288,
+          "min": 29196288,
+          "max": 29212672,
+          "stdev": 8107.977266,
+          "spread": 16384,
+          "spread_pct": 0.056117
+        },
+        "wall_ms": {
+          "samples": [
+            34.648916,
+            30.82525,
+            30.850709,
+            30.714166,
+            30.716959,
+            30.64425,
+            30.78625
+          ],
+          "sample_count": 7,
+          "median": 30.78625,
+          "min": 30.64425,
+          "max": 34.648916,
+          "stdev": 1.36374,
+          "spread": 4.004666,
+          "spread_pct": 13.007969
+        },
+        "minor_cycles": {
+          "samples": [
+            2,
+            2
+          ],
+          "sample_count": 2,
+          "median": 2,
+          "min": 2,
+          "max": 2,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            2,
+            2
+          ],
+          "sample_count": 2,
+          "median": 2,
+          "min": 2,
+          "max": 2,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            8214,
+            8214
+          ],
+          "sample_count": 2,
+          "median": 8214,
+          "min": 8214,
+          "max": 8214,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            656256,
+            656256
+          ],
+          "sample_count": 2,
+          "median": 656256,
+          "min": 656256,
+          "max": 656256,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_bytes": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "freed_bytes": {
+          "samples": [
+            34273736,
+            34273736
+          ],
+          "sample_count": 2,
+          "median": 34273736,
+          "min": 34273736,
+          "max": 34273736,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        }
+      }
+    },
+    "04_dead_after_deep_stack": {
+      "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+      "correctness": {
+        "status": "pass",
+        "oracle_version": "v26.5.1",
+        "reason": ""
+      },
+      "run_env": {},
+      "metrics": {
+        "heap_used_bytes": {
+          "samples": [
+            536,
+            536,
+            536,
+            536,
+            536,
+            536,
+            536
+          ],
+          "sample_count": 7,
+          "median": 536,
+          "min": 536,
+          "max": 536,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -500,59 +922,111 @@
         },
         "rss_bytes": {
           "samples": [
-            38191104,
-            37994496,
-            38289408,
-            38141952,
-            38109184,
-            38158336,
-            37978112
+            25542656,
+            25542656,
+            25542656,
+            25542656,
+            25542656,
+            25542656,
+            25542656
           ],
           "sample_count": 7,
-          "median": 38141952,
-          "min": 37978112,
-          "max": 38289408,
-          "stdev": 101160.352785,
-          "spread": 311296,
-          "spread_pct": 0.816151
+          "median": 25542656,
+          "min": 25542656,
+          "max": 25542656,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
         },
         "peak_rss_bytes": {
           "samples": [
-            38617088,
-            38420480,
-            38715392,
-            38567936,
-            38535168,
-            38584320,
-            38404096
+            28917760,
+            28917760,
+            28917760,
+            28917760,
+            28917760,
+            28917760,
+            28917760
           ],
           "sample_count": 7,
-          "median": 38567936,
-          "min": 38404096,
-          "max": 38715392,
-          "stdev": 101160.352785,
-          "spread": 311296,
-          "spread_pct": 0.807137
+          "median": 28917760,
+          "min": 28917760,
+          "max": 28917760,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
         },
         "wall_ms": {
           "samples": [
-            195.276625,
-            206.5295,
-            199.593792,
-            196.149542,
-            206.390917,
-            198.554583,
-            206.426875
+            31.4635,
+            25.192792,
+            24.908792,
+            25.181292,
+            25.040792,
+            24.949875,
+            24.841167
           ],
           "sample_count": 7,
-          "median": 199.593792,
-          "min": 195.276625,
-          "max": 206.5295,
-          "stdev": 4.672138,
-          "spread": 11.252875,
-          "spread_pct": 5.637888
+          "median": 25.040792,
+          "min": 24.841167,
+          "max": 31.4635,
+          "stdev": 2.258405,
+          "spread": 6.622333,
+          "spread_pct": 26.44618
         },
         "minor_cycles": {
+          "samples": [
+            7,
+            7
+          ],
+          "sample_count": 2,
+          "median": 7,
+          "min": 7,
+          "max": 7,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            7,
+            7
+          ],
+          "sample_count": 2,
+          "median": 7,
+          "min": 7,
+          "max": 7,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            605,
+            605
+          ],
+          "sample_count": 2,
+          "median": 605,
+          "min": 605,
+          "max": 605,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            48720,
+            48720
+          ],
+          "sample_count": 2,
+          "median": 48720,
+          "min": 48720,
+          "max": 48720,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
           "samples": [
             10,
             10
@@ -565,462 +1039,28 @@
           "spread": 0,
           "spread_pct": 0
         },
-        "step_cycles": {
-          "samples": [
-            10,
-            10
-          ],
-          "sample_count": 2,
-          "median": 10,
-          "min": 10,
-          "max": 10,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "copied_objects": {
-          "samples": [
-            125732,
-            125732
-          ],
-          "sample_count": 2,
-          "median": 125732,
-          "min": 125732,
-          "max": 125732,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "copied_bytes": {
-          "samples": [
-            8776704,
-            8776704
-          ],
-          "sample_count": 2,
-          "median": 8776704,
-          "min": 8776704,
-          "max": 8776704,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "promoted_objects": {
-          "samples": [
-            37473,
-            37473
-          ],
-          "sample_count": 2,
-          "median": 37473,
-          "min": 37473,
-          "max": 37473,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
         "promoted_bytes": {
           "samples": [
-            2569176,
-            2569176
+            440,
+            440
           ],
           "sample_count": 2,
-          "median": 2569176,
-          "min": 2569176,
-          "max": 2569176,
+          "median": 440,
+          "min": 440,
+          "max": 440,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            20219896,
-            20219896
+            118479632,
+            118479632
           ],
           "sample_count": 2,
-          "median": 20219896,
-          "min": 20219896,
-          "max": 20219896,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        }
-      }
-    },
-    "03_cross_gen_writes": {
-      "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
-      "correctness": {
-        "status": "pass",
-        "oracle_version": "v26.5.0",
-        "reason": ""
-      },
-      "metrics": {
-        "heap_used_bytes": {
-          "samples": [
-            705320,
-            705320,
-            705320,
-            705320,
-            705320,
-            705320,
-            705320
-          ],
-          "sample_count": 7,
-          "median": 705320,
-          "min": 705320,
-          "max": 705320,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "heap_total_bytes": {
-          "samples": [
-            19922944,
-            19922944,
-            19922944,
-            19922944,
-            19922944,
-            19922944,
-            19922944
-          ],
-          "sample_count": 7,
-          "median": 19922944,
-          "min": 19922944,
-          "max": 19922944,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "rss_bytes": {
-          "samples": [
-            28786688,
-            28786688,
-            28786688,
-            28803072,
-            28803072,
-            28770304,
-            28770304
-          ],
-          "sample_count": 7,
-          "median": 28786688,
-          "min": 28770304,
-          "max": 28803072,
-          "stdev": 12385.139852,
-          "spread": 32768,
-          "spread_pct": 0.11383
-        },
-        "peak_rss_bytes": {
-          "samples": [
-            29245440,
-            29245440,
-            29245440,
-            29261824,
-            29261824,
-            29229056,
-            29229056
-          ],
-          "sample_count": 7,
-          "median": 29245440,
-          "min": 29229056,
-          "max": 29261824,
-          "stdev": 12385.139852,
-          "spread": 32768,
-          "spread_pct": 0.112045
-        },
-        "wall_ms": {
-          "samples": [
-            205.479084,
-            204.695417,
-            204.594792,
-            203.815625,
-            207.744042,
-            204.515833,
-            204.37525
-          ],
-          "sample_count": 7,
-          "median": 204.594792,
-          "min": 203.815625,
-          "max": 207.744042,
-          "stdev": 1.197426,
-          "spread": 3.928417,
-          "spread_pct": 1.920096
-        },
-        "minor_cycles": {
-          "samples": [
-            22,
-            22
-          ],
-          "sample_count": 2,
-          "median": 22,
-          "min": 22,
-          "max": 22,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "step_cycles": {
-          "samples": [
-            22,
-            22
-          ],
-          "sample_count": 2,
-          "median": 22,
-          "min": 22,
-          "max": 22,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "copied_objects": {
-          "samples": [
-            105154,
-            105154
-          ],
-          "sample_count": 2,
-          "median": 105154,
-          "min": 105154,
-          "max": 105154,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "copied_bytes": {
-          "samples": [
-            7299544,
-            7299544
-          ],
-          "sample_count": 2,
-          "median": 7299544,
-          "min": 7299544,
-          "max": 7299544,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "promoted_objects": {
-          "samples": [
-            4702,
-            4702
-          ],
-          "sample_count": 2,
-          "median": 4702,
-          "min": 4702,
-          "max": 4702,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "promoted_bytes": {
-          "samples": [
-            208728,
-            208728
-          ],
-          "sample_count": 2,
-          "median": 208728,
-          "min": 208728,
-          "max": 208728,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "freed_bytes": {
-          "samples": [
-            36196760,
-            36196760
-          ],
-          "sample_count": 2,
-          "median": 36196760,
-          "min": 36196760,
-          "max": 36196760,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        }
-      }
-    },
-    "04_dead_after_deep_stack": {
-      "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
-      "correctness": {
-        "status": "pass",
-        "oracle_version": "v26.5.0",
-        "reason": ""
-      },
-      "metrics": {
-        "heap_used_bytes": {
-          "samples": [
-            1000728,
-            1000728,
-            1000728,
-            1000728,
-            1000728,
-            1000728,
-            1000728
-          ],
-          "sample_count": 7,
-          "median": 1000728,
-          "min": 1000728,
-          "max": 1000728,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "heap_total_bytes": {
-          "samples": [
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520
-          ],
-          "sample_count": 7,
-          "median": 20971520,
-          "min": 20971520,
-          "max": 20971520,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "rss_bytes": {
-          "samples": [
-            28786688,
-            28770304,
-            28803072,
-            28803072,
-            28770304,
-            28786688,
-            28786688
-          ],
-          "sample_count": 7,
-          "median": 28786688,
-          "min": 28770304,
-          "max": 28803072,
-          "stdev": 12385.139852,
-          "spread": 32768,
-          "spread_pct": 0.11383
-        },
-        "peak_rss_bytes": {
-          "samples": [
-            29212672,
-            29196288,
-            29229056,
-            29229056,
-            29196288,
-            29212672,
-            29212672
-          ],
-          "sample_count": 7,
-          "median": 29212672,
-          "min": 29196288,
-          "max": 29229056,
-          "stdev": 12385.139852,
-          "spread": 32768,
-          "spread_pct": 0.11217
-        },
-        "wall_ms": {
-          "samples": [
-            450.224083,
-            451.585542,
-            452.284375,
-            450.671708,
-            450.975333,
-            452.758375,
-            451.44225
-          ],
-          "sample_count": 7,
-          "median": 451.44225,
-          "min": 450.224083,
-          "max": 452.758375,
-          "stdev": 0.824117,
-          "spread": 2.534292,
-          "spread_pct": 0.561377
-        },
-        "minor_cycles": {
-          "samples": [
-            104,
-            104
-          ],
-          "sample_count": 2,
-          "median": 104,
-          "min": 104,
-          "max": 104,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "step_cycles": {
-          "samples": [
-            104,
-            104
-          ],
-          "sample_count": 2,
-          "median": 104,
-          "min": 104,
-          "max": 104,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "copied_objects": {
-          "samples": [
-            22522,
-            22522
-          ],
-          "sample_count": 2,
-          "median": 22522,
-          "min": 22522,
-          "max": 22522,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "copied_bytes": {
-          "samples": [
-            1413696,
-            1413696
-          ],
-          "sample_count": 2,
-          "median": 1413696,
-          "min": 1413696,
-          "max": 1413696,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "promoted_objects": {
-          "samples": [
-            4702,
-            4702
-          ],
-          "sample_count": 2,
-          "median": 4702,
-          "min": 4702,
-          "max": 4702,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "promoted_bytes": {
-          "samples": [
-            208736,
-            208736
-          ],
-          "sample_count": 2,
-          "median": 208736,
-          "min": 208736,
-          "max": 208736,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
-        "freed_bytes": {
-          "samples": [
-            123527360,
-            123527360
-          ],
-          "sample_count": 2,
-          "median": 123527360,
-          "min": 123527360,
-          "max": 123527360,
+          "median": 118479632,
+          "min": 118479632,
+          "max": 118479632,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1031,187 +1071,188 @@
       "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
       "correctness": {
         "status": "pass",
-        "oracle_version": "v26.5.0",
+        "oracle_version": "v26.5.1",
         "reason": ""
       },
+      "run_env": {},
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            1040208,
-            1040208,
-            1040208,
-            1040208,
-            1040208,
-            1040208,
-            1040208
+            7200,
+            7200,
+            7200,
+            7200,
+            7200,
+            7200,
+            7200
           ],
           "sample_count": 7,
-          "median": 1040208,
-          "min": 1040208,
-          "max": 1040208,
+          "median": 7200,
+          "min": 7200,
+          "max": 7200,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "heap_total_bytes": {
           "samples": [
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096,
+            22020096
           ],
           "sample_count": 7,
-          "median": 20971520,
-          "min": 20971520,
-          "max": 20971520,
+          "median": 22020096,
+          "min": 22020096,
+          "max": 22020096,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "rss_bytes": {
           "samples": [
-            37240832,
-            37240832,
-            37240832,
-            37257216,
-            37240832,
-            37257216,
-            37240832
+            26312704,
+            26312704,
+            26312704,
+            26312704,
+            26296320,
+            26312704,
+            26312704
           ],
           "sample_count": 7,
-          "median": 37240832,
-          "min": 37240832,
-          "max": 37257216,
-          "stdev": 7401.536741,
+          "median": 26312704,
+          "min": 26296320,
+          "max": 26312704,
+          "stdev": 5733.205707,
           "spread": 16384,
-          "spread_pct": 0.043995
+          "spread_pct": 0.062267
         },
         "peak_rss_bytes": {
           "samples": [
-            39763968,
-            39763968,
-            39763968,
-            39780352,
-            39763968,
-            39780352,
-            39763968
+            29278208,
+            29278208,
+            29278208,
+            29278208,
+            29261824,
+            29278208,
+            29278208
           ],
           "sample_count": 7,
-          "median": 39763968,
-          "min": 39763968,
-          "max": 39780352,
-          "stdev": 7401.536741,
+          "median": 29278208,
+          "min": 29261824,
+          "max": 29278208,
+          "stdev": 5733.205707,
           "spread": 16384,
-          "spread_pct": 0.041203
+          "spread_pct": 0.05596
         },
         "wall_ms": {
           "samples": [
-            153.809708,
-            153.99325,
-            153.946542,
-            153.524209,
-            154.348458,
-            153.999,
-            153.71525
+            52.472208,
+            52.413542,
+            52.098208,
+            52.249834,
+            52.080708,
+            52.125125,
+            52.139958
           ],
           "sample_count": 7,
-          "median": 153.946542,
-          "min": 153.524209,
-          "max": 154.348458,
-          "stdev": 0.240562,
-          "spread": 0.824249,
-          "spread_pct": 0.535412
+          "median": 52.139958,
+          "min": 52.080708,
+          "max": 52.472208,
+          "stdev": 0.147055,
+          "spread": 0.3915,
+          "spread_pct": 0.750864
         },
         "minor_cycles": {
           "samples": [
-            26,
-            26
+            2,
+            2
           ],
           "sample_count": 2,
-          "median": 26,
-          "min": 26,
-          "max": 26,
+          "median": 2,
+          "min": 2,
+          "max": 2,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "step_cycles": {
           "samples": [
-            26,
-            26
+            2,
+            2
           ],
           "sample_count": 2,
-          "median": 26,
-          "min": 26,
-          "max": 26,
+          "median": 2,
+          "min": 2,
+          "max": 2,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_objects": {
           "samples": [
-            38956,
-            38956
+            3078,
+            3078
           ],
           "sample_count": 2,
-          "median": 38956,
-          "min": 38956,
-          "max": 38956,
+          "median": 3078,
+          "min": 3078,
+          "max": 3078,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            2196400,
-            2196400
+            172040,
+            172040
           ],
           "sample_count": 2,
-          "median": 2196400,
-          "min": 2196400,
-          "max": 2196400,
+          "median": 172040,
+          "min": 172040,
+          "max": 172040,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            138,
-            138
+            0,
+            0
           ],
           "sample_count": 2,
-          "median": 138,
-          "min": 138,
-          "max": 138,
+          "median": 0,
+          "min": 0,
+          "max": 0,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            7096,
-            7096
+            0,
+            0
           ],
           "sample_count": 2,
-          "median": 7096,
-          "min": 7096,
-          "max": 7096,
+          "median": 0,
+          "min": 0,
+          "max": 0,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            41878592,
-            41878592
+            34510672,
+            34510672
           ],
           "sample_count": 2,
-          "median": 41878592,
-          "min": 41878592,
-          "max": 41878592,
+          "median": 34510672,
+          "min": 34510672,
+          "max": 34510672,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1222,187 +1263,188 @@
       "stdout": "probe:06_string_retention\nchecksum:1112804\n",
       "correctness": {
         "status": "pass",
-        "oracle_version": "v26.5.0",
+        "oracle_version": "v26.5.1",
         "reason": ""
       },
+      "run_env": {},
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            746056,
-            746056,
-            746056,
-            746056,
-            746056,
-            746056,
-            746056
+            211608,
+            211608,
+            211608,
+            211608,
+            211608,
+            211608,
+            211608
           ],
           "sample_count": 7,
-          "median": 746056,
-          "min": 746056,
-          "max": 746056,
+          "median": 211608,
+          "min": 211608,
+          "max": 211608,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "heap_total_bytes": {
           "samples": [
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672
           ],
           "sample_count": 7,
-          "median": 20971520,
-          "min": 20971520,
-          "max": 20971520,
+          "median": 23068672,
+          "min": 23068672,
+          "max": 23068672,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "rss_bytes": {
           "samples": [
-            28213248,
-            28049408,
-            28082176,
-            28213248,
-            28049408,
-            28114944,
-            28196864
+            30736384,
+            30687232,
+            30752768,
+            30736384,
+            30703616,
+            30720000,
+            30736384
           ],
           "sample_count": 7,
-          "median": 28114944,
-          "min": 28049408,
-          "max": 28213248,
-          "stdev": 69511.425018,
-          "spread": 163840,
-          "spread_pct": 0.582751
+          "median": 30736384,
+          "min": 30687232,
+          "max": 30752768,
+          "stdev": 20934.707282,
+          "spread": 65536,
+          "spread_pct": 0.21322
         },
         "peak_rss_bytes": {
           "samples": [
-            28639232,
-            28475392,
-            28508160,
-            28639232,
-            28475392,
-            28540928,
-            28622848
+            31244288,
+            31195136,
+            31260672,
+            31244288,
+            31211520,
+            31227904,
+            31244288
           ],
           "sample_count": 7,
-          "median": 28540928,
-          "min": 28475392,
-          "max": 28639232,
-          "stdev": 69511.425018,
-          "spread": 163840,
-          "spread_pct": 0.574053
+          "median": 31244288,
+          "min": 31195136,
+          "max": 31260672,
+          "stdev": 20934.707282,
+          "spread": 65536,
+          "spread_pct": 0.209754
         },
         "wall_ms": {
           "samples": [
-            125.513417,
-            124.734666,
-            125.924875,
-            125.77875,
-            125.600417,
-            125.913709,
-            126.245333
+            56.560167,
+            56.668208,
+            56.682208,
+            56.584125,
+            56.503875,
+            56.727,
+            56.75125
           ],
           "sample_count": 7,
-          "median": 125.77875,
-          "min": 124.734666,
-          "max": 126.245333,
-          "stdev": 0.442612,
-          "spread": 1.510667,
-          "spread_pct": 1.201051
+          "median": 56.668208,
+          "min": 56.503875,
+          "max": 56.75125,
+          "stdev": 0.084976,
+          "spread": 0.247375,
+          "spread_pct": 0.436532
         },
         "minor_cycles": {
           "samples": [
-            64,
-            64
+            4,
+            4
           ],
           "sample_count": 2,
-          "median": 64,
-          "min": 64,
-          "max": 64,
+          "median": 4,
+          "min": 4,
+          "max": 4,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "step_cycles": {
           "samples": [
-            64,
-            64
+            4,
+            4
           ],
           "sample_count": 2,
-          "median": 64,
-          "min": 64,
-          "max": 64,
+          "median": 4,
+          "min": 4,
+          "max": 4,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_objects": {
           "samples": [
-            19476,
-            19476
+            11026,
+            11026
           ],
           "sample_count": 2,
-          "median": 19476,
-          "min": 19476,
-          "max": 19476,
+          "median": 11026,
+          "min": 11026,
+          "max": 11026,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            1962384,
-            1962384
+            701088,
+            701088
           ],
           "sample_count": 2,
-          "median": 1962384,
-          "min": 1962384,
-          "max": 1962384,
+          "median": 701088,
+          "min": 701088,
+          "max": 701088,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            4704,
-            4704
+            4754,
+            4754
           ],
           "sample_count": 2,
-          "median": 4704,
-          "min": 4704,
-          "max": 4704,
+          "median": 4754,
+          "min": 4754,
+          "max": 4754,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            209288,
-            209288
+            211296,
+            211296
           ],
           "sample_count": 2,
-          "median": 209288,
-          "min": 209288,
-          "max": 209288,
+          "median": 211296,
+          "min": 211296,
+          "max": 211296,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            81571800,
-            81571800
+            67926328,
+            67926328
           ],
           "sample_count": 2,
-          "median": 81571800,
-          "min": 81571800,
-          "max": 81571800,
+          "median": 67926328,
+          "min": 67926328,
+          "max": 67926328,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1413,187 +1455,188 @@
       "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
       "correctness": {
         "status": "pass",
-        "oracle_version": "v26.5.0",
+        "oracle_version": "v26.5.1",
         "reason": ""
       },
+      "run_env": {},
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            1816232,
-            1816232,
-            1816232,
-            1816232,
-            1816232,
-            1816232,
-            1816232
+            983888,
+            983888,
+            983888,
+            983888,
+            983888,
+            983888,
+            983888
           ],
           "sample_count": 7,
-          "median": 1816232,
-          "min": 1816232,
-          "max": 1816232,
+          "median": 983888,
+          "min": 983888,
+          "max": 983888,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "heap_total_bytes": {
           "samples": [
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672
           ],
           "sample_count": 7,
-          "median": 20971520,
-          "min": 20971520,
-          "max": 20971520,
+          "median": 23068672,
+          "min": 23068672,
+          "max": 23068672,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "rss_bytes": {
           "samples": [
-            29671424,
-            29523968,
-            29655040,
-            29671424,
-            29671424,
-            29655040,
-            29671424
+            31440896,
+            31440896,
+            31473664,
+            31457280,
+            31457280,
+            31457280,
+            31457280
           ],
           "sample_count": 7,
-          "median": 29671424,
-          "min": 29523968,
-          "max": 29671424,
-          "stdev": 50199.664557,
-          "spread": 147456,
-          "spread_pct": 0.496963
+          "median": 31457280,
+          "min": 31440896,
+          "max": 31473664,
+          "stdev": 10467.353641,
+          "spread": 32768,
+          "spread_pct": 0.104167
         },
         "peak_rss_bytes": {
           "samples": [
-            30130176,
-            29982720,
-            30113792,
-            30130176,
-            30130176,
-            30113792,
-            30130176
+            31932416,
+            31932416,
+            31965184,
+            31948800,
+            31948800,
+            31948800,
+            31948800
           ],
           "sample_count": 7,
-          "median": 30130176,
-          "min": 29982720,
-          "max": 30130176,
-          "stdev": 50199.664557,
-          "spread": 147456,
-          "spread_pct": 0.489396
+          "median": 31948800,
+          "min": 31932416,
+          "max": 31965184,
+          "stdev": 10467.353641,
+          "spread": 32768,
+          "spread_pct": 0.102564
         },
         "wall_ms": {
           "samples": [
-            146.096792,
-            147.107833,
-            146.086792,
-            146.135292,
-            146.087416,
-            146.979042,
-            146.054708
+            34.273625,
+            30.579917,
+            30.737666,
+            30.547791,
+            30.536917,
+            30.678667,
+            30.739708
           ],
           "sample_count": 7,
-          "median": 146.096792,
-          "min": 146.054708,
-          "max": 147.107833,
-          "stdev": 0.431654,
-          "spread": 1.053125,
-          "spread_pct": 0.720841
+          "median": 30.678667,
+          "min": 30.536917,
+          "max": 34.273625,
+          "stdev": 1.275079,
+          "spread": 3.736708,
+          "spread_pct": 12.180151
         },
         "minor_cycles": {
           "samples": [
-            80,
-            80
+            5,
+            5
           ],
           "sample_count": 2,
-          "median": 80,
-          "min": 80,
-          "max": 80,
+          "median": 5,
+          "min": 5,
+          "max": 5,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "step_cycles": {
           "samples": [
-            80,
-            80
+            5,
+            5
           ],
           "sample_count": 2,
-          "median": 80,
-          "min": 80,
-          "max": 80,
+          "median": 5,
+          "min": 5,
+          "max": 5,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_objects": {
           "samples": [
-            18294,
-            18294
+            6302,
+            6302
           ],
           "sample_count": 2,
-          "median": 18294,
-          "min": 18294,
-          "max": 18294,
+          "median": 6302,
+          "min": 6302,
+          "max": 6302,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            24404056,
-            24404056
+            2671456,
+            2671456
           ],
           "sample_count": 2,
-          "median": 24404056,
-          "min": 24404056,
-          "max": 24404056,
+          "median": 2671456,
+          "min": 2671456,
+          "max": 2671456,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            4796,
-            4796
+            4803,
+            4803
           ],
           "sample_count": 2,
-          "median": 4796,
-          "min": 4796,
-          "max": 4796,
+          "median": 4803,
+          "min": 4803,
+          "max": 4803,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            957744,
-            957744
+            614744,
+            614744
           ],
           "sample_count": 2,
-          "median": 957744,
-          "min": 957744,
-          "max": 957744,
+          "median": 614744,
+          "min": 614744,
+          "max": 614744,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            97546128,
-            97546128
+            83728816,
+            83728816
           ],
           "sample_count": 2,
-          "median": 97546128,
-          "min": 97546128,
-          "max": 97546128,
+          "median": 83728816,
+          "min": 83728816,
+          "max": 83728816,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1604,148 +1647,149 @@
       "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
       "correctness": {
         "status": "pass",
-        "oracle_version": "v26.5.0",
+        "oracle_version": "v26.5.1",
         "reason": ""
       },
+      "run_env": {},
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            457872,
-            457872,
-            457872,
-            457872,
-            457872,
-            457872,
-            457872
+            672,
+            672,
+            672,
+            672,
+            672,
+            672,
+            672
           ],
           "sample_count": 7,
-          "median": 457872,
-          "min": 457872,
-          "max": 457872,
+          "median": 672,
+          "min": 672,
+          "max": 672,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "heap_total_bytes": {
           "samples": [
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520,
-            20971520
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672,
+            23068672
           ],
           "sample_count": 7,
-          "median": 20971520,
-          "min": 20971520,
-          "max": 20971520,
+          "median": 23068672,
+          "min": 23068672,
+          "max": 23068672,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "rss_bytes": {
           "samples": [
-            23199744,
-            23183360,
-            23183360,
-            23183360,
-            23199744,
-            23199744,
-            23199744
+            25444352,
+            25444352,
+            25444352,
+            25427968,
+            25444352,
+            25427968,
+            25444352
           ],
           "sample_count": 7,
-          "median": 23199744,
-          "min": 23183360,
-          "max": 23199744,
-          "stdev": 8107.977266,
+          "median": 25444352,
+          "min": 25427968,
+          "max": 25444352,
+          "stdev": 7401.536741,
           "spread": 16384,
-          "spread_pct": 0.070621
+          "spread_pct": 0.064392
         },
         "peak_rss_bytes": {
           "samples": [
-            26492928,
-            26476544,
-            26476544,
-            26492928,
-            26492928,
-            26492928,
-            26492928
+            28868608,
+            28868608,
+            28868608,
+            28852224,
+            28868608,
+            28852224,
+            28868608
           ],
           "sample_count": 7,
-          "median": 26492928,
-          "min": 26476544,
-          "max": 26492928,
+          "median": 28868608,
+          "min": 28852224,
+          "max": 28868608,
           "stdev": 7401.536741,
           "spread": 16384,
-          "spread_pct": 0.061843
+          "spread_pct": 0.056754
         },
         "wall_ms": {
           "samples": [
-            499.628209,
-            500.48,
-            499.916084,
-            498.778375,
-            500.0575,
-            498.825,
-            499.090084
+            150.860834,
+            151.330875,
+            151.528542,
+            150.763042,
+            151.05725,
+            150.89875,
+            150.989542
           ],
           "sample_count": 7,
-          "median": 499.628209,
-          "min": 498.778375,
-          "max": 500.48,
-          "stdev": 0.608786,
-          "spread": 1.701625,
-          "spread_pct": 0.340578
+          "median": 150.989542,
+          "min": 150.763042,
+          "max": 151.528542,
+          "stdev": 0.25403,
+          "spread": 0.7655,
+          "spread_pct": 0.506989
         },
         "minor_cycles": {
           "samples": [
-            84,
-            84
+            6,
+            6
           ],
           "sample_count": 2,
-          "median": 84,
-          "min": 84,
-          "max": 84,
+          "median": 6,
+          "min": 6,
+          "max": 6,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "step_cycles": {
           "samples": [
-            84,
-            84
+            6,
+            6
           ],
           "sample_count": 2,
-          "median": 84,
-          "min": 84,
-          "max": 84,
+          "median": 6,
+          "min": 6,
+          "max": 6,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_objects": {
           "samples": [
-            42973,
-            42973
+            3924,
+            3924
           ],
           "sample_count": 2,
-          "median": 42973,
-          "min": 42973,
-          "max": 42973,
+          "median": 3924,
+          "min": 3924,
+          "max": 3924,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            3092544,
-            3092544
+            281016,
+            281016
           ],
           "sample_count": 2,
-          "median": 3092544,
-          "min": 3092544,
-          "max": 3092544,
+          "median": 281016,
+          "min": 281016,
+          "max": 281016,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1778,13 +1822,1170 @@
         },
         "freed_bytes": {
           "samples": [
-            102703104,
-            102703104
+            101670912,
+            101670912
           ],
           "sample_count": 2,
-          "median": 102703104,
-          "min": 102703104,
-          "max": 102703104,
+          "median": 101670912,
+          "min": 101670912,
+          "max": 101670912,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        }
+      }
+    },
+    "09_try_catch_roots": {
+      "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+      "correctness": {
+        "status": "pass",
+        "oracle_version": "v26.5.1",
+        "reason": ""
+      },
+      "run_env": {},
+      "metrics": {
+        "heap_used_bytes": {
+          "samples": [
+            211216,
+            211216,
+            211216,
+            211216,
+            211216,
+            211216,
+            211216
+          ],
+          "sample_count": 7,
+          "median": 211216,
+          "min": 211216,
+          "max": 211216,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "heap_total_bytes": {
+          "samples": [
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520
+          ],
+          "sample_count": 7,
+          "median": 20971520,
+          "min": 20971520,
+          "max": 20971520,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "rss_bytes": {
+          "samples": [
+            33718272,
+            33734656,
+            33652736,
+            33767424,
+            33669120,
+            33734656,
+            33669120
+          ],
+          "sample_count": 7,
+          "median": 33718272,
+          "min": 33652736,
+          "max": 33767424,
+          "stdev": 39858.495174,
+          "spread": 114688,
+          "spread_pct": 0.340136
+        },
+        "peak_rss_bytes": {
+          "samples": [
+            33996800,
+            34013184,
+            33931264,
+            34045952,
+            33947648,
+            34013184,
+            33947648
+          ],
+          "sample_count": 7,
+          "median": 33996800,
+          "min": 33931264,
+          "max": 34045952,
+          "stdev": 39858.495174,
+          "spread": 114688,
+          "spread_pct": 0.337349
+        },
+        "wall_ms": {
+          "samples": [
+            665.876583,
+            665.624208,
+            665.155541,
+            665.60325,
+            665.535,
+            665.302042,
+            666.838042
+          ],
+          "sample_count": 7,
+          "median": 665.60325,
+          "min": 665.155541,
+          "max": 666.838042,
+          "stdev": 0.510362,
+          "spread": 1.682501,
+          "spread_pct": 0.252778
+        },
+        "minor_cycles": {
+          "samples": [
+            1,
+            1
+          ],
+          "sample_count": 2,
+          "median": 1,
+          "min": 1,
+          "max": 1,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            1,
+            1
+          ],
+          "sample_count": 2,
+          "median": 1,
+          "min": 1,
+          "max": 1,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
+            6150,
+            6150
+          ],
+          "sample_count": 2,
+          "median": 6150,
+          "min": 6150,
+          "max": 6150,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_bytes": {
+          "samples": [
+            421632,
+            421632
+          ],
+          "sample_count": 2,
+          "median": 421632,
+          "min": 421632,
+          "max": 421632,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "freed_bytes": {
+          "samples": [
+            17403752,
+            17403752
+          ],
+          "sample_count": 2,
+          "median": 17403752,
+          "min": 17403752,
+          "max": 17403752,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        }
+      }
+    },
+    "10_store_receiver_across_alloc": {
+      "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+      "correctness": {
+        "status": "pass",
+        "oracle_version": "v26.5.1",
+        "reason": ""
+      },
+      "run_env": {},
+      "metrics": {
+        "heap_used_bytes": {
+          "samples": [
+            219432,
+            219432,
+            219432,
+            219432,
+            219432,
+            219432,
+            219432
+          ],
+          "sample_count": 7,
+          "median": 219432,
+          "min": 219432,
+          "max": 219432,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "heap_total_bytes": {
+          "samples": [
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520
+          ],
+          "sample_count": 7,
+          "median": 20971520,
+          "min": 20971520,
+          "max": 20971520,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "rss_bytes": {
+          "samples": [
+            29949952,
+            29949952,
+            29949952,
+            29949952,
+            29949952,
+            29949952,
+            29949952
+          ],
+          "sample_count": 7,
+          "median": 29949952,
+          "min": 29949952,
+          "max": 29949952,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "peak_rss_bytes": {
+          "samples": [
+            30441472,
+            30441472,
+            30441472,
+            30441472,
+            30441472,
+            30441472,
+            30441472
+          ],
+          "sample_count": 7,
+          "median": 30441472,
+          "min": 30441472,
+          "max": 30441472,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "wall_ms": {
+          "samples": [
+            35.036666,
+            33.038458,
+            32.941416,
+            32.894125,
+            32.973209,
+            32.890084,
+            32.998875
+          ],
+          "sample_count": 7,
+          "median": 32.973209,
+          "min": 32.890084,
+          "max": 35.036666,
+          "stdev": 0.729769,
+          "spread": 2.146582,
+          "spread_pct": 6.510079
+        },
+        "minor_cycles": {
+          "samples": [
+            1,
+            1
+          ],
+          "sample_count": 2,
+          "median": 1,
+          "min": 1,
+          "max": 1,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            1,
+            1
+          ],
+          "sample_count": 2,
+          "median": 1,
+          "min": 1,
+          "max": 1,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            8058,
+            8058
+          ],
+          "sample_count": 2,
+          "median": 8058,
+          "min": 8058,
+          "max": 8058,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            524744,
+            524744
+          ],
+          "sample_count": 2,
+          "median": 524744,
+          "min": 524744,
+          "max": 524744,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_bytes": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "freed_bytes": {
+          "samples": [
+            17300304,
+            17300304
+          ],
+          "sample_count": 2,
+          "median": 17300304,
+          "min": 17300304,
+          "max": 17300304,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        }
+      }
+    },
+    "11_collect_at_depth": {
+      "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+      "correctness": {
+        "status": "pass",
+        "oracle_version": "v26.5.1",
+        "reason": ""
+      },
+      "run_env": {},
+      "metrics": {
+        "heap_used_bytes": {
+          "samples": [
+            211216,
+            211216,
+            211216,
+            211216,
+            211216,
+            211216,
+            211216
+          ],
+          "sample_count": 7,
+          "median": 211216,
+          "min": 211216,
+          "max": 211216,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "heap_total_bytes": {
+          "samples": [
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520,
+            20971520
+          ],
+          "sample_count": 7,
+          "median": 20971520,
+          "min": 20971520,
+          "max": 20971520,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "rss_bytes": {
+          "samples": [
+            30425088,
+            30441472,
+            30441472,
+            30441472,
+            30441472,
+            30441472,
+            30441472
+          ],
+          "sample_count": 7,
+          "median": 30441472,
+          "min": 30425088,
+          "max": 30441472,
+          "stdev": 5733.205707,
+          "spread": 16384,
+          "spread_pct": 0.053821
+        },
+        "peak_rss_bytes": {
+          "samples": [
+            30916608,
+            30932992,
+            30932992,
+            30932992,
+            30932992,
+            30932992,
+            30932992
+          ],
+          "sample_count": 7,
+          "median": 30932992,
+          "min": 30916608,
+          "max": 30932992,
+          "stdev": 5733.205707,
+          "spread": 16384,
+          "spread_pct": 0.052966
+        },
+        "wall_ms": {
+          "samples": [
+            38.055541,
+            36.863167,
+            36.853458,
+            36.804,
+            36.825292,
+            36.910084,
+            36.91075
+          ],
+          "sample_count": 7,
+          "median": 36.863167,
+          "min": 36.804,
+          "max": 38.055541,
+          "stdev": 0.419574,
+          "spread": 1.251541,
+          "spread_pct": 3.395099
+        },
+        "minor_cycles": {
+          "samples": [
+            1,
+            1
+          ],
+          "sample_count": 2,
+          "median": 1,
+          "min": 1,
+          "max": 1,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            1,
+            1
+          ],
+          "sample_count": 2,
+          "median": 1,
+          "min": 1,
+          "max": 1,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            6141,
+            6141
+          ],
+          "sample_count": 2,
+          "median": 6141,
+          "min": 6141,
+          "max": 6141,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            418624,
+            418624
+          ],
+          "sample_count": 2,
+          "median": 418624,
+          "min": 418624,
+          "max": 418624,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_bytes": {
+          "samples": [
+            0,
+            0
+          ],
+          "sample_count": 2,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "freed_bytes": {
+          "samples": [
+            17406768,
+            17406768
+          ],
+          "sample_count": 2,
+          "median": 17406768,
+          "min": 17406768,
+          "max": 17406768,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        }
+      }
+    },
+    "12_large_live_set": {
+      "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+      "correctness": {
+        "status": "pass",
+        "oracle_version": "v26.5.1",
+        "reason": ""
+      },
+      "run_env": {},
+      "metrics": {
+        "heap_used_bytes": {
+          "samples": [
+            4462040,
+            4462040,
+            4462040,
+            4462040,
+            4462040,
+            4462040,
+            4462040
+          ],
+          "sample_count": 7,
+          "median": 4462040,
+          "min": 4462040,
+          "max": 4462040,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "heap_total_bytes": {
+          "samples": [
+            108003328,
+            108003328,
+            108003328,
+            108003328,
+            108003328,
+            108003328,
+            108003328
+          ],
+          "sample_count": 7,
+          "median": 108003328,
+          "min": 108003328,
+          "max": 108003328,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "rss_bytes": {
+          "samples": [
+            169295872,
+            169295872,
+            169279488,
+            169295872,
+            169279488,
+            169361408,
+            169574400
+          ],
+          "sample_count": 7,
+          "median": 169295872,
+          "min": 169279488,
+          "max": 169574400,
+          "stdev": 98970.475429,
+          "spread": 294912,
+          "spread_pct": 0.174199
+        },
+        "peak_rss_bytes": {
+          "samples": [
+            170917888,
+            170917888,
+            170901504,
+            170917888,
+            170901504,
+            170983424,
+            171196416
+          ],
+          "sample_count": 7,
+          "median": 170917888,
+          "min": 170901504,
+          "max": 171196416,
+          "stdev": 98970.475429,
+          "spread": 294912,
+          "spread_pct": 0.172546
+        },
+        "wall_ms": {
+          "samples": [
+            2206.650375,
+            2208.627542,
+            2206.958292,
+            2207.147125,
+            2232.191958,
+            2205.938833,
+            2207.535084
+          ],
+          "sample_count": 7,
+          "median": 2207.147125,
+          "min": 2205.938833,
+          "max": 2232.191958,
+          "stdev": 8.798574,
+          "spread": 26.253125,
+          "spread_pct": 1.18946
+        },
+        "minor_cycles": {
+          "samples": [
+            5,
+            5
+          ],
+          "sample_count": 2,
+          "median": 5,
+          "min": 5,
+          "max": 5,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            5,
+            5
+          ],
+          "sample_count": 2,
+          "median": 5,
+          "min": 5,
+          "max": 5,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            61453,
+            61453
+          ],
+          "sample_count": 2,
+          "median": 61453,
+          "min": 61453,
+          "max": 61453,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            4424080,
+            4424080
+          ],
+          "sample_count": 2,
+          "median": 4424080,
+          "min": 4424080,
+          "max": 4424080,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
+            524306,
+            524306
+          ],
+          "sample_count": 2,
+          "median": 524306,
+          "min": 524306,
+          "max": 524306,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_bytes": {
+          "samples": [
+            37749496,
+            37749496
+          ],
+          "sample_count": 2,
+          "median": 37749496,
+          "min": 37749496,
+          "max": 37749496,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "freed_bytes": {
+          "samples": [
+            113377528,
+            113377528
+          ],
+          "sample_count": 2,
+          "median": 113377528,
+          "min": 113377528,
+          "max": 113377528,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        }
+      }
+    },
+    "13_large_eden_survivors": {
+      "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+      "correctness": {
+        "status": "pass",
+        "oracle_version": "v26.5.1",
+        "reason": ""
+      },
+      "run_env": {
+        "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+      },
+      "metrics": {
+        "heap_used_bytes": {
+          "samples": [
+            239024,
+            239024,
+            239024,
+            239024,
+            239024,
+            239024,
+            239024
+          ],
+          "sample_count": 7,
+          "median": 239024,
+          "min": 239024,
+          "max": 239024,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "heap_total_bytes": {
+          "samples": [
+            77594624,
+            77594624,
+            77594624,
+            77594624,
+            77594624,
+            77594624,
+            77594624
+          ],
+          "sample_count": 7,
+          "median": 77594624,
+          "min": 77594624,
+          "max": 77594624,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "rss_bytes": {
+          "samples": [
+            191299584,
+            192348160,
+            192331776,
+            191299584,
+            191299584,
+            191299584,
+            193642496
+          ],
+          "sample_count": 7,
+          "median": 191299584,
+          "min": 191299584,
+          "max": 193642496,
+          "stdev": 833118.501068,
+          "spread": 2342912,
+          "spread_pct": 1.224734
+        },
+        "peak_rss_bytes": {
+          "samples": [
+            191741952,
+            192790528,
+            192774144,
+            191741952,
+            191741952,
+            191741952,
+            194084864
+          ],
+          "sample_count": 7,
+          "median": 191741952,
+          "min": 191741952,
+          "max": 194084864,
+          "stdev": 833118.501068,
+          "spread": 2342912,
+          "spread_pct": 1.221909
+        },
+        "wall_ms": {
+          "samples": [
+            963.962125,
+            962.0635,
+            964.339625,
+            963.541583,
+            964.327917,
+            962.85475,
+            963.868792
+          ],
+          "sample_count": 7,
+          "median": 963.868792,
+          "min": 962.0635,
+          "max": 964.339625,
+          "stdev": 0.773821,
+          "spread": 2.276125,
+          "spread_pct": 0.236145
+        },
+        "minor_cycles": {
+          "samples": [
+            4,
+            4
+          ],
+          "sample_count": 2,
+          "median": 4,
+          "min": 4,
+          "max": 4,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            5,
+            5
+          ],
+          "sample_count": 2,
+          "median": 5,
+          "min": 5,
+          "max": 5,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            532787,
+            532787
+          ],
+          "sample_count": 2,
+          "median": 532787,
+          "min": 532787,
+          "max": 532787,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            32052048,
+            32052048
+          ],
+          "sample_count": 2,
+          "median": 32052048,
+          "min": 32052048,
+          "max": 32052048,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
+            541926,
+            541926
+          ],
+          "sample_count": 2,
+          "median": 541926,
+          "min": 541926,
+          "max": 541926,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_bytes": {
+          "samples": [
+            32599432,
+            32599432
+          ],
+          "sample_count": 2,
+          "median": 32599432,
+          "min": 32599432,
+          "max": 32599432,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "freed_bytes": {
+          "samples": [
+            208564912,
+            208564912
+          ],
+          "sample_count": 2,
+          "median": 208564912,
+          "min": 208564912,
+          "max": 208564912,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        }
+      }
+    },
+    "14_grow_then_churn": {
+      "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+      "correctness": {
+        "status": "pass",
+        "oracle_version": "v26.5.1",
+        "reason": ""
+      },
+      "run_env": {
+        "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+        "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+      },
+      "metrics": {
+        "heap_used_bytes": {
+          "samples": [
+            399152,
+            399152,
+            399152,
+            399152,
+            399152,
+            399152,
+            399152
+          ],
+          "sample_count": 7,
+          "median": 399152,
+          "min": 399152,
+          "max": 399152,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "heap_total_bytes": {
+          "samples": [
+            26214400,
+            26214400,
+            26214400,
+            26214400,
+            26214400,
+            26214400,
+            26214400
+          ],
+          "sample_count": 7,
+          "median": 26214400,
+          "min": 26214400,
+          "max": 26214400,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "rss_bytes": {
+          "samples": [
+            291667968,
+            291667968,
+            291651584,
+            291667968,
+            291667968,
+            291667968,
+            291651584
+          ],
+          "sample_count": 7,
+          "median": 291667968,
+          "min": 291651584,
+          "max": 291667968,
+          "stdev": 7401.536741,
+          "spread": 16384,
+          "spread_pct": 0.005617
+        },
+        "peak_rss_bytes": {
+          "samples": [
+            292126720,
+            292126720,
+            292110336,
+            292126720,
+            292126720,
+            292126720,
+            292110336
+          ],
+          "sample_count": 7,
+          "median": 292126720,
+          "min": 292110336,
+          "max": 292126720,
+          "stdev": 7401.536741,
+          "spread": 16384,
+          "spread_pct": 0.005609
+        },
+        "wall_ms": {
+          "samples": [
+            361.815459,
+            362.701334,
+            362.254791,
+            361.316667,
+            362.955208,
+            363.004541,
+            362.711917
+          ],
+          "sample_count": 7,
+          "median": 362.701334,
+          "min": 361.316667,
+          "max": 363.004541,
+          "stdev": 0.585293,
+          "spread": 1.687874,
+          "spread_pct": 0.465362
+        },
+        "minor_cycles": {
+          "samples": [
+            19,
+            19
+          ],
+          "sample_count": 2,
+          "median": 19,
+          "min": 19,
+          "max": 19,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "step_cycles": {
+          "samples": [
+            20,
+            20
+          ],
+          "sample_count": 2,
+          "median": 20,
+          "min": 20,
+          "max": 20,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_objects": {
+          "samples": [
+            13013,
+            13013
+          ],
+          "sample_count": 2,
+          "median": 13013,
+          "min": 13013,
+          "max": 13013,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "copied_bytes": {
+          "samples": [
+            2003112,
+            2003112
+          ],
+          "sample_count": 2,
+          "median": 2003112,
+          "min": 2003112,
+          "max": 2003112,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
+            403514,
+            403514
+          ],
+          "sample_count": 2,
+          "median": 403514,
+          "min": 403514,
+          "max": 403514,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_bytes": {
+          "samples": [
+            151713056,
+            151713056
+          ],
+          "sample_count": 2,
+          "median": 151713056,
+          "min": 151713056,
+          "max": 151713056,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "freed_bytes": {
+          "samples": [
+            122137312,
+            122137312
+          ],
+          "sample_count": 2,
+          "median": 122137312,
+          "min": 122137312,
+          "max": 122137312,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1794,8 +2995,8 @@
   },
   "suite": {
     "schema_version": 2,
-    "commit": "88dcee83b",
-    "generated_at": "2026-07-30T06:47:14Z",
+    "commit": "98e9ecdb5",
+    "generated_at": "2026-08-12T06:33:42Z",
     "run_config": {
       "requested_samples": 5,
       "expected_benchmarks": [
@@ -1828,12 +3029,12 @@
     "runtimes": {
       "perry": {
         "available": true,
-        "version": "perry 0.5.1265",
+        "version": "perry 0.5.1484",
         "command": [
           "<compiled-binary>"
         ],
         "compile_command": [
-          "wt-ratchet-target/release/perry",
+          "~/artifacts-7843-main/perry",
           "<source.ts>",
           "-o",
           "<compiled-binary>"
@@ -1841,7 +3042,7 @@
       },
       "node": {
         "available": true,
-        "version": "v26.5.0",
+        "version": "v26.5.1",
         "command": [
           "node",
           "<source.ts>"
@@ -1863,7 +3064,7 @@
           "perry": {
             "wall_ms": {
               "samples": [
-                137,
+                131,
                 94,
                 94,
                 94,
@@ -1871,25 +3072,25 @@
               ],
               "sample_count": 5,
               "median": 94,
-              "p95": 137,
+              "p95": 131,
               "min": 94,
-              "max": 137,
+              "max": 131,
               "mad": 0,
-              "stdev": 17.2
+              "stdev": 14.8
             },
             "rss_kb": {
               "samples": [
-                4048,
-                4048,
-                4048,
-                4048,
-                4048
+                4480,
+                4480,
+                4480,
+                4480,
+                4480
               ],
               "sample_count": 5,
-              "median": 4048,
-              "p95": 4048,
-              "min": 4048,
-              "max": 4048,
+              "median": 4480,
+              "p95": 4480,
+              "min": 4480,
+              "max": 4480,
               "mad": 0,
               "stdev": 0
             }
@@ -1897,14 +3098,14 @@
           "node": {
             "wall_ms": {
               "samples": [
-                52,
-                52,
                 51,
                 51,
-                51
+                52,
+                52,
+                52
               ],
               "sample_count": 5,
-              "median": 51,
+              "median": 52,
               "p95": 52,
               "min": 51,
               "max": 52,
@@ -1913,26 +3114,26 @@
             },
             "rss_kb": {
               "samples": [
-                82480,
-                82480,
-                82400,
-                82544,
-                82496
+                82384,
+                82272,
+                82240,
+                82208,
+                82384
               ],
               "sample_count": 5,
-              "median": 82480,
-              "p95": 82544,
-              "min": 82400,
-              "max": 82544,
-              "mad": 16,
-              "stdev": 46.372406
+              "median": 82272,
+              "p95": 82384,
+              "min": 82208,
+              "max": 82384,
+              "mad": 64,
+              "stdev": 73.391008
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 1.843137,
-            "rss": 0.049079
+            "wall_time": 1.807692,
+            "rss": 0.054454
           },
           "perry_to_bun": null
         },
@@ -1948,11 +3149,11 @@
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
         "perry_ms": 94,
-        "perry_rss_kb": 4048,
-        "node_ms": 51,
-        "node_rss_kb": 82480,
-        "speed_ratio": 1.843137,
-        "memory_ratio": 0.049079
+        "perry_rss_kb": 4480,
+        "node_ms": 52,
+        "node_rss_kb": 82272,
+        "speed_ratio": 1.807692,
+        "memory_ratio": 0.054454
       },
       "03_array_write": {
         "runtimes": {
@@ -1962,30 +3163,30 @@
                 3,
                 2,
                 1,
-                2,
+                1,
                 1
               ],
               "sample_count": 5,
-              "median": 2,
+              "median": 1,
               "p95": 3,
               "min": 1,
               "max": 3,
-              "mad": 1,
-              "stdev": 0.748331
+              "mad": 0,
+              "stdev": 0.8
             },
             "rss_kb": {
               "samples": [
-                98368,
-                98352,
-                98352,
-                98352,
-                98352
+                97824,
+                97824,
+                97824,
+                97840,
+                97824
               ],
               "sample_count": 5,
-              "median": 98352,
-              "p95": 98368,
-              "min": 98352,
-              "max": 98368,
+              "median": 97824,
+              "p95": 97840,
+              "min": 97824,
+              "max": 97840,
               "mad": 0,
               "stdev": 6.4
             }
@@ -1993,7 +3194,7 @@
           "node": {
             "wall_ms": {
               "samples": [
-                8,
+                7,
                 7,
                 7,
                 7,
@@ -2001,34 +3202,34 @@
               ],
               "sample_count": 5,
               "median": 7,
-              "p95": 8,
+              "p95": 7,
               "min": 7,
-              "max": 8,
+              "max": 7,
               "mad": 0,
-              "stdev": 0.4
+              "stdev": 0
             },
             "rss_kb": {
               "samples": [
-                386720,
-                386704,
-                386736,
-                386736,
-                386704
+                386624,
+                386624,
+                386688,
+                386496,
+                386544
               ],
               "sample_count": 5,
-              "median": 386720,
-              "p95": 386736,
-              "min": 386704,
-              "max": 386736,
-              "mad": 16,
-              "stdev": 14.310835
+              "median": 386624,
+              "p95": 386688,
+              "min": 386496,
+              "max": 386688,
+              "mad": 64,
+              "stdev": 67.428184
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 0.285714,
-            "rss": 0.254324
+            "wall_time": 0.142857,
+            "rss": 0.253021
           },
           "perry_to_bun": null
         },
@@ -2043,88 +3244,88 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 2,
-        "perry_rss_kb": 98352,
+        "perry_ms": 1,
+        "perry_rss_kb": 97824,
         "node_ms": 7,
-        "node_rss_kb": 386720,
-        "speed_ratio": 0.285714,
-        "memory_ratio": 0.254324
+        "node_rss_kb": 386624,
+        "speed_ratio": 0.142857,
+        "memory_ratio": 0.253021
       },
       "04_array_read": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                39,
-                24,
-                24,
-                24,
-                23
+                59,
+                38,
+                38,
+                38,
+                37
               ],
               "sample_count": 5,
-              "median": 24,
-              "p95": 39,
-              "min": 23,
-              "max": 39,
+              "median": 38,
+              "p95": 59,
+              "min": 37,
+              "max": 59,
               "mad": 0,
-              "stdev": 6.112283
+              "stdev": 8.508819
             },
             "rss_kb": {
               "samples": [
-                98416,
-                98416,
-                98416,
-                98416,
-                98432
+                97824,
+                97824,
+                97808,
+                97808,
+                97808
               ],
               "sample_count": 5,
-              "median": 98416,
-              "p95": 98432,
-              "min": 98416,
-              "max": 98432,
+              "median": 97808,
+              "p95": 97824,
+              "min": 97808,
+              "max": 97824,
               "mad": 0,
-              "stdev": 6.4
+              "stdev": 7.838367
             }
           },
           "node": {
             "wall_ms": {
               "samples": [
                 12,
-                13,
                 12,
                 12,
-                13
+                12,
+                12
               ],
               "sample_count": 5,
               "median": 12,
-              "p95": 13,
+              "p95": 12,
               "min": 12,
-              "max": 13,
+              "max": 12,
               "mad": 0,
-              "stdev": 0.489898
+              "stdev": 0
             },
             "rss_kb": {
               "samples": [
-                387328,
-                387312,
-                387392,
-                387488,
-                387152
+                387296,
+                387504,
+                387472,
+                387344,
+                387248
               ],
               "sample_count": 5,
-              "median": 387328,
-              "p95": 387488,
-              "min": 387152,
-              "max": 387488,
-              "mad": 64,
-              "stdev": 110.202722
+              "median": 387344,
+              "p95": 387504,
+              "min": 387248,
+              "max": 387504,
+              "mad": 96,
+              "stdev": 99.354718
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 2.0,
-            "rss": 0.25409
+            "wall_time": 3.166667,
+            "rss": 0.252509
           },
           "perry_to_bun": null
         },
@@ -2139,45 +3340,45 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 24,
-        "perry_rss_kb": 98416,
+        "perry_ms": 38,
+        "perry_rss_kb": 97808,
         "node_ms": 12,
-        "node_rss_kb": 387328,
-        "speed_ratio": 2.0,
-        "memory_ratio": 0.25409
+        "node_rss_kb": 387344,
+        "speed_ratio": 3.166667,
+        "memory_ratio": 0.252509
       },
       "05_fibonacci": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                348,
-                299,
-                300,
-                300,
-                300
+                431,
+                390,
+                390,
+                390,
+                390
               ],
               "sample_count": 5,
-              "median": 300,
-              "p95": 348,
-              "min": 299,
-              "max": 348,
+              "median": 390,
+              "p95": 431,
+              "min": 390,
+              "max": 431,
               "mad": 0,
-              "stdev": 19.303886
+              "stdev": 16.4
             },
             "rss_kb": {
               "samples": [
-                4176,
-                4176,
-                4176,
-                4176,
-                4176
+                4560,
+                4560,
+                4560,
+                4560,
+                4560
               ],
               "sample_count": 5,
-              "median": 4176,
-              "p95": 4176,
-              "min": 4176,
-              "max": 4176,
+              "median": 4560,
+              "p95": 4560,
+              "min": 4560,
+              "max": 4560,
               "mad": 0,
               "stdev": 0
             }
@@ -2185,42 +3386,42 @@
           "node": {
             "wall_ms": {
               "samples": [
-                969,
+                968,
                 968,
                 969,
                 968,
-                969
+                968
               ],
               "sample_count": 5,
-              "median": 969,
+              "median": 968,
               "p95": 969,
               "min": 968,
               "max": 969,
               "mad": 0,
-              "stdev": 0.489898
+              "stdev": 0.4
             },
             "rss_kb": {
               "samples": [
-                82240,
-                82160,
                 82096,
-                82176,
-                82192
+                82096,
+                82128,
+                82128,
+                81936
               ],
               "sample_count": 5,
-              "median": 82176,
-              "p95": 82240,
-              "min": 82096,
-              "max": 82240,
-              "mad": 16,
-              "stdev": 46.811964
+              "median": 82096,
+              "p95": 82128,
+              "min": 81936,
+              "max": 82128,
+              "mad": 32,
+              "stdev": 71.839822
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 0.309598,
-            "rss": 0.050818
+            "wall_time": 0.402893,
+            "rss": 0.055545
           },
           "perry_to_bun": null
         },
@@ -2235,19 +3436,19 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 300,
-        "perry_rss_kb": 4176,
-        "node_ms": 969,
-        "node_rss_kb": 82176,
-        "speed_ratio": 0.309598,
-        "memory_ratio": 0.050818
+        "perry_ms": 390,
+        "perry_rss_kb": 4560,
+        "node_ms": 968,
+        "node_rss_kb": 82096,
+        "speed_ratio": 0.402893,
+        "memory_ratio": 0.055545
       },
       "06_math_intensive": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                89,
+                86,
                 49,
                 49,
                 49,
@@ -2255,25 +3456,25 @@
               ],
               "sample_count": 5,
               "median": 49,
-              "p95": 89,
+              "p95": 86,
               "min": 49,
-              "max": 89,
+              "max": 86,
               "mad": 0,
-              "stdev": 16
+              "stdev": 14.8
             },
             "rss_kb": {
               "samples": [
-                4128,
-                4128,
-                4128,
-                4128,
-                4128
+                4528,
+                4528,
+                4528,
+                4528,
+                4528
               ],
               "sample_count": 5,
-              "median": 4128,
-              "p95": 4128,
-              "min": 4128,
-              "max": 4128,
+              "median": 4528,
+              "p95": 4528,
+              "min": 4528,
+              "max": 4528,
               "mad": 0,
               "stdev": 0
             }
@@ -2298,25 +3499,25 @@
             "rss_kb": {
               "samples": [
                 83648,
-                83744,
-                83744,
-                83552,
-                83760
+                83760,
+                83616,
+                83696,
+                83728
               ],
               "sample_count": 5,
-              "median": 83744,
+              "median": 83696,
               "p95": 83760,
-              "min": 83552,
+              "min": 83616,
               "max": 83760,
-              "mad": 16,
-              "stdev": 79.421911
+              "mad": 48,
+              "stdev": 52.190421
             }
           }
         },
         "ratios": {
           "perry_to_node": {
             "wall_time": 1.020833,
-            "rss": 0.049293
+            "rss": 0.054101
           },
           "perry_to_bun": null
         },
@@ -2332,44 +3533,44 @@
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
         "perry_ms": 49,
-        "perry_rss_kb": 4128,
+        "perry_rss_kb": 4528,
         "node_ms": 48,
-        "node_rss_kb": 83744,
+        "node_rss_kb": 83696,
         "speed_ratio": 1.020833,
-        "memory_ratio": 0.049293
+        "memory_ratio": 0.054101
       },
       "07_object_create": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                21,
-                6,
-                5,
-                5,
-                6
+                11,
+                3,
+                3,
+                2,
+                2
               ],
               "sample_count": 5,
-              "median": 6,
-              "p95": 21,
-              "min": 5,
-              "max": 21,
+              "median": 3,
+              "p95": 11,
+              "min": 2,
+              "max": 11,
               "mad": 1,
-              "stdev": 6.216108
+              "stdev": 3.429286
             },
             "rss_kb": {
               "samples": [
-                4960,
-                4960,
-                4960,
-                4960,
-                4960
+                5344,
+                5344,
+                5344,
+                5344,
+                5344
               ],
               "sample_count": 5,
-              "median": 4960,
-              "p95": 4960,
-              "min": 4960,
-              "max": 4960,
+              "median": 5344,
+              "p95": 5344,
+              "min": 5344,
+              "max": 5344,
               "mad": 0,
               "stdev": 0
             }
@@ -2377,42 +3578,42 @@
           "node": {
             "wall_ms": {
               "samples": [
-                9,
-                9,
+                8,
+                8,
                 8,
                 8,
                 8
               ],
               "sample_count": 5,
               "median": 8,
-              "p95": 9,
+              "p95": 8,
               "min": 8,
-              "max": 9,
+              "max": 8,
               "mad": 0,
-              "stdev": 0.489898
+              "stdev": 0
             },
             "rss_kb": {
               "samples": [
-                85296,
-                85200,
-                85024,
-                85280,
-                85296
+                85184,
+                85072,
+                85248,
+                85232,
+                85232
               ],
               "sample_count": 5,
-              "median": 85280,
-              "p95": 85296,
-              "min": 85024,
-              "max": 85296,
+              "median": 85232,
+              "p95": 85248,
+              "min": 85072,
+              "max": 85248,
               "mad": 16,
-              "stdev": 103.889172
+              "stdev": 64.478213
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 0.75,
-            "rss": 0.058161
+            "wall_time": 0.375,
+            "rss": 0.062699
           },
           "perry_to_bun": null
         },
@@ -2427,45 +3628,45 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 6,
-        "perry_rss_kb": 4960,
+        "perry_ms": 3,
+        "perry_rss_kb": 5344,
         "node_ms": 8,
-        "node_rss_kb": 85280,
-        "speed_ratio": 0.75,
-        "memory_ratio": 0.058161
+        "node_rss_kb": 85232,
+        "speed_ratio": 0.375,
+        "memory_ratio": 0.062699
       },
       "08_string_concat": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                10,
+                7,
                 2,
                 2,
-                2,
-                2
+                1,
+                1
               ],
               "sample_count": 5,
               "median": 2,
-              "p95": 10,
-              "min": 2,
-              "max": 10,
-              "mad": 0,
-              "stdev": 3.2
+              "p95": 7,
+              "min": 1,
+              "max": 7,
+              "mad": 1,
+              "stdev": 2.244994
             },
             "rss_kb": {
               "samples": [
-                4480,
-                4480,
-                4480,
-                4480,
-                4480
+                4848,
+                4848,
+                4848,
+                4848,
+                4848
               ],
               "sample_count": 5,
-              "median": 4480,
-              "p95": 4480,
-              "min": 4480,
-              "max": 4480,
+              "median": 4848,
+              "p95": 4848,
+              "min": 4848,
+              "max": 4848,
               "mad": 0,
               "stdev": 0
             }
@@ -2475,40 +3676,40 @@
               "samples": [
                 4,
                 4,
-                4,
-                4,
+                3,
+                3,
                 4
               ],
               "sample_count": 5,
               "median": 4,
               "p95": 4,
-              "min": 4,
+              "min": 3,
               "max": 4,
               "mad": 0,
-              "stdev": 0
+              "stdev": 0.489898
             },
             "rss_kb": {
               "samples": [
-                89024,
                 88992,
-                89120,
-                89008,
-                88960
+                88944,
+                88912,
+                88768,
+                88784
               ],
               "sample_count": 5,
-              "median": 89008,
-              "p95": 89120,
-              "min": 88960,
-              "max": 89120,
-              "mad": 16,
-              "stdev": 53.927359
+              "median": 88912,
+              "p95": 88992,
+              "min": 88768,
+              "max": 88992,
+              "mad": 80,
+              "stdev": 88.796396
             }
           }
         },
         "ratios": {
           "perry_to_node": {
             "wall_time": 0.5,
-            "rss": 0.050333
+            "rss": 0.054526
           },
           "perry_to_bun": null
         },
@@ -2524,44 +3725,44 @@
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
         "perry_ms": 2,
-        "perry_rss_kb": 4480,
+        "perry_rss_kb": 4848,
         "node_ms": 4,
-        "node_rss_kb": 89008,
+        "node_rss_kb": 88912,
         "speed_ratio": 0.5,
-        "memory_ratio": 0.050333
+        "memory_ratio": 0.054526
       },
       "09_method_calls": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                109,
-                78,
-                78,
-                78,
-                78
+                21,
+                10,
+                9,
+                9,
+                9
               ],
               "sample_count": 5,
-              "median": 78,
-              "p95": 109,
-              "min": 78,
-              "max": 109,
+              "median": 9,
+              "p95": 21,
+              "min": 9,
+              "max": 21,
               "mad": 0,
-              "stdev": 12.4
+              "stdev": 4.71593
             },
             "rss_kb": {
               "samples": [
-                9728,
-                9728,
-                9728,
-                9728,
-                9728
+                5648,
+                5648,
+                5648,
+                5648,
+                5648
               ],
               "sample_count": 5,
-              "median": 9728,
-              "p95": 9728,
-              "min": 9728,
-              "max": 9728,
+              "median": 5648,
+              "p95": 5648,
+              "min": 5648,
+              "max": 5648,
               "mad": 0,
               "stdev": 0
             }
@@ -2570,41 +3771,41 @@
             "wall_ms": {
               "samples": [
                 11,
+                11,
                 10,
-                11,
-                11,
-                11
+                10,
+                10
               ],
               "sample_count": 5,
-              "median": 11,
+              "median": 10,
               "p95": 11,
               "min": 10,
               "max": 11,
               "mad": 0,
-              "stdev": 0.4
+              "stdev": 0.489898
             },
             "rss_kb": {
               "samples": [
-                83072,
-                83008,
-                82960,
-                82992,
-                83008
+                82928,
+                82880,
+                82976,
+                82832,
+                82992
               ],
               "sample_count": 5,
-              "median": 83008,
-              "p95": 83072,
-              "min": 82960,
-              "max": 83072,
-              "mad": 16,
-              "stdev": 36.485614
+              "median": 82928,
+              "p95": 82992,
+              "min": 82832,
+              "max": 82992,
+              "mad": 48,
+              "stdev": 59.523441
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 7.090909,
-            "rss": 0.117194
+            "wall_time": 0.9,
+            "rss": 0.068107
           },
           "perry_to_bun": null
         },
@@ -2619,45 +3820,45 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 78,
-        "perry_rss_kb": 9728,
-        "node_ms": 11,
-        "node_rss_kb": 83008,
-        "speed_ratio": 7.090909,
-        "memory_ratio": 0.117194
+        "perry_ms": 9,
+        "perry_rss_kb": 5648,
+        "node_ms": 10,
+        "node_rss_kb": 82928,
+        "speed_ratio": 0.9,
+        "memory_ratio": 0.068107
       },
       "10_nested_loops": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                70,
-                42,
-                42,
-                43,
-                42
+                91,
+                57,
+                56,
+                56,
+                56
               ],
               "sample_count": 5,
-              "median": 42,
-              "p95": 70,
-              "min": 42,
-              "max": 70,
+              "median": 56,
+              "p95": 91,
+              "min": 56,
+              "max": 91,
               "mad": 0,
-              "stdev": 11.106755
+              "stdev": 13.905395
             },
             "rss_kb": {
               "samples": [
-                9760,
-                9760,
-                9760,
-                9744,
-                9744
+                9440,
+                9456,
+                9456,
+                9440,
+                9440
               ],
               "sample_count": 5,
-              "median": 9760,
-              "p95": 9760,
-              "min": 9744,
-              "max": 9760,
+              "median": 9440,
+              "p95": 9456,
+              "min": 9440,
+              "max": 9456,
               "mad": 0,
               "stdev": 7.838367
             }
@@ -2667,40 +3868,40 @@
               "samples": [
                 18,
                 18,
+                16,
                 18,
-                18,
-                17
+                18
               ],
               "sample_count": 5,
               "median": 18,
               "p95": 18,
-              "min": 17,
+              "min": 16,
               "max": 18,
               "mad": 0,
-              "stdev": 0.4
+              "stdev": 0.8
             },
             "rss_kb": {
               "samples": [
-                84896,
-                84880,
-                84848,
-                84880,
+                84912,
+                84944,
+                83936,
+                84928,
                 84800
               ],
               "sample_count": 5,
-              "median": 84880,
-              "p95": 84896,
-              "min": 84800,
-              "max": 84896,
-              "mad": 16,
-              "stdev": 34.16665
+              "median": 84912,
+              "p95": 84944,
+              "min": 83936,
+              "max": 84944,
+              "mad": 32,
+              "stdev": 387.31899
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 2.333333,
-            "rss": 0.114986
+            "wall_time": 3.111111,
+            "rss": 0.111174
           },
           "perry_to_bun": null
         },
@@ -2715,47 +3916,47 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 42,
-        "perry_rss_kb": 9760,
+        "perry_ms": 56,
+        "perry_rss_kb": 9440,
         "node_ms": 18,
-        "node_rss_kb": 84880,
-        "speed_ratio": 2.333333,
-        "memory_ratio": 0.114986
+        "node_rss_kb": 84912,
+        "speed_ratio": 3.111111,
+        "memory_ratio": 0.111174
       },
       "11_prime_sieve": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                134,
-                127,
-                127,
-                126,
-                127
+                41,
+                29,
+                30,
+                30,
+                29
               ],
               "sample_count": 5,
-              "median": 127,
-              "p95": 134,
-              "min": 126,
-              "max": 134,
-              "mad": 0,
-              "stdev": 2.925748
+              "median": 30,
+              "p95": 41,
+              "min": 29,
+              "max": 41,
+              "mad": 1,
+              "stdev": 4.621688
             },
             "rss_kb": {
               "samples": [
-                28464,
-                28480,
-                28480,
-                28480,
-                28480
+                27888,
+                27888,
+                27872,
+                27888,
+                27872
               ],
               "sample_count": 5,
-              "median": 28480,
-              "p95": 28480,
-              "min": 28464,
-              "max": 28480,
+              "median": 27888,
+              "p95": 27888,
+              "min": 27872,
+              "max": 27888,
               "mad": 0,
-              "stdev": 6.4
+              "stdev": 7.838367
             }
           },
           "node": {
@@ -2777,26 +3978,26 @@
             },
             "rss_kb": {
               "samples": [
-                113824,
-                113728,
                 113776,
-                113696,
-                113808
+                114208,
+                113776,
+                113808,
+                113728
               ],
               "sample_count": 5,
               "median": 113776,
-              "p95": 113824,
-              "min": 113696,
-              "max": 113824,
-              "mad": 48,
-              "stdev": 48.106548
+              "p95": 114208,
+              "min": 113728,
+              "max": 114208,
+              "mad": 32,
+              "stdev": 176.261624
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 21.166667,
-            "rss": 0.250316
+            "wall_time": 5.0,
+            "rss": 0.245113
           },
           "perry_to_bun": null
         },
@@ -2811,45 +4012,45 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 127,
-        "perry_rss_kb": 28480,
+        "perry_ms": 30,
+        "perry_rss_kb": 27888,
         "node_ms": 6,
         "node_rss_kb": 113776,
-        "speed_ratio": 21.166667,
-        "memory_ratio": 0.250316
+        "speed_ratio": 5.0,
+        "memory_ratio": 0.245113
       },
       "12_binary_trees": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                25,
-                7,
-                6,
-                7,
-                7
+                15,
+                4,
+                4,
+                3,
+                3
               ],
               "sample_count": 5,
-              "median": 7,
-              "p95": 25,
-              "min": 6,
-              "max": 25,
-              "mad": 0,
-              "stdev": 7.310267
+              "median": 4,
+              "p95": 15,
+              "min": 3,
+              "max": 15,
+              "mad": 1,
+              "stdev": 4.621688
             },
             "rss_kb": {
               "samples": [
-                5008,
-                5008,
-                5008,
-                5008,
-                5008
+                5312,
+                5312,
+                5312,
+                5312,
+                5312
               ],
               "sample_count": 5,
-              "median": 5008,
-              "p95": 5008,
-              "min": 5008,
-              "max": 5008,
+              "median": 5312,
+              "p95": 5312,
+              "min": 5312,
+              "max": 5312,
               "mad": 0,
               "stdev": 0
             }
@@ -2859,40 +4060,40 @@
               "samples": [
                 9,
                 9,
-                9,
                 10,
-                9
+                10,
+                10
               ],
               "sample_count": 5,
-              "median": 9,
+              "median": 10,
               "p95": 10,
               "min": 9,
               "max": 10,
               "mad": 0,
-              "stdev": 0.4
+              "stdev": 0.489898
             },
             "rss_kb": {
               "samples": [
-                84992,
-                85120,
-                85120,
-                85024,
-                85136
+                85056,
+                85136,
+                85216,
+                85216,
+                85264
               ],
               "sample_count": 5,
-              "median": 85120,
-              "p95": 85136,
-              "min": 84992,
-              "max": 85136,
-              "mad": 16,
-              "stdev": 58.656969
+              "median": 85216,
+              "p95": 85264,
+              "min": 85056,
+              "max": 85264,
+              "mad": 48,
+              "stdev": 73.391008
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 0.777778,
-            "rss": 0.058835
+            "wall_time": 0.4,
+            "rss": 0.062336
           },
           "perry_to_bun": null
         },
@@ -2907,53 +4108,53 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 7,
-        "perry_rss_kb": 5008,
-        "node_ms": 9,
-        "node_rss_kb": 85120,
-        "speed_ratio": 0.777778,
-        "memory_ratio": 0.058835
+        "perry_ms": 4,
+        "perry_rss_kb": 5312,
+        "node_ms": 10,
+        "node_rss_kb": 85216,
+        "speed_ratio": 0.4,
+        "memory_ratio": 0.062336
       },
       "13_factorial": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                139,
+                135,
                 94,
-                93,
+                94,
                 94,
                 94
               ],
               "sample_count": 5,
               "median": 94,
-              "p95": 139,
-              "min": 93,
-              "max": 139,
+              "p95": 135,
+              "min": 94,
+              "max": 135,
               "mad": 0,
-              "stdev": 18.104143
+              "stdev": 16.4
             },
             "rss_kb": {
               "samples": [
-                4112,
-                4112,
-                4112,
-                4112,
-                4112
+                4512,
+                4496,
+                4496,
+                4496,
+                4496
               ],
               "sample_count": 5,
-              "median": 4112,
-              "p95": 4112,
-              "min": 4112,
-              "max": 4112,
+              "median": 4496,
+              "p95": 4512,
+              "min": 4496,
+              "max": 4512,
               "mad": 0,
-              "stdev": 0
+              "stdev": 6.4
             }
           },
           "node": {
             "wall_ms": {
               "samples": [
-                580,
+                579,
                 579,
                 579,
                 578,
@@ -2961,34 +4162,34 @@
               ],
               "sample_count": 5,
               "median": 579,
-              "p95": 580,
+              "p95": 579,
               "min": 578,
-              "max": 580,
+              "max": 579,
               "mad": 0,
-              "stdev": 0.632456
+              "stdev": 0.4
             },
             "rss_kb": {
               "samples": [
-                84592,
-                84496,
-                84560,
                 84464,
-                84352
+                84544,
+                84448,
+                84480,
+                84416
               ],
               "sample_count": 5,
-              "median": 84496,
-              "p95": 84592,
-              "min": 84352,
-              "max": 84592,
-              "mad": 64,
-              "stdev": 83.69086
+              "median": 84464,
+              "p95": 84544,
+              "min": 84416,
+              "max": 84544,
+              "mad": 16,
+              "stdev": 42.452797
             }
           }
         },
         "ratios": {
           "perry_to_node": {
             "wall_time": 0.162349,
-            "rss": 0.048665
+            "rss": 0.05323
           },
           "perry_to_bun": null
         },
@@ -3004,44 +4205,44 @@
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
         "perry_ms": 94,
-        "perry_rss_kb": 4112,
+        "perry_rss_kb": 4496,
         "node_ms": 579,
-        "node_rss_kb": 84496,
+        "node_rss_kb": 84464,
         "speed_ratio": 0.162349,
-        "memory_ratio": 0.048665
+        "memory_ratio": 0.05323
       },
       "14_closure": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                90,
+                87,
                 47,
                 47,
-                47,
+                46,
                 47
               ],
               "sample_count": 5,
               "median": 47,
-              "p95": 90,
-              "min": 47,
-              "max": 90,
+              "p95": 87,
+              "min": 46,
+              "max": 87,
               "mad": 0,
-              "stdev": 17.2
+              "stdev": 16.104658
             },
             "rss_kb": {
               "samples": [
-                4208,
-                4208,
-                4208,
-                4208,
-                4208
+                4592,
+                4592,
+                4592,
+                4592,
+                4592
               ],
               "sample_count": 5,
-              "median": 4208,
-              "p95": 4208,
-              "min": 4208,
-              "max": 4208,
+              "median": 4592,
+              "p95": 4592,
+              "min": 4592,
+              "max": 4592,
               "mad": 0,
               "stdev": 0
             }
@@ -3051,40 +4252,40 @@
               "samples": [
                 297,
                 297,
-                296,
+                297,
                 297,
                 297
               ],
               "sample_count": 5,
               "median": 297,
               "p95": 297,
-              "min": 296,
+              "min": 297,
               "max": 297,
               "mad": 0,
-              "stdev": 0.4
+              "stdev": 0
             },
             "rss_kb": {
               "samples": [
-                84400,
-                84432,
-                84096,
+                84000,
+                84128,
                 84368,
-                84368
+                84192,
+                84304
               ],
               "sample_count": 5,
-              "median": 84368,
-              "p95": 84432,
-              "min": 84096,
-              "max": 84432,
-              "mad": 32,
-              "stdev": 120.754958
+              "median": 84192,
+              "p95": 84368,
+              "min": 84000,
+              "max": 84368,
+              "mad": 112,
+              "stdev": 129.826962
             }
           }
         },
         "ratios": {
           "perry_to_node": {
             "wall_time": 0.158249,
-            "rss": 0.049877
+            "rss": 0.054542
           },
           "perry_to_bun": null
         },
@@ -3100,44 +4301,44 @@
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
         "perry_ms": 47,
-        "perry_rss_kb": 4208,
+        "perry_rss_kb": 4592,
         "node_ms": 297,
-        "node_rss_kb": 84368,
+        "node_rss_kb": 84192,
         "speed_ratio": 0.158249,
-        "memory_ratio": 0.049877
+        "memory_ratio": 0.054542
       },
       "15_mandelbrot": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                61,
+                59,
                 21,
                 21,
                 22,
-                21
+                22
               ],
               "sample_count": 5,
-              "median": 21,
-              "p95": 61,
+              "median": 22,
+              "p95": 59,
               "min": 21,
-              "max": 61,
-              "mad": 0,
-              "stdev": 15.904716
+              "max": 59,
+              "mad": 1,
+              "stdev": 15.006665
             },
             "rss_kb": {
               "samples": [
-                4048,
-                4048,
-                4048,
-                4048,
-                4048
+                4448,
+                4448,
+                4448,
+                4448,
+                4448
               ],
               "sample_count": 5,
-              "median": 4048,
-              "p95": 4048,
-              "min": 4048,
-              "max": 4048,
+              "median": 4448,
+              "p95": 4448,
+              "min": 4448,
+              "max": 4448,
               "mad": 0,
               "stdev": 0
             }
@@ -3145,11 +4346,11 @@
           "node": {
             "wall_ms": {
               "samples": [
-                23,
-                23,
-                23,
                 24,
-                24
+                24,
+                23,
+                23,
+                23
               ],
               "sample_count": 5,
               "median": 23,
@@ -3161,26 +4362,26 @@
             },
             "rss_kb": {
               "samples": [
-                84144,
-                84064,
+                83792,
                 83840,
-                83984,
-                83936
+                83840,
+                83904,
+                83904
               ],
               "sample_count": 5,
-              "median": 83984,
-              "p95": 84144,
-              "min": 83840,
-              "max": 84144,
-              "mad": 80,
-              "stdev": 104.478897
+              "median": 83840,
+              "p95": 83904,
+              "min": 83792,
+              "max": 83904,
+              "mad": 48,
+              "stdev": 42.932505
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 0.913043,
-            "rss": 0.0482
+            "wall_time": 0.956522,
+            "rss": 0.053053
           },
           "perry_to_bun": null
         },
@@ -3195,47 +4396,47 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 21,
-        "perry_rss_kb": 4048,
+        "perry_ms": 22,
+        "perry_rss_kb": 4448,
         "node_ms": 23,
-        "node_rss_kb": 83984,
-        "speed_ratio": 0.913043,
-        "memory_ratio": 0.0482
+        "node_rss_kb": 83840,
+        "speed_ratio": 0.956522,
+        "memory_ratio": 0.053053
       },
       "16_matrix_multiply": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                725,
-                686,
-                686,
-                687,
-                686
+                127,
+                85,
+                85,
+                85,
+                85
               ],
               "sample_count": 5,
-              "median": 686,
-              "p95": 725,
-              "min": 686,
-              "max": 725,
+              "median": 85,
+              "p95": 127,
+              "min": 85,
+              "max": 127,
               "mad": 0,
-              "stdev": 15.504838
+              "stdev": 16.8
             },
             "rss_kb": {
               "samples": [
-                13376,
-                13392,
-                13376,
-                13392,
-                13376
+                8272,
+                8288,
+                8272,
+                8272,
+                8272
               ],
               "sample_count": 5,
-              "median": 13376,
-              "p95": 13392,
-              "min": 13376,
-              "max": 13392,
+              "median": 8272,
+              "p95": 8288,
+              "min": 8272,
+              "max": 8288,
               "mad": 0,
-              "stdev": 7.838367
+              "stdev": 6.4
             }
           },
           "node": {
@@ -3245,38 +4446,38 @@
                 33,
                 33,
                 33,
-                32
+                33
               ],
               "sample_count": 5,
               "median": 33,
               "p95": 33,
-              "min": 32,
+              "min": 33,
               "max": 33,
               "mad": 0,
-              "stdev": 0.4
+              "stdev": 0
             },
             "rss_kb": {
               "samples": [
-                89504,
-                89488,
-                89744,
-                89552,
-                89552
+                89584,
+                89360,
+                89536,
+                89584,
+                89360
               ],
               "sample_count": 5,
-              "median": 89552,
-              "p95": 89744,
-              "min": 89488,
-              "max": 89744,
+              "median": 89536,
+              "p95": 89584,
+              "min": 89360,
+              "max": 89584,
               "mad": 48,
-              "stdev": 91.634055
+              "stdev": 103.395164
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 20.787879,
-            "rss": 0.149366
+            "wall_time": 2.575758,
+            "rss": 0.092387
           },
           "perry_to_bun": null
         },
@@ -3291,45 +4492,237 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 686,
-        "perry_rss_kb": 13376,
+        "perry_ms": 85,
+        "perry_rss_kb": 8272,
         "node_ms": 33,
-        "node_rss_kb": 89552,
-        "speed_ratio": 20.787879,
-        "memory_ratio": 0.149366
+        "node_rss_kb": 89536,
+        "speed_ratio": 2.575758,
+        "memory_ratio": 0.092387
       },
       "bench_gc_pressure": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                79,
-                34,
-                34,
-                34,
-                34
+                57,
+                20,
+                19,
+                20,
+                19
               ],
               "sample_count": 5,
-              "median": 34,
-              "p95": 79,
-              "min": 34,
-              "max": 79,
-              "mad": 0,
-              "stdev": 18
+              "median": 20,
+              "p95": 57,
+              "min": 19,
+              "max": 57,
+              "mad": 1,
+              "stdev": 15.006665
             },
             "rss_kb": {
               "samples": [
-                22064,
-                22064,
-                22080,
-                22064,
-                22080
+                24384,
+                24400,
+                24400,
+                24400,
+                24400
               ],
               "sample_count": 5,
-              "median": 22064,
-              "p95": 22080,
-              "min": 22064,
-              "max": 22080,
+              "median": 24400,
+              "p95": 24400,
+              "min": 24384,
+              "max": 24400,
+              "mad": 0,
+              "stdev": 6.4
+            }
+          },
+          "node": {
+            "wall_ms": {
+              "samples": [
+                13,
+                12,
+                13,
+                13,
+                12
+              ],
+              "sample_count": 5,
+              "median": 13,
+              "p95": 13,
+              "min": 12,
+              "max": 13,
+              "mad": 0,
+              "stdev": 0.489898
+            },
+            "rss_kb": {
+              "samples": [
+                91280,
+                91104,
+                91264,
+                91264,
+                91376
+              ],
+              "sample_count": 5,
+              "median": 91264,
+              "p95": 91376,
+              "min": 91104,
+              "max": 91376,
+              "mad": 16,
+              "stdev": 87.401602
+            }
+          }
+        },
+        "ratios": {
+          "perry_to_node": {
+            "wall_time": 1.538462,
+            "rss": 0.267356
+          },
+          "perry_to_bun": null
+        },
+        "correctness": {
+          "status": "pass",
+          "reference": "node",
+          "actual_lines": [
+            "checksum:249999500000"
+          ],
+          "expected_lines": [
+            "checksum:249999500000"
+          ],
+          "reason": "all 5 Perry sample(s) matched node semantic output"
+        },
+        "perry_ms": 20,
+        "perry_rss_kb": 24400,
+        "node_ms": 13,
+        "node_rss_kb": 91264,
+        "speed_ratio": 1.538462,
+        "memory_ratio": 0.267356
+      },
+      "bench_json_roundtrip": {
+        "runtimes": {
+          "perry": {
+            "wall_ms": {
+              "samples": [
+                228,
+                221,
+                222,
+                220,
+                222
+              ],
+              "sample_count": 5,
+              "median": 222,
+              "p95": 228,
+              "min": 220,
+              "max": 228,
+              "mad": 1,
+              "stdev": 2.8
+            },
+            "rss_kb": {
+              "samples": [
+                86816,
+                86816,
+                86816,
+                86816,
+                86816
+              ],
+              "sample_count": 5,
+              "median": 86816,
+              "p95": 86816,
+              "min": 86816,
+              "max": 86816,
+              "mad": 0,
+              "stdev": 0
+            }
+          },
+          "node": {
+            "wall_ms": {
+              "samples": [
+                243,
+                242,
+                237,
+                239,
+                237
+              ],
+              "sample_count": 5,
+              "median": 239,
+              "p95": 243,
+              "min": 237,
+              "max": 243,
+              "mad": 2,
+              "stdev": 2.497999
+            },
+            "rss_kb": {
+              "samples": [
+                164048,
+                163920,
+                164048,
+                164160,
+                164048
+              ],
+              "sample_count": 5,
+              "median": 164048,
+              "p95": 164160,
+              "min": 163920,
+              "max": 164160,
+              "mad": 0,
+              "stdev": 75.995789
+            }
+          }
+        },
+        "ratios": {
+          "perry_to_node": {
+            "wall_time": 0.92887,
+            "rss": 0.529211
+          },
+          "perry_to_bun": null
+        },
+        "correctness": {
+          "status": "pass",
+          "reference": "node",
+          "actual_lines": [
+            "checksum:53735550"
+          ],
+          "expected_lines": [
+            "checksum:53735550"
+          ],
+          "reason": "all 5 Perry sample(s) matched node semantic output"
+        },
+        "perry_ms": 222,
+        "perry_rss_kb": 86816,
+        "node_ms": 239,
+        "node_rss_kb": 164048,
+        "speed_ratio": 0.92887,
+        "memory_ratio": 0.529211
+      },
+      "bench_object_property": {
+        "runtimes": {
+          "perry": {
+            "wall_ms": {
+              "samples": [
+                118,
+                81,
+                81,
+                81,
+                80
+              ],
+              "sample_count": 5,
+              "median": 81,
+              "p95": 118,
+              "min": 80,
+              "max": 118,
+              "mad": 0,
+              "stdev": 14.905033
+            },
+            "rss_kb": {
+              "samples": [
+                23568,
+                23552,
+                23568,
+                23552,
+                23552
+              ],
+              "sample_count": 5,
+              "median": 23552,
+              "p95": 23568,
+              "min": 23552,
+              "max": 23568,
               "mad": 0,
               "stdev": 7.838367
             }
@@ -3353,218 +4746,26 @@
             },
             "rss_kb": {
               "samples": [
-                91824,
-                91360,
-                91424,
-                91360,
-                91504
+                84800,
+                84768,
+                84640,
+                84720,
+                84656
               ],
               "sample_count": 5,
-              "median": 91424,
-              "p95": 91824,
-              "min": 91360,
-              "max": 91824,
+              "median": 84720,
+              "p95": 84800,
+              "min": 84640,
+              "max": 84800,
               "mad": 64,
-              "stdev": 173.096043
-            }
-          }
-        },
-        "ratios": {
-          "perry_to_node": {
-            "wall_time": 2.615385,
-            "rss": 0.241337
-          },
-          "perry_to_bun": null
-        },
-        "correctness": {
-          "status": "pass",
-          "reference": "node",
-          "actual_lines": [
-            "checksum:249999500000"
-          ],
-          "expected_lines": [
-            "checksum:249999500000"
-          ],
-          "reason": "all 5 Perry sample(s) matched node semantic output"
-        },
-        "perry_ms": 34,
-        "perry_rss_kb": 22064,
-        "node_ms": 13,
-        "node_rss_kb": 91424,
-        "speed_ratio": 2.615385,
-        "memory_ratio": 0.241337
-      },
-      "bench_json_roundtrip": {
-        "runtimes": {
-          "perry": {
-            "wall_ms": {
-              "samples": [
-                299,
-                290,
-                288,
-                290,
-                292
-              ],
-              "sample_count": 5,
-              "median": 290,
-              "p95": 299,
-              "min": 288,
-              "max": 299,
-              "mad": 2,
-              "stdev": 3.815757
-            },
-            "rss_kb": {
-              "samples": [
-                96272,
-                96352,
-                95856,
-                95840,
-                95872
-              ],
-              "sample_count": 5,
-              "median": 95872,
-              "p95": 96352,
-              "min": 95840,
-              "max": 96352,
-              "mad": 32,
-              "stdev": 225.048972
-            }
-          },
-          "node": {
-            "wall_ms": {
-              "samples": [
-                238,
-                245,
-                241,
-                239,
-                237
-              ],
-              "sample_count": 5,
-              "median": 239,
-              "p95": 245,
-              "min": 237,
-              "max": 245,
-              "mad": 2,
-              "stdev": 2.828427
-            },
-            "rss_kb": {
-              "samples": [
-                164224,
-                164176,
-                164240,
-                164160,
-                164064
-              ],
-              "sample_count": 5,
-              "median": 164176,
-              "p95": 164240,
-              "min": 164064,
-              "max": 164240,
-              "mad": 48,
               "stdev": 61.885055
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 1.213389,
-            "rss": 0.583959
-          },
-          "perry_to_bun": null
-        },
-        "correctness": {
-          "status": "pass",
-          "reference": "node",
-          "actual_lines": [
-            "checksum:53735550"
-          ],
-          "expected_lines": [
-            "checksum:53735550"
-          ],
-          "reason": "all 5 Perry sample(s) matched node semantic output"
-        },
-        "perry_ms": 290,
-        "perry_rss_kb": 95872,
-        "node_ms": 239,
-        "node_rss_kb": 164176,
-        "speed_ratio": 1.213389,
-        "memory_ratio": 0.583959
-      },
-      "bench_object_property": {
-        "runtimes": {
-          "perry": {
-            "wall_ms": {
-              "samples": [
-                157,
-                136,
-                133,
-                132,
-                132
-              ],
-              "sample_count": 5,
-              "median": 133,
-              "p95": 157,
-              "min": 132,
-              "max": 157,
-              "mad": 1,
-              "stdev": 9.612492
-            },
-            "rss_kb": {
-              "samples": [
-                20448,
-                20448,
-                20464,
-                20464,
-                20448
-              ],
-              "sample_count": 5,
-              "median": 20448,
-              "p95": 20464,
-              "min": 20448,
-              "max": 20464,
-              "mad": 0,
-              "stdev": 7.838367
-            }
-          },
-          "node": {
-            "wall_ms": {
-              "samples": [
-                13,
-                14,
-                12,
-                13,
-                13
-              ],
-              "sample_count": 5,
-              "median": 13,
-              "p95": 14,
-              "min": 12,
-              "max": 14,
-              "mad": 0,
-              "stdev": 0.632456
-            },
-            "rss_kb": {
-              "samples": [
-                84864,
-                84704,
-                84688,
-                84848,
-                84784
-              ],
-              "sample_count": 5,
-              "median": 84784,
-              "p95": 84864,
-              "min": 84688,
-              "max": 84864,
-              "mad": 80,
-              "stdev": 71.98222
-            }
-          }
-        },
-        "ratios": {
-          "perry_to_node": {
-            "wall_time": 10.230769,
-            "rss": 0.241178
+            "wall_time": 6.230769,
+            "rss": 0.277998
           },
           "perry_to_bun": null
         },
@@ -3579,141 +4780,45 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 133,
-        "perry_rss_kb": 20448,
+        "perry_ms": 81,
+        "perry_rss_kb": 23552,
         "node_ms": 13,
-        "node_rss_kb": 84784,
-        "speed_ratio": 10.230769,
-        "memory_ratio": 0.241178
+        "node_rss_kb": 84720,
+        "speed_ratio": 6.230769,
+        "memory_ratio": 0.277998
       },
       "bench_int_arithmetic": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                387,
-                363,
-                363,
-                364,
-                358
+                370,
+                338,
+                338,
+                338,
+                339
               ],
               "sample_count": 5,
-              "median": 363,
-              "p95": 387,
-              "min": 358,
-              "max": 387,
-              "mad": 1,
-              "stdev": 10.217632
-            },
-            "rss_kb": {
-              "samples": [
-                4368,
-                4384,
-                4368,
-                4368,
-                4368
-              ],
-              "sample_count": 5,
-              "median": 4368,
-              "p95": 4384,
-              "min": 4368,
-              "max": 4384,
+              "median": 338,
+              "p95": 370,
+              "min": 338,
+              "max": 370,
               "mad": 0,
-              "stdev": 6.4
-            }
-          },
-          "node": {
-            "wall_ms": {
-              "samples": [
-                64,
-                63,
-                62,
-                63,
-                64
-              ],
-              "sample_count": 5,
-              "median": 63,
-              "p95": 64,
-              "min": 62,
-              "max": 64,
-              "mad": 1,
-              "stdev": 0.748331
+              "stdev": 12.705904
             },
             "rss_kb": {
               "samples": [
-                83360,
-                83312,
-                83296,
-                83392,
-                83424
+                4784,
+                4784,
+                4784,
+                4784,
+                4784
               ],
               "sample_count": 5,
-              "median": 83360,
-              "p95": 83424,
-              "min": 83296,
-              "max": 83424,
-              "mad": 48,
-              "stdev": 47.893215
-            }
-          }
-        },
-        "ratios": {
-          "perry_to_node": {
-            "wall_time": 5.761905,
-            "rss": 0.052399
-          },
-          "perry_to_bun": null
-        },
-        "correctness": {
-          "status": "pass",
-          "reference": "node",
-          "actual_lines": [
-            "checksum:5760000"
-          ],
-          "expected_lines": [
-            "checksum:5760000"
-          ],
-          "reason": "all 5 Perry sample(s) matched node semantic output"
-        },
-        "perry_ms": 363,
-        "perry_rss_kb": 4368,
-        "node_ms": 63,
-        "node_rss_kb": 83360,
-        "speed_ratio": 5.761905,
-        "memory_ratio": 0.052399
-      },
-      "bench_buffer_readwrite": {
-        "runtimes": {
-          "perry": {
-            "wall_ms": {
-              "samples": [
-                138,
-                94,
-                94,
-                94,
-                94
-              ],
-              "sample_count": 5,
-              "median": 94,
-              "p95": 138,
-              "min": 94,
-              "max": 138,
-              "mad": 0,
-              "stdev": 17.6
-            },
-            "rss_kb": {
-              "samples": [
-                5328,
-                5328,
-                5328,
-                5328,
-                5328
-              ],
-              "sample_count": 5,
-              "median": 5328,
-              "p95": 5328,
-              "min": 5328,
-              "max": 5328,
+              "median": 4784,
+              "p95": 4784,
+              "min": 4784,
+              "max": 4784,
               "mad": 0,
               "stdev": 0
             }
@@ -3721,14 +4826,110 @@
           "node": {
             "wall_ms": {
               "samples": [
+                63,
+                63,
+                63,
+                63,
+                63
+              ],
+              "sample_count": 5,
+              "median": 63,
+              "p95": 63,
+              "min": 63,
+              "max": 63,
+              "mad": 0,
+              "stdev": 0
+            },
+            "rss_kb": {
+              "samples": [
+                83456,
+                83376,
+                83488,
+                83312,
+                83456
+              ],
+              "sample_count": 5,
+              "median": 83456,
+              "p95": 83488,
+              "min": 83312,
+              "max": 83488,
+              "mad": 32,
+              "stdev": 64.478213
+            }
+          }
+        },
+        "ratios": {
+          "perry_to_node": {
+            "wall_time": 5.365079,
+            "rss": 0.057324
+          },
+          "perry_to_bun": null
+        },
+        "correctness": {
+          "status": "pass",
+          "reference": "node",
+          "actual_lines": [
+            "checksum:5760000"
+          ],
+          "expected_lines": [
+            "checksum:5760000"
+          ],
+          "reason": "all 5 Perry sample(s) matched node semantic output"
+        },
+        "perry_ms": 338,
+        "perry_rss_kb": 4784,
+        "node_ms": 63,
+        "node_rss_kb": 83456,
+        "speed_ratio": 5.365079,
+        "memory_ratio": 0.057324
+      },
+      "bench_buffer_readwrite": {
+        "runtimes": {
+          "perry": {
+            "wall_ms": {
+              "samples": [
+                131,
+                94,
+                94,
+                94,
+                94
+              ],
+              "sample_count": 5,
+              "median": 94,
+              "p95": 131,
+              "min": 94,
+              "max": 131,
+              "mad": 0,
+              "stdev": 14.8
+            },
+            "rss_kb": {
+              "samples": [
+                5744,
+                5744,
+                5744,
+                5760,
+                5744
+              ],
+              "sample_count": 5,
+              "median": 5744,
+              "p95": 5760,
+              "min": 5744,
+              "max": 5760,
+              "mad": 0,
+              "stdev": 6.4
+            }
+          },
+          "node": {
+            "wall_ms": {
+              "samples": [
+                81,
+                81,
                 82,
-                81,
-                81,
-                81,
+                82,
                 82
               ],
               "sample_count": 5,
-              "median": 81,
+              "median": 82,
               "p95": 82,
               "min": 81,
               "max": 82,
@@ -3737,26 +4938,26 @@
             },
             "rss_kb": {
               "samples": [
-                83024,
-                83040,
-                82928,
-                82960,
-                83136
+                83072,
+                82992,
+                83072,
+                82944,
+                83040
               ],
               "sample_count": 5,
-              "median": 83024,
-              "p95": 83136,
-              "min": 82928,
-              "max": 83136,
-              "mad": 64,
-              "stdev": 71.98222
+              "median": 83040,
+              "p95": 83072,
+              "min": 82944,
+              "max": 83072,
+              "mad": 32,
+              "stdev": 49.574187
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 1.160494,
-            "rss": 0.064174
+            "wall_time": 1.146341,
+            "rss": 0.069171
           },
           "perry_to_bun": null
         },
@@ -3772,46 +4973,46 @@
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
         "perry_ms": 94,
-        "perry_rss_kb": 5328,
-        "node_ms": 81,
-        "node_rss_kb": 83024,
-        "speed_ratio": 1.160494,
-        "memory_ratio": 0.064174
+        "perry_rss_kb": 5744,
+        "node_ms": 82,
+        "node_rss_kb": 83040,
+        "speed_ratio": 1.146341,
+        "memory_ratio": 0.069171
       },
       "bench_array_grow": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                62,
-                25,
-                25,
-                25,
-                25
+                18,
+                8,
+                7,
+                7,
+                8
               ],
               "sample_count": 5,
-              "median": 25,
-              "p95": 62,
-              "min": 25,
-              "max": 62,
-              "mad": 0,
-              "stdev": 14.8
+              "median": 8,
+              "p95": 18,
+              "min": 7,
+              "max": 18,
+              "mad": 1,
+              "stdev": 4.223742
             },
             "rss_kb": {
               "samples": [
-                41920,
-                41920,
-                41920,
-                41920,
-                41920
+                43296,
+                43312,
+                43312,
+                43312,
+                43312
               ],
               "sample_count": 5,
-              "median": 41920,
-              "p95": 41920,
-              "min": 41920,
-              "max": 41920,
+              "median": 43312,
+              "p95": 43312,
+              "min": 43296,
+              "max": 43312,
               "mad": 0,
-              "stdev": 0
+              "stdev": 6.4
             }
           },
           "node": {
@@ -3819,40 +5020,40 @@
               "samples": [
                 11,
                 11,
-                11,
                 10,
-                11
+                10,
+                12
               ],
               "sample_count": 5,
               "median": 11,
-              "p95": 11,
+              "p95": 12,
               "min": 10,
-              "max": 11,
-              "mad": 0,
-              "stdev": 0.4
+              "max": 12,
+              "mad": 1,
+              "stdev": 0.748331
             },
             "rss_kb": {
               "samples": [
-                141360,
+                141168,
+                145856,
+                141344,
                 145904,
-                145920,
-                145824,
-                141088
+                145952
               ],
               "sample_count": 5,
-              "median": 145824,
-              "p95": 145920,
-              "min": 141088,
-              "max": 145920,
+              "median": 145856,
+              "p95": 145952,
+              "min": 141168,
+              "max": 145952,
               "mad": 96,
-              "stdev": 2284.123149
+              "stdev": 2277.928041
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 2.272727,
-            "rss": 0.28747
+            "wall_time": 0.727273,
+            "rss": 0.29695
           },
           "perry_to_bun": null
         },
@@ -3869,88 +5070,88 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 25,
-        "perry_rss_kb": 41920,
+        "perry_ms": 8,
+        "perry_rss_kb": 43312,
         "node_ms": 11,
-        "node_rss_kb": 145824,
-        "speed_ratio": 2.272727,
-        "memory_ratio": 0.28747
+        "node_rss_kb": 145856,
+        "speed_ratio": 0.727273,
+        "memory_ratio": 0.29695
       },
       "bench_string_heavy": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                111,
-                63,
-                62,
-                63,
-                62
+                94,
+                50,
+                51,
+                51,
+                51
               ],
               "sample_count": 5,
-              "median": 63,
-              "p95": 111,
-              "min": 62,
-              "max": 111,
-              "mad": 1,
-              "stdev": 19.405154
+              "median": 51,
+              "p95": 94,
+              "min": 50,
+              "max": 94,
+              "mad": 0,
+              "stdev": 17.304335
             },
             "rss_kb": {
               "samples": [
-                22944,
-                22928,
-                22944,
-                22944,
-                22928
+                24288,
+                24288,
+                24288,
+                24288,
+                24272
               ],
               "sample_count": 5,
-              "median": 22944,
-              "p95": 22944,
-              "min": 22928,
-              "max": 22944,
+              "median": 24288,
+              "p95": 24288,
+              "min": 24272,
+              "max": 24288,
               "mad": 0,
-              "stdev": 7.838367
+              "stdev": 6.4
             }
           },
           "node": {
             "wall_ms": {
               "samples": [
                 43,
+                42,
                 43,
-                43,
-                43,
+                42,
                 43
               ],
               "sample_count": 5,
               "median": 43,
               "p95": 43,
-              "min": 43,
+              "min": 42,
               "max": 43,
               "mad": 0,
-              "stdev": 0
+              "stdev": 0.489898
             },
             "rss_kb": {
               "samples": [
-                82384,
-                82576,
-                82576,
-                82704,
-                82624
+                82512,
+                82432,
+                82272,
+                82464,
+                82512
               ],
               "sample_count": 5,
-              "median": 82576,
-              "p95": 82704,
-              "min": 82384,
-              "max": 82704,
+              "median": 82464,
+              "p95": 82512,
+              "min": 82272,
+              "max": 82512,
               "mad": 48,
-              "stdev": 105.357297
+              "stdev": 88.565456
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 1.465116,
-            "rss": 0.277853
+            "wall_time": 1.186047,
+            "rss": 0.294529
           },
           "perry_to_bun": null
         },
@@ -3965,47 +5166,143 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 63,
-        "perry_rss_kb": 22944,
+        "perry_ms": 51,
+        "perry_rss_kb": 24288,
         "node_ms": 43,
-        "node_rss_kb": 82576,
-        "speed_ratio": 1.465116,
-        "memory_ratio": 0.277853
+        "node_rss_kb": 82464,
+        "speed_ratio": 1.186047,
+        "memory_ratio": 0.294529
       },
       "bench_numeric_array_numeric": {
         "runtimes": {
           "perry": {
             "wall_ms": {
               "samples": [
-                81,
-                82,
-                81,
-                80,
-                80
+                2728,
+                2730,
+                2719,
+                2760,
+                2706
               ],
               "sample_count": 5,
-              "median": 81,
-              "p95": 82,
-              "min": 80,
-              "max": 82,
-              "mad": 1,
-              "stdev": 0.748331
+              "median": 2728,
+              "p95": 2760,
+              "min": 2706,
+              "max": 2760,
+              "mad": 9,
+              "stdev": 17.839282
             },
             "rss_kb": {
               "samples": [
-                30672,
-                30688,
-                30688,
-                30672,
-                30672
+                48256,
+                48240,
+                48240,
+                48240,
+                48224
               ],
               "sample_count": 5,
-              "median": 30672,
-              "p95": 30688,
-              "min": 30672,
-              "max": 30688,
+              "median": 48240,
+              "p95": 48256,
+              "min": 48224,
+              "max": 48256,
               "mad": 0,
-              "stdev": 7.838367
+              "stdev": 10.119289
+            }
+          },
+          "node": {
+            "wall_ms": {
+              "samples": [
+                4,
+                5,
+                5,
+                5,
+                5
+              ],
+              "sample_count": 5,
+              "median": 5,
+              "p95": 5,
+              "min": 4,
+              "max": 5,
+              "mad": 0,
+              "stdev": 0.4
+            },
+            "rss_kb": {
+              "samples": [
+                103008,
+                102832,
+                102960,
+                102896,
+                102960
+              ],
+              "sample_count": 5,
+              "median": 102960,
+              "p95": 103008,
+              "min": 102832,
+              "max": 103008,
+              "mad": 48,
+              "stdev": 61.052109
+            }
+          }
+        },
+        "ratios": {
+          "perry_to_node": {
+            "wall_time": 545.6,
+            "rss": 0.468531
+          },
+          "perry_to_bun": null
+        },
+        "correctness": {
+          "status": "pass",
+          "reference": "node",
+          "actual_lines": [
+            "checksum:6500625"
+          ],
+          "expected_lines": [
+            "checksum:6500625"
+          ],
+          "reason": "all 5 Perry sample(s) matched node semantic output"
+        },
+        "perry_ms": 2728,
+        "perry_rss_kb": 48240,
+        "node_ms": 5,
+        "node_rss_kb": 102960,
+        "speed_ratio": 545.6,
+        "memory_ratio": 0.468531
+      },
+      "bench_numeric_array_downgrade": {
+        "runtimes": {
+          "perry": {
+            "wall_ms": {
+              "samples": [
+                17,
+                16,
+                17,
+                16,
+                17
+              ],
+              "sample_count": 5,
+              "median": 17,
+              "p95": 17,
+              "min": 16,
+              "max": 17,
+              "mad": 0,
+              "stdev": 0.489898
+            },
+            "rss_kb": {
+              "samples": [
+                24144,
+                24144,
+                24144,
+                24144,
+                24160
+              ],
+              "sample_count": 5,
+              "median": 24144,
+              "p95": 24160,
+              "min": 24144,
+              "max": 24160,
+              "mad": 0,
+              "stdev": 6.4
             }
           },
           "node": {
@@ -4013,8 +5310,8 @@
               "samples": [
                 5,
                 5,
-                5,
                 4,
+                5,
                 4
               ],
               "sample_count": 5,
@@ -4027,122 +5324,26 @@
             },
             "rss_kb": {
               "samples": [
-                102976,
-                102944,
-                102960,
-                102896,
-                102960
-              ],
-              "sample_count": 5,
-              "median": 102960,
-              "p95": 102976,
-              "min": 102896,
-              "max": 102976,
-              "mad": 16,
-              "stdev": 27.527441
-            }
-          }
-        },
-        "ratios": {
-          "perry_to_node": {
-            "wall_time": 16.2,
-            "rss": 0.297902
-          },
-          "perry_to_bun": null
-        },
-        "correctness": {
-          "status": "pass",
-          "reference": "node",
-          "actual_lines": [
-            "checksum:6500625"
-          ],
-          "expected_lines": [
-            "checksum:6500625"
-          ],
-          "reason": "all 5 Perry sample(s) matched node semantic output"
-        },
-        "perry_ms": 81,
-        "perry_rss_kb": 30672,
-        "node_ms": 5,
-        "node_rss_kb": 102960,
-        "speed_ratio": 16.2,
-        "memory_ratio": 0.297902
-      },
-      "bench_numeric_array_downgrade": {
-        "runtimes": {
-          "perry": {
-            "wall_ms": {
-              "samples": [
-                24,
-                23,
-                24,
-                24,
-                24
-              ],
-              "sample_count": 5,
-              "median": 24,
-              "p95": 24,
-              "min": 23,
-              "max": 24,
-              "mad": 0,
-              "stdev": 0.4
-            },
-            "rss_kb": {
-              "samples": [
-                30992,
-                30992,
-                30992,
-                30976,
-                30976
-              ],
-              "sample_count": 5,
-              "median": 30992,
-              "p95": 30992,
-              "min": 30976,
-              "max": 30992,
-              "mad": 0,
-              "stdev": 7.838367
-            }
-          },
-          "node": {
-            "wall_ms": {
-              "samples": [
-                5,
-                5,
-                5,
-                5,
-                4
-              ],
-              "sample_count": 5,
-              "median": 5,
-              "p95": 5,
-              "min": 4,
-              "max": 5,
-              "mad": 0,
-              "stdev": 0.4
-            },
-            "rss_kb": {
-              "samples": [
-                103232,
+                103056,
                 103184,
-                103280,
-                103280,
-                103184
+                103120,
+                103232,
+                103008
               ],
               "sample_count": 5,
-              "median": 103232,
-              "p95": 103280,
-              "min": 103184,
-              "max": 103280,
-              "mad": 48,
-              "stdev": 42.932505
+              "median": 103120,
+              "p95": 103232,
+              "min": 103008,
+              "max": 103232,
+              "mad": 64,
+              "stdev": 81.584312
             }
           }
         },
         "ratios": {
           "perry_to_node": {
-            "wall_time": 4.8,
-            "rss": 0.300217
+            "wall_time": 3.4,
+            "rss": 0.234135
           },
           "perry_to_bun": null
         },
@@ -4157,12 +5358,12 @@
           ],
           "reason": "all 5 Perry sample(s) matched node semantic output"
         },
-        "perry_ms": 24,
-        "perry_rss_kb": 30992,
+        "perry_ms": 17,
+        "perry_rss_kb": 24144,
         "node_ms": 5,
-        "node_rss_kb": 103232,
-        "speed_ratio": 4.8,
-        "memory_ratio": 0.300217
+        "node_rss_kb": 103120,
+        "speed_ratio": 3.4,
+        "memory_ratio": 0.234135
       }
     }
   }

@@ -761,7 +761,24 @@ pub extern "C" fn js_class_field_get_ic(
 
     crate::typed_feedback::js_typed_feedback_record_fallback_call(site_id);
     let obj_bits = receiver.to_bits();
+    // #7153: this function is the full-outline of the codegen class-field-get
+    // diamond (#5391), so it must mirror the diamond's nullish-receiver check —
+    // a field read on undefined/null throws TypeError instead of answering
+    // `undefined` through the by-name lookup.
     let key_raw = key as u64 & crate::value::POINTER_MASK;
+    if obj_bits == crate::value::TAG_UNDEFINED || obj_bits == crate::value::TAG_NULL {
+        let name = unsafe {
+            crate::object::has_own_helpers::str_from_string_header(
+                key_raw as *const crate::StringHeader,
+            )
+        }
+        .unwrap_or("");
+        crate::error::js_throw_type_error_property_access(
+            (obj_bits == crate::value::TAG_NULL) as u32,
+            name.as_ptr(),
+            name.len(),
+        );
+    }
     crate::object::js_object_get_field_by_name_f64(
         obj_bits as *const ObjectHeader,
         key_raw as *const crate::StringHeader,
@@ -947,14 +964,31 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
     }
 }
 
+/// The class-id half of [`js_method_direct_shape_guard`], hoisted out so a
+/// call site can test MORE than one (class id, keys token) pair per probe.
+///
+/// Returns the receiver's `class_id` when every precondition the guard checks
+/// *other than* the class-id / keys comparison holds, and writes the
+/// receiver's `keys_array` pointer through `out_keys`. Returns 0 — never a
+/// valid user class id — when any precondition fails, and then leaves
+/// `*out_keys` at 0 so a caller that skips the return check still cannot match
+/// a real keys token.
+///
+/// This exists because the single-pair guard speculates the receiver's dynamic
+/// class is exactly the *declared* class of the expression. For a receiver
+/// typed as a base class in a hierarchy (`const n: Node2D = nodes[i]`) that
+/// speculation is wrong for every subclass instance, so the guard misses 100%
+/// of the time and every call pays the full `js_native_call_method` tower. One
+/// probe plus an inline compare chain over the base's subclass closure turns
+/// the same information into a direct call. See
+/// `perry-codegen/src/lower_call/method_override.rs`.
 #[no_mangle]
-pub unsafe extern "C" fn js_method_direct_shape_guard(
-    receiver: f64,
-    expected_class_id: u32,
-    expected_keys: *const ArrayHeader,
-) -> i32 {
+pub unsafe extern "C" fn js_method_direct_shape_class(receiver: f64, out_keys: *mut u64) -> u32 {
+    if !out_keys.is_null() {
+        *out_keys = 0;
+    }
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
-    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+    if object_addr == 0 {
         return 0;
     }
     let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
@@ -971,7 +1005,28 @@ pub unsafe extern "C" fn js_method_direct_shape_guard(
     if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
         return 0;
     }
-    ((*obj).class_id == expected_class_id && std::ptr::eq((*obj).keys_array, expected_keys)) as i32
+    let class_id = (*obj).class_id;
+    if class_id == 0 {
+        return 0;
+    }
+    if !out_keys.is_null() {
+        *out_keys = (*obj).keys_array as u64;
+    }
+    class_id
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_method_direct_shape_guard(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+) -> i32 {
+    if expected_class_id == 0 || expected_keys.is_null() {
+        return 0;
+    }
+    let mut keys: u64 = 0;
+    let class_id = js_method_direct_shape_class(receiver, &mut keys);
+    (class_id == expected_class_id && keys == expected_keys as u64) as i32
 }
 
 #[no_mangle]
@@ -1062,4 +1117,6 @@ mod keep_guard_symbols {
 #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
 #[used] static G4: unsafe extern "C" fn(f64, u32, *const ArrayHeader) -> i32 = js_method_direct_shape_guard;
+    #[cfg(feature = "keepalive-anchors")]
+#[used] static G4B: unsafe extern "C" fn(f64, *mut u64) -> u32 = js_method_direct_shape_class;
 }

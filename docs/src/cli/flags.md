@@ -225,6 +225,8 @@ shrink less, proportionally.
 | `PERRY_APPLE_CERTIFICATE_PASSWORD` | Password for .p12 certificate |
 | `PERRY_TARGET_CPU` | CPU baseline for generated machine code (same values as `--march`; the flag and perry.toml `[build] march` win over the env var) |
 | `PERRY_NO_UPDATE_CHECK=1` | Disable automatic update checks |
+| `NO_UPDATE_NOTIFIER` | The same, using the ecosystem-wide spelling |
+| `PERRY_UPDATE_MODE` | `off`/`notify`/`prompt`/`auto` for one run — see [Updates](updates.md) |
 | `PERRY_UPDATE_SERVER` | Custom update server URL |
 | `CI=true` | Auto-skip update checks (set by most CI systems) |
 | `RUST_LOG` | Debug logging level (`debug`, `info`, `trace`) |

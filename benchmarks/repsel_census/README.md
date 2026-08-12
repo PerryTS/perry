@@ -101,7 +101,7 @@ still worked. It does not any more, and the version above is the one to copy.
 
 Byte-identical objects mean the promotions the report counted as wins changed
 nothing. `07_object_create` and `12_binary_trees` are byte-identical today.
-`09_method_calls` differs, but only by two `__pshape` clones with **zero call
+`09_method_calls` differs, but only by two `$pshape` clones with **zero call
 sites** — which is why the census reports its consumption as 0 and the object
 A/B alone would have been misleading.
 

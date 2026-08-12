@@ -14,7 +14,7 @@ use std::ptr;
 /// Must match value.rs TAG_UNDEFINED
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-thread_local! {
+crate::perry_thread_local! {
     static MAP_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
 }
 
@@ -63,7 +63,7 @@ pub(crate) fn test_clear_map_iterator_arrays() {
 }
 
 #[cfg(test)]
-thread_local! {
+crate::perry_thread_local! {
     static TEST_FORCE_HELPER_GC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -151,12 +151,36 @@ impl Drop for MapSideAllocation {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static MAP_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, MapSideAllocation>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
+/// Has any thread ever registered a `Map`?
+///
+/// Monotone — set at the one registration site below, never cleared, so it can
+/// only ever be *conservatively* true. False proves this thread's
+/// `MAP_REGISTRY` is empty, because a `Map` is only ever queried from the
+/// thread that registered it (arenas are per-thread; values cross threads by
+/// deep copy) and that thread's store precedes its own query in program order.
+///
+/// #7469: `js_array_length` probes both this registry and the `Set` one on
+/// every call — `arr.length` in a loop condition. On `churn.ts`, which creates
+/// no `Map` and no `Set`, those two probes were 78 of the 520 remaining
+/// `_tlv_get_addr` samples plus their hash cost, all to prove an empty map
+/// stays empty. This turns both into a relaxed load of a static.
+static MAP_REGISTRY_EVER_USED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// True when no `Map` has ever been registered, so `is_registered_map` can
+/// answer without touching the thread-local registry.
+#[inline(always)]
+fn map_registry_never_used() -> bool {
+    !MAP_REGISTRY_EVER_USED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
+    MAP_REGISTRY_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
     MAP_REGISTRY.with(|r| {
         let mut registry = r.borrow_mut();
         assert!(
@@ -167,7 +191,34 @@ fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
     });
 }
 
+/// Every entry into [`is_registered_map`], i.e. every caller that could not
+/// rule a `Map` out more cheaply. The `js_array_get_f64` / `js_array_length`
+/// receiver-tag gates (#7765) are asserted against this: a plain-array element
+/// read must not move it. Remove those gates and the assertion fails, which is
+/// the point — a fast path nobody can prove ran is not a fast path.
+///
+/// Per THREAD, not per process: the registries themselves are thread-local, and
+/// `cargo test` runs every case on its own thread in one process, so a global
+/// counter would be moved by whatever else happens to be running.
+#[cfg(test)]
+thread_local! {
+    static TEST_MAP_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_map_registry_probe_count() -> u64 {
+    TEST_MAP_REGISTRY_PROBES.with(|c| c.get())
+}
+
 pub fn is_registered_map(addr: usize) -> bool {
+    #[cfg(test)]
+    TEST_MAP_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
+    // #7469: nothing has ever been registered ⟹ nothing can be found. Checked
+    // first because it is the only arm that costs neither a thread-local
+    // resolution nor a hash.
+    if map_registry_never_used() {
+        return false;
+    }
     // #4004: small-handle registry ids (Web Fetch, perry-ffi/node:http, timers,
     // …) are NaN-boxed POINTER_TAG values living below the small-handle
     // cutoff; they are not heap addresses. Managed Maps are arena-allocated
@@ -296,7 +347,7 @@ fn is_safe_numeric_key(bits: u64) -> bool {
 // collapse hundreds of keys into bucket 0 (caught by a 2x regression
 // the first time around). With the avalanche step, even the worst-case
 // integer-f64 inputs distribute across buckets normally.
-thread_local! {
+crate::perry_thread_local! {
     static MAP_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<NumericKey, u32>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
@@ -318,7 +369,7 @@ thread_local! {
 // Pre-fix `Map.set("key_" + i, …)` over 500k inserts was O(N²) because
 // each `set` did a linear `find_key_index` to dedup-check; with this
 // table the dedup probe is O(1) amortized.
-thread_local! {
+crate::perry_thread_local! {
     static MAP_STRING_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, std::collections::HashMap<u64, Vec<u32>>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
@@ -429,7 +480,7 @@ fn is_ptr_index_key(bits: u64) -> bool {
 // (remembered-set dirty scan, copying field scan, verify/force-evacuate
 // rewrites), and `map_header_moved_for_gc` migrates the outer key when the
 // MapHeader itself moves.
-thread_local! {
+crate::perry_thread_local! {
     static MAP_PTR_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<MapPtrKey, u32>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
@@ -698,8 +749,12 @@ pub(crate) fn test_map_ptr_index_contains(map: *const MapHeader, key: f64) -> bo
 /// Strip NaN-boxing tags from a map pointer (defensive guard).
 /// If the pointer has NaN-boxing tags in the upper 16 bits, strip them.
 /// Returns null for undefined/null NaN-boxing tags.
+///
+/// This is *identity* only — it answers "what value did the caller pass?", not
+/// "which `MapHeader` does the operation run on". Use [`clean_map_ptr`] for the
+/// latter; the two differ for a `class X extends Map` instance (#7570).
 #[inline(always)]
-fn clean_map_ptr(map: *const MapHeader) -> *const MapHeader {
+fn map_receiver_identity(map: *const MapHeader) -> *const MapHeader {
     let bits = map as u64;
     let top16 = bits >> 48;
     if top16 >= 0x7FF8 {
@@ -712,9 +767,61 @@ fn clean_map_ptr(map: *const MapHeader) -> *const MapHeader {
     }
 }
 
+/// Resolve a `Map` receiver to the `MapHeader` the operation must run on.
+///
+/// Strips the NaN-box tag ([`map_receiver_identity`]) and then **brand-checks**
+/// the result. Codegen picks the raw `js_map_*` lowering from the *declared*
+/// TypeScript type of the receiver's binding, which is a hint and never a
+/// layout fact, so what arrives here can be:
+///
+/// * a genuine `MapHeader` — the overwhelmingly common case, and the only one
+///   that costs anything: one `GcHeader.obj_type` load (the 8 bytes
+///   immediately preceding the header) plus a compare;
+/// * a `class X extends Map` INSTANCE, which perry models as a plain
+///   `ObjectHeader` carrying the real collection under a hidden field —
+///   redirected onto that backing (#7570);
+/// * a plain object that was merely *annotated* `Map<K, V>` — resolved to
+///   null, so every entry point degrades through its existing null branch
+///   instead of reading `parent_class_id ‖ field_count` as `entries`.
+///
+/// Anything with no readable `GcHeader` (handle-band ids, tag remnants,
+/// non-pointer garbage) is passed through unchanged: that is exactly the
+/// pre-#7570 behaviour, and narrowing it is a separate, riskier change.
+#[inline(always)]
+fn clean_map_ptr(map: *const MapHeader) -> *const MapHeader {
+    let map = map_receiver_identity(map);
+    let addr = map as usize;
+    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        // Genuine Map: `js_map_alloc` allocates the header with GC_TYPE_MAP.
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_MAP => map,
+        // Only a plain object can be a Map subclass instance.
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            crate::object::map_set_subclass::redirect_collection_receiver(
+                addr,
+                crate::object::map_set_subclass::CollectionKind::Map,
+            ) as *const MapHeader
+        }
+        _ => map,
+    }
+}
+
 #[inline(always)]
 fn clean_map_ptr_mut(map: *mut MapHeader) -> *mut MapHeader {
     clean_map_ptr(map as *const MapHeader) as *mut MapHeader
+}
+
+#[inline(always)]
+fn map_receiver_identity_mut(map: *mut MapHeader) -> *mut MapHeader {
+    map_receiver_identity(map as *const MapHeader) as *mut MapHeader
+}
+
+/// [`clean_map_ptr`] for entry points OUTSIDE this module that take a raw
+/// receiver and must not deref it as a `MapHeader` on faith — currently the
+/// iterator-object constructors in `collection_iter_object`, which STORE the
+/// pointer instead of using it immediately (#7570).
+#[inline(always)]
+pub(crate) fn resolve_map_receiver(map: *const MapHeader) -> *const MapHeader {
+    clean_map_ptr(map)
 }
 
 /// Map header - GC-movable address, entries allocated separately
@@ -1294,14 +1401,45 @@ unsafe fn map_set_string_key_value(
     map
 }
 
+/// Run `op` on the RESOLVED collection and return the RECEIVER.
+///
+/// `Map.prototype.set` returns its receiver. For a `class X extends Map`
+/// instance the two differ (#7570): the entry is written to the hidden backing
+/// `MapHeader`, but `m.set(k, v)` must still evaluate to `m` — otherwise
+/// chaining hands back the backing and `m.set(…) === m` is false.
+///
+/// The common case (receiver IS the collection) costs one pointer compare and
+/// takes no handle scope. The subclass case roots the receiver, because it is a
+/// movable `ObjectHeader` and `op` allocates.
+#[inline]
+fn map_op_returning_receiver(
+    map: *mut MapHeader,
+    op: impl FnOnce(*mut MapHeader),
+) -> *mut MapHeader {
+    let receiver = map_receiver_identity_mut(map);
+    let resolved = clean_map_ptr_mut(map);
+    if resolved.is_null() {
+        return receiver;
+    }
+    if std::ptr::eq(resolved, receiver) {
+        op(resolved);
+        return receiver;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_raw_mut_ptr(receiver);
+    let ((), receiver) = handle.across_mut::<MapHeader, _>(|| op(resolved));
+    receiver
+}
+
 /// Set a key-value pair in the map
 /// The map pointer is stable (never reallocated)
 #[no_mangle]
 pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut MapHeader {
-    let map = clean_map_ptr_mut(map);
-    if map.is_null() {
-        return map;
-    }
+    map_op_returning_receiver(map, |map| map_set_resolved(map, key, value))
+}
+
+/// `js_map_set`'s body, on a receiver already resolved to a genuine `MapHeader`.
+fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
     let key = normalize_zero(key);
     unsafe {
         // Check if key already exists (O(1) via MAP_INDEX)
@@ -1317,7 +1455,7 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
                 value_slot as usize,
                 value.to_bits(),
             );
-            return map;
+            return;
         }
 
         // Key doesn't exist, append a new entry. `ensure_capacity` can fire a
@@ -1392,9 +1530,21 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
                 slot.insert(MapPtrKey(key), size);
             });
         }
-
-        map
     }
+}
+
+/// Shared tail for the `js_map_set_string_*` specializations: store into the
+/// RESOLVED collection, return the RECEIVER (#7570 — see
+/// [`map_op_returning_receiver`]).
+#[inline]
+fn map_set_string_returning_receiver(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: f64,
+) -> *mut MapHeader {
+    map_op_returning_receiver(map, |map| unsafe {
+        map_set_string_key_value(map, key, value);
+    })
 }
 
 #[no_mangle]
@@ -1415,11 +1565,7 @@ pub extern "C" fn js_map_set_string_number(
     key: *const StringHeader,
     value: f64,
 ) -> *mut MapHeader {
-    let map = clean_map_ptr_mut(map);
-    if map.is_null() {
-        return map;
-    }
-    unsafe { map_set_string_key_value(map, key, value) }
+    map_set_string_returning_receiver(map, key, value)
 }
 
 #[no_mangle]
@@ -1428,11 +1574,7 @@ pub extern "C" fn js_map_set_string_key(
     key: *const StringHeader,
     value: f64,
 ) -> *mut MapHeader {
-    let map = clean_map_ptr_mut(map);
-    if map.is_null() {
-        return map;
-    }
-    unsafe { map_set_string_key_value(map, key, value) }
+    map_set_string_returning_receiver(map, key, value)
 }
 
 #[no_mangle]
@@ -1441,12 +1583,8 @@ pub extern "C" fn js_map_set_string_i32(
     key: *const StringHeader,
     value: i32,
 ) -> *mut MapHeader {
-    let map = clean_map_ptr_mut(map);
-    if map.is_null() {
-        return map;
-    }
     let value_bits = crate::value::INT32_TAG | ((value as u32) as u64);
-    unsafe { map_set_string_key_value(map, key, f64::from_bits(value_bits)) }
+    map_set_string_returning_receiver(map, key, f64::from_bits(value_bits))
 }
 
 #[no_mangle]
@@ -1455,11 +1593,7 @@ pub extern "C" fn js_map_set_string_u32(
     key: *const StringHeader,
     value: u32,
 ) -> *mut MapHeader {
-    let map = clean_map_ptr_mut(map);
-    if map.is_null() {
-        return map;
-    }
-    unsafe { map_set_string_key_value(map, key, f64::from(value)) }
+    map_set_string_returning_receiver(map, key, f64::from(value))
 }
 
 #[no_mangle]
@@ -1468,11 +1602,7 @@ pub extern "C" fn js_map_set_string_f32(
     key: *const StringHeader,
     value: f32,
 ) -> *mut MapHeader {
-    let map = clean_map_ptr_mut(map);
-    if map.is_null() {
-        return map;
-    }
-    unsafe { map_set_string_key_value(map, key, f64::from(value)) }
+    map_set_string_returning_receiver(map, key, f64::from(value))
 }
 
 #[no_mangle]
@@ -1481,16 +1611,12 @@ pub extern "C" fn js_map_set_string_bool(
     key: *const StringHeader,
     value: i32,
 ) -> *mut MapHeader {
-    let map = clean_map_ptr_mut(map);
-    if map.is_null() {
-        return map;
-    }
     let value_bits = if value != 0 {
         crate::value::TAG_TRUE
     } else {
         crate::value::TAG_FALSE
     };
-    unsafe { map_set_string_key_value(map, key, f64::from_bits(value_bits)) }
+    map_set_string_returning_receiver(map, key, f64::from_bits(value_bits))
 }
 
 #[no_mangle]
@@ -1499,11 +1625,7 @@ pub extern "C" fn js_map_set_string_string(
     key: *const StringHeader,
     value: *const StringHeader,
 ) -> *mut MapHeader {
-    let map = clean_map_ptr_mut(map);
-    if map.is_null() {
-        return map;
-    }
-    unsafe { map_set_string_key_value(map, key, boxed_heap_string_key(value)) }
+    map_set_string_returning_receiver(map, key, boxed_heap_string_key(value))
 }
 
 /// Get a value from the map by key
@@ -1929,8 +2051,9 @@ pub extern "C" fn js_map_entries(map: *const MapHeader) -> *mut crate::array::Ar
             // to MIN_ARRAY_CAPACITY), then write key/value/length directly.
             // Skips the two `js_array_push_f64` calls per pair (each does
             // its own bounds + capacity check).
-            let pair = crate::array::js_array_alloc(2);
-            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            // Allocating pair array + map re-read as one combinator (#7341).
+            let (pair, map) =
+                map_handle.across_const::<MapHeader, _>(|| crate::array::js_array_alloc(2));
             let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));
@@ -2258,12 +2381,27 @@ static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_
 /// when omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg: f64) {
-    js_map_foreach_impl(
-        map,
-        callback,
-        this_arg,
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-    );
+    js_map_foreach_impl(map, callback, this_arg, collection_override(map));
+}
+
+/// The `collection` argument `js_map_foreach_impl` should report as the 3rd
+/// callback parameter and the `self === m` identity.
+///
+/// `undefined` — meaning "derive it from the map being iterated" — unless the
+/// receiver resolved to something else, i.e. it is a `class X extends Map`
+/// instance reached through a base-typed binding (#7570). Iteration then runs
+/// over the hidden backing, but the observable collection is still the
+/// INSTANCE. This is the same contract `js_map_foreach_with_collection` already
+/// serves for the unannotated path; without it, `m.forEach((v, k, self) => …)`
+/// would hand user code the backing and `self === m` would be false.
+#[inline(always)]
+fn collection_override(map: *const MapHeader) -> f64 {
+    let receiver = map_receiver_identity(map);
+    let resolved = clean_map_ptr(map);
+    if resolved.is_null() || std::ptr::eq(resolved, receiver) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_pointer(receiver as i64)
 }
 
 /// `Map.prototype.forEach` for a `class … extends Map` subclass instance: the

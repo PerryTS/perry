@@ -26,12 +26,27 @@ pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize
     if src_obj_ptr == 0 {
         return Vec::new();
     }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    guard
-        .as_ref()
-        .and_then(|m| m.get(&src_obj_ptr))
-        .cloned()
-        .unwrap_or_default()
+    let mut entries = {
+        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+        guard
+            .as_ref()
+            .and_then(|m| m.get(&src_obj_ptr))
+            .cloned()
+            .unwrap_or_default()
+    };
+    // Accessor-keyed entries are order-preserving placeholders whose real
+    // descriptor lives in `SYMBOL_ACCESSOR_PROPERTIES` (see
+    // `set_symbol_accessor_property`). Every consumer of this clone
+    // (console formatting, the freeze/seal walks) handles accessors through
+    // the accessor table separately, so hand back only the data entries —
+    // the same view they got when conversion removed the entry outright.
+    if !entries.is_empty() {
+        let accessor_keys = accessors::owner_symbol_accessor_keys(src_obj_ptr);
+        if !accessor_keys.is_empty() {
+            entries.retain(|(sym, _)| !accessor_keys.contains(sym));
+        }
+    }
+    entries
 }
 
 pub(crate) fn symbol_property_root_bits(owner: usize, sym_key: usize) -> Option<u64> {
@@ -253,9 +268,8 @@ unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
     // empty string `""`; a symbol with a (possibly empty) string description
     // names it `"[" + description + "]"`. Distinguish "no description" (→ `""`)
     // from `Symbol("")` (→ `"[]"`).
-    let desc = registered_symbol_description(sym_ptr as usize)
-        .map(|s| s.as_ref().to_string())
-        .or_else(|| str_from_header((*sym_ptr).description));
+    let desc =
+        symbol_description_text(sym_ptr).map(|s| String::from_utf8_lossy(s.as_ref()).into_owned());
     let inferred = match desc {
         Some(d) => format!("[{}]", d),
         None => String::new(),
@@ -539,7 +553,7 @@ pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64
                 crate::value::JSValue::pointer(err as *const u8).bits(),
             ));
         }
-        crate::object::class_dynamic_prop_root_store(class_id, name.to_string(), value);
+        crate::object::class_dynamic_prop_root_store(class_id, name, value);
         return;
     }
     store_class_static_symbol_root(class_id, sym_key, value.to_bits());
@@ -547,7 +561,16 @@ pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64
 
 /// Look up a static Symbol-keyed property on a class by class_id.
 /// Returns the stored value bits or `None` if no entry. Refs #420.
+#[inline]
 pub fn class_static_symbol_lookup(class_id: u32, sym_f64: f64) -> Option<u64> {
+    if super::CLASS_STATIC_SYMBOLS_LATCH.is_idle() {
+        return None;
+    }
+    class_static_symbol_lookup_slow(class_id, sym_f64)
+}
+
+#[inline(never)]
+fn class_static_symbol_lookup_slow(class_id: u32, sym_f64: f64) -> Option<u64> {
     unsafe {
         let sym_key = sym_key_from_f64(sym_f64);
         if class_id == 0 || sym_key == 0 {

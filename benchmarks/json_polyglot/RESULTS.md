@@ -1,8 +1,8 @@
 # JSON Polyglot Benchmark Results
 
 **Runs per cell:** 11 · **Pinning:** macOS scheduler hint (taskpolicy -t 0 -l 0 — P-core preferred via throughput/latency tiers, NOT strict affinity)
-**Hardware:** Darwin 25.5.0 arm64 on MacBookPro.
-**Date:** 2026-08-03.
+**Hardware:** Darwin 25.5.0 arm64 on perry-macos.
+**Date:** 2026-08-08.
 
 Two workloads, each language listed twice (idiomatic / optimized flag profile).
 Median wall-clock time is the headline number; p95, σ (population stddev),
@@ -18,21 +18,15 @@ low — the lazy path can avoid materializing the parse tree entirely.
 
 | Implementation | Profile | Median (ms) | p95 (ms) | σ | Min | Max | Peak RSS (MB) |
 |---|---|---:|---:|---:|---:|---:|---:|
-| rust serde_json (LTO+1cgu) | optimized | 184 | 193 | 2.6 | 184 | 193 | 10 |
-| rust serde_json | idiomatic | 191 | 201 | 2.9 | 190 | 201 | 11 |
-| perry (gen-gc + lazy tape) | optimized | 213 | 221 | 2.3 | 212 | 221 | 110 |
-| bun (default) | idiomatic | 223 | 225 | 1.1 | 221 | 225 | 83 |
-| node (default) | idiomatic | 387 | 397 | 4.5 | 382 | 397 | 103 |
-| node --max-old=4096 | optimized | 388 | 395 | 3.9 | 384 | 395 | 103 |
-| kotlin (kotlinx.serialization) | idiomatic | 455 | 474 | 7.9 | 446 | 474 | 609 |
-| kotlin -server -Xmx512m | optimized | 461 | 495 | 14.9 | 439 | 495 | 422 |
-| perry (mark-sweep, no lazy) | idiomatic | 608 | 616 | 5.3 | 599 | 616 | 301 |
-| go (encoding/json) | idiomatic | 771 | 777 | 2.6 | 768 | 777 | 23 |
-| c++ -O3 -flto (nlohmann/json) | optimized | 773 | 777 | 4.1 | 766 | 777 | 25 |
-| go -ldflags="-s -w" -trimpath | optimized | 778 | 784 | 3.7 | 770 | 784 | 22 |
-| c++ -O2 (nlohmann/json) | idiomatic | 834 | 848 | 4.4 | 831 | 848 | 25 |
-| swift -O -wmo (Foundation) | optimized | 3521 | 3617 | 31.8 | 3502 | 3617 | 33 |
-| swift -O (Foundation) | idiomatic | 3570 | 3588 | 9.8 | 3557 | 3588 | 32 |
+| rust serde_json (LTO+1cgu) | optimized | 178 | 194 | 4.6 | 178 | 194 | 10 |
+| perry (gen-gc + lazy tape) | optimized | 184 | 190 | 1.9 | 183 | 190 | 79 |
+| rust serde_json | idiomatic | 188 | 203 | 4.3 | 188 | 203 | 9 |
+| bun (default) | idiomatic | 220 | 232 | 3.5 | 219 | 232 | 83 |
+| node --max-old=4096 | optimized | 380 | 385 | 4.2 | 373 | 385 | 100 |
+| node (default) | idiomatic | 380 | 389 | 3.9 | 373 | 389 | 99 |
+| perry (mark-sweep, no lazy) | idiomatic | 1198 | 1206 | 2.6 | 1196 | 1206 | 62 |
+| swift -O -wmo (Foundation) | optimized | 3461 | 3487 | 10.0 | 3456 | 3487 | 28 |
+| swift -O (Foundation) | idiomatic | 3466 | 3481 | 8.1 | 3452 | 3481 | 28 |
 
 ## JSON parse-and-iterate
 
@@ -43,18 +37,12 @@ JSON content. 10k records, ~1 MB blob, 50 iterations per run.
 
 | Implementation | Profile | Median (ms) | p95 (ms) | σ | Min | Max | Peak RSS (MB) |
 |---|---|---:|---:|---:|---:|---:|---:|
-| rust serde_json (LTO+1cgu) | optimized | 181 | 190 | 2.6 | 180 | 190 | 11 |
-| rust serde_json | idiomatic | 191 | 198 | 2.2 | 190 | 198 | 11 |
-| bun (default) | idiomatic | 225 | 230 | 1.7 | 224 | 230 | 88 |
-| node --max-old=4096 | optimized | 389 | 393 | 2.2 | 386 | 393 | 98 |
-| node (default) | idiomatic | 390 | 398 | 3.4 | 386 | 398 | 97 |
-| kotlin -server -Xmx512m | optimized | 445 | 453 | 8.1 | 425 | 453 | 423 |
-| kotlin (kotlinx.serialization) | idiomatic | 473 | 488 | 11.3 | 457 | 488 | 607 |
-| perry (mark-sweep, no lazy) | idiomatic | 660 | 669 | 4.8 | 651 | 669 | 301 |
-| go -ldflags="-s -w" -trimpath | optimized | 775 | 779 | 2.5 | 769 | 779 | 23 |
-| go (encoding/json) | idiomatic | 775 | 782 | 3.8 | 771 | 782 | 23 |
-| c++ -O3 -flto (nlohmann/json) | optimized | 788 | 790 | 1.4 | 786 | 790 | 25 |
-| c++ -O2 (nlohmann/json) | idiomatic | 864 | 866 | 1.9 | 860 | 866 | 25 |
-| perry (gen-gc + lazy tape) | optimized | 2653 | 2920 | 78.4 | 2630 | 2920 | 356 |
-| swift -O (Foundation) | idiomatic | 3566 | 3641 | 38.7 | 3518 | 3641 | 33 |
-| swift -O -wmo (Foundation) | optimized | 3623 | 3709 | 35.2 | 3593 | 3709 | 34 |
+| rust serde_json (LTO+1cgu) | optimized | 179 | 198 | 5.4 | 179 | 198 | 10 |
+| rust serde_json | idiomatic | 188 | 203 | 4.3 | 188 | 203 | 9 |
+| bun (default) | idiomatic | 222 | 222 | 0.7 | 220 | 222 | 87 |
+| node --max-old=4096 | optimized | 384 | 389 | 4.4 | 376 | 389 | 95 |
+| node (default) | idiomatic | 385 | 395 | 5.0 | 378 | 395 | 95 |
+| perry (mark-sweep, no lazy) | idiomatic | 1247 | 1250 | 1.9 | 1244 | 1250 | 59 |
+| perry (gen-gc + lazy tape) | optimized | 2030 | 2048 | 69.2 | 1804 | 2048 | 170 |
+| swift -O (Foundation) | idiomatic | 3451 | 3477 | 11.8 | 3441 | 3477 | 28 |
+| swift -O -wmo (Foundation) | optimized | 3474 | 3502 | 14.0 | 3450 | 3502 | 28 |

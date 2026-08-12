@@ -101,7 +101,7 @@ pub(crate) fn exotic_expando_kind_of_value(value: f64) -> Option<(usize, ExoticK
     exotic_expando_kind(addr).map(|kind| (addr, kind))
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// addr -> insertion-ordered (key, nanboxed value bits) pairs (Date/RegExp).
     static EXOTIC_EXPANDO: RefCell<HashMap<usize, Vec<(String, u64)>>> =
         RefCell::new(HashMap::new());

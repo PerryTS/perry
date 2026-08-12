@@ -75,7 +75,7 @@ fn test_typed_shape_descriptor_tracks_raw_numeric_slots() {
     clear_mark_seeds();
 
     let obj = crate::object::js_object_alloc(0, 2);
-    crate::object::js_object_set_unboxed_f64_field(obj, 0, 1.5);
+    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.5));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.5));
     let raw_mask = [0b01u64];
     js_gc_init_typed_shape_layout(
@@ -149,7 +149,7 @@ fn test_typed_shape_descriptor_visible_for_shape_keyed_objects() {
 
     let raw_mask = [0b01u64];
     for object in [first, second] {
-        crate::object::js_object_set_unboxed_f64_field(object, 0, 1.5);
+        crate::object::js_object_set_field(object, 0, crate::value::JSValue::number(1.5));
         crate::object::js_object_set_field(object, 1, crate::value::JSValue::number(2.5));
         js_gc_init_typed_shape_layout(
             object as u64,
@@ -231,7 +231,7 @@ fn test_shape_keyed_typed_layout_survives_layout_transfer() {
         packed.len() as u32,
     );
     let src = crate::object::js_object_alloc_class_inline_keys(0x6964_01, 0, 2, keys);
-    crate::object::js_object_set_unboxed_f64_field(src, 0, 1.5);
+    crate::object::js_object_set_field(src, 0, crate::value::JSValue::number(1.5));
     crate::object::js_object_set_field(src, 1, crate::value::JSValue::number(2.5));
     let raw_mask = [0b01u64];
     js_gc_init_typed_shape_layout(
@@ -281,7 +281,7 @@ fn test_shape_keyed_typed_layout_survives_layout_transfer() {
     // that must NOT take the shared entry with it: an untouched sibling still
     // reads the shape descriptor.
     let sibling = crate::object::js_object_alloc_class_inline_keys(0x6964_01, 0, 2, keys);
-    crate::object::js_object_set_unboxed_f64_field(sibling, 0, 7.5);
+    crate::object::js_object_set_field(sibling, 0, crate::value::JSValue::number(7.5));
     crate::object::js_object_set_field(sibling, 1, crate::value::JSValue::number(8.5));
     js_gc_init_typed_shape_layout(
         sibling as u64,
@@ -312,7 +312,7 @@ fn test_shape_keyed_typed_layout_survives_copying_minor() {
         packed.len() as u32,
     );
     let obj = crate::object::js_object_alloc_class_inline_keys(0x6964_02, 0, 2, keys);
-    crate::object::js_object_set_unboxed_f64_field(obj, 0, 10.5);
+    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(10.5));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(-3.25));
     let raw_mask = [0b01u64];
     js_gc_init_typed_shape_layout(
@@ -359,7 +359,7 @@ fn test_typed_shape_raw_numeric_slots_accept_pointer_like_f64_bits() {
 
     let obj = crate::object::js_object_alloc(0, 2);
     let pointer_like_number = f64::from_bits(0x1000);
-    crate::object::js_object_set_unboxed_f64_field(obj, 0, pointer_like_number);
+    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(pointer_like_number));
     let child = crate::string::js_string_from_bytes(b"mixed-child".as_ptr(), 11);
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
 
@@ -378,7 +378,11 @@ fn test_typed_shape_raw_numeric_slots_accept_pointer_like_f64_bits() {
     assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(1));
 
     let next_pointer_like_number = f64::from_bits(0x2000);
-    crate::object::js_object_set_unboxed_f64_field(obj, 0, next_pointer_like_number);
+    crate::object::js_object_set_field(
+        obj,
+        0,
+        crate::value::JSValue::number(next_pointer_like_number),
+    );
     assert!(
         layout_typed_raw_f64_slot_for_user(obj as usize, 0),
         "raw f64 slots must not be downgraded by numeric payload bits that resemble raw pointers"
@@ -396,7 +400,7 @@ fn test_typed_shape_descriptor_rejects_nanbox_non_number_tags() {
 
     let raw_mask = [0b1u64];
     let obj = crate::object::js_object_alloc(0, 1);
-    crate::object::js_object_set_unboxed_f64_field(obj, 0, 1.5);
+    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.5));
     js_gc_init_typed_shape_layout(
         obj as u64,
         1,
@@ -416,7 +420,7 @@ fn test_typed_shape_descriptor_rejects_nanbox_non_number_tags() {
     assert_eq!(test_layout_pointer_slot_count(obj as usize, 1), None);
 
     let handle_obj = crate::object::js_object_alloc(0, 1);
-    crate::object::js_object_set_unboxed_f64_field(handle_obj, 0, 2.5);
+    crate::object::js_object_set_field(handle_obj, 0, crate::value::JSValue::number(2.5));
     js_gc_init_typed_shape_layout(
         handle_obj as u64,
         1,

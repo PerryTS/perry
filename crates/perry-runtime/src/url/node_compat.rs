@@ -121,6 +121,11 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn path_to_file_url_posix_preserves_relative_trailing_slash() {
+        // The expectation reads `current_dir()` here and the resolver reads
+        // it again internally — a parallel test that temporarily changes the
+        // PROCESS-global cwd (typed_feedback's CurrentDirGuard) can land
+        // between the two (#6965). Hold the crate-wide cwd lock.
+        let _cwd_lock = crate::test_support::process_cwd_test_lock();
         let cwd = cwd();
         let parent = std::env::current_dir()
             .expect("current dir")
@@ -144,6 +149,10 @@ mod tests {
 
     #[test]
     fn path_to_file_url_posix_does_not_add_slash_without_input_slash() {
+        // See path_to_file_url_posix_preserves_relative_trailing_slash: the
+        // two `current_dir()` reads must not straddle a parallel cwd change
+        // (#6965).
+        let _cwd_lock = crate::test_support::process_cwd_test_lock();
         let cwd = cwd();
 
         assert_eq!(

@@ -75,17 +75,22 @@ pub(crate) fn set_conservative_stack_scan_override(
     CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.replace(mode))
 }
 
-/// Scoped guard forcing the conservative native-stack scan for an explicit
-/// `gc()` collection (#4977). In the default `Auto` mode a full collection
-/// skips the native scan, but at a `gc()` callsite live module-init/top-level
-/// locals may be held only on the native stack — neither the precise
-/// shadow-stack roots nor the module-var scanners cover them — so the
-/// collector reclaimed live object graphs and later field reads returned
-/// dangling-pointer garbage. An already-pinned per-thread override wins (the
-/// GC unit tests pin `Auto` so a forced collection still reclaims objects they
-/// hold only as native-stack locals), and an explicit
-/// `PERRY_CONSERVATIVE_STACK_SCAN` env value beats any override either way,
-/// so the bisection escape hatch keeps working.
+/// Scoped guard pinning the conservative native-stack scan on for one
+/// collection. An already-pinned per-thread override wins (the GC unit tests
+/// pin `Auto` so a forced collection still reclaims objects they hold only as
+/// native-stack locals), and an explicit `PERRY_CONSERVATIVE_STACK_SCAN` env
+/// value beats any override either way, so the bisection escape hatch keeps
+/// working.
+///
+/// ★ #7558: this guard was introduced for explicit `gc()` (#4977 — a
+/// module-init/top-level local held only as a native-stack alloca was
+/// reclaimed, and later field reads returned dangling-pointer garbage). That
+/// callsite no longer engages it: the precise-rooting hole #4977 was working
+/// around has been closed from the other end, and the scan's cost is a
+/// 16%-of-retention, run-to-run-nondeterministic tax on every reading taken
+/// through `gc()` (see `policy::manual_gc_collect_now`). The remaining users
+/// are the allocation-point valves and `perry/gc` `minor()`; each names its
+/// `ConservativeScanSite` and is counted.
 ///
 /// ★ #7148: engaging this guard is *expensive*, not merely imprecise — the
 /// conservative scan makes the copying minor ineligible

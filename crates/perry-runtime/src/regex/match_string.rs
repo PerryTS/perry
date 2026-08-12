@@ -107,9 +107,13 @@ pub extern "C" fn js_string_match(
                 let arr_handle = scope.root_raw_mut_ptr(arr);
                 (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = matches.len() as u32;
                 for (i, m) in matches.iter().enumerate() {
-                    let str_ptr = js_string_from_str(m);
-                    let nanboxed = js_nanbox_string(str_ptr as i64);
-                    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                    // `across_mut` runs the allocating pair and hands back the
+                    // post-collection array address, so the receiver is never
+                    // bound stale in between (#7341).
+                    let (nanboxed, arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+                        let str_ptr = js_string_from_str(m);
+                        js_nanbox_string(str_ptr as i64)
+                    });
                     // GC_STORE_AUDIT(BARRIERED): regex match array slot uses the shared array slot-store helper.
                     crate::array::store_array_slot(arr, i, nanboxed.to_bits());
                 }
@@ -125,9 +129,12 @@ pub extern "C" fn js_string_match(
                         (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
                         for i in 0..caps.len() {
                             if let Some(m) = caps.get(i) {
-                                let str_ptr = js_string_from_str(m.as_str());
-                                let nanboxed = js_nanbox_string(str_ptr as i64);
-                                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                                // See the sibling above (#7341).
+                                let (nanboxed, arr) =
+                                    arr_handle.across_mut::<ArrayHeader, _>(|| {
+                                        let str_ptr = js_string_from_str(m.as_str());
+                                        js_nanbox_string(str_ptr as i64)
+                                    });
                                 // GC_STORE_AUDIT(BARRIERED): regex capture array slot uses the shared array slot-store helper.
                                 crate::array::store_array_slot(arr, i, nanboxed.to_bits());
                             } else {
@@ -194,9 +201,10 @@ pub extern "C" fn js_string_match(
             (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = matches.len() as u32;
 
             for (i, m) in matches.iter().enumerate() {
-                let str_ptr = js_string_from_str(m);
-                let nanboxed = js_nanbox_string(str_ptr as i64);
-                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                // Allocating string + array re-read as one combinator (#7341).
+                let (nanboxed, arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+                    js_nanbox_string(js_string_from_str(m) as i64)
+                });
                 // GC_STORE_AUDIT(BARRIERED): regex global match array slot uses the shared array slot-store helper.
                 crate::array::store_array_slot(arr, i, nanboxed.to_bits());
             }
@@ -214,9 +222,10 @@ pub extern "C" fn js_string_match(
 
                     for (i, cap) in caps.iter().enumerate() {
                         if let Some(m) = cap {
-                            let str_ptr = js_string_from_str(m.as_str());
-                            let nanboxed = js_nanbox_string(str_ptr as i64);
-                            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                            // Allocating string + array re-read as one combinator (#7341).
+                            let (nanboxed, arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+                                js_nanbox_string(js_string_from_str(m.as_str()) as i64)
+                            });
                             // GC_STORE_AUDIT(INIT): fresh match-array slot; layout is
                             // noted per store and the exact layout/barrier rebuild
                             // below the loop covers a mid-loop tenuring (#6386).

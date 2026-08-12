@@ -216,6 +216,25 @@ pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
 /// hot-path shape as `ARRAY_PROTO_HAS_INDEX` above.
 static ARRAY_PROTO_ITERATOR_MODIFIED: AtomicBool = AtomicBool::new(false);
 
+/// The same fact as [`ARRAY_PROTO_ITERATOR_MODIFIED`], exported so GENERATED
+/// code can read it (#7760 item 1).
+///
+/// `for…of` over a statically-proven array desugars to an index loop
+/// (`__i < __arr.length` / `__arr[__i]`) in HIR lowering, which never consults
+/// the iteration protocol — so a patched `Array.prototype[Symbol.iterator]` was
+/// ignored there even after the spread paths were fixed (#7542). The loop now
+/// branches on this flag ONCE at entry, which is also what the spec wants:
+/// `for…of` performs GetIterator exactly once, so a patch landing mid-loop must
+/// not change the iterator already in hand.
+///
+/// A separate `u8` global rather than exposing the `AtomicBool`: codegen emits
+/// a plain volatile `i8` load, the same shape as
+/// `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED`, so the fast arm pays one load and
+/// a predictable branch per LOOP — not per iteration — and the index loop
+/// itself is emitted byte-identically to before.
+#[no_mangle]
+pub static PERRY_ARRAY_PROTO_ITERATOR_PATCHED: AtomicU8 = AtomicU8::new(0);
+
 /// Record (if `obj` is `Array.prototype` and `sym_key` is the well-known
 /// `Symbol.iterator`) that the array iteration protocol has been tampered
 /// with. Called from the symbol-property set/delete paths.
@@ -227,6 +246,9 @@ pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
         && sym_key == crate::symbol::well_known_symbol("iterator") as usize
     {
         ARRAY_PROTO_ITERATOR_MODIFIED.store(true, Ordering::Relaxed);
+        // Publish to generated code. Release so a loop that observes the `1`
+        // also observes the prototype write that preceded it.
+        PERRY_ARRAY_PROTO_ITERATOR_PATCHED.store(1, Ordering::Release);
     }
 }
 
@@ -501,6 +523,27 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
 }
 
 fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringHeader) -> f64 {
+    // #7891: an erased Array declaration can feed this ABI a heap StringHeader.
+    // The receiver arrived unboxed and no longer carries STRING_TAG, so recover
+    // its runtime kind from the GC header before ordinary by-name lookup. A
+    // canonical index reads the UTF-16 code unit; `length`, `constructor`, OOB
+    // and non-index keys fall through to the established String property path.
+    // (SSO strings have no pointer/header and are separated by codegen.)
+    if !arr.is_null() && !key.is_null() {
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        {
+            if header.obj_type == crate::gc::GC_TYPE_STRING {
+                let key_value = crate::value::JSValue::string_ptr(key as *mut crate::StringHeader);
+                let indexed = crate::string::js_string_index_get(
+                    arr as *const crate::StringHeader,
+                    f64::from_bits(key_value.bits()),
+                );
+                if indexed.to_bits() != crate::value::TAG_UNDEFINED {
+                    return indexed;
+                }
+            }
+        }
+    }
     let value =
         crate::object::js_object_get_field_by_name(arr as *const crate::object::ObjectHeader, key);
     f64::from_bits(value.bits())
@@ -523,12 +566,87 @@ fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringH
 /// FOR DENSE KEYS/PROPERTY ARRAYS ONLY — general JS arrays may have
 /// `length > capacity` (sparse), where this cap would be incorrect.
 pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) -> usize {
+    // #7765: a well-formed dense keys array answers from its own two words.
+    // `js_array_length` re-derives the same number through a proxy probe, a
+    // second header read for its lazy/object arms, and a `clean_arr_ptr`
+    // forwarding walk — once per property read on the field-get funnel.
+    // `length <= capacity` is exactly the well-formed case; the sparse and
+    // corrupted shapes this cap exists for fall through unchanged.
+    if let Some(header) = crate::value::addr_class::try_read_gc_header(arr as usize) {
+        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && (*arr).length <= (*arr).capacity
+        {
+            return (*arr).length as usize;
+        }
+    }
     let raw = js_array_length(arr) as usize;
     if arr.is_null() {
         raw
     } else {
         raw.min((*arr).capacity as usize)
     }
+}
+
+/// Read slot `index` of a dense internal keys/property array.
+///
+/// The object field-get funnel has already proved `keys` is a live
+/// `GC_TYPE_ARRAY` — it reads the `GcHeader` and returns `undefined` otherwise
+/// — and has capped `index` below the array's own capacity (see
+/// [`keys_array_len_capped_to_capacity`]). Those are precisely the two facts
+/// [`js_array_get_f64`] re-establishes from scratch on every call: a
+/// `clean_arr_ptr` forwarding walk, a lazy-header probe, the exotic-receiver
+/// classifications and a descriptor-flag read — per key examined, per property
+/// read. On `gc-handoff/apps/asyncpipe_big.ts` that one funnel was 78% of all
+/// `js_array_get_f64` samples.
+///
+/// Falls back to the general getter for anything it cannot serve on those
+/// terms — a forwarded array (which `clean_arr_ptr` would relocate), one
+/// carrying index descriptors, an out-of-range index, or a hole (which reads
+/// through the prototype chain) — so no general semantics move. Keys arrays
+/// are dense and descriptor-free, so the fallback is the cold arm.
+#[inline]
+pub(crate) unsafe fn keys_array_slot(
+    keys: *const ArrayHeader,
+    index: u32,
+) -> crate::value::JSValue {
+    if let Some(header) = crate::value::addr_class::try_read_gc_header(keys as usize) {
+        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+            && index < (*keys).length
+            && index < (*keys).capacity
+        {
+            let elements =
+                (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let raw = std::ptr::read(elements.add(index as usize));
+            if raw.to_bits() != crate::value::TAG_HOLE {
+                return crate::value::JSValue::from_bits(raw.to_bits());
+            }
+        }
+    }
+    #[cfg(test)]
+    KEYS_ARRAY_SLOT_FALLBACKS.with(|c| c.set(c.get().wrapping_add(1)));
+    crate::array::js_array_get(keys, index)
+}
+
+/// Times [`keys_array_slot`] could NOT serve a slot from the dense words and
+/// had to delegate. Asserted in both directions by
+/// `array::collection_tag_tests` — zero for the dense keys arrays the fast path
+/// exists for, non-zero for every shape it must refuse — so a fast path that
+/// silently stopped applying, or one that started swallowing a shape it should
+/// have delegated, both go red.
+///
+/// Per THREAD — `cargo test` runs every case on its own thread in one process,
+/// so a process-global counter would be moved by whatever else is running.
+#[cfg(test)]
+thread_local! {
+    static KEYS_ARRAY_SLOT_FALLBACKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_keys_array_slot_fallbacks() -> u64 {
+    KEYS_ARRAY_SLOT_FALLBACKS.with(|c| c.get())
 }
 
 /// Auto-opt dead-strip anchor: codegen emits a bare `js_array_length` symbol in
@@ -568,10 +686,17 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
     };
     if !arr.is_null() {
         let addr = arr as usize;
-        if crate::set::is_registered_set(addr) {
+        // #7765: gate both probes on the receiver's own type tag — see
+        // `js_array_get_f64` for why the tag answers, why it is ABA-proof, and
+        // why a header-less buffer receiver still lands on the same result.
+        // This reads the byte the `GC_TYPE_LAZY_ARRAY` / `GC_TYPE_OBJECT` block
+        // a few lines below already reads, under the same magnitude guard, so
+        // it adds no dereference this function did not already perform.
+        let receiver_type = array_receiver_gc_tag(arr).0;
+        if receiver_type == crate::gc::GC_TYPE_SET && crate::set::is_registered_set(addr) {
             return crate::set::js_set_size(arr as *const crate::set::SetHeader);
         }
-        if crate::map::is_registered_map(addr) {
+        if receiver_type == crate::gc::GC_TYPE_MAP && crate::map::is_registered_map(addr) {
             return crate::map::js_map_size(arr as *const crate::map::MapHeader);
         }
     }
@@ -660,10 +785,15 @@ pub extern "C" fn js_array_get_element_f64(arr: i64, index: i64) -> f64 {
 /// Use when the codegen KNOWS the pointer is a plain Array (not Map/Set/Buffer).
 #[no_mangle]
 pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32) -> f64 {
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr(arr);
+    if cleaned.is_null() {
+        // #7574: array-like OBJECT receiver — see `js_array_get_f64`.
+        if crate::array::subclass::array_object_receiver(arr).is_some() {
+            return js_array_get_f64(arr, index);
+        }
         return f64::NAN;
     }
+    let arr = cleaned;
     // Index accessors / custom attrs installed via `Object.defineProperty`
     // need the descriptor-aware getter.
     if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
@@ -763,10 +893,17 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             }
         }
     }
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr(arr);
+    if cleaned.is_null() {
+        // #7574: `a[i]` on a `class X extends Array` instance held in a
+        // `T[]`-annotated binding. Read the object's indexed property through
+        // the spec-generic `Get`, not the `ObjectHeader` words.
+        if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
+            return crate::array::subclass::array_object_index_get(recv, index);
+        }
         return f64::NAN;
     }
+    let arr = cleaned;
     // Check if this is actually a TypedArray — dispatch through typed array helper
     if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
         return crate::typedarray::js_typed_array_get(
@@ -780,8 +917,32 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             crate::buffer::js_buffer_get(arr as *const crate::buffer::BufferHeader, index as i32);
         return byte_val as f64;
     }
+    // #7765: ONE `GcHeader` read now gates both collection probes below and
+    // supplies the descriptor flags further down, which `array_object_flags`
+    // used to re-derive through a second `clean_arr_ptr` and a second header
+    // read. On `gc-handoff/apps/asyncpipe_big.ts` this call site was 76% of all
+    // `is_registered_set` samples and 82% of all `is_registered_map` ones —
+    // both registries are non-empty there, so the #7474 latch is correctly
+    // armed and each probe really was resolving a thread-local and hashing, on
+    // every element read of an ordinary array, to prove an array is not a Map.
+    //
+    // The tag answers because every registered `Map`/`Set` IS its
+    // `arena_alloc_gc(_, _, GC_TYPE_MAP|GC_TYPE_SET)` header (one registration
+    // site each), and it is ABA-proof by construction: it lives INSIDE the
+    // candidate bytes, so recycling the address into anything else rewrites it
+    // before the new pointer is handed out. That is exactly what an
+    // address-keyed negative memo could not offer (#7755).
+    //
+    // Correct for a header-LESS receiver too. Buffers and typed arrays are
+    // `std::alloc`-backed, so their preceding bytes are allocator bookkeeping —
+    // but both are already routed above, and whichever way those bytes read the
+    // outcome is unchanged: a bookkeeping byte that happens to read as
+    // `GC_TYPE_SET`/`GC_TYPE_MAP` still falls through to the authoritative
+    // registry (which answers `false`), and any other value skips a probe that
+    // would have answered `false` anyway.
+    let receiver_tag = array_receiver_gc_tag(arr);
     // Check if this is a Set — read from elements pointer (not inline)
-    if crate::set::is_registered_set(arr as usize) {
+    if receiver_tag.0 == crate::gc::GC_TYPE_SET && crate::set::is_registered_set(arr as usize) {
         let set = arr as *const crate::set::SetHeader;
         unsafe {
             let size = (*set).size;
@@ -793,7 +954,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         }
     }
     // Check if this is a Map — return entries as [key, value] pairs
-    if crate::map::is_registered_map(arr as usize) {
+    if receiver_tag.0 == crate::gc::GC_TYPE_MAP && crate::map::is_registered_map(arr as usize) {
         let map = arr as *const crate::map::MapHeader;
         unsafe {
             let size = (*map).size;
@@ -809,7 +970,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // `array_has_own_index`) — this probe allocated two Strings on EVERY
     // checked element read once any descriptor existed process-wide, which
     // taxed every internal keys_array walk (`in`, defineProperty, Object.keys).
-    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+    if array_object_flags_from_tag(receiver_tag) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         let key = index.to_string();
         if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, &key) {
             if acc.get != 0 {
@@ -1074,10 +1235,20 @@ pub extern "C" fn js_array_set_f64_extend(
 ) -> *mut ArrayHeader {
     // Demote a uniquely-owned string source — see `js_array_set_f64`.
     crate::string::js_string_addref_if_heap_string(value);
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        // #7574: `a[i] = v` on a `class X extends Array` instance held in a
+        // `T[]`-annotated binding. Pre-fix this stored the value into
+        // `ObjectHeader.keys_array` / `.meta`. Run the object `[[Set]]` plus
+        // the Array-exotic `length` maintenance, and return the ORIGINAL
+        // receiver so the caller's realloc write-back keeps the binding.
+        if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
+            crate::array::subclass::array_object_index_set(recv, index, value);
+            return arr;
+        }
         return js_array_alloc(0);
     }
+    let arr = cleaned;
     // If this write targets `Array.prototype`, mark the prototype as carrying an
     // indexed property so out-of-bounds element reads on ordinary arrays consult
     // it (ECMA-262 OrdinaryGet → prototype chain). Cheap no-op otherwise.
@@ -1226,233 +1397,6 @@ pub extern "C" fn js_array_set_f64_extend(
     }
 }
 
-/// Bulk numeric dense fill for compiler-proven trivial loops:
-/// `for (let i = 0; i < end; i++) arr[i] = constant`.
-///
-/// This keeps JavaScript semantics for frozen/sealed/descriptor arrays by
-/// falling back to the ordinary extending setter. The fast path is restricted
-/// to dense writes from index 0 through `end - 1`, so the resulting live
-/// payload is entirely numeric and can be marked raw-f64 / pointer-free once.
-#[no_mangle]
-pub extern "C" fn js_array_fill_f64_const_extend(
-    arr: *mut ArrayHeader,
-    end: u32,
-    value: f64,
-) -> *mut ArrayHeader {
-    if end == 0 {
-        return clean_arr_ptr_mut(arr);
-    }
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
-        let new_arr = js_array_alloc(end);
-        return js_array_fill_f64_const_extend(new_arr, end, value);
-    }
-    note_array_index_write(arr as usize);
-    let flags = array_object_flags(arr);
-    if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
-        != 0
-        || crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
-    {
-        let mut out = arr;
-        for i in 0..end {
-            out = js_array_set_f64_extend(out, i, value);
-        }
-        return out;
-    }
-
-    let Some(number) = value_bits_to_number(value.to_bits()) else {
-        let mut out = arr;
-        for i in 0..end {
-            out = js_array_set_f64_extend(out, i, value);
-        }
-        return out;
-    };
-
-    unsafe {
-        let old_length = (*arr).length;
-        let raw_before = array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64);
-        if old_length > end && !raw_before {
-            let mut fallback = arr;
-            for i in 0..end {
-                fallback = js_array_set_f64_extend(fallback, i, value);
-            }
-            return fallback;
-        }
-
-        let mut out = if end > (*arr).capacity {
-            js_array_grow(arr, end)
-        } else {
-            arr
-        };
-        out = clean_arr_ptr_mut(out);
-        if out.is_null() || end > (*out).capacity {
-            let mut fallback = arr;
-            for i in 0..end {
-                fallback = js_array_set_f64_extend(fallback, i, value);
-            }
-            return fallback;
-        }
-        let elements_ptr = (out as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        for i in 0..end as usize {
-            // GC_STORE_AUDIT(POINTER_FREE): bulk numeric fill writes raw f64s only.
-            ptr::write(elements_ptr.add(i), number);
-        }
-        if (*out).length < end {
-            (*out).length = end;
-        }
-        set_array_numeric_layout(out, NumericArrayLayout::RawF64);
-        out
-    }
-}
-
-/// Bulk numeric dense fill for loops bounded by current array length:
-/// `for (let i = 0; i < arr.length; i++) arr[i] = constant`.
-///
-/// If the receiver is exotic (frozen/sealed/descriptors/etc.), the fallback
-/// re-reads `.length` on every iteration so it preserves the source loop's
-/// observable behavior when setters mutate array length.
-#[no_mangle]
-pub extern "C" fn js_array_fill_f64_const_len_extend(
-    arr: *mut ArrayHeader,
-    value: f64,
-) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr_mut(arr);
-    let end = js_array_length(arr);
-    if end == 0 || arr.is_null() {
-        return arr;
-    }
-    note_array_index_write(arr as usize);
-    let flags = array_object_flags(arr);
-    if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
-        != 0
-        || crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
-    {
-        let mut out = arr;
-        let mut i = 0;
-        while i < js_array_length(out) {
-            out = js_array_set_f64_extend(out, i, value);
-            i += 1;
-        }
-        return out;
-    }
-    js_array_fill_f64_const_extend(arr, end, value)
-}
-
-/// Bulk numeric dense fill for compiler-proven trivial loops:
-/// `for (let i = 0; i < end; i++) arr[i] = i`.
-#[no_mangle]
-pub extern "C" fn js_array_fill_f64_iota_extend(
-    arr: *mut ArrayHeader,
-    end: u32,
-) -> *mut ArrayHeader {
-    if end == 0 {
-        return clean_arr_ptr_mut(arr);
-    }
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
-        let new_arr = js_array_alloc(end);
-        return js_array_fill_f64_iota_extend(new_arr, end);
-    }
-    note_array_index_write(arr as usize);
-    let flags = array_object_flags(arr);
-    if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
-        != 0
-        || crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
-    {
-        let mut out = arr;
-        for i in 0..end {
-            out = js_array_set_f64_extend(out, i, i as f64);
-        }
-        return out;
-    }
-
-    unsafe {
-        let old_length = (*arr).length;
-        let raw_before = array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64);
-        if old_length > end && !raw_before {
-            let mut fallback = arr;
-            for i in 0..end {
-                fallback = js_array_set_f64_extend(fallback, i, i as f64);
-            }
-            return fallback;
-        }
-
-        let mut out = if end > (*arr).capacity {
-            js_array_grow(arr, end)
-        } else {
-            arr
-        };
-        out = clean_arr_ptr_mut(out);
-        if out.is_null() || end > (*out).capacity {
-            let mut fallback = arr;
-            for i in 0..end {
-                fallback = js_array_set_f64_extend(fallback, i, i as f64);
-            }
-            return fallback;
-        }
-        let elements_ptr = (out as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        for i in 0..end as usize {
-            // GC_STORE_AUDIT(POINTER_FREE): bulk iota fill writes raw f64s only.
-            ptr::write(elements_ptr.add(i), i as f64);
-        }
-        if (*out).length < end {
-            (*out).length = end;
-        }
-        set_array_numeric_layout(out, NumericArrayLayout::RawF64);
-        out
-    }
-}
-
-/// Bulk numeric dense fill for loops bounded by current array length:
-/// `for (let i = 0; i < arr.length; i++) arr[i] = i`.
-///
-/// If the receiver is exotic (frozen/sealed/descriptors/etc.), the fallback
-/// re-reads `.length` on every iteration so it preserves the source loop's
-/// observable behavior when setters mutate array length.
-#[no_mangle]
-pub extern "C" fn js_array_fill_f64_iota_len_extend(arr: *mut ArrayHeader) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr_mut(arr);
-    let end = js_array_length(arr);
-    if end == 0 || arr.is_null() {
-        return arr;
-    }
-    note_array_index_write(arr as usize);
-    let flags = array_object_flags(arr);
-    if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
-        != 0
-        || crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
-    {
-        let mut out = arr;
-        let mut i = 0;
-        while i < js_array_length(out) {
-            out = js_array_set_f64_extend(out, i, i as f64);
-            i += 1;
-        }
-        return out;
-    }
-    js_array_fill_f64_iota_extend(arr, end)
-}
-
 /// Try to perform `arr[i] = arr[i] + delta` over a dense numeric window.
 ///
 /// This is intentionally transactional: the first pass validates the actual
@@ -1548,27 +1492,6 @@ pub extern "C" fn js_array_numeric_range_add_len(receiver: f64, start: f64, delt
     array_numeric_range_add_impl(receiver, start, None, delta)
 }
 
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_ARRAY_FILL_F64_CONST_EXTEND: extern "C" fn(
-    *mut ArrayHeader,
-    u32,
-    f64,
-) -> *mut ArrayHeader = js_array_fill_f64_const_extend;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_ARRAY_FILL_F64_IOTA_EXTEND: extern "C" fn(*mut ArrayHeader, u32) -> *mut ArrayHeader =
-    js_array_fill_f64_iota_extend;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_ARRAY_FILL_F64_CONST_LEN_EXTEND: extern "C" fn(
-    *mut ArrayHeader,
-    f64,
-) -> *mut ArrayHeader = js_array_fill_f64_const_len_extend;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_ARRAY_FILL_F64_IOTA_LEN_EXTEND: extern "C" fn(*mut ArrayHeader) -> *mut ArrayHeader =
-    js_array_fill_f64_iota_len_extend;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_ARRAY_NUMERIC_RANGE_ADD: extern "C" fn(f64, f64, f64, f64) -> i64 =
@@ -1750,16 +1673,29 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
             // that evacuates the receiver; `arr` is a bare Rust local.
             let scope = crate::gc::RuntimeHandleScope::new();
             let arr_handle = scope.root_raw_const_ptr(arr);
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            return array_get_property_by_key(
-                arr_handle.get_raw_const_ptr::<ArrayHeader>(),
-                key_ptr,
-            );
+            // Allocating key build + receiver re-read as one combinator (#7341).
+            let (key_ptr, arr_now) = arr_handle.across_const::<ArrayHeader, _>(|| {
+                crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32)
+            });
+            return array_get_property_by_key(arr_now, key_ptr);
         }
     }
 
     if unsafe { crate::symbol::js_is_symbol(idx) } != 0 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
+        // Symbol-keyed read on an array: `arr[sym] = v` stores into the
+        // symbol side table keyed by the header address (write arm in
+        // `js_array_set_index_or_string`), so read it back through the
+        // standard symbol getter — which also serves an accessor installed
+        // via `defineProperty(arr, sym, {get})`. This used to hard-return
+        // `undefined`, making every stored symbol property unreadable
+        // (test262 getOwnPropertySymbols/order-after-define-property,
+        // Array-receiver half).
+        return unsafe {
+            crate::symbol::js_object_get_symbol_property(
+                crate::value::js_nanbox_pointer(arr as i64),
+                idx,
+            )
+        };
     }
     // #6935: read-side sibling of `js_array_set_index_or_string` below —
     // `js_jsvalue_to_string` on an object key (`a[new Number(1)]`,
@@ -1848,13 +1784,34 @@ pub extern "C" fn js_array_set_index_or_string(
         }
         return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
+    // Symbol-keyed write: store through the symbol side table (keyed by the
+    // header address), exactly like a plain-object receiver. This arm used to
+    // be missing — a symbol key fell past the string fallback below (guarded
+    // `js_is_symbol == 0`) to the final bare return, so the write was
+    // silently DROPPED and `arr[sym]` / `getOwnPropertySymbols(arr)` saw
+    // nothing (test262 getOwnPropertySymbols/order-after-define-property,
+    // Array-receiver half).
+    if unsafe { crate::symbol::js_is_symbol(idx) } != 0 {
+        // The store can run a user setter (symbol accessor installed on the
+        // array), which can GC and evacuate the receiver.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                crate::value::js_nanbox_pointer(arr as i64),
+                idx,
+                value,
+            );
+        }
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+    }
     // Fallback for a NON-numeric key: a primitive (`a[null]`, `a[undefined]`,
     // `a[true]`, `a[10n]`) or a boxed object (`a[new Number(1)]`). Per
     // ToPropertyKey these become string property keys (or, for `10n`, the
     // canonical index "10"); `js_array_set_string_key` routes accordingly.
     // Arrays previously DROPPED these writes (plain objects handled them).
     // Restricted to `numeric.is_none()`: numeric keys (including non-integer
-    // finite floats) are handled above. Symbols stay symbol-keyed.
+    // finite floats) are handled above. Symbols are handled by the arm above.
     //
     // #6935: this is the boxed-object arm the doc comment above names, so
     // `js_jsvalue_to_string` here runs a USER `toString` / `valueOf` — allocate
@@ -1967,5 +1924,24 @@ mod keys_len_cap_tests {
             capacity,
             "cap must bound a bogus oversized length to the array's capacity"
         );
+    }
+}
+
+#[cfg(test)]
+mod claimed_array_string_receiver_tests {
+    use super::array_get_property_by_key;
+
+    #[test]
+    fn numeric_string_key_reads_a_heap_string_before_by_name_fallback() {
+        let receiver = crate::string::js_string_from_bytes(b"ss".as_ptr(), 2);
+        let zero = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
+        let indexed = array_get_property_by_key(receiver.cast(), zero);
+        assert_eq!(
+            crate::builtins::jsvalue_string_content(indexed).as_deref(),
+            Some("s")
+        );
+
+        let length = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        assert_eq!(array_get_property_by_key(receiver.cast(), length), 2.0);
     }
 }

@@ -25,6 +25,35 @@ fn well_known_symbol_method_name(sym_key: usize) -> Option<&'static str> {
     None
 }
 
+/// Does `obj` carry an OWN symbol-keyed property under `sym`, **without
+/// invoking** an accessor for it?
+///
+/// [`own_symbol_property`] answers the same question by performing the read,
+/// which for an accessor property means calling the user getter. A caller that
+/// only wants to know whether the builtin behaviour has been shadowed — the
+/// `[...arr]` dense fast path in `array::flat_clone` — must not run that getter,
+/// because the slow path it falls back to will read the property again and the
+/// getter would then observe two calls where the spec mandates one.
+///
+/// Deliberately mirrors [`own_symbol_property`]'s two lookups in the same order
+/// (accessor table, then the raw `SYMBOL_PROPERTIES` data table) so the two can
+/// never disagree about existence; only the *invocation* differs.
+pub(crate) unsafe fn has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool {
+    if accessors::symbol_accessor_property(obj_f64, sym_f64).is_some() {
+        return true;
+    }
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return false;
+    }
+    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+    match guard.as_ref().and_then(|map| map.get(&obj_key)) {
+        Some(entries) => entries.iter().any(|&(sk, _)| sk == sym_key),
+        None => false,
+    }
+}
+
 /// #1758: the OWN symbol-property lookup — the raw `SYMBOL_PROPERTIES`
 /// side-table read keyed by the object's address (no class-ref / no prototype
 /// chain). Used by `js_object_get_symbol_property` and by
@@ -77,10 +106,25 @@ unsafe fn req_handle_symbol_fallback(obj_f64: f64, sym_f64: f64) -> Option<f64> 
     if !crate::object::is_valid_obj_ptr(raw as *const u8) {
         return None;
     }
+    // #7498: THIS IS THE STALE DEREF `PERRY_GC_PROTECT_FROMSPACE=1` REPORTS
+    // for `[...obj.arr]`. `js_string_from_bytes` below ALLOCATES, so a copying
+    // minor can relocate the receiver while it exists only in the bare `raw`
+    // usize — which the collector cannot see and therefore never rewrites.
+    // `js_object_get_field_by_name` then reads that pre-move copy's
+    // `keys_array` field out of retired from-space, and the fault lands on a
+    // 40-byte `GC_TYPE_ARRAY` two frames down.
+    //
+    // This helper runs on EVERY heap-object symbol read whose own-symbol
+    // lookup missed — including every `[Symbol.iterator]` resolution behind an
+    // array or object spread — so the window is unconditional, which is why
+    // the reproducer faults 5/5 rather than intermittently.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(obj_f64);
     let key = b"_req";
     let kh = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     let req = crate::object::js_object_get_field_by_name_f64(
-        raw as *const crate::object::ObjectHeader,
+        crate::value::js_nanbox_get_pointer(recv_h.get_nanbox_f64())
+            as *const crate::object::ObjectHeader,
         kh as *const crate::StringHeader,
     );
     let rbits = req.to_bits();
@@ -520,9 +564,21 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     // to a small native handle (POINTER-tagged, below HANDLE_BAND_MAX, not a
     // real heap object), and only returns a value the handle actually holds —
     // so ordinary objects (no `_req`, or a heap `_req`) are unaffected.
-    if let Some(v) = req_handle_symbol_fallback(obj_f64, sym_f64) {
+    // #7498: `req_handle_symbol_fallback` interns a `"_req"` key, so it is the
+    // first unconditional allocation on this resolver's path — every
+    // `[Symbol.iterator]` read behind a spread reaches it. Root the receiver
+    // and the symbol across it and rebind BOTH `obj_f64` and the derived
+    // `bits` from the roots afterwards, so no line below can name a
+    // pre-collection address.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(obj_f64);
+    let sym_h = scope.root_nanbox_f64(sym_f64);
+    if let Some(v) = req_handle_symbol_fallback(obj_h.get_nanbox_f64(), sym_h.get_nanbox_f64()) {
         return v;
     }
+    let obj_f64 = obj_h.get_nanbox_f64();
+    let sym_f64 = sym_h.get_nanbox_f64();
+    let bits = obj_f64.to_bits();
     let sym_key = sym_key_from_f64(sym_f64);
     if sym_key != 0 {
         let jsval = crate::value::JSValue::from_bits(bits);

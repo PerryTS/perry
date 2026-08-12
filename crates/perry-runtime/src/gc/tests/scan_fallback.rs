@@ -25,7 +25,7 @@ fn arm_old_reclaim() {
 
 fn clear_old_reclaim_state() {
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
-    GC_SAFEPOINT_PENDING.with(|pending| pending.set(false));
+    crate::gc::set_safepoint_pending(false);
     let old_in_use = crate::arena::old_gen_in_use_bytes();
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
 }
@@ -42,7 +42,7 @@ fn old_reclaim_runs_precisely_at_a_safepoint() {
     // existing full mark-sweep path"), so the ONLY place an old-gen reclaim
     // could happen was the allocation point, behind `force_full_scan()`.
     arm_old_reclaim();
-    GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+    crate::gc::set_safepoint_pending(true);
     js_gc_loop_safepoint();
 
     assert_eq!(
@@ -204,27 +204,107 @@ fn host_pressure_defers_when_a_generated_frame_is_live() {
     clear_old_reclaim_state();
 }
 
+/// Allocate a traceable malloc-GC object whose ONLY reference will be a
+/// pointer-shaped word planted in a live native-stack frame, run `js_gc_collect`
+/// from that frame, and report whether the object survived.
+///
+/// `#[inline(never)]` and the `black_box` bracket are both load-bearing. The
+/// conservative scanner walks from the collector's SP up to the stack base, so
+/// the plant only exists to be found if it is (a) really in memory rather than a
+/// register and (b) in a frame that is still live while the collection runs.
+/// Taking the array's address through `black_box` forces (a); calling
+/// `js_gc_collect` from inside this function forces (b).
+fn plant_on_native_stack_and_collect() -> bool {
+    #[inline(never)]
+    fn run(user_ptr: *mut u8) -> bool {
+        let mut plant = [0u64; 16];
+        // Both encodings the conservative word decoder accepts
+        // (`try_mark_value_or_raw`): NaN-boxed, and the raw-I64 form codegen
+        // uses for `is_pointer`-typed locals.
+        plant[7] = ptr_bits(user_ptr as usize);
+        plant[11] = user_ptr as u64;
+        std::hint::black_box(plant.as_ptr());
+        js_gc_collect();
+        std::hint::black_box(plant.as_ptr());
+        malloc_user_ptr_tracked(user_ptr)
+    }
+
+    let ptr = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    run(ptr)
+}
+
+/// #7558: explicit `gc()` runs on the PRECISE root set, like every other
+/// collection a production binary performs.
+///
+/// The pair below is what makes that a measurement rather than an assertion.
+/// The detector arm alone is not enough: "the object died because nothing
+/// conservative was scanned" and "the object died because the plant never
+/// landed on the stack at all" are the same green, and the second is the
+/// #6942/#7024/#7025 shape — a gate whose subject never ran. So the control arm
+/// re-runs the identical plant with the scan explicitly pinned `Full` and
+/// asserts the object SURVIVES. A green detector arm therefore means the
+/// planted word was findable and was not found.
 #[test]
-fn explicit_gc_still_scans_and_the_census_attributes_it() {
+fn explicit_gc_collects_precisely_and_a_native_stack_plant_dies() {
     let _isolation = GcTestIsolationGuard::new();
     clear_old_reclaim_state();
     reset_scan_fallback_counters();
 
-    js_gc_collect();
+    // The isolation guard pins `Auto`, and an already-pinned override makes
+    // `ManualGcScanGuard::force_full_scan` a no-op — so a test that left it
+    // pinned could not tell a removed force from a suppressed one. Clear it:
+    // this arm must see exactly what a production binary sees.
+    let pinned = crate::gc::roots::set_conservative_stack_scan_override(None);
+    let collections_before = gc_collection_count();
+    let survived = plant_on_native_stack_and_collect();
+    let collections_after = gc_collection_count();
+    crate::gc::roots::set_conservative_stack_scan_override(pinned);
 
-    // #7148 deliberately does NOT defer explicit `gc()`: it is a user request
-    // with synchronous semantics. What changes is that its cost is now
-    // attributable — every `gc_ratchet` probe ends with one of these, so a
-    // census that lumped it in with the automatic sites would misread.
     assert!(
-        scan_fallback_count(ConservativeScanSite::ManualCollect) >= 1,
-        "explicit gc() keeps the scan and must be counted as non-automatic"
+        collections_after > collections_before,
+        "LIVE SUBJECT: the explicit gc() must actually have collected — \
+         'the plant was not retained' is worthless if nothing ran"
+    );
+    assert!(
+        !survived,
+        "explicit gc() must consume only precise roots, so an object reachable \
+         ONLY from a pointer-shaped word in a live native-stack frame is \
+         garbage and must be swept (#7558)"
     );
     assert_eq!(
-        automatic_scan_fallback_total(),
+        scan_fallback_total(),
         0,
-        "an explicit gc() must not be counted against the automatic-site total \
-         that #7148 is driving to zero"
+        "and no site may force the conservative scan on this path — the \
+         `ManualCollect` census entry is deleted, not merely quiet (#7558)"
+    );
+
+    clear_old_reclaim_state();
+}
+
+#[test]
+fn the_native_stack_plant_survives_when_the_scan_is_pinned_on() {
+    // SABOTAGE CONTROL for the test above. Identical plant, scan forced on:
+    // the object must survive. If this fails the detector is not detecting
+    // anything and its green says nothing.
+    let _isolation = GcTestIsolationGuard::new();
+    clear_old_reclaim_state();
+    reset_scan_fallback_counters();
+
+    let pinned = crate::gc::roots::set_conservative_stack_scan_override(Some(
+        ConservativeStackScanMode::Full,
+    ));
+    let survived = plant_on_native_stack_and_collect();
+    crate::gc::roots::set_conservative_stack_scan_override(pinned);
+
+    assert!(
+        survived,
+        "with the conservative scan pinned on, the planted native-stack word \
+         must retain its object — otherwise the detector arm's green means \
+         'the plant never landed', not 'the scan did not run'"
     );
 
     clear_old_reclaim_state();
@@ -354,6 +434,126 @@ fn host_pressure_deferral_still_has_a_drain_when_moving_loop_polls_are_off() {
     assert!(
         gc_collection_count() > collections_before,
         "LIVE SUBJECT: the deferred critical-pressure cycle actually ran"
+    );
+
+    clear_old_reclaim_state();
+}
+
+/// #7682: the same plant, but the collection is driven by the **nursery-churn
+/// allocation-point arm** rather than an explicit `gc()`.
+///
+/// The distinction is the whole point. `gc()` is called from a place the
+/// precise root set describes; this arm runs from inside `arena_cell_alloc`,
+/// i.e. at whatever half-finished expression happened to need a fresh block.
+/// A value live only in an LLVM register there is named by neither root
+/// lowering — the shadow stack holds only what codegen has already stored to a
+/// slot, and RS4GC relocates only what it can type as `ptr addrspace(1)`,
+/// which a NaN-boxed `double` operand is not. The native-stack plant stands in
+/// for exactly that value.
+fn plant_on_native_stack_and_check_trigger(triggers: &GcTriggerThresholdTestGuard) -> bool {
+    #[inline(never)]
+    fn run(user_ptr: *mut u8, triggers: &GcTriggerThresholdTestGuard) -> bool {
+        let mut plant = [0u64; 16];
+        plant[7] = ptr_bits(user_ptr as usize);
+        plant[11] = user_ptr as u64;
+        std::hint::black_box(plant.as_ptr());
+        // Arm AFTER the plant's own allocation so the count comparison is
+        // due, and immediately before the check so nothing can re-baseline
+        // it. `copied_minor_malloc_sweep_due` reads the same comparison
+        // directly, so the malloc registry is swept whichever trigger kind
+        // `gc_budgeted_due_trigger` reports — without that the "it survived"
+        // assertion below would be vacuous.
+        triggers.make_malloc_sweep_due();
+        gc_check_trigger();
+        std::hint::black_box(plant.as_ptr());
+        malloc_user_ptr_tracked(user_ptr)
+    }
+
+    let ptr = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    run(ptr, triggers)
+}
+
+#[test]
+fn the_alloc_point_nursery_minor_retains_native_stack_values_under_the_polls_off_kill_switch() {
+    // The regression test for #7682, pinned to the pacing that reaches the
+    // direct alloc-point minor at all: polls OFF so the deferral to a precise
+    // safepoint never fires, scavenge ON so the arm is open. That was the
+    // SHIPPED default when #7682 was found, and it is the `=0` kill switch
+    // now that polls are back ON — the guard's name says so. In this
+    // combination the guard below was skipped, the copying minor became
+    // eligible at a register-imprecise point, and a tree-walking interpreter
+    // silently returned the wrong number because a relocated heap string was
+    // read back out of a stale register.
+    //
+    // It still has to hold under the kill switch. `=0` is a supported
+    // configuration, and "we moved the collection somewhere else by default"
+    // is not a reason for the alloc-point minor to be allowed to relocate when
+    // a user turns that route off.
+    let _isolation = GcTestIsolationGuard::new();
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    clear_old_reclaim_state();
+    reset_scan_fallback_counters();
+
+    // The isolation guard pins `Auto`, and an already-pinned override makes
+    // `force_full_scan` a no-op — so a test that left it pinned could not tell
+    // a removed force from a suppressed one. Clear it: this arm must see
+    // exactly what a production binary sees.
+    let pinned = crate::gc::roots::set_conservative_stack_scan_override(None);
+    let collections_before = gc_collection_count();
+    let survived = plant_on_native_stack_and_check_trigger(&triggers);
+    let collections_after = gc_collection_count();
+    crate::gc::roots::set_conservative_stack_scan_override(pinned);
+
+    assert!(
+        collections_after > collections_before,
+        "LIVE SUBJECT: the allocation-point arm must actually have collected — \
+         'the plant survived' is worthless if nothing ran"
+    );
+    assert!(
+        scan_fallback_count(ConservativeScanSite::NurseryChurnSlackValve) >= 1,
+        "the alloc point is register-imprecise, so this collection must force \
+         the conservative scan — unconditionally, not only when scavenge is off"
+    );
+    assert!(
+        survived,
+        "a value reachable ONLY from a live native-stack word must survive an \
+         allocation-point collection: it stands for the NaN-boxed operand an \
+         expression is holding in a register while its own allocation runs"
+    );
+
+    clear_old_reclaim_state();
+}
+
+#[test]
+fn the_alloc_point_plant_dies_when_the_scan_is_pinned_off() {
+    // SABOTAGE CONTROL for the test above, and the reason its green means
+    // something. Identical plant, identical trigger, scan pinned off — which
+    // is precisely the state `PERRY_GC_SCAVENGE`'s scan-skip used to produce.
+    // The plant must DIE here. If it survives, the detector arm is measuring
+    // "the malloc sweep never ran" rather than "the guard held", and both
+    // arms would be green on a tree with the bug back in it.
+    let _isolation = GcTestIsolationGuard::new();
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    clear_old_reclaim_state();
+    reset_scan_fallback_counters();
+
+    let pinned = crate::gc::roots::set_conservative_stack_scan_override(Some(
+        ConservativeStackScanMode::Disabled,
+    ));
+    let survived = plant_on_native_stack_and_check_trigger(&triggers);
+    crate::gc::roots::set_conservative_stack_scan_override(pinned);
+
+    assert!(
+        !survived,
+        "with the conservative scan pinned off the planted native-stack word \
+         must NOT retain its object — otherwise the detector arm's green says \
+         nothing about whether the scan ran"
     );
 
     clear_old_reclaim_state();

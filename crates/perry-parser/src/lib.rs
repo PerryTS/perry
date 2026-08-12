@@ -783,25 +783,35 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                 }
             }
             State::Regex { in_class } => {
-                out.push(bytes[i] as char);
+                // Step by whole chars, never by bytes: `bytes[i] as char` widens a
+                // single UTF-8 byte into a Latin-1 codepoint, so a raw `€` in the
+                // pattern is rewritten as the three chars `â` `\u{82}` `¬` and the
+                // literal silently stops matching (#7426). Every structural byte
+                // tested below is ASCII, so it can never be a continuation byte.
                 if bytes[i] == b'\\' {
-                    if let Some(&next) = bytes.get(i + 1) {
-                        out.push(next as char);
-                        i += 2;
-                    } else {
-                        i += 1;
+                    out.push('\\');
+                    i += 1;
+                    if i < bytes.len() {
+                        let ch = source[i..].chars().next().unwrap();
+                        out.push(ch);
+                        i += ch.len_utf8();
                     }
                 } else if bytes[i] == b'[' {
+                    out.push('[');
                     state = State::Regex { in_class: true };
                     i += 1;
                 } else if bytes[i] == b']' {
+                    out.push(']');
                     state = State::Regex { in_class: false };
                     i += 1;
                 } else if bytes[i] == b'/' && !in_class {
+                    out.push('/');
                     state = State::Code;
                     i += 1;
                 } else {
-                    i += 1;
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
                 }
             }
             State::LineComment => {
@@ -1315,5 +1325,75 @@ if (!ASCII_WHITESPACE_REPLACE_REGEX.test(' ')) {
 
         assert!(result.diagnostics.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_regex_literal_keeps_raw_non_ascii_characters() {
+        // #7426: the identifier-escape pre-pass stepped through regex literals a
+        // BYTE at a time and widened each byte with `as char`, so the UTF-8 bytes
+        // of `€` (E2 82 AC) were rewritten as three Latin-1 codepoints. SWC then
+        // parsed a pattern that could never match, with no error anywhere.
+        let cases = [
+            "const re = /a€b/;\n",
+            "const re = /[€]/;\n",
+            "const re = /€/u;\n",
+            "const re = /schön/i;\n",
+            "const re = /Maß/;\n",
+            "const re = /\\s*(\\d+)\\s+([\\d.,]+)\\s*€/;\n",
+            // A non-ASCII character immediately after a backslash (identity
+            // escape) took the other corrupting arm of the same match.
+            "const re = /\\€/;\n",
+            // Non-ASCII inside a character class must not desynchronize the
+            // in_class tracking that terminates the literal.
+            "const re = /[ö-ü]+/g;\n",
+        ];
+        for src in cases {
+            assert_eq!(
+                normalize_unicode_identifier_escapes(src),
+                src,
+                "pre-pass corrupted a regex literal: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_regex_literal_non_ascii_survives_to_the_ast() {
+        // End-to-end through SWC: the pattern SWC reports must be the source text.
+        let module = parse_typescript("const re = /a€b/;\n", "re.ts").unwrap();
+        let mut seen = None;
+        for item in &module.body {
+            let swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Decl(swc_ecma_ast::Decl::Var(
+                var,
+            ))) = item
+            else {
+                continue;
+            };
+            for decl in &var.decls {
+                if let Some(init) = decl.init.as_deref() {
+                    if let swc_ecma_ast::Expr::Lit(swc_ecma_ast::Lit::Regex(re)) = init {
+                        seen = Some(re.exp.to_string());
+                    }
+                }
+            }
+        }
+        assert_eq!(seen.as_deref(), Some("a€b"));
+        assert_eq!(seen.unwrap().chars().count(), 3);
+    }
+
+    #[test]
+    fn test_regex_pre_pass_still_normalizes_and_terminates() {
+        // The fix must not change ASCII behavior: identifier escapes outside the
+        // literal are still normalized, and `/` inside a class still does not end
+        // the pattern (the picomatch shape from the test above, plus non-ASCII).
+        assert_eq!(
+            normalize_unicode_identifier_escapes("const \\u0061 = /[/€]/;\n"),
+            "const a = /[/€]/;\n"
+        );
+        // `\u` INSIDE the pattern stays an escape — it is a regex escape, not an
+        // identifier escape, and rewriting it would change what the regex means.
+        assert_eq!(
+            normalize_unicode_identifier_escapes("const re = /\\u20AC/;\n"),
+            "const re = /\\u20AC/;\n"
+        );
     }
 }

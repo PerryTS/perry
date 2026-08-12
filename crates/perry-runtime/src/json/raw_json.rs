@@ -20,7 +20,27 @@ use crate::{js_string_from_bytes, JSValue, ObjectHeader, StringHeader};
 /// Reserved class id stamped onto raw-JSON wrapper objects. Kept distinct
 /// from every other reserved id used by `instanceof` / typeof so it can't be
 /// confused with a real user class or built-in.
-pub(crate) const RAW_JSON_CLASS_ID: u32 = 0xFFFF_00A0;
+///
+/// #7587: this was `0xFFFF_00A0`, which is [`JSX_NODE_CLASS_ID`]. Two
+/// independently written constants landed on the same slot — the second such
+/// collision found in a week, after #7576's `ITERATOR_HELPER_CLASS_ID` /
+/// `STRING_ITERATOR_CLASS_ID` pair. That one was inert-looking too, right up
+/// until it turned out to have killed the entire TC39 iterator-helpers surface.
+///
+/// This pair was not inert either. `value/to_string.rs` discriminates on
+/// `class_id` **alone** — no second condition — and returns field 0 as the
+/// object's string. A raw-JSON wrapper is allocated with one field and keeps
+/// its text in field 0, so `String(JSON.rawJSON("123"))` took the **JSX** arm
+/// and stringified through it. It returned a plausible answer purely because
+/// both types happen to store their payload in the same slot; any change to
+/// either layout would have turned that into garbage or a fault.
+///
+/// `scripts/class_id_collisions.py` now scans for this shape across every
+/// family, so a third pair cannot be introduced silently. A hand-maintained
+/// list could not — it only covers the constants somebody remembered to add.
+///
+/// [`JSX_NODE_CLASS_ID`]: crate::jsx::JSX_NODE_CLASS_ID
+pub(crate) const RAW_JSON_CLASS_ID: u32 = 0xFFFF_00A1;
 
 /// True if `text` is an acceptable argument to `JSON.rawJSON` per Node: a
 /// single JSON scalar with no leading/trailing whitespace, and not an object

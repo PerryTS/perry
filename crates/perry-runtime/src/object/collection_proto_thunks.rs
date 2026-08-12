@@ -16,7 +16,7 @@
 
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     static BUILTIN_MAP_SET_VALUE_BITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static BUILTIN_SET_ADD_VALUE_BITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -31,7 +31,7 @@ pub(crate) fn is_builtin_set_add_value(value: f64) -> bool {
 
 fn is_remembered_builtin_collection_method(
     value: f64,
-    cell: &'static std::thread::LocalKey<std::cell::Cell<u64>>,
+    cell: &'static crate::tls_hot::HotKey<std::cell::Cell<u64>>,
 ) -> bool {
     let ptr = normalized_collection_method_ptr(value);
     ptr != 0 && cell.with(|remembered| remembered.get() == ptr)
@@ -41,7 +41,7 @@ fn remember_builtin_collection_method(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
     value: f64,
-    cell: &'static std::thread::LocalKey<std::cell::Cell<u64>>,
+    cell: &'static crate::tls_hot::HotKey<std::cell::Cell<u64>>,
 ) {
     let value = installed_collection_method_value(proto_obj, method_name).unwrap_or(value);
     let ptr = normalized_collection_method_ptr(value);

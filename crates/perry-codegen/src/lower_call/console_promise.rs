@@ -13,10 +13,11 @@ use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
-use crate::expr::temp_root::{
-    rooted_array_begin, rooted_array_read, temp_root_get_double, temp_root_push_double,
-    temp_root_truncate, temp_rooted_array_push,
+use crate::rooting::{
+    any_operand_may_collect, implicit_this_restore, implicit_this_save, operand_may_collect,
+    with_operands_rooted, with_rooted_group,
 };
+
 use crate::expr::{
     emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, FnCtx,
     TypedFeedbackContract, TypedFeedbackKind,
@@ -37,6 +38,33 @@ fn util_types_arg_is_async_function_static(ctx: &FnCtx<'_>, expr: &Expr) -> Opti
         },
         _ => None,
     }
+}
+
+/// Lower every argument of a `console.*` call into `group`, left to right, with
+/// each already-evaluated value rooted across the evaluation of the ones that
+/// follow it, and re-read below the last of them.
+///
+/// **Every** argument, including the ones the method ignores. Node evaluates a
+/// call's whole argument list before it invokes the callee, so
+/// `console.dir(o, opts, sideEffect())` runs `sideEffect` BEFORE anything is
+/// printed. Two arms here used to evaluate the surplus arguments after the
+/// print (`dir`) or not at all (`time` / `count`), which is an observable
+/// difference rather than a formatting one — see #7649.
+///
+/// The window per argument is "the arguments after it": the consuming
+/// `js_console_*` call is emitted immediately below the last one, and an
+/// argument that is a literal or a proven non-pointer costs nothing, so a call
+/// like `console.table(rows)` emits exactly the IR it emitted before.
+fn lower_console_args<'a>(
+    ctx: &mut FnCtx<'_>,
+    group: &mut crate::rooting::RootedGroup<'a>,
+    args: &'a [Expr],
+) -> Result<Vec<String>> {
+    for (i, arg) in args.iter().enumerate() {
+        let collects = any_operand_may_collect(ctx, args[i + 1..].iter());
+        group.lower(ctx, arg, collects)?;
+    }
+    group.reread_all(ctx)
 }
 
 fn nanbox_bool_literal(value: bool) -> String {
@@ -282,32 +310,49 @@ pub fn try_lower_console_call(
                     ctx.block().call_void("js_console_trace", &[(DOUBLE, &val)]);
                 } else {
                     let cap = (args.len() as u32).to_string();
-                    let acc = rooted_array_begin(ctx, &cap);
-                    for arg in args.iter() {
-                        let v = lower_expr(ctx, arg)?;
-                        temp_rooted_array_push(ctx, &acc, &v);
-                    }
-                    let current_arr = rooted_array_read(ctx, &acc);
-                    ctx.block()
-                        .call_void("js_console_trace_spread", &[(I64, &current_arr)]);
-                    temp_root_truncate(ctx, &acc);
+                    with_rooted_group(ctx, 0, |ctx, group| {
+                        let acc = group.begin_array(ctx, &cap);
+                        for arg in args.iter() {
+                            let v = lower_expr(ctx, arg)?;
+                            group.push_array(ctx, acc, &v);
+                        }
+                        let current_arr = group.read_array(ctx, acc);
+                        ctx.block()
+                            .call_void("js_console_trace_spread", &[(I64, &current_arr)]);
+                        Ok(())
+                    })?;
                 }
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
                 ))));
             }
             // console.table(data[, properties]) — dedicated table renderer.
-            if property == "table" && (args.len() == 1 || args.len() == 2) {
-                let v = lower_expr(ctx, &args[0])?;
-                if args.len() == 2 {
-                    let props = lower_expr(ctx, &args[1])?;
-                    ctx.block().call_void(
-                        "js_console_table_with_properties",
-                        &[(DOUBLE, &v), (DOUBLE, &props)],
-                    );
-                } else {
-                    ctx.block().call_void("js_console_table", &[(DOUBLE, &v)]);
-                }
+            //
+            // #7649, two defects in five lines. `data` was lowered into a bare
+            // SSA register and then held across `properties`' lowering, which is
+            // arbitrary user code: `console.table(makeRows(), [churn()])` emits
+            // `%r1 = call @makeRows`, `%r2 = call @churn`, then reads `%r1` —
+            // and `root_reload` structurally cannot repair it, because a call
+            // result has no slot to be re-read from (#7280 taxonomy (c)+(d)).
+            // And the arity gate rejected three or more arguments, so
+            // `console.table(rows, cols, x)` fell through to the generic
+            // multi-arg console.log arm and printed the array instead of a
+            // table. Node ignores the surplus arguments; it does not stop being
+            // `console.table`.
+            if property == "table" && !args.is_empty() {
+                with_rooted_group(ctx, args.len(), |ctx, group| {
+                    let values = lower_console_args(ctx, group, args)?;
+                    if values.len() >= 2 {
+                        ctx.block().call_void(
+                            "js_console_table_with_properties",
+                            &[(DOUBLE, &values[0]), (DOUBLE, &values[1])],
+                        );
+                    } else {
+                        ctx.block()
+                            .call_void("js_console_table", &[(DOUBLE, &values[0])]);
+                    }
+                    Ok(())
+                })?;
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
                 ))));
@@ -322,25 +367,26 @@ pub fn try_lower_console_call(
                 "time" | "timeEnd" | "timeLog" | "count" | "countReset"
             ) && !args.is_empty()
             {
-                let v = lower_expr(ctx, &args[0])?;
                 if property == "timeLog" && args.len() > 1 {
-                    // `v` (the label) is itself an evaluated temporary held
-                    // across the extra arguments' evaluation, so it needs a
-                    // root of its own alongside the accumulator (#6951).
-                    let label = temp_root_push_double(ctx, &v);
-                    let cap = ((args.len() - 1) as u32).to_string();
-                    let acc = rooted_array_begin(ctx, &cap);
-                    for arg in args.iter().skip(1) {
-                        let extra = lower_expr(ctx, arg)?;
-                        temp_rooted_array_push(ctx, &acc, &extra);
-                    }
-                    let current_arr = rooted_array_read(ctx, &acc);
-                    let v = temp_root_get_double(ctx, &label);
-                    ctx.block().call_void(
-                        "js_console_time_log_spread",
-                        &[(DOUBLE, &v), (I64, &current_arr)],
-                    );
-                    temp_root_truncate(ctx, &label);
+                    // The label is an evaluated temporary held across the extra
+                    // arguments' evaluation, so it is rooted alongside the
+                    // accumulator (#6951) — both in one scope, released once.
+                    with_rooted_group(ctx, 1, |ctx, group| {
+                        let label = group.lower(ctx, &args[0], true)?;
+                        let cap = ((args.len() - 1) as u32).to_string();
+                        let acc = group.begin_array(ctx, &cap);
+                        for arg in args.iter().skip(1) {
+                            let extra = lower_expr(ctx, arg)?;
+                            group.push_array(ctx, acc, &extra);
+                        }
+                        let current_arr = group.read_array(ctx, acc);
+                        let v = group.reread(ctx, label)?;
+                        ctx.block().call_void(
+                            "js_console_time_log_spread",
+                            &[(DOUBLE, &v), (I64, &current_arr)],
+                        );
+                        Ok(())
+                    })?;
                     return Ok(Some(double_literal(f64::from_bits(
                         crate::nanbox::TAG_UNDEFINED,
                     ))));
@@ -353,7 +399,17 @@ pub fn try_lower_console_call(
                     "countReset" => "js_console_count_reset_value",
                     _ => unreachable!(),
                 };
-                ctx.block().call_void(runtime_fn, &[(DOUBLE, &v)]);
+                // #7649's sibling: only the label is used, but every argument
+                // is EVALUATED, because node evaluates the whole list before
+                // the call. `console.time("t", sideEffect())` used to lower
+                // `args[0]` alone and drop the rest on the floor — the side
+                // effect simply never happened. With a single argument nothing
+                // is rooted and the emitted IR is unchanged.
+                with_rooted_group(ctx, args.len(), |ctx, group| {
+                    let values = lower_console_args(ctx, group, args)?;
+                    ctx.block().call_void(runtime_fn, &[(DOUBLE, &values[0])]);
+                    Ok(())
+                })?;
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
                 ))));
@@ -405,21 +461,25 @@ pub fn try_lower_console_call(
                         .call_void("js_console_assert", &[(DOUBLE, &cond_v), (I64, "0")]);
                 } else {
                     // Multi-arg messages: bundle args[1..] into a heap
-                    // array and call the spread variant.
-                    let cond_root = temp_root_push_double(ctx, &cond_v);
-                    let cap = ((args.len() - 1) as u32).to_string();
-                    let acc = rooted_array_begin(ctx, &cap);
-                    for arg in args.iter().skip(1) {
-                        let v = lower_expr(ctx, arg)?;
-                        temp_rooted_array_push(ctx, &acc, &v);
-                    }
-                    let current_arr = rooted_array_read(ctx, &acc);
-                    let cond_v = temp_root_get_double(ctx, &cond_root);
-                    ctx.block().call_void(
-                        "js_console_assert_spread",
-                        &[(DOUBLE, &cond_v), (I64, &current_arr)],
-                    );
-                    temp_root_truncate(ctx, &cond_root);
+                    // array and call the spread variant. The condition is an
+                    // evaluated temporary held across every message's
+                    // evaluation, so it shares the accumulator's scope.
+                    with_rooted_group(ctx, 1, |ctx, group| {
+                        let cond = group.adopt(ctx, &args[0], &cond_v, true);
+                        let cap = ((args.len() - 1) as u32).to_string();
+                        let acc = group.begin_array(ctx, &cap);
+                        for arg in args.iter().skip(1) {
+                            let v = lower_expr(ctx, arg)?;
+                            group.push_array(ctx, acc, &v);
+                        }
+                        let current_arr = group.read_array(ctx, acc);
+                        let cond_v = group.reread(ctx, cond)?;
+                        ctx.block().call_void(
+                            "js_console_assert_spread",
+                            &[(DOUBLE, &cond_v), (I64, &current_arr)],
+                        );
+                        Ok(())
+                    })?;
                 }
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
@@ -431,20 +491,25 @@ pub fn try_lower_console_call(
             // customInspect=false #1201). Missing `options` arg becomes
             // `undefined` and the option decoders fall back to their
             // Node-compatible defaults.
+            //
+            // #7649, and the non-GC half is the one that shows up in output.
+            // `args[2..]` were lowered AFTER the call that produces the print,
+            // so `console.dir(x, y, sideEffect())` printed the object and only
+            // then ran `sideEffect` — node runs it first, because it evaluates
+            // the whole argument list before invoking anything. The GC half is
+            // `console.table`'s: `obj` was held in a bare register across
+            // `options`' lowering.
             if property == "dir" && !args.is_empty() {
-                let v = lower_expr(ctx, &args[0])?;
-                let opts = if args.len() >= 2 {
-                    lower_expr(ctx, &args[1])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                ctx.block().call_void(
-                    "js_console_dir_with_options",
-                    &[(DOUBLE, &v), (DOUBLE, &opts)],
-                );
-                for a in args.iter().skip(2) {
-                    let _ = lower_expr(ctx, a)?;
-                }
+                with_rooted_group(ctx, args.len(), |ctx, group| {
+                    let values = lower_console_args(ctx, group, args)?;
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let opts = values.get(1).cloned().unwrap_or(undef);
+                    ctx.block().call_void(
+                        "js_console_dir_with_options",
+                        &[(DOUBLE, &values[0]), (DOUBLE, &opts)],
+                    );
+                    Ok(())
+                })?;
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
                 ))));
@@ -461,14 +526,6 @@ pub fn try_lower_console_call(
                 } else {
                     lower_expr(ctx, arg)?
                 };
-                // The accumulator is allocated AFTER the argument, so
-                // `js_array_alloc` is itself a collection point with `v` live
-                // only in an SSA register. Root `v` across it (#6951).
-                let v_root = temp_root_push_double(ctx, &v);
-                let acc = rooted_array_begin(ctx, "1");
-                let v = temp_root_get_double(ctx, &v_root);
-                temp_rooted_array_push(ctx, &acc, &v);
-                let current_arr = rooted_array_read(ctx, &acc);
                 let runtime_fn = match property.as_str() {
                     "info" => "js_console_info_spread",
                     "debug" => "js_console_debug_spread",
@@ -476,10 +533,20 @@ pub fn try_lower_console_call(
                     "error" => "js_console_error_spread",
                     _ => "js_console_log_spread",
                 };
-                ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
-                // Drops `v_root` and everything above it, the accumulator
-                // included — a truncate is a stack cut, not a single pop.
-                temp_root_truncate(ctx, &v_root);
+                // The accumulator is allocated AFTER the argument, so
+                // `js_array_alloc` is itself a collection point with `v` live
+                // only in an SSA register. Root `v` across it (#6951). One
+                // release drops the value's slot and the accumulator's — a
+                // truncate is a stack cut, not a single pop.
+                with_rooted_group(ctx, 1, |ctx, group| {
+                    let held = group.adopt(ctx, arg, &v, true);
+                    let acc = group.begin_array(ctx, "1");
+                    let v = group.reread(ctx, held)?;
+                    group.push_array(ctx, acc, &v);
+                    let current_arr = group.read_array(ctx, acc);
+                    ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
+                    Ok(())
+                })?;
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
                 ))));
@@ -499,16 +566,6 @@ pub fn try_lower_console_call(
             // Keep it in a temp root and re-read it, so it survives and follows
             // an evacuating cycle.
             let cap = (args.len() as u32).to_string();
-            let acc = rooted_array_begin(ctx, &cap);
-            for arg in args.iter() {
-                let v = if let Some(v) = lower_util_types_predicate_arg(ctx, arg)? {
-                    v
-                } else {
-                    lower_expr(ctx, arg)?
-                };
-                temp_rooted_array_push(ctx, &acc, &v);
-            }
-            let current_arr = rooted_array_read(ctx, &acc);
             let runtime_fn = match property.as_str() {
                 "info" => "js_console_info_spread",
                 "debug" => "js_console_debug_spread",
@@ -516,8 +573,20 @@ pub fn try_lower_console_call(
                 "error" => "js_console_error_spread",
                 _ => "js_console_log_spread",
             };
-            ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
-            temp_root_truncate(ctx, &acc);
+            with_rooted_group(ctx, 0, |ctx, group| {
+                let acc = group.begin_array(ctx, &cap);
+                for arg in args.iter() {
+                    let v = if let Some(v) = lower_util_types_predicate_arg(ctx, arg)? {
+                        v
+                    } else {
+                        lower_expr(ctx, arg)?
+                    };
+                    group.push_array(ctx, acc, &v);
+                }
+                let current_arr = group.read_array(ctx, acc);
+                ctx.block().call_void(runtime_fn, &[(I64, &current_arr)]);
+                Ok(())
+            })?;
             return Ok(Some(double_literal(f64::from_bits(
                 crate::nanbox::TAG_UNDEFINED,
             ))));
@@ -594,29 +663,39 @@ pub fn try_lower_promise_static_call(
                     return Ok(Some(nanbox_pointer_inline(blk, &handle)));
                 }
                 "try" => {
-                    let callback = if args.is_empty() {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    } else {
-                        lower_expr(ctx, &args[0])?
-                    };
+                    // #7154's accumulator shape verbatim, with the callback on
+                    // top of it. `current_arr` was a raw `*mut ArrayHeader` in a
+                    // bare SSA register threaded through the push loop, holding
+                    // the only reference to everything pushed so far while the
+                    // NEXT argument — arbitrary user code — was lowered; and
+                    // `callback` sat in another bare register across
+                    // `js_array_alloc`, every push and every one of those
+                    // lowerings. Identical to the `namespace_call.rs` rest-path
+                    // defect slice 5 found, which printed a wrong answer on the
+                    // default build with no GC instrumentation at all.
                     let extra_count = args.len().saturating_sub(1);
-                    let mut current_arr =
-                        ctx.block()
-                            .call(I64, "js_array_alloc", &[(I32, &extra_count.to_string())]);
-                    for arg in args.iter().skip(1) {
-                        let value = lower_expr(ctx, arg)?;
-                        current_arr = ctx.block().call(
+                    let handle = with_rooted_group(ctx, 1, |ctx, group| {
+                        let callback = match args.first() {
+                            Some(cb) => Some(group.lower(ctx, cb, true)?),
+                            None => None,
+                        };
+                        let acc = group.begin_array(ctx, &extra_count.to_string());
+                        for arg in args.iter().skip(1) {
+                            let value = lower_expr(ctx, arg)?;
+                            group.push_array(ctx, acc, &value);
+                        }
+                        let current_arr = group.read_array(ctx, acc);
+                        let callback = match callback {
+                            Some(i) => group.reread(ctx, i)?,
+                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                        };
+                        Ok(ctx.block().call(
                             I64,
-                            "js_array_push_f64",
-                            &[(I64, &current_arr), (DOUBLE, &value)],
-                        );
-                    }
+                            "js_promise_try",
+                            &[(DOUBLE, &callback), (I64, &current_arr)],
+                        ))
+                    })?;
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_promise_try",
-                        &[(DOUBLE, &callback), (I64, &current_arr)],
-                    );
                     return Ok(Some(nanbox_pointer_inline(blk, &handle)));
                 }
                 _ => {}
@@ -624,31 +703,86 @@ pub fn try_lower_promise_static_call(
         }
         // `Array.fromAsync(input, mapFn?, thisArg?)` — Node 22+ static method.
         if is_global_constructor_expr(object, "Array") && property == "fromAsync" {
-            let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let input = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                undefined.clone()
-            };
-            let map_fn = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                undefined.clone()
-            };
-            let this_arg = if let Some(arg) = args.get(2) {
-                lower_expr(ctx, arg)?
-            } else {
-                undefined
-            };
-            let blk = ctx.block();
-            return Ok(Some(blk.call(
-                DOUBLE,
-                "js_array_from_async",
-                &[(DOUBLE, &input), (DOUBLE, &map_fn), (DOUBLE, &this_arg)],
-            )));
+            // Operand-to-operand windows, three deep: `input` was held in a bare
+            // register across `mapFn`'s and `thisArg`'s lowering and `mapFn`
+            // across `thisArg`'s, both of which are arbitrary user code.
+            // #7280 taxonomy (c), which `root_reload` cannot repair.
+            //
+            // One re-read point serves: all three are consumed by the single
+            // `js_array_from_async` below. `take(3)` keeps this a pure rooting
+            // fix — surplus arguments are not evaluated here today, which is a
+            // separate (node-visible) defect shared with the `Promise.*` statics
+            // above, and changing it belongs with theirs.
+            let operands: Vec<&Expr> = args.iter().take(3).collect();
+            return with_operands_rooted(ctx, &operands, |ctx, values| {
+                let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let input = values.first().cloned().unwrap_or_else(|| undefined.clone());
+                let map_fn = values.get(1).cloned().unwrap_or_else(|| undefined.clone());
+                let this_arg = values.get(2).cloned().unwrap_or(undefined);
+                Ok(Some(ctx.block().call(
+                    DOUBLE,
+                    "js_array_from_async",
+                    &[(DOUBLE, &input), (DOUBLE, &map_fn), (DOUBLE, &this_arg)],
+                )))
+            });
         }
     }
     Ok(None)
+}
+
+/// Emit the universal by-id method dispatcher for an already-evaluated and
+/// rooted receiver plus already-evaluated arguments.
+///
+/// Kept separate from the eligibility tower below so a tag-guarded String
+/// fast path can use the identical non-string arm without re-evaluating its
+/// receiver (#7673).
+pub(super) fn emit_native_method_str_dispatch(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    call_byte_offset: u32,
+    recv_box: &str,
+    lowered_args: &[String],
+) -> String {
+    // Pass a tagged pointer to the immutable StringPool dispatch descriptor.
+    // A GC-backed string handle belongs to the main thread's arena and cannot
+    // be resolved safely by a `perry/thread` worker executing this closure.
+    let key_idx = ctx.strings.intern(property);
+    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+    let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+    // The alloca MUST live in the entry block. An alloca in a loop body lowers
+    // to a runtime stack adjustment which is never restored (#167).
+    let (args_ptr, args_len_str) = if lowered_args.is_empty() {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let n = lowered_args.len();
+        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+        let blk = ctx.block();
+        for (i, value) in lowered_args.iter().enumerate() {
+            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &i.to_string())]);
+            blk.store(DOUBLE, value, &slot);
+        }
+        (buf_reg, n.to_string())
+    };
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::MethodCall,
+        property,
+        TypedFeedbackContract::method_call(),
+    );
+    // Arguments are already lowered, so a nested call can no longer shadow
+    // this call's source location.
+    crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+    ctx.block().call(
+        DOUBLE,
+        "js_typed_feedback_native_call_method_by_id",
+        &[
+            (I64, &site_id),
+            (DOUBLE, recv_box),
+            (I64, &method_id),
+            (PTR, &args_ptr),
+            (I64, &args_len_str),
+        ],
+    )
 }
 
 pub fn try_lower_native_method_str_dispatch(
@@ -874,81 +1008,35 @@ pub fn try_lower_native_method_str_dispatch(
             // Same shape, same fix as #7192's property/element STORE receiver:
             // a temp root, not a re-lower. Re-lowering `object` would observe an
             // assignment made by an argument, which is a miscompile rather than
-            // a rooting fix (see `temp_root::operand_is_reloadable`). Each
-            // argument is likewise rooted before the NEXT one is lowered, so an
-            // earlier argument cannot go stale across a later one.
-            let arg_collects: Vec<bool> = args
-                .iter()
-                .map(|a| crate::expr::temp_root::expr_may_trigger_gc(ctx, a))
-                .collect();
-            let any_arg_collects = arg_collects.iter().any(|&c| c);
+            // a rooting fix. Each argument is likewise rooted before the NEXT
+            // one is lowered, so an earlier argument cannot go stale across a
+            // later one.
+            //
+            // One re-read point serves this arm — everything the group protects
+            // is consumed by the single dispatch below it — so this is the
+            // plain `with_operands_rooted` form rather than the multi-stage one
+            // its `lower_dynamic_closure_call` sibling needs. The per-operand
+            // window it derives (`the operands after this one`) is exactly the
+            // hand-computed `any_arg_collects` / `arg_collects[i + 1..]` pair it
+            // replaces.
             let operand_exprs: Vec<&Expr> = std::iter::once(object.as_ref())
                 .chain(args.iter())
                 .collect();
-            let mut roots = crate::expr::temp_root::root_operands_begin(args.len() + 1);
-            let recv_box = lower_expr(ctx, object)?;
-            roots.push(ctx, object.as_ref(), &recv_box, any_arg_collects);
-            for (i, a) in args.iter().enumerate() {
-                let v = lower_expr(ctx, a)?;
-                roots.push(ctx, a, &v, arg_collects[i + 1..].iter().any(|&c| c));
-            }
-            // Re-read below the last collection point. Mandatory, not
-            // defensive: the temp-root slot is a MUTABLE root, so an evacuating
-            // cycle rewrites it and the register pushed beforehand is stale.
-            let rereads = roots.reread(ctx, &operand_exprs)?;
-            let recv_box = rereads[0].clone();
-            let lowered_args: Vec<String> = rereads[1..].to_vec();
-            // Pass a tagged pointer to the immutable StringPool dispatch
-            // descriptor. A GC-backed string handle belongs to the main
-            // thread's arena and cannot be resolved safely by a
-            // `perry/thread` worker executing this compiled closure.
-            let key_idx = ctx.strings.intern(property);
-            let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
-            let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
-            // Stack-allocate the args array if any. The alloca MUST live in
-            // the function entry block — emitting it into the current block
-            // (which may be a loop body) makes LLVM lower it as a runtime
-            // `sub %rsp, N` that never gets restored, eating the stack at
-            // ~16 bytes/iteration. See issue #167.
-            let (args_ptr, args_len_str) = if lowered_args.is_empty() {
-                ("null".to_string(), "0".to_string())
-            } else {
-                let n = lowered_args.len();
-                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-                let blk = ctx.block();
-                for (i, v) in lowered_args.iter().enumerate() {
-                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                    blk.store(DOUBLE, v, &slot);
-                }
-                (buf_reg, n.to_string())
-            };
-            let site_id = emit_typed_feedback_register_site(
-                ctx,
-                TypedFeedbackKind::MethodCall,
-                property,
-                TypedFeedbackContract::method_call(),
-            );
-            // #5247: record the source location right before the dynamic
-            // dispatch so a thrown "X is not a function" TypeError carries
-            // `at <file>:<line>`. Args are already lowered above, so a nested
-            // call's location no longer shadows this one.
-            crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
-            let blk = ctx.block();
-            let result = blk.call(
-                DOUBLE,
-                "js_typed_feedback_native_call_method_by_id",
-                &[
-                    (I64, &site_id),
-                    (DOUBLE, &recv_box),
-                    (I64, &method_id),
-                    (PTR, &args_ptr),
-                    (I64, &args_len_str),
-                ],
-            );
-            // Release AFTER the dispatch, not before: the dispatcher allocates
-            // while it reads these values.
-            roots.release(ctx);
-            return Ok(Some(result));
+            return with_operands_rooted(ctx, &operand_exprs, |ctx, rereads| {
+                let recv_box = rereads[0].clone();
+                let lowered_args: Vec<String> = rereads[1..].to_vec();
+                let result = emit_native_method_str_dispatch(
+                    ctx,
+                    property,
+                    call_byte_offset,
+                    &recv_box,
+                    &lowered_args,
+                );
+                // The group is released AFTER the dispatch, not before: the
+                // dispatcher allocates while it reads these values. That is the
+                // combinator's own contract now, not a line a future edit can move.
+                Ok(Some(result))
+            });
         }
     }
     Ok(None)
@@ -1297,25 +1385,42 @@ pub fn try_lower_closure_call_fallthrough(
     //
     // Temp roots, not re-lowering: re-lowering the callee or the receiver would
     // observe an assignment made by an argument, which is a miscompile rather
-    // than a rooting fix (`temp_root::operand_is_reloadable`).
-    let arg_collects: Vec<bool> = args
-        .iter()
-        .map(|a| crate::expr::temp_root::expr_may_trigger_gc(ctx, a))
-        .collect();
+    // than a rooting fix.
+    //
+    // This is the lowering that named the missing combinator. It consumes the
+    // group in TWO instructions with an allocating step between them, so it
+    // needs a re-read at two points, and every `with_operands_rooted*` form has
+    // exactly one. The scope now belongs to `with_rooted_group`; the body is a
+    // separate function only so that owning the release costs a wrapper rather
+    // than a 260-line reindentation.
+    with_rooted_group(ctx, args.len() + 2, |ctx, group| {
+        lower_closure_call_rooted(ctx, group, callee, args, call_byte_offset)
+    })
+}
+
+/// The rooted body of [`try_lower_closure_call_fallthrough`].
+///
+/// Everything it protects lives in `group`, which its caller releases on every
+/// path out — including this function's `?`.
+fn lower_closure_call_rooted<'a>(
+    ctx: &mut FnCtx<'_>,
+    group: &mut crate::rooting::RootedGroup<'a>,
+    callee: &'a Expr,
+    args: &'a [Expr],
+    call_byte_offset: u32,
+) -> Result<Option<String>> {
+    let arg_collects: Vec<bool> = args.iter().map(|a| operand_may_collect(ctx, a)).collect();
     let any_arg_collects = arg_collects.iter().any(|&c| c);
     // Reading the callee off the receiver: a by-name property get walks a
     // prototype chain and can run an accessor, so it is a collection point in
     // the receiver's window (and only in the receiver's).
-    let callee_read_collects = crate::expr::temp_root::expr_may_trigger_gc(ctx, callee);
+    let callee_read_collects = operand_may_collect(ctx, callee);
 
     // Operands are recorded in the order their values are produced — receiver,
-    // callee, then arguments — because `RootedOperands` roots each one BEFORE
-    // the next is lowered. Rooting a finished list afterwards is worse than
-    // doing nothing: by then an earlier operand may already have been swept and
-    // the push publishes a dangling pointer into a slot the collector scans.
-    let mut roots = crate::expr::temp_root::root_operands_begin(args.len() + 2);
-    let mut operand_exprs: Vec<&Expr> = Vec::with_capacity(args.len() + 2);
-
+    // callee, then arguments — because the group roots each one BEFORE the next
+    // is lowered. Rooting a finished list afterwards is worse than doing
+    // nothing: by then an earlier operand may already have been swept and the
+    // push publishes a dangling pointer into a slot the collector scans.
     let prelowered_recv: Option<(String, String)> =
         if let Expr::PropertyGet {
             object, property, ..
@@ -1358,9 +1463,10 @@ pub fn try_lower_closure_call_fallthrough(
                 None => lower_expr(ctx, obj_expr)?,
             };
             // Rooted here, before the callee read below: nothing has collected
-            // between the lowering above and this push.
-            roots.push(ctx, obj_expr, &v, callee_read_collects || any_arg_collects);
-            operand_exprs.push(obj_expr);
+            // between the lowering above and this push. `adopt` rather than
+            // `lower`, because the prelowered arm produced this value itself
+            // and the receiver must be evaluated exactly once.
+            group.adopt(ctx, obj_expr, &v, callee_read_collects || any_arg_collects);
             Some(v)
         }
         None => None,
@@ -1388,8 +1494,9 @@ pub fn try_lower_closure_call_fallthrough(
     } else {
         lower_expr(ctx, callee)?
     };
-    roots.push(ctx, callee, &recv_box, any_arg_collects);
-    operand_exprs.push(callee);
+    // `adopt`: on the prelowered arm the callee's value is the hand-emitted
+    // by-name read above, not `lower_expr(callee)`.
+    group.adopt(ctx, callee, &recv_box, any_arg_collects);
 
     // The rebind unbox allocates (see the header above), and it sits between
     // the last argument and `js_closure_callN`, so every argument's window
@@ -1397,10 +1504,8 @@ pub fn try_lower_closure_call_fallthrough(
     // their old IR.
     let rebind_allocates = method_recv.is_some();
     for (i, a) in args.iter().enumerate() {
-        let v = lower_expr(ctx, a)?;
         let collects = rebind_allocates || arg_collects[i + 1..].iter().any(|&c| c);
-        roots.push(ctx, a, &v, collects);
-        operand_exprs.push(a);
+        group.lower(ctx, a, collects)?;
     }
 
     // Re-read the receiver and the callee HERE: below every argument, above the
@@ -1408,10 +1513,10 @@ pub fn try_lower_closure_call_fallthrough(
     // is a MUTABLE root, so an evacuating cycle rewrites it and the register
     // pushed beforehand is stale.
     let method_recv: Option<String> = match recv_slot {
-        Some(i) => Some(roots.reread_one(ctx, &operand_exprs, i)?),
+        Some(i) => Some(group.reread(ctx, i)?),
         None => None,
     };
-    let recv_box = roots.reread_one(ctx, &operand_exprs, callee_slot)?;
+    let recv_box = group.reread(ctx, callee_slot)?;
 
     // #7211: the value `js_implicit_this_set` hands back is the PREVIOUS
     // implicit `this`, read straight out of the `IMPLICIT_THIS` cell — which
@@ -1450,7 +1555,7 @@ pub fn try_lower_closure_call_fallthrough(
     // `implicit_this_restore` is the shared form, so a seventh cannot
     // reintroduce this by copy-paste.
     let prev_this_root = if let Some(ref this_val) = method_recv {
-        Some(crate::expr::temp_root::implicit_this_save(ctx, this_val))
+        Some(implicit_this_save(ctx, this_val))
     } else if !matches!(callee, Expr::PropertyGet { .. }) {
         // Receiverless closure-value call (`fn()`, IIFE, `curry(1)(2)`):
         // OrdinaryCallBindThis binds `this` to undefined — without the
@@ -1463,7 +1568,7 @@ pub fn try_lower_closure_call_fallthrough(
         // from inside `o.m()`, and dropping that object is #3576's leak with
         // the sign flipped.
         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        Some(crate::expr::temp_root::implicit_this_save(ctx, &undef))
+        Some(implicit_this_save(ctx, &undef))
     } else {
         None
     };
@@ -1519,7 +1624,7 @@ pub fn try_lower_closure_call_fallthrough(
     let arg_base = callee_slot + 1;
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
     for i in 0..args.len() {
-        lowered_args.push(roots.reread_one(ctx, &operand_exprs, arg_base + i)?);
+        lowered_args.push(group.reread(ctx, arg_base + i)?);
     }
 
     let result = if lowered_args.len() <= 16 {
@@ -1573,10 +1678,9 @@ pub fn try_lower_closure_call_fallthrough(
     // what makes the order correct in both shapes rather than in the common
     // one.
     if let Some(prev) = prev_this_root {
-        crate::expr::temp_root::implicit_this_restore(ctx, prev);
+        implicit_this_restore(ctx, prev);
     }
-    // Released AFTER the dispatch, not before: the dispatcher allocates while
-    // it reads these values.
-    roots.release(ctx);
+    // The group is released by `with_rooted_group` AFTER this returns, which is
+    // after the dispatch — the dispatcher allocates while it reads these values.
     Ok(Some(result))
 }

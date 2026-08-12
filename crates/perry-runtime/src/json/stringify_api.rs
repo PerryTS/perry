@@ -28,9 +28,11 @@ pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
     };
     // A synthetic handle-band id (fetch/Blob/socket/… < HANDLE_BAND_MAX) is not
     // a real heap object; `gc_header = ptr - 8` would deref unmapped memory →
-    // SIGSEGV on e.g. `JSON.stringify(new Blob())` (#6240/#6241). It's never a
-    // LazyArrayHeader, so bail before the header read.
-    if ptr.is_null() || crate::value::addr_class::is_handle_band(ptr as usize) {
+    // SIGSEGV on e.g. `JSON.stringify(new Blob())` (#6240/#6241). Nor is an
+    // above-the-band payload automatically real — require a GC-tracked
+    // allocation (dereference-free page-map/registry lookups) before the
+    // header read, the same rule `is_object_pointer` uses.
+    if ptr.is_null() || !stringify::ptr_is_tracked_heap_object(ptr) {
         return value;
     }
     let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -68,21 +70,27 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
     let maybe_ptr = if top16 == 0x7FFD {
         // POINTER_TAG NaN-box: lower 48 bits are the user pointer.
         (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8
-    } else if top16 == 0 {
-        // Raw heap pointer (no NaN-box tag). User-space addresses on
-        // 64-bit systems fit in the lower 48 bits, so a real raw
-        // pointer has top16 == 0. The previous `top16 < 0x7FF8` check
-        // also accepted regular f64 numbers (e.g. 42.0 has top16
-        // 0x4045) and `gc_header = bits - 8` then dereferenced random
-        // memory, segfaulting `JSON.stringify(42)` at
-        // `0x4044_FFFF_FFFF_FFF8`.
+    } else if is_raw_pointer(bits) {
+        // Raw heap pointer (no NaN-box tag). `top16 == 0` alone is NOT enough:
+        // it is a superset of the positive-subnormal doubles, so it classified
+        // every denormal `Number` as a pointer and dereferenced it —
+        // `JSON.stringify(1e-317)` (bits `0x1ee257`) SIGSEGV'd at `0x1ee24f`,
+        // reachable from untrusted input via
+        // `JSON.stringify(JSON.parse(text))`. It was already the second
+        // narrowing of this test (`top16 < 0x7FF8` before it, which crashed
+        // `JSON.stringify(42)`); a third narrowing would not have helped
+        // either, because a raw pointer and a denormal share bit patterns by
+        // construction. `is_raw_pointer` decides by GC allocation membership
+        // instead — see its doc in `json/mod.rs`.
         bits as *const u8
     } else {
         return None;
     };
     // Handle-band synthetic ids are never lazy arrays and must not be deref'd
-    // one word below the id (#6240/#6241).
-    if maybe_ptr.is_null() || crate::value::addr_class::is_handle_band(maybe_ptr as usize) {
+    // one word below the id (#6240/#6241). Above the band is not proof either:
+    // require a GC-tracked allocation before the header read. (Redundant for
+    // the `is_raw_pointer` arm, load-bearing for the `POINTER_TAG` one.)
+    if maybe_ptr.is_null() || !stringify::ptr_is_tracked_heap_object(maybe_ptr) {
         return None;
     }
     let gc_header = maybe_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

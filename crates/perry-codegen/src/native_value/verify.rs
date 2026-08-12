@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 #[cfg(test)]
 use super::artifact::{NativeAbiTransitionOp, NativeAbiTransitionRecord};
 use super::artifact::{NativeRepRecord, NativeValueState};
-use super::buffer::{AliasState, BoundsState, BufferAccessMode};
+use super::buffer::{AliasState, BoundsState, BufferAccessMode, BufferViewPointerState};
 #[cfg(test)]
 use super::pod::recompute_layout_from_fields;
 use super::rep::NativeRep;
@@ -228,6 +228,36 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
         ) {
             errors.push(format!(
                 "{}:{} {} used unchecked native buffer access without proven/guarded bounds",
+                record.function, record.block_label, record.consumer
+            ));
+        }
+        let uses_native_buffer_pointer = matches!(
+            record.access_mode.as_ref(),
+            Some(BufferAccessMode::UncheckedNative | BufferAccessMode::CheckedNative)
+        );
+        if uses_native_buffer_pointer
+            && matches!(
+                record.buffer_view_pointer_state,
+                Some(BufferViewPointerState::Invalidated { .. })
+            )
+        {
+            errors.push(format!(
+                "{}:{} {} used an invalidated buffer-view data pointer",
+                record.function, record.block_label, record.consumer
+            ));
+        }
+        let uses_cached_buffer_view_pointer = matches!(record.native_rep, NativeRep::BufferView(_))
+            || record.buffer_access.is_some()
+            || record
+                .notes
+                .iter()
+                .any(|note| note.starts_with("proven_view=checked_inline"));
+        if uses_native_buffer_pointer
+            && uses_cached_buffer_view_pointer
+            && record.buffer_view_pointer_state.is_none()
+        {
+            errors.push(format!(
+                "{}:{} {} native buffer-view access omitted pointer-lifetime evidence",
                 record.function, record.block_label, record.consumer
             ));
         }

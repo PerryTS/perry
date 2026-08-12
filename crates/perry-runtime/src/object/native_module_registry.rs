@@ -138,6 +138,22 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
     }
 }
 
+/// Test-only: suppress the `cfg(test)` lazy `js_nm_install_all()` fallback in
+/// the lookup fns below. The fallback exists so ordinary unit tests can
+/// dispatch without the codegen-emitted install — but it makes any test that
+/// asserts "path X armed bucket Y itself" vacuously green (the lookup self-
+/// heals). A test proving an arming obligation flips this on (RAII-guarded)
+/// so the registry state it observes is exactly what the code under test
+/// produced. See `tests::buffer_constructor_mint_arms_the_buffer_dispatch_bucket`.
+#[cfg(test)]
+pub(crate) static NM_TEST_DISABLE_LAZY_INSTALL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+fn nm_lazy_install_enabled() -> bool {
+    !NM_TEST_DISABLE_LAZY_INSTALL.load(Ordering::Relaxed)
+}
+
 /// Look up the installed per-module dispatch fn for `name`. `None` if unknown or
 /// its `js_nm_install_<m>()` was never emitted (module not statically imported).
 pub(crate) fn nm_dispatch_lookup(name: &str) -> Option<NmDispatchFn> {
@@ -150,7 +166,7 @@ pub(crate) fn nm_dispatch_lookup(name: &str) -> Option<NmDispatchFn> {
     // `js_nm_install_<module>()` that precedes use in real programs. Lazily
     // populate so tests exercise the real registry path. (Not in production.)
     #[cfg(test)]
-    {
+    if nm_lazy_install_enabled() {
         js_nm_install_all();
         let p = NM_DISPATCH_REGISTRY[b as usize].load(Ordering::Relaxed);
         if !p.is_null() {
@@ -185,16 +201,24 @@ pub extern "C" fn js_nm_install_assert() {
 /// its absence will see it present under Perry.)
 #[no_mangle]
 pub extern "C" fn js_globalthis_seed_async_local_storage() {
-    let global = crate::object::js_get_global_this();
+    // #7497 (same shape as the proven site in `js_get_global_this_builtin_value`):
+    // both the export-value lookup and the key allocation below can collect, and
+    // `global` is the RECEIVER of the store that follows. Root it and re-read the
+    // address after the last allocation; root the constructor value too, since it
+    // is live across the key allocation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let global_handle = scope.root_nanbox_f64(crate::object::js_get_global_this());
     let ctor = crate::object::native_module::bound_native_callable_export_value(
         "async_hooks",
         "AsyncLocalStorage",
     );
+    let ctor_handle = scope.root_nanbox_f64(ctor);
     let key = crate::string::js_string_from_bytes(b"AsyncLocalStorage".as_ptr(), 17);
     crate::object::js_object_set_field_by_name(
-        crate::value::js_nanbox_get_pointer(global) as *mut crate::object::ObjectHeader,
+        crate::value::js_nanbox_get_pointer(global_handle.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader,
         key,
-        ctor,
+        ctor_handle.get_nanbox_f64(),
     );
 }
 
@@ -637,7 +661,7 @@ pub(crate) fn nm_ctor_lookup(module: &str) -> Option<NmCtorFn> {
     // See nm_dispatch_lookup: unit tests construct directly without the codegen
     // install; lazily populate so tests exercise the real registry.
     #[cfg(test)]
-    {
+    if nm_lazy_install_enabled() {
         js_nm_install_all();
         let p = NM_CTOR_REGISTRY[b as usize].load(Ordering::Relaxed);
         if !p.is_null() {
@@ -680,7 +704,7 @@ pub(crate) fn nm_attach_lookup(module: &str) -> Option<NmAttachFn> {
         return Some(unsafe { std::mem::transmute::<*mut (), NmAttachFn>(p) });
     }
     #[cfg(test)]
-    {
+    if nm_lazy_install_enabled() {
         js_nm_install_all();
         let p = NM_ATTACH_REGISTRY[b as usize].load(Ordering::Relaxed);
         if !p.is_null() {
@@ -694,4 +718,61 @@ pub(crate) fn nm_attach_lookup(module: &str) -> Option<NmAttachFn> {
 /// speculatively devirtualizable, same as the ctor registry).
 fn nm_register_attach(b: NmBucket, f: NmAttachFn) {
     NM_ATTACH_REGISTRY[b as usize].store(f as *mut (), Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #6924 acceptance: minting the global `Buffer` constructor value must arm
+    /// the buffer dispatch bucket ITSELF. `Buffer` is a global — a program that
+    /// never imports `buffer` still mints its bound statics (`Buffer.from`
+    /// captured as a value, `class MyBuf extends Buffer` inherited statics),
+    /// and those dispatch by name through `nm_dispatch_lookup("buffer.Buffer")`.
+    /// Before the fix nothing armed the bucket on that path, so every such call
+    /// silently returned `undefined`.
+    ///
+    /// The gap-suite twin (`test_gap_6924_extends_buffer_statics.ts`) covers
+    /// the end-to-end program shape but is tag-gated; this test is the per-PR
+    /// gate. Three resets make the assertion non-vacuous (sabotage-verified:
+    /// removing the mint's install call turns this red):
+    /// - the thread-local ctor cache, else a prior same-thread mint
+    ///   early-returns before the install;
+    /// - the bucket slot, else another test's arming lingers;
+    /// - the `cfg(test)` lazy install-all (RAII-suppressed), else the
+    ///   `nm_attach_lookup` the mint performs self-heals the whole registry
+    ///   and the test cannot fail.
+    /// The brief null window on the process-global slot is unobservable under
+    /// CI's serial `RUST_TEST_THREADS=1` mode.
+    #[test]
+    fn buffer_constructor_mint_arms_the_buffer_dispatch_bucket() {
+        struct LazyInstallGuard;
+        impl Drop for LazyInstallGuard {
+            fn drop(&mut self) {
+                NM_TEST_DISABLE_LAZY_INSTALL.store(false, Ordering::Relaxed);
+            }
+        }
+        NM_TEST_DISABLE_LAZY_INSTALL.store(true, Ordering::Relaxed);
+        let _guard = LazyInstallGuard;
+
+        super::super::native_module::BUFFER_CONSTRUCTOR_VALUE.with(|slot| slot.set(0));
+        NM_DISPATCH_REGISTRY[NmBucket::Buffer as usize]
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
+
+        let ctor = super::super::native_module::buffer_constructor_value();
+        assert_ne!(
+            ctor.to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "Buffer constructor mint failed outright"
+        );
+
+        assert!(
+            !NM_DISPATCH_REGISTRY[NmBucket::Buffer as usize]
+                .load(Ordering::Relaxed)
+                .is_null(),
+            "buffer_constructor_value() must arm the buffer dispatch bucket: \
+             its bound statics dispatch through nm_dispatch_lookup(\"buffer.Buffer\"), \
+             and no import-emitted js_nm_install_buffer exists on the global-Buffer path"
+        );
+    }
 }

@@ -204,6 +204,35 @@ fn test_weak_holder_latch_clears_after_transient_weakmap_dies() {
     );
 }
 
+/// Full/fallback weak processing must scale with registered weak holders, not
+/// with unrelated arena population. One live WeakRef is held constant while
+/// the second collection sees a much larger heap.
+#[test]
+fn test_full_weak_processing_work_is_independent_of_unrelated_heap_size() {
+    let _guard = CopyingNurseryTestGuard::new(1_001);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::weakref::test_support::clear_weak_holders();
+
+    let target = crate::object::js_object_alloc(0, 0);
+    let weak_ref = crate::weakref::js_weakref_new(f64::from_bits(obj_bits(target)));
+    js_shadow_slot_set(0, obj_bits(weak_ref));
+
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    let small_heap_work = crate::weakref::test_support::full_weak_processing_work_units();
+    assert_eq!(small_heap_work, 1, "exactly one holder was registered");
+
+    for slot in 1..=1_000 {
+        let unrelated = crate::object::js_object_alloc(0, 0);
+        js_shadow_slot_set(slot, obj_bits(unrelated));
+    }
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    let large_heap_work = crate::weakref::test_support::full_weak_processing_work_units();
+    assert_eq!(
+        large_heap_work, small_heap_work,
+        "one-holder weak work grew with unrelated heap: small={small_heap_work}, large={large_heap_work}"
+    );
+}
+
 /// (5) Cross-cycle registry currency: a WeakMap entry survives three
 /// consecutive moving minors with its holder evacuated (address changing) each
 /// time; the registry tracks the moved holder so a key that dies on cycle 3 is
@@ -275,6 +304,139 @@ extern "C" fn finreg_registry_test_callback(
     _held: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Build one holder of every kind, move all four through a copied minor, then
+/// drop their weak targets and age the graph out of block persistence. Also
+/// adds one dead holder and one stale registry address so the following
+/// full/fallback pass must classify both before dereferencing.
+fn prepare_moved_full_path_weak_holders() {
+    crate::weakref::test_support::clear_weak_holders();
+    assert_eq!(crate::weakref::pending_finalization_jobs_count(), 0);
+
+    let weak_target = crate::object::js_object_alloc(0, 0);
+    let weak_ref = crate::weakref::js_weakref_new(f64::from_bits(obj_bits(weak_target)));
+    js_shadow_slot_set(0, obj_bits(weak_ref));
+    js_shadow_slot_set(4, obj_bits(weak_target));
+
+    let map = crate::weakref::js_weakmap_new();
+    let map_key = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(1, obj_bits(map));
+    js_shadow_slot_set(5, obj_bits(map_key));
+    crate::weakref::js_weakmap_set(
+        f64::from_bits(js_shadow_slot_get(1)),
+        f64::from_bits(js_shadow_slot_get(5)),
+        f64::from_bits(crate::value::TAG_TRUE),
+    );
+
+    let set = crate::weakref::js_weakset_new();
+    let set_key = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(2, obj_bits(set));
+    js_shadow_slot_set(6, obj_bits(set_key));
+    crate::weakref::js_weakset_add(
+        f64::from_bits(js_shadow_slot_get(2)),
+        f64::from_bits(js_shadow_slot_get(6)),
+    );
+
+    let callback = crate::closure::js_closure_alloc(finreg_registry_test_callback as *const u8, 0);
+    let registry = crate::weakref::js_finreg_new(f64::from_bits(ptr_bits(callback as usize)));
+    let finreg_target = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(3, obj_bits(registry));
+    js_shadow_slot_set(7, obj_bits(finreg_target));
+    crate::weakref::js_finreg_register(
+        f64::from_bits(js_shadow_slot_get(3)),
+        f64::from_bits(js_shadow_slot_get(7)),
+        f64::from_bits(crate::value::TAG_TRUE),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+
+    let before_move = crate::weakref::test_support::weak_holder_addresses();
+    assert_eq!(
+        before_move.len(),
+        4,
+        "one holder of every kind is registered"
+    );
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    let after_move = crate::weakref::test_support::weak_holder_addresses();
+    assert_eq!(after_move.len(), 4);
+    assert!(
+        before_move.iter().all(|addr| !after_move.contains(addr)),
+        "every registered holder must be rekeyed after evacuation"
+    );
+
+    for slot in 4..8 {
+        js_shadow_slot_set(slot, 0);
+    }
+
+    // A dead holder must be pruned without dispatch. The fabricated stale
+    // address must be rejected by ValidPointerSet before any header read.
+    let dead_target = crate::object::js_object_alloc(0, 0);
+    let _dead_holder = crate::weakref::js_weakref_new(f64::from_bits(obj_bits(dead_target)));
+    crate::weakref::test_support::register_weak_holder_address(0x1234_5678);
+    assert_eq!(
+        crate::weakref::test_support::weak_holder_addresses().len(),
+        6
+    );
+
+    let aged_from = crate::arena::general_block_count();
+    while crate::arena::general_block_count().saturating_sub(aged_from) < 7 {
+        for _ in 0..64 {
+            let _ = crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING);
+        }
+    }
+}
+
+fn assert_full_path_weak_results() {
+    assert_eq!(
+        crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(0))).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "WeakRef target must be tombstoned"
+    );
+    for slot in [1, 2] {
+        let collection = (js_shadow_slot_get(slot) & POINTER_MASK) as *const crate::ObjectHeader;
+        assert!(
+            crate::weakref::weak_collection_entries(collection).is_empty(),
+            "WeakMap/WeakSet dead-key entry must be tombstoned"
+        );
+    }
+    assert_eq!(
+        crate::weakref::pending_finalization_jobs_count(),
+        1,
+        "FinalizationRegistry target must enqueue exactly one cleanup job"
+    );
+    assert_eq!(
+        crate::weakref::test_support::weak_holder_addresses().len(),
+        4,
+        "the dead holder and stale address must be pruned; live holders remain"
+    );
+}
+
+#[test]
+fn test_full_registry_path_handles_all_weak_kinds_moved_dead_and_stale_holders() {
+    let _guard = CopyingNurseryTestGuard::new(8);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    prepare_moved_full_path_weak_holders();
+
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert_full_path_weak_results();
+}
+
+#[test]
+fn test_fallback_registry_path_handles_all_weak_kinds_moved_dead_and_stale_holders() {
+    let _guard = CopyingNurseryTestGuard::new(8);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    prepare_moved_full_path_weak_holders();
+
+    let _barrier_guard = GeneratedWriteBarrierTestGuard::inactive();
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(
+        &trace,
+        false,
+        CopiedMinorFallbackReason::BarriersInactive,
+        false,
+    );
+    assert_full_path_weak_results();
 }
 
 /// (6) FinalizationRegistry: a registered target that dies across a moving minor

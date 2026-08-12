@@ -56327,10 +56327,6 @@ msgstr ""
 " untuk bisection)."
 
 #: src/internals/memory-model.md:116
-msgid "`PERRY_GEN_GC_EVACUATE=0` / `off` / `false`"
-msgstr "`PERRY_GEN_GC_EVACUATE=0` / `off` / `false`"
-
-#: src/internals/memory-model.md:116
 msgid ""
 "Disable policy evacuation. `=1` / `on` / `true` is accepted as \"allow the "
 "auto-policy\", not as unconditional evacuation."

@@ -123,7 +123,7 @@ pub(super) fn apply_pkg_and_toml_config(
         }
         found
     };
-    if let Some(pkg_json_path) = pkg_json_path {
+    if let Some(pkg_json_path) = pkg_json_path.clone() {
         if let Ok(content) = fs::read_to_string(&pkg_json_path) {
             if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(aliases) = pkg
@@ -893,6 +893,50 @@ pub(super) fn apply_pkg_and_toml_config(
         args.target.as_deref(),
         args.app_bundle_id.as_deref(),
     );
+    // `perry.update` (Phase B): validate the project's update settings and hand
+    // codegen the blob to bake in. Read here rather than in the package.json
+    // block above because the resolution needs perry.toml too, and that is
+    // parsed at this point.
+    //
+    // A validation failure is a BUILD failure: a typo in an update URL is
+    // discovered either by the person who typed it, now, or by their users, in
+    // production, as silence.
+    let pkg_for_update: Option<serde_json::Value> = pkg_json_path
+        .as_ref()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok());
+    let default_bin_name = args
+        .output
+        .as_deref()
+        .and_then(|out| Path::new(out).file_stem())
+        .or_else(|| args.input.file_stem())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "app".to_string());
+    // `read_app_metadata` already resolved the app's version, preferring
+    // perry.toml's `[project] version` — and that is the version the rest of the
+    // binary reports. Preferring package.json here would let a dual-manifest
+    // project embed one version in its update block and report another
+    // everywhere else, so the notice would compare against a number the app
+    // never claims to be.
+    let default_version = if app_metadata.version.trim().is_empty() {
+        pkg_for_update
+            .as_ref()
+            .and_then(|pkg| pkg.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        app_metadata.version.clone()
+    };
+    let mut app_metadata = app_metadata;
+    app_metadata.update_config = super::update_config::resolve(
+        pkg_for_update.as_ref(),
+        perry_toml.as_ref(),
+        &default_bin_name,
+        &default_version,
+    )?
+    .map(|config| config.to_blob());
+
     ctx.app_metadata = app_metadata.clone();
     if let Some(ref toml_dir) = toml_root {
         if let Some(ref doc) = perry_toml {

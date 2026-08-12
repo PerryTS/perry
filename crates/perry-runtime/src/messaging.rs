@@ -606,7 +606,15 @@ pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
         "constructor",
         get_global_constructor("BroadcastChannel"),
     );
-    let name_ptr = crate::builtins::js_string_coerce(name);
+    // #6949(b): `js_string_coerce` allocates for every shape except an
+    // already-heap STRING_TAG value, so it can collect and EVACUATE — and
+    // `obj`, allocated a few lines up, is a raw Rust local: neither a GC root
+    // nor a shadow slot. Every `set_field`/`install_method` below writes
+    // through it. Root it across the coercion and re-read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let (name_ptr, obj) = obj_handle
+        .across_mut::<object::ObjectHeader, _>(|| crate::builtins::js_string_coerce(name));
     let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
     set_field(obj, "name", name_value);
     install_method(obj, "close", noop0 as *const u8, 0);

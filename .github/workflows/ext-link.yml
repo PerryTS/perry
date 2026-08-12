@@ -1,0 +1,155 @@
+# ---------------------------------------------------------------------------
+# ext-link — per-PR LINK check for the `perry-ext-*` crates (#7656)
+#
+# A `perry-runtime` change broke the link of five `perry-ext-*` crates and no
+# per-PR gate could have caught it (#7650, fixed in #7655); it surfaced at the
+# next tag, days later.
+#
+# Why `cargo-test`'s scope cannot see this: `ci_test_scope.py` selects a
+# reverse-dependency closure, and `_is_fanout_leaf` deliberately keeps
+# `perry-ext-*` / `perry-stdlib` OUT of the fan-out. That is correct on its own
+# terms — their unit tests are self-contained pure-Rust logic, and re-running
+# ~40 crates on every foundational change is the cost the scoping exists to
+# avoid. What it misses is that for these crates the coupling is the LINK, not
+# the test: they pull in a feature-stripped runtime through `perry-ffi`'s
+# `runtime-link` built with `-Wl,-dead_strip`, so a new reference edge inside
+# `perry-runtime` can keep alive a chain the stripper had been removing. In
+# #7650 that edge was one added call (`pin_object` -> `arena::classify_heap_space`)
+# in code that had previously done a raw flag write, and the symptom was
+# `Undefined symbols for architecture arm64`.
+#
+# So this job BUILDS and does not RUN: `cargo test --no-run` links the test
+# binaries and stops. Running them would add time and check nothing this does
+# not already.
+#
+# `--release` deliberately: `-dead_strip` is what makes the failure, and it is
+# a release-profile behaviour. A dev-profile build links a different set and
+# would be green through exactly the regression this exists to catch.
+# ---------------------------------------------------------------------------
+name: ext-link
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # PR runs supersede each other; a manual dispatch is never cancelled.
+  group: ext-link-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ext-link:
+    runs-on: ubuntu-latest
+    # Measured on an arm64 dev Mac. COLD release target, the five crates from
+    # #7650 only: 7:24, 7 test binaries. All 38 ext crates with perry-runtime
+    # already built: 4:10, 216 test binaries. The shared `perry-runtime` release
+    # build dominates, so covering every ext crate costs LESS than building the
+    # runtime once — which is why the scope is all of them rather than the five
+    # that happened to fail in #7650.
+    #
+    # The bound is a backstop, not a budget: it has to cover a cold sccache
+    # building perry-runtime in release from scratch on a shared runner, which
+    # is far slower than the numbers above, while still cutting a true hang.
+    timeout-minutes: 120
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "8G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      # This job compiles PR-controlled build scripts; don't leave the workflow
+      # token in .git/config for them to read.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Cheap gate: no toolchain, no cargo, no cache restore. Every step below
+      # is skipped when the diff cannot change what the archives link.
+      - name: Compute ext-link scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci_ext_link_scope.py --self-test
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
+              --json files --jq '.files[].path')"
+          else
+            # Manual dispatch: check everything.
+            changed_files="crates/perry-runtime/src/lib.rs"
+          fi
+          pkgs="$(printf '%s\n' "$changed_files" | python3 scripts/ci_ext_link_scope.py)"
+          if [ -z "$pkgs" ]; then
+            echo "Diff cannot change what the ext archives link — nothing to do."
+            echo "pkgs=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Linking $(printf '%s\n' "$pkgs" | wc -l) perry-ext-* crates:"
+            printf '%s\n' "$pkgs"
+            {
+              echo 'pkgs<<PERRY_EOF'
+              printf '%s\n' "$pkgs"
+              echo 'PERRY_EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.scope.outputs.pkgs != ''
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.scope.outputs.pkgs != ''
+        uses: ./.github/actions/setup-llvm22
+
+      - name: Install sccache
+        if: steps.scope.outputs.pkgs != ''
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache sccache objects
+        if: steps.scope.outputs.pkgs != ''
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.pkgs != ''
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Link the ext crates
+        if: steps.scope.outputs.pkgs != ''
+        env:
+          # lld has repeatedly SIGBUS'd large links on the shared runner.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_BUILD_JOBS: "1"
+          PKGS: ${{ steps.scope.outputs.pkgs }}
+        run: |
+          # Explicit rather than relying on the runner's default `bash -e`: a
+          # failing `cargo test --no-run` IS the regression this job exists to
+          # catch, so its exit status must abort the step under any shell.
+          set -euo pipefail
+          args=""
+          while read -r pkg; do
+            [ -n "$pkg" ] || continue
+            args="$args -p $pkg"
+          done <<< "$PKGS"
+
+          # `--message-format=json` so the count below comes from cargo rather
+          # than being inferred from exit status. The counting lives in the
+          # script (`--count-linked`) so this file carries no inline Python —
+          # a heredoc at column 0 silently breaks the YAML block scalar.
+          # shellcheck disable=SC2086
+          cargo test --release --no-run --message-format=json $args > /tmp/ext-link.json
+
+          linked="$(python3 scripts/ci_ext_link_scope.py --count-linked /tmp/ext-link.json)"
+          echo "linked test binaries: $linked"
+          if [ "$linked" -eq 0 ]; then
+            echo "::error::ext-link linked ZERO test binaries. The gate ran but had no subject — either the scope selected no packages or cargo built nothing. Fix the scope rather than trusting this green."
+            exit 1
+          fi

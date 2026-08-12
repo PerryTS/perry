@@ -26,13 +26,12 @@
 //     mutated with `pop`, one with mixed element classes, one read out of
 //     bounds — each still has to produce Node's answer.
 //
-// NOT covered, deliberately: `short[5].id` where the binding is annotated
-// `Row`. Node throws `TypeError: Cannot read properties of undefined`; Perry
-// prints `undefined` — on `main`, at the base commit, and with
-// `PERRY_PTR_SHAPE_LOCALS=0`, so it is an unrelated pre-existing gap and NOT
-// this pass's OOB hazard (which E5's in-bounds conjunct is what rules out).
-// Asserting `typeof` instead keeps the out-of-bounds read exercised without
-// making this file red for someone else's bug.
+// NOT covered here: `short[5].id` where the binding is annotated `Row` —
+// that was the pre-existing #7153 gap (Perry printed `undefined` where Node
+// throws TypeError), fixed and covered by
+// `test_gap_7153_class_typed_nullish_field_read.ts`. The `typeof` assert
+// below stays: it exercises the out-of-bounds read without a throw, which is
+// this pass's concern (E5's in-bounds conjunct).
 
 class Row {
   id: number;

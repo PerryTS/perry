@@ -150,6 +150,7 @@
 - [Test Registration (dark tests)](testing/test-registration.md)
 - [Geisterhand (UI Fuzzer)](testing/geisterhand.md)
 - [Node Compatibility Matrix](testing/node-compat-matrix.md)
+- [CI Gate Scheduling](testing/ci-gate-scheduling.md)
 
 # CLI Reference
 
@@ -167,6 +168,8 @@
 - [`perry audit --sbom`](cli/perry-audit-sbom.md)
 - [Host Allowlist (nativeLibrary, compilePackages)](cli/allow-perry-features.md)
 - [perry.toml Reference](cli/perry-toml.md)
+- [Updates](cli/updates.md)
+- [Update Checks in Your Apps](cli/app-updates.md)
 - [Privacy & Telemetry](cli/telemetry.md)
 
 ---
@@ -174,8 +177,10 @@
 # Internals
 
 - [Memory Model](internals/memory-model.md)
+- [Garbage Collector](internals/garbage-collector.md)
 - [Explicit Memory Control](internals/explicit-memory.md)
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)
+- [Incremental GC step bounds](internals/gc-step-bounds.md)
 - [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)
 
 # Contributing

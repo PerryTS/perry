@@ -3,6 +3,14 @@ use super::*;
 /// Number of most-recent pause samples retained per thread (#6187).
 pub const GC_RECENT_PAUSE_WINDOW: usize = 32;
 
+/// Is `PERRY_GC_DIAG` set? Read once and cached, so a diagnostic call site can
+/// sit on a path that runs before/around `main` without paying a `getenv` each
+/// time. Diagnostic-only: nothing may branch on this for behaviour.
+pub fn gc_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("PERRY_GC_DIAG").is_some())
+}
+
 pub struct GcStats {
     pub collection_count: u64,
     pub total_freed_bytes: u64,
@@ -22,7 +30,16 @@ impl GcStats {
     /// Single funnel for per-collection accounting: last/max pause and the
     /// recent-pause ring advance together with the counters, so no future
     /// collection path can update one without the others.
+    ///
+    /// #6080a: the read-PIC epoch bump rides the same funnel — every
+    /// completed collection may have freed or moved a keys array whose raw
+    /// address is primed in a `@perry_ic_N` cache no GC scanner can see, so
+    /// pointer-token primes must stop hitting from here on. (Budgeted cycles
+    /// bump a second time at sweep ENTRY — see `step_sweep` — because their
+    /// sweep slices interleave with the mutator before this funnel runs.
+    /// Double-bumping is harmless: it only costs one extra re-prime.)
     pub(super) fn record_collection(&mut self, freed_bytes: u64, elapsed_us: u64) {
+        crate::object::pic_epoch_bump();
         self.collection_count += 1;
         self.total_freed_bytes = self.total_freed_bytes.saturating_add(freed_bytes);
         self.last_pause_us = elapsed_us;
@@ -198,13 +215,48 @@ pub(super) struct CopyingNurseryTraceStats {
     pub(super) copied_bytes: usize,
     pub(super) promoted_objects: usize,
     pub(super) promoted_bytes: usize,
+    /// Effective tenuring threshold (survival count) this cycle promoted at
+    /// (gc/tenuring.rs adaptive loop; 0 on rows where no copying minor ran).
+    pub(super) tenuring_survivals: u8,
+    /// Live bytes moved out of Eden this cycle (copied to a survivor space or
+    /// promoted) — the adaptive loop's influx signal.
+    pub(super) eden_live_bytes: usize,
+    /// Live bytes re-copied/promoted out of the from-survivor space this
+    /// cycle — the re-copy tax the adaptive loop exists to bound.
+    pub(super) survivor_live_bytes: usize,
     pub(super) large_excluded_objects: usize,
     pub(super) large_excluded_bytes: usize,
     pub(super) reset_blocks: usize,
     pub(super) malloc_validation_lookups: usize,
     pub(super) malloc_registry_rebuilds: u64,
     pub(super) malloc_sweep_due: bool,
+    /// #7645: the eligibility preflight's two young-graph walks were provably
+    /// no-ops (no young pin has ever been created, and the malloc-registry
+    /// question was already answered) and were skipped. This is the live-
+    /// subject flag for the "the second traversal is gone" claim: a row with
+    /// `eligible=true` and `preflight_skipped=false` did the old work.
+    pub(super) preflight_skipped: bool,
     pub(super) fallback_reason: CopiedMinorFallbackReason,
+    /// #7742: this cycle promoted the young generation whole, in place —
+    /// nothing was copied and nothing moved.
+    pub(super) in_place_promotion: bool,
+    /// Objects promoted by that path. The "did the subject run?" counter: a
+    /// row with `in_place_promotion=true` and zero here promoted nothing and
+    /// proves nothing.
+    pub(super) in_place_promoted_objects: usize,
+    pub(super) in_place_promoted_blocks: usize,
+    /// Bytes on the promoted blocks that were NOT live — the footprint this
+    /// technique trades for the speed, retained until the next full.
+    pub(super) in_place_dead_bytes: usize,
+    /// Promoted blocks whose live fraction was under 50%: the shape in-place
+    /// promotion is the wrong answer for. Non-zero here means the policy
+    /// threshold is admitting cycles it should not.
+    pub(super) in_place_sparse_blocks: usize,
+    /// Young-survival ratio (permille) this cycle measured — the input the
+    /// NEXT cycle's promotion decision is taken from.
+    pub(super) young_survival_permille: u64,
+    /// #7742: the three remembered-set passes were provably empty and skipped.
+    pub(super) remembering_skipped: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -392,9 +444,24 @@ thread_local! {
         const { Cell::new(LayoutScanTraceStats::zero()) };
 }
 
+/// Has ANY thread ever armed the layout-scan trace?
+///
+/// `layout_scan_trace_active()` is read once per traced object
+/// (`heap_payload_slot_selection`) and once per pointer slot
+/// (`record_layout_child_slot_read`), and on Darwin a `thread_local!` read is
+/// an out-of-line `_tlv_get_addr` call — so a facility that is OFF for the
+/// entire process still cost two calls per promoted object. This is the #7834
+/// `PERRY_PER_OBJECT_LAYOUTS_ANY` pattern: a monotone process-global that
+/// proves the thread-local is `false` without resolving it. It is never
+/// cleared, which is sound because it only ever short-circuits to the
+/// thread-local answer.
+static LAYOUT_SCAN_TRACE_ARMED_ANY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[inline]
 pub(super) fn begin_layout_scan_trace() {
     LAYOUT_SCAN_TRACE_STATS.with(|stats| stats.set(LayoutScanTraceStats::zero()));
+    LAYOUT_SCAN_TRACE_ARMED_ANY.store(true, std::sync::atomic::Ordering::Release);
     LAYOUT_SCAN_TRACE_ACTIVE.with(|active| active.set(true));
 }
 
@@ -415,6 +482,11 @@ pub(super) fn finish_layout_scan_trace() -> LayoutScanTraceStats {
 
 #[inline]
 pub(super) fn layout_scan_trace_active() -> bool {
+    // Store-before-arm (`Release` in `begin_layout_scan_trace`) makes a `false`
+    // read a proof that this thread's `LAYOUT_SCAN_TRACE_ACTIVE` is false too.
+    if !LAYOUT_SCAN_TRACE_ARMED_ANY.load(std::sync::atomic::Ordering::Acquire) {
+        return false;
+    }
     LAYOUT_SCAN_TRACE_ACTIVE.with(Cell::get)
 }
 
@@ -910,6 +982,7 @@ impl GcCycleTrace {
             "live_bytes": self.old_pages.live_bytes,
             "dead_bytes": self.old_pages.dead_bytes,
             "reusable_bytes": self.old_pages.reusable_bytes,
+            "pooled_bytes": self.old_pages.pooled_bytes,
             "returned_bytes": self.old_pages.returned_bytes,
             "pinned_bytes": self.old_pages.pinned_bytes,
             "object_count": self.old_pages.object_count,
@@ -982,6 +1055,9 @@ impl GcCycleTrace {
             "copied_bytes": self.copying_nursery.copied_bytes,
             "promoted_objects": self.copying_nursery.promoted_objects,
             "promoted_bytes": self.copying_nursery.promoted_bytes,
+            "tenuring_survivals": self.copying_nursery.tenuring_survivals,
+            "eden_live_bytes": self.copying_nursery.eden_live_bytes,
+            "survivor_live_bytes": self.copying_nursery.survivor_live_bytes,
             "large_excluded_objects": self.copying_nursery.large_excluded_objects,
             "large_excluded_bytes": self.copying_nursery.large_excluded_bytes,
             "reset_blocks": self.copying_nursery.reset_blocks,
@@ -989,6 +1065,13 @@ impl GcCycleTrace {
             "malloc_registry_rebuilds": self.copying_nursery.malloc_registry_rebuilds,
             "malloc_sweep_due": self.copying_nursery.malloc_sweep_due,
             "fallback_reason": self.copying_nursery.fallback_reason.as_str(),
+            "in_place_promotion": self.copying_nursery.in_place_promotion,
+            "in_place_promoted_objects": self.copying_nursery.in_place_promoted_objects,
+            "in_place_promoted_blocks": self.copying_nursery.in_place_promoted_blocks,
+            "in_place_dead_bytes": self.copying_nursery.in_place_dead_bytes,
+            "in_place_sparse_blocks": self.copying_nursery.in_place_sparse_blocks,
+            "young_survival_permille": self.copying_nursery.young_survival_permille,
+            "remembering_skipped": self.copying_nursery.remembering_skipped,
         });
         let evacuation_policy_json = serde_json::json!({
             "allowed": self.evacuation_policy.allowed,
@@ -1028,6 +1111,12 @@ impl GcCycleTrace {
             "reusable_bytes": self.sweep.reusable_bytes,
             "returned_bytes": self.sweep.returned_bytes,
             "reset_blocks": self.sweep.reset_blocks,
+            "removed_blocks": self.sweep.removed_blocks,
+            "removed_bytes": self.sweep.removed_bytes,
+            "pooled_blocks": self.sweep.pooled_blocks,
+            "pooled_bytes": self.sweep.pooled_bytes,
+            "pool_drained_blocks": self.sweep.pool_drained_blocks,
+            "pool_drained_bytes": self.sweep.pool_drained_bytes,
             "deallocated_blocks": self.sweep.deallocated_blocks,
             "deallocated_bytes": self.sweep.deallocated_bytes,
             "retained_forwarded_stub_objects": self.sweep.retained_forwarded_stub_objects,
@@ -1089,6 +1178,29 @@ impl GcCycleTrace {
         let allocator_maintenance_json =
             allocator_maintenance_json(self.allocator_maintenance, self.progress_kind);
         let steps_value = steps_json(self.steps_before, steps_after);
+        let (pacing_baseline, pacing_shift, pacing_threshold) =
+            super::policy::major_pacing_snapshot();
+        // `escalate_at_or_above_bytes`, not the old `escalate_above_bytes`: the
+        // predicate this mirrors is `in_use >= threshold` (its floor clause is a
+        // `>=`), and the old name was half of why the reported figure and the
+        // decision could disagree. `null` = arena-growth pacing disabled
+        // (`PERRY_GC_MAJOR_PACING_FLOOR_MB=0`), i.e. no reading escalates.
+        let major_pacing_json = serde_json::json!({
+            "baseline_bytes": pacing_baseline,
+            "backoff_shift": pacing_shift,
+            "escalate_at_or_above_bytes": pacing_threshold,
+            // Which arm paced this cycle. Without it a run that never armed the
+            // survival-adaptive band is indistinguishable from one that did and
+            // simply had nothing to skip.
+            "retaining": super::policy::major_pacing_retaining(),
+            // #7865: the reading actually compared against
+            // `escalate_at_or_above_bytes`. Emitted because the two used to be
+            // different KINDS of quantity — a post-full live baseline against a
+            // pre-collection allocated reading — and nothing in the trace said
+            // so. A gate that cannot see the left-hand side cannot prove which
+            // way the comparison went.
+            "escalation_reading_bytes": super::policy::pacing_escalation_reading_bytes(),
+        });
         serde_json::json!({
             "event": "gc_cycle",
             "collection_kind": self.collection_kind.as_str(),
@@ -1121,6 +1233,7 @@ impl GcCycleTrace {
             "debt": debt_json,
             "allocator_maintenance": allocator_maintenance_json,
             "steps": steps_value,
+            "major_pacing": major_pacing_json,
         })
     }
 
@@ -1419,6 +1532,7 @@ pub(super) fn arena_snapshot_json(
         "longlived": arena_region_json(snapshot.longlived),
         "old": arena_region_json(snapshot.old),
         "total_in_use_bytes": snapshot.total_in_use_bytes,
+        "total_live_allocated_bytes": snapshot.total_live_allocated_bytes,
         "total_reserved_bytes": snapshot.total_reserved_bytes,
         "total_block_count": snapshot.total_block_count,
     })

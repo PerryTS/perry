@@ -45,11 +45,51 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// match.
 static PROP_PLAN_EPOCH: AtomicU64 = AtomicU64::new(1);
 
-/// Invalidate every cached store plan. Cheap (one relaxed add); callers are
+/// The SEMANTIC half of [`PROP_PLAN_EPOCH`]: bumped by exactly the events that
+/// change what a property lookup would ANSWER — descriptor installs and clears,
+/// `delete`, per-instance prototype recording, class-prototype-object
+/// registration, parent-static linking. Deliberately NOT bumped by garbage
+/// collection.
+///
+/// The store/read-plan caches need the GC bump because they memoize a
+/// (keys_array address, interned key pointer) → slot mapping, and a collection
+/// can relocate either identity. A cache that instead re-derives its addresses
+/// from live objects on every lookup — and only COMPARES them against what it
+/// recorded — does not: a relocation shows up as an address mismatch, which is
+/// a miss, and GC never adds or removes a property. Keying such a cache on the
+/// full epoch is not merely wasteful, it is a performance CLIFF: the
+/// incremental collector's root scan bumps the epoch at loop-poll cadence, so
+/// the entry is invalid on essentially every lookup and the "cache" degrades
+/// into an unconditional recompute. Measured on `gc-handoff/apps/asyncpipe.ts`:
+/// +35 % instructions versus baseline, against −24.6 % with the recompute
+/// eliminated (#7910).
+static PROP_PLAN_SEMANTIC_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// Invalidate every cached store plan. Cheap (two relaxed adds); callers are
 /// rare, cold paths by construction.
 #[inline]
 pub(crate) fn prop_plan_epoch_bump() {
     PROP_PLAN_EPOCH.fetch_add(1, Ordering::Relaxed);
+    PROP_PLAN_SEMANTIC_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Invalidate cached store plans for a reason that is NOT a semantic property
+/// change: a collection moved interned keys or pruned dead owners' side-table
+/// entries. Bumps only the pointer-identity epoch.
+#[inline]
+pub(crate) fn prop_plan_gc_epoch_bump() {
+    PROP_PLAN_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Current SEMANTIC epoch — see [`PROP_PLAN_SEMANTIC_EPOCH`]. Exposed so other
+/// caches whose validity rests on the same set of property-changing events can
+/// key on it rather than growing a parallel counter with its own — separately
+/// fallible — set of mutation hooks. First consumer: the `Object.prototype`
+/// "has no `then`" verdict behind the promise assimilation fast path
+/// (`promise::then_probe`, #7910).
+#[inline]
+pub(crate) fn prop_plan_semantic_epoch() -> u64 {
+    PROP_PLAN_SEMANTIC_EPOCH.load(Ordering::Relaxed)
 }
 
 #[derive(Clone, Copy)]
@@ -67,7 +107,7 @@ struct PlanEntry {
 const PLAN_CACHE_SIZE: usize = 4096;
 const PLAN_CACHE_MASK: usize = PLAN_CACHE_SIZE - 1;
 
-thread_local! {
+crate::perry_thread_local! {
     // Heap-allocate the table (~112KB) — oversized inline TLS overflows the
     // ILP32 TLS layout on arm64_32 (same fix as string/intern.rs).
     static STORE_PLAN_CACHE: std::cell::UnsafeCell<Box<[PlanEntry]>> =
@@ -181,7 +221,7 @@ struct ReadPlanEntry {
 const READ_PLAN_SIZE: usize = 8192;
 const READ_PLAN_MASK: usize = READ_PLAN_SIZE - 1;
 
-thread_local! {
+crate::perry_thread_local! {
     // Heap-allocated for the same arm64_32 TLS-size reason as the store table.
     static READ_PLAN_CACHE: std::cell::UnsafeCell<Box<[ReadPlanEntry]>> =
         std::cell::UnsafeCell::new(
@@ -246,11 +286,28 @@ pub(crate) fn read_plan_record(keys_id: usize, key_ptr: usize, field_idx: u32) {
 mod tests {
     use super::*;
 
+    /// A recorded verdict is invalidated by two PROCESS-global counters:
+    /// `PROP_PLAN_EPOCH` (bumped by every GC cycle's dead-owner fan-out and
+    /// every descriptor install, on any thread) and `VTABLE_GEN` (bumped by
+    /// every class method/getter registration in any parallel test). A bump
+    /// landing between record and check legitimately flushes the entry, so a
+    /// single-shot `record → assert(check)` is order-dependent under
+    /// default-parallel `cargo test` (#6965). Retry instead: a genuine
+    /// record/check regression fails every lap, while a concurrent bump only
+    /// costs one. The caches themselves are thread-local, so nothing a
+    /// parallel thread does can turn a MISS assertion into a spurious hit —
+    /// only the positive direction needs this.
+    fn store_plan_records_and_hits(class_id: u32, key_ptr: usize) -> bool {
+        (0..64).any(|_| {
+            store_plan_record(class_id, key_ptr);
+            store_plan_check(class_id, key_ptr)
+        })
+    }
+
     #[test]
     fn record_then_check_hits_and_epoch_bump_invalidates() {
         let key = 0xDEAD_BEE0usize;
-        store_plan_record(7, key);
-        assert!(store_plan_check(7, key));
+        assert!(store_plan_records_and_hits(7, key));
         // Different class or key misses.
         assert!(!store_plan_check(8, key));
         assert!(!store_plan_check(7, key + 16));
@@ -258,15 +315,13 @@ mod tests {
         prop_plan_epoch_bump();
         assert!(!store_plan_check(7, key));
         // Re-record under the new epoch works again.
-        store_plan_record(7, key);
-        assert!(store_plan_check(7, key));
+        assert!(store_plan_records_and_hits(7, key));
     }
 
     #[test]
     fn vtable_generation_bump_invalidates() {
         let key = 0xBEEF_00F0usize;
-        store_plan_record(9, key);
-        assert!(store_plan_check(9, key));
+        assert!(store_plan_records_and_hits(9, key));
         crate::object::class_registry::test_bump_vtable_generation();
         assert!(!store_plan_check(9, key));
     }
@@ -275,8 +330,13 @@ mod tests {
     fn read_plan_roundtrip_and_epoch_flush() {
         let keys = 0xAAAA_0040usize;
         let key = 0xBBBB_0080usize;
-        read_plan_record(keys, key, 21);
-        assert_eq!(read_plan_lookup(keys, key), Some(21));
+        // Same order-dependence as the store-plan tests: a concurrent global
+        // epoch bump between record and lookup flushes the thread-local
+        // entry, so retry the roundtrip.
+        assert!((0..64).any(|_| {
+            read_plan_record(keys, key, 21);
+            read_plan_lookup(keys, key) == Some(21)
+        }));
         assert_eq!(read_plan_lookup(keys, key + 8), None);
         prop_plan_epoch_bump();
         assert_eq!(read_plan_lookup(keys, key), None);

@@ -737,6 +737,18 @@ pub(crate) fn buffer_constructor_value() -> f64 {
             return f64::from_bits(cached);
         }
 
+        // #6924: the statics minted below are BOUND_METHOD closures that
+        // dispatch by name through the "buffer.Buffer" namespace, and that
+        // dispatch resolves via the per-module registry
+        // (`nm_dispatch_lookup`). The registry's soundness rule — a bound
+        // export exists only after its module's `js_nm_install_*` ran — is
+        // upheld by codegen for IMPORTED modules, but `Buffer` is a global:
+        // this mint runs with no `buffer` import anywhere, so nothing armed
+        // the bucket and every inherited/captured static (`MyBuf.from`,
+        // `const f = B.from`) silently returned `undefined`. Arm it at the
+        // mint, mirroring `install_native_module_vtable()` above.
+        super::super::native_module_registry::js_nm_install_buffer();
+
         let func_ptr = buffer_constructor_thunk as *const u8;
         let closure = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure.is_null() {

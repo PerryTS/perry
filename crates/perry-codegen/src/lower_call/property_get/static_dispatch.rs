@@ -74,174 +74,211 @@ pub(crate) fn try_lower_static_dispatch(
                 .and_then(|cc| cc.extends_name.clone());
         }
         if let Some((fn_name, _is_static, declared, has_rest, is_synth_args)) = resolved {
-            // Receiver-box selection (`this` inside the static body):
-            //   - `ClassRef`: `lower_expr` already yields the
-            //     INT32-NaN-boxed class id; `this === ClassRef`.
-            //   - `Call` (factory return): `lower_expr` returns the
-            //     dynamic class produced by the factory, so each
-            //     `Literal(value)` / `make(ast)` call carries
-            //     unique static fields (`static literals = […]`,
-            //     `static ast = …`). The static body reads those
-            //     through `this.<field>`, so passing the synthesized
-            //     ClassRef would lose the per-call data — use the
-            //     actual lowered call result instead.
-            //   - Everything else (`LocalGet` after a
-            //     `const Cls = make()` collapse, etc.): synthesize
-            //     a fresh ClassRef NaN-box. The static body's
-            //     `this.<field>` then dispatches through the
-            //     ClassRef's class-keys + class-field side-table,
-            //     which is the post-#912 (gap 2) shape.
-            let recv_box = match object {
-                Expr::ClassRef(_) => lower_expr(ctx, object)?,
-                Expr::Call { .. } => lower_expr(ctx, object)?,
-                Expr::Sequence(_) => lower_expr(ctx, object)?,
-                // #1787: a class-expression value is a real heap class
-                // object whose per-evaluation static fields are OWN
-                // properties. Use the actual lowered object as `this` (NOT a
-                // synthesized ClassRef) so `this.ast` inside the static body
-                // reads this evaluation's own field rather than the shared
-                // template's static-field global.
-                Expr::ClassExprFresh { .. } => lower_expr(ctx, object)?,
-                // #1787: `const C = make(...); C.staticMethod()`. The local
-                // holds the class-expression's heap object (or, for a
-                // top-level-class alias like `const F = Foo`, the same
-                // INT32 ClassRef the synthesized fallback would produce).
-                // Loading the actual stored value preserves the
-                // per-evaluation own static fields a synthesized ClassRef
-                // would discard, and is value-identical for the ClassRef
-                // case — so `this.<field>` resolves correctly either way.
-                Expr::LocalGet(_) => lower_expr(ctx, object)?,
-                _ => {
-                    // Synthesize a ClassRef NaN-box from the resolved class.
-                    let cid = ctx.class_ids.get(&cls_name).copied().unwrap_or(0);
-                    let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
-                    crate::nanbox::double_literal(f64::from_bits(bits))
+            // #7664: `recv_box` (below) is frequently a module global —
+            // `(Lexer as any).lex(...)` reads the `Lexer` class value straight
+            // out of `@perry_global_*` once any closure in the module also
+            // reads it, exactly as marked's Lexer/Parser collision test does —
+            // and the runtime REWRITES that global's storage on an evacuating
+            // cycle without touching a register already loaded from it. Every
+            // arg-bundling arm below can allocate (an object-literal arg with
+            // a `valueOf` method allocates the object AND a closure for the
+            // method; the has-rest arms unconditionally allocate the
+            // synthesized array), so a naive `let recv_box = …; /* lower args
+            // */; use(recv_box)` holds the pre-collection copy across all of
+            // it — measured: `new DataView`/`Uint8Array`'s sibling-operand
+            // bug (`lower_call/builtin.rs`), here on the receiver instead of
+            // a constructor argument. `RootedGroup::adopt` protects an
+            // already-computed value the same way `with_operands_rooted`
+            // protects a lowered one — see its doc for why `object` being
+            // neither reloadable nor always literally `lower_expr(object)`
+            // (the `_` arm below synthesizes instead) is fine: the
+            // precondition is "not reloadable", not "value came from
+            // `lower_expr`".
+            return crate::rooting::with_rooted_group(ctx, 1, |ctx, group| {
+                // Receiver-box selection (`this` inside the static body):
+                //   - `ClassRef`: `lower_expr` already yields the
+                //     INT32-NaN-boxed class id; `this === ClassRef`.
+                //   - `Call` (factory return): `lower_expr` returns the
+                //     dynamic class produced by the factory, so each
+                //     `Literal(value)` / `make(ast)` call carries
+                //     unique static fields (`static literals = […]`,
+                //     `static ast = …`). The static body reads those
+                //     through `this.<field>`, so passing the synthesized
+                //     ClassRef would lose the per-call data — use the
+                //     actual lowered call result instead.
+                //   - Everything else (`LocalGet` after a
+                //     `const Cls = make()` collapse, etc.): synthesize
+                //     a fresh ClassRef NaN-box. The static body's
+                //     `this.<field>` then dispatches through the
+                //     ClassRef's class-keys + class-field side-table,
+                //     which is the post-#912 (gap 2) shape.
+                let recv_box = match object {
+                    Expr::ClassRef(_) => lower_expr(ctx, object)?,
+                    Expr::Call { .. } => lower_expr(ctx, object)?,
+                    Expr::Sequence(_) => lower_expr(ctx, object)?,
+                    // #1787: a class-expression value is a real heap class
+                    // object whose per-evaluation static fields are OWN
+                    // properties. Use the actual lowered object as `this` (NOT a
+                    // synthesized ClassRef) so `this.ast` inside the static body
+                    // reads this evaluation's own field rather than the shared
+                    // template's static-field global.
+                    Expr::ClassExprFresh { .. } => lower_expr(ctx, object)?,
+                    // #1787: `const C = make(...); C.staticMethod()`. The local
+                    // holds the class-expression's heap object (or, for a
+                    // top-level-class alias like `const F = Foo`, the same
+                    // INT32 ClassRef the synthesized fallback would produce).
+                    // Loading the actual stored value preserves the
+                    // per-evaluation own static fields a synthesized ClassRef
+                    // would discard, and is value-identical for the ClassRef
+                    // case — so `this.<field>` resolves correctly either way.
+                    Expr::LocalGet(_) => lower_expr(ctx, object)?,
+                    _ => {
+                        // Synthesize a ClassRef NaN-box from the resolved class.
+                        let cid = ctx.class_ids.get(&cls_name).copied().unwrap_or(0);
+                        let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
+                        crate::nanbox::double_literal(f64::from_bits(bits))
+                    }
+                };
+                // `has_rest` unconditionally allocates the synthesized array
+                // below regardless of what `args` themselves do; otherwise
+                // defer to the real predicate so a plain zero/literal-arg
+                // static call (the common case) still emits no rooting
+                // traffic at all, matching its pre-#7664 IR exactly.
+                let collects =
+                    has_rest || crate::rooting::any_operand_may_collect(ctx, args.iter());
+                let recv_idx = group.adopt(ctx, object, &recv_box, collects);
+
+                // Refs #915 (gap 3 / #321 follow-up): Effect's `class
+                // SchemaClass { static pipe() { ... arguments ... } }`
+                // factory returns an anon class whose `pipe` reads
+                // `arguments.length` to dispatch. The HIR appends a
+                // synthesized `arguments` rest param (#677 / #899). The
+                // direct-call dispatch here previously forwarded the
+                // call args 1:1 to the function whose only declared
+                // parameter is the rest array — so for
+                // `Cls.pipe(f1, f2)` the function got `arg0 = f1` (then
+                // read .length = "function" → undefined). Mirror the
+                // arg-bundling logic from the regular Call lowering
+                // (lines ~720–765) so the rest slot receives a real
+                // array of all call args, matching JS `arguments`
+                // semantics. The non-synthetic rest path (e.g.
+                // `static foo(a, ...rest)`) follows the same shape:
+                // pass the first `declared-1` positional args as-is,
+                // then bundle the trailing args into an Array.
+                let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                if has_rest && is_synth_args {
+                    // Lower each call arg exactly ONCE (a value may have side
+                    // effects), then reuse the SSA registers both for the leading
+                    // real params and for the synthesized `arguments` object.
+                    let mut vals: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        vals.push(lower_expr(ctx, a)?);
+                    }
+                    // #5703: the leading real params BEFORE the synth `arguments`
+                    // slot (`static method(x, _ = 0) { … arguments … }` →
+                    // params `[x, _, <arguments>]`) must receive their positional
+                    // values, padded with `undefined` when under-supplied — exactly
+                    // as the class-DECLARATION (StaticMethodCall) path does.
+                    // Previously this branch pushed ONLY the arguments object, so a
+                    // leading param like `x` received the (empty) arguments array
+                    // instead of its argument / `undefined` (test262
+                    // `params-dflt-meth-static-args-unmapped`).
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let fixed_count = declared.saturating_sub(1);
+                    for i in 0..fixed_count {
+                        lowered.push(vals.get(i).cloned().unwrap_or_else(|| undef.clone()));
+                    }
+                    // The synthesized `arguments` object holds ALL passed args.
+                    let cap = (vals.len() as u32).to_string();
+                    let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    for v in &vals {
+                        let blk = ctx.block();
+                        current =
+                            blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, v)]);
+                    }
+                    current =
+                        ctx.block()
+                            .call(I64, "js_array_mark_arguments_object", &[(I64, &current)]);
+                    let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
+                    lowered.push(arguments_box);
+                } else if has_rest {
+                    let fixed_count = declared.saturating_sub(1);
+                    for a in args.iter().take(fixed_count) {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    // #5703 (mirrors #235 in the StaticMethodCall path): when the
+                    // caller under-supplies the fixed leading params, pad the
+                    // missing slots with `undefined` BEFORE the rest array, so the
+                    // callee's default-param prologue / destructuring fires instead
+                    // of reading an uninitialized (0.0) parameter register.
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    while lowered.len() < fixed_count {
+                        lowered.push(undef.clone());
+                    }
+                    let rest_count = args.len().saturating_sub(fixed_count);
+                    let cap = (rest_count as u32).to_string();
+                    let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    for a in args.iter().skip(fixed_count) {
+                        let v = lower_expr(ctx, a)?;
+                        let blk = ctx.block();
+                        current =
+                            blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
+                    }
+                    let rest_box = nanbox_pointer_inline(ctx.block(), &current);
+                    lowered.push(rest_box);
+                } else {
+                    for a in args {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    // #5703: a static method of a class EXPRESSION called with fewer
+                    // args than declared (`C.m()` for `static m(a = 1)` or
+                    // `static m([x, y] = […])`) reaches this fused get-static-method
+                    // +call path rather than the `StaticMethodCall` path used by
+                    // class DECLARATIONS. That path pads missing slots with
+                    // `undefined` (#235); this one did not, so the callee read an
+                    // uninitialized (0.0) register — its default-param prologue
+                    // (`if (p === undefined) p = …`) and array destructuring
+                    // (`GetIterator(p)` → "is not iterable") never fired. Pad here
+                    // too so both paths behave identically.
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    while lowered.len() < declared {
+                        lowered.push(undef.clone());
+                    }
                 }
-            };
-            // Refs #915 (gap 3 / #321 follow-up): Effect's `class
-            // SchemaClass { static pipe() { ... arguments ... } }`
-            // factory returns an anon class whose `pipe` reads
-            // `arguments.length` to dispatch. The HIR appends a
-            // synthesized `arguments` rest param (#677 / #899). The
-            // direct-call dispatch here previously forwarded the
-            // call args 1:1 to the function whose only declared
-            // parameter is the rest array — so for
-            // `Cls.pipe(f1, f2)` the function got `arg0 = f1` (then
-            // read .length = "function" → undefined). Mirror the
-            // arg-bundling logic from the regular Call lowering
-            // (lines ~720–765) so the rest slot receives a real
-            // array of all call args, matching JS `arguments`
-            // semantics. The non-synthetic rest path (e.g.
-            // `static foo(a, ...rest)`) follows the same shape:
-            // pass the first `declared-1` positional args as-is,
-            // then bundle the trailing args into an Array.
-            let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-            if has_rest && is_synth_args {
-                // Lower each call arg exactly ONCE (a value may have side
-                // effects), then reuse the SSA registers both for the leading
-                // real params and for the synthesized `arguments` object.
-                let mut vals: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    vals.push(lower_expr(ctx, a)?);
-                }
-                // #5703: the leading real params BEFORE the synth `arguments`
-                // slot (`static method(x, _ = 0) { … arguments … }` →
-                // params `[x, _, <arguments>]`) must receive their positional
-                // values, padded with `undefined` when under-supplied — exactly
-                // as the class-DECLARATION (StaticMethodCall) path does.
-                // Previously this branch pushed ONLY the arguments object, so a
-                // leading param like `x` received the (empty) arguments array
-                // instead of its argument / `undefined` (test262
-                // `params-dflt-meth-static-args-unmapped`).
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let fixed_count = declared.saturating_sub(1);
-                for i in 0..fixed_count {
-                    lowered.push(vals.get(i).cloned().unwrap_or_else(|| undef.clone()));
-                }
-                // The synthesized `arguments` object holds ALL passed args.
-                let cap = (vals.len() as u32).to_string();
-                let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                for v in &vals {
-                    let blk = ctx.block();
-                    current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, v)]);
-                }
-                current =
-                    ctx.block()
-                        .call(I64, "js_array_mark_arguments_object", &[(I64, &current)]);
-                let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
-                lowered.push(arguments_box);
-            } else if has_rest {
-                let fixed_count = declared.saturating_sub(1);
-                for a in args.iter().take(fixed_count) {
-                    lowered.push(lower_expr(ctx, a)?);
-                }
-                // #5703 (mirrors #235 in the StaticMethodCall path): when the
-                // caller under-supplies the fixed leading params, pad the
-                // missing slots with `undefined` BEFORE the rest array, so the
-                // callee's default-param prologue / destructuring fires instead
-                // of reading an uninitialized (0.0) parameter register.
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered.len() < fixed_count {
-                    lowered.push(undef.clone());
-                }
-                let rest_count = args.len().saturating_sub(fixed_count);
-                let cap = (rest_count as u32).to_string();
-                let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                for a in args.iter().skip(fixed_count) {
-                    let v = lower_expr(ctx, a)?;
-                    let blk = ctx.block();
-                    current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
-                }
-                let rest_box = nanbox_pointer_inline(ctx.block(), &current);
-                lowered.push(rest_box);
-            } else {
-                for a in args {
-                    lowered.push(lower_expr(ctx, a)?);
-                }
-                // #5703: a static method of a class EXPRESSION called with fewer
-                // args than declared (`C.m()` for `static m(a = 1)` or
-                // `static m([x, y] = […])`) reaches this fused get-static-method
-                // +call path rather than the `StaticMethodCall` path used by
-                // class DECLARATIONS. That path pads missing slots with
-                // `undefined` (#235); this one did not, so the callee read an
-                // uninitialized (0.0) register — its default-param prologue
-                // (`if (p === undefined) p = …`) and array destructuring
-                // (`GetIterator(p)` → "is not iterable") never fired. Pad here
-                // too so both paths behave identically.
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered.len() < declared {
-                    lowered.push(undef.clone());
-                }
-            }
-            // #7211: rooted save/restore — the displaced implicit `this` is
-            // live across the static method body below, which is user code.
-            let prev_this = crate::expr::temp_root::implicit_this_save(ctx, &recv_box);
-            // Receiver-sensitive static `this`: arm the one-shot override with
-            // the ACTUAL receiver box so the callee prologue's
-            // `js_static_this_resolve` binds `this` to it (spec
-            // OrdinaryCallBindThis). This must cover the dynamic-value receiver
-            // shapes too (ClassExprFresh / factory `Call` / `LocalGet`), not
-            // just plain class-refs: the prologue consumes the armed override
-            // or falls back to the LEXICAL class-ref — it never reads implicit
-            // `this` — so the previous implicit-this-only treatment of these
-            // shapes silently bound `this` to the shared template. A class
-            // EXPRESSION's per-evaluation statics are OWN properties of the
-            // fresh heap class object (never written to the template's
-            // static-field globals), so `this.<field>` inside the static body
-            // read `undefined` (#1787 criterion 1: `make(a).viaThis()` /
-            // `const C = make(a); C.viaThis()`). For a local that holds a
-            // plain ClassRef value this arms exactly the prologue's default —
-            // no behavior change — and for fresh objects it restores the
-            // receiver, matching the runtime dispatch tower
-            // (`js_class_static_method_call`), which has armed its receiver
-            // since the static-private-brand work.
-            ctx.block()
-                .call_void("js_static_this_arm_value", &[(DOUBLE, &recv_box)]);
-            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-            let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
-            crate::expr::temp_root::implicit_this_restore(ctx, prev_this);
-            return Ok(Some(result));
+                // #7664: re-read below the arg lowering above, not the
+                // register captured before it — see the rationale on this
+                // closure's opening comment.
+                let recv_box = group.reread(ctx, recv_idx)?;
+                // #7211: rooted save/restore — the displaced implicit `this` is
+                // live across the static method body below, which is user code.
+                let prev_this = crate::rooting::implicit_this_save(ctx, &recv_box);
+                // Receiver-sensitive static `this`: arm the one-shot override with
+                // the ACTUAL receiver box so the callee prologue's
+                // `js_static_this_resolve` binds `this` to it (spec
+                // OrdinaryCallBindThis). This must cover the dynamic-value receiver
+                // shapes too (ClassExprFresh / factory `Call` / `LocalGet`), not
+                // just plain class-refs: the prologue consumes the armed override
+                // or falls back to the LEXICAL class-ref — it never reads implicit
+                // `this` — so the previous implicit-this-only treatment of these
+                // shapes silently bound `this` to the shared template. A class
+                // EXPRESSION's per-evaluation statics are OWN properties of the
+                // fresh heap class object (never written to the template's
+                // static-field globals), so `this.<field>` inside the static body
+                // read `undefined` (#1787 criterion 1: `make(a).viaThis()` /
+                // `const C = make(a); C.viaThis()`). For a local that holds a
+                // plain ClassRef value this arms exactly the prologue's default —
+                // no behavior change — and for fresh objects it restores the
+                // receiver, matching the runtime dispatch tower
+                // (`js_class_static_method_call`), which has armed its receiver
+                // since the static-private-brand work.
+                ctx.block()
+                    .call_void("js_static_this_arm_value", &[(DOUBLE, &recv_box)]);
+                let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                    lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
+                crate::rooting::implicit_this_restore(ctx, prev_this);
+                Ok(Some(result))
+            });
         }
         // #1787 / #321: the call target is a static FIELD holding a callable,
         // not a static METHOD — e.g. effect's

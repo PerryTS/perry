@@ -21,6 +21,12 @@ use crate::value::{
 };
 use std::cell::RefCell;
 
+/// #7900: weak-to-strong READ barrier. See the module for the full argument.
+mod read_barrier;
+pub(crate) mod sliced;
+#[cfg(test)]
+pub(crate) mod test_support;
+
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -336,6 +342,25 @@ fn weak_target_should_clear(
     }
 }
 
+/// Parent-only half of [`is_weak_target_trace_slot`]: can `header` own a weak
+/// target slot at all?
+///
+/// Exactly the three classes the slot predicate recognises. A `false` here
+/// proves `is_weak_target_trace_slot` is `false` for EVERY slot of this
+/// object, which lets a scan that walks hundreds of slots per parent decide it
+/// once instead of per slot.
+#[inline]
+pub(crate) unsafe fn header_may_hold_weak_target_slots(header: *mut crate::gc::GcHeader) -> bool {
+    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
+    matches!(
+        (*obj).class_id,
+        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY | CLASS_ID_FINALIZATION_RECORD
+    )
+}
+
 /// True when `slot` is a weak target edge and must not be treated as a
 /// strong child during mark/remembered-set scans. Rewrite/copy passes should
 /// still visit these slots so live weak targets get moved addresses repaired.
@@ -403,7 +428,9 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
     if val.is_undefined() {
         f64::from_bits(TAG_UNDEFINED)
     } else {
-        f64::from_bits(val.bits())
+        // #7900: a white target becomes a STRONG mutator local here, through a
+        // read the store barrier cannot see. Shade it before handing it over.
+        read_barrier::weak_read_barrier_f64(val.bits())
     }
 }
 
@@ -518,8 +545,11 @@ pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, toke
     );
     let record_val = f64::from_bits(JSValue::pointer(record as *const u8).bits());
     let record_handle = scope.root_nanbox_f64(record_val);
-    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    // #7341: `js_string_from_bytes` allocates; pair it with the registry re-read
+    // so the pre-collection `reg_ptr` is never nameable.
+    let (entries_key, reg_nanbox) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(reg_nanbox) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -563,8 +593,11 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     let mut found = false;
     // Rebuild the entries array without matching records.
     let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
-    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    // #7341: `js_string_from_bytes` allocates; pair it with the registry re-read
+    // so the pre-collection `reg_ptr` is never nameable.
+    let (entries_key, reg_nanbox) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(reg_nanbox) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -642,9 +675,9 @@ pub(crate) fn scan_pending_finalization_jobs_roots_mut(
 // shared between two passes that decide "was this weak target collected?"
 // differently:
 //
-// * The FULL / fallback cycle (`process_weak_targets_after_mark`, driven from
-//   cycle.rs `WeakProcessing`) probes the `ValidPointerSet` it already built
-//   for its main trace. UNCHANGED behavior — see `weak_target_should_clear`.
+// * The FULL / fallback cycle (`FullWeakProcessingState`, driven from cycle.rs
+//   `WeakProcessing`) probes the `ValidPointerSet` it already built for its
+//   main trace. See `weak_target_should_clear`.
 // * The copied-minor fast path (`process_weak_targets_from_registry`) probes
 //   the copy's O(1) page-metadata classifier (`CopyingPointerSet`), avoiding
 //   both the full-heap BTreeSet build and the whole-arena walk. See
@@ -791,15 +824,12 @@ unsafe fn classify_gc_type_child(
     (unsafe { (*cp.header).obj_type } == obj_type).then_some(ptr)
 }
 
-/// What the copied-minor pass should do with a registered holder address.
+/// What a registry-scoped weak pass should do with a holder address.
 enum HolderDisposition {
-    /// Live holder scanned this cycle (its weak slots are repaired): rekey the
-    /// registry to this current address and process it.
+    /// Live holder at its current address: process its weak slots.
     Process(usize),
     /// Cannot be proven dead in a minor (an unmarked OLD/longlived holder — a
-    /// minor doesn't mark old-gen) AND its weak slots may be stale/unrepaired:
-    /// leave it registered untouched and let a full GC resolve it. Mirrors the
-    /// original arena walk, which only ever processed MARKED objects.
+    /// minor doesn't mark old-gen): leave it registered for a full GC.
     Keep,
     /// Provably dead (unmarked nursery holder) or unclassifiable (stale /
     /// recycled address): remove it from the registry.
@@ -846,35 +876,41 @@ unsafe fn resolve_weak_holder_copied(
     }
 }
 
-/// Full / fallback-cycle weak processing. Walks EVERY live object in the arena
-/// to find the three weak-holder class_ids and tombstones dead weak targets
-/// using the `ValidPointerSet` the caller built for its main trace. UNCHANGED
-/// by #6182 (the registry optimization is copied-minor-only).
-pub(crate) fn process_weak_targets_after_mark(
+/// Resumable full/fallback weak processing. Lives in [`sliced`], which carries
+/// the whole rationale for why a FinalizationRegistry's record array is now
+/// cursored rather than atomic (#7903).
+pub(crate) use sliced::FullWeakProcessingState;
+
+/// Validate a registry entry before dereferencing it. Full cycles can prove
+/// every unmarked holder dead. Fallback minors may only prove that for nursery
+/// holders; unmarked old holders stay registered for the next full cycle.
+unsafe fn resolve_weak_holder_full(
     valid_ptrs: &crate::gc::ValidPointerSet,
+    addr: usize,
     minor_only: bool,
-    enqueue_callbacks: bool,
-) {
-    // #6180 pause floor: the whole-heap walk below exists only to FIND weak
-    // holders (WeakRef / FinalizationRegistry / WeakMap-entry objects). The
-    // #6182 registry tracks every live holder — if none exist (the common
-    // case), the entire O(heap) pass is a no-op. This is the single largest
-    // atomic-finalize cost for weakref-free programs.
-    if !weak_target_holders_allocated() {
-        return;
+) -> HolderDisposition {
+    if !valid_ptrs.contains(&addr) {
+        return HolderDisposition::Drop;
     }
-    let liveness = FullCycleLiveness {
-        valid_ptrs,
-        minor_only,
-    };
-    crate::arena::arena_walk_objects(|header_ptr| unsafe {
-        let header = header_ptr as *mut crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT || !header_is_live(header) {
-            return;
-        }
-        let obj = header_ptr.add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
-        dispatch_weak_holder(obj, &liveness, enqueue_callbacks);
-    });
+    let header = header_from_user_addr(addr);
+    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return HolderDisposition::Drop;
+    }
+    let obj = addr as *mut ObjectHeader;
+    if !matches!(
+        (*obj).class_id,
+        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY | CLASS_ID_WEAK_ENTRY
+    ) {
+        return HolderDisposition::Drop;
+    }
+    if header_is_live(header) {
+        return HolderDisposition::Process(addr);
+    }
+    if minor_only && !crate::arena::pointer_in_nursery(addr) {
+        HolderDisposition::Keep
+    } else {
+        HolderDisposition::Drop
+    }
 }
 
 /// Copied-minor weak processing (#6182). Iterates ONLY the registered holders
@@ -1027,14 +1063,64 @@ unsafe fn process_finreg_after_mark(
     liveness: &dyn WeakLiveness,
     enqueue_callbacks: bool,
 ) {
+    let Some(identity) = finreg_entries_identity(registry, liveness) else {
+        return;
+    };
+    process_finreg_record_range(registry, liveness, enqueue_callbacks, 0, identity.len);
+}
+
+/// The value word of a registry's `entries` field plus that array's length.
+///
+/// This pair is the *identity* a sliced record cursor is validated against —
+/// see `sliced`'s module docs. Both mutator-side mutation paths change one of
+/// the two (`unregister` installs a rebuilt array, `register` pushes), so a
+/// match means the indices held across a mutator window still denote the same
+/// records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FinregEntriesIdentity {
+    bits: u64,
+    len: usize,
+}
+
+/// # Safety
+/// `registry` must be a live `CLASS_ID_FINALIZATION_REGISTRY` object.
+unsafe fn finreg_entries_identity(
+    registry: *mut ObjectHeader,
+    liveness: &dyn WeakLiveness,
+) -> Option<FinregEntriesIdentity> {
+    let bits = object_field_bits(registry, FINREG_ENTRIES_FIELD);
+    let entries = liveness.as_live_array(bits)?;
+    Some(FinregEntriesIdentity {
+        bits,
+        len: js_array_length(entries) as usize,
+    })
+}
+
+/// Scan `count` records starting at `start`. Returns how many indices were
+/// visited — the work-unit charge, which counts skipped (dead / non-record)
+/// slots too, because reading and rejecting one is the same cost as processing
+/// it and a budget that only charged for hits would not bound anything.
+///
+/// # Safety
+/// `registry` must be a live `CLASS_ID_FINALIZATION_REGISTRY` object.
+unsafe fn process_finreg_record_range(
+    registry: *mut ObjectHeader,
+    liveness: &dyn WeakLiveness,
+    enqueue_callbacks: bool,
+    start: usize,
+    count: usize,
+) -> usize {
     let callback = f64::from_bits(object_field_bits(registry, FINREG_CALLBACK_FIELD));
     let entries_bits = object_field_bits(registry, FINREG_ENTRIES_FIELD);
     let Some(entries) = liveness.as_live_array(entries_bits) else {
-        return;
+        return 0;
     };
     let len = js_array_length(entries) as usize;
+    let stop = len.min(start.saturating_add(count));
     let registry_value = f64::from_bits(JSValue::pointer(registry as *const u8).bits());
-    for i in 0..len {
+    let mut scanned = 0usize;
+    for i in start..stop {
+        scanned += 1;
         let record_value = js_array_get_f64(entries, i as u32);
         let Some(record) = liveness
             .as_live_object_with_class(record_value.to_bits(), CLASS_ID_FINALIZATION_RECORD)
@@ -1049,6 +1135,7 @@ unsafe fn process_finreg_after_mark(
             enqueue_callbacks,
         );
     }
+    scanned
 }
 
 unsafe fn process_finreg_record_after_mark(
@@ -1131,8 +1218,11 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     }
     let len = js_array_length(entries_ptr) as usize;
     let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
-    let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    // #7341: `js_string_from_bytes` allocates; pair it with the registry re-read
+    // so the pre-collection `reg_ptr` is never nameable.
+    let (entries_key, reg_nanbox) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(reg_nanbox) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -1546,9 +1636,10 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
         // re-read its current pointer before boxing `entry_val`, otherwise a
         // stale address would be stored into the array.
         let entry_handle = scope.root_raw_mut_ptr(entry);
+        // #7341: `entries_array` allocates, so pair it with the entry re-read.
         let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
-        let entries_ptr = entries_array(map_ptr);
-        let entry = entry_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let (entries_ptr, entry) =
+            entry_handle.across_mut::<ObjectHeader, _>(|| entries_array(map_ptr));
         let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
         if first_tomb >= 0 {
             js_array_set_f64(entries_ptr, first_tomb as u32, entry_val);
@@ -1586,7 +1677,11 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
                 continue; // tombstoned (key collected)
             }
             if stored_key == key.to_bits() {
-                return f64::from_bits(object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD));
+                // #7900: shade the key (so a pending weak slice cannot tombstone
+                // this entry mid-turn) and the value handed to the mutator.
+                read_barrier::weak_read_barrier(stored_key);
+                let value = object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD);
+                return read_barrier::weak_read_barrier_f64(value);
             }
         }
     }
@@ -1615,6 +1710,7 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
                 continue; // tombstoned (key collected)
             }
             if stored_key == key.to_bits() {
+                read_barrier::weak_read_barrier(stored_key); // #7900: keep has/get agreeing
                 return f64::from_bits(TAG_TRUE);
             }
         }

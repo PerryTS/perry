@@ -82,21 +82,6 @@ impl EvacuationPolicySnapshot {
     }
 }
 
-#[derive(Default)]
-pub(super) struct OldPageDefragSelection {
-    pub(super) pages: crate::fast_hash::PtrHashSet<usize>,
-    pub(super) page_order: Vec<usize>,
-    pub(super) candidate_pages: usize,
-    pub(super) selected_pages: usize,
-    pub(super) selected_live_bytes: usize,
-    pub(super) selected_reclaimable_bytes: usize,
-    /// Page-granule bytes the selected pages would hand back once their
-    /// movable live objects are evacuated: page size minus pinned bytes
-    /// (selection skips pinned pages, so in practice the full granule).
-    pub(super) selected_releasable_block_bytes: usize,
-    pub(super) skipped_pinned_pages: usize,
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct EvacuationPolicyDecision {
     pub(super) allowed: bool,
@@ -129,135 +114,33 @@ pub(super) struct SweepTraceStats {
     pub(super) reusable_bytes: usize,
     pub(super) returned_bytes: usize,
     pub(super) reset_blocks: usize,
+    pub(super) removed_blocks: usize,
+    pub(super) removed_bytes: usize,
+    pub(super) pooled_blocks: usize,
+    pub(super) pooled_bytes: usize,
+    /// Pooled mappings explicitly deallocated after a critical-pressure or
+    /// allocation-failure full cycle. Included in returned/deallocated totals.
+    pub(super) pool_drained_blocks: usize,
+    pub(super) pool_drained_bytes: usize,
     pub(super) deallocated_blocks: usize,
     // Compatibility alias for returned_bytes.
     pub(super) deallocated_bytes: usize,
     pub(super) retained_forwarded_stub_objects: usize,
     pub(super) retained_forwarded_stub_bytes: usize,
-}
-
-#[inline]
-pub(super) fn old_page_defrag_eligible(meta: crate::arena::OldPageMeta) -> bool {
-    meta.allocated_bytes > 0 && meta.live_bytes > 0 && meta.dead_bytes > 0 && meta.pinned_bytes == 0
-}
-
-#[inline]
-pub(super) fn old_page_defrag_skipped_for_pin(meta: crate::arena::OldPageMeta) -> bool {
-    meta.allocated_bytes > 0 && meta.live_bytes > 0 && meta.dead_bytes > 0 && meta.pinned_bytes > 0
-}
-
-pub(super) fn select_old_page_defrag_pages_from_snapshot(
-    snapshot: &[crate::arena::OldPageMeta],
-    force: bool,
-) -> OldPageDefragSelection {
-    let mut selection = OldPageDefragSelection::default();
-    let mut candidates = Vec::new();
-    for &meta in snapshot {
-        if old_page_defrag_skipped_for_pin(meta) {
-            selection.skipped_pinned_pages = selection.skipped_pinned_pages.saturating_add(1);
-            continue;
-        }
-        if !old_page_defrag_eligible(meta) {
-            continue;
-        }
-        selection.candidate_pages = selection.candidate_pages.saturating_add(1);
-        if force || meta.dead_bytes >= meta.live_bytes {
-            candidates.push(meta);
-        }
-    }
-
-    candidates.sort_unstable_by(|a, b| {
-        let b_ratio = (b.dead_bytes as u128).saturating_mul(a.allocated_bytes as u128);
-        let a_ratio = (a.dead_bytes as u128).saturating_mul(b.allocated_bytes as u128);
-        b_ratio
-            .cmp(&a_ratio)
-            .then_with(|| a.live_bytes.cmp(&b.live_bytes))
-            .then_with(|| a.page_base.cmp(&b.page_base))
-    });
-
-    for meta in candidates {
-        let page = crate::arena::generation_page_for_addr(meta.page_base);
-        if selection.pages.insert(page) {
-            selection.page_order.push(page);
-            selection.selected_pages = selection.selected_pages.saturating_add(1);
-            selection.selected_live_bytes = selection
-                .selected_live_bytes
-                .saturating_add(meta.live_bytes);
-            selection.selected_reclaimable_bytes = selection
-                .selected_reclaimable_bytes
-                .saturating_add(meta.dead_bytes);
-            selection.selected_releasable_block_bytes =
-                selection.selected_releasable_block_bytes.saturating_add(
-                    (meta.page_end.saturating_sub(meta.page_base))
-                        .saturating_sub(meta.pinned_bytes),
-                );
-        }
-    }
-
-    selection
-}
-
-// gh #6206 test hook: the defrag machinery's unit tests exercise the
-// selection/copy/re-remember mechanics directly and must bypass the
-// production off-gate below. Thread-local so parallel tests don't race.
-#[cfg(test)]
-thread_local! {
-    pub(crate) static OLD_DEFRAG_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// RAII enable for the defrag unit tests: forces the off-gate open on this
-/// thread for the guard's lifetime.
-#[cfg(test)]
-pub(crate) struct OldDefragTestEnable;
-
-#[cfg(test)]
-impl OldDefragTestEnable {
-    pub(crate) fn new() -> Self {
-        OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.set(Some(true)));
-        OldDefragTestEnable
-    }
-}
-
-#[cfg(test)]
-impl Drop for OldDefragTestEnable {
-    fn drop(&mut self) {
-        OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.set(None));
-    }
-}
-
-fn old_page_defrag_enabled() -> bool {
-    #[cfg(test)]
-    if let Some(v) = OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.get()) {
-        return v;
-    }
-    use std::sync::OnceLock;
-    static OPT_IN: OnceLock<bool> = OnceLock::new();
-    *OPT_IN.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_GC_OLD_DEFRAG").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
-    })
-}
-
-pub(super) fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelection {
-    // gh #6206: old-page defrag evacuation is OFF pending a rewrite-contract
-    // fix. With defrag active, a reader can observe a pre-move address of a
-    // defrag-moved old object long after the cycle (wild-pointer crash /
-    // silently corrupt cached value); the reproducer corrupts 6/6 with defrag
-    // enabled and is clean 6/6 with it disabled, on the same binary, while
-    // every heap-payload slot (arrays in-length, object fields, Map entries)
-    // verifies as correctly rewritten — the stale reference lives on a
-    // non-heap path (address-keyed cache / IC / side table) the defrag
-    // rewrite doesn't reach. Nursery evacuation and tenured promotion (the
-    // reclaim-critical moving paths) are unaffected. Re-enable for
-    // debugging/bisection with PERRY_GC_OLD_DEFRAG=1.
-    if !old_page_defrag_enabled() {
-        return OldPageDefragSelection::default();
-    }
-    let snapshot = crate::arena::old_page_meta_snapshot();
-    select_old_page_defrag_pages_from_snapshot(&snapshot, force)
+    /// #7598: bytes this walk classified live / dead in the general (Eden)
+    /// blocks. Consumed by `tenuring::seed_promote_lock_from_sweep`, which
+    /// documents the policy and why the signal is not self-referential.
+    pub(super) eden_live_bytes: u64,
+    pub(super) eden_dead_bytes: u64,
+    /// Header-inclusive bytes this arena walk classified live. Unlike block
+    /// offsets, this excludes dead objects stranded beside a tiny survivor.
+    pub(super) arena_live_bytes: u64,
+    /// #7901: the share of `arena_live_bytes` sitting in the copying
+    /// collector's FROM-SPACE (Eden + active survivor). A following copied
+    /// minor replaces from-space wholesale and must remove exactly this — see
+    /// `arena::arena_live_from_space_bytes` for why the block high-water is the
+    /// wrong quantity to subtract.
+    pub(super) arena_live_from_space_bytes: u64,
 }
 
 pub(super) fn evacuation_policy_initial_decision(
@@ -611,6 +494,34 @@ pub(super) fn sweep() -> u64 {
     sweep_with_age_bump(false).freed_bytes
 }
 
+/// #7539: is the lazy JSON array at `addr` provably dead at sweep entry?
+///
+/// Same rule `map.rs` applies to a registered Map: unmarked ∧ not pinned ∧ not
+/// forwarded, and — for a MINOR trace, which never traces the old generation —
+/// additionally not tenured and physically in the nursery.
+unsafe fn registered_lazy_array_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
+    if header.obj_type != GC_TYPE_LAZY_ARRAY {
+        return false;
+    }
+    let flags = header.gc_flags;
+    if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED) != 0 {
+        return false;
+    }
+    if full_trace {
+        return true;
+    }
+    if flags & GC_FLAG_TENURED != 0 {
+        return false;
+    }
+    matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Nursery
+    )
+}
+
 pub(super) fn sweep_malloc_objects() -> u64 {
     let mut state = MallocSweepCycleState::new(true);
     state.finish_unbounded()
@@ -855,49 +766,24 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     };
     let mut retained_forwarded_stub_objects: usize = 0;
     let mut retained_forwarded_stub_bytes: usize = 0;
+    let mut arena_live_bytes: u64 = 0;
 
-    // Sweep arena objects. Two-phase strategy:
+    // Sweep arena objects with per-block live tracking, in ONE walk. (The
+    // "two-phase probe-then-track" strategy this comment used to describe was
+    // replaced by the single walk below; the per-object HashMap it existed to
+    // avoid is gone.)
     //
-    //   1. Fast probe pass: walk objects, clear mark bits, count
-    //      dead bytes, track whether ANY block has a live object.
-    //      If no live anywhere → entire arena is reclaimable. Skip
-    //      every per-block tracking structure and reset all blocks
-    //      to offset=0 in O(1). This is the common case for tight
-    //      `new ClassName()` loops where nothing escapes.
+    // Per object: live → set `block_has_live[block_idx]` and clear the mark bit
+    // inline; dead → zero its payload so stale pointers cannot retain anything
+    // next cycle. Dead objects are deliberately NOT pushed onto the global
+    // ARENA_FREE_LIST: the inline bump allocator never reads it (it relies on
+    // the per-block reset), and the push cost measured ~420 ms per benchmark
+    // (~50 ns × ~700k objects × ~12 cycles) purely for the rare shapes the
+    // function-call allocator handles.
     //
-    //   2. Slow tracking pass (only when some block has live objects):
-    //      walk again, this time bucketing dead objects per block so
-    //      we can decide which blocks are fully empty (reset) vs
-    //      partially empty (push their dead objects to the free list
-    //      in a single batched extend).
-    //
-    // The two-pass split avoids the per-object HashMap insert cost
-    // (~50ns) on the common all-dead path, where it would account for
-    // 700k × 50ns = 35ms per GC cycle.
-    // Sweep arena objects with per-block live tracking.
-    //
-    // For each object, walk and check mark/pinned state:
-    //   - live → set `block_has_live[block_idx]` and clear the mark
-    //     bit inline so we don't need a separate pass.
-    //   - dead → zero its payload memory (so stale pointers don't
-    //     retain other objects on the next GC cycle).
-    //
-    // We deliberately do NOT push dead objects onto the global
-    // ARENA_FREE_LIST. The inline bump allocator never reads the
-    // free list — it uses the per-block reset instead. Pushing
-    // dead objects to the free list would cost ~50ns per object
-    // × ~700k objects per GC × ~12 GC cycles per benchmark = 420ms
-    // of pure waste in `object_create`. The function-call allocator
-    // path (`js_object_alloc_class_inline_keys` → `arena_alloc_gc`)
-    // is the only consumer of the free list, and it's only used
-    // for shapes the inline path doesn't cover (anonymous classes,
-    // closure body new'd from a slot, etc.) — those are rare enough
-    // that running them through the slow path is fine.
-    //
-    // After the walk, `arena_reset_empty_blocks` resets every block
-    // with zero live objects to offset=0. This is the load-bearing
-    // optimization that lets the inline bump allocator reuse memory
-    // across GC cycles instead of page-faulting through fresh blocks.
+    // After the walk, `arena_reset_empty_blocks` resets every block with zero
+    // live objects to offset=0 — the load-bearing optimization that lets the
+    // inline bump allocator reuse memory instead of page-faulting fresh blocks.
     let n_blocks = crate::arena::arena_block_count();
     let mut block_has_live: Vec<bool> = vec![false; n_blocks];
     // Inclusive upper bound on indices that age. `general_block_count()`
@@ -959,6 +845,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 return;
             }
             if flags & GC_FLAG_PINNED != 0 {
+                arena_live_bytes = arena_live_bytes.saturating_add((*header).size as u64);
                 if block_idx >= old_block_start {
                     crate::arena::old_page_account_swept_object(
                         header as usize,
@@ -996,6 +883,13 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     || (block_idx < resettable_general_n
                         && crate::arena::general_block_in_recent_window(block_idx));
                 if retain_stub {
+                    // A full collection can leave an unmarked stub in the
+                    // recent-block safety window without mistaking it for a
+                    // live object. Keep the block/header, but do not charge
+                    // that proven-dead stub to the live census.
+                    if do_age_bump || flags & GC_FLAG_MARKED != 0 {
+                        arena_live_bytes = arena_live_bytes.saturating_add((*header).size as u64);
+                    }
                     if block_idx >= old_block_start {
                         crate::arena::old_page_account_swept_object(
                             header as usize,
@@ -1070,6 +964,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     invalidate_dead_old_arena_header(header, total_size);
                 }
             } else {
+                arena_live_bytes = arena_live_bytes.saturating_add((*header).size as u64);
                 if block_idx >= old_block_start {
                     crate::arena::old_page_account_swept_object(
                         header as usize,
@@ -1105,7 +1000,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
             .filter(|&i| block_has_live[i])
             .count();
         eprintln!(
-            "[gc] blocks: general={} ({} live), longlived={} ({} live), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
+            "[gc] blocks: general={} ({} live), non_general={} ({} live, survivors+longlived+old), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
             resettable_general_n,
             live_general,
             n_blocks - resettable_general_n,
@@ -1128,6 +1023,16 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     } else {
         crate::arena::ArenaResetStats::default()
     };
+    // #7437: rebuild the old-gen hole free list from the surviving blocks.
+    // Runs AFTER the block reclaim above, so a fully-dead block's holes are
+    // never recorded — its bytes were recycled wholesale, which is strictly
+    // better than hole-by-hole reuse.
+    if reclaim_dead_old_blocks {
+        old_free_rebuild_from_live_old_blocks(&block_has_live, old_block_start);
+        if std::env::var_os("PERRY_GC_DIAG").is_some() {
+            eprintln!("[gc-old-free] reusable_bytes={}", old_free_bytes());
+        }
+    }
     let reset = crate::arena::ArenaResetStats {
         reset_blocks: nursery_reset
             .reset_blocks
@@ -1137,6 +1042,22 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
             .reusable_bytes
             .saturating_add(survivor_reset.reusable_bytes)
             .saturating_add(old_reset.reusable_bytes),
+        removed_blocks: nursery_reset
+            .removed_blocks
+            .saturating_add(survivor_reset.removed_blocks)
+            .saturating_add(old_reset.removed_blocks),
+        removed_bytes: nursery_reset
+            .removed_bytes
+            .saturating_add(survivor_reset.removed_bytes)
+            .saturating_add(old_reset.removed_bytes),
+        pooled_blocks: nursery_reset
+            .pooled_blocks
+            .saturating_add(survivor_reset.pooled_blocks)
+            .saturating_add(old_reset.pooled_blocks),
+        pooled_bytes: nursery_reset
+            .pooled_bytes
+            .saturating_add(survivor_reset.pooled_bytes)
+            .saturating_add(old_reset.pooled_bytes),
         deallocated_blocks: nursery_reset
             .deallocated_blocks
             .saturating_add(survivor_reset.deallocated_blocks)
@@ -1153,10 +1074,24 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
         reusable_bytes: reset.reusable_bytes,
         returned_bytes: reset.deallocated_bytes,
         reset_blocks: reset.reset_blocks,
+        removed_blocks: reset.removed_blocks,
+        removed_bytes: reset.removed_bytes,
+        pooled_blocks: reset.pooled_blocks,
+        pooled_bytes: reset.pooled_bytes,
+        pool_drained_blocks: 0,
+        pool_drained_bytes: 0,
         deallocated_blocks: reset.deallocated_blocks,
         deallocated_bytes: reset.deallocated_bytes,
         retained_forwarded_stub_objects,
         retained_forwarded_stub_bytes,
+        // Legacy unbudgeted path, not reached in production and not wired to
+        // the #7598 seed nor to #7901's live census — the cycle stepper's
+        // `IncrementalSweepState` is the only publisher of either, so leaving
+        // these zero cannot feed a wrong number to `record_arena_live_census`.
+        eden_live_bytes: 0,
+        eden_dead_bytes: 0,
+        arena_live_bytes,
+        arena_live_from_space_bytes: 0,
     }
 }
 
@@ -1184,6 +1119,7 @@ pub(super) struct IncrementalSweepState {
     dead_sets: Vec<usize>,
     dead_buffers: Vec<usize>,
     dead_typed_arrays: Vec<usize>,
+    dead_lazy_arrays: Vec<usize>,
     malloc: MallocSweepCycleState,
     arena: ArenaSweepObjectsState,
     cleanup: Option<ArenaSweepCleanupState>,
@@ -1206,6 +1142,7 @@ impl IncrementalSweepState {
             dead_sets: Vec::new(),
             dead_buffers: Vec::new(),
             dead_typed_arrays: Vec::new(),
+            dead_lazy_arrays: Vec::new(),
             malloc: MallocSweepCycleState::new(sweep_malloc),
             arena: ArenaSweepObjectsState::new(
                 do_age_bump,
@@ -1237,10 +1174,18 @@ impl IncrementalSweepState {
         self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);
         self.dead_typed_arrays =
             crate::typedarray::collect_dead_registered_typed_arrays_post_trace(full_trace);
+        // #7539: lazy JSON arrays own their tape bytes outside the GC heap.
+        // The copying minor has its own from-space pass; this covers the
+        // non-copying cycles, including a dead owner sitting in the ACTIVE
+        // nursery block that no sweeper ever object-walks.
+        self.dead_lazy_arrays = crate::json_tape_store::collect_owners(&|addr| unsafe {
+            registered_lazy_array_is_dead_post_trace(addr, full_trace)
+        });
         if !self.dead_maps.is_empty()
             || !self.dead_sets.is_empty()
             || !self.dead_buffers.is_empty()
             || !self.dead_typed_arrays.is_empty()
+            || !self.dead_lazy_arrays.is_empty()
         {
             self.subphase = SweepCycleSubphase::CollectionSideBuffers;
         }
@@ -1260,6 +1205,8 @@ impl IncrementalSweepState {
                         crate::buffer::finalize_collected_dead_buffer(addr);
                     } else if let Some(addr) = self.dead_typed_arrays.pop() {
                         crate::typedarray::finalize_collected_dead_typed_array(addr);
+                    } else if let Some(addr) = self.dead_lazy_arrays.pop() {
+                        crate::json_tape_store::release(addr);
                     } else {
                         self.subphase = SweepCycleSubphase::Malloc;
                         break;
@@ -1270,6 +1217,7 @@ impl IncrementalSweepState {
                     && self.dead_sets.is_empty()
                     && self.dead_buffers.is_empty()
                     && self.dead_typed_arrays.is_empty()
+                    && self.dead_lazy_arrays.is_empty()
                 {
                     self.subphase = SweepCycleSubphase::Malloc;
                 }
@@ -1284,6 +1232,7 @@ impl IncrementalSweepState {
             SweepCycleSubphase::ArenaObjects => {
                 if self.arena.step(budget) {
                     self.arena.maybe_print_diag();
+                    self.arena.push_live_block_holes();
                     self.cleanup = Some(ArenaSweepCleanupState::new(
                         self.arena.block_has_live(),
                         self.arena.block_snapshots(),
@@ -1308,10 +1257,20 @@ impl IncrementalSweepState {
                         reusable_bytes: reset.reusable_bytes,
                         returned_bytes: reset.deallocated_bytes,
                         reset_blocks: reset.reset_blocks,
+                        removed_blocks: reset.removed_blocks,
+                        removed_bytes: reset.removed_bytes,
+                        pooled_blocks: reset.pooled_blocks,
+                        pooled_bytes: reset.pooled_bytes,
+                        pool_drained_blocks: 0,
+                        pool_drained_bytes: 0,
                         deallocated_blocks: reset.deallocated_blocks,
                         deallocated_bytes: reset.deallocated_bytes,
                         retained_forwarded_stub_objects: self.arena.retained_forwarded_stub_objects,
                         retained_forwarded_stub_bytes: self.arena.retained_forwarded_stub_bytes,
+                        eden_live_bytes: self.arena.eden_live_bytes,
+                        eden_dead_bytes: self.arena.eden_dead_bytes,
+                        arena_live_bytes: self.arena.arena_live_bytes,
+                        arena_live_from_space_bytes: self.arena.arena_live_from_space_bytes,
                     };
                     self.subphase = SweepCycleSubphase::Done;
                     return true;
@@ -1365,14 +1324,21 @@ struct ArenaSweepObjectsState {
     /// Full traces DO visit every live parent, so mark-based reclaim stays
     /// sound there (and bounds the accumulation).
     minor_sweep: bool,
-    /// Old-gen blocks selected for page defrag this cycle. Their live contents
-    /// were evacuated out during this same cycle, so what is left really is
-    /// reclaimable even in a minor — and the block-level reclaim needs
-    /// `block_has_live` to stay false for them.
+    /// Old-gen blocks selected for page defrag this cycle. Every indexed
+    /// occupant was evacuated out during this same cycle, so what is left
+    /// really is reclaimable even in a minor — and the block-level reclaim
+    /// needs `block_has_live` to stay false for them.
     targeted_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
     freed_bytes: u64,
     retained_forwarded_stub_objects: usize,
     retained_forwarded_stub_bytes: usize,
+    /// #7598 Eden census: see `SweepTraceStats`.
+    eden_live_bytes: u64,
+    eden_dead_bytes: u64,
+    arena_live_bytes: u64,
+    /// #7901: see `SweepTraceStats::arena_live_from_space_bytes`.
+    arena_live_from_space_bytes: u64,
+    active_survivor_blocks: std::ops::Range<usize>,
 }
 
 impl ArenaSweepObjectsState {
@@ -1402,6 +1368,27 @@ impl ArenaSweepObjectsState {
             freed_bytes: 0,
             retained_forwarded_stub_objects: 0,
             retained_forwarded_stub_bytes: 0,
+            eden_live_bytes: 0,
+            eden_dead_bytes: 0,
+            arena_live_bytes: 0,
+            arena_live_from_space_bytes: 0,
+            active_survivor_blocks: crate::arena::active_survivor_block_index_range(),
+        }
+    }
+
+    /// #7437: rebuild the old-gen hole free list once the object walk
+    /// completes — block liveness is final at that point, and the block
+    /// cleanup that follows only touches blocks with NO live object, which
+    /// the rebuild's filter already skips.
+    fn push_live_block_holes(&mut self) {
+        if self.reclaim_dead_old_blocks {
+            super::old_free_rebuild_from_live_old_blocks(
+                &self.block_has_live,
+                self.old_block_start,
+            );
+            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+                eprintln!("[gc-old-free] reusable_bytes={}", super::old_free_bytes());
+            }
         }
     }
 
@@ -1436,7 +1423,7 @@ impl ArenaSweepObjectsState {
             .filter(|&i| self.block_has_live[i])
             .count();
         eprintln!(
-            "[gc] blocks: general={} ({} live), longlived={} ({} live), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
+            "[gc] blocks: general={} ({} live), non_general={} ({} live, survivors+longlived+old), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
             self.resettable_general_n,
             live_general,
             self.block_has_live.len() - self.resettable_general_n,
@@ -1456,7 +1443,7 @@ impl ArenaSweepObjectsState {
                 return;
             }
             if flags & GC_FLAG_PINNED != 0 {
-                self.keep_live_object(header, block_idx, flags, age_bump_this, true);
+                self.keep_live_object(header, block_idx, flags, age_bump_this, true, true);
                 return;
             }
             if flags & GC_FLAG_FORWARDED != 0 {
@@ -1466,7 +1453,7 @@ impl ArenaSweepObjectsState {
             if flags & GC_FLAG_MARKED == 0 && self.unmarked_is_provably_dead(block_idx) {
                 self.reclaim_dead_object(header, block_idx);
             } else {
-                self.keep_live_object(header, block_idx, flags, age_bump_this, false);
+                self.keep_live_object(header, block_idx, flags, age_bump_this, false, true);
             }
         }
     }
@@ -1482,8 +1469,8 @@ impl ArenaSweepObjectsState {
     /// following minor stopped tracing the array's other pointer elements,
     /// sweeping objects that were still referenced.
     ///
-    /// The old-page defrag targets are exempt: this cycle evacuated their live
-    /// contents, so the remainder is genuinely reclaimable.
+    /// The old-page defrag targets are exempt: this cycle evacuated every
+    /// indexed occupant, so the remainder is genuinely reclaimable.
     #[inline]
     fn unmarked_is_provably_dead(&self, block_idx: usize) -> bool {
         if !self.minor_sweep || block_idx < self.old_block_start {
@@ -1503,6 +1490,7 @@ impl ArenaSweepObjectsState {
         flags: u8,
         age_bump_this: bool,
         pinned: bool,
+        count_in_live_census: bool,
     ) {
         if block_idx >= self.old_block_start {
             crate::arena::old_page_account_swept_object(
@@ -1514,6 +1502,23 @@ impl ArenaSweepObjectsState {
         }
         if block_idx < self.block_has_live.len() {
             self.block_has_live[block_idx] = true;
+        }
+        if block_idx < self.resettable_general_n {
+            self.eden_live_bytes = self.eden_live_bytes.saturating_add((*header).size as u64);
+        }
+        if count_in_live_census {
+            let size = (*header).size as u64;
+            self.arena_live_bytes = self.arena_live_bytes.saturating_add(size);
+            // #7901: the from-space share of the census, so a following copied
+            // minor can remove exactly what it replaces.
+            if crate::arena::block_in_copying_from_space(
+                block_idx,
+                self.resettable_general_n,
+                &self.active_survivor_blocks,
+            ) {
+                self.arena_live_from_space_bytes =
+                    self.arena_live_from_space_bytes.saturating_add(size);
+            }
         }
         if age_bump_this && flags & GC_FLAG_TENURED == 0 {
             if flags & GC_FLAG_HAS_SURVIVED != 0 {
@@ -1541,7 +1546,11 @@ impl ArenaSweepObjectsState {
             || (block_idx < self.resettable_general_n
                 && crate::arena::general_block_in_recent_window(block_idx));
         if retain_stub {
-            self.keep_live_object(header, block_idx, flags, false, false);
+            // A full collection can leave an unmarked stub in the recent-block
+            // safety window. It still pins the block, but it is proven dead and
+            // therefore excluded from live-allocation accounting.
+            let count_in_live_census = self.minor_sweep || flags & GC_FLAG_MARKED != 0;
+            self.keep_live_object(header, block_idx, flags, false, false, count_in_live_census);
             if block_idx < self.resettable_general_n {
                 self.retained_forwarded_stub_objects =
                     self.retained_forwarded_stub_objects.saturating_add(1);
@@ -1578,6 +1587,9 @@ impl ArenaSweepObjectsState {
         }
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
         self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
+        if block_idx < self.resettable_general_n {
+            self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(total_size as u64);
+        }
         finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
         if self.reclaim_dead_old_blocks && dead_old {
             invalidate_dead_old_arena_header(header, total_size);
@@ -1679,6 +1691,10 @@ fn add_reset_stats(
     crate::arena::ArenaResetStats {
         reset_blocks: lhs.reset_blocks.saturating_add(rhs.reset_blocks),
         reusable_bytes: lhs.reusable_bytes.saturating_add(rhs.reusable_bytes),
+        removed_blocks: lhs.removed_blocks.saturating_add(rhs.removed_blocks),
+        removed_bytes: lhs.removed_bytes.saturating_add(rhs.removed_bytes),
+        pooled_blocks: lhs.pooled_blocks.saturating_add(rhs.pooled_blocks),
+        pooled_bytes: lhs.pooled_bytes.saturating_add(rhs.pooled_bytes),
         deallocated_blocks: lhs
             .deallocated_blocks
             .saturating_add(rhs.deallocated_blocks),
@@ -1859,34 +1875,39 @@ pub(super) fn evacuate_selected_old_pages_collecting(
         &source_blocks.pages
     };
 
-    crate::arena::old_arena_walk_objects_on_pages(selected_pages, |header_ptr| {
-        let header = header_ptr as *mut GcHeader;
+    // A minor trace deliberately does not establish old-generation liveness:
+    // an unmarked old object is normally live and merely unvisited. Reclaim is
+    // block-granular, so moving only the marked occupants of selected pages
+    // and then targeting their whole source block discards live unmarked
+    // neighbors (#7876). Snapshot every indexed occupant of the containing
+    // source blocks and evacuate the block all-or-nothing. Dead old objects
+    // remain indexed until a full trace proves them dead, so conservatively
+    // copying them here preserves the same minor-GC retention contract.
+    let mut source_headers = Vec::new();
+    crate::arena::old_arena_walk_objects_on_pages(excluded_pages, |header_ptr| {
+        source_headers.push(header_ptr as *mut GcHeader);
+    });
+    let source_block_is_movable = source_headers.iter().all(|&header| unsafe {
+        if header.is_null() {
+            return false;
+        }
+        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        let flags = (*header).gc_flags;
+        crate::arena::pointer_in_old_gen(user_ptr as usize)
+            && flags != 0
+            && flags & (GC_FLAG_FORWARDED | GC_FLAG_PINNED) == 0
+            && gc_type_is_movable((*header).obj_type)
+            && !is_conservatively_pinned(header)
+    });
+    if source_headers.is_empty() || !source_block_is_movable {
+        return evacuated;
+    }
+
+    for header in source_headers {
         unsafe {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            if !crate::arena::pointer_in_old_gen(user_ptr as usize) {
-                return;
-            }
             let flags = (*header).gc_flags;
-            if flags & GC_FLAG_FORWARDED != 0 {
-                return;
-            }
-            if flags & GC_FLAG_MARKED == 0 {
-                return;
-            }
-            if flags & GC_FLAG_PINNED != 0 {
-                return;
-            }
-            if !gc_type_is_movable((*header).obj_type) {
-                return;
-            }
-            if is_conservatively_pinned(header) {
-                return;
-            }
-
             let total = (*header).size as usize;
-            if !old_object_pages_all_selected(header, total, selected_pages) {
-                return;
-            }
 
             let payload = total - GC_HEADER_SIZE;
             let new_user = crate::arena::arena_alloc_gc_old_excluding_pages(
@@ -1920,7 +1941,7 @@ pub(super) fn evacuate_selected_old_pages_collecting(
             evacuated.old_page_moved_objects = evacuated.old_page_moved_objects.saturating_add(1);
             evacuated.old_page_moved_bytes = evacuated.old_page_moved_bytes.saturating_add(total);
         }
-    });
+    }
 
     evacuated
 }

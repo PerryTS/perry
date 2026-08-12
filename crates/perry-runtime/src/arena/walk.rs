@@ -321,11 +321,12 @@ pub fn arena_total_bytes() -> usize {
     ARENA_TOTAL_BYTES.with(|t| t.get())
 }
 
-/// Get bytes currently in use (sum of `block.offset` across blocks).
-/// Used by adaptive GC to measure how much actual data the program is
-/// holding live, separately from how much arena space we've reserved.
-/// After a GC sweep that resets empty blocks, in-use bytes drop
-/// dramatically while reserved bytes stay constant.
+/// Get allocation high-water bytes (sum of `block.offset` across blocks).
+///
+/// This includes swept holes in partially-live blocks and is deliberately a
+/// placement/fragmentation quantity, not live heap usage. Consumers that need
+/// object occupancy (`heapUsed`, major-GC pacing) use
+/// [`arena_live_allocated_bytes`](super::arena_live_allocated_bytes).
 pub fn arena_in_use_bytes() -> usize {
     sync_inline_arena_state();
     let mut used: usize = 0;
@@ -379,6 +380,7 @@ pub(crate) struct ArenaTelemetrySnapshot {
     pub(crate) longlived: ArenaRegionTelemetry,
     pub(crate) old: ArenaRegionTelemetry,
     pub(crate) total_in_use_bytes: usize,
+    pub(crate) total_live_allocated_bytes: usize,
     pub(crate) total_reserved_bytes: usize,
     pub(crate) total_block_count: usize,
 }
@@ -387,8 +389,33 @@ pub(crate) struct ArenaTelemetrySnapshot {
 pub struct ArenaResetStats {
     pub reset_blocks: usize,
     pub reusable_bytes: usize,
+    /// Blocks removed from arena reservation accounting, whether retained in
+    /// the recycled pool or actually returned to the allocator.
+    pub removed_blocks: usize,
+    pub removed_bytes: usize,
+    /// Removed blocks retained as discarded, reusable mappings.
+    pub pooled_blocks: usize,
+    pub pooled_bytes: usize,
+    /// Removed blocks actually handed to `dealloc` in production.
     pub deallocated_blocks: usize,
     pub deallocated_bytes: usize,
+}
+
+impl ArenaResetStats {
+    pub(crate) fn record_block_release(&mut self, size: usize, release: ArenaBlockRelease) {
+        self.removed_blocks = self.removed_blocks.saturating_add(1);
+        self.removed_bytes = self.removed_bytes.saturating_add(size);
+        match release {
+            ArenaBlockRelease::Pooled => {
+                self.pooled_blocks = self.pooled_blocks.saturating_add(1);
+                self.pooled_bytes = self.pooled_bytes.saturating_add(size);
+            }
+            ArenaBlockRelease::Deallocated => {
+                self.deallocated_blocks = self.deallocated_blocks.saturating_add(1);
+                self.deallocated_bytes = self.deallocated_bytes.saturating_add(size);
+            }
+        }
+    }
 }
 
 fn arena_region_telemetry(arena: &Arena) -> ArenaRegionTelemetry {
@@ -432,6 +459,7 @@ pub(crate) fn arena_telemetry_snapshot() -> ArenaTelemetrySnapshot {
             + survivor1.in_use_bytes
             + longlived.in_use_bytes
             + old.in_use_bytes,
+        total_live_allocated_bytes: arena_live_allocated_bytes(),
         total_reserved_bytes: arena.reserved_bytes
             + survivor0.reserved_bytes
             + survivor1.reserved_bytes
@@ -838,4 +866,44 @@ pub fn longlived_end() -> usize {
     let s1 = SURVIVOR_ARENA_1.with(|arena| unsafe { (*arena.get()).blocks.len() });
     let l = LONGLIVED_ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() });
     g + s0 + s1 + l
+}
+
+/// #7437: walk EVERY header in the selected old-gen blocks, including
+/// invalidated dead ones (`obj_type == 0`), which the walkable-gated
+/// walkers above deliberately skip. Stepping is by `GcHeader::size`, which
+/// `invalidate_dead_old_arena_header` preserves exactly so holes remain
+/// traversable. `block_filter` receives GLOBAL block indices (same base as
+/// `arena_walk_objects_filtered`'s old-gen region).
+pub(crate) fn old_arena_walk_all_headers_filtered(
+    mut block_filter: impl FnMut(usize) -> bool,
+    mut callback: impl FnMut(*mut u8, usize),
+) {
+    use crate::gc::GcHeader;
+    let old_block_start = longlived_end();
+    OLD_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for (i, block) in arena.blocks.iter().enumerate() {
+            let block_idx = old_block_start + i;
+            if block.data.is_null() || !block_filter(block_idx) {
+                continue;
+            }
+            let mut offset = 0usize;
+            while offset < block.offset {
+                let aligned = (offset + 7) & !7;
+                if aligned >= block.offset {
+                    break;
+                }
+                let header_ptr = unsafe { block.data.add(aligned) };
+                let header = header_ptr as *const GcHeader;
+                unsafe {
+                    let total_size = (*header).size as usize;
+                    if total_size == 0 || total_size > block.size {
+                        break;
+                    }
+                    callback(header_ptr, block_idx);
+                    offset = aligned + total_size;
+                }
+            }
+        }
+    });
 }

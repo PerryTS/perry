@@ -1,9 +1,13 @@
 use super::super::*;
 use super::support::*;
 mod array_layout;
+mod declared_at_allocation;
+mod element_shape;
 mod object_closure_slots;
+mod object_layout_invalidation;
+mod per_object_tables;
+mod shape_install_memo;
 mod typed_shape;
-mod unboxed_object;
 
 #[test]
 fn test_trace_array_marks_child() {

@@ -44,3 +44,34 @@ rules:
       # change that needs its own carefully-tested PR (a mistake only
       # manifests at the next tag). Tracked as follow-up.
       - release-packages.yml
+
+  # 2026-08-05: three findings, all audit-confidence Low, all of them the one
+  # `LLVM_SYS_221_PREFIX=<prefix>` line that setup-llvm22 exists to write —
+  # once per platform arm. This gate went red at #7353, the commit that
+  # introduced that action, and stayed red for ~40 main commits.
+  #
+  # This is a scoped carve-out and NOT the fix. Measured: the audit is
+  # satisfied only by not writing the environment file at all. A dynamic value
+  # into $GITHUB_ENV always reports (a static literal does not; ours is
+  # `brew --prefix` / `llvm-config --prefix` output), and the pwsh arm reports
+  # even for a literal, because zizmor cannot evaluate `Out-File`. The only
+  # clean form is `$GITHUB_OUTPUT` + composite-action outputs — which is a real
+  # improvement in the abstract and a bad trade here: measured across
+  # .github/workflows, that is 44 jobs needing an `id:` and 140 downstream
+  # steps each needing `env: LLVM_SYS_221_PREFIX: ${{ steps.<id>.outputs.prefix }}`,
+  # because llvm-sys reads the prefix from the environment at build time. That
+  # re-creates precisely the "44 inline recipes" this action was written to
+  # delete, across 18 files, none of it verifiable outside CI.
+  #
+  # The exposure being traded away is small and bounded: the written values are
+  # filesystem paths produced by locally installed toolchains, on a composite
+  # action whose callers all run under `pull_request` / `push`, never
+  # `pull_request_target` or `workflow_run`. zizmor's own confidence is Low for
+  # this reason.
+  #
+  # Ratchet: delete this entry when setup-llvm22 moves to outputs. `action.yml`
+  # is unambiguous only because it is the repo's ONLY composite action — adding
+  # a second one silently widens this, so re-scope it at that point.
+  github-env:
+    ignore:
+      - action.yml

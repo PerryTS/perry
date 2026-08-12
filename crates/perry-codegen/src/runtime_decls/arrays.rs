@@ -44,6 +44,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Refs #488: bulk push for `arr.push(...src)` spread call.
     module.declare_function("js_array_push_spread_f64", I64, &[I64, I64]);
     module.declare_function("js_array_get_f64", DOUBLE, &[I64, I32]);
+    // repsel #7480 / #5093: the element-shape versioned loop's preheader
+    // guard. Establishes-or-confirms the per-array homogeneous element-shape
+    // invariant and returns the proven class id (0 = no proof). O(n) on the
+    // first visit, O(1) after — see `array/element_shape.rs`.
+    module.declare_function("js_array_ensure_element_shape", I32, &[I64]);
     module.declare_function("js_array_get_index_or_string", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_array_numeric_get_f64_unboxed", DOUBLE, &[I64, I32]);
     module.declare_function("js_array_set_f64", VOID, &[I64, I32, DOUBLE]);
@@ -78,6 +83,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // re-boxed live head (identity for everything else).
     module.declare_function("js_array_refresh_local_head", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_note_numeric_write", VOID, &[I64, I64]);
+    // #7469: at-allocation all-pointer element-layout declaration for a
+    // proven `[]` + push-loop array. Emitted once per allocation site; the
+    // per-push layout note it retires is re-armed by the header test in
+    // `expr/array_push.rs` whenever the declaration is not (or no longer) live.
+    module.declare_function("js_array_declare_all_pointer_elements", VOID, &[I64]);
     module.declare_function("js_array_length", I32, &[I64]);
     // Array.isArray runtime dispatch for values with indeterminate
     // static type (e.g. JSON.parse results, closure captures, any/
@@ -87,6 +97,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // for the inline PropertyGet length path when the GC-type check
     // can't prove the receiver is an Array/String.
     module.declare_function("js_value_length_f64", DOUBLE, &[DOUBLE]);
+    // #7853: property-semantic sibling used when a static Array/String/Named
+    // claim fails its runtime layout guard. Unlike the numeric helper above,
+    // it preserves `undefined` and non-numeric property values and throws for
+    // nullish receivers.
+    module.declare_function("js_value_length_property_f64", DOUBLE, &[DOUBLE]);
 
     // Shadow stack for precise root tracking (gen-GC Phase A per
     // docs/generational-gc-plan.md). Declared now so codegen can
@@ -130,6 +145,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // collection can run at a precise-root safepoint. No-op at runtime unless
     // moving mode is on and a collection is pending.
     module.declare_function("js_gc_loop_safepoint", VOID, &[]);
+    // The poll's arming word (`perry-runtime/src/gc/poll_arm.rs`). Non-zero
+    // means `js_gc_loop_safepoint` has something to consider; zero is a proof
+    // it would return immediately, so `emit_gc_loop_safepoint` loads this and
+    // branches around the call. Process-global on purpose: a thread-local would
+    // cost a `_tlv_get_addr` CALL per back-edge on Darwin, which is the
+    // regression this replaces.
+    module.add_external_global("PERRY_GC_POLL_ARMED", I32);
 
     // Write barrier for the generational GC (Phase C per the
     // gen-GC plan). Called by codegen-emitted heap-store sites
@@ -142,7 +164,6 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     //   js_write_barrier_root_heap_word(child_bits: u64)
     //   js_gc_note_slot_layout(parent_bits: u64, slot_index: u32, value_bits: u64)
     //   js_gc_init_typed_shape_layout(obj: u64, slot_count: u32, raw_f64_mask_words: *const u64, raw_f64_mask_word_count: u32, pointer_mask_words: *const u64, pointer_mask_word_count: u32)
-    //   js_gc_init_unboxed_object_layout(obj: u64, slot_count: u32, raw_f64_mask: u64, pointer_mask: u64)
     module.declare_function("js_write_barrier", VOID, &[I64, I64]);
     module.declare_function("js_write_barrier_slot", VOID, &[I64, I64, I64]);
     module.declare_function("js_write_barrier_root_nanbox", VOID, &[I64]);
@@ -155,12 +176,18 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         VOID,
         &[I64, I32, PTR, I32, PTR, I32],
     );
+    // #7510: same signature, but for a FRESHLY ALLOCATED instance whose slots
+    // are still the allocator's fill — it declares the layout instead of
+    // validating it, so a constructor's own field stores can see it.
     module.declare_function(
-        "js_gc_init_unboxed_object_layout",
+        "js_gc_declare_typed_shape_layout",
         VOID,
-        &[I64, I32, I64, I64],
+        &[I64, I32, PTR, I32, PTR, I32],
     );
-
+    // #7834: the address-dependent half of the declare, on its own. Emitted
+    // behind a `PERRY_PER_OBJECT_LAYOUTS_ANY` test by a construction site whose
+    // shape half is already baked into the inline-bump header constant.
+    module.declare_function("js_gc_forget_object_layout", VOID, &[I64]);
     // Array methods (Phase B.12).
     // - js_array_pop_f64(arr) -> f64    (last element, NaN if empty)
     // - js_array_join(arr, sep) -> *mut StringHeader (i64)

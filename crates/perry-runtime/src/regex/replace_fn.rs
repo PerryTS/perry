@@ -8,7 +8,13 @@ pub(super) unsafe fn call_replace_callback(callback: f64, args: &[f64]) -> Strin
     let prev = crate::object::js_implicit_this_set(f64::from_bits(crate::value::TAG_UNDEFINED));
     let ret = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
     crate::object::js_implicit_this_set(prev);
-    let ptr = crate::value::js_get_string_pointer_unified(ret) as *const StringHeader;
+    // §22.1.3.19 step "Let replacement be ? ToString(? Call(replaceValue, …))":
+    // the callback result is ToString-coerced — `undefined` renders as
+    // "undefined", a number stringifies, an object runs its `toString`, and a
+    // Symbol throws a TypeError. The old raw pointer-extract silently dropped
+    // every non-string result to "" (test262 replace S15.5.4.11_A1_T5/T10).
+    crate::builtins::reject_symbol_to_string(ret);
+    let ptr = crate::builtins::js_string_coerce(ret) as *const StringHeader;
     if is_valid_ptr(ptr) {
         string_as_str(ptr).to_string()
     } else {
@@ -347,16 +353,67 @@ fn replacement_is_callable(value: f64) -> bool {
     crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize)
 }
 
+/// Root TWO raw receivers across one allocating coercion and hand the callee
+/// the POST-collection addresses.
+///
+/// `RuntimeHandle::across_const` pairs exactly one allocating call with one
+/// re-read, so two receivers compose by NESTING: the inner call runs `coerce`
+/// and re-reads `b`, the outer then re-reads `a`. Neither pre-call address is
+/// ever bound, which is the property `across_*` exists to provide (#7341) and
+/// the one `scripts/raw_handle_debt.py` counts. `path::value_args`'
+/// `with_two_headers` uses the same nesting for the same reason.
+///
+/// Both receivers are rooted BEFORE `coerce` runs, so a collection inside it
+/// marks and rewrites both slots; `f` then sees two addresses that are current
+/// as of the same collection.
+fn with_two_receivers_across<A, B, C, R>(
+    a: *const A,
+    b: *const B,
+    coerce: impl FnOnce() -> C,
+    f: impl FnOnce(*const A, *const B, C) -> R,
+) -> R {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_raw_const_ptr(a);
+    let b_handle = scope.root_raw_const_ptr(b);
+    let ((coerced, b), a) = a_handle.across_const::<A, _>(|| b_handle.across_const::<B, _>(coerce));
+    f(a, b, coerced)
+}
+
+/// One-receiver twin of [`with_two_receivers_across`].
+fn with_receiver_across<A, C, R>(
+    a: *const A,
+    coerce: impl FnOnce() -> C,
+    f: impl FnOnce(*const A, C) -> R,
+) -> R {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_raw_const_ptr(a);
+    let (coerced, a) = a_handle.across_const::<A, _>(coerce);
+    f(a, coerced)
+}
+
 #[no_mangle]
 pub extern "C" fn js_string_replace_string_dyn(
     s: *const StringHeader,
     pattern: *const StringHeader,
     replacement: f64,
 ) -> *mut StringHeader {
+    // #6949(a): `js_string_coerce` is a plain ToString ARGUMENT coercion here,
+    // and it allocates for every shape except an already-heap STRING_TAG value
+    // (`builtins::string_coerce_is_inert`) — an SSO short string materialises,
+    // a number/bool/null/BigInt builds its stringification, and a POINTER_TAG
+    // object runs a user `toString`/`valueOf`. Any of those can collect and
+    // EVACUATE. Rust evaluates arguments left to right, so the raw receiver
+    // params below are copied BEFORE the coercion runs; the copies survive, the
+    // pointees move, and the callee dereferences the stale ones.
     if replacement_is_callable(replacement) {
         return js_string_replace_string_fn(s, pattern, replacement);
     }
-    js_string_replace_string(s, pattern, crate::builtins::js_string_coerce(replacement))
+    with_two_receivers_across(
+        s,
+        pattern,
+        || crate::builtins::js_string_coerce(replacement),
+        |s, pattern, coerced| js_string_replace_string(s, pattern, coerced),
+    )
 }
 
 #[no_mangle]
@@ -368,7 +425,12 @@ pub extern "C" fn js_string_replace_all_string_dyn(
     if replacement_is_callable(replacement) {
         return js_string_replace_all_string_fn(s, pattern, replacement);
     }
-    js_string_replace_all_string(s, pattern, crate::builtins::js_string_coerce(replacement))
+    with_two_receivers_across(
+        s,
+        pattern,
+        || crate::builtins::js_string_coerce(replacement),
+        |s, pattern, coerced| js_string_replace_all_string(s, pattern, coerced),
+    )
 }
 
 /// Resolve a runtime-dynamic `searchValue` (an object-property read, call
@@ -410,7 +472,11 @@ pub extern "C" fn js_string_replace_search_dyn(
     if let Some(re) = needle_regex_ptr(needle) {
         return js_string_replace_regex_dyn(s, re, replacement);
     }
-    js_string_replace_string_dyn(s, crate::builtins::js_string_coerce(needle), replacement)
+    with_receiver_across(
+        s,
+        || crate::builtins::js_string_coerce(needle),
+        |s, needle| js_string_replace_string_dyn(s, needle, replacement),
+    )
 }
 
 /// `replaceAll` twin of [`js_string_replace_search_dyn`].
@@ -424,7 +490,11 @@ pub extern "C" fn js_string_replace_all_search_dyn(
     if let Some(re) = needle_regex_ptr(needle) {
         return js_string_replace_all_regex_dyn(s, re, replacement);
     }
-    js_string_replace_all_string_dyn(s, crate::builtins::js_string_coerce(needle), replacement)
+    with_receiver_across(
+        s,
+        || crate::builtins::js_string_coerce(needle),
+        |s, needle| js_string_replace_all_string_dyn(s, needle, replacement),
+    )
 }
 
 #[cfg(feature = "regex-engine")]
@@ -438,10 +508,14 @@ pub extern "C" fn js_string_replace_regex_dyn(
         return crate::regex::js_string_replace_regex_fn(s, re, replacement);
     }
     // The `_named` variant handles both `$1` and `$<name>` expansion.
-    crate::regex::js_string_replace_regex_named(
+    // #6949(a): both raw params span the coercion — and `re` is a
+    // `RegExpHeader`, not a string, so a stale one is read for its compiled
+    // pattern rather than merely for bytes.
+    with_two_receivers_across(
         s,
         re,
-        crate::builtins::js_string_coerce(replacement),
+        || crate::builtins::js_string_coerce(replacement),
+        |s, re, coerced| crate::regex::js_string_replace_regex_named(s, re, coerced),
     )
 }
 
@@ -455,10 +529,14 @@ pub extern "C" fn js_string_replace_all_regex_dyn(
     if replacement_is_callable(replacement) {
         return crate::regex::js_string_replace_all_regex_fn(s, re, replacement);
     }
-    crate::regex::js_string_replace_all_regex_named(
+    // #6949(a): both raw params span the coercion — and `re` is a
+    // `RegExpHeader`, not a string, so a stale one is read for its compiled
+    // pattern rather than merely for bytes.
+    with_two_receivers_across(
         s,
         re,
-        crate::builtins::js_string_coerce(replacement),
+        || crate::builtins::js_string_coerce(replacement),
+        |s, re, coerced| crate::regex::js_string_replace_all_regex_named(s, re, coerced),
     )
 }
 

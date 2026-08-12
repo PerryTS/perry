@@ -22,6 +22,14 @@ declare function gc(): void;
 
 const DEPTH = 220;
 const ROUNDS = 3;
+// Transient allocation AFTER the descend rounds, with no explicit gc() in
+// its way, sized so the young generation crosses the 16 MB scavenge cap
+// and AUTOMATIC minors fire as well as the explicit deepest-point gc()s:
+// the pin validator refuses a probe that runs no minor collection, and
+// before the cap was young-generation-scoped this probe only got minors
+// from the degenerate once-per-block cadence.
+const CHURN = 220000;
+const RING = 64;
 
 class Payload {
   tag: number;
@@ -55,9 +63,22 @@ function descend(depth: number): number {
   return (mine.value() + deeper) | 0;
 }
 
+const ring: (Payload | null)[] = [];
+for (let i = 0; i < RING; i++) {
+  ring.push(null);
+}
+
 let checksum = 0;
 for (let round = 0; round < ROUNDS; round++) {
   checksum = (checksum + descend(DEPTH)) | 0;
+}
+for (let j = 0; j < CHURN; j++) {
+  const t = new Payload(j);
+  checksum = (checksum + t.tag) | 0;
+  ring[j % RING] = t;
+}
+for (let i = 0; i < RING; i++) {
+  ring[i] = null;
 }
 
 gc();

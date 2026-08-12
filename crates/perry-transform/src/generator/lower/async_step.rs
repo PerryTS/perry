@@ -4,6 +4,7 @@
 //! `lower.rs`.
 
 use super::*;
+use crate::generator::build_box_release_stmts;
 
 pub(crate) fn build_async_throw_body_direct(
     catches: Vec<CatchRoute>,
@@ -87,6 +88,11 @@ pub fn build_async_step_driver_direct(
     captures_new_target: bool,
     enclosing_class: Option<String>,
     is_strict: bool,
+    // #7933: boxed body locals of this activation that no closure can observe.
+    // Released (`js_box_set(cell, undefined)`) at the step machine's terminal
+    // states so a completed activation stops retaining its locals through the
+    // never-freed `BOX_REGISTRY`. See `generator/box_release.rs`.
+    release_ids: &[LocalId],
 ) -> Vec<Stmt> {
     // When `throw_closure_expr` is None, the function had no awaiting
     // try/catch so the throw path is a plain rethrow — we inline it
@@ -250,6 +256,41 @@ pub fn build_async_step_driver_direct(
         }),
     };
 
+    // #7933: the two terminal states of a plain-async activation. Everything
+    // else in this body either suspends (`AsyncStepChain`) or re-enters the
+    // step (`__step_self(e, true)`), and reaches one of these two later.
+    //
+    //   1. `IterResultGetDone` — the body ran to a `return` (which also set
+    //      `__gen_done`), so the activation resolves.
+    //   2. the catch arm's `isError` branch — an exception escaped the body
+    //      while already in the error re-entry, i.e. no user `catch` handled
+    //      it, so the activation rejects.
+    //
+    // A resume that still arrives afterwards is harmless: it writes `__gen_sent`
+    // before reading it, then short-circuits on the un-released `__gen_done` and
+    // re-runs these (idempotent) stores.
+    let reject_arm: Vec<Stmt> = {
+        let mut stmts = build_box_release_stmts(release_ids);
+        stmts.push(Stmt::Return(Some(promise_reject(Expr::LocalGet(
+            catch_e_id,
+        )))));
+        stmts
+    };
+    let resolve_arm: Vec<Stmt> = {
+        let mut stmts = build_box_release_stmts(release_ids);
+        // Optimized: AsyncStepDone reuses INLINE_TRAP_NEXT instead of
+        // allocating a fresh `Promise.resolve(value)` Promise. Saves one
+        // js_promise_resolved alloc per async function call (50k/run on
+        // promise_all_chains). The return value already lives in the
+        // iter-result TLS slot, and a box release neither allocates nor
+        // collects, so ordering the releases first cannot disturb it.
+        stmts.push(Stmt::Return(Some(Expr::AsyncStepDone {
+            value: Box::new(Expr::IterResultGetValue),
+            step_closure: Box::new(Expr::LocalGet(step_self_id)),
+        })));
+        stmts
+    };
+
     let step_body: Vec<Stmt> = vec![
         Stmt::Let {
             id: step_self_id,
@@ -265,9 +306,7 @@ pub fn build_async_step_driver_direct(
                 body: vec![
                     Stmt::If {
                         condition: Expr::LocalGet(is_error_param_id),
-                        then_branch: vec![Stmt::Return(Some(promise_reject(Expr::LocalGet(
-                            catch_e_id,
-                        ))))],
+                        then_branch: reject_arm,
                         else_branch: None,
                     },
                     // Use the step closure captured at entry so nested
@@ -285,14 +324,7 @@ pub fn build_async_step_driver_direct(
         },
         Stmt::If {
             condition: Expr::IterResultGetDone,
-            // Optimized: AsyncStepDone reuses INLINE_TRAP_NEXT instead
-            // of allocating a fresh `Promise.resolve(value)` Promise.
-            // Saves one js_promise_resolved alloc per async function
-            // call (50k/run on promise_all_chains).
-            then_branch: vec![Stmt::Return(Some(Expr::AsyncStepDone {
-                value: Box::new(Expr::IterResultGetValue),
-                step_closure: Box::new(Expr::LocalGet(step_self_id)),
-            }))],
+            then_branch: resolve_arm,
             else_branch: None,
         },
         Stmt::Return(Some(Expr::AsyncStepChain {

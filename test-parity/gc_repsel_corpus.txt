@@ -260,8 +260,8 @@ test_gap_gc_closure_this_capture_rooting
 # Measured on `origin/main` (91170973c), compiled AND run with
 # `PERRY_GC_MOVING_LOOP_POLLS=1`, oracle node 26.5.1 (`bad 0` for both):
 #   method_receiver_rooting    `TypeError: value is not a function`, and
-#                              exit=139 (SIGSEGV) under PERRY_GC_ZEAL=1 +
-#                              PERRY_GC_PROTECT_FROMSPACE=1
+#                              exit=139 (SIGSEGV) under PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1
+#                              + PERRY_GC_PROTECT_FROMSPACE=1
 #   index_get_receiver_rooting `TypeError: Cannot read properties of undefined
 #                              (reading 'v')`
 # Both are `bad 0` with #7206 applied, and `bad 0` on the shipped default on
@@ -293,7 +293,8 @@ test_gap_gc_index_get_receiver_rooting
 #   closure_call_callee_rooting    `TypeError: value is not a function`
 #   closure_call_this_rooting      `TypeError: value is not a function`
 #   closure_call_argument_rooting  `TypeError: value is not a function`
-# All three are `bad 0` with #7214 applied, including under PERRY_GC_ZEAL=1,
+# All three are `bad 0` with #7214 applied, including under
+# PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1,
 # and clean on the shipped default on BOTH sides -- so they certify nothing on
 # the `default` arm and belong with the `requires=move` rows.
 test_gap_gc_closure_call_callee_rooting
@@ -516,8 +517,8 @@ test_gap_gc_symbol_local_rooting
 # blind to it (it reads LLVM IR; none of this is in LLVM IR).
 #
 # Measured on this branch, release, `PERRY_GC_MOVING_LOOP_POLLS=1` at compile:
-#   before the fix, POLLS=1 + ZEAL=1     200/200 iterations wrong on EVERY route
-#   after  the fix, POLLS=1 + ZEAL=1     10/10 runs byte-exact with the oracle
+#   before the fix, POLLS=1 + RATE=1     200/200 iterations wrong on EVERY route
+#   after  the fix, POLLS=1 + RATE=1     10/10 runs byte-exact with the oracle
 #   control, + PERRY_GEN_GC=0            clean on both sides
 # and under the loop_polls arm env
 # (`HEAP_LIMIT=8 INCREMENTAL=0 CONSERVATIVE_STACK_SCAN=off POLLS=1 FORCE_EVACUATE=1`)
@@ -553,11 +554,201 @@ test_gap_gc_dynamic_construct_receiver_rooting
 #                 with only the first exclusion applied.
 #
 # Measured on this branch, release, `PERRY_GC_MOVING_LOOP_POLLS=1` at compile:
-#   before, POLLS=1 + ZEAL=1            200/200 iterations wrong, both shapes
-#   after,  POLLS=1 + ZEAL=1            byte-exact with the oracle
+#   before, POLLS=1 + RATE=1            200/200 iterations wrong, both shapes
+#   after,  POLLS=1 + RATE=1            byte-exact with the oracle
 #   after,  loop_polls arm env          byte-exact
 #   control, + PERRY_GEN_GC=0           clean on both sides
 # and on the real workload, `sfw-registry --help` under
-# `PROTECT_FROMSPACE=1 DEPTH=800 POLLS=1` (no zeal): 10/10 FAULT before,
+# `PROTECT_FROMSPACE=1 DEPTH=800 POLLS=1` (no schedule): 10/10 FAULT before,
 # 40/40 clean after.
 test_gap_gc_optional_param_receiver_rooting
+
+# --- #7475: the array-iterator drain (`[...obj.arr]` / Array.from) ----------
+#
+# The FIRST witness in this corpus that fails on the SHIPPED DEFAULT, not only
+# on a `requires=move` arm. It is registered here anyway, because the moving
+# arms are what make its failure a fault instead of a wrong answer.
+#
+# `js_iterator_to_array` held five live values in bare Rust locals across a
+# `.next()` call that allocates the `{ value, done }` object: the iterator, the
+# accumulator array, the `next` closure, and the two key strings — and one
+# level down `make_iter_result` held the element value and its own freshly
+# allocated result object across four more allocations. A copying minor moved
+# them and rewrote only the slots it can see. The iterator's pre-move copy then
+# handed `dispatch_array_iterator_method` a from-space backing array, which is
+# where `js_array_length` faulted.
+#
+# Found through the auto-optimize link (#7475): `object_deep_clone` threw
+# `TypeError: next is not a function` there while printing the right checksum
+# under `PERRY_NO_AUTO_OPTIMIZE=1`. The feature-stripped runtime did not have a
+# different bug — `PERRY_GC_PROTECT_FROMSPACE=1` faults on BOTH links, at the
+# same minor #0 — it allocated in the order that made the stale read visible.
+#
+# Measured on this branch:
+#   before, default link + default env     TypeError: next is not a function
+#   before, auto-optimize link             TypeError: next is not a function
+#   before, PROTECT_FROMSPACE=1 DEPTH=200  FAULT at js_array_length inside
+#                                          dispatch_array_iterator_method, both links
+#   after,  both links                     byte-exact with the oracle
+#   after,  PROTECT_FROMSPACE=1 DEPTH=200  that fault is GONE; a DIFFERENT one
+#                                          remains (#7498)
+#
+# THE INSTRUMENT IS NOT CLEAN AFTER THE FIX, and saying otherwise would be the
+# overclaim this repo keeps paying for. `[...o.meta.tags]` reaches the drain
+# through `array_from_spread_value`, whose `[Symbol.iterator]` prototype walk
+# has its OWN stale from-space deref — `array_prototype_property_value` →
+# `default_object_prototype_property_value` → `js_object_get_field_by_name`, on
+# a 56-byte GC_TYPE_STRING at minor #3. That is #7498, unfixed here: it does not
+# corrupt this file's result, so the file gates the drain and nothing else. When
+# #7498 lands, a protected run of this file should go silent — if it does not,
+# there is a third site.
+#
+# #7498 HAS LANDED AND THIS FILE DID NOT GO SILENT — so, per the sentence
+# above, THERE IS A THIRD SITE, and it is filed as #7528. #7498's
+# two faults are gone from this file's protected run; what remains is
+# `js_native_call_method` reading its ROOTED receiver into a local ~330 lines
+# and a dozen allocating probes before `is_closure_ptr` dereferences it
+# (`array_from_spread_value` → `js_closure_call0` → `js_native_call_method +
+# 5604`). Measured on the #7498 branch, macOS/arm64: this file prints
+# `badLen 1` instead of `badLen 0` (5/5), and `PERRY_GEN_GC=0`,
+# `PERRY_GC_SCAVENGE=0` and `PERRY_WRITE_BARRIERS=0` each make it correct while
+# `PERRY_GEN_GC_EVACUATE=0` does not — the copying minor, not policy
+# evacuation. Patching the one faulting line was tried and REVERTED: the fault
+# simply moved 800 bytes further into the same function, which is the signal
+# that the whole receiver needs re-reading, not one arm of it.
+test_gap_gc_iterator_drain_rooting
+
+# --- #7497: the globalThis builtin-value lookup -----------------------------
+#
+# `js_get_global_this_builtin_value` read the `globalThis` object out of its
+# root into a raw `*const ObjectHeader` and only THEN allocated the lookup key.
+# The root is correct and IS rewritten by evacuation; the raw copy already read
+# out of it is not. That lookup interns nothing, so every call mints a fresh
+# string, and any of those allocations can be the copying minor that moves
+# `globalThis` — after which `js_object_get_field_by_name` dereferences retired
+# from-space.
+#
+# `Promise.all` is what finds it: each element runs `Promise.resolve`, and
+# `js_promise_resolve_spec` asks `is_default_promise_constructor` for
+# `globalThis.Promise` through that function. One 50 000-element combinator
+# call therefore performs 50 000 of these lookups, so one straddles the
+# collection. That is why the app-pattern kernel `promise_all_chains`
+# (1000 x 50) needed its full scale while a single wide call needs 0.2 s.
+#
+# Measured on this branch, release, PERRY_NO_AUTO_OPTIMIZE=1 and default env:
+#   before  Uncaught (in promise) TypeError: value is not a function
+#   before, PROTECT_FROMSPACE=1 DEPTH=200
+#           FAULT in js_object_get_field_by_name, reached from
+#           js_get_global_this_builtin_value <- js_promise_resolve_spec <-
+#           spec_combinators::call_with_this <- run_combinator <-
+#           js_promise_all_iterable, on a GC_TYPE_OBJECT at minor #0
+#   after   byte-exact with the oracle, and that fault is gone
+#
+# The failure is NOT arm-conditional — it fails on the shipped default — but it
+# is registered here because the moving arms are what turn it into a fault with
+# an address instead of a wrong answer.
+test_gap_gc_global_builtin_lookup_rooting
+# --- #7498: the OTHER `[...obj.arr]` lowering (inlined → the symbol walk) ----
+#
+# The spread has two lowerings. Out of line it calls `js_iterator_to_array`
+# (above). Inlined, it routes through `array_from_spread_value`, which resolves
+# `[Symbol.iterator]` through the whole prototype-walk tower first — and three
+# frames on that walk held a GC value the collector cannot see:
+#
+#   * `req_handle_symbol_fallback` read the receiver into a `usize`, interned a
+#     `"_req"` key (an allocation), then read a field off the PRE-move address.
+#     It runs on every heap-object symbol read whose own-symbol lookup missed,
+#     so the window is unconditional — 5/5, not intermittent.
+#   * `array_prototype_property_value` and the array/object arms of
+#     `get_field_by_name_object_tail` took the property name as a `&str` / a
+#     `&[u8]` BORROWED OUT OF THE KEY'S `StringHeader`. No root fixes that: a
+#     borrow is not a slot the collector can rewrite. They copy the bytes off
+#     the heap before their first allocation now.
+#   * `array_from_spread_value` carried the spread receiver through a dozen
+#     probes and the entire walk, then used it to rebind `this` for the
+#     factory.
+#
+# LATENT BY CONSTRUCTION, like `10_store_receiver_across_alloc.ts`: evacuation
+# copies rather than zeroes, so the stale read returns the correct old bytes and
+# this file printed the RIGHT checksum before the fix, on both links. Only
+# unmapping retired from-space makes it a signal. Measured on this branch:
+#
+#   before, default link + default env      byte-exact with the oracle
+#   before, auto-optimize link              byte-exact with the oracle
+#   before, PROTECT_FROMSPACE=1 DEPTH=200   FAULT 5/5 on BOTH links, at
+#                                           array_from_spread_value →
+#                                           js_object_get_symbol_property →
+#                                           js_object_get_field_by_name_f64 →
+#                                           js_object_get_field_by_name, on a
+#                                           40-byte GC_TYPE_ARRAY (the pre-move
+#                                           copy's keys_array) at minor #1
+#   after,  both links                      byte-exact with the oracle
+#   after,  PROTECT_FROMSPACE=1 DEPTH=200   CLEAN 5/5 on BOTH links, with the
+#                                           instrument proved live: four
+#                                           `retired_set=#N` page-sets and
+#                                           `[gc-copy-minor] ran
+#                                           copied_objects=11794` on the first
+#                                           minor alone
+#
+# The auto-optimize arm was A/B'd with the runtime archive rebuilt from source
+# on both sides (`perry-auto-*`, asserted on the `[link] invoking:` line), so
+# the two rows are the same link with different runtime source, not two links.
+#
+# KEEP `clone` SMALL. Its size is the whole point: grow it and the spread goes
+# back out of line onto `js_iterator_to_array`, i.e. onto #7475's path, and this
+# file stops covering the walk.
+test_gap_gc_spread_symbol_iterator_rooting
+test_gap_repsel_element_shape_loop_clone
+
+# --- #7682: an allocation-point collection must not MOVE anything -----------
+#
+# NOT a rooting witness like every entry above it, and the difference is the
+# point. The others plant a value that codegen failed to root and let a moving
+# collection expose it. Here codegen's root discipline is COMPLETE for the
+# program — `scripts/gc_root_dominance_check.py` reports 0 violations over 380
+# root stores — and the collector still relocated a value out from under a
+# register, because it ran an *evacuating* minor at an arbitrary allocation
+# point (`gc_check_trigger`'s nursery-churn arm) rather than at a declared
+# safepoint. `PERRY_GC_SCAVENGE` gated off the `force_full_scan()` that keeps
+# that collection non-moving. See `changelog.d/` for the full route.
+#
+# NOT LATENT: it prints a wrong NUMBER, not a wrong-but-plausible one. A
+# tree-walking interpreter's variable lookup misses bindings that are present,
+# and naive `fib` — a count of leaves returning 1 — comes back short by exactly
+# the miss count. Measured under the gap harness's own PERRY_NO_AUTO_OPTIMIZE=1:
+#
+#   before (a853135aa runtime)   1708662 / 1708662 / 1708662   oracle 1708840
+#   after                        1708840 3/3, and 1708840 with auto-optimize
+#
+# On the `loop_polls` arm this file is a moving-collector witness like the rest
+# — back-edge polls put the copying minor at the safepoints, which is where it
+# is supposed to be.
+test_gap_gc_alloc_point_no_move
+
+# #7210 §2/§3 and #7640 section A (PR #7736). Three rooting fixtures whose
+# hazards are all "a value staged in a register or a plain stack buffer while
+# an allocating helper runs" — the shape the matrix's moving arms exist to
+# catch, so they belong here rather than only in the dominance corpus.
+#
+#   class_field_receiver          the typed-`this` field store's receiver
+#   index_set_bounded_globalthis  the bounded-index array store and
+#                                 `globalThis[k] = v`'s key + singleton copy
+#   namespace_and_computed        `emit_namespace_populator`'s `vals_buf`
+#                                 staging, and `obj[strKey](args)` computed
+#                                 dispatch across `unbox_str_handle`
+test_gap_gc_class_field_receiver_rooting
+test_gap_gc_index_set_bounded_globalthis_ta_rooting
+test_gap_gc_namespace_and_computed_dispatch_rooting
+
+# #7766 (PR #7778): the element-binding clone through a function boundary.
+# Lying callers force the slow path while the honest arm's clone reads raw
+# f64 slots off relocatable objects — live on the evacuating arms (9 copying
+# minors / 15,843 objects moved under zeal at audit time).
+test_gap_repsel_element_shape_param_binding
+
+# #7770 (PR #7774, registered by #7778): the element-group numeric-field
+# proof. Low-allocation read loop — its cell can run zero copying minors on
+# a filtered arm (the arm-level liveness gate is the vacuity guard); its
+# value here is byte-parity under every arm plus raw-f64 loads on proven
+# fields whenever relocation does land.
+test_gap_repsel_element_group_numeric

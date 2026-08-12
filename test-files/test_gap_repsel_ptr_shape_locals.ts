@@ -218,7 +218,7 @@ console.log(internalPoison());
 // ─────────────────────────────────────────────────────────────────────────
 // Representation-selection Phase 5a: proven `this` in methods
 // (PERRY_PTR_SHAPE_THIS). Both call sites that already prove a receiver's
-// exact shape route to the internal `__pshape` clone, whose `this.field`
+// exact shape route to the internal `$pshape` clone, whose `this.field`
 // accesses lower guard-free. The frozen-receiver case lives in its own file
 // (test_gap_repsel_proven_this_frozen.ts) because the freeze-family kill is
 // module-wide by construction — a single Object.freeze here would disable
@@ -338,7 +338,7 @@ function closureThis(): string {
 console.log("p5a-closure:" + closureThis());
 
 // 16. Static-method exclusion: statics have no receiver at all, and the
-//     `perry_static_` targets must never be routed to a `__pshape` symbol.
+//     `perry_static_` targets must never be routed to a `$pshape` symbol.
 class Stat5a {
   static base: number = 5;
   static twice(x: number): number {
@@ -434,11 +434,12 @@ function inherited(): string {
 }
 console.log("p5a-inherit:" + inherited());
 
-// 20. Clone-symbol collision (issue #6927). `tick`'s proven-`this` clone
-//     symbol is byte-identical to the PUBLIC symbol of a user method literally
-//     named `tick__pshape`. The colliding clone must stand down to the guarded
-//     lowering rather than emit a second definition of one LLVM symbol; the
-//     non-colliding sibling keeps its clone. Both must behave normally.
+// 20. Clone-suffix forgery (issue #6927). A user method literally named
+//     `tick__pshape` — the OLD spelling of `tick`'s proven-`this` clone
+//     symbol — must not collide with it: the clone now lives in the reserved
+//     `$`-separated namespace (`tick$pshape`), which sanitized user names can
+//     never compose. Both methods keep their own symbols (and `tick` keeps
+//     its clone); both must behave normally.
 class Collide5a {
   n: number;
   constructor(n: number) {

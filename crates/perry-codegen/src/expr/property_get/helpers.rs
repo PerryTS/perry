@@ -3,6 +3,19 @@
 //! Pure mechanical move — bodies are verbatim. Visibility widened to
 //! `pub(crate)` so both the trunk's guarded arms and the sibling general
 //! dispatch can reach them.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Listed in `crate::rooting`'s `MIGRATED_MODULES`, and the listing is
+//! **vacuous on the committed source**: this module has never named an
+//! `expr::temp_root` symbol, so only the sabotage arm makes the line an
+//! assertion. The audit that earned it: these helpers receive the receiver
+//! already lowered and lower no user expression, so no operand window opens
+//! inside them. The class-field guard diamond does hold a derived
+//! `obj_bits`/`obj_handle` across `js_typed_feedback_class_field_get_guard`;
+//! that shape is a *derived raw pointer*, which no temp root can name and which
+//! `crate::rooting` therefore cannot express — it is recorded in #7640, not
+//! papered over here.
 
 use super::*;
 
@@ -13,7 +26,7 @@ use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
 use crate::type_analysis::receiver_class_name;
-use crate::types::{DOUBLE, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes
@@ -318,6 +331,112 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         }
     }
 
+    // repsel #7480 / #5093: inside the fast clone of an ELEMENT-shape
+    // versioned loop, `arr[i].field` in number context lowers to a bare
+    // element load plus the residual per-element check, with no element-read
+    // tier and no guard call (see stmt/element_shape_loop.rs).
+    //
+    // #7480 step 3: this sits ABOVE the `receiver_class_name` gate on purpose.
+    // The clone's element class can be one that resolver does not answer for —
+    // an object-literal element type (`keep: {v: number}[]`) resolves to its
+    // `__AnonShape_<hash>` only inside the matcher, which is where that
+    // resolution is kept so it cannot un-gate anything else (#6377). Every
+    // fact this consults was validated by the matcher when the fact was built:
+    // the class has no computed members and no base, the property is not an
+    // accessor and is not denylisted, and its declared type is a raw-f64
+    // candidate at the packed slot index carried here. So the lowering needs
+    // nothing from the receiver's static type, and asking for it would have
+    // made the whole clone dead IR.
+    if let Some((fact, field_index)) =
+        crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property)
+            .map(|(fact, idx)| (fact.clone(), idx))
+    {
+        // Both receiver spellings — `arr[j].field` and #7771's `r.field`
+        // through the clone's element binding — resolve to the fact's own
+        // array; the report below must not re-derive it from the expression
+        // shape, which the binding form does not carry.
+        let arr_id = fact.array_local_id;
+        // The counter's canonical i32 slot is what the matcher required;
+        // without it there is nothing to index with.
+        if let Some(slot) = ctx.i32_counter_slots.get(&fact.index_local_id).cloned() {
+            let idx_i32 = ctx.block().load(I32, &slot);
+            let value = crate::expr::element_shape_guard::emit_element_shape_field_load(
+                ctx,
+                &fact,
+                &idx_i32,
+                field_index,
+            );
+            let lowered = LoweredValue {
+                semantic: SemanticKind::JsNumber,
+                rep: NativeRep::F64,
+                llvm_ty: DOUBLE,
+                value: value.clone(),
+            };
+            ctx.record_lowered_value_with_access_mode_and_facts(
+                "ElementShapeFieldGet",
+                Some(arr_id),
+                "element_shape_loop.raw_f64_load",
+                &lowered,
+                Some(BoundsState::Guarded {
+                    guard_id: "element_shape_loop_preheader_check".to_string(),
+                }),
+                None,
+                Some(BufferAccessMode::CheckedNative),
+                None,
+                None,
+                None,
+                vec![raw_f64_layout_fact(
+                    Some(arr_id),
+                    "consumed",
+                    "element_shape_loop_preheader_check",
+                    None,
+                )],
+                Vec::new(),
+                false,
+                false,
+                vec![
+                    format!("field={property}"),
+                    format!("class={}", fact.class_name),
+                    "loop_versioning=element_shape".to_string(),
+                    "index_range=nonnegative_i32".to_string(),
+                    "length_range=guarded_i32".to_string(),
+                    "element_shape=homogeneous_class".to_string(),
+                ],
+            );
+            // `--opt-report` consumption (#7766): the selection recorded at
+            // clone emission was APPLIED here. Without this row a build under
+            // the report would print "selected, consumed 0" — the wasted-proof
+            // outcome — for a proof that is in fact doing the work.
+            if crate::opt_report::enabled() {
+                let (name, local_id) = match fact.element_binding {
+                    Some(id) => (
+                        ctx.local_id_to_name
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("<local {id}>")),
+                        Some(id),
+                    ),
+                    None => (
+                        ctx.local_id_to_name
+                            .get(&arr_id)
+                            .map(|n| format!("elements of `{n}`"))
+                            .unwrap_or_else(|| format!("elements of <local {arr_id}>")),
+                        None,
+                    ),
+                };
+                crate::opt_report::consume(
+                    crate::opt_report::Position::Local,
+                    &name,
+                    local_id,
+                    crate::opt_report::Analysis::PtrShape,
+                    "Ptr<Shape>",
+                    "element_shape_loop.raw_f64_load",
+                );
+            }
+            return Ok(Some(value));
+        }
+    }
+
     let Some(class_name) = receiver_class_name(ctx, object) else {
         return Ok(None);
     };
@@ -617,6 +736,13 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
 
+    let subclass_arms = crate::expr::class_field_inline_guard::class_field_subclass_arms(
+        ctx,
+        &class_name,
+        property,
+        field_index,
+        true,
+    );
     let _guardcall_label = crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
         ctx,
         &obj_bits,
@@ -627,6 +753,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         true,
         None,
         &fast_label,
+        &subclass_arms,
     );
     let guard_ok = ctx.block().call(
         I32,
@@ -695,8 +822,45 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     );
 
     ctx.current_block = fallback_idx;
+    // #7153: same nullish-receiver check as the value-context diamond in
+    // property_get.rs — a nullish field read must throw TypeError, not coerce
+    // `undefined` to NaN and keep running.
+    let (is_null, is_nullish) = {
+        let blk = ctx.block();
+        let is_undef = blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_UNDEFINED_I64);
+        let is_null = blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_NULL_I64);
+        let is_nullish = blk.or(I1, &is_undef, &is_null);
+        (is_null, is_nullish)
+    };
+    let throw_idx = ctx.new_block("class_field_get_number.throw_nullish");
+    let lookup_idx = ctx.new_block("class_field_get_number.fallback_lookup");
+    let throw_label = ctx.block_label(throw_idx);
+    let lookup_label = ctx.block_label(lookup_idx);
+    ctx.block()
+        .cond_br(&is_nullish, &throw_label, &lookup_label);
+
+    ctx.current_block = throw_idx;
+    let prop_entry = ctx.strings.entry(key_idx);
+    let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
+    let prop_len_str = prop_entry.byte_len.to_string();
+    let is_null_i32 = ctx.block().zext(I1, &is_null, I32);
+    ctx.block().call_void(
+        "js_throw_type_error_property_access",
+        &[
+            (I32, &is_null_i32),
+            (PTR, &prop_bytes_global),
+            (I64, &prop_len_str),
+        ],
+    );
+    ctx.block().unreachable();
+
+    ctx.current_block = lookup_idx;
     let blk = ctx.block();
-    blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+    crate::expr::emit_typed_feedback_record_call(
+        blk,
+        "js_typed_feedback_record_fallback_call",
+        &[(I64, &site_id)],
+    );
     let val_fallback_js = blk.call(
         DOUBLE,
         "js_object_get_field_by_name_f64",

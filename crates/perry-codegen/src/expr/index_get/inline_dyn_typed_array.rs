@@ -4,6 +4,16 @@
 //! Pure mechanical move — the items below are verbatim copies (only the
 //! visibility of the entry point is widened to `pub(super)` so the trunk's
 //! call sites keep compiling).
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Listed in `crate::rooting`'s `MIGRATED_MODULES`, and the listing is
+//! **vacuous on the committed source**: this module has never named an
+//! `expr::temp_root` symbol, so only the sabotage arm makes the line an
+//! assertion. The audit that earned it: the entry point receives the receiver
+//! and index already lowered, lowers no user expression, and emits only pure
+//! IR (guards, GEPs, loads) plus the out-of-line `js_dyn_index_get` fallback —
+//! so no register of a GC value spans a lowering here.
 
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 

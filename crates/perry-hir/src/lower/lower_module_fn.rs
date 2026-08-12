@@ -479,7 +479,11 @@ pub fn lower_module_full(
     // modules without candidates) lowers the original with no clone.
     let folded = super::builder_fold::fold_builder_sequences(ast_module);
     let ast_module = folded.as_ref().unwrap_or(ast_module);
-    let mut ctx = LoweringContext::with_class_id_start(source_file_path, start_class_id);
+    // #7177: salt on the module NAME (checkout-invariant), not the absolute
+    // source path, so the same source compiled from two directories emits the
+    // same `__perry_cap_*` symbols.
+    let mut ctx =
+        LoweringContext::with_class_id_start_salted(source_file_path, name, start_class_id);
     // #6812 (w16): scan the module lowering actually consumes (post-fold) for
     // constant-bounded dynamic-key builder widths; `lower_object` attaches
     // them to the per-site empty-literal classes as alloc_width_hint.

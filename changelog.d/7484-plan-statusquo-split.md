@@ -1,0 +1,1 @@
+- **`docs/engine-plan.md` restructured to status quo + remaining work only** (~150 lines from 811): current layer/repsel/backlog state, live blockers, ordered what's-left, and the binding method rules. All dated status sections and incident narratives moved verbatim to the new `docs/engine-plan-history.md` as provenance. Reflects #7477 fixed by #7483. (#7484)

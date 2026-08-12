@@ -518,36 +518,13 @@ pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
     }
 }
 
-/// Build the `{ value, done }` iterator-result object. `value` arrives as
-/// a NaN-boxed JSValue; `done` is a JS boolean.
-unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-
-    // keys array so destructuring + property reads find named slots.
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::object::js_object_set_keys(obj, keys);
-
-    js_object_set_field(obj, 0, value);
-    js_object_set_field(obj, 1, JSValue::bool(done));
-    js_nanbox_pointer(obj as i64)
-}
-
-unsafe fn make_sqlite_iter_result(value: JSValue, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::object::js_object_set_keys(obj, keys);
-    js_object_set_field(obj, 0, JSValue::bool(done));
-    js_object_set_field(obj, 1, value);
-    js_nanbox_pointer(obj as i64)
-}
+// #7564: `build_iter_result` lived here, rooted by #7475 but still allocating
+// the two key strings and the keys array on EVERY call — and minting a fresh
+// shape id per call, because `shape_id_for_keys_ensure` keys the shape table on
+// the keys array's address. Both constructors now come from the single
+// `crate::iter_result` implementation, which shares one keys array (and so one
+// shape) per key order per thread and allocates only the result object.
+use crate::iter_result::{make_iter_result, make_sqlite_iter_result};
 
 unsafe fn make_pair_array(idx: u32, value: f64) -> f64 {
     let pair = crate::array::js_array_alloc(2);
@@ -566,10 +543,21 @@ pub unsafe fn dispatch_array_iterator_method(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
+    // #7475: the raw `iter_obj` parameter is not a GC root, and this function
+    // allocates in several places — `js_object_set_field` (shape transition /
+    // storage growth), `make_pair_array`, and the two result constructors. A
+    // copying minor landing in any of those windows moves the iterator and
+    // leaves the parameter naming retired from-space. Root it once and read
+    // the CURRENT address through `iter_obj()` at every use, so no pre-
+    // collection copy is nameable.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
+    let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
+
     // Field 2: iterator kind — read up front so the exhausted paths can pick
     // the kind's done-value (`null` for KIND_VALUES_NULL_DONE, `undefined`
     // otherwise).
-    let kind = f64::from_bits(js_object_get_field(iter_obj, 2).bits()) as i32;
+    let kind = f64::from_bits(js_object_get_field(iter_obj(), 2).bits()) as i32;
     let done_value = || {
         if kind == KIND_VALUES_NULL_DONE {
             JSValue::null()
@@ -580,10 +568,10 @@ pub unsafe fn dispatch_array_iterator_method(
     match method_name {
         "next" => {
             if kind == KIND_VALUES_NULL_DONE {
-                let epoch_ptr =
-                    js_nanbox_get_pointer(f64::from_bits(js_object_get_field(iter_obj, 3).bits()))
-                        as *const std::sync::atomic::AtomicU64;
-                let expected = f64::from_bits(js_object_get_field(iter_obj, 4).bits()) as u64;
+                let epoch_ptr = js_nanbox_get_pointer(f64::from_bits(
+                    js_object_get_field(iter_obj(), 3).bits(),
+                )) as *const std::sync::atomic::AtomicU64;
+                let expected = f64::from_bits(js_object_get_field(iter_obj(), 4).bits()) as u64;
                 if epoch_ptr.is_null()
                     || (*epoch_ptr).load(std::sync::atomic::Ordering::Relaxed) != expected
                 {
@@ -594,7 +582,7 @@ pub unsafe fn dispatch_array_iterator_method(
                 }
             }
             // Field 0: backing array pointer (NaN-boxed).
-            let backing_field = js_object_get_field(iter_obj, 0);
+            let backing_field = js_object_get_field(iter_obj(), 0);
             let backing_f64 = f64::from_bits(backing_field.bits());
             // Array iterators clear their backing array at exhaustion. SQLite's
             // statement iterator restarts a completed execution on the next call.
@@ -606,7 +594,7 @@ pub unsafe fn dispatch_array_iterator_method(
             }
             let arr_ptr = js_nanbox_get_pointer(backing_f64) as *const ArrayHeader;
             // Field 1: current index.
-            let idx_field = js_object_get_field(iter_obj, 1);
+            let idx_field = js_object_get_field(iter_obj(), 1);
             let idx = f64::from_bits(idx_field.bits()) as u32;
 
             let len = if arr_ptr.is_null() {
@@ -617,17 +605,26 @@ pub unsafe fn dispatch_array_iterator_method(
 
             if idx >= len {
                 if kind == KIND_VALUES_NULL_DONE {
-                    js_object_set_field(iter_obj, 1, JSValue::number(0.0));
+                    js_object_set_field(iter_obj(), 1, JSValue::number(0.0));
                     return make_sqlite_iter_result(done_value(), true);
                 }
-                js_object_set_field(iter_obj, 0, JSValue::undefined());
+                js_object_set_field(iter_obj(), 0, JSValue::undefined());
                 return make_iter_result(done_value(), true);
             }
 
             // Advance the stored cursor before computing the value so a
             // subsequent `.next()` call sees the bumped index.
-            js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
+            js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
 
+            // #7475: the cursor store above can allocate (shape transition /
+            // storage growth), so `arr_ptr` — read before it — may now name
+            // from-space. Re-derive the backing array from the iterator's
+            // field 0, which the collector DOES rewrite, instead of reusing
+            // the pre-store copy. `iter_obj()` re-reads the iterator's own
+            // address from its root for the same reason.
+            let arr_ptr =
+                js_nanbox_get_pointer(f64::from_bits(js_object_get_field(iter_obj(), 0).bits()))
+                    as *const ArrayHeader;
             let elem = if arr_ptr.is_null() {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
@@ -652,7 +649,7 @@ pub unsafe fn dispatch_array_iterator_method(
         // Iterators are themselves iterable — `[Symbol.iterator]()` on one
         // returns the same iterator (matches Node, and lets `js_get_iterator`
         // / `for (const v of arr.values())` re-enter without a wrapper).
-        "Symbol.iterator" | "@@iterator" | "values" => js_nanbox_pointer(iter_obj as i64),
+        "Symbol.iterator" | "@@iterator" | "values" => js_nanbox_pointer(iter_obj() as i64),
         // `return`/`throw` are part of the iterator spec; Node's array
         // iterator inherits them from %IteratorPrototype%. Return a
         // `{ value: undefined, done: true }` shape for early-exit code.
@@ -661,7 +658,7 @@ pub unsafe fn dispatch_array_iterator_method(
         // `{ done: true, value: null }` — matching Node's sqlite iterator.
         "return" | "throw" => {
             if kind == KIND_VALUES_NULL_DONE {
-                js_object_set_field(iter_obj, 0, JSValue::undefined());
+                js_object_set_field(iter_obj(), 0, JSValue::undefined());
             }
             if kind == KIND_VALUES_NULL_DONE {
                 make_sqlite_iter_result(done_value(), true)

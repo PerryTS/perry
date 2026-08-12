@@ -46,7 +46,7 @@ pub(crate) use namespace_builders::{
 };
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
 
-thread_local! {
+crate::perry_thread_local! {
     pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     pub(crate) static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =
@@ -1051,7 +1051,22 @@ pub extern "C" fn js_class_method_bind(
         if let Ok(name) = unsafe {
             std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
         } {
-            if bound_native_method_length(name).is_none() {
+            // #7689: a CONSTRUCTOR class-ref receiver (`const f = C.m`) must
+            // never canonicalize to the INSTANCE vtable method of the same
+            // name — in JS `C.m` sees only statics (`class C { static lex(){}
+            // lex(){} }` has `C.lex` === the static; the instance `lex` lives
+            // on `C.prototype`). `class_id_from_method_receiver` treats a
+            // class ref like an instance, so marked's `const lexer2 =
+            // _Lexer.lex; lexer2(src, opt)` extracted the instance `lex`,
+            // whose bare invocation read `this.options` off an unconstructed
+            // receiver. Fall through to `build_bound_method_closure`: its
+            // call-time dispatch (`js_native_call_method`'s 0x7FFE arm)
+            // resolves statics-first for constructor refs. PROTOTYPE refs
+            // (`C.prototype.m`) keep the canonical path — the instance method
+            // is exactly what they name.
+            let receiver_is_constructor_ref =
+                class_ref_id(instance).is_some() && class_prototype_ref_id(instance).is_none();
+            if !receiver_is_constructor_ref && bound_native_method_length(name).is_none() {
                 if let Some(class_id) = class_id_from_method_receiver(instance) {
                     if let Some(owner) =
                         super::class_registry::method_owner_class_id(class_id, name)
@@ -1301,7 +1316,12 @@ pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
     captured
 }
 
-fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
+/// The `class_id` of `instance`, when `instance` really is a class instance.
+///
+/// `pub(super)` so `object::tests` can assert the #7563 invariant directly: a
+/// non-object allocation (an array, above all) must resolve to `None` rather
+/// than to whatever its bytes happen to hold at the `class_id` offset.
+pub(super) fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
     if let Some(cid) = class_ref_id(instance) {
         return Some(cid);
     }
@@ -1323,7 +1343,27 @@ fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
             if crate::closure::is_closure_ptr(obj as usize) {
                 return None;
             }
-            let cid = unsafe { (*obj).class_id };
+            // #7563: the closure guard above fixed ONE instance of that type
+            // confusion; a bare `(*obj).class_id` read has it for every other
+            // non-object allocation too. `ObjectHeader` is `{ object_type: u32,
+            // class_id: u32, … }` while `ArrayHeader` is `{ length: u32,
+            // capacity: u32 }`, so the `class_id` slot of an ARRAY overlays its
+            // **capacity** — an N-capacity array literal was read back as
+            // "class id N". Reached from `arr[Symbol.iterator]`, which resolves via
+            // `js_class_method_bind(arr, "values")` (`symbol/get.rs`): whenever
+            // class id N happened to own a `values` method, the array's
+            // iterator resolved to THAT class's method. With `class Plain {
+            // values() { return [777][Symbol.iterator](); } }` the one-element
+            // literal read back as class id 1 — `Plain` itself — so `values`
+            // called `values` until the stack guard page: a SIGSEGV with no
+            // `Map` anywhere in the program.
+            //
+            // `js_object_get_class_id` is the guarded accessor for exactly this
+            // read: it rejects the handle band, the std::alloc'd Map/Set/Regex
+            // headers (which have no `GcHeader` to probe), and — the part that
+            // matters here — any allocation whose `GcHeader.obj_type` is not
+            // `GC_TYPE_OBJECT`. Reading the field directly bypassed all three.
+            let cid = crate::object::js_object_get_class_id(obj);
             if cid != 0 {
                 return Some(cid);
             }

@@ -35,6 +35,8 @@ mod array_literal;
 mod buffer_access;
 mod buffer_views;
 mod channel;
+#[cfg(test)]
+mod conforming_layout_note_tests;
 mod helpers;
 mod i32_fast_path;
 mod index;
@@ -61,8 +63,9 @@ pub(crate) use buffer_access::{
     lower_typed_array_store, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
-    alias_buffer_view_slot, attach_native_owned_view_fact, buffer_access_materialization_reason,
-    buffer_view_lowered_value, downgrade_buffer_alias, downgrade_buffer_aliases_in_expr,
+    alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
+    buffer_access_materialization_reason, buffer_view_lowered_value, downgrade_buffer_alias,
+    downgrade_buffer_aliases_in_expr, invalidate_buffer_view_pointer,
     invalidate_native_owned_views_for_dispose, native_arena_canonical_owner_id,
     record_native_arena_owner_assignment, update_buffer_view_for_assignment,
 };
@@ -72,11 +75,12 @@ pub(crate) use channel::{
 };
 pub(crate) use helpers::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
-    class_field_store_needs_layout_note, class_field_store_needs_string_addref,
-    expr_has_numeric_pointer_free_array_layout, expr_produces_non_pointer_bits_by_construction,
-    is_global_this_builtin_function_name, is_global_this_builtin_name,
-    lower_expr_with_expected_type, lower_js_args_array, proxy_build_args_array, unbox_str_handle,
-    unbox_to_i64,
+    class_field_store_layout_note_is_conforming, class_field_store_needs_layout_note,
+    class_field_store_needs_string_addref, emit_all_pointer_array_declaration,
+    expr_has_numeric_pointer_free_array_layout, expr_produces_fresh_heap_allocation,
+    expr_produces_non_pointer_bits_by_construction, is_global_this_builtin_function_name,
+    is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
+    store_needs_string_addref, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
@@ -108,8 +112,8 @@ pub(crate) use range_facts::{
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
-    emit_typed_feedback_register_site, native_region_slug, typed_feedback_emission_enabled,
-    TypedFeedbackContract, TypedFeedbackKind,
+    emit_typed_feedback_record_call, emit_typed_feedback_register_site, native_region_slug,
+    typed_feedback_emission_enabled, TypedFeedbackContract, TypedFeedbackKind,
 };
 pub(crate) use url_helpers::lower_url_string_getter;
 pub(crate) use v8_interop::{
@@ -118,9 +122,11 @@ pub(crate) use v8_interop::{
 };
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_jsvalue_slot_store_scalar_aware_on_block, emit_jsvalue_slot_store_with_flags_on_block,
-    emit_jsvalue_slot_store_with_value_bits_on_block, emit_root_heap_word_store_on_block,
-    emit_root_nanbox_store_on_block, emit_write_barrier, emit_write_barrier_slot_on_block,
+    emit_jsvalue_slot_store_pointer_tested, emit_jsvalue_slot_store_scalar_aware_on_block,
+    emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
+    emit_layout_note_slot_on_block, emit_may_carry_heap_pointer_check,
+    emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block, emit_write_barrier,
+    emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
     lower_array_super_init, lower_event_emitter_subclass_init, lower_node_stream_super_init,
     lower_stream_super_init,
 };
@@ -129,14 +135,28 @@ pub(crate) use write_barrier::{
 // bulky `record_lowered_value*` method family, the shadow-slot free helpers,
 // and the `lower_expr` dispatch table moved into siblings to keep this file
 // under 2000 lines. Inherent methods (`record_value`) need no re-export.
+#[cfg(test)]
+mod array_push_guard_tests;
+#[cfg(test)]
+mod class_field_barrier_tests;
 mod dispatch;
 mod record_value;
 mod repsel_gates;
 mod scalar_slot_root;
 pub(crate) mod shadow_inline;
-mod shadow_slot;
+// `pub(crate)` since #7615 slice 8: `rooting/temp_root.rs` binds a pooled
+// temp alloca through the same shadow-slot emission every named local uses,
+// and it now lives outside `crate::expr`.
+#[cfg(test)]
+mod call_spread_rooting_tests;
+#[cfg(test)]
+mod issue7628_rooting_tests;
+pub(crate) mod shadow_slot;
+#[cfg(test)]
+mod slice7_rooting_tests;
+#[cfg(test)]
+mod slice8_rooting_tests;
 mod slot_rep;
-pub(crate) mod temp_root;
 // #7128: the env-knob table and the pure `gates -> context flags` derivation.
 // Every `FnCtx` construction site goes through `RepselContextFlags` so that a
 // knob cannot silently acquire a second representation's sites again.
@@ -156,7 +176,8 @@ pub(crate) use slot_rep::{
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
 pub(crate) use scalar_slot_root::{
-    root_entry_alloca, root_scalar_replaced_slot, root_scalar_replaced_slot_unconditional,
+    entry_init_load_rooted_global, root_entry_alloca, root_scalar_replaced_slot,
+    root_scalar_replaced_slot_unconditional,
 };
 pub(crate) use shadow_slot::{
     current_closure_ptr_value, emit_persistent_shadow_root_barrier,
@@ -228,6 +249,26 @@ pub(crate) struct FnCtx<'a> {
     /// True while lowering an expression statement whose resulting JS value
     /// will be discarded.
     pub discard_expr_value: bool,
+
+    /// #7590: is the expression **currently being dispatched** one whose value
+    /// is discarded — as opposed to [`Self::discard_expr_value`], which says
+    /// only that the enclosing STATEMENT's value is discarded?
+    ///
+    /// The two are not the same, and reading the wrong one is a silent
+    /// wrong-value bug. `discard_expr_value` is set once per `Stmt::Expr` and
+    /// is never cleared as `lower_expr` recurses, so it is still set while
+    /// lowering the operands of `sink(buf[0] = 5);` — where the store's value
+    /// is very much consumed. Four sites read it as if it meant this field and
+    /// returned `0.0`, making a typed-array store used as an expression
+    /// evaluate to `0` instead of the assigned value (ES2024 §13.15.2).
+    ///
+    /// This one is **taken** (`mem::take`) at the top of
+    /// [`dispatch::lower_expr`], so it reaches exactly one expression — the one
+    /// the statement is made of — and every operand lowered beneath it reads
+    /// `false`. Handlers that need it receive it as a parameter rather than
+    /// reading the field, because they consult it *after* lowering their
+    /// operands, by which point the field has been taken again.
+    pub discard_this_expr: bool,
     /// HIR FuncId → LLVM function name. Resolved at the top of
     /// `compile_module` so `FuncRef(id)` calls know what to emit.
     pub func_names: &'a std::collections::HashMap<u32, String>,
@@ -511,6 +552,10 @@ pub(crate) struct FnCtx<'a> {
     /// by namespace member access lowering to disambiguate when the same
     /// export name appears in multiple `import * as X / Y` sources.
     pub namespace_member_prefixes: &'a std::collections::HashMap<(String, String), String>,
+    /// #7189: `(namespace local, member)` pairs whose member is another
+    /// module's namespace object rather than a binding. See the doc on
+    /// `CompileOptions::namespace_member_nested`.
+    pub namespace_member_nested: &'a std::collections::HashSet<(String, String)>,
     /// Issue #5924: per-namespace origin-name resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `origin_name`. Consulted
     /// before `import_function_origin_names` when computing the symbol
@@ -648,6 +693,17 @@ pub(crate) struct FnCtx<'a> {
     /// (`sum += i % 1000` in a 100M loop) from 1550ms → ~150ms on ARM.
     pub integer_locals: &'a std::collections::HashSet<u32>,
 
+    /// LocalIds that are integer-valued within **i64** range but not provably
+    /// within i32 range, mapped to a conservative `log2(|value|)` bound.
+    ///
+    /// `integer_locals` above is an i32-RANGE set — it gates i32 shadow slots,
+    /// so it must stay narrow. The `%` fast path converts with
+    /// `fptosi double -> i64` and only needs i64-range integrality, so it
+    /// additionally consults this map. Sole consumer:
+    /// `type_analysis::numeric::integer_magnitude_bits`. Populated per function
+    /// by `collectors::int_valued_i64_locals::collect_int_valued_i64_locals`.
+    pub int_valued_i64_locals: &'a std::collections::HashMap<u32, u32>,
+
     /// LocalIds whose writes are all explicit `>>> 0` u32 casts. These locals
     /// can use the same i32 bit-pattern slot as signed integer locals for
     /// bitwise consumers, but ordinary JS reads must convert with `uitofp` so
@@ -689,6 +745,29 @@ pub(crate) struct FnCtx<'a> {
     /// a slot that already holds 0) — `emit_shadow_slot_clear` skips it.
     /// Seeded at construction with the entry-bound parameter slots.
     pub shadow_slots_bound: std::collections::HashSet<u32>,
+
+    /// #7469: pooled frame-rooted allocas for expression temporaries — see
+    /// [`crate::rooting::TempRootPool`]. Starts empty; grows on the first
+    /// protected temporary this function lowers.
+    pub temp_roots: crate::rooting::TempRootPool,
+
+    /// #7773/#7506: LocalIds whose `Number`/`Int32` value came from an
+    /// initializer whose numeric answer is only a declared type — `const v =
+    /// o.x` on an `x: number` field, or `const sum = o.x + o.y`. This includes
+    /// both `Any` locals refined by codegen and locals the HIR already typed as
+    /// numeric.
+    ///
+    /// The `Any` refinement remains load-bearing (without it every ordinary
+    /// field read loses the numeric fast path), but both it and an HIR numeric
+    /// type can copy a declared field type rather than prove a runtime value.
+    /// The local then reads as `is_numeric_expr`, which licenses a bare `fadd`
+    /// / `fmul` on whatever the slot holds — and arithmetic on a NaN-boxed
+    /// value PRESERVES ITS PAYLOAD, so a string laundered in through `as any`
+    /// came back out of a multiply still tagged as a string.
+    ///
+    /// Consumed by `type_analysis::numeric_proof_is_declared_only`, which turns
+    /// the trust into a four-instruction runtime tag test instead.
+    pub declared_only_numeric_locals: std::collections::HashSet<u32>,
 
     /// Cached pointer to this function's `InlineArenaState` slot —
     /// allocated lazily on the first `new ClassName()` site that uses
@@ -780,6 +859,15 @@ pub(crate) struct FnCtx<'a> {
     /// slow clone's preheader BEFORE committing any side effect of the
     /// current iteration.
     pub class_field_loop_facts: Vec<ClassFieldLoopFact>,
+
+    /// repsel #7480 / #5093: scoped loop-versioning facts for element-shape
+    /// loops (`for (…) sum += arr[i].field`). Pushed only around the FAST
+    /// clone of `lower_element_shape_versioned_for`
+    /// (`stmt/element_shape_loop.rs`). Inside that clone `arr[i].field`
+    /// lowers to a bare element load plus a small residual per-element check
+    /// with a single side exit — no element-read tier, no guard call, no
+    /// per-access volatile gate load.
+    pub element_shape_loop_facts: Vec<ElementShapeLoopFact>,
 
     /// Parallel i32 counter slots for integer loop counters that are
     /// used as bounded array indices. When a for-loop counter is in
@@ -1514,6 +1602,128 @@ pub(crate) struct ClassFieldLoopFact {
     pub fields: std::collections::BTreeMap<String, u32>,
 }
 
+/// #5093 / repsel #7480: one fact per (array, counter, versioned loop) — the
+/// element-shape clone's licence to read `arr[i].field` with no guard.
+///
+/// Pushed only around the FAST clone of `lower_element_shape_versioned_for`
+/// (`stmt/element_shape_loop.rs`). See that module for the full safety
+/// argument; the short version is that the preheader proved
+///
+/// * `arr` is a genuine `GC_TYPE_ARRAY` (never an `Array` subclass, which is
+///   a plain `ObjectHeader` — #7573/#7603),
+/// * the runtime's homogeneous element-shape invariant holds for `arr` at
+///   exactly `class_name`'s class id (`js_array_ensure_element_shape`),
+/// * the verified prefix covers every index the loop reads,
+///
+/// and the lowering proved the fast clone is call-free, so nothing can revoke
+/// the invariant or move the array while the clone runs.
+#[derive(Debug, Clone)]
+pub(crate) struct ElementShapeLoopFact {
+    /// LocalId of the loop-invariant array the preheader guarded.
+    pub array_local_id: u32,
+    /// LocalId of the loop counter used as the element index.
+    pub index_local_id: u32,
+    pub scope_id: u32,
+    /// Class the preheader proved every element in the verified prefix has.
+    pub class_name: String,
+    /// SSA name of the elements base pointer (`arr_handle + 8`), derived in
+    /// the preheader AFTER the guard call, so it cannot be a pre-move address.
+    pub elements_base: String,
+    /// SSA name of the hoisted `@perry_class_keys_<class>` load.
+    pub expected_keys: String,
+    /// Slow clone's preheader label. The per-element residual check (see
+    /// `expr::element_shape_guard`) branches here on a miss; the slow clone
+    /// re-executes the current iteration, which is safe because the matcher
+    /// admits no body that commits an effect before the read.
+    pub side_exit_label: String,
+    /// property name -> packed slot index, every entry a declared raw-f64
+    /// candidate validated by the matcher.
+    pub fields: std::collections::BTreeMap<String, u32>,
+    /// Largest packed slot index the loop touches — the per-element
+    /// `field_count` check covers every tracked access with one compare.
+    pub max_field_index: u32,
+    /// #7771: the body's `const r = arr[counter]` binding, when the matcher
+    /// admitted the element-binding form. Inside the fast clone the `Let`
+    /// itself emits nothing (`stmt/let_stmt.rs`) and every `r.field` read
+    /// lowers through [`element_shape_loop_fact_for_property_get`]'s
+    /// `LocalGet` arm; the slow clone, lowered after this fact is popped,
+    /// binds `r` generically. `None` for the single-statement accumulator
+    /// form.
+    pub element_binding: Option<u32>,
+}
+
+/// Find the innermost active element-shape loop fact covering a
+/// `PropertyGet`'s receiver: answers `Some((fact, packed_slot_index))` exactly
+/// when `object.property` is a tracked `arr[counter].field` read inside an
+/// element-shape fast clone.
+///
+/// The single entry point for the three sites that must agree about that read
+/// — the field lowering itself
+/// (`expr::property_get::lower_raw_f64_class_field_get_for_number_context`),
+/// `type_analysis::is_numeric_expr`, and `expr::binary`'s arithmetic-operand
+/// router. #7480 step 3 made the clone self-contained by routing all three
+/// through the fact instead of through `receiver_class_name`, which by design
+/// does not resolve an object-literal element type; the fact's own
+/// `class_name` is therefore the authoritative answer rather than a filter on
+/// one the caller supplies.
+///
+/// `(array, counter)` already identifies one loop — a counter local is minted
+/// per `for`, and the matcher admits exactly one array per loop. Cheap
+/// early-out first: outside a fast clone the fact vector is empty.
+///
+/// The **canonical-i32 counter slot is part of the predicate**, not a
+/// precondition the caller re-checks. Answering `Some` is a promise that the
+/// read really does take the bare-load lowering, and `is_numeric_expr` bets a
+/// raw `double` on that promise: if the field lowering declined for want of an
+/// i32 slot while the numeric predicate still said yes, the operand would be
+/// consumed as a real double while the generic lowering handed back a NaN-boxed
+/// value. The matcher declines the whole loop without that slot
+/// (`lower_element_shape_versioned_for`), so today the two can't disagree —
+/// asking here keeps them unable to disagree if the matcher is ever widened.
+pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
+    ctx: &'f FnCtx<'_>,
+    object: &perry_hir::Expr,
+    property: &str,
+) -> Option<(&'f ElementShapeLoopFact, u32)> {
+    use perry_hir::Expr;
+    if ctx.element_shape_loop_facts.is_empty() {
+        return None;
+    }
+    match object {
+        Expr::IndexGet { object, index } => {
+            let (Expr::LocalGet(array_local_id), Expr::LocalGet(index_local_id)) =
+                (object.as_ref(), index.as_ref())
+            else {
+                return None;
+            };
+            if !ctx.i32_counter_slots.contains_key(index_local_id) {
+                return None;
+            }
+            ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
+                if fact.array_local_id != *array_local_id || fact.index_local_id != *index_local_id
+                {
+                    return None;
+                }
+                fact.fields.get(property).map(|idx| (fact, *idx))
+            })
+        }
+        // #7771: `r.field` through the clone's element binding. The matcher
+        // pinned `r = arr[counter]` as the body's first statement, so this is
+        // the same tracked element access spelled through the binding. The
+        // counter-slot obligation is checked against the fact's own counter,
+        // because the binding form carries no index expression at the read.
+        Expr::LocalGet(recv_id) => ctx.element_shape_loop_facts.iter().rev().find_map(|fact| {
+            if fact.element_binding != Some(*recv_id)
+                || !ctx.i32_counter_slots.contains_key(&fact.index_local_id)
+            {
+                return None;
+            }
+            fact.fields.get(property).map(|idx| (fact, *idx))
+        }),
+        _ => None,
+    }
+}
+
 /// Find the innermost active class-field loop fact covering
 /// `(recv_local_id, class_name, property)`. Returns the fact and the packed
 /// slot index of the field.
@@ -1728,21 +1938,32 @@ pub(crate) mod calls;
 mod child_proc;
 mod closure;
 mod compare;
+#[cfg(test)]
+mod compare_tests;
 mod conditional;
 mod dyn_extern_i18n;
 mod env_clones;
 mod fs_await;
 mod index_get;
+#[cfg(test)]
+mod index_get_claim_tests;
 mod masked_window;
 mod ptr_numarray_access;
 mod ta_param_f64_read;
 pub(crate) use index_get::packed_f64_loop_index_parts;
 pub(crate) use masked_window::masked_window_fact_for_index;
+/// Rooting coverage for the computed-store arms the TS corpora cannot reach
+/// (#7637, #7638, #7639) — see the module header for why they cannot.
+#[cfg(test)]
+mod computed_store_rooting_tests;
 mod index_set;
+mod index_set_guarded;
 mod index_set_typed_array;
 mod instance_misc1;
+mod member_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;
+pub(crate) mod element_shape_guard;
 mod js_runtime;
 mod literals_vars;
 mod logical_collections;
@@ -1751,8 +1972,8 @@ mod misc_methods;
 mod new_dynamic;
 mod objects_arrays_lit;
 mod os_uri_dates;
-mod property_get;
-mod property_set;
+pub(crate) mod property_get;
+pub(crate) mod property_set;
 pub(crate) mod proxy_reflect;
 mod static_field_meta;
 mod static_method;
@@ -2200,6 +2421,26 @@ fn lower_numeric_binary_value(
         return Ok(None);
     }
 
+    // #7773: `is_numeric_expr` answering `true` is not always a PROOF — for a
+    // class-field read, an array element, or a local refined from one, it is
+    // just the declared type repeated back, and nothing enforces declared types
+    // at runtime. This tier emits a bare `fadd`/`fmul` with no residual coerce
+    // at all, and arithmetic on a NaN-BOXED value propagates the payload
+    // instead of producing NaN — so a string laundered into a `x: number` slot
+    // came back out of `v * 2` still a string (`typeof` said `"string"`).
+    //
+    // Hand those to `binary::lower`, which has both remedies: the runtime tag
+    // test that keeps `+` on the spec's string-concat dispatch, and the
+    // residual `js_number_coerce` that gives every other operator its
+    // `ToNumber`. Same hand-off shape as the two Mod cases below, and for the
+    // same reason — it must run before operand lowering so an `Ok(None)` emits
+    // no dead loads or duplicate records.
+    if crate::type_analysis::numeric_proof_is_declared_only(ctx, left)
+        || crate::type_analysis::numeric_proof_is_declared_only(ctx, right)
+    {
+        return Ok(None);
+    }
+
     // Hand this proven shape to `binary::lower`, which owns the existing
     // integer remainder and negative-zero repair. This must run before operand
     // lowering so returning `None` emits no dead loads or duplicate records.
@@ -2215,6 +2456,30 @@ fn lower_numeric_binary_value(
             Expr::Integer(value)
                 if i32::try_from(*value).is_ok_and(|divisor| divisor > 0)
         )
+    {
+        return Ok(None);
+    }
+
+    // #7404: the same hand-off for a remainder whose operands the integer
+    // fast path can prove, but whose dividend has no i32 counter slot — the
+    // `bench_bitwise` shape (`let a = 12345678; … a = a + 1; a % 1000`).
+    //
+    // The condition above only recognises an `i32_counter_slots` dividend, so
+    // an i64-range integer local fell through to the `frem double` below,
+    // which on AArch64 is a `bl _fmod` libm call.
+    //
+    // The DIVISOR is restricted to a non-zero integer literal, exactly like the
+    // hand-off above. That is not incidental tidiness: `binary::lower`'s own
+    // Mod gate accepts any `integer_locals` divisor, and `srem(x, 0)` is UB in
+    // LLVM while JS requires NaN. A decrementing counter that walks through
+    // zero (`for (let d = 10; d >= 0; d--) … x % d`) IS in `integer_locals`,
+    // so widening the hand-off to non-literal divisors would newly route it
+    // into `srem` — main keeps it on `frem` only because this hand-off never
+    // fires for it. Literal divisors cannot be zero here, so the dividend is
+    // the only side this widens.
+    if matches!(op, BinaryOp::Mod)
+        && matches!(right, Expr::Integer(divisor) if *divisor != 0)
+        && crate::type_analysis::is_integer_valued_expr(ctx, left)
     {
         return Ok(None);
     }

@@ -1235,6 +1235,15 @@ mod tests {
 
     #[test]
     fn namespace_members_exist_with_expected_shapes() {
+        // The constructor `prototype` slots installed by
+        // `install_webassembly_constructor` live in the PROCESS-global
+        // `CLOSURE_PROPS` side table, and the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears that table from whatever
+        // parallel test thread runs it — wiping the entries between this
+        // test's install and its `webassembly_constructor_proto` read-back
+        // ("Module.prototype must exist", #6965). Serialize with those
+        // guards per the `global_side_table_test_lock` contract.
+        let _global = crate::gc::global_side_table_test_lock();
         let ns = create_webassembly_namespace();
         assert!(value_heap_ptr(ns).is_some(), "namespace must be an object");
 

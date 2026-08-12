@@ -1011,6 +1011,24 @@ pub(super) unsafe fn dispatch_handle(
                                         entry.has_synthetic_arguments,
                                         entry.has_rest,
                                     );
+                                    // #7769: this walk — not the tail vtable
+                                    // arm of `js_native_call_method` — is where
+                                    // an INHERITED method resolves, and
+                                    // inherited methods are the common case in
+                                    // any real hierarchy (`class Square extends
+                                    // Rect` calling `Rect`'s `area`). Recording
+                                    // the outcome here is what lets the
+                                    // top-of-tower fast path serve them; the
+                                    // helper re-checks the receiver-shape
+                                    // predicate before storing anything.
+                                    super::note_class_vtable_resolution(
+                                        f64::from_bits(jsval.bits()),
+                                        method_name,
+                                        entry.func_ptr,
+                                        entry.param_count,
+                                        entry.has_synthetic_arguments,
+                                        entry.has_rest,
+                                    );
                                     resolved_method = Some(ResolvedMethod::Vtable {
                                         func_ptr: entry.func_ptr,
                                         param_count: entry.param_count,

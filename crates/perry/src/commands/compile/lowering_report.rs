@@ -1497,7 +1497,7 @@ mod tests {
                     "consumer": "typed_f64_func_ref_call",
                     "native_rep_name": "f64",
                     "native_value_state": "region_local",
-                    "notes": ["typed_clone=perry_fn_typed__add__typed_f64; generic_wrapper=perry_fn_typed__add"]
+                    "notes": ["typed_clone=perry_fn_typed__add$typed_f64; generic_wrapper=perry_fn_typed__add"]
                 },
                 {
                     "function": "probe",
@@ -1664,7 +1664,7 @@ mod tests {
             report.evidence.typed_clone_decisions[0]
                 .typed_clone
                 .as_deref(),
-            Some("perry_fn_typed__add__typed_f64")
+            Some("perry_fn_typed__add$typed_f64")
         );
         assert_eq!(
             report.evidence.typed_clone_decisions[0]
@@ -1702,7 +1702,7 @@ mod tests {
                     "consumer": "typed_i1_func_ref_call",
                     "native_rep_name": "js_value",
                     "native_value_state": "region_local",
-                    "notes": ["typed_clone=perry_fn_typed__both__typed_i1"]
+                    "notes": ["typed_clone=perry_fn_typed__both$typed_i1"]
                 },
                 {
                     "function": "both",
@@ -1784,8 +1784,8 @@ mod tests {
                     "native_rep_name": "js_value",
                     "native_value_state": "region_local",
                     "notes": [
-                        "typed_clone=perry_fn_typed__mix__typed_i32",
-                        "generic_wrapper=perry_fn_typed__mix__generic"
+                        "typed_clone=perry_fn_typed__mix$typed_i32",
+                        "generic_wrapper=perry_fn_typed__mix$generic"
                     ]
                 }
             ]

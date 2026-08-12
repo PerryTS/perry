@@ -583,7 +583,8 @@ fn ta_int_elem_load_is_i32_provable(ctx: &FnCtx<'_>, object: &Expr, index: &Expr
     let Some(view) = ctx.buffer_view_slots.get(id) else {
         return false;
     };
-    if view.index_unit != BufferIndexUnit::Element
+    if !view.pointer_state.is_stable()
+        || view.index_unit != BufferIndexUnit::Element
         || !view.alias.allows_noalias()
         || view.scope_idx.is_none()
     {

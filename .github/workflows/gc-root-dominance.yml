@@ -61,8 +61,19 @@ name: GC Root Dominance
 
 on:
   pull_request:
+  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
+  # `push: branches: [main]` starved this gate and nine others for two days
+  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
+  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
+  # measured. Note this workflow runs `macos-14`, not `ubuntu-latest`; #7856's
+  # claim that it was unaffected was reading its PR arm, which drains because PR
+  # runs supersede each other, while its `main` arm queued like all the rest.
+  # ***DO NOT RESTORE `push: branches: [main]`.***
+  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
+  schedule:
+    - cron: "17 */6 * * *"
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -136,6 +147,36 @@ jobs:
       # Static and instant, like the audit above, so it runs before the build.
       - name: POLL_CAPABLE_RUNTIME entries must name real runtime symbols
         run: python3 scripts/gc_root_dominance_check.py --audit-poll-capable
+
+      # ★ The THIRD audit, and the direction the other two structurally cannot
+      # look (#7616). Both of those hunt a NAME WITH NO REFERENT: a dead
+      # ALLOC_RE alternative, a phantom POLL_CAPABLE_RUNTIME entry. Nothing
+      # hunted a REFERENT WITH NO NAME -- a real allocating symbol that is
+      # missing from POLL_CAPABLE_RUNTIME -- and a missing entry suppresses
+      # findings exactly as silently as a phantom one.
+      #
+      # #7453 is the worked example and it cost a shipped use-after-free.
+      # `new URL(input, base)` held a raw `*mut StringHeader` across the
+      # lowering of `base`; the fix added `url_coerce_string` to ALLOC_RE,
+      # said in its own comment "that gap is why the checker did not flag
+      # #7453", and stopped one list short. Re-planting that exact code and
+      # running EVERY mode this workflow has (#7616's measurement):
+      #
+      #   --moving-only (dominance)              0 clean -> 0 sabotaged
+      #   --unrooted-allocas --moving-only       0       -> 0
+      #   --stale-registers --moving-only        2       -> 2
+      #   --statepoints --moving-only            2       -> 2   <- the mode
+      #     that reads the lowering that SHIPS, added in #7663
+      #   --stale-registers (unfiltered)        24       -> 35
+      #   --statepoints     (unfiltered)        15       -> 21
+      #
+      # Every GATED arm blind, both UNFILTERED arms not. The single missing
+      # list entry was all of it: adding `js_url_coerce_string` takes the
+      # sabotaged arms to 13 and 8 and leaves the clean arms at 2 and 2.
+      #
+      # Static and instant, like the two above, so it runs before the build.
+      - name: ALLOC_RE symbols that reach a poll-capable one must be listed
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-reach
 
       # `--unrooted-allocas` exempts two heap-value sources whose objects can
       # neither move nor be reclaimed (#7210): the old-arena class-keys array,
@@ -331,6 +372,10 @@ jobs:
             --min-files 90 --min-binds 1500 --min-funcs 1200 \
             --max-stale 39
 
+      # 86 -> 104 at #7616: widening POLL_CAPABLE_RUNTIME by 77 symbols makes
+      # windows MOVING that `--moving-only` previously dropped. Still inside
+      # the pinned 118, so the budget is deliberately NOT raised — a ratchet
+      # you loosen every time it gets closer is not a ratchet.
       - name: Stale-register budget (dependency-scale)
         run: |
           set -euo pipefail
@@ -347,4 +392,298 @@ jobs:
           path: |
             ir-corpus
             ir-corpus-dep
+          retention-days: 7
+
+  # ★★★ THE LOWERING THAT ACTUALLY SHIPS (#7663).
+  #
+  # Everything in the job above compiles its corpus under `PERRY_RS4GC=0` — the
+  # SHADOW-STACK lowering — and since #7370 that is not the default on any
+  # target whose frames the runtime can walk. The reason was sound and is
+  # stated inline in `gc_root_dominance_corpus.sh`: the checker anchored on
+  # `@js_shadow_slot_bind`, the native lowering emits zero of them, and
+  # `--min-binds` therefore failed the job. So the gate was pointed at the only
+  # lowering it could read, and `docs/src/internals/gc-rooting-invariant.md`
+  # records the consequence as a blind spot: **a green `gc-root-dominance` was
+  # evidence about a lowering that does not ship.**
+  #
+  # This job closes that. It is a SEPARATE job, not more steps in the one
+  # above, for three reasons: it needs a differently-generated corpus, its
+  # floors are about safepoints rather than root stores, and — the one that
+  # matters — a separate job is a separate branch-protection context, so this
+  # can be promoted to required on its own schedule without dragging the
+  # shadow arms with it. The price is a second compiler build; `needs:` would
+  # avoid it and was rejected, because it would make this job unrunnable
+  # whenever the shadow job is red — precisely when someone wants to know
+  # whether the OTHER lowering is affected.
+  #
+  # NOT REQUIRED, deliberately, and this is the second step nobody took last
+  # time. A gate that has never been green blocks every open PR the day it
+  # becomes required (CLAUDE.md's corollary, which this repo has already paid
+  # for once — see hazard 2 in the header of this file). Let it run on `main`
+  # first, then promote. Promotion is an admin action and is tracked separately
+  # from the PR that adds this.
+  gc-root-dominance-statepoints:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Same fast structural failure first. `--self-test` now covers BOTH
+      # lowerings: the statepoint half asserts the bundle parser reads the
+      # wrapped callee and a non-empty live set (the two mistakes the Rust
+      # reader of this construct already made and caught), that the two verdict
+      # classes are distinguished by the bundle alone, that the relocated-value
+      # control reports zero, and that `--min-statepoints` refuses the shadow
+      # corpus while `--min-binds` refuses this one.
+      - name: Checker self-test (can this gate still fail?)
+        run: python3 scripts/gc_root_dominance_check.py --self-test
+
+      # The FOUR static audits are shared vocabulary, not shadow-mode
+      # details: `--statepoints` classifies its sources with the same ALLOC_RE,
+      # decides MOVING with the same POLL_CAPABLE_RUNTIME, and honours the same
+      # #7210 exemptions. A phantom entry in any of them is a hole in THIS gate
+      # too, so all four run here as well rather than being inherited by
+      # assumption from a job that may not have run.
+      #
+      # `--audit-poll-reach` matters most HERE, because #7616's measurement was
+      # taken in this job's mode: the re-planted #7453 shape reported 2 clean
+      # and 2 sabotaged under `--statepoints --moving-only`, i.e. the newest
+      # mode was as blind as the three it was added to cover for, and for the
+      # same one-line reason. The full census is in the shadow job above.
+      - name: ALLOC_RE alternatives must match real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-alloc-re
+      - name: POLL_CAPABLE_RUNTIME entries must name real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-capable
+      - name: ALLOC_RE symbols that reach a poll-capable one must be listed
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-reach
+      - name: Immovable-source exemptions must still hold
+        run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      # This also puts a matched LLVM 22 `opt` on disk and exports
+      # LLVM_SYS_221_PREFIX, which is how the corpus script finds it. The
+      # native corpus is `--trace llvm` output PLUS the production statepoint
+      # rewrite, because codegen does not emit statepoints — LLVM does, later,
+      # in the linker step.
+      - uses: ./.github/actions/setup-llvm22
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gcdom-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build perry and the runtime archives
+        run: |
+          set -euo pipefail
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+
+      # The script single-sources the pass string from
+      # `STATEPOINT_REWRITE_PASSES` in perry-codegen and refuses to run if it
+      # cannot read it, so this corpus cannot drift away from the pipeline
+      # production uses. It also asserts its own subject: zero statepoints or
+      # zero live bundles is an error at generation time, not a clean verdict
+      # downstream.
+      - name: Emit the NATIVE (statepoint) IR corpus
+        run: ./scripts/gc_root_dominance_corpus.sh ir-corpus-native --lowering native
+
+      - name: Check GC values across safepoints (native roots)
+        run: |
+          set -euo pipefail
+          # No pipe: the checker's own exit status is the job's.
+          #
+          # FLOORS, from the corpus as of this commit — 149 modules, 2452
+          # functions, 30033 safepoints, 17478 with a live bundle, 40759
+          # relocations — set below that with room for churn and far above
+          # "something compiled". Three separate floors because they fail for
+          # three different reasons and the message has to say which:
+          #   --min-statepoints  this is the shadow corpus, or codegen stopped
+          #                      marking functions gc "statepoint-example"
+          #   --min-relocates    the corpus was copied through un-rewritten
+          #                      (`opt` exits 0 on a module with nothing to do)
+          #   --min-live-bundles safepoints that record NO roots, which is what
+          #                      an unrooted build looks like
+          #
+          # BUDGETS. `unrooted` (the object is in NO live bundle at all, so
+          # nothing marks or rewrites it) is the serious class, and it is a
+          # RATCHET rather than a calibrated zero: this is a young instrument
+          # pointed at a lowering nothing had ever checked statically, and the
+          # remainder is a population under triage rather than a number anyone
+          # has adjudicated. It is a budget rather than allowlist entries for
+          # the reason `--stale-registers` records — tombstones with no issue
+          # numbers would be worse documentation than one number that can only
+          # go down. Lower it as sites are fixed.
+          #
+          # 21 at #7663. #7664 fixed 14 of them in `root_reload.rs` and
+          # `lower_call/new.rs` — the whole `strhandle` population (10), the
+          # `js_new_target_get` save/restore (1), and 3 of the 7 unmasked
+          # receivers — so the budget is 7. #7616 (widening POLL_CAPABLE_RUNTIME)
+          # and #7690 (rooting the spread argument-bundle accumulator) moved it
+          # 7 -> 11 -> 8, tracked in the two changelog fragments for those PRs.
+          #
+          # ★ RE-VERIFIED AT #7664's SECOND PASS: the 8 above was already stale
+          # by the time this ran. A fresh corpus read 9, not 8 — a static-method
+          # receiver hazard in `test_gap_static_method_value_name_collision`
+          # (added after the "8" snapshot, by the #7689/#7691 fix that armed a
+          # receiver-sensitive static `this`) had joined the population without
+          # anyone lowering — er, RAISING — the budget to match. That in itself
+          # is the thing CLAUDE.md's hazard-4 corollary warns about: a budget
+          # nobody re-measures silently absorbs the next hazard.
+          #
+          # Of the 9: 4 were CHECKER FALSE POSITIVES, not real hits. `chain`
+          # (the untracked cast-closure a stale use is searched in) treated
+          # `phi` as unconditionally transparent — one tainted incoming edge
+          # blanket-tainted the phi's RESULT, and a downstream use of that
+          # result was checked against ANY CFG path from source to use
+          # (`between_blocks` is deliberately path-insensitive, which is sound
+          # for an ordinary register but not a phi, whose dynamic value depends
+          # on which edge was actually taken). All four were the identical
+          # shape, e.g. `readCtx`:
+          #
+          #     entry.0:            %r2 = <unmask of the receiver>
+          #                         br i1 %r4, label %then, label %merge
+          #     merge:              %r87 = phi double [ %r2, %entry.0 ],
+          #                                           [ %r86, %pget.recv_merge ]
+          #                         ret double %r87
+          #
+          # The safepoints are all on the `%then` path, where the phi selects
+          # `%r86`. On the edge that carries `%r2` nothing collects between its
+          # definition and the join — the checker was reporting the OTHER
+          # edge's safepoint against THIS edge's value. Verified register-by-
+          # register on all four (`readCtx`, `__closure_5`, `Readable`,
+          # `__obj_method_toLocaleString_3` — every one a `logical.merge` join
+          # of an `&&`).
+          #
+          # Fixed: `_cast_closure` gained `phi_all_edges` — a phi joins `chain`
+          # only once EVERY incoming edge is independently in it, closing the
+          # false positive. That deliberately gives up the case of a SINGLE
+          # tainted edge with its own intervening safepoint before its own
+          # predecessor's terminator; `_phi_edge_hazard` covers that separately,
+          # checking each edge's window on its own. Two sabotage-tested
+          # self-test fixtures (`phi_safe_edge` / `phi_hazard_edge`) pin both
+          # directions.
+          #
+          # The remaining 5 were real, and split two ways:
+          #
+          #   3  unrooted:global. `test_gap_arraybuffer_transfer::main` (2,
+          #      `new DataView`/`new Uint8Array` reading a module-global
+          #      receiver, then holding it across a sibling `{ valueOf() {...} }`
+          #      argument's allocation) — fixed upstream by #7719, which covers
+          #      the identical shape across all 30 `lower_call/builtin.rs` ctor
+          #      arms via a shared `RootedGroup`. `test_gap_static_method_value_
+          #      name_collision::main` (1, `(Lexer as any).lex(...)`'s receiver
+          #      held across arg-bundling that always allocates for a rest
+          #      param) — fixed here, in
+          #      `lower_call/property_get/static_dispatch.rs`, the same
+          #      `RootedGroup::adopt`/`reread` shape on the receiver instead of
+          #      a constructor argument.
+          #   2  unrooted:capture. `js_closure_get_capture_bits` returns a raw
+          #      `i64` that may be a NaN-boxed heap value, and unlike
+          #      `%this_closure` itself (which codegen already re-enters into
+          #      the `ptr addrspace(1)` tracked domain), its generic "read a
+          #      captured value" call sites never re-enter it into either that
+          #      domain or a temp root.
+          #      `test_gap_class_expr_dynamic_parent_ctor::__closure_21`: a
+          #      captured dynamic-parent-class reference read at the top of the
+          #      synthesized implicit ctor closure, used ~60 lines later as
+          #      `js_new_function_construct`'s callee, across
+          #      `js_object_alloc_class_inline_keys` AND the class's own user
+          #      constructor.
+          #      `test_gap_computed_key_method_nested_this::__closure_9`: a
+          #      captured numeric local read, then `total + x`-style `fadd`
+          #      after `js_number_coerce` (which can run a user
+          #      `Symbol.toPrimitive`) intervenes. NOT reloadable the way a
+          #      strhandle global is (re-deriving from `%this_closure` reads
+          #      the pre-move closure — RS4GC does not relocate a raw `i64`
+          #      parameter) — but IS reloadable the way OTHER root-derived
+          #      values are: re-calling `js_closure_get_capture_bits` with the
+          #      same closure pointer and index re-reads the same slot, sound
+          #      under the identical store side-condition
+          #      (`js_closure_set_capture_bits` to that index) `root_reload.rs`
+          #      already tracks for shadow slots and handle globals.
+          #
+          # ★ #7725 CLOSED both `unrooted:capture` hits, and the budget is
+          # deleted rather than set to 0 — `--max-unrooted` already defaults
+          # to 0, and a budget nobody re-measures is exactly the silently-
+          # absorbing-the-next-hazard failure mode CLAUDE.md's hazard-4
+          # corollary warns about (the "8 was already stale, a fresh corpus
+          # read 9" paragraph above is that failure mode, once). The fix:
+          # `root_reload.rs`'s `Facts` gained `capture_get_key`, so a
+          # `js_closure_get_capture_bits` call whose ptr operand already
+          # belongs to a reloadable recipe (the closure-ptr shadow-slot load
+          # chain #7055 already protects) extends that recipe like a
+          # transparent bit op — the whole chain (slot load, mask, a FRESH
+          # call to `js_closure_get_capture_bits` with the same index, and
+          # any further cast) re-materialises at every reload point. The
+          # store side-condition switches from "was the closure-ptr slot
+          # reassigned" (never, in generated code) to "was THIS INDEX set" —
+          # a synthetic per-index key a `js_closure_set_capture_bits` call
+          # populates via the same `stores_to` field a plain store uses,
+          # which needed the `recipe[0]`-only group key widened to
+          # `(recipe[0], root_ptr)` so the two conditions don't get
+          # conflated under one reachability walk. Verified: native corpus
+          # 2 -> 0 (`stale` held at 0), `--lowering shadow` corpus clean,
+          # `--self-test` still proves the checker can fail.
+          #
+          # --seeded-violations plants 40 safepoints into this very IR, between
+          # a `ptrtoint ptr addrspace(1)` and its use, and requires all 40 to be
+          # reported. It runs even when the budgets are already red, because
+          # the run whose "can it still fail" arm you most want is the one that
+          # is already telling you something. That is the arm that fails if the
+          # mode has stopped understanding LLVM's output — the only way a green
+          # verdict here could be a lie.
+          python3 scripts/gc_root_dominance_check.py ir-corpus-native \
+            --statepoints \
+            --moving-only \
+            --min-files 90 --min-funcs 1200 \
+            --min-statepoints 15000 \
+            --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-stale 0 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+
+      # ★ The unfiltered arm, as a DIAGNOSTIC rather than a gate.
+      #
+      # `--moving-only` keeps only hazards whose window reaches a safepoint
+      # that can run an evacuating minor. The rest are still hazards under the
+      # RECLAIM half of the invariant (a value held only in an untracked
+      # register can be swept, not just moved), and the count is two orders of
+      # magnitude larger: 1444 (1123 unrooted, 321 stale) against the gated
+      # arm's 21. Printing it keeps the filtered number honest — if the gated
+      # arm ever reads zero, this line says whether that is the corpus or the
+      # filter. `|| true` is deliberate and is the ONLY one in this file —
+      # this step is not a gate and must not be read as one.
+      - name: Unfiltered hazard census (diagnostic, not a gate)
+        # The explicit opt-out `gc_gate_wiring_check.py` looks for. Without it
+        # that gate reads the `|| true` below as a swallowed failure -- which
+        # is exactly right for a gating step and exactly wrong for this one, so
+        # the difference has to be declared rather than argued in a comment.
+        continue-on-error: true
+        run: |
+          python3 scripts/gc_root_dominance_check.py ir-corpus-native \
+            --statepoints \
+            --min-files 90 --min-funcs 1200 \
+            --min-statepoints 15000 --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-unrooted 100000 --max-stale 100000 || true
+
+      - name: Upload the IR corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gc-root-dominance-statepoint-ir
+          path: ir-corpus-native
           retention-days: 7

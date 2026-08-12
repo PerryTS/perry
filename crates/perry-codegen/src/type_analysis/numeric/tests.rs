@@ -30,6 +30,7 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -221,4 +222,448 @@ fn dynamic_operand_multiply_keeps_bigint_aware_helper() {
         "a possibly-object operand must keep the BigInt-aware dynamic \
          multiply routing:\n{ir}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #7404 — the `%` integer fast path must fire for locals that are
+// integer-valued within i64 range but NOT provably i32-range.
+//
+// These assert on the emitted IR rather than on a predicate, because the whole
+// failure mode being fixed was a gate that was live but asking the wrong
+// question: a test that only checked "nothing threw" would have passed against
+// the broken compiler.
+// ---------------------------------------------------------------------------
+
+fn mod_(left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Mod,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+
+fn add(left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+
+/// `let a = 12345678; for (…) { acc += a % 1000; a = a + 1; }`
+///
+/// `a` is mutated by an unbounded `+ 1` chain, so it is (correctly) NOT in the
+/// i32-range `integer_locals` set — before #7404 this fell through to
+/// `frem double`, i.e. a `bl _fmod` libm call on AArch64.
+#[test]
+fn i64_range_local_reaches_the_integer_modulo_fast_path() {
+    let ir = emitted_ir(probe_module(
+        "mod_i64_local_unit.ts",
+        Vec::new(),
+        vec![
+            number_let(1, "acc", true, Expr::Integer(0)),
+            number_let(2, "a", true, Expr::Integer(12345678)),
+            Stmt::For {
+                init: Some(Box::new(number_let(3, "i", true, Expr::Integer(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::Integer(64)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(
+                        1,
+                        Box::new(add(
+                            Expr::LocalGet(1),
+                            mod_(Expr::LocalGet(2), Expr::Integer(1000)),
+                        )),
+                    )),
+                    Stmt::Expr(Expr::LocalSet(
+                        2,
+                        Box::new(add(Expr::LocalGet(2), Expr::Integer(1))),
+                    )),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+    assert!(
+        ir.contains("srem i64"),
+        "`a % 1000` for an i64-range increment counter must lower to srem, \
+         not a frem/fmod libm call:\n{ir}"
+    );
+}
+
+/// The dividend may come from the i64-range set; the **divisor** may not.
+///
+/// `srem(x, 0)` is UB in LLVM while JS requires NaN, and the lowering's
+/// zero guard only recognises a literal `0`. A counter that walks through zero
+/// (`d = d - 1`) is exactly what the i64-range set admits, so it must stay on
+/// `frem`.
+#[test]
+fn i64_range_local_is_refused_as_a_modulo_divisor() {
+    let ir = emitted_ir(probe_module(
+        "mod_i64_divisor_unit.ts",
+        Vec::new(),
+        vec![
+            number_let(1, "acc", true, Expr::Integer(0)),
+            number_let(2, "d", true, Expr::Integer(10)),
+            Stmt::For {
+                init: Some(Box::new(number_let(3, "i", true, Expr::Integer(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::Integer(64)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(
+                        1,
+                        Box::new(add(
+                            Expr::LocalGet(1),
+                            mod_(Expr::Integer(1000), Expr::LocalGet(2)),
+                        )),
+                    )),
+                    Stmt::Expr(Expr::LocalSet(
+                        2,
+                        Box::new(Expr::Binary {
+                            op: BinaryOp::Sub,
+                            left: Box::new(Expr::LocalGet(2)),
+                            right: Box::new(Expr::Integer(1)),
+                        }),
+                    )),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+    assert!(
+        !ir.contains("srem i64"),
+        "a divisor that can walk through zero must NOT reach srem \
+         (srem by 0 is UB; JS requires NaN):\n{ir}"
+    );
+}
+
+// ── #7592: `s.charCodeAt(i)` in a hash loop ─────────────────────────────
+//
+// `honest_bench`'s `json_pipeline` FNV-1a phase hashes a 68 MB string one
+// `charCodeAt` at a time. Its leaf profile was 85% opaque runtime calls:
+// `js_string_char_code_at` 31.5%, `js_dynamic_bitxor` 31.0%,
+// `js_string_index_to_i32` 13.1%, `js_get_string_pointer_unified` 9.0% —
+// only 15% was the JS loop. Two independent defects produced that, and each
+// assertion below pins exactly one of them.
+
+fn typed_param(id: u32, name: &str, ty: Type) -> Param {
+    Param {
+        id,
+        name: name.to_string(),
+        ty,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    }
+}
+
+/// `recv.charCodeAt(index)`
+fn char_code_at(recv: Expr, index: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(recv),
+            property: "charCodeAt".to_string(),
+            byte_offset: 0,
+        }),
+        args: vec![index],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }
+}
+
+/// `for (let i = 0; i < 64; i++) h = (h ^ recv.charCodeAt(i)) | 0;`
+fn hash_loop_ir(param_ty: Type) -> String {
+    let recv = Expr::LocalGet(1);
+    emitted_ir(probe_module(
+        "char_code_at_unit.ts",
+        vec![typed_param(1, "s", param_ty)],
+        vec![
+            number_let(10, "h", true, Expr::Integer(0)),
+            Stmt::For {
+                init: Some(Box::new(number_let(11, "i", true, Expr::Integer(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(11)),
+                    right: Box::new(Expr::Integer(64)),
+                }),
+                update: Some(Expr::Update {
+                    id: 11,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    10,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::BitOr,
+                        left: Box::new(Expr::Binary {
+                            op: BinaryOp::BitXor,
+                            left: Box::new(Expr::LocalGet(10)),
+                            right: Box::new(char_code_at(recv, Expr::LocalGet(11))),
+                        }),
+                        right: Box::new(Expr::Integer(0)),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(10))),
+        ],
+    ))
+}
+
+#[test]
+fn char_code_at_on_a_string_receiver_is_statically_numeric() {
+    // Defect 1: `is_numeric_expr` had no arm for a String-method call, so
+    // `h ^ s.charCodeAt(i)` failed `expr/binary.rs`'s "both operands are
+    // statically primitive" test and every iteration paid a
+    // `js_dynamic_bitxor` FFI call to compute an integer xor.
+    let ir = hash_loop_ir(Type::String);
+    assert!(
+        !ir.contains("call double @js_dynamic_bitxor"),
+        "a xor against String.prototype.charCodeAt must not route through \
+         the BigInt-aware dynamic helper — charCodeAt is a Number:\n{ir}"
+    );
+    assert!(
+        ir.contains("xor i32"),
+        "the xor must lower inline once both operands are proven \
+         non-BigInt primitives:\n{ir}"
+    );
+}
+
+#[test]
+fn char_code_at_on_a_string_receiver_emits_the_inline_ascii_read() {
+    // Defect 2: even with the receiver handle resolved, each character cost
+    // two more opaque calls (`js_string_index_to_i32` +
+    // `js_string_char_code_at`), which also pinned the loop-invariant header
+    // loads inside the loop because LICM cannot hoist across an opaque call.
+    let ir = hash_loop_ir(Type::String);
+    assert!(
+        ir.contains("cca.fast"),
+        "a string-typed receiver must get the inline ASCII charCodeAt fast \
+         path:\n{ir}"
+    );
+    assert!(
+        ir.contains("load i8"),
+        "the ASCII fast path must read the character as a single byte \
+         load:\n{ir}"
+    );
+    // The slow arm is still emitted — it is what services SSO receivers,
+    // non-ASCII payloads, out-of-range and non-numeric indices. Its presence
+    // is the proof that the fast path did NOT replace the correct lowering,
+    // only shortcut it.
+    assert!(
+        ir.contains("call double @js_string_char_code_at")
+            && ir.contains("call i32 @js_string_index_to_i32"),
+        "the inline path must keep the runtime helpers as its fallback \
+         arm:\n{ir}"
+    );
+}
+
+#[test]
+fn char_code_at_on_an_unproven_receiver_keeps_the_runtime_lowering() {
+    // The negative control. An `any`-typed receiver may be a user object with
+    // its own `charCodeAt`, so neither the static Number claim nor the inline
+    // header read is admissible — and this assertion is what makes the two
+    // tests above meaningful rather than tautological (both would pass on a
+    // build that fired the fast path unconditionally).
+    let ir = hash_loop_ir(Type::Any);
+    assert!(
+        !ir.contains("cca.fast"),
+        "an unproven receiver must not read a StringHeader inline:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_dynamic_bitxor"),
+        "an unproven receiver's method result may still be a BigInt, so the \
+         xor must keep the dynamic helper:\n{ir}"
+    );
+}
+
+#[test]
+fn only_number_returning_string_methods_are_claimed_numeric() {
+    // `codePointAt` returns `undefined` (a NaN-BOX tag) for an out-of-range
+    // index and `at`/`charAt` return strings, so claiming them numeric would
+    // hand a tagged value to an `fadd`/inline-xor. Pinning the exact set here
+    // means widening it is a deliberate edit, not a copy-paste from
+    // `is_known_string_method_name`.
+    const CLAIMED: [&str; 5] = [
+        "charCodeAt",
+        "indexOf",
+        "lastIndexOf",
+        "search",
+        "localeCompare",
+    ];
+    for name in CLAIMED {
+        assert!(
+            super::string_method_returns_number(name),
+            "{name} lowers to a raw double and must be claimed numeric"
+        );
+    }
+    for name in [
+        "codePointAt",
+        "at",
+        "charAt",
+        "startsWith",
+        "endsWith",
+        "includes",
+        "slice",
+        "split",
+        "match",
+    ] {
+        assert!(
+            !super::string_method_returns_number(name),
+            "{name} does not always evaluate to a Number and must not be claimed"
+        );
+    }
+    // The claim mirrors `lower_call/property_get.rs`'s static-String routing
+    // condition; an admitted name that is ALSO array-only would never reach
+    // `lower_string_method`, and the claim would be about a call that lowers
+    // somewhere else entirely.
+    for name in CLAIMED {
+        assert!(
+            !crate::lower_call::property_get::is_array_only_method_name(name),
+            "{name} must not be array-only, or the routing mirror is wrong"
+        );
+        assert!(
+            crate::lower_string_method::is_known_string_method_name(name),
+            "{name} must be a known String method, or it never routes to \
+             lower_string_method"
+        );
+    }
+}
+
+/// #7796 — an element read at a NON-numeric index is not a numeric read.
+///
+/// `a[Symbol.iterator]` on a `number[]` is a property read on the array
+/// object, and it answers with a function. Typing the local that holds it as
+/// `number` made the truthiness test lower to `fcmp one %v, 0.0` — and every
+/// NaN-boxed pointer IS a NaN, so that comparison is false for every function,
+/// object and string alive. `if (f)` took the false branch on a value that
+/// `typeof` called a function and `Boolean()` called true.
+mod symbol_keyed_element_reads {
+    use super::*;
+
+    /// Slice out the probe function so an assertion cannot be satisfied by
+    /// some unrelated part of the module.
+    fn probe_body(ir: &str) -> String {
+        let start = ir
+            .find("__probe(")
+            .map(|i| ir[..i].rfind("define").expect("define before probe"))
+            .expect("probe function must be emitted");
+        let end = ir[start..].find("\n}").expect("probe must terminate") + start;
+        ir[start..end].to_string()
+    }
+
+    fn array_of_numbers(id: u32) -> Stmt {
+        Stmt::Let {
+            id,
+            name: "a".to_string(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: false,
+            init: Some(Expr::Array(vec![Expr::Integer(1)])),
+        }
+    }
+
+    fn truthy_return(local: u32) -> Stmt {
+        Stmt::Return(Some(Expr::Conditional {
+            condition: Box::new(Expr::LocalGet(local)),
+            then_expr: Box::new(Expr::Integer(1)),
+            else_expr: Box::new(Expr::Integer(0)),
+        }))
+    }
+
+    #[test]
+    fn a_symbol_indexed_element_is_tested_with_js_is_truthy() {
+        // const a: number[] = [1];
+        // const sym = Symbol.iterator;
+        // const f = a[sym];
+        // return f ? 1 : 0;
+        let ir = emitted_ir(probe_module(
+            "symbol_keyed_element_read.ts",
+            Vec::new(),
+            vec![
+                array_of_numbers(1),
+                Stmt::Let {
+                    id: 2,
+                    name: "sym".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::SymbolFor(Box::new(Expr::String(
+                        "@@__perry_wk_iterator".to_string(),
+                    )))),
+                },
+                Stmt::Let {
+                    id: 3,
+                    name: "f".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        index: Box::new(Expr::LocalGet(2)),
+                    }),
+                },
+                truthy_return(3),
+            ],
+        ));
+        let body = probe_body(&ir);
+        assert!(
+            body.contains("js_is_truthy"),
+            "a symbol-keyed read must go through the general truthiness \
+             helper, or a NaN-boxed function reads as false:\n{body}"
+        );
+        assert!(
+            !body.contains("fcmp one"),
+            "the numeric fast path must not fire for a non-numeric index:\n{body}"
+        );
+    }
+
+    #[test]
+    fn a_numeric_index_keeps_the_inline_fast_path() {
+        // The guard against over-correcting: requiring a numeric index must
+        // not cost the ordinary `a[i]` element read its inline comparison.
+        let ir = emitted_ir(probe_module(
+            "numeric_element_read.ts",
+            Vec::new(),
+            vec![
+                array_of_numbers(1),
+                Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: false,
+                    init: Some(Expr::Integer(0)),
+                },
+                Stmt::Let {
+                    id: 3,
+                    name: "v".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        index: Box::new(Expr::LocalGet(2)),
+                    }),
+                },
+                truthy_return(3),
+            ],
+        ));
+        let body = probe_body(&ir);
+        assert!(
+            body.contains("fcmp one"),
+            "a numeric index must keep the inline truthiness comparison:\n{body}"
+        );
+    }
 }

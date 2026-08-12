@@ -55,6 +55,8 @@ pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, Shad
 pub(crate) use temp_roots::reset_temp_roots;
 #[cfg(test)]
 pub(super) use temp_roots::temp_root_depth;
+/// #7469: consumed by `crate::tls_hot::fill`, which lives outside `gc`.
+pub(crate) use temp_roots::temp_roots_hot_addr;
 pub use temp_roots::{
     js_array_push_f64_temp_rooted, js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_set,
     js_gc_temp_root_truncate,
@@ -80,6 +82,10 @@ pub(super) struct MutableRootScannerEntry {
     pub(super) source: MutableRootScannerSource,
     pub(super) budgeted_scanner: Option<BudgetedMutableRootScanner>,
     pub(super) budgeted_state_factory: Option<BudgetedMutableRootScannerStateFactory>,
+    /// Registration-site name, for per-scanner root attribution
+    /// (`gc/scanner_profile.rs`, #7915). Diagnostics only — nothing in the
+    /// collector's control flow reads it.
+    pub(super) name: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,7 +95,7 @@ pub(super) enum RuntimeHandleSlot {
     HeapWord(u64),
 }
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
     pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScannerEntry>> = const { RefCell::new(Vec::new()) };
     pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
@@ -220,14 +226,35 @@ pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
     );
 }
 
+/// `gc_register_mutable_root_scanner` plus a registration-site name for
+/// per-scanner root attribution (`gc/scanner_profile.rs`).
+pub(crate) fn gc_register_named_mutable_root_scanner(
+    name: &'static str,
+    scanner: MutableRootScanner,
+) {
+    gc_register_mutable_root_scanner_named_with_source(
+        name,
+        scanner,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+}
+
 /// Compatibility wrapper for callers that provide a human-readable scanner
 /// name. Current root-source telemetry groups these under runtime mutable
 /// scanners.
-pub fn gc_register_mutable_root_scanner_named(_source: &'static str, scanner: MutableRootScanner) {
-    gc_register_mutable_root_scanner(scanner);
+pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: MutableRootScanner) {
+    gc_register_named_mutable_root_scanner(source, scanner);
 }
 
 pub(super) fn gc_register_mutable_root_scanner_with_source(
+    scanner: MutableRootScanner,
+    source: MutableRootScannerSource,
+) {
+    gc_register_mutable_root_scanner_named_with_source("unnamed", scanner, source);
+}
+
+pub(super) fn gc_register_mutable_root_scanner_named_with_source(
+    name: &'static str,
     scanner: MutableRootScanner,
     source: MutableRootScannerSource,
 ) {
@@ -237,11 +264,28 @@ pub(super) fn gc_register_mutable_root_scanner_with_source(
             source,
             budgeted_scanner: None,
             budgeted_state_factory: None,
+            name,
         });
     });
 }
 
 pub(super) fn gc_register_budgeted_mutable_root_scanner_with_source(
+    scanner: MutableRootScanner,
+    budgeted_scanner: BudgetedMutableRootScanner,
+    budgeted_state_factory: BudgetedMutableRootScannerStateFactory,
+    source: MutableRootScannerSource,
+) {
+    gc_register_budgeted_named_mutable_root_scanner_with_source(
+        "unnamed",
+        scanner,
+        budgeted_scanner,
+        budgeted_state_factory,
+        source,
+    );
+}
+
+pub(super) fn gc_register_budgeted_named_mutable_root_scanner_with_source(
+    name: &'static str,
     scanner: MutableRootScanner,
     budgeted_scanner: BudgetedMutableRootScanner,
     budgeted_state_factory: BudgetedMutableRootScannerStateFactory,
@@ -253,6 +297,7 @@ pub(super) fn gc_register_budgeted_mutable_root_scanner_with_source(
             source,
             budgeted_scanner: Some(budgeted_scanner),
             budgeted_state_factory: Some(budgeted_state_factory),
+            name,
         });
     });
 }
@@ -374,13 +419,17 @@ pub(super) fn mark_stack_roots_unchecked(
     // Size check: 32 * 8 = 256 bytes, which exceeds the darwin arm64
     // `jmp_buf` (48 * 4 = 192 bytes) and every other platform we
     // currently support — see `crate::ffi::setjmp::JMP_BUF_MIN_BYTES`.
-    let mut jmp_buf = [0u64; 32]; // oversized for safety
+    // 16-aligned: MSVC's `_setjmp` saves XMM registers with aligned
+    // stores, and a bare `[u64; 32]` is only 8-aligned (#7356).
+    #[repr(C, align(16))]
+    struct JmpBufWords([u64; 32]);
+    let mut jmp_buf = JmpBufWords([0u64; 32]); // oversized for safety
     unsafe {
-        crate::ffi::setjmp::setjmp(jmp_buf.as_mut_ptr() as *mut std::os::raw::c_int);
+        crate::ffi::setjmp::setjmp(jmp_buf.0.as_mut_ptr() as *mut std::os::raw::c_int);
     }
 
     // Scan the register buffer (covers callee-saved regs: x19-x28 on AArch64, rbx/rbp/r12-r15 on x86_64)
-    for &word in &jmp_buf {
+    for &word in &jmp_buf.0 {
         if try_mark_conservative_word(word, valid_ptrs, pin_only_old) {
             stats.root_count += 1;
         }

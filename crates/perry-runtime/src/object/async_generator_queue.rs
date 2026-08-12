@@ -44,10 +44,29 @@ struct AsyncGeneratorQueueState {
     queue: VecDeque<AsyncGeneratorRequest>,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static STATES: RefCell<Vec<AsyncGeneratorQueueState>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Install the queue wrappers on an async-generator instance's own
+/// `next`/`return`/`throw`.
+///
+/// # Rooting (#7577)
+///
+/// Called from `js_generator_attach_prototype` /
+/// `js_generator_attach_closure_prototype`, both of which now hand in a
+/// freshly re-read receiver — which this function then let go stale again.
+/// Each `set_method` pair allocates twice (`js_closure_alloc` for the wrapper,
+/// `js_object_set_field_by_name` for the keys-array transition), so by the
+/// third `set_method` the `obj` bound at entry was two collections old, and the
+/// two ORIGINAL closures still waiting to be captured were as well — a wrapper
+/// built over a moved `original` calls into retired from-space on the first
+/// `gen.return()`.
+///
+/// Everything is therefore held in a `RuntimeHandleScope` and re-read at each
+/// use. `own_closure` reads are allocation-free
+/// (`js_object_get_own_field_or_undef` matches by byte slice), so the three
+/// lookups can be done up front; it is the writes that move things.
 pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
     if obj.is_null() {
         return;
@@ -67,6 +86,12 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
         return;
     };
 
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(js_nanbox_pointer(obj as i64));
+    let next_h = scope.root_nanbox_f64(js_nanbox_pointer(next as i64));
+    let ret_h = scope.root_nanbox_f64(js_nanbox_pointer(ret as i64));
+    let throw_h = scope.root_nanbox_f64(js_nanbox_pointer(throw as i64));
+
     let state_id = STATES.with(|states| {
         let mut states = states.borrow_mut();
         let id = states.len() + 1;
@@ -78,21 +103,32 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
         id
     });
 
-    set_method(
-        obj,
-        b"next",
-        make_method_wrapper(state_id, next, async_generator_next_wrapper),
-    );
-    set_method(
-        obj,
-        b"return",
-        make_method_wrapper(state_id, ret, async_generator_return_wrapper),
-    );
-    set_method(
-        obj,
-        b"throw",
-        make_method_wrapper(state_id, throw, async_generator_throw_wrapper),
-    );
+    let obj_now = || js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
+    let closure_now = |h: &crate::gc::RuntimeHandle<'_>| {
+        js_nanbox_get_pointer(h.get_nanbox_f64()) as *const ClosureHeader
+    };
+
+    for (name, original_h, func) in [
+        (
+            b"next".as_slice(),
+            &next_h,
+            async_generator_next_wrapper as extern "C" fn(*const ClosureHeader, f64) -> f64,
+        ),
+        (b"return".as_slice(), &ret_h, async_generator_return_wrapper),
+        (b"throw".as_slice(), &throw_h, async_generator_throw_wrapper),
+    ] {
+        // Inlined rather than routed through `make_method_wrapper` for one
+        // reason: that helper takes `original` as a parameter, so the caller
+        // would have to bind it BEFORE `js_closure_alloc` runs and the capture
+        // store would write a pre-collection address. Reading it from the
+        // handle after the allocation is the whole fix.
+        let wrapper = js_closure_alloc(func as *const u8, 2);
+        js_closure_set_capture_f64(wrapper, 0, state_id as f64);
+        js_closure_set_capture_ptr(wrapper, 1, closure_now(original_h) as i64);
+        // `set_method` roots both of its pointer arguments before it allocates
+        // its key string; nothing between here and the call allocates.
+        set_method(obj_now(), name, wrapper);
+    }
 }
 
 pub(crate) fn scan_async_generator_queue_roots_mut(
@@ -122,9 +158,22 @@ fn own_closure(obj: *mut ObjectHeader, name: &[u8]) -> Option<*const ClosureHead
     None
 }
 
+/// `obj[name] = closure`.
+///
+/// #7577: `js_string_from_bytes` allocates, so both pointer arguments are
+/// rooted across it and re-read at the store. Pre-fix, building the key could
+/// move the receiver and the closure, and the store then wrote a moved closure
+/// into a moved object using both pre-collection addresses.
 fn set_method(obj: *mut ObjectHeader, name: &[u8], closure: *mut ClosureHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(js_nanbox_pointer(obj as i64));
+    let closure_h = scope.root_nanbox_f64(js_nanbox_pointer(closure as i64));
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(obj, key, js_nanbox_pointer(closure as i64));
+    js_object_set_field_by_name(
+        js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader,
+        key,
+        closure_h.get_nanbox_f64(),
+    );
 }
 
 /// #4547: the queue wrappers each take a single `arg` (the value passed to
@@ -133,7 +182,7 @@ fn set_method(obj: *mut ObjectHeader, name: &[u8], closure: *mut ClosureHeader) 
 /// uninitialized stack slot for `arg` instead of `undefined`. Record arity 1
 /// for all three func pointers so the call path pads the missing argument.
 fn register_wrapper_arities() {
-    thread_local! {
+    crate::perry_thread_local! {
         static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     REGISTERED.with(|done| {
@@ -147,16 +196,13 @@ fn register_wrapper_arities() {
     });
 }
 
-fn make_method_wrapper(
-    state_id: usize,
-    original: *const ClosureHeader,
-    func: extern "C" fn(*const ClosureHeader, f64) -> f64,
-) -> *mut ClosureHeader {
-    let wrapper = js_closure_alloc(func as *const u8, 2);
-    js_closure_set_capture_f64(wrapper, 0, state_id as f64);
-    js_closure_set_capture_ptr(wrapper, 1, original as i64);
-    wrapper
-}
+// #7577: `make_method_wrapper(state_id, original, func)` used to live here. Its
+// signature was the defect — taking `original` as a parameter forced every
+// caller to bind that pointer BEFORE the `js_closure_alloc` inside, so the
+// capture store wrote a pre-collection address. The one caller now allocates
+// the wrapper first and reads `original` out of its handle afterwards, which
+// leaves no correct way to call this helper; per CLAUDE.md's kill-policy the
+// losing shape is deleted rather than left for a future caller to reach for.
 
 fn make_settle_wrapper(
     state_id: usize,
@@ -268,8 +314,10 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: Reques
         let scope = crate::gc::RuntimeHandleScope::new();
         let original_handle = scope.root_raw_const_ptr(original);
         let arg_handle = scope.root_nanbox_f64(arg);
-        let promise = js_promise_new();
-        let original = original_handle.get_raw_const_ptr::<ClosureHeader>();
+        // `across_const` pairs the allocating call with the re-read, so the
+        // closure pointer cannot be bound stale in between (#7341).
+        let (promise, original) =
+            original_handle.across_const::<ClosureHeader, _>(|| js_promise_new());
         let arg = arg_handle.get_nanbox_f64();
         STATES.with(|states| {
             if let Some(state) = states.borrow_mut().get_mut(state_id - 1) {

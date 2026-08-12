@@ -101,6 +101,24 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "Buffer",
 ];
 
+/// Is `name` one of the built-in CONSTRUCTORS installed on `globalThis`?
+///
+/// #7518: `try_dispatch_value_called_proto_method` needs this to tell a built-in
+/// *prototype method* invoked as a value — the #3716 uncurry-this idiom, which it
+/// must re-dispatch by name on `IMPLICIT_THIS` — from a global *constructor*
+/// invoked as a value, which it must not: `IMPLICIT_THIS.EventTarget(…)` resolves
+/// to nothing and the by-name tower's catch-all throws
+/// `TypeError: EventTarget is not a function`.
+///
+/// Both are backed by the same `global_this_builtin_noop_thunk`, and the only
+/// thing that used to separate them was the accident that constructors carried no
+/// recorded builtin `.length`. That stopped being true as
+/// [`builtin_constructor_spec_length`] below grew to cover them, so the
+/// distinction has to be stated rather than inferred.
+pub(crate) fn is_global_this_builtin_constructor_name(name: &str) -> bool {
+    GLOBAL_THIS_BUILTIN_CONSTRUCTORS.contains(&name)
+}
+
 /// #3655: spec `length` (declared-parameter count) for each built-in
 /// constructor, so `Ctor.length` reads the right arity through the runtime
 /// value path (`const C = DataView; C.length === 1`) and

@@ -20,6 +20,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -118,6 +119,7 @@ fn class_with_static(id: u32, value: f64) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 

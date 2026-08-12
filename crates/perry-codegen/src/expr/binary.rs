@@ -7,7 +7,7 @@
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr, LogicalOp};
 
-use crate::lower_string_method::{
+use crate::lower_string_concat::{
     flatten_string_add_chain, lower_string_coerce_concat, lower_string_concat,
     lower_string_concat_chain,
 };
@@ -18,12 +18,219 @@ use crate::native_value::{
 use crate::type_analysis::{
     add_operands_have_pod_materialization_hazard,
     expr_may_return_boxed_value_from_raw_f64_fallback, is_bigint_expr, is_bool_expr,
-    is_numeric_expr,
+    is_numeric_expr, numeric_proof_is_declared_only,
 };
 use crate::types::{DOUBLE, I1, I128, I32, I64};
 
-use super::temp_root::{lower_operand_pair_rooted, temp_root_release};
+use crate::rooting::with_operands_rooted;
+
 use super::{is_known_finite, lower_expr, FnCtx};
+
+/// `helper(left, right)` with each operand rooted across the other's lowering
+/// and the group released on every path out (#6951).
+///
+/// All five dynamic-dispatch arms below are this one shape — the operand pair
+/// feeds a runtime helper that runs `ToPrimitive` / `ToNumeric` on both sides,
+/// so a pointer-bearing left operand has to survive the right operand's
+/// evaluation. Before #7615 slice 8 each spelled it out as
+/// `lower_operand_pair_rooted` + a `temp_root_release` on its own `return`
+/// path; that is five chances to place the release wrong, and #7462 is what
+/// one misplaced release costs.
+fn lower_rooted_dynamic_binary(
+    ctx: &mut FnCtx<'_>,
+    helper: &str,
+    left: &Expr,
+    right: &Expr,
+) -> Result<String> {
+    with_operands_rooted(ctx, &[left, right], |ctx, values| {
+        Ok(ctx.block().call(
+            DOUBLE,
+            helper,
+            &[(DOUBLE, &values[0]), (DOUBLE, &values[1])],
+        ))
+    })
+}
+
+/// `+` where both operands are statically numeric but at least one of them is
+/// numeric only because a DECLARED type said so (#7773, #7776).
+///
+/// Nothing enforces annotations at runtime, so a `x: number` slot reached
+/// through `as any` really can hold a string — and then the spec says `+` is
+/// string concatenation, which is what Node does. Trusting the annotation cost
+/// two different wrong answers, both silent:
+///
+/// * `o.x + 1` produced `NaN`, because the number-context read's cold arm
+///   `js_number_coerce`s unconditionally; Node prints `s1`.
+/// * through a refined local the add did not even coerce — `fadd` on a
+///   NaN-BOXED value propagates the input payload on both AArch64 and x86-64,
+///   so the string came back out of the add still a string, and the `+ 1`
+///   looked like it had evaporated.
+///
+/// So re-check at runtime instead of assuming. The fast arm keeps the inline
+/// `fadd`; only a value that is not a canonical double reaches the dynamic
+/// helper, which is the one that implements the spec's `+`.
+///
+/// **The whole `+` TREE becomes one diamond, not one per node.** That is a
+/// correctness-neutral but performance-critical detail, and doing it the
+/// obvious way first is what showed why. Per-node diamonds make the outer add
+/// of `s += o.x + 1` consume a PHI, and LLVM cannot prove a phi over
+/// (`fadd`, runtime call) is a canonical double — so the outer test never
+/// folded, its cold arm stayed live in the loop, and `Acc.run`'s hot loop lost
+/// its `fadd` to an unconditional call. Measured on the bench mini that shape
+/// went 86 ms -> 119 ms. Fusing the tree removes the phi entirely: one test
+/// over the tree's violable LEAVES, one branch, then either all-`fadd` or
+/// all-`js_dynamic_string_or_number_add`.
+///
+/// Associativity is preserved rather than assumed away: both arms rebuild the
+/// ORIGINAL tree shape. `1 + (2 + "x")` is `"12x"` and `(1 + 2) + "x"` is
+/// `"3x"`, so a flattened re-association would be a wrong answer — the leaves
+/// are collected in evaluation order for rooting, but the arms are rebuilt
+/// node-for-node.
+///
+/// Every leaf is tested EXCEPT those that `expr_produces_canonical_raw_f64`
+/// vouches for (literals, `Math.*`, an explicit coerce, non-`+` arithmetic).
+/// Testing only the declared-only leaves is not enough, and the accumulator is
+/// the counter-example: `let s = 0; s += r.x + r.y` types `s` as `Number`, but
+/// the moment this very lowering's cold arm concatenates, `s` HOLDS A STRING
+/// while its static type still says otherwise. Skipping it summed
+/// `16zw1113151719` down to `16zw` — the fast arm `fadd`ed a NaN-boxed string
+/// and passed it through unchanged, which is the original bug reintroduced one
+/// level up. `expr_produces_canonical_raw_f64` declines to vouch for a
+/// `LocalGet` precisely because a local is a slot somebody can store into.
+///
+/// The residual cost lands where it is already small: every read that reaches
+/// here is one the compiler could NOT prove, so it pays an inline header
+/// precheck or a `js_typed_feedback_class_field_get_guard` call for its shape
+/// check regardless. The proven tiers (element-shape / class-field loop facts,
+/// `Ptr<Shape>` numeric fields, scalar replacement, POD records, typed arrays)
+/// never get here at all — `numeric_proof_is_declared_only` answers `false`.
+fn lower_declared_only_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    let mut leaves = Vec::new();
+    add_tree_leaves(expr, &mut leaves);
+    let needs_test: Vec<bool> = leaves
+        .iter()
+        .map(|leaf| !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
+        .collect();
+
+    with_operands_rooted(ctx, &leaves, |ctx, values| {
+        let mut cond: Option<String> = None;
+        for (value, is_tested) in values.iter().zip(needs_test.iter()) {
+            if !is_tested {
+                continue;
+            }
+            let is_num = crate::stmt::emit_js_value_is_number(ctx, value);
+            cond = Some(match cond {
+                Some(prev) => ctx.block().and(I1, &prev, &is_num),
+                None => is_num,
+            });
+        }
+        // The caller only routes here when a leaf is declared-only, and every
+        // such leaf is a field / element / local read — none of which
+        // `expr_produces_canonical_raw_f64` vouches for. So there is always at
+        // least one test; an empty condition would mean the two predicates had
+        // drifted apart, which is worth a hard error rather than a silent
+        // unguarded `fadd`.
+        let Some(all_num) = cond else {
+            anyhow::bail!(
+                "declared-only `+` tree has no testable leaf: \
+                 numeric_proof_is_declared_only and expr_produces_canonical_raw_f64 disagree"
+            );
+        };
+
+        let fast_idx = ctx.new_block("declared_add.numeric");
+        let slow_idx = ctx.new_block("declared_add.dynamic");
+        let merge_idx = ctx.new_block("declared_add.merge");
+        let fast_label = ctx.block_label(fast_idx);
+        let slow_label = ctx.block_label(slow_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        ctx.block().cond_br(&all_num, &fast_label, &slow_label);
+
+        ctx.current_block = fast_idx;
+        let fast_val = rebuild_add_tree(ctx, expr, values, &mut 0, true);
+        let fast_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = slow_idx;
+        let slow_val = rebuild_add_tree(ctx, expr, values, &mut 0, false);
+        let slow_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = merge_idx;
+        Ok(ctx
+            .block()
+            .phi(DOUBLE, &[(&fast_val, &fast_end), (&slow_val, &slow_end)]))
+    })
+}
+
+/// The `+` tree's operand leaves, in evaluation order — a left-to-right walk,
+/// so `with_operands_rooted` lowers them in the order JS evaluates them.
+fn add_tree_leaves<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    if let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    {
+        add_tree_leaves(left, out);
+        add_tree_leaves(right, out);
+    } else {
+        out.push(expr);
+    }
+}
+
+/// Rebuild the `+` tree over already-lowered leaf values, node for node, so the
+/// original associativity survives. `fast` picks the inline `fadd`; otherwise
+/// every node goes through the spec-`+` helper.
+fn rebuild_add_tree(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    values: &[String],
+    next_leaf: &mut usize,
+    fast: bool,
+) -> String {
+    if let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    {
+        let l = rebuild_add_tree(ctx, left, values, next_leaf, fast);
+        let r = rebuild_add_tree(ctx, right, values, next_leaf, fast);
+        return if fast {
+            ctx.block().fadd(&l, &r)
+        } else {
+            ctx.block().call(
+                DOUBLE,
+                "js_dynamic_string_or_number_add",
+                &[(DOUBLE, &l), (DOUBLE, &r)],
+            )
+        };
+    }
+    let value = values[*next_leaf].clone();
+    *next_leaf += 1;
+    value
+}
+
+/// May the flattened `p1 + p2 + … + pN` chain be handed to
+/// `js_string_concat_chain`, which formats EVERY part as a string? (#7837)
+///
+/// The fold reproduces the source tree `(((p1 + p2) + p3) …)` only when that
+/// tree really is all-concat. Exactly one node can fail that: `p1 + p2`. If
+/// either of those is genuinely a string the node concatenates, its result is
+/// a string, and every later `+` concatenates too, whatever the later parts
+/// hold. If neither is, the node may be a numeric ADD — and then
+/// `const a: string = (42 as any), b: string = (99 as any); a + b + "x"` is
+/// `"141x"` in Node while the fold prints `"4299x"`.
+///
+/// So the head pair needs a proof, not an annotation. A chain that fails this
+/// simply falls through to the pairwise lowering, where `js_string_concat_box`
+/// resolves each node from the runtime tags.
+fn chain_fold_is_sound(ctx: &FnCtx<'_>, parts: &[&Expr]) -> bool {
+    parts
+        .iter()
+        .take(2)
+        .any(|p| crate::type_analysis::string_value_is_runtime_guaranteed(ctx, p))
+}
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
     // #6884: a statically typed numeric TypedArray read is Number|undefined,
@@ -33,6 +240,21 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     if let Expr::IndexGet { object, index } = expr {
         if let Some(value) =
             super::ta_param_f64_read::try_lower_ta_f64_read_for_number_context(ctx, object, index)?
+        {
+            return Ok((value, true));
+        }
+        // #7494: the guarded tier above declines outright for a receiver
+        // tracked in `ctx.buffer_view_slots` (its own "don't shadow" comment)
+        // because that tracked view owns a STRONGER-bounds native path
+        // (`lower_typed_array_load`). Nothing routed a number-context read to
+        // it, so a proven in-bounds buffer-view typed-array read still fell
+        // through to the generic `lower_expr` tier below and picked up a
+        // redundant `js_number_coerce` from the residual-coerce rule, which
+        // cannot see which concrete lowering actually ran.
+        if let Some(value) =
+            super::buffer_access::try_lower_typed_array_f64_read_for_number_context(
+                ctx, object, index,
+            )?
         {
             return Ok((value, true));
         }
@@ -58,7 +280,19 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
             return Ok((value, true));
         }
     }
-    if expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
+    // repsel #7480 step 3: a tracked `arr[i].field` read inside an
+    // element-shape fast clone routes to the raw-f64 lowering WITHOUT the
+    // boxed-fallback test below. That test asks `receiver_class_name`, which
+    // by design does not resolve an object-literal element type, so the read
+    // would otherwise fall through to `lower_expr` — a generic diamond, whose
+    // calls then fail the clone's call-free admission and cost the clone
+    // entirely. The predicate is left alone rather than widened: this read has
+    // no boxed fallback at all (the residual per-element check proves the slot
+    // is a raw double before the load), so claiming one here would be a lie
+    // that other consumers of that predicate would read.
+    let in_element_shape_clone = matches!(expr, Expr::PropertyGet { object, property, .. }
+        if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some());
+    if in_element_shape_clone || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
         if let Some(value) =
             super::property_get::lower_raw_f64_class_field_get_for_number_context(ctx, expr)?
         {
@@ -92,7 +326,19 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
 fn operand_needs_residual_coerce(ctx: &FnCtx<'_>, expr: &Expr, fallback_coerced: bool) -> bool {
     !fallback_coerced
         && (!is_numeric_expr(ctx, expr)
-            || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr))
+            || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr)
+            // #7773/#7506: a numeric local or compound expression initialized
+            // from a declared-only field/element expression is
+            // `is_numeric_expr`, but the hazard predicate above only knows how
+            // to look at reads. That made both `const sum = o.x + o.y; sum *
+            // scale` and `(o.x + o.y) * scale` emit a bare `fmul`. Arithmetic
+            // on a NaN-box preserves the payload, so the multiply returned the
+            // string unchanged. Every non-`+` arithmetic operator is a plain
+            // `ToNumber` on its operands, so a coerce is the whole fix here;
+            // `+` needs the concat dispatch and gets it from
+            // `lower_declared_only_numeric_add`. Proven raw-f64 tiers answer
+            // false here, so asking about every expression keeps them exempt.
+            || numeric_proof_is_declared_only(ctx, expr))
 }
 
 /// Lower an operand in number context: route through
@@ -401,13 +647,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // shapes go through the existing pairwise paths.
                 if l_is_str && r_is_str {
                     if let Some(parts) = flatten_string_add_chain(ctx, left, right) {
-                        if parts.len() >= 3 {
+                        if parts.len() >= 3 && chain_fold_is_sound(ctx, &parts) {
                             return lower_string_concat_chain(ctx, &parts);
                         }
                     }
                 }
 
-                if l_is_str && r_is_str {
+                // The pairwise concat — and ONLY the pairwise concat — accepts a
+                // DECLARED `string` as well as a structurally-proven one, so
+                // `"shape:" + this.tag` and `prefix + r.kind` stop paying
+                // `js_dynamic_string_or_number_add`'s scope + four roots + two
+                // `ToPrimitive`s to rediscover what the declarations said.
+                //
+                // Sound for a LYING declaration, not merely unlikely to meet
+                // one: this arm emits `js_string_concat_box`, which
+                // tag-dispatches both operands and forwards any non-string pair
+                // to `js_dynamic_string_or_number_add` — so string+string,
+                // string+number and number+number all return exactly what the
+                // dynamic path returns. See `is_declared_string_expr` for why
+                // the chain fold above and the one-sided arm below must keep
+                // the strict predicate.
+                if crate::type_analysis::is_declared_string_expr(ctx, left)
+                    && crate::type_analysis::is_declared_string_expr(ctx, right)
+                {
                     return lower_string_concat(ctx, left, right);
                 }
                 if l_is_str || r_is_str {
@@ -423,14 +685,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if other_known_primitive {
                         return lower_string_coerce_concat(ctx, left, right, l_is_str, r_is_str);
                     }
-                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                    let sum = ctx.block().call(
-                        DOUBLE,
+                    return lower_rooted_dynamic_binary(
+                        ctx,
                         "js_dynamic_string_or_number_add",
-                        &[(DOUBLE, &l), (DOUBLE, &r)],
+                        left,
+                        right,
                     );
-                    temp_root_release(ctx, guard);
-                    return Ok(sum);
                 }
                 if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) {
                     if let Some(value) = try_lower_small_bigint_literal_binary(
@@ -441,12 +701,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ) {
                         return Ok(value);
                     }
-                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                    let sum =
-                        ctx.block()
-                            .call(DOUBLE, "js_dynamic_add", &[(DOUBLE, &l), (DOUBLE, &r)]);
-                    temp_root_release(ctx, guard);
-                    return Ok(sum);
+                    return lower_rooted_dynamic_binary(ctx, "js_dynamic_add", left, right);
                 }
                 // Refs #486: neither operand is statically known. Per JS
                 // spec for `+`, if EITHER side is a string at runtime, the
@@ -466,14 +721,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && crate::type_analysis::is_numeric_expr(ctx, right))
                     || add_operands_have_pod_materialization_hazard(ctx, left, right)
                 {
-                    let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                    let sum = ctx.block().call(
-                        DOUBLE,
+                    return lower_rooted_dynamic_binary(
+                        ctx,
                         "js_dynamic_string_or_number_add",
-                        &[(DOUBLE, &l), (DOUBLE, &r)],
+                        left,
+                        right,
                     );
-                    temp_root_release(ctx, guard);
-                    return Ok(sum);
+                }
+                // Both sides are statically numeric — but "statically" can mean
+                // "an annotation said so", and annotations are not enforced
+                // (#7773, #7776). Re-check the tag at runtime rather than
+                // emitting a bare `fadd` on a value that may be NaN-boxed.
+                if numeric_proof_is_declared_only(ctx, left)
+                    || numeric_proof_is_declared_only(ctx, right)
+                {
+                    return lower_declared_only_numeric_add(ctx, expr);
                 }
             }
             // BigInt arithmetic fast path. NaN-tagged bigints compare
@@ -496,12 +758,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return Ok(value);
                 }
-                let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                let value = ctx
-                    .block()
-                    .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
-                temp_root_release(ctx, guard);
-                return Ok(value);
+                return lower_rooted_dynamic_binary(ctx, fname, left, right);
             }
             // A non-primitive operand may `ToNumeric` to a BigInt at runtime
             // (`Object(1n)`, or an object with a BigInt-returning
@@ -556,12 +813,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // operands, so a pointer-bearing left operand must
                         // survive the right operand's evaluation.
                         let fname = bigint_dynamic_helper(*op);
-                        let (l, r, guard) = lower_operand_pair_rooted(ctx, left, right)?;
-                        let value = ctx
-                            .block()
-                            .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
-                        temp_root_release(ctx, guard);
-                        return Ok(value);
+                        return lower_rooted_dynamic_binary(ctx, fname, left, right);
                     }
                 }
             }
@@ -587,7 +839,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 || matches!(**right, Expr::Number(v) if v == 0.0);
             if matches!(op, BinaryOp::Mod)
                 && crate::type_analysis::is_integer_valued_expr(ctx, left)
-                && crate::type_analysis::is_integer_valued_expr(ctx, right)
+                && crate::type_analysis::is_integer_valued_divisor(ctx, right)
                 && !right_is_known_zero
             {
                 let l_raw = lower_expr(ctx, left)?;

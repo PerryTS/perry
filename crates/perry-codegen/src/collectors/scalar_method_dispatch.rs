@@ -614,6 +614,7 @@ mod tests {
             is_exported: false,
             is_nested: false,
             alloc_width_hint: 0,
+            specialized_from: None,
             aliases: Vec::new(),
         }
     }

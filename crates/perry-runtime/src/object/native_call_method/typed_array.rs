@@ -232,7 +232,13 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                 Some(crate::typedarray::KIND_BIGINT64) | Some(crate::typedarray::KIND_BIGUINT64)
             );
             let builtin: &[u8] = if is_bigint { b"BigInt" } else { b"Number" };
-            match builtin_proto_user_method(builtin, "toLocaleString") {
+            // #5901: no primitive receiver here — the element values are
+            // formatted individually below, so pass `undefined`.
+            match builtin_proto_user_method(
+                builtin,
+                "toLocaleString",
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            ) {
                 None => {
                     let s = crate::typedarray::js_typed_array_join_value(
                         ta,

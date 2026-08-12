@@ -29,6 +29,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -588,7 +589,6 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_GC_SAFEPOINT_ONLY",
         "PERRY_DISABLE_BUFFER_FAST_PATH",
         "PERRY_VERIFY_NATIVE_REGIONS",
-        "PERRY_UNBOXED_OBJECT_FIELDS",
         "PERRY_TARGET_CPU",
         // Codegen tuning/emission toggles (#6394).
         "PERRY_TYPED_FEEDBACK",

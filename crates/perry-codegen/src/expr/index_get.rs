@@ -3,6 +3,20 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! # Rooting (Layer 1, slice 4)
+//!
+//! Migrated onto [`crate::rooting`]; this module names no `expr::temp_root`
+//! symbol. Both windows here are the READ counterpart of the store-operand
+//! guard — `o[f()]` evaluates the base before the key, so the base is live in
+//! an SSA register while arbitrary user code runs — and both are one call to
+//! [`crate::rooting::with_operands_rooted`] over `[base, key]`. The key needs
+//! no protection of its own because it is lowered last, which the operand list
+//! derives rather than asserts.
+//!
+//! The remaining `js_*` calls in this file return `DOUBLE` (NaN-boxed) or are
+//! consumed in the block that produced them, so there is no raw-pointer
+//! register to root: `call_rooted` has no site here.
 
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
@@ -12,16 +26,18 @@ use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
+use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::{
-    array_kind_fact, buffer_access_materialization_reason, emit_typed_feedback_register_site,
-    expr_has_numeric_pointer_free_array_layout, int_range_expr, lower_buffer_load, lower_expr,
-    lower_expr_as_i32, lower_typed_array_load, materialize_js_value, raw_f64_layout_fact,
-    try_lower_flat_const_index_get, typed_feedback_emission_enabled, unbox_str_handle,
-    unbox_to_i64, BufferAccessSpec, FnCtx, PackedF64LoopFact, TypedFeedbackContract,
-    TypedFeedbackKind,
+    array_kind_fact, attach_buffer_view_pointer_state_for_expr,
+    buffer_access_materialization_reason, emit_typed_feedback_register_site,
+    expr_has_numeric_pointer_free_array_layout, int_range_expr, invalidate_buffer_view_pointer,
+    lower_buffer_load, lower_expr, lower_expr_as_i32, lower_typed_array_load, materialize_js_value,
+    raw_f64_layout_fact, try_lower_flat_const_index_get, typed_feedback_emission_enabled,
+    unbox_str_handle, unbox_to_i64, BufferAccessSpec, FnCtx, PackedF64LoopFact,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
 mod guarded_array;
@@ -32,10 +48,33 @@ use guarded_array::{
 };
 use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
 
+/// #7494: deliberately `static_type_of`, not `receiver_class_name`.
+///
+/// `receiver_class_name` returns `None` for any `Expr::LocalGet(id)` with
+/// `ctx.reassigned_locals.contains(id)` — correct for its OTHER callers,
+/// which use the resolved name for FIXED-OFFSET class-layout dispatch that
+/// really would be unsound against a value an `as any` reassignment swapped
+/// in (#6906). Every consumer gated on THIS predicate is different: either a
+/// `ctx.buffer_view_slots`-tracked proof that reassignment already
+/// invalidates on its own (`lower_typed_array_store`, `try_lower_proven_
+/// view_checked_store`/`proven_view_for` — see their own `buffer_view_slots`
+/// lookups), or a genuinely dynamic runtime call (`js_typed_array_set`,
+/// `js_typed_array_get`, `js_typed_array_index_{get,set}_dynamic`) that
+/// re-validates the object's actual GC kind before touching memory, exactly
+/// like `js_array_push_f64` does for a non-array receiver (#7574). The
+/// dynamic-fallback arm's own comment already promises this: "aliases,
+/// reassigned locals, and unknown bounds stay on the runtime helper" — a
+/// promise `receiver_class_name` silently broke by answering `None` for a
+/// reassigned local before that arm was ever reached, which sent the access
+/// on to `is_array_expr`'s PLAIN-array layout instead (element 0 at byte 8,
+/// not the typed-array data region at byte 16) for a real typed-array
+/// object: a type-confused, `unbox`ed-pointer-plus-wrong-offset write,
+/// not merely a missed optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(
-        receiver_class_name(ctx, object).as_deref(),
-        Some(
+        crate::type_analysis::static_type_of(ctx, object),
+        Some(HirType::Named(name)) if matches!(
+            name.as_str(),
             "Int8Array"
                 | "Uint8ClampedArray"
                 | "Int16Array"
@@ -179,6 +218,40 @@ fn typed_array_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &E
         && !numeric_index_has_loop_array_index_proof(ctx, object, index)
 }
 
+fn is_proven_canonical_numeric_string_literal(key: &[u8]) -> bool {
+    if matches!(key, b"-0" | b"NaN" | b"Infinity" | b"-Infinity") {
+        return true;
+    }
+
+    let digits = key.strip_prefix(b"-").unwrap_or(key);
+    if digits.is_empty()
+        || (digits.len() > 1 && digits[0] == b'0')
+        || !digits.iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+
+    // Decimal integers through Number.MAX_SAFE_INTEGER are exact, and this
+    // range is below the threshold where JS Number#toString switches to
+    // exponent notation. Their source spelling therefore proves
+    // CanonicalNumericIndexString without invoking runtime conversion.
+    digits
+        .iter()
+        .try_fold(0_u64, |value, digit| {
+            value.checked_mul(10)?.checked_add(u64::from(digit - b'0'))
+        })
+        .is_some_and(|value| value <= 9_007_199_254_740_991)
+}
+
+fn runtime_key_may_expose_typed_array_backing_buffer(index: &Expr) -> bool {
+    match index {
+        Expr::String(key) => !is_proven_canonical_numeric_string_literal(key.as_bytes()),
+        Expr::WtfString(key) => !is_proven_canonical_numeric_string_literal(key),
+        Expr::Integer(_) | Expr::Number(_) => false,
+        _ => true,
+    }
+}
+
 fn lower_array_index_get_via_runtime_key(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -200,6 +273,57 @@ fn lower_array_index_get_via_runtime_key(
     } else {
         boxed
     }
+}
+
+/// Read a string-valued key from a receiver admitted by an erased Array type.
+///
+/// The ordinary array ABI takes an already-unboxed `ArrayHeader*`, which loses
+/// an SSO String's tag/payload before the runtime can validate the claim. Keep
+/// the receiver boxed until that immediate representation is separated; heap
+/// Strings remain real pointers and are classified inside the array-key helper,
+/// while every other value retains the established fallback.
+fn lower_claimable_array_string_key_get(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_double: &str,
+) -> String {
+    let string_idx = ctx.new_block("aidxkey.sso");
+    let array_idx = ctx.new_block("aidxkey.raw");
+    let merge_idx = ctx.new_block("aidxkey.merge");
+    let string_label = ctx.block_label(string_idx);
+    let array_label = ctx.block_label(array_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let bits = ctx.block().bitcast_double_to_i64(arr_box);
+    let top16 = ctx.block().lshr(I64, &bits, "48");
+    let is_sso_string = ctx.block().icmp_eq(I64, &top16, "32761"); // SHORT_STRING_TAG
+    ctx.block()
+        .cond_br(&is_sso_string, &string_label, &array_label);
+
+    ctx.current_block = string_idx;
+    let string_value = ctx.block().call(
+        DOUBLE,
+        "js_string_index_get_boxed",
+        &[(DOUBLE, arr_box), (DOUBLE, idx_double)],
+    );
+    let string_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = array_idx;
+    let arr_handle = unbox_to_i64(ctx.block(), arr_box);
+    let array_value = ctx.block().call(
+        DOUBLE,
+        "js_array_get_index_or_string",
+        &[(I64, &arr_handle), (DOUBLE, idx_double)],
+    );
+    let array_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[(&string_value, &string_end), (&array_value, &array_end)],
+    )
 }
 
 fn is_async_dispose_symbol_index(index: &Expr) -> bool {
@@ -521,11 +645,13 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     if index_is_static_string_or_symbol {
         return Ok(None);
     }
-    let obj_box = lower_expr(ctx, object)?;
-    let idx_d = lower_expr(ctx, index)?;
-    Ok(Some(lower_inline_dyn_typed_array_get(
-        ctx, &obj_box, &idx_d, true,
-    )))
+    // #7640 section B: receiver live across an unconstrained index.
+    rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+        let (obj_box, idx_d) = (vals[0].clone(), vals[1].clone());
+        Ok(Some(lower_inline_dyn_typed_array_get(
+            ctx, &obj_box, &idx_d, true,
+        )))
+    })
 }
 
 fn lower_bounded_array_index_get(
@@ -542,16 +668,32 @@ fn lower_bounded_array_index_get(
     // bytes at `arr + 8 + idx*8`, so route through the slow path only when
     // the receiver is lazy. Issue #233: also detect FORWARDED arrays; the
     // slow path's `clean_arr_ptr` follows the chain.
+    //
+    // #7574: the test is now POSITIVE — `obj_type == GC_TYPE_ARRAY` — instead
+    // of "not lazy". `is_array_expr` is satisfied by a DECLARED `Type::Array`,
+    // and a declared type is a hint, never a layout fact (CLAUDE.md, *Known
+    // Limitations*), so `const a: number[] = new MyArr()` (a `class X extends
+    // Array` instance — a plain `ObjectHeader`) reached the raw
+    // `gep + load double` at `handle + 8 + idx*8`, i.e. straight into
+    // `parent_class_id ‖ field_count`, then the `keys_array` and `meta`
+    // POINTERS — reading two live GC child edges out as user doubles. The
+    // sibling tier in `index_get/guarded_array.rs` has always tested
+    // `GC_TYPE_ARRAY` here; this one only excluded lazy arrays.
+    //
+    // Strictly more restrictive than the old test (`GC_TYPE_LAZY_ARRAY` is 9,
+    // so `!= GC_TYPE_ARRAY` subsumes `== GC_TYPE_LAZY_ARRAY`): no receiver that
+    // used to take the slow path now takes the fast one. It is also one
+    // instruction CHEAPER — a single `icmp ne` replaces `icmp eq` + `or`.
     let gc_type_addr = blk.sub(I64, &arr_handle, "8");
     let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
     let gc_type = blk.load(I8, &gc_type_ptr);
-    let is_lazy = blk.icmp_eq(I8, &gc_type, "9"); // GC_TYPE_LAZY_ARRAY
+    let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
     let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
     let gc_flags = blk.load(I8, &gc_flags_ptr);
     let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
     let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
-    let needs_slow = blk.or(I1, &is_lazy, &is_fwd);
+    let needs_slow = blk.or(I1, &not_array, &is_fwd);
     // Index accessors / custom attribute descriptors (`Object.defineProperty
     // (arr, i, { get })`) divert element reads through the descriptor tables —
     // the raw slot load below would bypass them (test262 sort/precise-*).
@@ -739,13 +881,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // path), which exposes `@@toStringTag` (`safe-stable-stringify`)
                 // and `@@iterator`.
                 if matches!(index.as_ref(), Expr::SymbolFor(_)) {
-                    let obj_box = lower_expr(ctx, object)?;
-                    let key_box = lower_expr(ctx, index)?;
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_object_get_symbol_property",
-                        &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
-                    ));
+                    // #7640 section B (MEDIUM): `Expr::SymbolFor` lowers to a
+                    // real `js_symbol_for` call, which INTERNS — it allocates a
+                    // SymbolHeader on first use — so the receiver was live
+                    // across an allocation.
+                    return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                        let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_object_get_symbol_property",
+                            &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
+                        ))
+                    });
                 }
                 // #2063 / fractional numeric keys: only proven integer element
                 // indices may take an i32 helper path. Try native
@@ -764,6 +911,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(v);
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
+                    if runtime_key_may_expose_typed_array_backing_buffer(index) {
+                        if let Expr::LocalGet(id) = object.as_ref() {
+                            if ctx.buffer_view_slots.contains_key(id) {
+                                invalidate_buffer_view_pointer(
+                                    ctx,
+                                    *id,
+                                    MaterializationReason::MutableAlias,
+                                );
+                            }
+                        }
+                    }
                     let arr_box = lower_expr(ctx, object)?;
                     let key_box = lower_expr(ctx, index)?;
                     let blk = ctx.block();
@@ -788,6 +946,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         false,
                         vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                     );
+                    attach_buffer_view_pointer_state_for_expr(ctx, object);
                     return Ok(result);
                 }
 
@@ -832,6 +991,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     false,
                     vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                 );
+                attach_buffer_view_pointer_state_for_expr(ctx, object);
                 return Ok(result);
             }
             if is_uint8array_receiver(ctx, object) && is_numeric_expr(ctx, index) {
@@ -957,26 +1117,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // array path so `str[0]` doesn't fall through to a raw
             // double load.
             if is_string_expr(ctx, object) {
-                let s_box = lower_expr(ctx, object)?;
-                let idx_d = lower_expr(ctx, index)?;
-                let blk = ctx.block();
-                // #3987: route through the canonical-index runtime helper (it
-                // takes the raw NaN-boxed key, not an `fptosi`'d i32) so a valid
-                // array index returns its char and every non-canonical key
-                // (`NaN`, `1.5`, negatives, OOB, `"01"`, non-numeric strings)
-                // returns `undefined` — matching ECMAScript / Node — instead of
-                // truncating the index and returning `""` for OOB.
-                // Pass the receiver STILL BOXED. Unboxing here masked off the
-                // low 48 bits, which is only a pointer for a heap STRING_TAG
-                // value — an inline SHORT_STRING_TAG (SSO) value's payload is
-                // the characters themselves, so the mask produced a garbage
-                // pointer and `(a + b)[0]` segfaulted on any short
-                // concatenation. The boxed entry point decides by tag.
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_string_index_get_boxed",
-                    &[(DOUBLE, &s_box), (DOUBLE, &idx_d)],
-                ));
+                // #7640 section B: the receiver is a HEAP STRING and the index
+                // is unconstrained here — `s[f()]` lowers arbitrary user code
+                // between the two. The group states the decision; when the
+                // index provably cannot collect (a literal, a plain local)
+                // `operand_protection` answers `Reuse` and this emits nothing.
+                return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                    let (s_box, idx_d) = (vals[0].clone(), vals[1].clone());
+                    let blk = ctx.block();
+                    // #3987: route through the canonical-index runtime helper (it
+                    // takes the raw NaN-boxed key, not an `fptosi`'d i32) so a valid
+                    // array index returns its char and every non-canonical key
+                    // (`NaN`, `1.5`, negatives, OOB, `"01"`, non-numeric strings)
+                    // returns `undefined` — matching ECMAScript / Node — instead of
+                    // truncating the index and returning `""` for OOB.
+                    // Pass the receiver STILL BOXED. Unboxing here masked off the
+                    // low 48 bits, which is only a pointer for a heap STRING_TAG
+                    // value — an inline SHORT_STRING_TAG (SSO) value's payload is
+                    // the characters themselves, so the mask produced a garbage
+                    // pointer and `(a + b)[0]` segfaulted on any short
+                    // concatenation. The boxed entry point decides by tag.
+                    Ok(blk.call(
+                        DOUBLE,
+                        "js_string_index_get_boxed",
+                        &[(DOUBLE, &s_box), (DOUBLE, &idx_d)],
+                    ))
+                });
             }
             // #6750 follow-up: a masked-window fact (dense range-loop or
             // straight-line region fast copy) covering this access means the
@@ -1022,17 +1188,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 index.as_ref(),
                 Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
             ) || is_string_expr(ctx, index);
+            // #7854 recovered a receiver's declared array type for a LOCAL
+            // (`const names = e.names`), never for the read used directly as a
+            // receiver (`e.vals[i]`, `p.toks[p.pos]`) — the HIR types a
+            // `PropertyGet` off a UNION receiver as `Any`, so those land in the
+            // `recv_unknown` arm below and pay `js_dyn_index_get` plus the
+            // `js_array_length` its miss path calls.
+            //
+            // A declared property type is a CLAIM. It is admissible here and
+            // only here because the tier this unlocks —
+            // `lower_guarded_array_index_get` — re-checks `GC_TYPE_ARRAY`, the
+            // forwarding flag, descriptors, the prototype latch and the bounds
+            // on the receiver itself and routes every failure to the boxed
+            // fallback. A violated claim costs a branch, not an answer. (#6132
+            // records that the same guard is what makes a typed-array-valued
+            // member receiver safe on this path.)
+            //
+            // Restricted to a NON-string, NON-symbol key because only the
+            // numeric array tier has its own receiver guard. String-valued
+            // keys on an array claim are handled below by an SSO-tag guard;
+            // heap strings remain pointers and are classified inside the
+            // established array-key fallback before object lookup.
+            let declared_array_claim =
+                crate::type_analysis::declared_array_property_claim(ctx, object);
+            let claimed_array =
+                recv_unknown && !index_is_static_string_or_symbol && declared_array_claim;
+            let recv_unknown = recv_unknown && !claimed_array;
             if recv_unknown && !index_is_static_string_or_symbol {
-                let obj_box = lower_expr(ctx, object)?;
-                let idx_d = lower_expr(ctx, index)?;
-                // #5525 follow-up: guarded inline typed-array element load at the
-                // access site (cache probe + bounds check + direct slot load),
-                // falling back to `js_dyn_index_get` on any guard miss. Removes
-                // the per-element out-of-line call + `lookup_typed_array_kind` +
-                // `js_number_coerce` on bcrypt's hot Int32Array `S[i]`/`P[i]`.
-                return Ok(lower_inline_dyn_typed_array_get(
-                    ctx, &obj_box, &idx_d, false,
-                ));
+                // #7640 section B: receiver live across an unconstrained index.
+                return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                    let (obj_box, idx_d) = (vals[0].clone(), vals[1].clone());
+                    // #5525 follow-up: guarded inline typed-array element load at the
+                    // access site (cache probe + bounds check + direct slot load),
+                    // falling back to `js_dyn_index_get` on any guard miss. Removes
+                    // the per-element out-of-line call + `lookup_typed_array_kind` +
+                    // `js_number_coerce` on bcrypt's hot Int32Array `S[i]`/`P[i]`.
+                    Ok(lower_inline_dyn_typed_array_get(
+                        ctx, &obj_box, &idx_d, false,
+                    ))
+                });
             }
             // Three cases:
             //   1. Receiver is a known array → inline f64 element load
@@ -1040,46 +1234,67 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //      generic object field access via js_object_get_field_by_name_f64
             //   3. Anything else → fall back to dynamic object field
             //      access by stringifying the index at runtime
-            if is_array_expr(ctx, object) {
+            if is_array_expr(ctx, object) || declared_array_claim {
                 // #321: a symbol-keyed array read (`arr[Symbol.iterator]`) must
                 // NOT take the numeric fast path below — `fptosi` on the symbol
                 // value yields a garbage index (returned a number). Route symbol
                 // keys to the symbol-property resolver, which exposes the array
                 // iterator for `Symbol.iterator`.
                 if matches!(index.as_ref(), Expr::SymbolFor(_)) {
-                    let obj_box = lower_expr(ctx, object)?;
-                    let key_box = lower_expr(ctx, index)?;
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_object_get_symbol_property",
-                        &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
-                    ));
+                    // #7640 section B (MEDIUM): `Expr::SymbolFor` lowers to a
+                    // real `js_symbol_for` call, which INTERNS — it allocates a
+                    // SymbolHeader on first use — so the receiver was live
+                    // across an allocation.
+                    return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                        let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_object_get_symbol_property",
+                            &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
+                        ))
+                    });
                 }
                 if !is_numeric_expr(ctx, index) {
-                    let arr_box = lower_expr(ctx, object)?;
-                    let idx_double = lower_expr(ctx, index)?;
-                    let arr_handle = {
-                        let blk = ctx.block();
-                        unbox_to_i64(blk, &arr_box)
-                    };
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_array_get_index_or_string",
-                        &[(I64, &arr_handle), (DOUBLE, &idx_double)],
-                    ));
+                    // #7891: this route must retain the receiver's NaN-box tag.
+                    // `is_array_expr` trusts an erased declaration, so the
+                    // runtime value can be a String. The ordinary array helper
+                    // takes an already unboxed ArrayHeader pointer; its
+                    // string-key arm therefore answered `undefined` for a
+                    // string-valued receiver's canonical key (`xs["0"]`) and
+                    // could not represent SSO strings at all. The local tag
+                    // guard routes the immediate SSO encoding to the boxed
+                    // string index helper. Heap strings remain pointers and the
+                    // array helper classifies them before object lookup; every
+                    // other shape keeps the existing fallback. Numeric keys
+                    // retain the guarded array tier below.
+                    //
+                    // #7640 section B: `!is_numeric_expr` also does not restrict
+                    // the index to a safe shape — `arr[f()]` is exactly this arm.
+                    return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                        let (arr_box, idx_double) = (vals[0].clone(), vals[1].clone());
+                        Ok(lower_claimable_array_string_key_get(
+                            ctx,
+                            &arr_box,
+                            &idx_double,
+                        ))
+                    });
                 }
                 if numeric_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
-                    let arr_box = lower_expr(ctx, object)?;
-                    let idx_double = lower_expr(ctx, index)?;
-                    let arr_handle = {
-                        let blk = ctx.block();
-                        unbox_to_i64(blk, &arr_box)
-                    };
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_array_get_index_or_string",
-                        &[(I64, &arr_handle), (DOUBLE, &idx_double)],
-                    ));
+                    // #7640 section B: `is_numeric_expr` is a TYPE predicate,
+                    // not an effect-free one — a numeric-typed but unproven
+                    // dynamic index (a getter, a call) is this arm's target.
+                    return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                        let (arr_box, idx_double) = (vals[0].clone(), vals[1].clone());
+                        let arr_handle = {
+                            let blk = ctx.block();
+                            unbox_to_i64(blk, &arr_box)
+                        };
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_array_get_index_or_string",
+                            &[(I64, &arr_handle), (DOUBLE, &idx_double)],
+                        ))
+                    });
                 }
                 let require_numeric_layout =
                     expr_has_numeric_pointer_free_array_layout(ctx, object);
@@ -1209,7 +1424,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // it as `*StringHeader`. Issue #214 SSO bug class.
                 let preserve_class_ref_bits =
                     index_object_is_class_or_proto_ref(ctx, object.as_ref());
-                let obj_box = lower_expr(ctx, object)?;
                 // #7154: `o[f()]` evaluates the base first and the key second,
                 // leaving the base in a bare SSA register while `f()` runs. An
                 // evacuating minor inside `f()` relocates the base; the location
@@ -1223,157 +1437,182 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `PERRY_GC_MOVING_LOOP_POLLS=1`: `numericOriginMap` is a module
                 // global (a registered root the collector rewrites) and the key
                 // `typeof def.value` is a property get that can collect.
-                let recv_guard =
-                    super::temp_root::guard_store_operand(ctx, object, &obj_box, index);
-                let key_box = lower_expr(ctx, index)?;
-                let obj_box =
-                    super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
-                let blk = ctx.block();
-                let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                let obj_handle =
-                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
-                let key_handle = unbox_str_handle(blk, &key_box);
-                let site_id = emit_typed_feedback_register_site(
-                    ctx,
-                    TypedFeedbackKind::PropertyGet,
-                    "object[index]",
-                    TypedFeedbackContract::object_get_by_name(),
-                );
-                let out = ctx.block().call(
-                    DOUBLE,
-                    "js_typed_feedback_object_get_field_by_name_f64",
-                    &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
-                );
-                super::temp_root::release_store_operand(ctx, recv_guard);
-                return Ok(out);
+                //
+                // The base and the key are one operand group: the base's window
+                // is the key's lowering, the key's window is empty (it is
+                // lowered last), and `operand_protection` derives both from the
+                // list rather than from a hand-written `collects` flag.
+                return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                    let (obj_box, key_box) = (&vals[0], &vals[1]);
+                    let blk = ctx.block();
+                    // #7640 section D: the KEY is unboxed first. `unbox_str_handle`
+                    // is not a mask — it calls `js_get_string_pointer_unified`,
+                    // which materialises an SSO value into a fresh heap
+                    // `StringHeader`, i.e. one allocation. Deriving the receiver's
+                    // raw untagged pointer above it put a pointer NO ROOT CAN NAME
+                    // across a potential collection point (#7280 taxonomy (a): a
+                    // raw `i64` cannot be repaired by re-reading a `double` slot).
+                    // Swapping the two lines closes it at zero runtime cost —
+                    // the same two instructions, in the other order.
+                    let key_handle = unbox_str_handle(blk, key_box);
+                    let obj_bits = blk.bitcast_double_to_i64(obj_box);
+                    let obj_handle =
+                        classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::PropertyGet,
+                        "object[index]",
+                        TypedFeedbackContract::object_get_by_name(),
+                    );
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_typed_feedback_object_get_field_by_name_f64",
+                        &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
+                    ))
+                });
             }
             // Last-resort fallback with runtime tag checks on the index.
             // First runtime-check whether the index is a Symbol; if so,
             // dispatch to the symbol-property side table — mirrors the
             // IndexSet branch. Otherwise fall through to string/numeric.
             let preserve_class_ref_bits = index_object_is_class_or_proto_ref(ctx, object.as_ref());
-            let obj_box = lower_expr(ctx, object)?;
             // #7154: same window as the dynamic-string-key arm above — the base
             // is live in a register while the key expression is lowered, and an
             // evacuating minor inside the key relocates it.
-            let recv_guard = super::temp_root::guard_store_operand(ctx, object, &obj_box, index);
-            let idx_box = lower_expr(ctx, index)?;
-            let obj_box =
-                super::temp_root::reread_store_operand(ctx, &recv_guard, object, &obj_box)?;
-            // RequireObjectCoercible(base): `null[k]` / `undefined[k]` must throw
-            // a TypeError per spec, NOT silently return undefined. The dotted
-            // PropertyGet path already guards nullish receivers; the computed
-            // form fell through to the by-name runtime helper (masked handle
-            // `2`/`1`) which returned undefined. The check fires here — after
-            // both the base and the property-key *expression* are evaluated but
-            // before ToPropertyKey (key coercion / `toString`) — matching the
-            // ECMAScript evaluation order (test262 compound-assignment S11.13.2_A7.*,
-            // prefix/postfix increment A6). A non-nullish receiver passes through
-            // unchanged. (#4918 non-class language remnant.)
-            let obj_box =
-                ctx.block()
-                    .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
-            let blk = ctx.block();
-            let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-            let obj_handle = classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
-            let is_sym_i32 = blk.call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
-            let is_sym_bit = blk.icmp_ne(I32, &is_sym_i32, "0");
-            let sym_idx = ctx.new_block("iget.sym");
-            let nonsym_idx = ctx.new_block("iget.nonsym");
-            let str_idx = ctx.new_block("iget.str");
-            let num_idx = ctx.new_block("iget.num");
-            let merge_idx = ctx.new_block("iget.merge");
-            let sym_lbl = ctx.block_label(sym_idx);
-            let nonsym_lbl = ctx.block_label(nonsym_idx);
-            let str_lbl = ctx.block_label(str_idx);
-            let num_lbl = ctx.block_label(num_idx);
-            let merge_lbl = ctx.block_label(merge_idx);
-            ctx.block().cond_br(&is_sym_bit, &sym_lbl, &nonsym_lbl);
-            // Symbol key → side-table get.
-            ctx.current_block = sym_idx;
-            let v_sym = ctx.block().call(
-                DOUBLE,
-                "js_object_get_symbol_property",
-                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
-            );
-            let sym_end_lbl = ctx.block().label.clone();
-            ctx.block().br(&merge_lbl);
-            // Not a symbol → recompute idx_bits in this block.
-            ctx.current_block = nonsym_idx;
-            let blk = ctx.block();
-            let idx_bits = blk.bitcast_double_to_i64(&idx_box);
-            let top16 = blk.lshr(I64, &idx_bits, "48");
-            // STRING_TAG (0x7FFF = 32767): heap StringHeader pointer.
-            let is_str_tag_heap = blk.icmp_eq(I64, &top16, "32767");
-            let lower48 = blk.and(I64, &idx_bits, POINTER_MASK_I64);
-            let is_valid_ptr = blk.icmp_ugt(I64, &lower48, "4095");
-            let is_str_heap = blk.and(crate::types::I1, &is_str_tag_heap, &is_valid_ptr);
-            // SHORT_STRING_TAG (0x7FF9 = 32761): inline SSO from JSON.parse,
-            // .slice, etc. Lower 48 encode length+bytes, NOT a pointer, so we
-            // can't AND-mask to a StringHeader; route through unbox_str_handle
-            // which materializes SSO to a heap StringHeader (issue #434).
-            let is_str_tag_sso = blk.icmp_eq(I64, &top16, "32761");
-            let is_str = blk.or(crate::types::I1, &is_str_heap, &is_str_tag_sso);
-            ctx.block().cond_br(&is_str, &str_lbl, &num_lbl);
-            // String key → object field access.
-            ctx.current_block = str_idx;
-            let key_handle = {
+            //
+            // The group is released after `body` returns, which lands the
+            // truncate in the merge block — below every arm's getter, any of
+            // which can run a user getter and therefore collect.
+            rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                let (obj_box, idx_box) = (vals[0].clone(), vals[1].clone());
+                // RequireObjectCoercible(base): `null[k]` / `undefined[k]` must throw
+                // a TypeError per spec, NOT silently return undefined. The dotted
+                // PropertyGet path already guards nullish receivers; the computed
+                // form fell through to the by-name runtime helper (masked handle
+                // `2`/`1`) which returned undefined. The check fires here — after
+                // both the base and the property-key *expression* are evaluated but
+                // before ToPropertyKey (key coercion / `toString`) — matching the
+                // ECMAScript evaluation order (test262 compound-assignment S11.13.2_A7.*,
+                // prefix/postfix increment A6). A non-nullish receiver passes through
+                // unchanged. (#4918 non-class language remnant.)
+                let obj_box =
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
                 let blk = ctx.block();
-                unbox_str_handle(blk, &idx_box)
-            };
-            let site_id = emit_typed_feedback_register_site(
-                ctx,
-                TypedFeedbackKind::PropertyGet,
-                "object[index]",
-                TypedFeedbackContract::object_get_by_name(),
-            );
-            let v_str = ctx.block().call(
-                DOUBLE,
-                "js_typed_feedback_object_get_field_by_name_f64",
-                &[(I64, &site_id), (I64, &obj_handle), (I64, &key_handle)],
-            );
-            let str_end_lbl = ctx.block().label.clone();
-            ctx.block().br(&merge_lbl);
-            // Numeric key → polymorphic dispatch.
-            //
-            // Closes #471 (read side, paired with the IndexSet polymorphic
-            // fix above): the previous fallback emitted an inline
-            // `obj_handle + 8 + idx*8` load on the assumption that the
-            // receiver had an ArrayHeader (8-byte header) layout. Once the
-            // IndexSet path stopped writing through that layout for plain
-            // objects, the read side had to follow — `constMap[i] = v;
-            // constMap[i]` would otherwise set via the object setter
-            // (key stringified into the keys_array) and read from
-            // `obj+8+i*8` (stale ObjectHeader fields), returning garbage
-            // f64 values.
-            //
-            // Route through the runtime which checks the receiver's GC
-            // type and dispatches: arrays/lazy/buffers/typed-arrays
-            // through js_array_get_f64 (handles forwarding-chain follow
-            // + lazy-materialize + per-kind reads), plain objects
-            // through stringify-the-index + js_object_get_field_by_name_f64.
-            ctx.current_block = num_idx;
-            let v_num = ctx.block().call(
-                DOUBLE,
-                "js_object_get_index_polymorphic",
-                &[(I64, &obj_handle), (DOUBLE, &idx_box)],
-            );
-            let num_end_lbl = ctx.block().label.clone();
-            ctx.block().br(&merge_lbl);
-            // Merge.
-            ctx.current_block = merge_idx;
-            let merged = ctx.block().phi(
-                DOUBLE,
-                &[
-                    (&v_sym, &sym_end_lbl),
-                    (&v_str, &str_end_lbl),
-                    (&v_num, &num_end_lbl),
-                ],
-            );
-            // Released in the merge block so every arm's getter (any of which
-            // can run a user getter and therefore collect) is still covered.
-            super::temp_root::release_store_operand(ctx, recv_guard);
-            Ok(merged)
+                let obj_bits = blk.bitcast_double_to_i64(&obj_box);
+                let obj_handle =
+                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
+                let is_sym_i32 = blk.call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
+                let is_sym_bit = blk.icmp_ne(I32, &is_sym_i32, "0");
+                let sym_idx = ctx.new_block("iget.sym");
+                let nonsym_idx = ctx.new_block("iget.nonsym");
+                let str_idx = ctx.new_block("iget.str");
+                let num_idx = ctx.new_block("iget.num");
+                let merge_idx = ctx.new_block("iget.merge");
+                let sym_lbl = ctx.block_label(sym_idx);
+                let nonsym_lbl = ctx.block_label(nonsym_idx);
+                let str_lbl = ctx.block_label(str_idx);
+                let num_lbl = ctx.block_label(num_idx);
+                let merge_lbl = ctx.block_label(merge_idx);
+                ctx.block().cond_br(&is_sym_bit, &sym_lbl, &nonsym_lbl);
+                // Symbol key → side-table get.
+                ctx.current_block = sym_idx;
+                let v_sym = ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_symbol_property",
+                    &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
+                );
+                let sym_end_lbl = ctx.block().label.clone();
+                ctx.block().br(&merge_lbl);
+                // Not a symbol → recompute idx_bits in this block.
+                ctx.current_block = nonsym_idx;
+                let blk = ctx.block();
+                let idx_bits = blk.bitcast_double_to_i64(&idx_box);
+                let top16 = blk.lshr(I64, &idx_bits, "48");
+                // STRING_TAG (0x7FFF = 32767): heap StringHeader pointer.
+                let is_str_tag_heap = blk.icmp_eq(I64, &top16, "32767");
+                let lower48 = blk.and(I64, &idx_bits, POINTER_MASK_I64);
+                let is_valid_ptr = blk.icmp_ugt(I64, &lower48, "4095");
+                let is_str_heap = blk.and(crate::types::I1, &is_str_tag_heap, &is_valid_ptr);
+                // SHORT_STRING_TAG (0x7FF9 = 32761): inline SSO from JSON.parse,
+                // .slice, etc. Lower 48 encode length+bytes, NOT a pointer, so we
+                // can't AND-mask to a StringHeader; route through unbox_str_handle
+                // which materializes SSO to a heap StringHeader (issue #434).
+                let is_str_tag_sso = blk.icmp_eq(I64, &top16, "32761");
+                let is_str = blk.or(crate::types::I1, &is_str_heap, &is_str_tag_sso);
+                ctx.block().cond_br(&is_str, &str_lbl, &num_lbl);
+                // String key → object field access.
+                ctx.current_block = str_idx;
+                // #7640 section D, the cross-block half. `unbox_str_handle`
+                // calls `js_get_string_pointer_unified`, which materialises an
+                // SSO value into a fresh heap `StringHeader` — one allocation.
+                // The entry block's `obj_handle` is a RAW `i64` computed two
+                // conditional branches above it, so it crossed that allocation
+                // with no root able to name it. Re-derive it HERE, below the
+                // key unbox, from the boxed receiver.
+                // Shadowing the entry block's `obj_handle` would be a verifier
+                // error, not a style choice: the NUMERIC sibling block below
+                // uses that one, and a definition in THIS block does not
+                // dominate it.
+                let (key_handle, str_obj_handle) = {
+                    let blk = ctx.block();
+                    let key_handle = unbox_str_handle(blk, &idx_box);
+                    let obj_bits = blk.bitcast_double_to_i64(&obj_box);
+                    let str_obj_handle =
+                        classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
+                    (key_handle, str_obj_handle)
+                };
+                let site_id = emit_typed_feedback_register_site(
+                    ctx,
+                    TypedFeedbackKind::PropertyGet,
+                    "object[index]",
+                    TypedFeedbackContract::object_get_by_name(),
+                );
+                let v_str = ctx.block().call(
+                    DOUBLE,
+                    "js_typed_feedback_object_get_field_by_name_f64",
+                    &[(I64, &site_id), (I64, &str_obj_handle), (I64, &key_handle)],
+                );
+                let str_end_lbl = ctx.block().label.clone();
+                ctx.block().br(&merge_lbl);
+                // Numeric key → polymorphic dispatch.
+                //
+                // Closes #471 (read side, paired with the IndexSet polymorphic
+                // fix above): the previous fallback emitted an inline
+                // `obj_handle + 8 + idx*8` load on the assumption that the
+                // receiver had an ArrayHeader (8-byte header) layout. Once the
+                // IndexSet path stopped writing through that layout for plain
+                // objects, the read side had to follow — `constMap[i] = v;
+                // constMap[i]` would otherwise set via the object setter
+                // (key stringified into the keys_array) and read from
+                // `obj+8+i*8` (stale ObjectHeader fields), returning garbage
+                // f64 values.
+                //
+                // Route through the runtime which checks the receiver's GC
+                // type and dispatches: arrays/lazy/buffers/typed-arrays
+                // through js_array_get_f64 (handles forwarding-chain follow
+                // + lazy-materialize + per-kind reads), plain objects
+                // through stringify-the-index + js_object_get_field_by_name_f64.
+                ctx.current_block = num_idx;
+                let v_num = ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_index_polymorphic",
+                    &[(I64, &obj_handle), (DOUBLE, &idx_box)],
+                );
+                let num_end_lbl = ctx.block().label.clone();
+                ctx.block().br(&merge_lbl);
+                // Merge.
+                ctx.current_block = merge_idx;
+                let merged = ctx.block().phi(
+                    DOUBLE,
+                    &[
+                        (&v_sym, &sym_end_lbl),
+                        (&v_str, &str_end_lbl),
+                        (&v_num, &num_end_lbl),
+                    ],
+                );
+                Ok(merged)
+            })
         }
 
         // Phase H err: `agg.errors.length` — receiver is

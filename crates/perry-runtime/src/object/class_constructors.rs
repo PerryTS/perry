@@ -178,7 +178,7 @@ fn lookup_class_constructor_flags(class_id: u32) -> (bool, bool) {
         .unwrap_or((false, false))
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Decl-site snapshots of a function-nested class DECLARATION's captured
     /// outer locals, keyed by class_id. Filled by the codegen-emitted
     /// `js_class_register_capture_values` call at the class's source-order

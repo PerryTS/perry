@@ -1,0 +1,315 @@
+//! Correctness tests for the monotone side-table probe latches.
+//!
+//! The latches in [`crate::registry_latch`] make "is this value special?" free
+//! for programs that never use the feature. Speed is the easy half; the hard
+//! half is that a program which *does* use the feature must still work, and in
+//! particular must still work when the feature is first used **after** the
+//! probe's idle fast path has already been taken. Every test below therefore
+//! takes the fast path first and only then registers.
+//!
+//! The `latch_semantics` tests at the bottom prove the ordering rule is
+//! load-bearing rather than decorative: they model both orderings of
+//! arm-vs-insert and show that only the wrong one can be observed as
+//! "idle while the table already holds the entry".
+
+use crate::registry_latch::RegistryLatch;
+
+/// A heap-plausible address that is not registered in any side table, and whose
+/// `addr - 8` word is readable — the probes that read a `GcHeader` (regex magic,
+/// Date/Temporal brands) must be safe to call on arbitrary pointer-shaped
+/// values, so the scratch address deliberately has readable bytes in front of
+/// it rather than being a bare integer.
+fn unregistered_scratch_addr() -> usize {
+    let boxed: Box<[u64; 16]> = Box::new([0; 16]);
+    let base = Box::into_raw(boxed) as usize; // leaked on purpose: process-lifetime
+    base + 64
+}
+
+/// Every probe must answer "no" for an address nothing ever registered. This is
+/// the fast path when the latch is idle and the ordinary table miss when it is
+/// not, so the assertion holds in both states and the test is order-independent.
+#[test]
+fn unregistered_address_misses_every_probe() {
+    let addr = unregistered_scratch_addr();
+
+    assert_eq!(crate::typedarray::lookup_typed_array_kind(addr), None);
+    assert!(!crate::buffer::is_registered_buffer(addr));
+    assert!(!crate::buffer::is_uint8array_buffer(addr));
+    assert!(!crate::buffer::is_array_buffer(addr));
+    assert!(!crate::buffer::is_shared_array_buffer(addr));
+    assert!(!crate::buffer::is_any_array_buffer(addr));
+    assert!(!crate::buffer::is_data_view(addr));
+    assert!(!crate::buffer::is_secret_key(addr));
+    assert!(!crate::buffer::is_detached_buffer(addr));
+    assert_eq!(crate::buffer::crypto_key_meta(addr), None);
+    assert_eq!(crate::buffer::asymmetric_key_meta(addr), None);
+    assert_eq!(crate::buffer::buffer_ab_alias(addr), None);
+    assert!(!crate::symbol::is_registered_symbol(addr));
+    assert!(!crate::shared_sab::is_shared_sab(addr));
+    assert!(!crate::regex::is_registered_regex(addr));
+    assert!(!crate::map::is_registered_map(addr));
+    assert!(!crate::set::is_registered_set(addr));
+}
+
+/// #7474-shape regression: constructing a typed array AFTER the idle fast path
+/// has already answered "not a typed array" must still register. A latch armed
+/// after the registry insert — or a stale negative left in the `PERRY_TA_KIND_CACHE`
+/// by the idle path — would make this array invisible to every `instanceof`,
+/// element-access and formatting path.
+#[test]
+fn typed_array_is_found_after_the_idle_fast_path_ran() {
+    let scratch = unregistered_scratch_addr();
+    // 1. take the probe's fast path at least once.
+    assert_eq!(crate::typedarray::lookup_typed_array_kind(scratch), None);
+
+    // 2. only now create the feature.
+    let ta = crate::typedarray::js_typed_array_new(crate::typedarray::KIND_FLOAT64 as i32, 4.0);
+    assert!(!ta.is_null(), "test premise: the typed array allocated");
+
+    // 3. the probe must see it.
+    assert_eq!(
+        crate::typedarray::lookup_typed_array_kind(ta as usize),
+        Some(crate::typedarray::KIND_FLOAT64),
+        "a typed array created after the idle fast path must still be registered"
+    );
+    assert!(
+        crate::typedarray::typed_array_registry_ever_used(),
+        "registering a typed array must arm the latch"
+    );
+    // The unrelated scratch address must NOT have become a typed array.
+    assert_eq!(crate::typedarray::lookup_typed_array_kind(scratch), None);
+}
+
+#[test]
+fn buffer_is_found_after_the_idle_fast_path_ran() {
+    let scratch = unregistered_scratch_addr();
+    assert!(!crate::buffer::is_registered_buffer(scratch));
+
+    let buf = crate::buffer::buffer_alloc(32);
+    assert!(!buf.is_null(), "test premise: the buffer allocated");
+
+    assert!(
+        crate::buffer::is_registered_buffer(buf as usize),
+        "a Buffer created after the idle fast path must still be registered"
+    );
+    assert!(!crate::buffer::is_registered_buffer(scratch));
+}
+
+#[test]
+fn uint8array_mark_is_found_after_the_idle_fast_path_ran() {
+    let scratch = unregistered_scratch_addr();
+    assert!(!crate::buffer::is_uint8array_buffer(scratch));
+
+    let buf = crate::buffer::buffer_alloc(8) as usize;
+    crate::buffer::mark_as_uint8array(buf);
+
+    assert!(
+        crate::buffer::is_uint8array_buffer(buf),
+        "`new Uint8Array(...)` identity must survive the idle fast path"
+    );
+    assert!(!crate::buffer::is_uint8array_buffer(scratch));
+}
+
+#[test]
+fn array_buffer_and_data_view_marks_are_found_after_the_idle_fast_path_ran() {
+    let scratch = unregistered_scratch_addr();
+    assert!(!crate::buffer::is_array_buffer(scratch));
+    assert!(!crate::buffer::is_data_view(scratch));
+
+    let ab = crate::buffer::buffer_alloc(16) as usize;
+    crate::buffer::mark_as_array_buffer(ab);
+    let dv = crate::buffer::buffer_alloc(16) as usize;
+    crate::buffer::mark_as_data_view(dv);
+
+    assert!(crate::buffer::is_array_buffer(ab));
+    assert!(crate::buffer::is_any_array_buffer(ab));
+    assert!(crate::buffer::is_data_view(dv));
+    assert!(!crate::buffer::is_array_buffer(scratch));
+    assert!(!crate::buffer::is_data_view(scratch));
+}
+
+/// A `SharedArrayBuffer` backing is process-global and enters neither
+/// thread-local registry, so it is the one case where a probe must answer "yes"
+/// for an address the *local* tables have never seen. It therefore has to arm
+/// `is_registered_buffer`'s latch as well as its own — an omission here would
+/// leave every SAB invisible to `Buffer`/`Uint8Array` dispatch.
+#[test]
+fn shared_array_buffer_backing_is_found_after_the_idle_fast_path_ran() {
+    let scratch = unregistered_scratch_addr();
+    assert!(!crate::buffer::is_registered_buffer(scratch));
+    assert!(!crate::buffer::is_shared_array_buffer(scratch));
+
+    let sab = crate::shared_sab::alloc_shared_sab(64) as usize;
+
+    assert!(crate::shared_sab::is_shared_sab(sab));
+    assert!(
+        crate::buffer::is_registered_buffer(sab),
+        "a SAB backing must read as a registered buffer even though it never \
+         enters BUFFER_REGISTRY — `alloc_shared_sab` arms that latch too"
+    );
+    assert!(crate::buffer::is_shared_array_buffer(sab));
+    assert!(crate::buffer::is_any_array_buffer(sab));
+    assert!(!crate::buffer::is_shared_array_buffer(scratch));
+}
+
+/// The cross-thread half of the SAB contract: a backing allocated on another
+/// agent must be recognised here. The latch is process-global precisely so this
+/// keeps working — a thread-local latch would let the receiving thread take its
+/// own idle fast path and deny an address that is genuinely shared.
+#[test]
+fn shared_array_buffer_allocated_on_another_thread_is_found_here() {
+    let sab = std::thread::spawn(|| crate::shared_sab::alloc_shared_sab(32) as usize)
+        .join()
+        .expect("SAB allocation thread");
+
+    assert!(crate::shared_sab::is_shared_sab(sab));
+    assert!(crate::buffer::is_registered_buffer(sab));
+    assert!(crate::buffer::is_shared_array_buffer(sab));
+}
+
+#[test]
+fn symbol_is_found_after_the_idle_fast_path_ran() {
+    let scratch = unregistered_scratch_addr();
+    assert!(!crate::symbol::is_registered_symbol(scratch));
+
+    let sym = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
+    assert!(sym != 0, "test premise: the symbol allocated");
+
+    assert!(
+        crate::symbol::is_registered_symbol(sym),
+        "a Symbol created after the idle fast path must still be registered"
+    );
+    assert!(!crate::symbol::is_registered_symbol(scratch));
+}
+
+/// Map and Set already carried the #7474 latch; the contract is asserted here
+/// alongside the rest so the whole family is covered by one test module.
+#[test]
+fn map_and_set_are_found_after_the_idle_fast_path_ran() {
+    let scratch = unregistered_scratch_addr();
+    assert!(!crate::map::is_registered_map(scratch));
+    assert!(!crate::set::is_registered_set(scratch));
+
+    let map = crate::map::js_map_alloc(4) as usize;
+    let set = crate::set::js_set_alloc(4) as usize;
+
+    assert!(crate::map::is_registered_map(map));
+    assert!(crate::set::is_registered_set(set));
+    assert!(!crate::map::is_registered_map(scratch));
+    assert!(!crate::set::is_registered_set(scratch));
+}
+
+#[test]
+fn detached_buffer_mark_is_found_after_the_idle_fast_path_ran() {
+    let scratch = unregistered_scratch_addr();
+    assert!(!crate::buffer::is_detached_buffer(scratch));
+
+    let ab = crate::buffer::buffer_alloc(16) as usize;
+    crate::buffer::mark_as_array_buffer(ab);
+    assert!(!crate::buffer::is_detached_buffer(ab));
+    crate::buffer::detach_array_buffer(ab);
+
+    assert!(
+        crate::buffer::is_detached_buffer(ab),
+        "`ArrayBuffer.prototype.detached` must survive the idle fast path"
+    );
+    assert!(!crate::buffer::is_detached_buffer(scratch));
+}
+
+/// The ordering rule itself, modelled on a private latch + table pair so both
+/// orderings can be run. This is the "prove the gate can fail" half: if
+/// arm-after-insert were harmless the wrong-order case would be indistinguishable
+/// from the right one, and none of the comments in `registry_latch.rs` would be
+/// worth writing.
+mod latch_semantics {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static TABLE: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn table_contains(addr: usize) -> bool {
+        TABLE.with(|t| t.borrow().contains(&addr))
+    }
+
+    fn probe(latch: &RegistryLatch, addr: usize) -> bool {
+        if latch.is_idle() {
+            return false;
+        }
+        table_contains(addr)
+    }
+
+    /// The rule: arm, then publish.
+    fn register_correctly(latch: &RegistryLatch, addr: usize, observe: &mut dyn FnMut()) {
+        latch.arm();
+        observe();
+        TABLE.with(|t| t.borrow_mut().push(addr));
+        observe();
+    }
+
+    /// The bug the rule exists to prevent: publish, then arm.
+    fn register_wrongly(latch: &RegistryLatch, addr: usize, observe: &mut dyn FnMut()) {
+        TABLE.with(|t| t.borrow_mut().push(addr));
+        observe();
+        latch.arm();
+        observe();
+    }
+
+    #[test]
+    fn arm_before_publish_is_never_observably_inconsistent() {
+        let latch = RegistryLatch::new();
+        let addr = 0xBEEF_0000usize;
+        let mut inconsistent = false;
+        {
+            let mut observe = || {
+                // The probe must never deny an entry the table already holds.
+                if table_contains(addr) && !probe(&latch, addr) {
+                    inconsistent = true;
+                }
+            };
+            register_correctly(&latch, addr, &mut observe);
+        }
+        assert!(
+            !inconsistent,
+            "arm-before-publish must have no window in which the table holds \
+             the entry and the probe still answers `false`"
+        );
+        assert!(probe(&latch, addr));
+        TABLE.with(|t| t.borrow_mut().clear());
+    }
+
+    #[test]
+    fn arm_after_publish_is_observably_inconsistent() {
+        let latch = RegistryLatch::new();
+        let addr = 0xFEED_0000usize;
+        let mut inconsistent = false;
+        {
+            let mut observe = || {
+                if table_contains(addr) && !probe(&latch, addr) {
+                    inconsistent = true;
+                }
+            };
+            register_wrongly(&latch, addr, &mut observe);
+        }
+        assert!(
+            inconsistent,
+            "sabotage check: publishing before arming MUST produce a window in \
+             which a live entry reads as absent — if this stops failing, the \
+             ordering rule has stopped being load-bearing and the check above \
+             is proving nothing"
+        );
+        TABLE.with(|t| t.borrow_mut().clear());
+    }
+
+    #[test]
+    fn latch_never_goes_back_to_idle() {
+        let latch = RegistryLatch::new();
+        assert!(latch.is_idle());
+        latch.arm();
+        for _ in 0..4 {
+            latch.arm();
+            assert!(!latch.is_idle());
+        }
+    }
+}

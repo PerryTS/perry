@@ -1,6 +1,8 @@
 //! Array representation for Perry — split into topical sub-modules.
 mod alloc;
 mod concat_reverse;
+mod element_shape;
+mod fill_extend;
 mod flat_clone;
 mod from_concat;
 mod generic;
@@ -23,6 +25,12 @@ mod splice_slice;
 mod subclass;
 
 #[cfg(test)]
+mod collection_tag_tests;
+#[cfg(test)]
+mod spread_dense_tests;
+#[cfg(test)]
+mod subclass_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use self::alloc::{array_length_range_error, js_array_alloc_pointer_elements};
@@ -35,9 +43,19 @@ pub use self::concat_reverse::{
     js_array_concat, js_array_concat_new, js_array_fill, js_array_fill_generic,
     js_array_fill_range, js_array_reverse, js_array_reverse_value,
 };
+pub(crate) use self::element_shape::{
+    clear_element_shape_ptr, forget_element_shape, invalidate_all_element_shapes,
+    note_element_store, prune_dead_element_shape_owners, transfer_element_shape,
+};
+pub use self::element_shape::{
+    js_array_element_shape_check, js_array_element_shape_class, js_array_element_shape_epoch,
+    js_array_element_shape_version, js_array_ensure_element_shape,
+};
+#[cfg(test)]
+pub(crate) use self::element_shape::{test_element_shape_record_exists, test_serialize};
 pub use self::flat_clone::{
-    js_array_clone, js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys,
-    js_array_values,
+    js_array_clone, js_array_clone_for_spread, js_array_entries, js_array_flat,
+    js_array_flat_depth, js_array_keys, js_array_values,
 };
 pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
@@ -69,7 +87,8 @@ pub(crate) use self::header::{
     rebuild_array_numeric_raw_f64_dense_window, rebuild_array_numeric_raw_f64_dense_window_i32,
 };
 pub use self::header::{
-    js_array_clear_numeric_layout, js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
+    js_array_clear_numeric_layout, js_array_declare_all_pointer_elements,
+    js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
     js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_get_or_init,
     js_tagged_template_register_raw, js_template_raw, scan_template_raw_roots,
     scan_template_raw_roots_mut, ArrayHeader,
@@ -81,12 +100,12 @@ pub(crate) use self::header::{
 pub use self::immutable::{
     js_array_copy_within, js_array_copy_within_value, js_array_to_reversed,
     js_array_to_sorted_default, js_array_to_sorted_with_comparator, js_array_to_spliced,
-    js_array_with,
+    js_array_with, js_arraylike_copy_within,
 };
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
     array_prototype_addr, array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
-    invalidate_array_index_fast_path, keys_array_len_capped_to_capacity,
+    invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
     note_array_proto_iterator_write, note_object_prototype_index_write, object_prototype_addr,
     object_prototype_addr_matches, object_prototype_has_index_flag,
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
@@ -101,7 +120,9 @@ pub use self::indexing::{
     scan_prototype_addr_cache_roots_mut,
 };
 #[cfg(test)]
-pub(crate) use self::indexing::{test_array_proto_addr_cache, test_object_proto_addr_cache};
+pub(crate) use self::indexing::{
+    test_array_proto_addr_cache, test_keys_array_slot_fallbacks, test_object_proto_addr_cache,
+};
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
 pub use self::iter_methods::{
@@ -125,6 +146,13 @@ pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
 pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
+};
+// #7574 — array-like OBJECT receiver resolution for the raw `js_array_*` entry
+// points, plus the Array-exotic `length` maintenance the generic OBJECT index
+// store needs for a `class X extends Array` receiver.
+pub(crate) use self::subclass::{
+    array_object_set_length, is_array_subclass_class_id, is_array_subclass_value,
+    maintain_array_exotic_length, note_array_subclass_index_write,
 };
 // Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
 // so an `async function*` mapper return is driven through the iterator
@@ -159,13 +187,14 @@ pub use self::splice_slice::{
 
 pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
-pub(crate) use self::flat_clone::flattenable_array_ptr;
+pub(crate) use self::flat_clone::{dense_spread_copy, dense_spread_source, flattenable_array_ptr};
 pub(crate) use self::header::{
     array_byte_size, array_is_frozen, array_is_sealed_or_no_extend, array_named_property_delete,
     array_named_property_get, array_named_property_get_by_name, array_named_property_has,
     array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
     array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
-    array_ptr_as_proxy, canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
+    array_object_flags_from_tag, array_ptr_as_proxy, array_receiver_gc_tag,
+    canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
     clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
     mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
     note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,

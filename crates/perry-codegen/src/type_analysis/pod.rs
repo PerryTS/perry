@@ -437,6 +437,138 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
     }
 }
 
+/// True when this expression's "the value is a Number" answer rests ONLY on a
+/// **declared** type — a class-field annotation or an array's element type —
+/// which nothing enforces at runtime (CLAUDE.md, Known Limitations: annotations
+/// are erased, so `(o as any).x = "s"` stores a string into a `x: number` slot).
+///
+/// This is deliberately NARROWER than
+/// [`expr_may_return_boxed_value_from_raw_f64_fallback`], which answers "is
+/// there a raw-f64 tier worth trying" and stays `true` for reads that end up
+/// with no boxed fallback at all. Here every arm that carries a REAL proof —
+/// a guard, a closed store universe, or scalar replacement — answers `false`,
+/// because for those the value provably is a double and a runtime re-check
+/// would be dead code:
+///
+/// * element-shape loop fact — the preheader pinned the element class and the
+///   per-element residual check requires `GC_OBJ_TYPED_LAYOUT_INTACT`;
+/// * class-field loop fact — the preheader shape check already ran;
+/// * `Ptr<Shape>` `numeric_fields` — every reachable store is a number;
+/// * scalar replacement — there is no heap slot for anyone to write;
+/// * POD record fields — the layout is native, not a NaN-boxed slot;
+/// * masked-window element facts — the window was proven.
+///
+/// What remains is the guarded class-field / element diamond, whose cold arm
+/// exists precisely because the declared type can be wrong. Answering `true`
+/// there is cheap by construction: that read already pays either an inline
+/// header precheck or a `js_typed_feedback_class_field_get_guard` call, so a
+/// four-instruction tag test beside it is noise.
+///
+/// Conservative direction: a missed `false` costs those four instructions; a
+/// missed `true` is a wrong answer (#7773, #7776), so unproven reads answer
+/// `true`.
+pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            // `.length` is produced by the runtime, not read out of a
+            // user-writable slot.
+            if property == "length" {
+                return false;
+            }
+            if !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
+                return false;
+            }
+            if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property)
+                .is_some()
+            {
+                return false;
+            }
+            if pod_record_field_is_numeric(ctx, object, property) {
+                return false;
+            }
+            // Scalar replacement, reached through the local and through `this`
+            // inside an inlined constructor — the same two spellings
+            // `is_numeric_expr` handles.
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if ctx
+                    .scalar_replaced
+                    .get(id)
+                    .is_some_and(|fields| fields.contains_key(property.as_str()))
+                {
+                    return false;
+                }
+            }
+            if matches!(object.as_ref(), Expr::This) {
+                if let Some(target_id) = ctx.scalar_ctor_target.last().copied() {
+                    if ctx
+                        .scalar_replaced
+                        .get(&target_id)
+                        .is_some_and(|fields| fields.contains_key(property.as_str()))
+                    {
+                        return false;
+                    }
+                }
+            }
+            let Some(class_name) = receiver_class_name(ctx, object) else {
+                return false;
+            };
+            if let Expr::LocalGet(recv_id) = object.as_ref() {
+                if crate::expr::class_field_loop_fact_lookup(
+                    &ctx.class_field_loop_facts,
+                    *recv_id,
+                    &class_name,
+                    property,
+                )
+                .is_some()
+                {
+                    return false;
+                }
+            }
+            let ptr_shape_numeric = ctx
+                .ptr_shape_receiver_fact(object.as_ref())
+                .map(|fact| fact.class_name == class_name && fact.numeric_fields.contains(property))
+                .unwrap_or(false);
+            !ptr_shape_numeric
+        }
+        Expr::IndexGet { object, index } => {
+            if !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
+                return false;
+            }
+            if let Expr::LocalGet(arr_id) = object.as_ref() {
+                if crate::expr::masked_window_fact_for_index(ctx, *arr_id, index).is_some() {
+                    return false;
+                }
+            }
+            // A typed array's storage is native bytes — a non-numeric store is
+            // converted on the way in, so the read cannot surface one.
+            !receiver_class_name(ctx, object)
+                .as_deref()
+                .is_some_and(is_numeric_typed_array_class)
+        }
+        // A numeric local initialized from one of the expressions above
+        // inherits its violability — its HIR type did not prove anything
+        // (#7773's `const v: any = o.x`, and #7506's already-number-typed
+        // `const sum = o.x + o.y`). Without this bit, a later `v * 2` or
+        // `sum * scale` becomes a bare `fmul` on whatever boxed value the slot
+        // holds, and a NaN-boxed string passes straight through it.
+        Expr::LocalGet(id) => ctx.declared_only_numeric_locals.contains(id),
+        // `a + b` is numeric only when both sides are, so it is violable when
+        // either side is; `a || b` / `a && b` / `a ?? b` pass one operand
+        // VALUE through, so the same holds. Both mirror `is_numeric_expr`.
+        Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left,
+            right,
+        }
+        | Expr::Logical { left, right, .. } => {
+            numeric_proof_is_declared_only(ctx, left) || numeric_proof_is_declared_only(ctx, right)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn is_fixed_width_buffer_numeric_read(method: &str) -> bool {
     matches!(
         method,

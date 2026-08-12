@@ -80,6 +80,50 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// `String.prototype` methods whose lowering in `lower_string_method.rs`
+/// produces a **real f64** on every input — either `sitofp` of an `i32`
+/// helper result, or a helper documented to return a plain double.
+///
+/// Deliberately excluded, and why each one would be wrong here:
+/// * `codePointAt` — returns `undefined` (a NaN-BOX tag, not a number) for an
+///   out-of-range index; `js_string_code_point_at` is documented as
+///   "NaN-boxed number **or undefined**".
+/// * `at` / `charAt` — string results.
+/// * `startsWith` / `endsWith` / `includes` — booleans (NaN-boxed tags).
+///
+/// `charCodeAt` IS admitted: its out-of-range result is `f64::NAN`
+/// (`0x7FF8_0000_0000_0000`), a hardware quiet NaN outside the NaN-box tag
+/// band `0x7FF9..=0x7FFF`, so it is a genuine Number in exactly the sense
+/// `is_numeric_expr` promises.
+fn string_method_returns_number(name: &str) -> bool {
+    matches!(
+        name,
+        "charCodeAt" | "indexOf" | "lastIndexOf" | "search" | "localeCompare"
+    )
+}
+
+/// True when `<object>.<property>(…)` is one of the Number-returning
+/// `String.prototype` methods AND the receiver takes codegen's proven-string
+/// lowering path.
+///
+/// The receiver test mirrors `lower_call/property_get.rs`'s static-String
+/// dispatch condition exactly (`is_string_expr && !is_array_only_method_name
+/// && is_known_string_method_name`), so the predicate can only answer `true`
+/// for a call that really is lowered by `lower_string_method` — the
+/// Any-typed-receiver fallback, which routes to `js_native_call_method` and
+/// can return `undefined` for a non-string runtime value, is not claimed.
+///
+/// #7592: without this, `h ^ s.charCodeAt(i)` fails the "both operands are
+/// statically primitive" test in `expr/binary.rs` and every iteration of an
+/// FNV-style hash loop pays a `js_dynamic_bitxor` FFI call — 31% of the leaf
+/// profile of `json_pipeline`'s hash phase, for an integer xor.
+fn string_method_call_returns_number(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
+    string_method_returns_number(property)
+        && crate::type_analysis::is_string_expr(ctx, object)
+        && !crate::lower_call::property_get::is_array_only_method_name(property)
+        && crate::lower_string_method::is_known_string_method_name(property)
+}
+
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_)
@@ -87,10 +131,15 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => true,
-        Expr::Uint8ArrayGet { .. }
-        | Expr::BufferIndexGet { .. }
-        | Expr::Uint8ArrayLength(_)
-        | Expr::BufferLength(_) => true,
+        // #7700: a `Uint8ArrayGet` is a BYTE read only when its key is numeric.
+        // This is the very test `arrays_finds::lower_uint8array_get_i32` applies
+        // to choose between the byte accessor and
+        // `js_object_get_index_polymorphic`, so the two cannot disagree about
+        // whether `u8[Symbol.iterator]` is a number — which matters wherever a
+        // `true` here means "a raw double": `fcmp`-based truthiness, `fadd`
+        // operands, the non-BigInt bitwise fast path.
+        Expr::Uint8ArrayGet { index, .. } => is_numeric_expr(ctx, index),
+        Expr::BufferIndexGet { .. } | Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
         Expr::LocalGet(id) => matches!(
             ctx.local_types.get(id),
             Some(HirType::Number) | Some(HirType::Int32)
@@ -234,6 +283,25 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return true;
             }
+            // repsel #7480 step 3: inside an element-shape fast clone a tracked
+            // `arr[i].field` read is a GUARD-PROVEN raw double — the preheader
+            // pinned the element class and the per-element residual check
+            // requires `GC_OBJ_TYPED_LAYOUT_INTACT`, so the slot cannot hold a
+            // NaN-boxed value. This is a stronger proof than the declared-type
+            // answer below, and it is the ONLY one available for an
+            // object-literal element type, whose owner class
+            // `receiver_class_name` deliberately does not resolve.
+            //
+            // It is also load-bearing rather than a bonus: without it
+            // `sum += keep[j].v` lowers through
+            // `js_dynamic_string_or_number_add`, that call fails the clone's
+            // call-free admission test, and the clone is never entered at all.
+            // Scoped to the clone — outside one the fact vector is empty.
+            if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property)
+                .is_some()
+            {
+                return true;
+            }
             if let Expr::LocalGet(id) = object.as_ref() {
                 if ctx
                     .scalar_replaced
@@ -290,6 +358,40 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
         Expr::IndexGet { object, index } => {
+            // #6750 follow-up: a masked-index read covered by an ACTIVE
+            // masked-window fact (dense range-loop / straight-line-region
+            // fast copy) is a guard-proven numeric element load, even when
+            // the receiver's STATIC type is erased (`any` parameter).
+            // Without this, `n ^= S[x & 0xff]` inside a fast copy still
+            // routed through the BigInt-aware dynamic helpers. Facts are
+            // scope-managed by the versioned lowerings, so the answer is
+            // only `true` while a fast copy that proved the window is being
+            // lowered. The fact itself proves the index is an integer, so it
+            // stands ahead of the index check below.
+            if let Expr::LocalGet(arr_id) = object.as_ref() {
+                if crate::expr::masked_window_fact_for_index(ctx, *arr_id, index).is_some() {
+                    return true;
+                }
+            }
+            // #7796: an element type only describes reads at a NUMERIC index.
+            // `a[sym]` on a `number[]` is not an element read at all — it is a
+            // property read on the array OBJECT, and `a[Symbol.iterator]`
+            // answers with a function.
+            //
+            // Getting this wrong is not merely a missed optimization. The
+            // caller acts on "this is a number" by testing the raw double with
+            // `fcmp one %v, 0.0`, and every NaN-boxed pointer IS a NaN, so that
+            // comparison is false for every object, string and function alive.
+            // `if (a[Symbol.iterator])` therefore took the FALSE branch on a
+            // value that `Boolean()` and `typeof` both agreed was a function.
+            //
+            // Proof is required rather than merely the absence of counter-
+            // evidence: an index we cannot type may hold anything at runtime,
+            // and answering `false` here costs a fast path while answering
+            // `true` costs a wrong branch.
+            if !is_numeric_expr(ctx, index) {
+                return false;
+            }
             if receiver_class_name(ctx, object)
                 .as_deref()
                 .is_some_and(is_numeric_typed_array_class)
@@ -299,18 +401,6 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
-            // #6750 follow-up: a masked-index read covered by an ACTIVE
-            // masked-window fact (dense range-loop / straight-line-region
-            // fast copy) is a guard-proven numeric element load, even when
-            // the receiver's STATIC type is erased (`any` parameter).
-            // Without this, `n ^= S[x & 0xff]` inside a fast copy still
-            // routed through the BigInt-aware dynamic helpers. Facts are
-            // scope-managed by the versioned lowerings, so the answer is
-            // only `true` while a fast copy that proved the window is being
-            // lowered.
-            if crate::expr::masked_window_fact_for_index(ctx, *arr_id, index).is_some() {
-                return true;
-            }
             match ctx.local_types.get(arr_id) {
                 Some(HirType::Array(elem)) => {
                     matches!(**elem, HirType::Number | HirType::Int32)
@@ -335,6 +425,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 object, property, ..
             } = callee.as_ref()
             {
+                if string_method_call_returns_number(ctx, object, property) {
+                    return true;
+                }
                 if is_fixed_width_buffer_numeric_read(property)
                     && receiver_class_name(ctx, object)
                         .as_deref()
@@ -548,7 +641,11 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // BigInt. `Uint8ArrayGet` / `BufferIndexGet` are byte reads; a general
         // `IndexGet` qualifies only when the receiver is a numeric typed array
         // (a plain object / array element could hold a BigInt).
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        // #7700: a byte read only with a numeric key. With any other key this
+        // is a property read, and an expando holds anything — `u8.n = 1n;
+        // const k: any = "n"; u8[k]` IS a BigInt.
+        Expr::Uint8ArrayGet { index, .. } => is_numeric_expr(ctx, index),
+        Expr::BufferIndexGet { .. } => true,
         Expr::IndexGet { object, .. } => receiver_class_name(ctx, object)
             .as_deref()
             .is_some_and(is_numeric_typed_array_class),
@@ -595,33 +692,114 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 ///
 /// Recognizes:
 /// - `Expr::Integer(_)` — integer literal
-/// - `Expr::LocalGet(id)` for locals pre-analyzed as integer-valued by
-///   `collectors::collect_integer_locals` (for-loop counters etc.)
+/// - `Expr::LocalGet(id)` for locals pre-analyzed as integer-valued, either by
+///   `collectors::collect_integer_locals` (i32-range: for-loop counters etc.)
+///   or by `collectors::int_valued_i64_locals` (i64-range: literal-initialised
+///   locals whose every write is a bounded constant translation)
 /// - `Expr::Update { .. }` — `i++`/`i--`, whose value is always integer
 ///   if the underlying local is integer-valued
 /// - `Expr::Binary { Add/Sub/Mul/Mod }` recursively when both operands are
 ///   integer-valued (closed under integer arithmetic; Div is excluded
 ///   because `1 / 2` is 0.5 in JS, not 0)
 /// - bitwise ops: always integer by JS ToInt32 semantics
+///
+/// The result additionally guarantees the value fits `fptosi double -> i64`
+/// — see `integer_magnitude_bits`, which this delegates to. `fptosi` is
+/// **poison** when the operand is out of the target's range, so proving
+/// integrality alone is not enough for the `%` lowering.
 pub(crate) fn is_integer_valued_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    integer_magnitude_bits_inner(ctx, e, true).is_some_and(|bits| bits <= MAX_FPTOSI_I64_BITS)
+}
+
+/// The same judgment for the **divisor** of `%`, with the i64-range local set
+/// deliberately withheld.
+///
+/// `srem(x, 0)` is UB in LLVM while JS requires `NaN`, and the caller's
+/// `right_is_known_zero` guard only recognises a literal `0` — a *local* that
+/// happens to hold `0` slips past it. The i64-range set admits exactly the
+/// counters that walk through zero (`for (let d = 10; d >= 0; d--) … x % d`),
+/// so letting it widen the divisor would introduce a UB window that
+/// `integer_locals` alone does not open. The dividend has no such constraint.
+pub(crate) fn is_integer_valued_divisor(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    integer_magnitude_bits_inner(ctx, e, false).is_some_and(|bits| bits <= MAX_FPTOSI_I64_BITS)
+}
+
+/// Largest magnitude (as `log2`) an expression may have and still convert
+/// exactly and in-range through `fptosi double -> i64`. `i64::MAX` is
+/// `2^63 - 1`, so `2^62` leaves a full bit of headroom.
+const MAX_FPTOSI_I64_BITS: u32 = 62;
+
+/// Conservative upper bound on `log2(|value|)` for a provably integer-valued
+/// expression; `None` when the expression is not provably integer-valued.
+///
+/// This is a magnitude *lattice*, not just an integrality predicate, because
+/// the `%` fast path emits `fptosi double -> i64` and LLVM makes that **poison**
+/// for an operand outside i64 range. A plain "is it an integer?" answer lets
+/// `(a * b * c) % n` through even when the product needs 93 bits.
+///
+/// Leaf bounds:
+/// - `integer_locals` — proven i32-range, so `|v| <= 2^31` → 31 bits.
+/// - `int_valued_i64_locals` — per-local bound recorded by the collector
+///   (56 bits for the common `+-1` step chain; see that module for the
+///   IEEE-754 saturation proof that makes it a hard ceiling).
+/// - bitwise results — `ToInt32` gives `|v| <= 2^31`; `>>>` is `ToUint32`,
+///   so `|v| <= 2^32`.
+/// - `Uint8ArrayGet` / `BufferIndexGet` — a byte, `|v| <= 2^8`.
+///
+/// Composition mirrors ordinary magnitude arithmetic: `Add`/`Sub` add a bit,
+/// `Mul` adds the exponents, and `%` is bounded by the smaller operand
+/// (`|a % b| <= min(|a|, |b|)`).
+fn integer_magnitude_bits_inner(ctx: &FnCtx<'_>, e: &Expr, allow_i64_locals: bool) -> Option<u32> {
+    let recurse = |sub: &Expr| integer_magnitude_bits_inner(ctx, sub, allow_i64_locals);
     match e {
-        Expr::Integer(_) => true,
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
-        Expr::LocalGet(id) => ctx.integer_locals.contains(id),
-        Expr::Update { id, .. } => ctx.integer_locals.contains(id),
-        Expr::Binary { op, left, right } => match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Mod => {
-                is_integer_valued_expr(ctx, left) && is_integer_valued_expr(ctx, right)
+        Expr::Integer(v) => Some(crate::collectors::ceil_log2_abs(*v)),
+        // A byte value — #7700: only with a numeric key. A property read has no
+        // magnitude bound at all.
+        Expr::Uint8ArrayGet { index, .. } if is_numeric_expr(ctx, index) => Some(8),
+        Expr::Uint8ArrayGet { .. } => None,
+        Expr::BufferIndexGet { .. } => Some(8),
+        Expr::LocalGet(id) | Expr::Update { id, .. } => {
+            if ctx.integer_locals.contains(id) {
+                Some(31)
+            } else if allow_i64_locals {
+                ctx.int_valued_i64_locals.get(id).copied()
+            } else {
+                None
             }
+        }
+        Expr::Binary { op, left, right } => match op {
+            BinaryOp::Add | BinaryOp::Sub => {
+                let l = recurse(left)?;
+                let r = recurse(right)?;
+                Some(l.max(r).saturating_add(1))
+            }
+            BinaryOp::Mul => {
+                let l = recurse(left)?;
+                let r = recurse(right)?;
+                Some(l.saturating_add(r))
+            }
+            // `|a % b| <= min(|a|, |b|)`. Admitted only against a NON-ZERO
+            // integer literal divisor: `x % 0` is NaN, and `fptosi(NaN)` is
+            // poison, so a nested `%` by a possibly-zero divisor must not be
+            // treated as an integer.
+            BinaryOp::Mod => match right.as_ref() {
+                Expr::Integer(d) if *d != 0 => {
+                    let l = recurse(left)?;
+                    Some(l.min(crate::collectors::ceil_log2_abs(*d)))
+                }
+                _ => None,
+            },
+            // ToInt32 → |v| <= 2^31.
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
-            | BinaryOp::Shr
-            | BinaryOp::UShr => true,
-            _ => false,
+            | BinaryOp::Shr => Some(31),
+            // ToUint32 → |v| <= 2^32.
+            BinaryOp::UShr => Some(32),
+            _ => None,
         },
-        _ => false,
+        _ => None,
     }
 }
 

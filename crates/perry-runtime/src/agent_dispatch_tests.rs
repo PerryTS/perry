@@ -13,11 +13,25 @@
 
 use crate::agent::{current_agent, enter_worker_agent, owns, retire_agent, PRIMARY_AGENT};
 
-/// The timer queues are process-global, and `cargo test` runs these in parallel
-/// threads of one process — so two tests that both schedule on the PRIMARY agent
-/// would see each other's timers in `active_timeout_resource_count()`. Serialize
-/// the ones that assert on primary-agent counts.
-static TIMER_QUEUE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// #7680: this file used to serialize against itself with a private
+/// `TIMER_QUEUE_TESTS` lock, which — unlike `crate::gc::global_side_table_test_lock()`
+/// — the GC test guards' state reset never takes, and an unguarded call to
+/// `crate::timer::test_clear_all_timer_scanner_roots()` (below) never took
+/// either: the exact `opt_report` / `ext_registry` split-lock-domain shape
+/// #7665 fixed elsewhere. `TIMER_QUEUE` / `CALLBACK_TIMERS` / `INTERVAL_TIMERS`
+/// are `per_test_global!` (#7674) now, so the underlying DATA hazard — a
+/// foreign thread's clear landing mid-test — is already structurally closed:
+/// every libtest test runs on its own thread, and a clear only ever touches
+/// the calling thread's own instance. The lock is taken anyway, unified to the
+/// guards' own domain, for two reasons: it matches the `plugin::REGISTRY`
+/// precedent the issue names, and the tests below that adopt a shared queue
+/// instance across a `std::thread::spawn` boundary (see
+/// `crate::timer::test_shared_queues::{test_shared_queue_keys, test_adopt_queues}`)
+/// hold a real cross-thread-visible table for part of their run, so serializing them
+/// against a concurrent GC guard reset is no longer purely decorative.
+fn timer_queue_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    crate::gc::global_side_table_test_lock()
+}
 
 /// The Android invariant, stated as a test: `nativePumpTick` runs on the UI
 /// thread, which never claims a worker agent, so it must resolve to the same
@@ -66,7 +80,7 @@ fn a_worker_disowns_the_primary_agents_work() {
 /// filter-and-drop, silently eaten it.
 #[test]
 fn a_worker_neither_fires_nor_eats_a_primary_agent_timer() {
-    let _serial = TIMER_QUEUE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = timer_queue_test_lock();
     // Schedule on the primary agent (this test thread).
     let before = crate::timer::active_timeout_resource_count();
     let id = crate::timer::js_set_timeout_callback(0, 50_000.0);
@@ -76,9 +90,17 @@ fn a_worker_neither_fires_nor_eats_a_primary_agent_timer() {
         "the owning agent sees its own timer as an active handle"
     );
 
-    // A worker pumps the timer queues. It must fire nothing of ours...
-    let fired_on_worker = std::thread::spawn(|| {
+    // A worker pumps the timer queues. It must fire nothing of ours — which
+    // this assertion can only prove if the worker is looking at the SAME
+    // queues: `TIMER_QUEUE` / `CALLBACK_TIMERS` / `INTERVAL_TIMERS` are
+    // `per_test_global!` (#7674), so a plain spawned thread gets its own
+    // empty instance and would pass this test whether or not
+    // `crate::agent::owns` filtering still worked (#7680). Adopt the primary
+    // thread's instance so the worker reads a real shared queue.
+    let queue_keys = crate::timer::test_shared_queues::test_shared_queue_keys();
+    let fired_on_worker = std::thread::spawn(move || {
         let agent = enter_worker_agent();
+        crate::timer::test_shared_queues::test_adopt_queues(queue_keys);
         let fired = crate::timer::js_callback_timer_tick() + crate::timer::js_interval_timer_tick();
         // ...and must not count our timer as work keeping ITS loop alive.
         let visible = crate::timer::active_timeout_resource_count();
@@ -122,7 +144,7 @@ fn a_worker_neither_fires_nor_eats_a_primary_agent_timer() {
 /// of the primary agent's slots — while the owner still roots its own.
 #[test]
 fn a_workers_gc_scan_never_visits_another_agents_timer_slots() {
-    let _serial = TIMER_QUEUE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = timer_queue_test_lock();
 
     // A promise timer on the primary agent. Its `promise` (a raw pointer into
     // THIS arena) and `value` slots are scanned unconditionally, which is what
@@ -143,9 +165,13 @@ fn a_workers_gc_scan_never_visits_another_agents_timer_slots() {
         "the owning agent must root its own timer's slots, or the promise is swept"
     );
 
-    // The same scan on a worker must not see any of it.
-    let visited_on_worker = std::thread::spawn(|| {
+    // The same scan on a worker must not see any of it — meaningfully only if
+    // the worker is scanning the SAME `per_test_global!` queue instance the
+    // primary just populated (#7680; see the comment on the previous test).
+    let queue_keys = crate::timer::test_shared_queues::test_shared_queue_keys();
+    let visited_on_worker = std::thread::spawn(move || {
         let agent = enter_worker_agent();
+        crate::timer::test_shared_queues::test_adopt_queues(queue_keys);
         let mut visited = 0usize;
         crate::timer::scan_timer_roots(&mut |_v: f64| visited += 1);
         retire_agent(agent);
@@ -167,11 +193,17 @@ fn a_workers_gc_scan_never_visits_another_agents_timer_slots() {
 /// global queue and fired on whatever thread pumped next — reading freed memory.
 #[test]
 fn retiring_a_worker_purges_the_timers_it_scheduled() {
-    let _serial = TIMER_QUEUE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = timer_queue_test_lock();
     let before = crate::timer::active_timeout_resource_count();
 
-    std::thread::spawn(|| {
+    // Adopt the primary's queue instance so the final assertion — that a dead
+    // worker's timers don't linger on "the primary agent's queue" — checks
+    // the SAME table the worker scheduled into, rather than an empty
+    // `per_test_global!` instance nothing else ever touched (#7680).
+    let queue_keys = crate::timer::test_shared_queues::test_shared_queue_keys();
+    std::thread::spawn(move || {
         let agent = enter_worker_agent();
+        crate::timer::test_shared_queues::test_adopt_queues(queue_keys);
         // A worker scheduling a timer: the callback closure would live in this
         // worker's arena.
         crate::timer::js_set_timeout_callback(0, 60_000.0);

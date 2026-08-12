@@ -632,6 +632,34 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
 /// methods were noop-backed (`global_this_builtin_noop_thunk`), so a borrowed
 /// reference (`obj.pop = Array.prototype.pop; obj.pop()` or
 /// `Array.prototype.pop.call(obj)`) returned `undefined` / looped.
+/// `Array.prototype.values` / `Array.prototype[Symbol.iterator]` (#7760).
+///
+/// `values` used to be installed by `install_noop_proto_methods`, so it existed
+/// and did nothing, and `Array.prototype[Symbol.iterator]` was not an own
+/// property at all — `js_object_get_symbol_property` synthesized a
+/// receiver-bound method on every read. Two consequences, both spec violations:
+///
+///   * `Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)` was
+///     `undefined`, and the symbol was absent from `getOwnPropertySymbols`,
+///     while every other builtin prototype (Map/Set/String/%TypedArray%) had a
+///     real descriptor.
+///   * saving and restoring the method — `const o = p[Symbol.iterator]; …;
+///     p[Symbol.iterator] = o` — left a closure bound to the PROTOTYPE, so the
+///     restored iterator threw `next is not a function`. That is the ordinary
+///     patch-and-restore idiom, and it also made the whole family untestable
+///     against the node oracle (#7542).
+///
+/// Reading `this` at CALL time is the fix for the second: the value is one
+/// function, and `Array.prototype.values.call(arr)` / a restored slot both
+/// iterate the receiver they are given.
+pub(crate) extern "C" fn array_prototype_values_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _a: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::array::array_values_iter(this)
+}
+
 pub(crate) extern "C" fn array_prototype_pop_thunk(
     _c: *const crate::closure::ClosureHeader,
     _a: f64,
@@ -683,6 +711,48 @@ pub(crate) extern "C" fn array_prototype_sort_thunk(
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
     crate::array::js_arraylike_sort(this, comparator)
+}
+/// `fill` / `copyWithin` were noop-backed until #6908, so a Proxy receiver
+/// (`p.fill(9)` — the method resolves through `Get(proxy, "fill")` to this
+/// prototype thunk) and borrowed references silently returned `undefined`.
+/// Each routes to the value-generic engine, which takes the dense helper for
+/// real arrays, the trap loop for proxies, the live-`Get`/`Set` loop for
+/// array-like objects, and ToObject-throws on nullish receivers. A supplied-
+/// but-`undefined` trailing argument is normalized to "absent" here (for
+/// `fill.start` the ToIntegerOrInfinity coercion makes them equivalent; for
+/// the `end` params the spec resolves `undefined` to `len`).
+pub(crate) extern "C" fn array_prototype_fill_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    let args = global_this_rest_array_values(rest);
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let value = args.first().copied().unwrap_or(undefined);
+    let (has_start, start) = match args.get(1) {
+        Some(v) => (1, *v),
+        None => (0, 0.0),
+    };
+    let (has_end, end) = match args.get(2) {
+        Some(v) if v.to_bits() != crate::value::TAG_UNDEFINED => (1, *v),
+        _ => (0, 0.0),
+    };
+    crate::array::js_array_fill_generic(this, value, has_start, start, has_end, end)
+}
+pub(crate) extern "C" fn array_prototype_copy_within_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    let args = global_this_rest_array_values(rest);
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let target = args.first().copied().unwrap_or(undefined);
+    let start = args.get(1).copied().unwrap_or(undefined);
+    let (has_end, end) = match args.get(2) {
+        Some(v) if v.to_bits() != crate::value::TAG_UNDEFINED => (1, *v),
+        _ => (0, 0.0),
+    };
+    crate::array::js_arraylike_copy_within(this, target, start, has_end, end)
 }
 
 /// Real thunks for the generic `Array.prototype` iteration / search methods,

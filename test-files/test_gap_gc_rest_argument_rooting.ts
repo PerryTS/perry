@@ -1,4 +1,4 @@
-// parity-env: PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_ZEAL=1
+// parity-env: PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1
 //
 // #7154: a cross-module call to a callee with a trailing `...rest` must root
 // its fixed parameters AND its accumulating rest array.
@@ -7,7 +7,7 @@
 // without it the harness compiles and runs in the default configuration, the
 // broken compiler prints `bad 0` 10/10, and this file gates nothing. Polls are
 // off by default since #7161, so the IR has no back-edge safepoint for a minor
-// to land on; and without zeal the only collections are allocation-triggered,
+// to land on; and without the seeded schedule the only collections are allocation-triggered,
 // which take `ManualGcScanGuard::force_full_scan` and make the copying minor
 // ineligible — so nothing MOVES and a stale register still names a live
 // object. `run_parity_tests.sh` applies `parity-env` to the perry compile AND
@@ -62,7 +62,7 @@
 //
 // The literal arm needs the collection EARLY: `__perry_init_strings_*` runs at
 // startup, so a literal is young for the first couple of minors and tenured
-// after that, and only a young object is evacuated. Under `PERRY_GC_ZEAL=1` the
+// after that, and only a young object is evacuated. At `PERRY_GC_SCHEDULE_RATE=1` the
 // first back-edge poll inside `churn` already runs an evacuating minor, so
 // iteration 0 is where the literal arm bites.
 

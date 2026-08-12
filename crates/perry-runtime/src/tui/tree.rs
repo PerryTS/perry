@@ -43,8 +43,10 @@ pub enum Node {
 /// through the table take the lock for the duration of a get/set. The
 /// lock isn't on the hot path (FFI calls fire on the main thread once
 /// per render) so a plain Mutex is fine.
-static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
-static REGISTRY: Mutex<Vec<(i64, Node)>> = Mutex::new(Vec::new());
+per_test_global! {
+    static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
+    static REGISTRY: Mutex<Vec<(i64, Node)>> = Mutex::new(Vec::new());
+}
 
 /// Register a freshly-built node and return its handle.
 pub fn register(node: Node) -> i64 {

@@ -25,6 +25,138 @@ unsafe fn receiver_gc_type(ptr: *const ArrayHeader) -> u8 {
     (*gc_header).obj_type
 }
 
+/// Is `value` an ordinary dense Array whose `[...value]` is *observably* a
+/// straight element copy — i.e. an iteration nobody can intercept?
+///
+/// Spread on a plain array is by far the most common spread in real code, and
+/// per ECMA-262 it is `GetIterator` → `%ArrayIteratorPrototype%.next()` per
+/// element. Perry implements that literally, which is why `[...tags]` on a
+/// 3-element array cost ~66x what `Array.from(tags)` cost: the protocol resolves
+/// `@@iterator` through the by-name prototype tower, builds a bound closure,
+/// allocates an iterator object, and then allocates a fresh `{ value, done }`
+/// result object (plus its two key strings and its keys array — five heap
+/// allocations) for every element AND for the terminating step. None of that is
+/// observable when the array is ordinary, so this predicate proves ordinariness
+/// and lets the caller memcpy instead (#7533).
+///
+/// Every gate rejects a way the copy could differ from the drain:
+///  - `try_read_gc_header` + `GC_TYPE_ARRAY`: a real dense array, not a
+///    Set/Map/Buffer/TypedArray/lazy array (each has its own `obj_type`), not a
+///    proxy or native handle (rejected by band, without a deref), and not a
+///    small-buffer slab allocation (which carries no `GcHeader` at all). A
+///    `class X extends Array` instance is object-backed (`GC_TYPE_OBJECT`), so
+///    it is excluded here and keeps its snapshot path.
+///  - `array_iteration_is_exotic`: no per-index accessor descriptors, no
+///    `Array.prototype` / `Object.prototype` index properties shadowing the
+///    dense slots, and no live indices past the dense backing store — the three
+///    cases where `arr[i]` is not the raw slot.
+///  - `array_proto_iterator_modified`: user code replaced or deleted
+///    `Array.prototype[Symbol.iterator]`, so the builtin walk is no longer what
+///    a spread must run.
+///  - `has_own_symbol_property`: the instance carries its OWN `[Symbol.iterator]`,
+///    which shadows the prototype's. Existence is probed WITHOUT invoking an
+///    accessor, so falling through to the slow path calls a user getter exactly
+///    once, as the spec requires.
+pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    // Band/slab validation BEFORE any deref: rejects handle ids and the
+    // header-less small-buffer slab without touching memory.
+    unsafe { crate::value::addr_class::try_read_gc_header(raw)? };
+    // Only THEN follow the forwarding chain. `js_array_grow` (issue #233) leaves
+    // a `GC_FLAG_FORWARDED` header at the OLD address whose first eight bytes —
+    // where `length`/`capacity` used to live — now hold the forwarding pointer.
+    // Reading `length` off the stale header yields a garbage element count, and
+    // the copy below then memcpy'd from an address derived from it: `[...sparse]`
+    // after `sparse.length = 5`, and `[...beyond]` after `beyond[9] = 9`, both
+    // took EXC_BAD_ACCESS in `_platform_memmove`. Every other array helper cleans
+    // first, including `js_array_clone`'s own memcpy tail; this one must too.
+    let arr = crate::array::clean_arr_ptr(raw as *const ArrayHeader);
+    if arr.is_null() {
+        return None;
+    }
+    // Re-read the type off the POST-forwarding header: the stale one is the
+    // address the caller named, the live one is the array we would copy.
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize)? };
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    if crate::array::array_iteration_is_exotic(arr) {
+        return None;
+    }
+    if crate::array::array_proto_iterator_modified() {
+        return None;
+    }
+    let iter_sym = crate::symbol::well_known_symbol("iterator");
+    if iter_sym.is_null() {
+        return None;
+    }
+    let sym_value = f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
+    if unsafe { crate::symbol::has_own_symbol_property(value, sym_value) } {
+        return None;
+    }
+    Some(arr)
+}
+
+/// Element-copy an array [`dense_spread_source`] has already proven ordinary.
+///
+/// `value` is the NaN-boxed receiver rather than a raw pointer because
+/// `js_array_alloc` below is a collection point: pre-#7497 the sibling
+/// `js_array_clone` derived its source elements from the pre-collection address
+/// and memcpy'd retired from-space. Root first, allocate, then re-read BOTH
+/// addresses from their handles.
+///
+/// Holes are the one place a raw copy and the iterator drain disagree: the drain
+/// reads `arr[i]`, which yields `undefined` for a hole, while the slot itself
+/// holds `TAG_HOLE`. Normalize on the way out so `[...[1, , 3]]` stays
+/// `[1, undefined, 3]` and `1 in [...[1, , 3]]` stays `true`.
+///
+/// Both reads of the source go through `clean_arr_ptr`, so a `js_array_grow`
+/// forwarding header (#233) is followed rather than mistaken for the array.
+pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src_h = scope.root_nanbox_f64(value);
+    let read_src = || {
+        clean_arr_ptr(
+            crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader
+        )
+    };
+    unsafe {
+        let src = read_src();
+        if src.is_null() {
+            return js_array_alloc(0);
+        }
+        let len = (*src).length;
+        let result_h =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
+        // Re-read AFTER the allocation: `js_array_alloc` is a collection point,
+        // and pre-#7497 the sibling `js_array_clone` memcpy'd from the
+        // pre-collection address, i.e. out of retired from-space.
+        let src = read_src();
+        let result =
+            crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
+        if src.is_null() || result.is_null() {
+            return js_array_alloc(0);
+        }
+        if len > 0 {
+            let src_elements =
+                (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+            let dst_elements =
+                (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+            // GC_STORE_AUDIT(BARRIERED): bulk copy into an unpublished array,
+            // followed by the exact layout/barrier rebuild below.
+            ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
+            for i in 0..len as usize {
+                if ptr::read(dst_elements.add(i)) == crate::value::TAG_HOLE {
+                    ptr::write(dst_elements.add(i), crate::value::TAG_UNDEFINED);
+                }
+            }
+            (*result).length = len;
+            rebuild_array_layout_exact(result);
+        }
+        result
+    }
+}
+
 /// Return a real `ArrayHeader` only when `value` satisfies ECMAScript's
 /// `IsArray` check. This unwraps proxy targets, rejects every other
 /// `POINTER_TAG` heap object by its GC type, and materializes lazy arrays
@@ -407,9 +539,22 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     if src.is_null() {
         return js_array_alloc(0);
     }
+    // #7497: `js_array_alloc` below can trigger the copying minor, which MOVES
+    // `src`. Pre-fix, `src_elements` was derived from the pre-collection address
+    // and `copy_nonoverlapping` read retired from-space — so `[...arr]`,
+    // `Array.from(arr)` and every combinator's iterable snapshot could copy
+    // whatever the recycled bytes now hold. `PERRY_GC_PROTECT_FROMSPACE=1` faults
+    // here on the `Promise.all` snapshot at minor #0. Root the source across the
+    // allocation and re-read both addresses from their handles afterwards.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(src as i64));
     unsafe {
         let len = (*src).length;
-        let result = js_array_alloc(len);
+        let result_h =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
+        let src = crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader;
+        let result =
+            crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
         if len > 0 {
             let src_elements =
                 (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -545,8 +690,16 @@ pub extern "C" fn js_array_values(arr: *const ArrayHeader) -> *mut ArrayHeader {
             }
             _ => {}
         }
+        // #7497 (CodeRabbit): the same shape `js_array_clone` had — `arr` is the
+        // memcpy SOURCE and `js_array_alloc` below can move it. Root and re-read.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let src_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(arr as i64));
         let len = (*arr).length;
-        let result = js_array_alloc(len);
+        let result_h =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
+        let arr = crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader;
+        let result =
+            crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
         if len > 0 {
             let src_elements =
                 (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;

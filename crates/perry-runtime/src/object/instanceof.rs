@@ -747,7 +747,7 @@ fn ordinary_has_instance(constructor: f64, value: f64) -> bool {
     result.to_bits() == crate::value::TAG_TRUE
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// When set, `js_instanceof_dynamic` returns `false` instead of throwing on
     /// an unresolved / non-callable right-hand side. Used by
     /// `OrdinaryHasInstance` (#3662), whose spec returns `false` there rather
@@ -885,6 +885,70 @@ pub extern "C" fn js_instanceof_noncallable_rhs() -> f64 {
     throw_type_error(b"Right-hand side of 'instanceof' is not callable");
 }
 
+/// Does the class-id chain starting at `start` reach `want`?
+///
+/// Walks two edges at every step, both bounded by the same depth budget:
+///
+/// * the **parent** edge (`CLASS_REGISTRY`), i.e. `extends`; and
+/// * the **generic-origin** edge (#7575), i.e. "this class is
+///   `monomorph`'s `Gen$num`, written by the user as `Gen`".
+///
+/// The second one exists because Perry monomorphizes generic classes. `new
+/// Gen<number>()` stamps the instance with `Gen$num`'s id, while `x instanceof
+/// Gen` resolves the RHS to the GENERIC's id — an id that is in no parent chain,
+/// so the walk answered `false` for the class the user actually wrote. It is
+/// checked at each hop rather than only at the start because a specialization's
+/// ancestors can be specializations too.
+///
+/// The origin edge is NOT a parent edge: `CLASS_REGISTRY`'s chain also resolves
+/// `super()` construction, static-method lookup and vtable dispatch, and
+/// splicing `Gen` in between `Gen$num` and its real base would re-run the wrong
+/// constructor. See `object/class_meta_registry.rs`.
+pub(crate) fn class_chain_reaches(start: u32, want: u32) -> bool {
+    if start == 0 || want == 0 {
+        return false;
+    }
+    let mut cur = start;
+    let mut depth = 0;
+    loop {
+        if cur == want {
+            return true;
+        }
+        if depth > 64 {
+            return false;
+        }
+        if let Some(gid) = crate::object::class_generic_origin(cur) {
+            if gid == want || class_chain_reaches_parents_only(gid, want, depth + 1) {
+                return true;
+            }
+        }
+        match get_parent_class_id(cur) {
+            Some(pid) if pid != 0 && pid != cur => cur = pid,
+            _ => return false,
+        }
+        depth += 1;
+    }
+}
+
+/// The parent-only half of [`class_chain_reaches`], used to continue a walk that
+/// has already stepped onto a generic origin. Separate so the two edges cannot
+/// recurse into each other without bound.
+fn class_chain_reaches_parents_only(start: u32, want: u32, depth0: usize) -> bool {
+    let mut cur = start;
+    let mut depth = depth0;
+    while depth <= 64 {
+        if cur == want {
+            return true;
+        }
+        match get_parent_class_id(cur) {
+            Some(pid) if pid != 0 && pid != cur => cur = pid,
+            _ => return false,
+        }
+        depth += 1;
+    }
+    false
+}
+
 /// Check if a value is an instance of a class with the given class_id
 /// Walks the inheritance chain to check parent classes
 /// Returns NaN-boxed TAG_TRUE / TAG_FALSE so the result identifies as a boolean.
@@ -944,7 +1008,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // off the class id (OWN lookup only — never resolves Function.prototype's
     // default @@hasInstance thunk, so no recursion). A present-but-non-callable
     // value throws; only `null`/`undefined` falls through to the chain.
-    {
+    //
+    // The latch check is what keeps `well_known_symbol("hasInstance")` — a
+    // string-keyed interning probe — off the path entirely in the (dominant)
+    // case where no class in the program declares any static Symbol member.
+    if crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.is_armed() {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
             let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
@@ -975,22 +1043,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                     (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
                 };
                 if unsafe { (*gc_header).obj_type } == crate::gc::GC_TYPE_OBJECT {
-                    let mut cur = unsafe { (*obj).class_id };
-                    if cur != 0 {
-                        if cur == class_id {
-                            return true_val;
-                        }
-                        let mut depth = 0;
-                        while let Some(pid) = get_parent_class_id(cur) {
-                            if pid == 0 || depth > 64 {
-                                break;
-                            }
-                            if pid == class_id {
-                                return true_val;
-                            }
-                            cur = pid;
-                            depth += 1;
-                        }
+                    let cur = unsafe { (*obj).class_id };
+                    if class_chain_reaches(cur, class_id) {
+                        return true_val;
                     }
                 }
             }
@@ -1556,20 +1611,12 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         {
             return true_val;
         }
-        if obj_class_id == class_id {
+        // Walk up the inheritance chain using the class registry. #7575: the
+        // walk also follows the generic-origin edge, so a dynamic RHS holding a
+        // generic class (`const C = Gen; x instanceof C`) matches an instance of
+        // one of its specializations.
+        if class_chain_reaches(obj_class_id, class_id) {
             return true_val;
-        }
-
-        // Walk up the inheritance chain using the class registry
-        let mut current_class = obj_class_id;
-        while let Some(parent_id) = get_parent_class_id(current_class) {
-            if parent_id == 0 {
-                break;
-            }
-            if parent_id == class_id {
-                return true_val;
-            }
-            current_class = parent_id;
         }
 
         false_val
@@ -1611,5 +1658,86 @@ mod null_lhs_tests {
                 lhs.to_bits()
             );
         }
+    }
+}
+
+/// #7575 — the generic-origin edge in [`class_chain_reaches`].
+///
+/// Perry monomorphizes generic classes, so `new Gen<number>()` stamps its
+/// instance with `Gen$num`'s id while `x instanceof Gen` asks about the
+/// GENERIC's id. These exercise the walk directly over synthetic ids: the
+/// gap test proves the end-to-end behaviour, this proves the walk's shape,
+/// including that the new edge does not make unrelated classes match.
+#[cfg(test)]
+mod generic_origin_chain_tests {
+    use super::class_chain_reaches;
+    use crate::object::{js_register_class_generic_origin, js_register_class_parent};
+
+    // Ids well outside the reserved 0xFFFF00xx band and outside any range a
+    // compiled module hands out in a test run.
+    const BASE: u32 = 0x0757_5000;
+    const GENERIC: u32 = 0x0757_5001;
+    const SPECIALIZED: u32 = 0x0757_5002;
+    const OTHER_SPECIALIZED: u32 = 0x0757_5003;
+    const SUB_GENERIC: u32 = 0x0757_5004;
+    const SUB_SPECIALIZED: u32 = 0x0757_5005;
+    const UNRELATED: u32 = 0x0757_5006;
+
+    fn wire() {
+        // class Base {}
+        // class Generic<T> extends Base {}        -> Specialized, OtherSpecialized
+        // class SubGeneric<T> extends Generic<T> {} -> SubSpecialized
+        js_register_class_parent(GENERIC, BASE);
+        js_register_class_parent(SPECIALIZED, BASE);
+        js_register_class_generic_origin(SPECIALIZED, GENERIC);
+        js_register_class_parent(OTHER_SPECIALIZED, BASE);
+        js_register_class_generic_origin(OTHER_SPECIALIZED, GENERIC);
+        js_register_class_parent(SUB_GENERIC, GENERIC);
+        js_register_class_parent(SUB_SPECIALIZED, GENERIC);
+        js_register_class_generic_origin(SUB_SPECIALIZED, SUB_GENERIC);
+    }
+
+    #[test]
+    fn a_specialization_is_an_instance_of_its_generic_and_of_the_real_base() {
+        wire();
+        // The bug: this was false, because GENERIC is in no parent chain.
+        assert!(class_chain_reaches(SPECIALIZED, GENERIC));
+        assert!(class_chain_reaches(SPECIALIZED, BASE));
+        assert!(class_chain_reaches(SPECIALIZED, SPECIALIZED));
+    }
+
+    #[test]
+    fn the_origin_edge_walks_the_generics_own_parents() {
+        wire();
+        // SubSpecialized -> (origin) SubGeneric -> (parent) Generic -> Base.
+        assert!(class_chain_reaches(SUB_SPECIALIZED, SUB_GENERIC));
+        assert!(class_chain_reaches(SUB_SPECIALIZED, GENERIC));
+        assert!(class_chain_reaches(SUB_SPECIALIZED, BASE));
+    }
+
+    /// The edge must not make everything match everything: two specializations
+    /// of the same generic are siblings, not ancestors of one another, and the
+    /// generic is not an instance of its own specialization.
+    #[test]
+    fn the_origin_edge_stays_directional_and_does_not_widen_matches() {
+        wire();
+        assert!(!class_chain_reaches(SPECIALIZED, OTHER_SPECIALIZED));
+        assert!(!class_chain_reaches(OTHER_SPECIALIZED, SPECIALIZED));
+        assert!(!class_chain_reaches(GENERIC, SPECIALIZED));
+        assert!(!class_chain_reaches(BASE, GENERIC));
+        assert!(!class_chain_reaches(SPECIALIZED, UNRELATED));
+        assert!(!class_chain_reaches(UNRELATED, GENERIC));
+        assert!(!class_chain_reaches(SPECIALIZED, 0));
+        assert!(!class_chain_reaches(0, GENERIC));
+    }
+
+    /// A self-edge or a cycle must terminate rather than hang: the walk is
+    /// depth-bounded and refuses `cur -> cur`.
+    #[test]
+    fn a_self_referential_registration_terminates() {
+        js_register_class_generic_origin(0x0757_50FF, 0x0757_50FF); // rejected
+        js_register_class_parent(0x0757_50FE, 0x0757_50FE); // self parent
+        assert!(!class_chain_reaches(0x0757_50FE, GENERIC));
+        assert!(class_chain_reaches(0x0757_50FE, 0x0757_50FE));
     }
 }

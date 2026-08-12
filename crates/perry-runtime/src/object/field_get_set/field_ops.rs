@@ -34,7 +34,7 @@ use super::*;
 const WARN_NULL_PTR_LOG_LIMIT: u64 = 64;
 const WARN_NULL_PTR_ABORT_LIMIT: u64 = 100_000;
 
-thread_local! {
+crate::perry_thread_local! {
     static WARN_NULL_PTR_STATE: std::cell::Cell<WarnNullPtrState>
         = const { std::cell::Cell::new(WarnNullPtrState {
             total_count: 0,
@@ -149,6 +149,22 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         };
         let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
         let slot = fields_ptr.add(field_index as usize);
+        // #7164 publication order (same invariant as the two "#7154
+        // publication order" sites in field_set_by_name/tail.rs): widen
+        // `field_count` FIRST, before the store. `object::gc_field_slot_range`
+        // bounds the collector's view of the payload by `field_count`, so a
+        // write at an index the count does not yet cover is invisible to BOTH
+        // tracing and evacuation rewriting -- a pointer stored there is never
+        // marked (swept while live) and never rewritten (stale from-space
+        // pointer left in a live slot) by a copying minor. This is the
+        // BY-INDEX counterpart of that bug: `alloc_limit` above already bounds
+        // `field_index` below the physical capacity, and every physical slot
+        // is undefined-initialized at allocation (`object/alloc.rs`), so
+        // widening here can only ever expose non-pointer sentinels ahead of
+        // the store that is about to fill this one in.
+        if field_index >= (*obj).field_count {
+            (*obj).field_count = field_index + 1;
+        }
         crate::gc::runtime_store_jsvalue_slot(
             obj as usize,
             slot as usize,
@@ -167,11 +183,10 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
 /// this function to compare the receiver's class id against every user
 /// class implementing the same method name. Without the GC-type guard we
 /// blindly read 4 bytes at offset 4 of the receiver — which for a
-/// `SetHeader` (allocated via std::alloc, no GcHeader, layout
-/// `{ size: u32, capacity: u32, elements: *mut f64 }`) is its `capacity`
-/// field. `js_set_alloc(0)` defaults capacity to 4, which collides with
-/// whichever user class lands at id 4, routing the call into the wrong
-/// method body and crashing on the bogus `this` pointer.
+/// `SetHeader` (layout `{ size: u32, capacity: u32, elements: *mut f64 }`) is
+/// its `capacity` field. `js_set_alloc(0)` defaults capacity to 4, which
+/// collides with whichever user class lands at id 4, routing the call into the
+/// wrong method body and crashing on the bogus `this` pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
     if crate::value::addr_class::is_handle_band(obj as usize) {
@@ -179,9 +194,15 @@ pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
     }
     let addr = obj as usize;
     // Built-in headers (Set / Map / Regex) live in their own per-type
-    // registries — they're never user class instances. Reject them first
-    // so we never try to read a GcHeader at obj-8, which doesn't exist
-    // for these std::alloc'd headers.
+    // registries — they're never user class instances. Reject them first.
+    //
+    // The reason given here used to be that Set/Map headers are `std::alloc`'d
+    // with no `GcHeader` at `obj - 8`. That stopped being true when
+    // `js_set_alloc` / `js_map_alloc` moved to
+    // `arena_alloc_gc(_, _, GC_TYPE_SET|GC_TYPE_MAP)` — both DO carry a header,
+    // and the `GC_TYPE_OBJECT` test below already rejects them on it. Regex
+    // pointers are the remaining header-less case, which is why the registry
+    // order is kept.
     if crate::set::is_registered_set(addr)
         || crate::map::is_registered_map(addr)
         || crate::regex::is_regex_pointer(obj as *const u8)
@@ -242,71 +263,6 @@ pub extern "C" fn js_object_set_field_f64(obj: *mut ObjectHeader, field_index: u
         }
     }
     js_object_set_field(obj, field_index, JSValue::from_bits(value.to_bits()));
-}
-
-/// Store a raw f64 into an object field slot for the unboxed numeric-field prototype.
-///
-/// This is only intended for construction sites whose static type has already
-/// proven a raw-number slot. Dynamic writes still go through the normal setters,
-/// which deopt the typed descriptor before tracing non-number values.
-#[no_mangle]
-pub extern "C" fn js_object_set_unboxed_f64_field(
-    obj: *mut ObjectHeader,
-    field_index: u32,
-    value: f64,
-) {
-    let obj = {
-        let b = obj as u64;
-        let t = b >> 48;
-        if t >= 0x7FF8 {
-            if t == 0x7FFC
-                || (b & 0x0000_FFFF_FFFF_FFFF) == 0
-                || (b & 0x0000_FFFF_FFFF_FFFF) < 0x10000
-            {
-                return;
-            }
-            (b & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader
-        } else {
-            obj
-        }
-    };
-    if obj.is_null() || (obj as usize) < 0x10000 {
-        return;
-    }
-    unsafe {
-        let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
-            return;
-        }
-        let stored_field_count = (*obj).field_count;
-        let alloc_limit =
-            std::cmp::max(stored_field_count, crate::object::INLINE_SLOT_FLOOR as u32);
-        if field_index >= alloc_limit {
-            eprintln!(
-                "[PERRY WARN] js_object_set_unboxed_f64_field: OOB write field_index={} alloc_limit={} (field_count={}) obj={:p} class_id={}",
-                field_index, alloc_limit, stored_field_count, obj, (*obj).class_id
-            );
-            return;
-        }
-        let bits = value.to_bits();
-        let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-        let slot = fields_ptr.add(field_index as usize);
-        crate::gc::runtime_store_jsvalue_slot(
-            obj as usize,
-            slot as usize,
-            field_index as usize,
-            bits,
-        );
-    }
-}
-
-/// Read a raw f64 object field slot used by the unboxed numeric-field prototype.
-#[no_mangle]
-pub extern "C" fn js_object_get_unboxed_f64_field(
-    obj: *const ObjectHeader,
-    field_index: u32,
-) -> f64 {
-    f64::from_bits(js_object_get_field(obj, field_index).bits())
 }
 
 /// Set a field by index with a raw f64 value (for dynamic object creation)

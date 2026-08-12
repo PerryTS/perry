@@ -66,7 +66,7 @@ fn pending_collection_still_owed() -> bool {
 
 fn clear_pending_collection() {
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
-    GC_SAFEPOINT_PENDING.with(|pending| pending.set(false));
+    crate::gc::set_safepoint_pending(false);
     let old_in_use = crate::arena::old_gen_in_use_bytes();
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
 }

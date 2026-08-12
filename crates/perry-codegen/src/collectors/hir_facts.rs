@@ -34,6 +34,15 @@ pub(crate) type NativeRegionFactGraph = TypeFacts;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RepresentationFacts {
     pub integer_locals: HashSet<u32>,
+    /// Locals that are integer-valued within **i64** range but NOT provably
+    /// within i32 range, mapped to a conservative `log2(|value|)` bound.
+    ///
+    /// Deliberately separate from `integer_locals`, which is an i32-RANGE set
+    /// feeding i32 shadow slots (`needs_i32_slot`) — widening that would place
+    /// an i32-overflowing value into an i32 slot. The `%` fast path converts to
+    /// i64 and only needs i64-range integrality, so it consults this set too.
+    /// See `collectors/int_valued_i64_locals.rs`. This is the ONLY consumer.
+    pub int_valued_i64_locals: std::collections::HashMap<u32, u32>,
     pub unsigned_i32_locals: HashSet<u32>,
     /// Locals whose runtime value provably can never be a BigInt (every write
     /// is a non-BigInt expression). Seeds `is_provably_not_bigint`, which gates
@@ -81,6 +90,13 @@ pub(crate) struct ArrayFacts {
     pub local_kinds: HashMap<u32, ArrayKindFact>,
     pub length_stable_locals: HashSet<u32>,
     pub noalias_locals: HashSet<u32>,
+    /// #7469: array locals whose element layout is declarable **once, at the
+    /// allocation site**, as all-pointer — an `[]` literal binding whose every
+    /// store in this region is a push of a by-construction heap pointer. See
+    /// `collectors/all_pointer_arrays.rs` for the four admission terms and for
+    /// why this fact governs *profitability* rather than the soundness of the
+    /// elided per-store note (which the emitted header test owns).
+    pub all_pointer_element_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -164,6 +180,10 @@ impl TypeFacts {
         &self.representation.integer_locals
     }
 
+    pub(crate) fn int_valued_i64_locals(&self) -> &std::collections::HashMap<u32, u32> {
+        &self.representation.int_valued_i64_locals
+    }
+
     pub(crate) fn unsigned_i32_locals(&self) -> &HashSet<u32> {
         &self.representation.unsigned_i32_locals
     }
@@ -231,6 +251,14 @@ impl TypeFacts {
 
     pub(crate) fn proves_noalias_array(&self, local_id: u32) -> bool {
         self.arrays.noalias_locals.contains(&local_id)
+    }
+
+    /// #7469: this array local's element layout may be declared all-pointer at
+    /// its allocation site, and its proven-pointer pushes may then elide the
+    /// per-store layout note behind the emitted header test. See
+    /// `collectors/all_pointer_arrays.rs`.
+    pub(crate) fn declares_all_pointer_elements(&self, local_id: u32) -> bool {
+        self.arrays.all_pointer_element_locals.contains(&local_id)
     }
 
     pub(crate) fn array_length_mutation_locals(&self) -> &HashSet<u32> {
@@ -382,11 +410,18 @@ pub(crate) fn collect_type_facts(
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
 ) -> TypeFacts {
+    // #7700: which locals hold a NUMBER, so a `u8[k]` keyed on one is a byte
+    // read rather than a property read. Computed once here because
+    // `binding_types` covers only params and module globals — the body `let`s,
+    // above all the counter in `for (let i = …) sum += buf[i]`, have to be
+    // walked for or the hottest buffer shape loses its i32 representation.
+    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
     let mut integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
         flat_const_ids,
         clamp_fn_ids,
         arg_dependent_clamp_fn_ids,
+        &numeric_locals,
     );
     // Native-i32 residency for integer-valued locals whose init/writes include a
     // possibly-out-of-bounds INT typed-array element read (bcryptjs `_encipher`
@@ -449,8 +484,15 @@ pub(crate) fn collect_type_facts(
     };
     let not_bigint_locals =
         super::not_bigint_locals::collect_not_bigint_locals(stmts, params, binding_types);
-    let (array_facts, effect_facts, materialization_hazards) =
+    let (mut array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
+    // #7469: at-allocation all-pointer element-layout declaration candidates.
+    array_facts.all_pointer_element_locals =
+        super::all_pointer_arrays::collect_all_pointer_array_locals(
+            stmts,
+            boxed_vars,
+            module_globals,
+        );
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     // Repsel Phase 1: under `PERRY_CANONICAL_I32_LOCALS` (default on), a
     // proven in-window const int-typed-array element load counts as a STRICT
@@ -468,6 +510,7 @@ pub(crate) fn collect_type_facts(
         flat_const_ids,
         clamp_fn_ids,
         strict_int_ta_views,
+        &numeric_locals,
     );
     // #7128: the profitability half of canonical-i32 selection. Every term
     // above answers "may we?"; this one answers "should we?", and it is
@@ -564,9 +607,14 @@ pub(crate) fn collect_type_facts(
         compile_time_constants,
         &integer_locals,
     );
+    // i64-range integer-valued locals for the `%` fast path. Independent of
+    // `integer_locals` (which is i32-RANGE and drives i32 shadow slots); this
+    // one is consumed only by `type_analysis::numeric::integer_magnitude_bits`.
+    let int_valued_i64_locals = super::int_valued_i64_locals::collect_int_valued_i64_locals(stmts);
     let graph = TypeFacts {
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
+            int_valued_i64_locals,
             unsigned_i32_locals,
             not_bigint_locals,
             int_valued_ta_locals,
@@ -1363,6 +1411,9 @@ impl ArrayFactCollector {
                 local_kinds: self.local_kinds,
                 length_stable_locals,
                 noalias_locals,
+                // Filled in by `collect_type_facts` — its own walk, with its
+                // own admission terms, over the same statements.
+                all_pointer_element_locals: HashSet::new(),
             },
             EffectFacts {
                 unknown_call_escape: self.unknown_call_escape,
@@ -2255,6 +2306,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         );
 
         assert!(
@@ -2290,6 +2342,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -2329,6 +2382,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -2385,6 +2439,7 @@ mod tests {
             &HashSet::new(),
             &clamp_ids,
             &clamp_ids,
+            &HashSet::new(),
         );
         assert!(!ints.contains(&1), "non-int-written seed must be pruned");
         assert!(
@@ -2407,6 +2462,7 @@ mod tests {
             &HashSet::new(),
             &clamp_ids,
             &clamp_ids,
+            &HashSet::new(),
         );
         assert!(ints.contains(&2), "int-arg clamp3 result must stay integer");
         assert!(ints.contains(&3), "copy of live clamp3 result must stay");
@@ -2418,6 +2474,7 @@ mod tests {
             &coercing_stmts,
             &HashSet::new(),
             &clamp_ids,
+            &HashSet::new(),
             &HashSet::new(),
         );
         assert!(
@@ -2451,6 +2508,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -2488,6 +2546,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),

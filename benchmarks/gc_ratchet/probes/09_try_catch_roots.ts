@@ -129,6 +129,27 @@ for (let r = 0; r < 32; r++) {
   checksum = (checksum + rethrower(r)) | 0;
 }
 
+// Churn phase with NO explicit gc(): every earlier phase collects explicitly
+// every few hundred KB, so the young generation never reaches the 16 MB
+// scavenge cap and no AUTOMATIC minor ever fires — and the pin validator
+// refuses a probe that runs no minor collection. (Before the cap was
+// young-generation-scoped, this probe got its minors from the degenerate
+// once-per-block cadence.) The try/catch phases above are unchanged; the
+// survivors of those phases must still read back correctly after the
+// automatic collections this loop triggers.
+const churnRing: (Payload | null)[] = [];
+for (let i = 0; i < 64; i++) {
+  churnRing.push(null);
+}
+for (let j = 0; j < 200000; j++) {
+  const t = new Payload(j);
+  checksum = (checksum + t.tag) | 0;
+  churnRing[j % 64] = t;
+}
+for (let i = 0; i < 64; i++) {
+  churnRing[i] = null;
+}
+
 gc();
 const mu = process.memoryUsage();
 

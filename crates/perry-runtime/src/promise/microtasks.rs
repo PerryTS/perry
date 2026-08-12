@@ -4,7 +4,7 @@
 
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Promise currently being dispatched by the microtask runner after its
     /// task has been popped from TASK_QUEUE. While user callbacks run this is
     /// the mutable root that lets copied-minor rewrite the promise pointer
@@ -125,6 +125,49 @@ enum MicrotaskDrainMode {
     /// (Next.js's React server renderer schedules its render/flush that way;
     /// #5437).
     AwaitLoop,
+}
+
+/// NaN-box a possibly-null promise / closure pointer so it can be parked in a
+/// `RuntimeHandleScope` (#7497). NaN-boxed rather than `root_raw_*_ptr` because
+/// reading a raw handle back needs `get_raw_*_ptr`, which
+/// `scripts/raw_handle_debt.py` counts; the NaN-boxed round trip is free and is
+/// the RE-READ these sites exist for.
+#[inline]
+fn boxed_promise(p: *mut Promise) -> f64 {
+    if p.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(p as i64)
+    }
+}
+
+#[inline]
+fn boxed_closure(c: ClosurePtr) -> f64 {
+    if c.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        crate::value::js_nanbox_pointer(c as i64)
+    }
+}
+
+#[inline]
+fn rooted_promise(h: &crate::gc::RuntimeHandle<'_>) -> *mut Promise {
+    let v = h.get_nanbox_f64();
+    if v.to_bits() == crate::value::TAG_UNDEFINED {
+        std::ptr::null_mut()
+    } else {
+        crate::value::js_nanbox_get_pointer(v) as *mut Promise
+    }
+}
+
+#[inline]
+fn rooted_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
+    let v = h.get_nanbox_f64();
+    if v.to_bits() == crate::value::TAG_UNDEFINED {
+        std::ptr::null()
+    } else {
+        crate::value::js_nanbox_get_pointer(v) as ClosurePtr
+    }
 }
 
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
@@ -293,7 +336,14 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                 None => break,
                 Some(Task::Promise(promise, value, is_fulfilled, task_context)) => {
                     bump(&MT_RUN_COUNT);
+                    // #7497: root BEFORE `enter_microtask_context` — a popped
+                    // Task is no longer a scanned root and that call allocates.
+                    let task_scope = crate::gc::RuntimeHandleScope::new();
+                    let task_promise_handle = task_scope.root_nanbox_f64(boxed_promise(promise));
+                    let task_value_handle = task_scope.root_nanbox_f64(value);
                     enter_microtask_context(&task_context);
+                    let promise = rooted_promise(&task_promise_handle);
+                    let value = task_value_handle.get_nanbox_f64();
                     unsafe {
                         let callback = if is_fulfilled {
                             (*promise).on_fulfilled
@@ -341,9 +391,23 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         // nested drain leaves the enclosing arm — and its
                         // exception-trap routing — intact. This mirrors the
                         // INLINE_TRAP save/restore in the Inline/AsyncStep arms.
+                        //
+                        // #7497: `callback` and `value` need the same treatment.
+                        // `callback` was read out of `(*promise).on_fulfilled`
+                        // above and then carried in a register across
+                        // `async_hooks::before` and `v8::promise_hook_before`,
+                        // both of which can allocate — and the very next
+                        // instruction after them loads `func_ptr` out of it.
+                        // The `CURRENT_MICROTASK_CALLBACK` cell IS a scanned
+                        // root, so the collector rewrites the CELL and leaves
+                        // this copy naming from-space.
+                        // `PERRY_GC_PROTECT_FROMSPACE=1` faults exactly there,
+                        // on a 112-byte `GC_TYPE_CLOSURE`.
                         let scope = crate::gc::RuntimeHandleScope::new();
                         let promise_handle = scope.root_raw_mut_ptr(promise);
                         let next_handle = scope.root_raw_mut_ptr((*promise).next);
+                        let callback_handle = scope.root_nanbox_f64(boxed_closure(callback));
+                        let value_handle = scope.root_nanbox_f64(value);
                         let prev_promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
                         let prev_callback = CURRENT_MICROTASK_CALLBACK.with(|c| c.get());
                         let prev_value = CURRENT_MICROTASK_VALUE.with(|c| c.get());
@@ -372,7 +436,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         let trigger_async_id = (*promise).trigger_async_id;
                         crate::async_hooks::before(async_id, trigger_async_id);
                         crate::v8::promise_hook_before(promise);
-                        let result = crate::closure::js_closure_call1(callback, value);
+                        // #7497: re-read BOTH from their handles — the two calls
+                        // above allocate.
+                        let result = crate::closure::js_closure_call1(
+                            rooted_closure(&callback_handle),
+                            value_handle.get_nanbox_f64(),
+                        );
                         // Keep the callback result rooted across `after()` (which
                         // can run JS when async_hooks are active) via the value
                         // cell, then reload promise/next from our handles — never
@@ -419,16 +488,43 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     restore_microtask_context();
                     ran += 1;
                 }
-                Some(Task::PromiseAll(state, value, is_fulfilled, task_context)) => {
+                Some(Task::PromiseAll(mut state, value, is_fulfilled, task_context)) => {
                     bump(&MT_RUN_COUNT);
+                    // #7497: root BEFORE `enter_microtask_context` — see the
+                    // Task::AsyncStep arm. The combinator state carries three
+                    // heap pointers plus the settlement value.
+                    let task_scope = crate::gc::RuntimeHandleScope::new();
+                    let result_h = task_scope.root_nanbox_f64(boxed_promise(state.result_promise));
+                    let results_h = task_scope
+                        .root_nanbox_f64(crate::value::js_nanbox_pointer(state.results_arr as i64));
+                    let state_arr_h = task_scope
+                        .root_nanbox_f64(crate::value::js_nanbox_pointer(state.state_arr as i64));
+                    let value_h = task_scope.root_nanbox_f64(value);
                     enter_microtask_context(&task_context);
+                    state.result_promise = rooted_promise(&result_h);
+                    state.results_arr =
+                        crate::value::js_nanbox_get_pointer(results_h.get_nanbox_f64())
+                            as *mut crate::array::ArrayHeader;
+                    state.state_arr =
+                        crate::value::js_nanbox_get_pointer(state_arr_h.get_nanbox_f64())
+                            as *mut crate::array::ArrayHeader;
+                    let value = value_h.get_nanbox_f64();
                     combinators::promise_all_settle(state, value, is_fulfilled);
                     restore_microtask_context();
                     ran += 1;
                 }
                 Some(Task::Inline(callback, value, next, is_fulfilled, task_context)) => {
                     bump(&MT_RUN_COUNT);
+                    // #7497: root BEFORE `enter_microtask_context` — see the
+                    // Task::AsyncStep arm.
+                    let trap_scope = crate::gc::RuntimeHandleScope::new();
+                    let callback_handle = trap_scope.root_nanbox_f64(boxed_closure(callback));
+                    let value_handle = trap_scope.root_nanbox_f64(value);
+                    let next_handle = trap_scope.root_nanbox_f64(boxed_promise(next));
                     enter_microtask_context(&task_context);
+                    let callback = rooted_closure(&callback_handle);
+                    let value = value_handle.get_nanbox_f64();
+                    let next = rooted_promise(&next_handle);
                     // Inline tasks are produced by `js_promise_resolved_then`
                     // (the `Promise.resolve(<primitive>).then(cb_f, cb_e)`
                     // fast path). We've already skipped allocating the
@@ -461,7 +557,6 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     // when the runner is invoked re-entrantly from inside
                     // a non-transformed async closure's busy-wait.
                     let prev_trap = INLINE_TRAP.with(|c| c.get());
-                    let trap_scope = crate::gc::RuntimeHandleScope::new();
                     let prev_trap_next_handle = trap_scope.root_raw_mut_ptr(prev_trap.trap_next);
                     let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
                         prev_trap.current_step as *const crate::closure::ClosureHeader,
@@ -482,7 +577,9 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         None
                     };
                     crate::v8::promise_hook_before(next);
-                    let result = crate::closure::js_closure_call1(callback, value);
+                    let callback = rooted_closure(&callback_handle);
+                    let result =
+                        crate::closure::js_closure_call1(callback, value_handle.get_nanbox_f64());
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
                     crate::v8::promise_hook_after(next_for_after);
@@ -527,8 +624,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     trigger_async_id,
                 }) => {
                     bump(&MT_RUN_COUNT);
-                    enter_microtask_context(&context);
+                    // #7497: root BEFORE `enter_microtask_context` — see the
+                    // Task::AsyncStep arm.
                     let scope = crate::gc::RuntimeHandleScope::new();
+                    let callback_handle = scope.root_nanbox_f64(boxed_closure(callback));
+                    enter_microtask_context(&context);
+                    let callback = rooted_closure(&callback_handle);
                     let prev_promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
                     let prev_callback = CURRENT_MICROTASK_CALLBACK.with(|c| c.get());
                     let prev_value = CURRENT_MICROTASK_VALUE.with(|c| c.get());
@@ -540,7 +641,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                     CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
                     crate::async_hooks::before(async_id, trigger_async_id);
-                    crate::closure::js_closure_call0(callback);
+                    crate::closure::js_closure_call0(rooted_closure(&callback_handle));
                     crate::async_hooks::after(async_id);
                     crate::async_hooks::destroy(async_id);
                     CURRENT_MICROTASK_PROMISE
@@ -554,7 +655,24 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                 }
                 Some(Task::AsyncStep(step_closure, value, next, is_error, task_context)) => {
                     bump(&MT_RUN_COUNT);
+                    // #7497: ROOT BEFORE `enter_microtask_context`. A Task stops
+                    // being a scanned root the instant it is popped off
+                    // TASK_QUEUE, and everything between the pop and the
+                    // dispatch — the context switch, the async-hook bookkeeping,
+                    // the promise hooks — can allocate. Rooting inside the arm
+                    // but AFTER those calls preserves an address that is already
+                    // stale, which is what the first attempt at this fix did:
+                    // the instrument still faulted at `call_async_step_direct`'s
+                    // `(*step_closure).func_ptr`, on a value re-read from a
+                    // handle that had been seeded too late.
+                    let trap_scope = crate::gc::RuntimeHandleScope::new();
+                    let step_handle = trap_scope.root_nanbox_f64(boxed_closure(step_closure));
+                    let value_handle = trap_scope.root_nanbox_f64(value);
+                    let next_handle = trap_scope.root_nanbox_f64(boxed_promise(next));
                     enter_microtask_context(&task_context);
+                    let step_closure = rooted_closure(&step_handle);
+                    let value = value_handle.get_nanbox_f64();
+                    let next = rooted_promise(&next_handle);
                     // Direct dispatch of the async-step closure. Skips the
                     // then_v_arrow / then_e_arrow wrapper that would
                     // otherwise be invoked as the on_fulfilled / on_rejected
@@ -678,11 +796,18 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     // settles with the awaited value rather than the
                     // explicit return expression.
                     let prev_trap = INLINE_TRAP.with(|c| c.get());
-                    let trap_scope = crate::gc::RuntimeHandleScope::new();
                     let prev_trap_next_handle = trap_scope.root_raw_mut_ptr(prev_trap.trap_next);
                     let prev_trap_step_handle = trap_scope.root_raw_const_ptr(
                         prev_trap.current_step as *const crate::closure::ClosureHeader,
                     );
+                    // #7497: seed the trap from the HANDLES, not from the locals.
+                    // Between the re-read at the top of this arm and here sit the
+                    // runaway-reentry guard (which allocates a TypeError on its
+                    // bounded path) and two handle pushes; a stale `next` stored
+                    // into the trap is what `js_async_step_done` later settles
+                    // and RETURNS as the async function's own result promise.
+                    let next = rooted_promise(&next_handle);
+                    let step_closure = rooted_closure(&step_handle);
                     INLINE_TRAP.with(|c| {
                         c.set(InlineTrap {
                             trap_next: next,
@@ -721,7 +846,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     };
                     crate::async_hooks::before(step_async_id, step_trigger_id);
                     crate::v8::promise_hook_before(next);
-                    let result = call_async_step_direct(step_closure, value, is_error_bits);
+                    // #7497: re-read both across the two calls above.
+                    let result = call_async_step_direct(
+                        rooted_closure(&step_handle),
+                        value_handle.get_nanbox_f64(),
+                        is_error_bits,
+                    );
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK

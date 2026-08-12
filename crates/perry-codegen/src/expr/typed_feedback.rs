@@ -253,6 +253,58 @@ pub(crate) fn typed_feedback_emission_enabled() -> bool {
         || std::env::var_os("PERRY_TYPED_FEEDBACK_TRACE").is_some()
 }
 
+/// Emit a pure-BOOKKEEPING typed-feedback call — or nothing at all in a default
+/// build.
+///
+/// #7480 step 4, and the other half of the argument
+/// [`typed_feedback_emission_enabled`] already makes. That gate removed the
+/// per-site `js_typed_feedback_register_site` call from default builds and
+/// stopped there, leaving the *recording* helpers
+/// (`observe_property_{get,set}`, `record_guard_{pass,fail}`,
+/// `record_fallback_call`) emitted on every execution of every dynamic
+/// property boundary. Each begins:
+///
+/// ```text
+/// if site_id == 0 || !typed_feedback_enabled() { return; }
+/// ```
+///
+/// so in a default build every one of them is a cross-crate call that answers
+/// "no" and returns. On `churn_read_big.ts` — 200k × 1000 reads of
+/// `keep[j].v + keep[j].w` — those two answers are **22.3% of the whole
+/// program** (`observe_property` 11.1%, `record_guard_pass` 11.2%, `sample`,
+/// 2465 leaf samples). Not the recording: the call, plus the `LazyLock<bool>`
+/// acquire load each one performs to decide it has nothing to do.
+///
+/// Leaving them in was never a deliberate trade. Registration and recording are
+/// the same feature behind the same env var, and a binary compiled without the
+/// var could already only produce *unattributed* feedback — sites with no
+/// module, function or source name, because nothing registered them. This makes
+/// the contract whole: the env is a compile-time switch, exactly as
+/// [`typed_feedback_emission_enabled`]'s doc says, and a run that asks for a
+/// trace from a binary that was not built for one now says so
+/// (`js_typed_feedback_maybe_dump_trace`) instead of writing an empty file.
+///
+/// **Only helpers that exclusively record go through here.** Anything that also
+/// performs the operation or picks the dispatch — `js_typed_feedback_*_guard`,
+/// `…_object_set_field_by_name_fast`, `…_object_get_field_by_name_f64`,
+/// `…_native_call_method` — is a real call on a real path and is emitted
+/// unconditionally, whatever the env says.
+pub(crate) fn emit_typed_feedback_record_call(
+    blk: &mut crate::block::LlBlock,
+    func_name: &str,
+    args: &[(crate::types::LlvmType, &str)],
+) {
+    debug_assert!(
+        func_name.starts_with("js_typed_feedback_record_")
+            || func_name.starts_with("js_typed_feedback_observe_"),
+        "only pure-recording feedback helpers may be elided: {func_name}"
+    );
+    if !typed_feedback_emission_enabled() {
+        return;
+    }
+    blk.call_void(func_name, args);
+}
+
 pub(crate) fn emit_typed_feedback_register_site(
     ctx: &mut FnCtx<'_>,
     kind: TypedFeedbackKind,

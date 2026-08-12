@@ -266,3 +266,101 @@ fn test_fresh_closure_capture_slots_are_initialized_7154() {
         }
     }
 }
+
+/// #7164 — `js_object_set_field` (the BY-INDEX setter on `perry-ffi`'s stable
+/// surface, re-exported verbatim from `object/field_get_set/field_ops.rs`)
+/// must widen `field_count` the same way the by-name path already does at
+/// `object/field_set_by_name/tail.rs`'s two "#7154 publication order" sites.
+///
+/// `perry_ffi::alloc_object()` calls `js_object_alloc(0, 0)`: `field_count =
+/// 0` with `INLINE_SLOT_FLOOR` physical slots undefined-initialized.
+/// `js_object_set_field(obj, 0, pointer_value)` passes the bounds check
+/// (`0 < max(field_count, INLINE_SLOT_FLOOR)`) and stores the pointer, but —
+/// unlike
+/// `tail.rs`'s by-name writer — never bumps `field_count`. The collector's
+/// view of the payload (`object::gc_field_slot_range`, and downstream
+/// `heap_payload_slot_selection`'s `payload.is_empty()` short-circuit) is
+/// bounded by `field_count`, so the stored pointer is outside the traced
+/// range: never marked (swept while live) and never rewritten by a copying
+/// minor (stale from-space pointer left in a live slot). Reachable through
+/// `perry-ffi`'s documented surface alone (`alloc_object` + `js_object_set_field`).
+#[test]
+fn test_ffi_index_field_set_widens_field_count_7164() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    // Mirrors `perry_ffi::alloc_object()` exactly: class_id=0, field_count=0.
+    let obj = crate::object::js_object_alloc(0, 0);
+    assert_eq!(
+        unsafe { (*obj).field_count },
+        0,
+        "test setup: alloc_object()'s field_count starts at 0"
+    );
+
+    let child = crate::string::js_string_from_bytes(
+        b"ffi-index-set-field-7164".as_ptr(),
+        "ffi-index-set-field-7164".len() as u32,
+    );
+
+    // The exact documented-FFI call: `perry_ffi::js_object_set_field(obj, 0,
+    // value)` forwards verbatim to this runtime symbol.
+    crate::object::js_object_set_field(
+        obj,
+        0,
+        crate::value::JSValue::from_bits(string_bits(child as usize)),
+    );
+
+    // Deterministic assertion, independent of GC timing (mirrors the two
+    // tests above): the slot the store just published must be enumerated as
+    // a child edge, or the collector's view of the payload never covers it.
+    let field0_slot = unsafe {
+        (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as usize
+    };
+    let enumerated = unsafe { enumerated_child_slots(obj as usize) };
+    assert!(
+        enumerated.contains(&field0_slot),
+        "#7164: js_object_set_field(obj, 0, ..) on a field_count=0 object must \
+         widen field_count so the collector's view covers the written slot; \
+         the collector enumerated {enumerated:?} (a raw field_count=0 leaves \
+         the whole payload range empty, so the mask is never consulted)"
+    );
+    assert_eq!(
+        unsafe { (*obj).field_count },
+        1,
+        "#7164: js_object_set_field must widen field_count to cover the \
+         written index, mirroring field_set_by_name/tail.rs's publication order"
+    );
+
+    // End to end: the object is the ONLY root — the string is reachable
+    // exclusively through the field this defect leaves untraced. It must
+    // survive a copying minor, and the slot must be rewritten to the
+    // relocated address (not left pointing at reclaimed from-space memory).
+    js_shadow_slot_set(0, ptr_bits(obj as usize));
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert!(
+        trace.copying_nursery.copied_objects > 0,
+        "#7164 regression test requires a COPYING minor; a non-moving \
+         collection cannot expose a missing mark/rewrite (copied_objects=0)"
+    );
+
+    let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    let stored = crate::object::js_object_get_field(obj_after, 0);
+    assert!(
+        stored.is_string(),
+        "#7164: the field must still hold a live string after a copying \
+         minor (got bits {:#x}) — an untraced slot is either collected out \
+         from under a live reference or left as a stale from-space pointer",
+        stored.bits()
+    );
+    let recovered = (stored.bits() & POINTER_MASK) as usize;
+    assert!(
+        crate::arena::classify_heap_generation(recovered) != crate::arena::HeapGeneration::Unknown,
+        "#7164: the string reached only through the object field must remain \
+         a live heap pointer after the collection (recovered {recovered:#x})"
+    );
+    unsafe {
+        assert_string_bytes(
+            recovered as *const crate::StringHeader,
+            b"ffi-index-set-field-7164",
+        );
+    }
+}

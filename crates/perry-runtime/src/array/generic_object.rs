@@ -449,6 +449,16 @@ pub extern "C" fn js_arraylike_concat(recv: f64, args_ptr: *const f64, count: i3
 pub extern "C" fn js_arraylike_splice(recv: f64, args_ptr: *const f64, count: i32) -> f64 {
     let o = to_object(recv);
     let count = count.max(0) as usize;
+    // #6908: Proxy receivers take the trap-routed spec loop. The `object_splice`
+    // fallback's `al_*` primitives do route proxy element traps, but its
+    // `al_set_length` tail reads the masked handle id as a raw ObjectHeader
+    // address, and its proxy deletes don't throw on a refusing trap
+    // (DeletePropertyOrThrow).
+    if crate::proxy::js_proxy_is_proxy(o) != 0 {
+        if let Some(r) = super::push_pop::proxy_array_mutator(o, "splice", args_ptr, count) {
+            return r;
+        }
+    }
     let arr = as_real_array(o);
     if !arr.is_null() {
         return unsafe { real_array_mutator(arr, "splice", args_ptr, count) };

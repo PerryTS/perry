@@ -87,6 +87,19 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     // segfaulted. Materialize to a heap StringHeader so every pointer
     // extraction downstream is valid; the per-codepoint path in
     // `js_array_clone` then behaves exactly as it does for a literal.
+    // #7542: `Array.from(arr)` is `GetIterator(arr)` + drain, so a patched
+    // `Array.prototype[Symbol.iterator]` drives it exactly as it drives spread.
+    // This function's array arm ends in a raw `js_array_clone` — a shallow
+    // element copy that never consults the protocol — so the guard has to be
+    // here rather than downstream. `array_from_spread_value` already routes the
+    // patched case through `js_get_iterator`; reuse it so the two entry points
+    // cannot answer differently for the same receiver.
+    if crate::array::array_proto_iterator_modified()
+        && crate::array::js_array_is_array(boxed).to_bits() == crate::value::TAG_TRUE
+    {
+        return crate::array::js_array_clone_for_spread(boxed);
+    }
+
     let jsval = crate::value::JSValue::from_bits(bits);
     if jsval.is_short_string() {
         let hdr = crate::string::js_string_materialize_to_heap(boxed);
@@ -781,6 +794,15 @@ unsafe fn peek_plain_array_len(arr: *const ArrayHeader) -> Option<u32> {
     if crate::array::array_ptr_as_proxy(arr).is_some() {
         return None;
     }
+    // #7574: `clean_arr_ptr` now REFUSES a `GC_TYPE_OBJECT` allocation, so an
+    // array-like object — a `class X extends Array` instance among them — would
+    // fall into the null arm below and be mis-sized as an EMPTY array. It used
+    // to reach the `obj_type != GC_TYPE_ARRAY` test and answer `None`
+    // ("un-peekable, size it as 1 and take the spec-shaped per-source flow").
+    // Keep that answer: classify BEFORE the null shortcut.
+    if crate::array::subclass::raw_receiver_is_heap_object(arr) {
+        return None;
+    }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return Some(0);
@@ -823,6 +845,16 @@ unsafe fn concat_capacity_hint(recv: *const ArrayHeader, args_ptr: *const f64, c
 /// Pure reads — runs no user code, allocates nothing.
 unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const ArrayHeader, u32)> {
     if crate::array::array_ptr_as_proxy(src).is_some() {
+        return None;
+    }
+    // #7574: same hazard as `peek_plain_array_len` — but here mis-classifying a
+    // `class X extends Array` argument as an empty dense source would SILENTLY
+    // DROP its elements, because this bulk path returns `Some(out)` and the
+    // spec-shaped `append_concat_arg` flow (which has the subclass snapshot
+    // arm) never runs. `[1, 2].concat(sub)` yielded `1,2`. Reject it here so
+    // the caller falls through, exactly as it did before `clean_arr_ptr`
+    // started refusing object receivers.
+    if crate::array::subclass::raw_receiver_is_heap_object(src) {
         return None;
     }
     let src = clean_arr_ptr(src);
@@ -1029,11 +1061,11 @@ unsafe fn try_append_spread_array_dense(
         // e.g. from `array_subclass_dense_snapshot`) and re-resolve both.
         let scope = crate::gc::RuntimeHandleScope::new();
         let src_handle = scope.root_raw_const_ptr(src);
-        let grown = crate::array::js_array_grow(result, new_len);
-        (
-            grown,
-            clean_arr_ptr(src_handle.get_raw_const_ptr::<ArrayHeader>()),
-        )
+        // `js_array_grow` allocates and can move `src`; `across_const` runs it
+        // and hands back the post-collection address (#7341).
+        let (grown, src_after) = src_handle
+            .across_const::<ArrayHeader, _>(|| crate::array::js_array_grow(result, new_len));
+        (grown, clean_arr_ptr(src_after))
     } else {
         (result, src)
     };

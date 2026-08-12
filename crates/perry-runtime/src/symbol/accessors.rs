@@ -12,9 +12,11 @@ pub(super) struct SymbolAccessorDescriptor {
     pub(super) set: u64,
 }
 
-static SYMBOL_ACCESSOR_PROPERTIES: Mutex<
-    Option<HashMap<(usize, usize), SymbolAccessorDescriptor>>,
-> = Mutex::new(None);
+per_test_global! {
+    static SYMBOL_ACCESSOR_PROPERTIES: Mutex<
+        Option<HashMap<(usize, usize), SymbolAccessorDescriptor>>,
+    > = Mutex::new(None);
+}
 
 pub(super) fn clear_symbol_accessor_property(obj_key: usize, sym_key: usize) {
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
@@ -46,11 +48,27 @@ pub(crate) unsafe fn set_symbol_accessor_property(
     }
     crate::symbol::note_symbol_key_installed(sym_key);
     {
+        // `SYMBOL_PROPERTIES` is the only insertion-ordered record of symbol
+        // property CREATION order, which `[[OwnPropertyKeys]]` must report
+        // (test262 getOwnPropertySymbols/order-after-define-property).
+        // Removing the data entry on a data→accessor redefine — or never
+        // adding one for a fresh accessor install — destroys that position,
+        // so the key re-enumerated at the end (or in creation-id order, which
+        // is not install order). Keep an order-preserving placeholder instead:
+        // same key, TAG_UNDEFINED value bits so the old data value stops
+        // being rooted. Readers never mistake it for a data value — get, set,
+        // gOPD and has-own all consult `SYMBOL_ACCESSOR_PROPERTIES` first,
+        // and `clone_symbol_entries_for_obj_ptr` filters accessor-keyed
+        // entries out for the raw-entry consumers (formatting, freeze/seal).
         let mut props = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-        if let Some(map) = props.as_mut() {
-            if let Some(entries) = map.get_mut(&obj_key) {
-                entries.retain(|(key, _)| *key != sym_key);
-            }
+        if props.is_none() {
+            *props = Some(HashMap::new());
+        }
+        let entries = props.as_mut().unwrap().entry(obj_key).or_default();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.0 == sym_key) {
+            entry.1 = crate::value::TAG_UNDEFINED;
+        } else {
+            entries.push((sym_key, crate::value::TAG_UNDEFINED));
         }
     }
     {

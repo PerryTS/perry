@@ -1,0 +1,211 @@
+//! `per_test_global!` — a process-global table whose test-time isolation no
+//! lock enforces, declared so that one test cannot reach another test's copy.
+//!
+//! The macro is named for what it *does* (a per-test instance in a test build)
+//! rather than for the sharpest instance of the hazard (the GC guards' clear),
+//! because two of its residents are not cleared by anything:
+//!
+//! * `tui::tree`'s `NEXT_HANDLE` / `REGISTRY` — no clear at all, just two
+//!   process-global counters and `assert_eq!(h2, h1 + 1)`. A concurrent
+//!   `register()` on any other test thread breaks it.
+//! * `gc::barrier`'s `GENERATED_WRITE_BARRIERS_EMITTED` — owned by TWO guards
+//!   under TWO DIFFERENT locks, and read by tests holding neither.
+//!
+//! Both of those failed inside a 22-run soak of the fix for the first case, and
+//! both were diagnosed from the wrong VALUE rather than the timing (a
+//! non-sequential handle; `slot_page_ever_dirty=false`, i.e. the barrier did not
+//! fire). Naming the macro after the clear would have made them look like
+//! misfits rather than the same defect.
+//!
+//! # The defect this exists to make structurally impossible (#7672)
+//!
+//! `gc::tests::support::reset_copying_nursery_runtime_test_state()` runs from
+//! `GcTestIsolationGuard` and `CopyingNurseryTestGuard`, and calls ~20
+//! `test_clear_*` helpers so the GC test that constructed the guard sees
+//! exactly the roots it installs. Those helpers `clear()` PROCESS-global
+//! tables, from whatever libtest thread happens to be running the guard.
+//!
+//! The guards serialize against *each other* (`global_side_table_test_lock`),
+//! and against the handful of tests that remember to take that lock. Nothing
+//! requires a *reader* to take it — the defence is opt-in and the opt-in is
+//! invisible at the read site. So a test on thread T that writes an entry and
+//! reads it back a few statements later has its entry deleted, mid-test, by a
+//! guard on thread U, and observes a silently wrong value.
+//!
+//! Three flakes in two days came from exactly this, each diagnosed from the
+//! wrong VALUE rather than the timing:
+//!
+//! | fixed in | table | presented as |
+//! |---|---|---|
+//! | #7665 | `opt_report`'s row sink | `rows.len() == 2` failing at **3** |
+//! | #7665 | `ext_registry`'s `USED_PROVIDERS` | "empty" failing with `ioredis` present |
+//! | #7671 | `closure`'s `CLOSURE_PROPS` | a static method read back as `TAG_UNDEFINED` |
+//!
+//! # Why the fix is per-thread storage and not a lock
+//!
+//! The damage window is "between this test's write and this test's read", and
+//! only the test knows that span. An accessor that takes a shared lock for the
+//! duration of one call does not cover it; a lock that covers it has to be
+//! taken by the test, which is the opt-in the class is made of. Blanket-locking
+//! the ~180 tests that read these tables serializes a large part of the suite
+//! for a hazard whose incidence nobody can bound.
+//!
+//! So the storage moves instead. In a **test build** each thread gets its own
+//! instance of the table, which is exactly the isolation the clear was reaching
+//! for: `reset_copying_nursery_runtime_test_state()` on thread U empties U's
+//! instance, which already contains only U's entries, and thread T's test is
+//! structurally out of reach. libtest runs one thread per test, so "per thread"
+//! and "per test" coincide.
+//!
+//! In a **non-test build** the macro expands to the plain `static` it replaced,
+//! byte for byte. `test_clear_*` is `#[cfg(test)]` and never runs in a shipped
+//! runtime, so the whole hazard — and the whole fix — is confined to tests.
+//!
+//! Call sites do not change: [`PerThread`] derefs to the table, so
+//! `SYMBOL_REGISTRY.lock()` and `CLASS_PROTOTYPE_OBJECTS.read()` keep working
+//! as written.
+//!
+//! # What holds the line
+//!
+//! * `scripts/global_sink_isolation.py` (runs in `lint`) derives the clear list
+//!   from `reset_copying_nursery_runtime_test_state`'s own source, resolves the
+//!   storage behind each helper, and FAILS on a bare `static` that is neither
+//!   thread-local nor declared here. A new sink cannot be added quietly, and a
+//!   new *reader* never has to remember anything.
+//! * `gc::tests::global_sink_isolation` plants the #7671 shape — write on this
+//!   thread, run the guards' clear on another, read back — for each converted
+//!   table, and proves the harness still catches an unconverted one via a
+//!   deliberately bare canary. A green run means the detector works, not that
+//!   nothing was tried.
+
+/// Per-thread instance of a process-global side table, for test builds.
+///
+/// Constructed only by [`per_test_global!`]. Derefs to `T`, so every call
+/// site that used the `static` directly is unchanged.
+///
+/// The instance is leaked (`Box::leak`) rather than dropped at thread exit:
+/// `Deref::deref` must hand out a reference that outlives the borrow of the
+/// `static`, and a thread-exit drop would dangle it. The cost is bounded by
+/// (threads that touched the table) x (empty table size); a libtest thread that
+/// never touches a table never allocates one.
+#[cfg(test)]
+pub struct PerThread<T: Send + Sync + 'static> {
+    init: fn() -> T,
+}
+
+#[cfg(test)]
+impl<T: Send + Sync + 'static> PerThread<T> {
+    pub const fn new(init: fn() -> T) -> Self {
+        Self { init }
+    }
+
+    fn instance(&self) -> &'static T {
+        let key = self as *const Self as usize;
+        // A thread-local map, not a global one: a global would reintroduce a
+        // process-wide lock on a path taken by every side-table access in the
+        // test build.
+        let cached = SLOTS.try_with(|slots| slots.borrow().get(&key).copied());
+        if let Ok(Some(addr)) = cached {
+            // SAFETY: `addr` was produced below from a `Box::leak` of `T` on
+            // this thread and is never removed, so it is live for the process.
+            return unsafe { &*(addr as *const T) };
+        }
+        let leaked: &'static T = Box::leak(Box::new((self.init)()));
+        // `try_with` fails only while this thread's TLS is being destroyed. A
+        // table touched from a TLS destructor gets a fresh instance rather than
+        // a panic; it is being torn down either way.
+        let _ = SLOTS.try_with(|slots| {
+            slots.borrow_mut().insert(key, leaked as *const T as usize);
+        });
+        leaked
+    }
+
+    /// This thread's instance of the table, as an opaque key a *different*
+    /// thread can hand to [`Self::adopt`] to observe the SAME instance
+    /// instead of materializing its own.
+    ///
+    /// Per-thread isolation exists to keep a table out of reach of an
+    /// UNRELATED test's noise (#7672's own guards, running on whatever
+    /// libtest thread happens to construct them) — it is not meant to hide a
+    /// test's own deliberately-spawned worker thread from data the spawning
+    /// thread just wrote. A test whose actual subject is cross-thread
+    /// visibility of the SAME table (`agent_dispatch_tests.rs`'s #6185
+    /// coverage: an entry enqueued by one agent, read by a pump acting for
+    /// another) needs this escape hatch — without it, the per-thread split
+    /// makes such a test's assertions pass regardless of whether the
+    /// production filtering logic they exist to exercise is even still
+    /// there. Materializes this thread's instance if it has not touched the
+    /// table yet, so the key handed out is never dangling.
+    pub fn shared_key(&self) -> usize {
+        self.instance() as *const T as usize
+    }
+
+    /// Make this thread's future accesses to this table resolve to `key`
+    /// (obtained from [`Self::shared_key`] on another thread) instead of
+    /// materializing this thread's own instance.
+    ///
+    /// Must run before this thread's first access to the table. `instance()`
+    /// re-reads the mapping on every call, so calling this AFTER the table
+    /// has already materialized on this thread does not merge the two — it
+    /// just switches future lookups to `key`, silently abandoning whatever
+    /// this thread had already written to its own (now orphaned) instance.
+    pub fn adopt(&self, key: usize) {
+        let slot = self as *const Self as usize;
+        let _ = SLOTS.try_with(|slots| {
+            slots.borrow_mut().insert(slot, key);
+        });
+    }
+}
+
+#[cfg(test)]
+impl<T: Send + Sync + 'static> std::ops::Deref for PerThread<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.instance()
+    }
+}
+
+// No `unsafe impl Sync` is needed and none is written: `PerThread<T>` holds only
+// a `fn() -> T`, so the auto impl already applies. Every thread observes only
+// the instance it created and the instances are leaked, so no `T` crosses a
+// thread boundary or is dropped through this type. `T: Send + Sync` is required
+// regardless, because the non-test expansion is a plain `static`.
+
+#[cfg(test)]
+thread_local! {
+    /// `&PerThread<T>` address -> leaked `&'static T` address, for this thread.
+    static SLOTS: std::cell::RefCell<std::collections::HashMap<usize, usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Declare a process-global table that must be per-test in a test build.
+///
+/// Expands to the plain `static` outside a test build, and to a
+/// [`PerThread`] instance inside one. See the module docs for why.
+///
+/// ```ignore
+/// per_test_global! {
+///     /// Doc comments and attributes pass through.
+///     static SYMBOL_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
+/// }
+/// ```
+/// The trailing `;` is optional so a single-table declaration can be written
+/// `per_test_global!(static X: T = init)` on one line — `timer.rs` sits
+/// three lines under the 2000-line cap (`scripts/check_file_size.sh`) and the
+/// block form would push it over.
+macro_rules! per_test_global {
+    ($(
+        $(#[$attr:meta])*
+        $vis:vis static $name:ident : $ty:ty = $init:expr
+    );+ $(;)?) => {$(
+        #[cfg(not(test))]
+        $(#[$attr])*
+        $vis static $name: $ty = $init;
+
+        #[cfg(test)]
+        $(#[$attr])*
+        $vis static $name: $crate::per_test_global::PerThread<$ty> =
+            $crate::per_test_global::PerThread::new(|| $init);
+    )+};
+}

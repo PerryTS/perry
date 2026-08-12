@@ -400,6 +400,20 @@ fn registry() -> crate::gc::GcRootRegistryGuard<'static, TypedFeedbackRegistry> 
     crate::gc::lock_gc_root_registry(&REGISTRY)
 }
 
+/// Has this process observed anything at all?
+///
+/// #7480 step 4: instrumentation is emitted at COMPILE time (see
+/// `perry-codegen`'s `typed_feedback_emission_enabled`), so a binary built
+/// without `PERRY_TYPED_FEEDBACK[_TRACE]` and then *run* with it set has
+/// nothing to report. Before, that produced a trace of unattributed sites —
+/// counters with no module, function or source name, because registration was
+/// already compile-gated. Now it produces nothing, which is the same amount of
+/// information and looks far more like success. The trace dump uses this to say
+/// so out loud rather than writing an empty file.
+pub(crate) fn no_sites_were_instrumented() -> bool {
+    registry().sites.is_empty()
+}
+
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_register_site(
     site_id: u64,
@@ -2478,6 +2492,19 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                         key_ptr,
                         value_handle.get_nanbox_f64(),
                     );
+                    // #7574: this is the arm a `T[]`-annotated binding holding a
+                    // `class X extends Array` instance reaches — the inline and
+                    // out-of-line index-set guards both reject a non-
+                    // `GC_TYPE_ARRAY` receiver and land here. The instance is a
+                    // real Array in JavaScript, so `sub[3] = v` must leave
+                    // `length == 4`; the plain-object store above never touches
+                    // it. Cheap no-op for every other object receiver.
+                    let key_value =
+                        f64::from_bits(crate::value::js_nanbox_string(key_ptr as i64).to_bits());
+                    crate::array::note_array_subclass_index_write(
+                        f64::from_bits(receiver_handle.get_heap_word_u64()),
+                        key_value,
+                    );
                 }
                 f64::from_bits(receiver_handle.get_heap_word_u64())
             }
@@ -2575,7 +2602,12 @@ pub extern "C" fn js_typed_feedback_object_set_unboxed_f64_field(
         object_key_matches_field(obj, key, field_index) && is_plain_number_bits(value.to_bits()),
     );
     if pass {
-        crate::object::js_object_set_unboxed_f64_field(obj, field_index, value);
+        // The `js_object_set_unboxed_f64_field` prototype setter this wrapper
+        // once used was deleted (Phase 4b cleanup) — its store path was
+        // bit-identical to the plain indexed setter. The symbol name stays
+        // (it is a `check_runtime_symbols.sh` sentinel and part of the #854
+        // typed-feedback foundation); only the fast path changed.
+        crate::object::js_object_set_field(obj, field_index, crate::JSValue::number(value));
     } else {
         record_fallback_call(site_id);
         crate::object::js_object_set_field_by_name(obj, key, value);

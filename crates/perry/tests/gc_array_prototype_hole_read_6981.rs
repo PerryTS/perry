@@ -104,7 +104,6 @@ const ORACLE_RELOCATE: &str = "120,105,125,679,142,125,133,128,115,135,126,109,1
 /// the unfixed compiler. Clear the whole family, then apply the arm's own vars.
 const GC_ENV_OVERRIDES: &[&str] = &[
     "PERRY_GEN_GC",
-    "PERRY_GEN_GC_EVACUATE",
     "PERRY_GC_SCAVENGE",
     "PERRY_GC_SCAVENGE_NURSERY_MB",
     "PERRY_GC_MOVING_SAFEPOINT",

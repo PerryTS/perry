@@ -246,7 +246,13 @@ fn try_consumer_fuse_pattern(
         return None;
     }
 
-    // Build replacement: `f(args, outer);`
+    // Build replacement: `outer = f(args, outer);`
+    //
+    // #7661: the assignment is not cosmetic. The callee may grow the array,
+    // and `js_array_grow` relocates — leaving a forwarding stub at the address
+    // `outer` still holds. The producer returns its own (written-back) head;
+    // storing it back is what keeps `outer` live for the caller's own later
+    // pushes and element reads.
     let mut new_args = call_args;
     new_args.push(Expr::LocalGet(outer_id));
     let _ = out_param_ids.get(&callee_id)?; // sanity check producer was sized
@@ -257,7 +263,10 @@ fn try_consumer_fuse_pattern(
         // #5247: deforestation-fused call; no single source offset.
         byte_offset: 0,
     };
-    Some((2, vec![Stmt::Expr(new_call)]))
+    Some((
+        2,
+        vec![Stmt::Expr(Expr::LocalSet(outer_id, Box::new(new_call)))],
+    ))
 }
 
 /// Match the for-loop shape `for (let j = 0; j < child.length; j++)
@@ -401,19 +410,35 @@ fn try_rewrite_single_stmt(
                 let info = producers.get(fid)?;
                 let mut new_args = args.clone();
                 new_args.push(Expr::LocalGet(*id));
-                let call_stmt = Stmt::Expr(Expr::Call {
-                    callee: callee.clone(),
-                    args: new_args,
-                    type_args: type_args.clone(),
-                    byte_offset: 0,
-                });
+                // #7661: `id = f(args, id)`, not a bare `f(args, id)`. The
+                // callee grows the array it was handed, and growth RELOCATES —
+                // the old address becomes a forwarding stub. Without the
+                // assignment the caller's binding keeps that stub, which the
+                // runtime resolves transparently and emitted code does not
+                // (#7612 SIGBUS'd on exactly this, at N = 17).
+                let call_stmt = Stmt::Expr(Expr::LocalSet(
+                    *id,
+                    Box::new(Expr::Call {
+                        callee: callee.clone(),
+                        args: new_args,
+                        type_args: type_args.clone(),
+                        byte_offset: 0,
+                    }),
+                ));
                 let let_stmt = Stmt::Let {
                     id: *id,
                     name: name.clone(),
                     ty: Type::Array(Box::new(info.elem_ty.clone())),
-                    mutable: *mutable,
+                    // The binding is written twice now (the empty literal, then
+                    // the returned live head), so it must be mutable even when
+                    // the source said `const`. It is a compiler-generated
+                    // binding at this point; the source-level `const` contract
+                    // is unobservable because the second write stores the same
+                    // array's current address.
+                    mutable: true,
                     init: Some(Expr::Array(Vec::new())),
                 };
+                let _ = mutable;
                 let _ = out_param_ids; // already validated producer
                 let _ = next_local;
                 Some((let_stmt, vec![call_stmt]))

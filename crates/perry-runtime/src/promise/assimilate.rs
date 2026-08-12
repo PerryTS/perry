@@ -103,6 +103,18 @@ pub(super) fn get_then_action(value: f64) -> Result<Option<f64>, f64> {
     if is_definitely_primitive(value) {
         return Ok(None);
     }
+    // #7910: an ordinary object with no `then` anywhere on its chain is the
+    // overwhelmingly common resolution, and the spec's `Get(resolution,
+    // "then")` costs a `setjmp` frame, a re-intern of `"then"`, the generic
+    // dynamic getter's preamble and a miss-walk into `Object.prototype` to
+    // answer `undefined`. `definitely_no_then` proves that answer from the
+    // object's own header and keys array plus a signature-guarded verdict on
+    // `Object.prototype`, and declines (false) for anything it cannot prove.
+    // A plain object is never a native Array, so the array-prototype arm below
+    // is unreachable under this gate.
+    if super::then_probe::definitely_no_then(value) {
+        return Ok(None);
+    }
     let then = combinator_catch_js(|| unsafe {
         crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
     })?;
@@ -374,6 +386,14 @@ extern "C" fn promise_resolve_thenable_job(closure: *const crate::closure::Closu
 /// its eventual state. Returns the wrapper promise, or — when `then` is absent
 /// or not callable — the original `value` unchanged (resolve-plain).
 pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
+    // #7910: same fast negative as `get_then_action`. When there is provably no
+    // `then`, `Get` would answer `undefined`, `IsCallable(undefined)` is false,
+    // and this function returns `value` unchanged (resolve-plain) — which is
+    // exactly what the early return does, without allocating the key or paying
+    // the `setjmp`.
+    if super::then_probe::definitely_no_then(value) {
+        return value;
+    }
     // `Get(value, "then")` (27.2.1.3.2 step 8). A throwing getter is an abrupt
     // completion → resolve-with-thenable rejects the wrapper promise with the
     // thrown value (step 9), rather than letting the exception unwind out of the

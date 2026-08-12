@@ -39,8 +39,11 @@ pub extern "C" fn js_string_append(
         let scope = crate::gc::RuntimeHandleScope::new();
         let src_handle = scope.root_string_ptr(src);
         let src_blen = unsafe { (*src).byte_len };
-        let new_ptr = js_string_from_bytes_with_capacity(ptr::null(), 0, src_blen);
-        let src = src_handle.get_raw_const_ptr::<StringHeader>();
+        // `across_const` pairs the allocating call with the re-read, so the
+        // source pointer cannot be bound stale in between (#7341).
+        let (new_ptr, src) = src_handle.across_const::<StringHeader, _>(|| {
+            js_string_from_bytes_with_capacity(ptr::null(), 0, src_blen)
+        });
         if is_valid_string_ptr(src) {
             unsafe {
                 let src_data = string_data(src);

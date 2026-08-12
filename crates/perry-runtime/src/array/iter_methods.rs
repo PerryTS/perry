@@ -107,6 +107,18 @@ impl Drop for DenseThisGuard {
 /// Returns nothing (void)
 #[no_mangle]
 pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const ClosureHeader) {
+    // #7574: `normalize_array_receiver` materializes an array-like OBJECT
+    // receiver — a `class X extends Array` instance among them — into a fresh
+    // dense snapshot. The spec passes the RECEIVER as the callback's 3rd
+    // argument, so without this the callback saw the snapshot and
+    // `self === sub` was false (the same "forEach's 3rd argument" obligation
+    // #7573 hit for Map/Set). Gated on a one-load `GC_TYPE_OBJECT` header test,
+    // so a genuine array pays a compare and never enters the registry probes.
+    let self_override = if crate::array::subclass::raw_receiver_is_heap_object(arr) {
+        crate::array::subclass::array_object_receiver(arr)
+    } else {
+        None
+    };
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return;
@@ -142,6 +154,13 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // The override is a movable `ObjectHeader` held across user callbacks
+        // that allocate — root it for the duration of the loop.
+        let self_handle = self_override.map(|recv| scope.root_nanbox_f64(recv));
+        let self_value = |rooted: &RootedIterArray| match &self_handle {
+            Some(h) => h.get_nanbox_f64(),
+            None => rooted.receiver(),
+        };
         let _tg = DenseThisGuard::bind_undefined();
         if crate::array::array_iteration_is_exotic(arr) {
             for i in 0..length as usize {
@@ -150,7 +169,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                js_closure_call3(callback, element, i as f64, rooted.receiver());
+                js_closure_call3(callback, element, i as f64, self_value(&rooted));
             }
             return;
         }
@@ -162,7 +181,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
             // dispatch path supports call3 safely, so bound native
             // methods like `array.forEach(console.log)` can observe the
             // source array just like Node.
-            js_closure_call3(callback, element, i as f64, rooted.receiver());
+            js_closure_call3(callback, element, i as f64, self_value(&rooted));
         }
     }
 }
@@ -196,8 +215,10 @@ pub extern "C" fn js_array_map(
         // scan (copied-minor eligibility requires no conservative stack scan).
         // Closures are non-movable, so an unrooted one is swept in place mid-
         // loop → the next dispatch calls freed memory ("object is not a
-        // function" / wild-pointer crash). Masked by PERRY_GEN_GC_EVACUATE=0,
-        // whose non-moving minor DOES run the conservative scan. See gh #6206.
+        // function" / wild-pointer crash). It used to be masked by
+        // the non-copying fallback minor, which DOES run the
+        // conservative scan; that knob was deleted in #7611, so there is no
+        // longer a configuration in which this rooting is optional. See gh #6206.
         let cb_handle = scope.root_raw_const_ptr(callback);
         let _tg = DenseThisGuard::bind_undefined();
 
@@ -273,6 +294,31 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // The callback needs the same root its sibling `js_array_map` gives it
+        // (#6081), and for the same reason: a callback allocated by a frameless
+        // caller — the arrow in `xs.map(x => …)` — is reachable ONLY through this
+        // raw parameter and the native stack, which an evacuating minor does not
+        // scan. Every `js_closure_call3` below allocates, so from the second
+        // element on the dispatch reads a moved-or-swept closure.
+        //
+        // This arm was missed when #6081 rooted `js_array_map`, and stayed latent:
+        // a stale root only bites when a collection lands inside its window, and
+        // nothing put one there. #7533's dense-spread fast path removed ~25
+        // allocations per loop iteration from `object_deep_clone`, which moved
+        // every subsequent collection and dropped one squarely inside this loop —
+        // `PERRY_GC_PROTECT_FROMSPACE=1` then faults here on a retired
+        // `obj_type=4` (GC_TYPE_CLOSURE). The kernel faults under the instrument
+        // BEFORE that change too, at a different site, so this is a pre-existing
+        // defect exposed by new timing, not one introduced by it.
+        //
+        // NaN-boxed rather than `root_raw_const_ptr`, so the read-back at each
+        // callsite is a `get_nanbox_f64` and this module stays out of
+        // `scripts/raw_handle_debt.py`'s ledger (same shape as
+        // `js_iterator_to_array`'s `next` handle).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         let _tg = DenseThisGuard::bind_undefined();
         if crate::array::array_iteration_is_exotic(arr) {
             for i in 0..length as usize {
@@ -281,7 +327,7 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                let _ = js_closure_call3(callback, element, i as f64, rooted.receiver());
+                let _ = js_closure_call3(current_callback(), element, i as f64, rooted.receiver());
             }
             return;
         }
@@ -289,7 +335,7 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
             let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let _ = js_closure_call3(callback, element, i as f64, rooted.receiver());
+            let _ = js_closure_call3(current_callback(), element, i as f64, rooted.receiver());
         }
     }
 }

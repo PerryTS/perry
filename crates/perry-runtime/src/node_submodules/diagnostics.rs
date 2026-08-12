@@ -333,6 +333,61 @@ pub(crate) fn channel_key(name: f64) -> Option<DiagChannelKey> {
     None
 }
 
+/// Rekey the symbol-address lookup after an evacuating collection.
+///
+/// `DIAG_CHANNELS[*].name` owns and roots the symbol. This map is only its
+/// identity index, so following an existing forwarding address here must not
+/// make the map key an additional root.
+pub(crate) fn scan_diagnostics_channel_key_roots_mut(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    if !visitor.is_metadata_rewrite_phase() {
+        return;
+    }
+    DIAG_CHANNEL_BY_KEY.with(|map| {
+        let mut map = map.borrow_mut();
+        if !map
+            .keys()
+            .any(|key| matches!(key, DiagChannelKey::Symbol(_)))
+        {
+            return;
+        }
+
+        let old = std::mem::take(&mut *map);
+        for (mut key, id) in old {
+            if let DiagChannelKey::Symbol(bits) = &mut key {
+                let mut addr = (*bits & crate::value::POINTER_MASK) as usize;
+                if visitor.visit_metadata_usize_slot(&mut addr) {
+                    *bits = crate::value::POINTER_TAG | (addr as u64 & crate::value::POINTER_MASK);
+                }
+            }
+            map.insert(key, id);
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_diag_symbol_key(bits: u64) {
+    DIAG_CHANNEL_BY_KEY.with(|map| {
+        let mut map = map.borrow_mut();
+        map.clear();
+        map.insert(DiagChannelKey::Symbol(bits), 1);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_diag_symbol_keys() -> Vec<u64> {
+    DIAG_CHANNEL_BY_KEY.with(|map| {
+        map.borrow()
+            .keys()
+            .filter_map(|key| match key {
+                DiagChannelKey::Symbol(bits) => Some(*bits),
+                DiagChannelKey::String(_) => None,
+            })
+            .collect()
+    })
+}
+
 /// True when `value` is a JS Symbol. `channel(symbol)` accepts symbols, but
 /// `tracingChannel(nameOrChannels)` rejects them (#3084) — Node's validator
 /// only allows a string name or a channel-object map there.

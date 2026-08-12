@@ -471,6 +471,121 @@ fn test_transient_runtime_handle_object_set_gc() {
     }
 }
 
+thread_local! {
+    static SPILL_HOOK_FIRED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Force one copying minor at the spill allocation window, once.
+fn spill_force_minor_gc_hook(_obj_ptr: usize) {
+    if SPILL_HOOK_FIRED.with(|fired| fired.replace(true)) {
+        return;
+    }
+    let _ = crate::gc::gc_collect_minor();
+}
+
+struct SpillSafepointHookGuard {
+    previous: Option<crate::object::SpillSafepointHook>,
+}
+
+impl SpillSafepointHookGuard {
+    fn new() -> Self {
+        SPILL_HOOK_FIRED.with(|fired| fired.set(false));
+        let previous =
+            crate::object::test_set_spill_safepoint_hook(Some(spill_force_minor_gc_hook));
+        Self { previous }
+    }
+
+    fn assert_fired(&self) {
+        assert!(
+            SPILL_HOOK_FIRED.with(|fired| fired.get()),
+            "the spill allocation window was never entered — this test proves nothing"
+        );
+    }
+}
+
+impl Drop for SpillSafepointHookGuard {
+    fn drop(&mut self) {
+        crate::object::test_set_spill_safepoint_hook(self.previous);
+        SPILL_HOOK_FIRED.with(|fired| fired.set(false));
+    }
+}
+
+/// #7538: the value handed to the spill (overflow) store must survive a
+/// copying minor landing on the spill's OWN allocations.
+///
+/// `spill_set_slow` rooted the owner but took the value as plain `u64` bits.
+/// `object_meta_ensure` and the buffer `js_array_alloc_with_length` are both
+/// collection points, so an evacuating minor at either one moved the value and
+/// left the parameter naming the from-space copy — which the function then
+/// published into the overflow slot, AFTER the collector had finished
+/// rewriting live references. Nothing corrected it and no verifier could see
+/// it: the target is alive, merely relocated, so
+/// `PERRY_GC_VERIFY_EVACUATION` (which only reports forwarded-but-unrewritten
+/// slots reachable through a traced descriptor) walked straight past it.
+///
+/// The observable end of that in #7538 was `JSON.stringify` emitting
+/// `{"field0":…,"field1":…}` for one record in a parsed array: the stale
+/// pointer still read back plausible field VALUES out of retired from-space,
+/// but its `keys_array` named a keys array that had itself been recycled.
+///
+/// The address assertion is the load-bearing one. `assert_string_bytes` alone
+/// passes against the unfixed code, because from-space still holds the old
+/// bytes — which is exactly why this shipped silently.
+#[test]
+fn test_transient_runtime_handle_object_overflow_set_gc() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    // `js_object_alloc(0, 0)` is what `json_tape`'s element-wise materializer
+    // uses, so every key past `INLINE_SLOT_FLOOR` parks in overflow storage.
+    let obj = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(0, ptr_bits(obj as usize));
+    let obj_now = || (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+
+    // Fill the inline region so the next key overflows.
+    for i in 0..crate::object::INLINE_SLOT_FLOOR {
+        let name = format!("k{i}");
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj_now(), key, i as f64);
+    }
+    let overflow_index = crate::object::INLINE_SLOT_FLOOR;
+
+    let value = crate::string::js_string_from_bytes(b"overflow-payload".as_ptr(), 16);
+    js_shadow_slot_set(1, string_bits(value as usize));
+    let overflow_key = crate::string::js_string_from_bytes(b"spilled".as_ptr(), 7);
+
+    let hook = SpillSafepointHookGuard::new();
+    crate::object::js_object_set_field_by_name(
+        obj_now(),
+        overflow_key,
+        f64::from_bits(js_shadow_slot_get(1)),
+    );
+    hook.assert_fired();
+
+    let value_after = (js_shadow_slot_get(1) & POINTER_MASK) as *const crate::StringHeader;
+    assert_ne!(
+        value_after as usize, value as usize,
+        "the copying minor did not relocate the value — the window under test never opened"
+    );
+
+    let stored = crate::object::overflow_get(obj_now() as usize, overflow_index)
+        .expect("the overflow slot must hold the stored value");
+    assert_eq!(stored & TAG_MASK, STRING_TAG);
+    assert_eq!(
+        (stored & POINTER_MASK) as usize,
+        value_after as usize,
+        "the overflow store must publish the POST-collection address"
+    );
+    unsafe {
+        assert_string_bytes(
+            (stored & POINTER_MASK) as *const crate::StringHeader,
+            b"overflow-payload",
+        );
+    }
+}
+
 #[test]
 fn test_transient_runtime_handle_closure_captures_gc() {
     let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();

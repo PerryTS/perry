@@ -37,6 +37,9 @@ mod types;
 pub use types::*;
 mod policy;
 pub(crate) use policy::gc_runtime_safepoint;
+/// The one writer of `GC_SAFEPOINT_PENDING` — it also keeps the poll's global
+/// arming shadow in step. See `gc/poll_arm.rs`.
+pub(crate) use policy::set_safepoint_pending;
 pub use policy::*;
 mod progress;
 pub use progress::*;
@@ -48,8 +51,21 @@ mod telemetry;
 pub use telemetry::*;
 mod malloc;
 pub use malloc::*;
+/// #7469: the `gc` half of the hot-thread-local address cache. Split out of
+/// `barrier.rs` / `layout.rs` / `malloc.rs` so each stays under the repo's
+/// 2000-line-per-file cap.
+mod hot_tls;
+pub(crate) use hot_tls::*;
 mod roots;
 pub use roots::*;
+#[cfg(test)]
+/// Rewrite runtime-handle roots only; this deliberately does not rewrite the
+/// installed `INLINE_TRAP`, whose scanner is exercised separately.
+pub(crate) fn test_rewrite_runtime_handles_for_forwarded_objects() {
+    let valid_ptrs = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_rewrite(&valid_ptrs);
+    scan_runtime_handle_roots_mut(&mut visitor);
+}
 /// #7148: the census of conservative-scan fallbacks and the precise-safepoint
 /// drains that replace them. Declared next to `roots` because
 /// `ManualGcScanGuard` is what records into it.
@@ -61,11 +77,30 @@ pub(crate) use scan_fallback::*;
 mod root_words;
 use root_words::*;
 mod layout;
+mod layout_slot_visit;
+pub(crate) use layout_slot_visit::*;
+/// #7510: the per-object slot-layout side tables and the emptiness flag that
+/// keeps them off the allocation, store, death and trace paths. Split out of
+/// `layout.rs` so it stays under the repo's 2000-line-per-file cap.
+mod layout_tables;
+// The immortal-object construction window and the table-occupancy readout, both
+// consumed from OUTSIDE `gc`: `object::global_this` opens the window around the
+// `globalThis` bootstrap and prints the residue under `PERRY_GC_DIAG`.
+pub(crate) use layout_tables::per_object_layout_table_sizes;
+pub use layout_tables::ImmortalLayoutScope;
+/// #7510 item 1: the construction-side memo that turns an already-installed
+/// typed shape into two header bit-writes instead of a descriptor build plus a
+/// `SHAPE_LAYOUTS` round-trip.
+mod shape_install;
 pub use layout::*;
+pub(crate) use shape_install::shape_install_memo_hot_addr;
 mod trace;
 pub(crate) use trace::*;
 mod barrier;
 pub use barrier::*;
+/// #7630: the runtime slot-store helpers, split from `barrier.rs` (2000-line cap).
+mod barrier_store;
+pub use barrier_store::*;
 mod dirty_page_cache;
 // #7187 Phase B: `crate::arena`'s page-metadata module invalidates the
 // barrier's "already dirty" page cache when it un-stamps or discards a page.
@@ -77,14 +112,41 @@ mod barrier_arming;
 // rustc warned. A plain `use` brings them into `gc`'s namespace, which is all
 // the in-module callers (`telemetry.rs`, `cycle.rs`) actually need.
 use barrier_arming::*;
+/// #7645: `GC_FLAG_PINNED` custody + the young-pin latch the copying minor's
+/// eligibility preflight is skipped on. Every write of the bit goes through
+/// `pin::pin_object`; `scripts/gc_pin_sites.py` enforces that in `lint`.
+mod pin;
+#[cfg(test)]
+pub(crate) use pin::test_reset_young_pin_latch;
+pub use pin::{
+    copied_minor_preflight_skips, copied_minor_preflight_walks, pin_object, pin_object_non_young,
+    unpin_object,
+};
+use pin::{note_preflight_skipped, note_preflight_walked, young_pin_latch_armed};
+/// Software prefetch helpers for the collector's pointer-chasing loops
+/// (drain, `clear_marks`, the remembered-set dirty scan).
+mod prefetch;
+
 mod copying;
+/// Per-scanner root attribution for the copied-minor root scan (#7915).
+mod scanner_profile;
 use copying::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry
 // pass in `crate::weakref` (#6182), which lives outside the gc module.
 pub(crate) use copying::CopyingPointerSet;
+// The hard ceiling every birth-generation threshold in `gc::types` must stay
+// under; asserted by `arena::tests::pointer_bearing_large_object_threshold_is_movable`.
+pub(crate) use copying::MAX_YOUNG_MOVE_BYTES;
 mod dead_owner;
+mod old_free;
+use old_free::*;
+pub(crate) use old_free::{old_free_bytes, old_free_filter_range, old_free_take_exact};
+mod tenuring;
+use tenuring::*;
 mod oldgen;
 use oldgen::*;
+mod oldgen_defrag;
+use oldgen_defrag::*;
 mod cycle;
 use cycle::*;
 mod verify;
@@ -93,12 +155,36 @@ mod verify;
 /// the rewrite pass own root enumeration. Debug-only
 /// (`PERRY_GC_FROMSPACE_SCAN=1`).
 mod fromspace_scan;
-/// #7154 tooling: force an evacuating minor at every safepoint so an unrooted
-/// value dies/moves on its FIRST exposure. Debug-only (`PERRY_GC_ZEAL=1`).
-mod zeal;
+/// #7742: the measured policy behind whole-block in-place promotion. The
+/// mechanism is `arena/promote.rs`; this decides when to use it.
+mod promote_in_place;
+use promote_in_place::*;
+pub use promote_in_place::{
+    in_place_promoted_objects, in_place_promotion_cycles, untraced_promoted_objects,
+    untraced_promotion_cycles,
+};
+/// Instrument-liveness counters (#7604): copying minors completed, objects
+/// relocated, loop back-edge polls reached. Mode-independent — they count what
+/// the COLLECTOR did, not what forced it, so they outlive any one stress knob.
+pub(crate) mod instruments;
+/// The loop back-edge poll's arming word: the one load that decides whether
+/// `js_gc_loop_safepoint` is worth calling at all. Not debug-only — it is on
+/// the hot path of every allocating loop.
+pub(crate) mod poll_arm;
+/// #7154 tooling: collect on a deterministic pseudo-random schedule derived from
+/// a seed, at a density `PERRY_GC_SCHEDULE_RATE` tunes from "never" up to every
+/// handled safepoint, so a failing seed is a reproducer. Debug-only
+/// (`PERRY_GC_SCHEDULE_SEED=<u64>`).
+pub(crate) mod schedule;
+pub(crate) use instruments::note_loop_poll_reached;
+pub use instruments::{copying_minor_cycles, loop_polls_reached, moved_objects_total};
+pub use poll_arm::PERRY_GC_POLL_ARMED;
+pub(crate) use poll_arm::{arm_poll, disarm_poll, poll_armed, resolve_poll_seed};
+pub use schedule::{
+    gc_schedule_forced_collections, gc_schedule_safepoints, schedule_liveness_report,
+    schedule_polls_paced,
+};
 pub use verify::*;
-pub use zeal::zeal_forced_collections;
-pub(crate) use zeal::{gc_zeal_enabled, note_zeal_forced_collection};
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 #[cfg(feature = "diagnostics")]
@@ -113,6 +199,38 @@ pub fn gc_collect_minor() -> u64 {
 }
 
 pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Allowed)
+}
+
+/// May this minor be escalated to a full mark-sweep by the two THROUGHPUT
+/// PACING predicates (`copied_minor_promotion_handoff_due`,
+/// `arena_growth_full_escalation_due`)?
+///
+/// Both exist so a long-running mutator does not accumulate array-growth stubs
+/// the non-moving minor cannot reclaim, and on every automatic path the answer
+/// is `Allowed`. `Refused` exists for exactly one caller: the explicit `gc()`
+/// under `PERRY_GC_FORCE_EVACUATE`, which asked for a *moving* collection and
+/// is followed immediately by a full mark-sweep anyway (#6946). A full sweep
+/// moves nothing, so an escalation there hands the caller a non-moving
+/// collection under a knob whose whole name is about relocation — which is
+/// precisely how that knob came to be inert for every `gc()`-driven test.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FullEscalation {
+    Allowed,
+    Refused,
+}
+
+/// The minor an explicit `gc()` runs first when forced evacuation is on
+/// (#6946). Refuses the pacing escalation, so the caller gets the moving
+/// collection the knob promises rather than a full sweep that moves nothing.
+pub(super) fn gc_collect_forced_evacuating_minor(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused)
+}
+
+fn gc_collect_minor_with_trigger_inner(
+    trigger: GcTriggerSnapshot,
+    escalation: FullEscalation,
+) -> GcCollectOutcome {
     // PERRY_GC_SAFEPOINT_ONLY: held for the whole collection so every
     // consumer of the scan decision (root scan, copying eligibility,
     // evacuation pinning, verifier) sees the same healed answer.
@@ -152,7 +270,13 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
         f.set(prev | GC_FLAG_IN_ALLOC);
         prev & GC_FLAG_IN_ALLOC
     });
-    if copied_minor_promotion_handoff_due(trigger.kind) {
+    let may_escalate = escalation == FullEscalation::Allowed;
+    if may_escalate && copied_minor_promotion_handoff_due(trigger.kind) {
+        // #7592: latch before running it. This full is non-moving and promotes
+        // nothing, so it cannot relieve the survivor pressure that scheduled
+        // it; without the latch the predicate is still true at the next minor
+        // and the collector livelocks on fulls that free nothing.
+        note_survivor_promotion_handoff_full();
         let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
             GcTriggerKind::SurvivorPromotionBytes,
         ));
@@ -164,7 +288,7 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
     // only a full mark-sweep reclaims stubs. Escalate to a full once the arena's
     // live bytes exceed K× the last full's live set (belt-and-suspenders for
     // callers that reach a minor outside the budgeted pressure path).
-    if arena_growth_full_escalation_due() {
+    if may_escalate && arena_growth_full_escalation_due() {
         let outcome =
             gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(trigger.kind));
         restore_minor_in_alloc(prev_in_alloc);
@@ -175,15 +299,12 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
     crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
-    let evacuation_policy_allowed = gen_gc_evacuate_enabled();
+    // Not budgeted, so the low-pause veto does not apply and the policy is
+    // always allowed to run here (#7611 deleted the env veto that used to sit
+    // in this slot). The variable stays rather than being folded away: it is
+    // recorded in the cycle trace and read back by the evacuation-policy tests.
+    let evacuation_policy_allowed = true;
     let force_evacuation = gc_force_evacuate_enabled();
-    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
-        select_old_page_defrag_pages(force_evacuation)
-    } else {
-        OldPageDefragSelection::default()
-    };
-    let old_page_source_blocks =
-        crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
@@ -207,6 +328,18 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
         };
     }
     clear_mark_seeds();
+    // Old-page defrag belongs to the non-copying fallback below. Snapshotting
+    // and sorting all old-page metadata before trying the copying fast path
+    // charged every ordinary minor an O(old pages) cost even though that path
+    // cannot consume the selection. Defer both selection and source-block
+    // expansion until the fast path has declined the collection.
+    let old_page_selection = if old_to_young_tracking_complete() {
+        select_old_page_defrag_pages(force_evacuation)
+    } else {
+        OldPageDefragSelection::default()
+    };
+    let old_page_source_blocks =
+        crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
     GcCycleState::new_minor_fallback(
         trigger,
         trace,
@@ -248,33 +381,59 @@ pub fn gen_gc_enabled() -> bool {
     })
 }
 
-/// Gen-GC Phase C4b: evacuation is policy-driven by default.
-/// `PERRY_GEN_GC_EVACUATE=0`, `=false`, or `=off` disables the
-/// policy. `=1`, `=true`, and `=on` are accepted for compatibility
-/// but mean "allow the auto-policy", not unconditional evacuation.
-pub fn gen_gc_evacuate_enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_GEN_GC_EVACUATE").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
-}
+// ★ `PERRY_GEN_GC_EVACUATE` was DELETED here (#7611). Read this before adding
+// an "escape hatch" back.
+//
+// It used to gate `evacuation_policy_allowed` — the C4b tenured→old-gen policy
+// evacuation and the old-page defrag selection — and to veto
+// `gc_force_evacuate_enabled()` below.
+//
+// **It was measured inert where anyone was looking.** On the pinned quiet host,
+// identical binaries and protocol, the only difference being the knob, a
+// cell-by-cell diff over all 12 gc-ratchet probes × 8 counters
+// (`minor_cycles`, `step_cycles`, `copied_objects`, `copied_bytes`,
+// `promoted_objects`, `promoted_bytes`, `freed_bytes`, `heap_used_bytes`)
+// reported **0 of 96 cells moved** — bit-identical medians, and
+// `gc_ratchet.py check` exit 0 with the knob set. For contrast the same
+// procedure with `PERRY_GEN_GC=0` moved 79 cells and returned 90 findings, so
+// the harness was sensitive and this knob specifically was not. The mechanism:
+// the counters the ratchet reads come from the COPYING minor
+// (`gc_collect_minor_copying_fast_path`), which this knob never gated; what it
+// gated is the non-copying fallback's policy evacuation, which those probes do
+// not reach.
+//
+// **Its one unique live effect was a footgun.** Vetoing
+// `gc_force_evacuate_enabled()` meant an ambient `PERRY_GEN_GC_EVACUATE=0`
+// silently disarmed the #7154 stress instrument (`PERRY_GC_SCHEDULE_SEED`),
+// so a stress run could report "clean" having moved nothing. CLAUDE.md documented that as a
+// caveat rather than treating it as the defect it is. Deleting the knob deletes
+// the way to disarm the instrument by accident.
+//
+// **The branch it gated is NOT deleted with it, because the branch has another
+// controller that IS exercised.** `evacuation_policy_allowed` is still false on
+// every budgeted low-pause cycle (`low_pause_non_moving` in
+// `gc_start_budgeted_minor_fallback_cycle_with_snapshot`), and
+// `budgeted_low_pause_minor_does_not_evacuate` asserts that arm behaviourally —
+// nothing moved, no forwarding stub, old-page selection skipped, and
+// `trace.evacuation_policy.reason == "low_pause_non_moving"`. So the losing
+// mode still compiles and still has a test; what stopped existing is the
+// untested *configuration*.
+//
+// Per CLAUDE.md's binding GC knob kill-policy: "a mode that still exists is a
+// decision that hasn't been made".
 
 fn gc_force_evacuate_enabled() -> bool {
-    // `PERRY_GC_ZEAL=1` implies forced evacuation (#7154 tooling): a zealous
-    // minor that leaves survivors in place would move nothing, and "an unrooted
-    // value moves on its first exposure" is the entire contract of zeal mode.
-    // Still subject to `gen_gc_evacuate_enabled()` — an explicit
-    // `PERRY_GEN_GC_EVACUATE=0` wins, so the two knobs cannot silently disagree.
-    gen_gc_evacuate_enabled()
-        && (gc_zeal_enabled()
-            || matches!(
-                std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
-                Ok("1") | Ok("on") | Ok("true")
-            ))
+    // `PERRY_GC_SCHEDULE_SEED` implies forced evacuation (#7154 tooling): a
+    // scheduled minor that leaves survivors in place would move nothing, and
+    // "an unrooted value moves on its first exposure" is the entire contract of
+    // the mode — without this it would be a knob whose name promises relocation
+    // stress and whose effect is sweep pressure. Unconditional, per #7611's
+    // deletion note above.
+    schedule::gc_schedule_enabled()
+        || matches!(
+            std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
 }
 
 fn gc_verify_evacuation_enabled() -> bool {
@@ -284,18 +443,61 @@ fn gc_verify_evacuation_enabled() -> bool {
     )
 }
 
-/// Phase-1 de-risking flag (OFF by default). When set, the alloc-point
-/// nursery-churn arm (`gc_check_trigger`) runs its direct minor with the
-/// PRECISE shadow-stack roots instead of forcing the conservative native
-/// scan. The conservative scan makes the copying fast path ineligible
-/// (`CopiedMinorFallbackReason::ConservativeStack`), pinning the minor to the
-/// non-moving in-place sweep that cannot reclaim array-growth stubs; skipping
-/// it lets the evacuating scavenge run and reset the whole young arena in
-/// O(live). NOT sound as a production default yet — the alloc point can be
-/// register-imprecise — so it stays behind this flag for measurement +
-/// `PERRY_GC_VERIFY_EVACUATION` probing only. Pairs with
-/// `PERRY_GC_MAJOR_PACING_FLOOR_MB=0` so the #6939 pacing doesn't escalate the
-/// minor to a full before the copying path is reached.
+/// `PERRY_GC_SCAVENGE` — **ON by default since #7056**, kill switch
+/// `PERRY_GC_SCAVENGE=0`/`off`/`false`. It is a PACING knob: it routes
+/// nursery-churn triggers to the direct minor in `gc_check_trigger` instead of
+/// the budgeted non-moving stepper, which on a reallocation-heavy loop frees
+/// nothing. Paired with the nursery cap in `policy::effective_next_arena_trigger`
+/// that is the -69% RSS result quoted on the getter below.
+///
+/// It does **not** decide whether the alloc-point minor may move, and #7682 is
+/// what that confusion cost. The flag used to gate the `force_full_scan()` on
+/// that arm off, so the shipped default ran an EVACUATING minor at an arbitrary
+/// allocation point — a program point neither root lowering describes — and
+/// values held only in registers were relocated behind their holders' backs.
+/// The guard is now unconditional; see the comment at its site in
+/// `policy::gc_check_trigger` for why no pacing knob can answer the question it
+/// asks.
+///
+/// This doc comment previously read "Phase-1 de-risking flag (OFF by default)
+/// … NOT sound as a production default yet". Both halves were false for two
+/// hundred releases, eight lines above a body comment saying "ON BY DEFAULT" —
+/// the #6987 shape CLAUDE.md warns about, and this time the stale half was the
+/// one carrying the soundness argument.
+///
+/// **Kill-policy disposition, stated rather than left implicit — and stated
+/// for the configuration that now ships.** The flag's only production reader is
+/// the arm condition in `gc_check_trigger`, a three-way disjunction:
+/// `gc_scavenge_enabled() || gc_moving_loop_polls_enabled() ||
+/// registered_root_scanners_block_budgeted_gc()`.
+///
+///  * **With polls ON (the default since #7682's follow-up)** the second
+///    disjunct carries the arm, and this flag decides nothing. It is redundant,
+///    not load-bearing.
+///  * **With `PERRY_GC_MOVING_LOOP_POLLS=0`** it is the only thing holding the
+///    arm open, and dropping it would route nursery pressure to the budgeted
+///    stepper, which is non-moving *and* reclaims almost nothing on a
+///    reallocation loop. The third disjunct does NOT rescue that case: under
+///    `gc_incremental_enabled()` (the default) it reduces to "any COPY-ONLY
+///    scanner", and a compiled program has none — the reasoning
+///    `test-parity/gc_matrix_inert_arms.txt` recorded for the `cons_scan_off`
+///    arm, and the thing that made a first attempt at repairing
+///    `generator_attach_prototype` fail for a third distinct reason.
+///
+/// So the honest summary is: this knob is now a modifier on the kill switch,
+/// not a mode of its own. By CLAUDE.md's rule that is a candidate for deletion —
+/// fold its behaviour into the polls-off path and stop having two flags whose
+/// interaction nobody exercises. Deliberately NOT done here: this PR already
+/// changes two defaults, and a third would make one bisect answer three
+/// questions. The decision wants the arm condition's three disjuncts measured
+/// on real programs, which is a separate change with a separate A/B.
+///
+/// An earlier draft of this comment claimed the knob was "very close to inert
+/// for a compiled binary" on the strength of the third disjunct holding for
+/// every compiled program. That is wrong under the default incremental stepper,
+/// for the reason above. It is recorded rather than quietly deleted because
+/// this whole PR exists because a stale half of a doc comment kept carrying a
+/// soundness argument after it stopped being true.
 #[cfg(test)]
 thread_local! {
     /// Test-only override, consulted BEFORE the process-wide OnceLock so a
@@ -331,10 +533,17 @@ pub(super) fn gc_scavenge_enabled() -> bool {
         // them evacuating (O(live) copying) rather than O(heap) sweeps — so the
         // frequency is cheap instead of expensive.
         //
-        // Enabling this also defers alloc-point collections to a precise
-        // safepoint rather than collecting behind a forced conservative scan.
-        // That is newly reasonable: native roots became the default in #7370, so
-        // a precise safepoint is what the shipped configuration now has.
+        // What this does NOT do, despite what this comment used to claim: it
+        // does not defer alloc-point collections to a precise safepoint. That
+        // deferral is gated on `gc_moving_loop_polls_enabled()`, a DIFFERENT
+        // flag, and for the whole #7161 stopgap the two disagreed — the
+        // deferral was dead and the alloc-point minor ran right there, moving
+        // objects at a register-imprecise point. That is #7682.
+        //
+        // The deferral is live again now that polls default ON, so the shipped
+        // default does reach a precise safepoint — but not because of THIS
+        // flag, and the alloc-point minor is sound on its own terms either way,
+        // by being non-moving (`force_full_scan`).
         !matches!(
             std::env::var("PERRY_GC_SCAVENGE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -421,6 +630,9 @@ pub(crate) fn gc_try_emergency_reclaim() -> bool {
         return false;
     }
     IN_EMERGENCY.with(|c| c.set(true));
+    // A failed reservation can coexist with differently-sized pooled blocks.
+    // Make the emergency full return those mappings before the one retry.
+    crate::arena::request_block_pool_drain();
     let _scan = roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::EmergencyReclaim);
     let _ = gc_collect_emergency_full();
     IN_EMERGENCY.with(|c| c.set(false));
@@ -479,6 +691,29 @@ pub(crate) fn ensure_gc_initialized() {
     }
 }
 
+/// Register a mutable root scanner, tagging it with its own path as the
+/// attribution name (`gc/scanner_profile.rs`, #7915). Root-scan cost on
+/// promise-heavy workloads is per registered root, so "which registry" is the
+/// first question any investigation asks; deriving the name from the
+/// registration site keeps the answer from drifting away from the list.
+macro_rules! reg_scanner {
+    ($scanner:expr $(,)?) => {
+        gc_register_named_mutable_root_scanner(stringify!($scanner), $scanner)
+    };
+}
+
+macro_rules! reg_budgeted_scanner {
+    ($scanner:expr, $step:expr, $state:expr, $source:expr $(,)?) => {
+        gc_register_budgeted_named_mutable_root_scanner_with_source(
+            stringify!($scanner),
+            $scanner,
+            $step,
+            $state,
+            $source,
+        )
+    };
+}
+
 pub fn gc_init() {
     // Idempotent per thread: production calls this at startup, and
     // `ensure_gc_initialized` calls it lazily on threads that don't. Latch the
@@ -488,7 +723,7 @@ pub fn gc_init() {
         return;
     }
     crate::perf_hooks::init_time_origin();
-    gc_register_budgeted_mutable_root_scanner_with_source(
+    reg_budgeted_scanner!(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,
         new_runtime_handle_root_scan_state,
@@ -498,20 +733,20 @@ pub fn gc_init() {
     // across a collection point. Same standing as the shadow stack — a precise
     // mutable root that is marked AND rewritten — and, like the shadow stack,
     // load-bearing the moment the conservative native-stack scan is off.
-    gc_register_budgeted_mutable_root_scanner_with_source(
+    reg_budgeted_scanner!(
         scan_temp_roots_mut,
         scan_temp_roots_mut_step,
         new_temp_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
-    gc_register_mutable_root_scanner(crate::promise::scan_native_async_completion_roots_mut);
-    gc_register_budgeted_mutable_root_scanner_with_source(
+    reg_scanner!(crate::promise::scan_native_async_completion_roots_mut);
+    reg_budgeted_scanner!(
         promise_mutable_root_scanner,
         crate::promise::scan_promise_roots_mut_step,
         crate::promise::new_promise_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
-    gc_register_budgeted_mutable_root_scanner_with_source(
+    reg_budgeted_scanner!(
         timer_mutable_root_scanner,
         crate::timer::scan_timer_roots_mut_step,
         crate::timer::new_timer_root_scan_state,
@@ -521,24 +756,22 @@ pub fn gc_init() {
     // tables (defineProperty accessors/attrs) and the proxy registry +
     // reflect-metadata store were invisible to GC — values swept/moved under
     // live references, owner keys stale after evacuation.
-    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+    reg_scanner!(crate::object::descriptor_state::scan_descriptor_roots_mut);
     // #6759 Phase C3a: shape records follow their keys array across
     // evacuation (metadata-rewrite rekey only; the records hold no heap
     // references and mark nothing).
-    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
+    reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
+    reg_scanner!(crate::proxy::scan_proxy_roots_mut);
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
     // ERROR_USER_PROPS — invisible to GC without this scanner (collectable
     // while reachable; stale addresses after a move). The address KEYS are
     // maintained by the ErrorSideTables move/finalize hooks.
-    gc_register_mutable_root_scanner(
-        crate::node_submodules::diagnostics_gc::scan_error_user_props_roots_mut,
-    );
-    gc_register_mutable_root_scanner(exception_mutable_root_scanner);
-    gc_register_mutable_root_scanner(async_context_mutable_root_scanner);
-    gc_register_mutable_root_scanner(async_hooks_mutable_root_scanner);
-    gc_register_mutable_root_scanner(shape_cache_mutable_root_scanner);
-    gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
+    reg_scanner!(crate::node_submodules::diagnostics_gc::scan_error_user_props_roots_mut,);
+    reg_scanner!(exception_mutable_root_scanner);
+    reg_scanner!(async_context_mutable_root_scanner);
+    reg_scanner!(async_hooks_mutable_root_scanner);
+    reg_scanner!(shape_cache_mutable_root_scanner);
+    reg_scanner!(crate::regex::scan_last_exec_groups_root_mut);
     // #7211: the eight interned `typeof` result strings, and JSON.rawJSON's
     // interned `"rawJSON"` key. Both are thread-local caches of a RAW
     // `StringHeader*` allocated in the nursery and referenced by nothing else,
@@ -549,44 +782,42 @@ pub fn gc_init() {
     // `PERRY_GC_MOVING_LOOP_POLLS=1` build failed 10/10 rather than
     // intermittently, and why the from-space reporter blamed
     // `retired_by_minor=#0`.
-    gc_register_mutable_root_scanner(crate::builtins::arithmetic::scan_typeof_string_roots_mut);
-    gc_register_mutable_root_scanner(crate::json::raw_json::scan_raw_json_key_root_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_exotic_expando_roots_mut);
-    gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
+    reg_scanner!(crate::builtins::arithmetic::scan_typeof_string_roots_mut);
+    reg_scanner!(crate::json::raw_json::scan_raw_json_key_root_mut);
+    reg_scanner!(crate::object::scan_exotic_expando_roots_mut);
+    reg_scanner!(crate::array::scan_template_raw_roots_mut);
     // #6981: the memoized `Array.prototype` / `Object.prototype` addresses in
     // `array::indexing`. Raw addresses of movable objects — a relocating cycle
     // that does not rewrite them leaves the hole/OOB read fallback comparing a
     // stale address against a forwarding-resolved receiver, which defeats its
     // own self-recursion guard and drives the mutator into unbounded recursion.
-    gc_register_mutable_root_scanner(crate::array::scan_prototype_addr_cache_roots_mut);
+    reg_scanner!(crate::array::scan_prototype_addr_cache_roots_mut);
     // #6763: inherited-property resolution retains an owner while an accessor
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
-    gc_register_mutable_root_scanner(
-        crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,
-    );
-    gc_register_mutable_root_scanner(crate::map::scan_map_iterator_array_roots_mut);
-    gc_register_mutable_root_scanner(crate::set::scan_set_iterator_array_roots_mut);
-    gc_register_mutable_root_scanner(crate::perf_hooks::scan_perf_entries_roots_mut);
-    gc_register_mutable_root_scanner(crate::v8::scan_v8_promise_hook_roots_mut);
-    gc_register_mutable_root_scanner(crate::typed_feedback::scan_typed_feedback_roots_mut);
-    gc_register_mutable_root_scanner(crate::typedarray_props::scan_typed_array_own_props_roots_mut);
+    reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
+    reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
+    reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
+    reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
+    reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
+    reg_scanner!(crate::typed_feedback::scan_typed_feedback_roots_mut);
+    reg_scanner!(crate::typedarray_props::scan_typed_array_own_props_roots_mut);
     // A typed array's materialized backing ArrayBuffer lives only as a raw
     // address in TYPED_ARRAY_VIEW_META — collectable/stale under a live typed
     // array, which made `subarray` hand back a garbage-length view.
-    gc_register_mutable_root_scanner(crate::typedarray_view::scan_typed_array_view_meta_roots_mut);
-    gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
-    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_arguments_object_roots_mut);
+    reg_scanner!(crate::typedarray_view::scan_typed_array_view_meta_roots_mut);
+    reg_scanner!(transition_cache_mutable_root_scanner);
+    reg_scanner!(crate::object::scan_object_cache_roots_mut);
+    reg_scanner!(crate::object::scan_arguments_object_roots_mut);
     // bun:ffi (#6562): the cached FFIType enum object.
-    gc_register_mutable_root_scanner(crate::bun_ffi::scan_bun_ffi_roots_mut);
-    gc_register_budgeted_mutable_root_scanner_with_source(
+    reg_scanner!(crate::bun_ffi::scan_bun_ffi_roots_mut);
+    reg_budgeted_scanner!(
         crate::object::scan_class_side_table_roots_mut,
         crate::object::scan_class_side_table_roots_mut_step,
         crate::object::new_class_side_table_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
-    gc_register_budgeted_mutable_root_scanner_with_source(
+    reg_budgeted_scanner!(
         crate::symbol::scan_symbol_side_table_roots_mut,
         crate::symbol::scan_symbol_side_table_roots_mut_step,
         crate::symbol::new_symbol_side_table_root_scan_state,
@@ -597,10 +828,10 @@ pub fn gc_init() {
     // that body (e.g. @perryts/mysql Pool.acquire → handshake → nativeScramble
     // under concurrent load) must rewrite the cell, or the body's next
     // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
-    gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
+    reg_scanner!(crate::object::scan_implicit_this_roots_mut);
     // Connected inspector sessions are retained only by the inspector's
     // thread-local registry while they receive protocol notifications.
-    gc_register_mutable_root_scanner(crate::node_inspector::scan_inspector_roots_mut);
+    reg_scanner!(crate::node_inspector::scan_inspector_roots_mut);
     // Issue #1790 (epic #1785 class-object dispatch / design #1772): the class
     // static-inheritance side-tables CLASS_PROTOTYPE_OBJECTS and
     // CLASS_PARENT_CLOSURES hold the heap parent (`class Sub extends make(...)`
@@ -608,77 +839,83 @@ pub fn gc_init() {
     // them so a parent reachable only through the table survives collection and
     // its address is fixed up after a copying-nursery / evacuation move,
     // keeping `Sub.ast` and inherited static methods resolvable.
-    gc_register_mutable_root_scanner(crate::object::scan_class_inheritance_roots_mut);
+    reg_scanner!(crate::object::scan_class_inheritance_roots_mut);
     // #1934: live `child_process.spawn` ChildProcess objects are reachable only
     // from the reactor's registry (the event loop holds no JSValue root for a
     // fire-and-forget spawn). Scan + rewrite them so a GC between ticks doesn't
     // reclaim the object whose `data`/`exit` handlers are still pending.
-    gc_register_mutable_root_scanner(crate::child_process::reactor::cp_reactor_scan_roots_mut);
+    reg_scanner!(crate::child_process::reactor::cp_reactor_scan_roots_mut);
     // #6563: live node-pty IPty objects are likewise reachable only from the
     // pty reactor's registry while their onData/onExit handlers are pending.
     #[cfg(unix)]
-    gc_register_mutable_root_scanner(crate::pty::reactor::pty_reactor_scan_roots_mut);
+    reg_scanner!(crate::pty::reactor::pty_reactor_scan_roots_mut);
     // #4911: a bound node:dgram socket is reachable only from the dgram
     // reactor's registry while its recv thread runs; scan + rewrite it so a GC
     // between ticks doesn't reclaim the object whose `message` handlers fire.
     #[cfg(feature = "mod-dgram")]
-    gc_register_mutable_root_scanner(crate::dgram_reactor::scan_roots_mut);
-    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
-    gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
-    gc_register_mutable_root_scanner(small_int_cache_mutable_root_scanner);
-    gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
-    gc_register_mutable_root_scanner(crate::builtins::scan_boxed_primitive_payload_roots_mut);
-    gc_register_mutable_root_scanner(crate::weakref::scan_pending_finalization_jobs_roots_mut);
+    reg_scanner!(crate::dgram_reactor::scan_roots_mut);
+    reg_scanner!(json_parse_mutable_root_scanner);
+    reg_scanner!(intern_table_mutable_root_scanner);
+    // #7564: the per-thread `{ value, done }` / `{ done, value }` keys arrays
+    // shared by every iterator result the runtime builds. Nothing else in the
+    // heap references them — the result objects that use them are short-lived
+    // while the cache outlives them — so without this scanner they would be
+    // swept and the next `.next()` would install a freed keys array. It also
+    // REWRITES: an evacuating collection moves them like any other array, and
+    // the thread-local slot is the only place the new address can be recorded.
+    reg_scanner!(crate::iter_result::scan_iter_result_keys_roots_mut);
+    reg_scanner!(small_int_cache_mutable_root_scanner);
+    reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
+    reg_scanner!(crate::builtins::scan_boxed_primitive_payload_roots_mut);
+    reg_scanner!(crate::weakref::scan_pending_finalization_jobs_roots_mut);
     // #6182: keep the weak-holder registry's stored holder ADDRESSES current
     // across evacuation. Metadata-only (non-rooting) — it rewrites forwarded
     // addresses in rewrite phases and emits nothing during mark, so it never
     // keeps a dead holder alive. Copied-minor liveness/prune is driven by
     // `process_weak_targets_from_registry`; this covers full-cycle currency.
-    gc_register_mutable_root_scanner(crate::weakref::scan_weak_holders_roots_mut);
+    reg_scanner!(crate::weakref::scan_weak_holders_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
     // `node_submodules.rs`. Without this scanner the next GC cycle
     // after first import-binding use would reclaim the singletons
     // (nothing else holds them — they live for the program's lifetime
     // via codegen `getter` calls, not via a user-visible JSValue root).
-    gc_register_mutable_root_scanner(
-        crate::node_submodules::scan_node_submodule_singleton_roots_mut,
-    );
+    reg_scanner!(crate::node_submodules::scan_node_submodule_singleton_roots_mut,);
     // Box-capture root scanner (mutable closure captures, esp. the
     // generator state-machine's `__iter` and `__step` boxes that hold
     // the iter object + step closure across awaits).
-    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    reg_scanner!(crate::r#box::scan_box_roots_mut);
     // Iter-result scratch slot — the async-step fast path stows the
     // generator's most recent yield value here; it stays live until
     // the step driver reads it back.
-    gc_register_mutable_root_scanner(crate::promise::scan_iter_result_root_mut);
+    reg_scanner!(crate::promise::scan_iter_result_root_mut);
     // Async-step thunk single-slot cache (build_async_step_thunks).
-    gc_register_mutable_root_scanner(crate::promise::scan_async_step_thunk_cache_mut);
+    reg_scanner!(crate::promise::scan_async_step_thunk_cache_mut);
     // Closure singleton caches. Captured-closure cache keys mirror closure
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
-    gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
-    gc_register_mutable_root_scanner(crate::buffer::scan_buffer_own_props_roots_mut);
+    reg_scanner!(crate::closure::scan_singleton_closure_roots_mut);
+    reg_scanner!(crate::closure::scan_closure_dynamic_props_roots_mut);
+    reg_scanner!(crate::buffer::scan_buffer_own_props_roots_mut);
     // Generic per-handle expando properties (`blob.colors = [...]` and other
     // arbitrary own props on native HANDLE values). Keys are stable small handle
     // ids; only the stored VALUES are JS references that must be traced.
-    gc_register_mutable_root_scanner(crate::object::handle_expando::scan_handle_expando_roots_mut);
+    reg_scanner!(crate::object::handle_expando::scan_handle_expando_roots_mut);
     // Native-module callable export singletons and process stdio stream
     // singletons store heap pointers in TLS caches; keep them live and rewrite
     // them if a copying collection moves their backing allocations.
-    gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_class_capture_value_roots_mut);
-    gc_register_mutable_root_scanner(crate::node_vm::scan_vm_roots_mut);
+    reg_scanner!(crate::object::scan_native_callable_export_roots_mut);
+    reg_scanner!(crate::object::scan_class_capture_value_roots_mut);
+    reg_scanner!(crate::node_vm::scan_vm_roots_mut);
     // #6559: the dyn-eval interpreter's rooted value stack (environments,
     // temporaries, arguments of in-flight interpreted frames). Mark +
     // REWRITE — interpreter state must survive moving collections triggered
     // from inside interpreted code.
     #[cfg(feature = "dyn-eval")]
-    gc_register_mutable_root_scanner(crate::dyn_eval::scan_dyn_eval_roots_mut);
-    gc_register_mutable_root_scanner(crate::tls::scan_tls_roots_mut);
-    gc_register_mutable_root_scanner(crate::process::scan_process_finalization_roots_mut);
-    gc_register_mutable_root_scanner(crate::process::scan_process_module_loader_roots_mut);
+    reg_scanner!(crate::dyn_eval::scan_dyn_eval_roots_mut);
+    reg_scanner!(crate::tls::scan_tls_roots_mut);
+    reg_scanner!(crate::process::scan_process_finalization_roots_mut);
+    reg_scanner!(crate::process::scan_process_module_loader_roots_mut);
     // #7231: the materialize-once `process.*` caches. Each is a thread-local
     // cell holding a NURSERY-allocated object that nothing else refers to —
     // `process.env` / `.permission` / `.report` are getter CALLS, not fields
@@ -688,22 +925,22 @@ pub fn gc_init() {
     // `CACHED_ENV` is the load-bearing one: `process.env` is touched by nearly
     // every real Node program, and every `process.env.X = v` after the first
     // collection wrote through a dangling pointer.
-    gc_register_mutable_root_scanner(crate::process::scan_process_env_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::process::scan_permission_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::process::scan_report_cache_roots_mut);
+    reg_scanner!(crate::process::scan_process_env_cache_roots_mut);
+    reg_scanner!(crate::process::scan_permission_cache_roots_mut);
+    reg_scanner!(crate::process::scan_report_cache_roots_mut);
     // #7231: the raw `Error` constructor address behind
     // `Error.prepareStackTrace`. The closure is reachable through `globalThis`
     // so it is not swept, but this duplicate lives outside the object graph
     // and goes stale on a move.
-    gc_register_mutable_root_scanner(crate::object::scan_error_constructor_root_mut);
+    reg_scanner!(crate::object::scan_error_constructor_root_mut);
     // #7231: native callback slots that bypass their rooted sibling
     // structures. `RESIZE_CALLBACK` bypasses the EventEmitter listener array;
     // `FRAME_CALLBACKS` is rooted only transiently by a `RuntimeHandleScope`
     // during registration; `INPUT_HANDLER` holds the `useInput` arrow, which
     // in idiomatic inline form has no other reference at all.
-    gc_register_mutable_root_scanner(crate::tty::scan_tty_resize_callback_root_mut);
-    gc_register_mutable_root_scanner(crate::frame::scan_frame_callback_roots_mut);
-    gc_register_mutable_root_scanner(crate::tui::input::scan_tui_input_handler_root_mut);
+    reg_scanner!(crate::tty::scan_tty_resize_callback_root_mut);
+    reg_scanner!(crate::frame::scan_frame_callback_roots_mut);
+    reg_scanner!(crate::tui::input::scan_tui_input_handler_root_mut);
     // #7231: three in-flight cells that hold a NaN-boxed heap value across a
     // window in which user code can run. Each is a second copy of a value
     // whose original is rooted elsewhere, or the only copy for the length of
@@ -711,21 +948,21 @@ pub fn gc_init() {
     // CELL is the half a scanner can close — the displaced value each
     // save/restore idiom parks in a bare Rust local is noted at each
     // declaration and needs `RuntimeHandleScope` plumbing, not a scanner.
-    gc_register_mutable_root_scanner(crate::object::scan_current_new_target_root_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_accessor_receiver_override_root_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_pending_fetch_signal_root_mut);
-    gc_register_mutable_root_scanner(crate::os::scan_process_event_listener_roots_mut);
+    reg_scanner!(crate::object::scan_current_new_target_root_mut);
+    reg_scanner!(crate::object::scan_accessor_receiver_override_root_mut);
+    reg_scanner!(crate::object::scan_pending_fetch_signal_root_mut);
+    reg_scanner!(crate::os::scan_process_event_listener_roots_mut);
     // #6077: keep promises tracked for an unhandled rejection alive + address-
     // stable until reported, so the program-end report is not a stale/UAF read.
-    gc_register_mutable_root_scanner(crate::promise::scan_unhandled_rejection_roots_mut);
-    gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
-    gc_register_mutable_root_scanner(crate::fs::scan_fs_handle_roots_mut);
-    gc_register_mutable_root_scanner(crate::fs::scan_fs_stream_roots_mut);
-    gc_register_mutable_root_scanner(crate::fs::scan_fs_watcher_roots_mut);
+    reg_scanner!(crate::promise::scan_unhandled_rejection_roots_mut);
+    reg_scanner!(crate::os::scan_process_stream_singleton_roots_mut);
+    reg_scanner!(crate::fs::scan_fs_handle_roots_mut);
+    reg_scanner!(crate::fs::scan_fs_stream_roots_mut);
+    reg_scanner!(crate::fs::scan_fs_watcher_roots_mut);
     #[cfg(feature = "full")]
-    gc_register_mutable_root_scanner(crate::plugin::scan_plugin_roots_mut);
-    gc_register_mutable_root_scanner(crate::geisterhand_registry::scan_geisterhand_roots_mut);
-    gc_register_mutable_root_scanner(crate::ui_text_registry::scan_ui_text_registry_roots_mut);
+    reg_scanner!(crate::plugin::scan_plugin_roots_mut);
+    reg_scanner!(crate::geisterhand_registry::scan_geisterhand_roots_mut);
+    reg_scanner!(crate::ui_text_registry::scan_ui_text_registry_roots_mut);
     // perry/tui hook + state slot pools — they store raw NaN-boxed
     // value bits but the GC has no other way to know which slots hold
     // heap pointers (arrays/objects/strings stashed via setState /
@@ -734,20 +971,20 @@ pub fn gc_init() {
     // the next allocation triggered minor GC, and the array was
     // reclaimed because nothing else held it — `messages.map(…)` on
     // the stale pointer produced an empty render.
-    gc_register_budgeted_mutable_root_scanner_with_source(
+    reg_budgeted_scanner!(
         crate::tui::hooks::scan_hook_slot_roots_mut,
         crate::tui::hooks::scan_hook_slot_roots_mut_step,
         crate::tui::hooks::new_hook_slot_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
-    gc_register_budgeted_mutable_root_scanner_with_source(
+    reg_budgeted_scanner!(
         crate::tui::state::scan_state_slot_roots_mut,
         crate::tui::state::scan_state_slot_roots_mut_step,
         crate::tui::state::new_state_slot_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
     #[cfg(feature = "ohos-napi")]
-    gc_register_mutable_root_scanner(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
+    reg_scanner!(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
 }
 
 #[no_mangle]
@@ -764,25 +1001,16 @@ pub extern "C" fn js_gc_init() {
     // a second js_gc_init on another thread is harmless.
     #[cfg(windows)]
     crate::win_console::enable_vt_output();
-    // #6882: mimalloc (the global allocator, #62) tags its OS mappings with
-    // VM tag 100, which macOS tooling — vmmap, Instruments' VM Tracker,
-    // `footprint` — decodes as `IOAccelerator`: the entire JS heap renders
-    // as GPU-driver memory (644 MB of "IOAccelerator" on an allocation-heavy
-    // benchmark). Retag to VM_MEMORY_APPLICATION_SPECIFIC_1 (240) so heap
-    // regions show up as a neutral, distinctive "Memory Tag 240" instead.
-    // An explicit `MIMALLOC_OS_TAG` env setting still wins — skip the
-    // override so profilers can keep steering the tag themselves. Regions
-    // mapped before this call (early Rust startup) keep tag 100; the bulk
-    // of the heap (arena blocks, GC metadata) maps afterwards. Idempotent,
-    // like the rest of this function.
-    #[cfg(all(
-        target_pointer_width = "64",
-        target_vendor = "apple",
-        feature = "alloc-mimalloc"
-    ))]
-    if std::env::var_os("MIMALLOC_OS_TAG").is_none() {
-        unsafe { libmimalloc_sys::mi_option_set(libmimalloc_sys::mi_option_os_tag, 240) };
-    }
+    // #6882/#7450: macOS decodes mimalloc's default VM tag (100) as
+    // `IOAccelerator`, so the whole JS heap renders as GPU-driver memory in
+    // vmmap/Instruments/`footprint`. The retag to tag 240 that fixes this
+    // cannot live here — mimalloc reserves its 1 GiB arena during Rust's
+    // pre-`main` startup and every later allocation just commits pages inside
+    // that already-tagged mapping, so a retag at `js_gc_init` time reaches
+    // nothing (#7450). It now runs from a `__DATA,__mod_init_func`
+    // constructor; this call keeps that constructor in the link and re-applies
+    // the option idempotently. See `crate::mimalloc_os_tag`.
+    crate::mimalloc_os_tag::ensure_mimalloc_os_tag_applied();
     crate::node_submodules::diagnostics_channel_init_main_thread();
     crate::node_submodules::init_trace_events_runtime();
     // #5093: force every class-field access back through the full guard call —
@@ -803,16 +1031,163 @@ pub extern "C" fn js_gc_init() {
     gc_init();
 }
 
-/// Release external Map/Set storage owned by the current thread.
+/// Release external Map/Set/JSON-tape storage owned by the current thread.
 ///
 /// This is intentionally narrower than a general heap teardown: the arena
-/// headers remain owned by the arena, while the collection registries own the
-/// separately allocated buffers. The operation is idempotent and is called
+/// headers remain owned by the arena, while the side-allocation registries own
+/// the separately allocated buffers. The operation is idempotent and is called
 /// only once no more JavaScript work can run on this thread.
+///
+/// ★ It is also where the **schedule liveness verdict** is emitted (#7604).
+/// Codegen calls this exactly once, at the real process-exit boundary after
+/// every exit callback (`codegen/entry.rs`), which is the one point in a
+/// compiled program where "what did this run actually exercise" is answerable.
+/// See `emit_schedule_liveness_verdict`.
 #[no_mangle]
 pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     crate::map::release_current_thread_map_side_allocations();
+    crate::json_tape_store::release_current_thread_lazy_tapes();
     crate::set::release_current_thread_set_side_allocations();
+    // Every process-exit path funnels through here — the generated exit
+    // epilogue, `js_process_exit`, and the fatal-path teardown — and perry's own
+    // exits call `_exit`, so `atexit` alone would not see them. Print the seeded
+    // GC-schedule summary here so a *passing* run still reports how many
+    // safepoints the schedule actually saw. Inert (one cached-`Option` load) and
+    // once-only when the mode is off.
+    schedule::report_exit_summary();
+    emit_incremental_liveness_diag();
+    emit_schedule_liveness_verdict();
+}
+
+/// `PERRY_GC_DIAG=1`: what the INCREMENTAL collector charged this run, whether
+/// or not any cycle completed (#7909).
+///
+/// Every other GC diagnostic is emitted per completed cycle, so a run that
+/// starts a budgeted cycle and never finishes it prints nothing at all — the
+/// `asyncpipe` shape, where the collector's own output is empty while a third
+/// of the leaf profile is collector machinery. `cycle_starts > completions`
+/// with a large `steps` is exactly that state, and it is only visible here.
+fn emit_incremental_liveness_diag() {
+    if !telemetry::gc_diag_enabled() {
+        return;
+    }
+    if !crate::native_handle::is_main_thread_or_unrecorded() {
+        return;
+    }
+    static EMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let (reentrant, no_trigger, start_blocked, resume_blocked) = instruments::budgeted_step_skips();
+    let (blocked_alloc, blocked_unsafe_zone, blocked_root_lock) =
+        instruments::moving_safepoints_blocked_by_other_guards();
+    eprintln!(
+        "[gc-incremental] cycle_starts={} steps={} completions={} active_at_exit={} \
+         mark_barrier_arms={} mark_barrier_armed_us={} \
+         skips(reentrant={reentrant} no_trigger={no_trigger} start_blocked={start_blocked} \
+         resume_blocked={resume_blocked}) safepoints_blocked_by_budgeted={} \
+         safepoints_blocked(in_alloc={blocked_alloc} unsafe_zone={blocked_unsafe_zone} \
+         root_lock={blocked_root_lock}) \
+         copying_minors={} loop_polls={} poll_arm_events={} \
+         poll_armed_at_exit={}",
+        instruments::incremental_cycle_starts(),
+        instruments::incremental_steps(),
+        instruments::incremental_completions(),
+        policy::gc_budgeted_cycle_active(),
+        instruments::mark_barrier_arm_events(),
+        instruments::mark_barrier_armed_us(),
+        instruments::moving_safepoints_blocked_by_budgeted(),
+        instruments::copying_minor_cycles(),
+        instruments::loop_polls_reached(),
+        poll_arm::poll_arm_events(),
+        poll_arm::poll_armed_count(),
+    );
+    emit_step_bounds_diag();
+}
+
+/// What the "time-budgeted" collector actually cost, as opposed to what it was
+/// asked to cost (#7903).
+///
+/// `js_gc_step_us` and mutator assist can only consult the clock BETWEEN work
+/// units, so a budget is only as good as the largest single unit. These are the
+/// measured maxima plus the liveness counters for the sliced weak path:
+///
+/// * `step_max_us` — longest single budgeted step.
+/// * `final_remark_max_us` / `final_remarks` — the deliberately ATOMIC phase,
+///   reported separately so a heap-sized pause cannot hide inside the general
+///   maximum.
+/// * `weak_records` / `weak_max_records_per_step` — FinalizationRegistry
+///   records scanned, and the worst single step's share of them. Before #7903
+///   one registry was one work unit, so this maximum was the whole registry.
+/// * `weak_steps_sliced` — steps that ended PARTWAY THROUGH a registry. **This
+///   is the subject-was-live counter**: a run reporting zero has not exercised
+///   the sliced path, whatever else it reports. A NONZERO value proves less
+///   than it looks — a step can end mid-registry at the entry park, before any
+///   record is scanned — so pair it with `weak_max_records_per_step`, which is
+///   what actually distinguishes a sliced array from a swallowed one.
+/// * `weak_registry_restarts` / `weak_registry_atomic_finishes` — cursors
+///   invalidated by mutator restructuring, and the bounded fallback taken when
+///   one registry exhausted its restart budget.
+fn emit_step_bounds_diag() {
+    eprintln!(
+        "[gc-step-bounds] step_max_us={} final_remark_max_us={} final_remarks={} \
+         weak_records={} weak_max_records_per_step={} weak_steps_sliced={} \
+         weak_registry_restarts={} weak_registry_atomic_finishes={}",
+        instruments::step_max_us(),
+        instruments::final_remark_max_us(),
+        instruments::final_remark_count(),
+        instruments::weak_records_scanned(),
+        instruments::weak_max_records_per_step(),
+        instruments::weak_steps_sliced(),
+        instruments::weak_registry_restarts(),
+        instruments::weak_registry_atomic_finishes(),
+    );
+}
+
+/// Print what the rate-1 schedule endpoint actually did, and **fail the
+/// process** when the answer is "nothing" (#7604).
+///
+/// This is the "assert the subject was live" rule turned on the instrument
+/// itself. A rate-1 run that forced zero collections, or whose every forced
+/// collection was escalated to a non-moving full mark-sweep, has exercised
+/// nothing — and before #7604 it exited 0 and looked exactly like a run that
+/// had. That is the fourth way a gate cannot fail, applied to a debug knob
+/// whose entire purpose is to make a class of bug reproducible.
+///
+/// Exiting non-zero rather than warning is deliberate. The schedule is never on
+/// in production — the whole knob is debug-only, off by default, and set by
+/// hand or by a CI stress arm. In both of those contexts a vacuous run is a
+/// result the operator must not be allowed to read as a pass. Sub-endpoint
+/// rates get no verdict (a sparse sample legitimately forcing nothing is not a
+/// broken instrument); their liveness counters are in the exit-summary line
+/// above.
+///
+/// Known limitation, stated rather than hidden: `process.exit()` terminates via
+/// `libc::_exit` and never reaches this boundary, so a run that ends that way
+/// gets no verdict. An uncaught throw is the same. Both already bypass every
+/// other exit callback.
+fn emit_schedule_liveness_verdict() {
+    // Same discipline as `report_exit_summary`, for the same reason: every
+    // thread routes through the teardown funnel, the counters are
+    // process-global, and a worker tearing down first would judge — and at
+    // rate 1 `exit(70)` on — counts that are not yet final. Main-thread-only
+    // (via the TLS-free OS-id compare) and once-only.
+    if !crate::native_handle::is_main_thread_or_unrecorded() {
+        return;
+    }
+    static VERDICT_EMITTED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    if VERDICT_EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    match schedule_liveness_report() {
+        None => {}
+        Some(Ok(summary)) => eprintln!("{summary}"),
+        Some(Err(complaint)) => {
+            eprintln!("{complaint}");
+            std::process::exit(70);
+        }
+    }
 }
 
 /// #5093: parse a boolean-ish env var by value (not mere presence): true for
@@ -887,6 +1262,33 @@ pub extern "C" fn js_gc_pause_stats(
             }
         }
     });
+}
+
+/// Stamp a freshly built, runtime-owned keys array as copy-on-write shared.
+///
+/// The `*mut GcHeader` cast lives HERE, in `gc/`, rather than at the call site.
+/// `scripts/addr_class_inventory.py` refuses a bare `as *mut GcHeader` outside
+/// `gc/` and `value/addr_class.rs`, and every one of the ~126 grandfathered
+/// entries in `scripts/addr_class_allowlist.txt` carries the same promise —
+/// "migrate to a helper in a follow-up". This is that helper for the one thing
+/// those call sites actually do: set a flag.
+///
+/// `addr_class::try_read_gc_header` cannot serve them, and that is not an
+/// oversight — it returns `&'static GcHeader`, a SHARED reference, precisely so
+/// that a probe of an untrusted address can never write through it. A flag
+/// write needs `*mut`, so it needs a separate, narrower entry point with a
+/// stronger precondition, which is what this is.
+///
+/// # Safety
+/// `user_ptr` must be the user pointer of a live GC object this thread has just
+/// allocated — never an address decoded from a NaN-box payload. That is the
+/// same discipline the arena walkers are allowlisted under: an address obtained
+/// from allocation or block iteration cannot be in the handle band, so there is
+/// nothing for `try_read_gc_header`'s band check to reject.
+#[inline]
+pub(crate) unsafe fn mark_shape_shared(user_ptr: *mut u8) {
+    let header = layout::header_from_user_ptr(user_ptr);
+    (*header).gc_flags |= GC_FLAG_SHAPE_SHARED;
 }
 
 #[cfg(test)]

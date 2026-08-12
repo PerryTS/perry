@@ -130,6 +130,26 @@ budget_scaled_accessor!(
     32,
     1024 * 1024
 );
+
+/// Process-wide recycled arena-block allowance. The historical 64 MiB remains
+/// unchanged on unconstrained desktop/server processes, while constrained
+/// processes spend at most one eighth of their heap budget on idle mappings.
+/// One 1 MiB block is the minimum useful reserve.
+pub(crate) fn gc_block_pool_cap_bytes() -> usize {
+    static CACHED: OnceLock<usize> = OnceLock::new();
+    *CACHED.get_or_init(|| gc_block_pool_cap_with_budget(gc_heap_budget_bytes()))
+}
+
+/// Unconstrained-process block-pool allowance. Named rather than inline because
+/// `docs/src/internals/garbage-collector.md` documents it and
+/// `scripts/check_gc_doc_claims.py` re-derives the documented number from this
+/// definition — an inline literal is a number the page can drift away from
+/// without anything noticing.
+pub(super) const BLOCK_POOL_CAP_DEFAULT_BYTES: usize = 64 * 1024 * 1024;
+
+pub(super) fn gc_block_pool_cap_with_budget(budget: Option<usize>) -> usize {
+    budget_scaled_with(budget, BLOCK_POOL_CAP_DEFAULT_BYTES, 1, 8, 1024 * 1024)
+}
 budget_scaled_accessor!(
     gc_old_gen_reclaim_threshold_dyn_bytes,
     GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,

@@ -13,37 +13,133 @@ use super::*;
 /// per-class-instance hot path that uses the inline allocator.
 #[inline]
 pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
-    INLINE_STATE.with(|inline_s| unsafe {
-        let inline_ptr = inline_s.get();
-        ARENA.with(|a| {
-            let arena_ptr = (*a).get();
-            // Sync inline → block before allocating, if the inline
-            // state has been initialized. Borrows are deliberately
-            // short-lived: `arena_cell_alloc` runs the GC between two
-            // disjoint borrows, and the collector mutates BOTH the arena
-            // and `INLINE_STATE` (`Arena::resync_inline_to_current`). #7022.
-            if !(*inline_ptr).data.is_null() {
-                let offset = (*inline_ptr).offset;
-                let arena = &mut *arena_ptr;
-                let current = arena.current;
-                arena.blocks[current].offset = offset;
-            }
-            let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
-            // Resync block → inline (may have advanced to a new block).
-            if !(*inline_ptr).data.is_null() {
-                let (data, offset, block_size) = {
-                    let arena = &*arena_ptr;
-                    let block = &arena.blocks[arena.current];
-                    (block.data, block.offset, block.size)
-                };
-                let inline = &mut *inline_ptr;
-                inline.data = data;
-                inline.offset = offset;
-                inline.size = block_size;
-            }
-            ptr
-        })
-    })
+    // #7469: both thread-locals come off the one cached hot-TLS base rather
+    // than two `_tlv_get_addr` calls. The comment above about "two extra TLS
+    // reads cost ~5-10ns" was measuring exactly that toll.
+    unsafe {
+        let inline_ptr = crate::arena::hot_inline_state();
+        let arena_ptr = crate::arena::hot_arena();
+        // Sync inline → block before allocating, if the inline
+        // state has been initialized. Borrows are deliberately
+        // short-lived: `arena_cell_alloc` runs the GC between two
+        // disjoint borrows, and the collector mutates BOTH the arena
+        // and `INLINE_STATE` (`Arena::resync_inline_to_current`). #7022.
+        if !(*inline_ptr).data.is_null() {
+            let offset = (*inline_ptr).offset;
+            let arena = &mut *arena_ptr;
+            let current = arena.current;
+            arena.blocks[current].offset = offset;
+        }
+        let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
+        // Resync block → inline (may have advanced to a new block).
+        if !(*inline_ptr).data.is_null() {
+            let (data, offset, block_size) = {
+                let arena = &*arena_ptr;
+                let block = &arena.blocks[arena.current];
+                (block.data, block.offset, block.size)
+            };
+            let inline = &mut *inline_ptr;
+            inline.data = data;
+            inline.offset = offset;
+            inline.size = block_size;
+        }
+        ptr
+    }
+}
+
+/// [`arena_alloc_gc`] with its **collection point removed**: the request is
+/// served by bumping the nursery block that is already open, or the call
+/// returns null. It never runs `gc_check_trigger()`, never reserves a fresh
+/// block and never births into old-gen.
+///
+/// ★ The value here is not the handful of instructions saved on the slow
+/// branch — it is the *guarantee*. A runtime helper holding raw heap pointers
+/// it has not rooted can allocate through this and, on a non-null return,
+/// KNOW that nothing moved: the only collection point on the arena path is
+/// precisely the one this refuses to reach. That turns "root every operand
+/// into the transient handle stack, then re-read every one of them
+/// afterwards" into "read them once", for the overwhelmingly common case
+/// where a 1 MB block has room.
+///
+/// On null the caller MUST fall back: root its operands, re-issue through
+/// [`arena_alloc_gc`], and re-read the operands from their handles. Nothing
+/// has collected at that point either — a null is a refusal, not an event —
+/// so the operands are still readable where the caller last saw them.
+///
+/// Deliberately written out rather than sharing a body with `arena_alloc_gc`:
+/// that function is `#[inline(always)]` into every allocation site in the
+/// program (including user IR, through the bitcode-link path), and it is not
+/// worth risking its codegen to save twenty lines here. The two divergences
+/// are both refusals — an oversized request and a non-empty hot free list
+/// both return null instead of being served — so this can only ever hand back
+/// memory `arena_alloc_gc` would have handed back identically.
+#[inline(always)]
+pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
+
+    let total = gc_padded_total_size(size, align);
+    // Old-gen birth walks page lists and can reserve — outside the contract.
+    if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
+        return std::ptr::null_mut();
+    }
+    // The free-list arm of `arena_alloc_gc` cannot collect either, but nothing
+    // in the tree ever sets this latch, so serving it here would be untested
+    // code on a hot path. Refuse and let the caller take the rooted path.
+    if crate::gc::hot_arena_free_list_nonempty().get() {
+        return std::ptr::null_mut();
+    }
+
+    let raw = arena_alloc_no_collect(total, align);
+    if raw.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let header = raw as *mut GcHeader;
+        (*header).obj_type = obj_type;
+        (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
+        crate::gc::gc_note_black_birth(header);
+        (*header)._reserved = 0;
+        (*header).size = total as u32;
+    }
+
+    unsafe { raw.add(GC_HEADER_SIZE) }
+}
+
+/// [`arena_alloc`] minus its collection point: serve the request from the
+/// block that is already open, or return null.
+///
+/// The inline-state sync/resync mirrors `arena_alloc`'s, so a successful
+/// allocation is indistinguishable from one taken through it. A refusal
+/// leaves every offset exactly where it was, so the caller's fallback through
+/// `arena_alloc` behaves as if this had never been called.
+#[inline(always)]
+fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
+    unsafe {
+        let inline_ptr = crate::arena::hot_inline_state();
+        let arena_ptr = crate::arena::hot_arena();
+        if !(*inline_ptr).data.is_null() {
+            let offset = (*inline_ptr).offset;
+            let arena = &mut *arena_ptr;
+            let current = arena.current;
+            arena.blocks[current].offset = offset;
+        }
+        let Some(ptr) = crate::arena::arena_cell_try_alloc_current(arena_ptr, size, align) else {
+            return std::ptr::null_mut();
+        };
+        if !(*inline_ptr).data.is_null() {
+            let (data, offset, block_size) = {
+                let arena = &*arena_ptr;
+                let block = &arena.blocks[arena.current];
+                (block.data, block.offset, block.size)
+            };
+            let inline = &mut *inline_ptr;
+            inline.data = data;
+            inline.offset = offset;
+            inline.size = block_size;
+        }
+        ptr
+    }
 }
 
 /// Allocate from the longlived arena (issue #179). Unlike `arena_alloc`,
@@ -115,12 +211,39 @@ pub(crate) fn arena_alloc_old_excluding_pages(
 /// GcHeader-prefixed counterpart of `arena_alloc_old`. See
 /// `arena_alloc_gc_longlived` for the same shape on the longlived
 /// arena — only the backing region differs.
+///
+/// #7624: page registration is DEFERRED here (`defer_old_object_page_registration`
+/// rather than `register_old_object_pages`). This is the per-object old-gen
+/// birth path — since #7613's promote-on-first-copy it carries every promotion
+/// a copying minor makes, ~113 MB per json_pipeline run — and eager
+/// registration costs two `RefCell` borrows, two `Vec` allocations, and a
+/// linear dedup scan that grows as the page fills. Allocation policy is
+/// deliberately UNCHANGED: the `old_free_take_exact` hole probe below stays,
+/// so this is a bookkeeping change only. See the flush discipline in
+/// `arena/page_meta.rs`.
 pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
     // Same alignment-preservation rationale as `arena_alloc_gc`.
     let pad = align.max(8);
     let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    // #7437: reuse a swept same-size hole before bumping — otherwise a
+    // block with any live object never yields its dead bytes back and old
+    // capacity only ever grows. Exact fit keeps `GcHeader::size` equal to
+    // what per-object promotion accounting records for this allocation.
+    if let Some(user_ptr) = crate::gc::old_free_take_exact(total, None) {
+        let raw = (user_ptr - GC_HEADER_SIZE) as *mut u8;
+        unsafe {
+            let header = raw as *mut GcHeader;
+            (*header).obj_type = obj_type;
+            (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
+            crate::gc::gc_note_black_birth(header);
+            (*header)._reserved = 0;
+            (*header).size = total as u32;
+        }
+        defer_old_object_page_registration(raw as usize, total);
+        return user_ptr as *mut u8;
+    }
     let raw = arena_alloc_old(total, align);
 
     unsafe {
@@ -131,11 +254,41 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
         (*header)._reserved = 0;
         (*header).size = total as u32;
     }
-    register_old_object_pages(raw as usize, total);
+    defer_old_object_page_registration(raw as usize, total);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
+/// The old-gen + born-tenured shape `arena_alloc_gc` hands a LARGE object, for
+/// a caller that wants it on size-independent grounds.
+///
+/// #7539's `LazyArrayHeader` is the caller: it used to reach this arm by being
+/// multi-megabyte (its tape was inline), and every caller outside `json_tape`
+/// relies on the resulting header address being stable across allocations.
+/// Moving the tape out shrank the header to ~88 bytes, which would have made
+/// it nursery-resident and movable; asking for this shape explicitly keeps the
+/// invariant those callers were already written against.
+pub(crate) fn arena_alloc_gc_old_born_tenured(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_FLAG_TENURED, GC_HEADER_SIZE};
+
+    let user_ptr = arena_alloc_gc_old(size, align, obj_type);
+    unsafe {
+        let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;
+        (*header).gc_flags |= GC_FLAG_TENURED;
+    }
+    user_ptr
+}
+
+/// #7624: registration stays EAGER here, unlike `arena_alloc_gc_old`. This is
+/// old-page defrag's relocation allocator (`gc/oldgen.rs`'s
+/// `evacuate_selected_old_pages_collecting`), which runs from INSIDE
+/// `old_arena_walk_objects_on_pages`' callback — i.e. downstream of that
+/// reader's own flush. Deferring would be sound (the walk snapshots its header
+/// list before invoking the callback, and the flush discipline covers the
+/// rest), but it buys nothing: defrag is a rare, per-cycle pass whose
+/// per-object cost is dominated by the `copy_nonoverlapping` beside it, and
+/// keeping it eager keeps the deferral's proof obligation to the one path that
+/// measurably needs it.
 pub(crate) fn arena_alloc_gc_old_excluding_pages(
     size: usize,
     align: usize,
@@ -146,6 +299,21 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
 
     let pad = align.max(8);
     let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    // #7437: same hole reuse as `arena_alloc_gc_old`, but never into a page
+    // this defrag pass is evacuating.
+    if let Some(user_ptr) = crate::gc::old_free_take_exact(total, Some(excluded_pages)) {
+        let raw = (user_ptr - GC_HEADER_SIZE) as *mut u8;
+        unsafe {
+            let header = raw as *mut GcHeader;
+            (*header).obj_type = obj_type;
+            (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
+            crate::gc::gc_note_black_birth(header);
+            (*header)._reserved = 0;
+            (*header).size = total as u32;
+        }
+        register_old_object_pages(raw as usize, total);
+        return user_ptr as *mut u8;
+    }
     let raw = arena_alloc_old_excluding_pages(total, align, excluded_pages);
 
     unsafe {
@@ -237,8 +405,17 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // Large arena-backed GC objects are born directly in non-moving old
     // generation. The threshold applies to the actual bytes a copying nursery
     // would otherwise move: GcHeader + payload + alignment padding.
+    //
+    // It is TYPE-DEPENDENT, because the price of crossing it is: this object is
+    // also stamped `GC_FLAG_TENURED`, and a minor never sweeps old-gen — so for
+    // a POINTER-BEARING object the cost is not its own bytes, it is every
+    // object it can reach, held live through the remembered set by a container
+    // nothing refers to any more. See
+    // `gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES` for the measurement
+    // (`shapes.ts` sat 16 bytes over the flat 16 KB line and re-marked 118 006
+    // slots per minor because of it).
     let total = gc_padded_total_size(size, align);
-    if crate::gc::is_large_object_total_size(total) {
+    if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
         let user_ptr = arena_alloc_gc_old(size, align, obj_type);
         unsafe {
             let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;
@@ -254,9 +431,9 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // micro-benchmarks like object_create / binary_trees run their tight
     // loops. Walking an empty Vec was costing ~10ns per alloc (borrow,
     // iterate, drop) for nothing; this `Cell` check is ~1ns.
-    let reused = if crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.get()) {
-        crate::gc::ARENA_FREE_LIST.with(|fl| {
-            let mut fl = fl.borrow_mut();
+    let reused = if crate::gc::hot_arena_free_list_nonempty().get() {
+        {
+            let mut fl = crate::gc::hot_arena_free_list().borrow_mut();
             // Find a slot that fits (exact or slightly larger)
             let mut best_idx = None;
             let mut best_waste = usize::MAX;
@@ -272,13 +449,13 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
             if let Some(idx) = best_idx {
                 let (ptr, _slot_size) = fl.swap_remove(idx);
                 if fl.is_empty() {
-                    crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
+                    crate::gc::hot_arena_free_list_nonempty().set(false);
                 }
                 Some(ptr)
             } else {
                 None
             }
-        })
+        }
     } else {
         None
     };

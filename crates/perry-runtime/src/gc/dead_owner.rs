@@ -214,9 +214,13 @@ fn fan_out(
     is_dead_symbol: &dyn Fn(usize) -> bool,
 ) {
     // Interned key pointers cached in the store-plan cache may die in this
-    // collection — flush every cached verdict.
-    crate::object::prop_plan::prop_plan_epoch_bump();
+    // collection — flush every cached verdict. Pointer identity only: the
+    // entries pruned below all belong to objects that are DEAD, so no live
+    // object's property lookup changes its answer. See
+    // `prop_plan_gc_epoch_bump`.
+    crate::object::prop_plan::prop_plan_gc_epoch_bump();
     crate::array::prune_dead_array_named_property_owners(is_dead_owner);
+    crate::array::prune_dead_element_shape_owners(is_dead_owner);
     crate::map::prune_dead_map_iterator_array_owners(is_dead_owner);
     crate::set::prune_dead_set_iterator_array_owners(is_dead_owner);
     crate::object::prune_dead_descriptor_owner_entries(is_dead_owner);

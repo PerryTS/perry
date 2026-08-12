@@ -316,6 +316,27 @@ pub fn transform_generator_function_with_extra_captures(
     // must be boxed captures like any other cross-state local.
     let prologue_hoist = collect_hoisted_vars(&param_prologue);
 
+    // #7933: every local a closure in this body can observe. Read from the
+    // ORIGINAL body (before hoisting/linearization move statements around) —
+    // those passes rewrite references but never introduce a user closure, and
+    // the ones that do rewrite closure bodies (`rewrite_written_captures_to_cells`,
+    // `snapshot_suspended_loop_captures`) only ever redirect a closure onto a
+    // *different* id, which leaves the pre-pass answer conservative. `None`
+    // means the analysis is unusable (sloppy `with`) and nothing may be
+    // released. See `box_release.rs` for why closure visibility is the exact
+    // condition.
+    // Consumed only by the `was_plain_async` arm below — a generator's
+    // `{next, return, throw}` object is user-visible, so "done" is not the end
+    // of observability there and nothing is ever released.
+    let closure_visible_before: Option<std::collections::HashSet<LocalId>> = {
+        closure_visible_ids(&func.body).and_then(|mut ids| {
+            closure_visible_ids(&param_prologue).map(|p| {
+                ids.extend(p);
+                ids
+            })
+        })
+    };
+
     // #321: hoist `yield` / `yield*` that live inside a larger expression
     // (`return (yield 1) + (yield 2)`, call args, array/object literals, etc.)
     // into ordered `let __ygen_N = yield E;` temps so the linearizer below only
@@ -864,6 +885,54 @@ pub fn transform_generator_function_with_extra_captures(
         // emit `Stmt::Throw(value)` inline in its is-error arm, saving one
         // closure allocation per async-fn invocation (50k/run on the
         // promise_all_chains kernel).
+        // #7933: the activation's boxed body locals that no closure can
+        // observe, released (set to `undefined`) at the state machine's
+        // terminal states. Second, independent scan of the POST-linearization
+        // bodies, unioned with the pre-pass one: an id either scan calls
+        // closure-visible is kept.
+        let release_ids: Vec<LocalId> = {
+            let post_visible = closure_visible_ids(&next_resume_body).and_then(|mut ids| {
+                let routes_ok =
+                    catches
+                        .iter()
+                        .all(|route| match closure_visible_ids(&route.body) {
+                            Some(r) => {
+                                ids.extend(r);
+                                true
+                            }
+                            None => false,
+                        });
+                if routes_ok {
+                    Some(ids)
+                } else {
+                    None
+                }
+            });
+            match (&closure_visible_before, &post_visible) {
+                (Some(before), Some(after)) => {
+                    let mut ids: Vec<LocalId> = hoisted
+                        .iter()
+                        .map(|(id, _, _)| *id)
+                        .chain(extra_local_ids.iter().copied())
+                        // `__gen_sent` holds the value the last `await`
+                        // delivered — a first-class retainer, and re-entry
+                        // overwrites it before any read.
+                        .chain(std::iter::once(sent_id))
+                        .filter(|id| !before.contains(id) && !after.contains(id))
+                        .collect();
+                    // The state-machine control locals (`__gen_state`,
+                    // `__gen_done`, `__gen_executing`, the pending-completion
+                    // record) are deliberately NOT released: a resume that
+                    // arrives after the terminal state reads `__gen_done` to
+                    // short-circuit, and an `undefined` there would drop it
+                    // into the dispatch loop with no matching state.
+                    ids.sort();
+                    ids.dedup();
+                    ids
+                }
+                _ => Vec::new(),
+            }
+        };
         let throw_routes_for_step = if catches.is_empty() {
             None
         } else {
@@ -885,6 +954,7 @@ pub fn transform_generator_function_with_extra_captures(
             captures_new_target,
             enclosing_class.clone(),
             func.is_strict,
+            &release_ids,
         );
         for s in wrapper_stmts {
             new_body.push(s);

@@ -464,6 +464,25 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("module: \"dgram\"") {
             ctx.uses_dgram = true;
         }
+        // `node:test` → gates `perry-runtime/mod-node-test` (the runner, and
+        // with it the JSON serializer its snapshot assertions call). Like
+        // dgram it is runtime-only, so `requires_stdlib` is false for it and
+        // `native_module_imports` never learns about it. Match the import
+        // list rather than the lowered body: `node:test` reaches the body as
+        // `module: "test"`, but `node:test/reporters` lowers its specifiers
+        // to bare `ExternFuncRef`s and leaves no module marker there at all,
+        // so a body-only scan links a program that calls
+        // `js_node_submod_install_test_reporters` against a runtime that no
+        // longer defines it.
+        if !ctx.uses_node_test {
+            ctx.uses_node_test = hir_module.imports.iter().any(|import| {
+                let bare = import
+                    .source
+                    .strip_prefix("node:")
+                    .unwrap_or(&import.source);
+                bare == "test" || bare == "test/reporters"
+            });
+        }
         if debug_hir_uses_get_builtin_module(&hir_debug) {
             ctx.uses_get_builtin_module = true;
         }

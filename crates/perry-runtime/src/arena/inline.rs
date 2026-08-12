@@ -21,22 +21,32 @@ pub struct InlineArenaState {
 /// is stable for the lifetime of the thread, so caching is safe.
 ///
 /// First call on each thread lazy-syncs from the underlying ARENA.
+///
+/// #7469: this resolves `INLINE_STATE` and `ARENA` through
+/// [`crate::arena::block::hot_inline_state`] / [`crate::arena::block::hot_arena`]
+/// rather than `.with()`. Both already *have* named slots in the hot cache —
+/// they are two of its sixteen — but this call site was still going through
+/// the `LocalKey`, so it paid `_tlv_get_addr` anyway: 5.2% of `interp`'s
+/// remaining calls, from a function whose whole job is to be called once per
+/// JS function entry. A cache with a covered entry that the caller does not
+/// use is the same as no cache.
 #[no_mangle]
 pub extern "C" fn js_inline_arena_state() -> *mut InlineArenaState {
-    INLINE_STATE.with(|s| {
-        let state = unsafe { &mut *s.get() };
+    // SAFETY: `hot_inline_state`/`hot_arena` return this thread's own
+    // `INLINE_STATE`/`ARENA` storage — the same addresses `.with()` would hand
+    // out, resolved once per thread instead of once per call.
+    unsafe {
+        let state = &mut *super::block::hot_inline_state();
         if state.data.is_null() {
             // Lazy init: copy from underlying ARENA's current block.
-            ARENA.with(|a| unsafe {
-                let arena = &*a.get();
-                let block = &arena.blocks[arena.current];
-                state.data = block.data;
-                state.offset = block.offset;
-                state.size = block.size;
-            });
+            let arena = &*super::block::hot_arena();
+            let block = &arena.blocks[arena.current];
+            state.data = block.data;
+            state.offset = block.offset;
+            state.size = block.size;
         }
         state as *mut InlineArenaState
-    })
+    }
 }
 
 /// Slow path for inline bump alloc. Called from emitted IR when the

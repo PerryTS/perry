@@ -50,7 +50,7 @@ pub(crate) struct ViewInfo {
     pub length: u32,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// `view_ptr → ViewInfo`.  Lookups during writes are O(1). Address-keyed
     /// `PtrHashMap` (#6386): both maps are probed on EVERY DataView/typed
     /// view write via `propagate_written_range_from_receiver`, and SipHash

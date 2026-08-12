@@ -1,0 +1,1 @@
+- **`docs/engine-plan.md` synced to ticket reality (2026-08-06):** #7472 fixed by #7473 and closed, #7396 closed as fixed-by-#7421, the public benchmark artifact down to a single blocker (#7475), residual #7481 recorded with the large-Eden probe-coverage lesson, and the repsel stack position added — phases 1–4a merged, 4b in flight, element-shape route decided in #7480. (#7482)

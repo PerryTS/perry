@@ -274,6 +274,7 @@ unsafe fn dispatch_pointer_with_replacer(
     // the URL, so the generic object walk below would trip the circular-
     // structure detector. The href is a plain string, so the emit is identical
     // for compact and pretty walks. See `write_url_href_json`.
+    #[cfg(feature = "url-engine")]
     if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
         super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
         return;
@@ -357,6 +358,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     indent: &str,
     depth: usize,
 ) {
+    check_stringify_nesting_depth(depth);
     // Circular-reference detection (mirrors the pretty/array-replacer paths).
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
@@ -518,6 +520,19 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
     indent: &str,
     depth: usize,
 ) {
+    check_stringify_nesting_depth(depth);
+    // #7269: follow GC_FLAG_FORWARDED array-growth stubs (`js_array_grow`,
+    // issue #233) before any header read — mirrors the resolution in
+    // `dispatch_pointer_with_replacer`'s array arm and
+    // `stringify_array_with_array_replacer`. Every array's only current
+    // caller already resolves before calling in, but this function must not
+    // depend on that — a raw `ptr as *const ArrayHeader` cast on a stale
+    // pre-grow pointer reads the forwarding pointer as (length, capacity).
+    let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
+    if ptr.is_null() {
+        buf.push_str("null");
+        return;
+    }
     // Circular-reference detection.
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
@@ -823,6 +838,7 @@ pub(crate) unsafe fn stringify_value_pretty(
         // be walked as a plain object (its `searchParams` back-reference trips
         // the circular-structure detector). Mirrors the compact-path branch in
         // `stringify_object_inner`; see `write_url_href_json`.
+        #[cfg(feature = "url-engine")]
         if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
             super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
             return;
@@ -865,12 +881,24 @@ pub(crate) unsafe fn stringify_value_pretty(
         } else if type_hint == TYPE_ARRAY {
             stringify_array_pretty(ptr, buf, indent, depth);
         } else {
-            let arr = ptr as *const crate::ArrayHeader;
-            if !arr.is_null() {
-                let len = (*arr).length;
-                let cap = (*arr).capacity;
+            // #7269: this is the TYPE_UNKNOWN structural-fallback probe — an
+            // array-shaped pointer never got a `gc_obj_type` dispatch on this
+            // path, so an array grown past its initial inline capacity (16)
+            // reaches here still holding its stale pre-grow address. Its
+            // GC_FLAG_FORWARDED stub's first 8 bytes now hold the forwarding
+            // pointer, so reading them raw as (length, capacity) below
+            // yielded a bogus, run-to-run-different "shape" that either
+            // misclassified a live array as a string/object or walked the
+            // resulting garbage length. Resolve through `clean_arr_ptr` —
+            // same chain `json/stringify.rs::stringify_array_depth` and the
+            // replacer array-walks in this file already follow — BEFORE the
+            // length/capacity probe, and pass the resolved pointer on.
+            let resolved = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
+            if !resolved.is_null() {
+                let len = (*resolved).length;
+                let cap = (*resolved).capacity;
                 if len <= cap && cap > 0 && cap < 10000 && !is_object_pointer(ptr) {
-                    stringify_array_pretty(ptr, buf, indent, depth);
+                    stringify_array_pretty(resolved as *const u8, buf, indent, depth);
                     return;
                 }
             }
@@ -897,6 +925,7 @@ pub(crate) unsafe fn stringify_object_pretty(
     indent: &str,
     depth: usize,
 ) {
+    check_stringify_nesting_depth(depth);
     // Same deref-safety gate the plain path applies in `is_object_pointer`: the
     // `field_count` / `keys_array` reads below load straight through `ptr`, so an
     // in-range-but-unmapped garbage address (a denormal double that survived the
@@ -1030,6 +1059,20 @@ pub(crate) unsafe fn stringify_array_pretty(
     indent: &str,
     depth: usize,
 ) {
+    check_stringify_nesting_depth(depth);
+    // #7269: resolve GC_FLAG_FORWARDED array-growth stubs before any header
+    // read. `ptr_is_tracked_heap_object` below only confirms the address is a
+    // live tracked allocation — a forwarded stub still passes that check
+    // (its GcHeader is intact; only its body was overwritten with the
+    // forwarding pointer), so it does NOT substitute for this resolve. This
+    // is the shared choke point for both callers below (the explicit
+    // `type_hint == TYPE_ARRAY` dispatch and the TYPE_UNKNOWN structural
+    // fallback), so resolving once here protects both.
+    let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
+    if ptr.is_null() {
+        buf.push_str("null");
+        return;
+    }
     // Same gate as `stringify_object_pretty`: this is the fall-through branch for
     // a pointer that failed the object probes, so a corrupted pointer lands here
     // and the `(*arr).length` read below would fault.
@@ -1090,6 +1133,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     depth: usize,
     use_pretty: bool,
 ) {
+    check_stringify_nesting_depth(depth);
     // Circular reference check
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
@@ -1276,6 +1320,7 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
     depth: usize,
     use_pretty: bool,
 ) {
+    check_stringify_nesting_depth(depth);
     // #5989: follow GC_FLAG_FORWARDED array-growth stubs (`js_array_grow`, issue
     // #233) so a stale pre-grow pointer serializes the current grown array —
     // mirrors the resolution in `dispatch_pointer_with_replacer`'s array arm.
@@ -1346,6 +1391,13 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
 // ─── Extract array of strings from a JSValue array ──────────────────────────
 
 pub(crate) unsafe fn extract_string_array(ptr: *const u8) -> Vec<String> {
+    // #7269: the PropertyList replacer array (`JSON.stringify(v, ['a','b'])`)
+    // is exactly as susceptible to the GC_FLAG_FORWARDED array-growth stub as
+    // any other array pointer in this file — resolve before the header read.
+    let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
+    if ptr.is_null() {
+        return Vec::new();
+    }
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
@@ -1423,9 +1475,14 @@ pub(crate) unsafe fn is_array_value(bits: u64) -> bool {
         if is_object_pointer(ptr) {
             return false;
         }
-        let arr = ptr as *const crate::ArrayHeader;
-        let len = (*arr).length;
-        let cap = (*arr).capacity;
+        // #7269: same GC_FLAG_FORWARDED array-growth hazard as every other
+        // raw `ArrayHeader` cast in this file — resolve first.
+        let resolved = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
+        if resolved.is_null() {
+            return false;
+        }
+        let len = (*resolved).length;
+        let cap = (*resolved).capacity;
         len <= cap && cap > 0 && cap < 10000
     } else {
         false
@@ -1740,4 +1797,104 @@ pub unsafe extern "C" fn js_json_stringify_full(
     STRINGIFY_DEPTH.with(|d| d.set(d.get() - 1));
     // Return as NaN-boxed string
     (STRING_TAG | (result_ptr as u64 & POINTER_MASK)) as i64
+}
+
+#[cfg(test)]
+mod forwarded_array_pretty_print_tests {
+    use super::*;
+
+    /// #7269: `JSON.stringify(v, null, 2)` on an array grown past its
+    /// initial inline capacity (`MIN_ARRAY_CAPACITY`, 16) returned
+    /// nondeterministic garbage — a different, wrong-length string on every
+    /// run of the SAME binary. Root cause: `js_array_grow` (issue #233)
+    /// reallocates and installs a `GC_FLAG_FORWARDED` stub at the OLD
+    /// address, whose first 8 bytes — exactly `ArrayHeader.length` +
+    /// `.capacity` — now hold the raw forwarding pointer to the new array.
+    /// The stub is retained specifically so a caller still holding the
+    /// pre-grow address (its comment: "an async function's caller still
+    /// holding the pre-grow pointer") keeps resolving correctly *through
+    /// `clean_arr_ptr`*. The plain (non-pretty) path always went through
+    /// `clean_arr_ptr` before every header read
+    /// (`json/stringify.rs::stringify_array_depth`); the pretty-print path
+    /// in this file read `(*arr).length`/`.capacity` directly, so it saw the
+    /// forwarding pointer's bytes reinterpreted as a bogus, run-to-run-
+    /// different array shape — "garbage" because the bytes are a real, live
+    /// pointer, just not the field values they're pretending to be.
+    ///
+    /// This test needs no explicit GC cycle: `js_array_grow` unconditionally
+    /// installs the forwarding stub on every reallocating grow, independent
+    /// of any minor/major collection.
+    #[test]
+    fn pretty_stringify_resolves_array_grown_past_inline_capacity() {
+        unsafe {
+            let mut arr = crate::js_array_alloc(0);
+            let initial_capacity = (*arr).capacity;
+            assert!(
+                initial_capacity > 0,
+                "a freshly allocated array must report a real capacity"
+            );
+            // Fill to capacity so the NEXT push must reallocate.
+            for i in 0..initial_capacity {
+                arr = crate::js_array_push_f64(arr, i as f64);
+            }
+            assert_eq!((*arr).length, initial_capacity);
+
+            // Capture the pre-grow address. No allocation happens between this
+            // read and the growing push below, so nothing else can have moved
+            // or reused this address in between.
+            let stale_ptr = arr as *const crate::ArrayHeader;
+            let grown = crate::js_array_push_f64(arr, initial_capacity as f64);
+            assert_ne!(
+                grown as *const crate::ArrayHeader, stale_ptr,
+                "growth past capacity must reallocate to a new address \
+                 (otherwise this test exercises nothing)"
+            );
+            assert_eq!((*grown).length, initial_capacity + 1);
+
+            // Sabotage precondition, mirroring `array/subclass_tests.rs`'s
+            // style: prove the stale address really carries a raw forwarding
+            // pointer reinterpreted as (length, capacity), not merely stale
+            // or reused memory — reconstructing the u64 from the two u32
+            // fields must recover the grown array's exact address.
+            let raw_len_bits = (*stale_ptr).length as u64;
+            let raw_cap_bits = (*stale_ptr).capacity as u64;
+            let forwarded_as_ptr = raw_len_bits | (raw_cap_bits << 32);
+            assert_eq!(
+                forwarded_as_ptr, grown as u64,
+                "the stale header's raw (length, capacity) bytes must be the \
+                 exact bit pattern of the new array's address"
+            );
+            assert_ne!(
+                (*stale_ptr).length,
+                initial_capacity + 1,
+                "sabotage precondition: an unresolved read of the stale \
+                 header must not already report the real length by luck"
+            );
+            let resolved = crate::array::clean_arr_ptr(stale_ptr);
+            assert_eq!(
+                resolved, grown as *const crate::ArrayHeader,
+                "clean_arr_ptr must resolve the stale pre-grow pointer to the grown array"
+            );
+
+            // Build the exact NaN-boxed value a caller still holding the
+            // pre-grow reference would carry, and pretty-stringify it —
+            // mirroring the issue's `JSON.stringify(v, null, 2)` repro.
+            let stale_value = f64::from_bits(POINTER_TAG | (stale_ptr as u64 & POINTER_MASK));
+            let result_bits = js_json_stringify_full(stale_value, f64::from_bits(TAG_NULL), 2.0);
+            let result_ptr = (result_bits as u64 & POINTER_MASK) as *const StringHeader;
+            let s = str_from_header(result_ptr).expect("must produce a string");
+
+            let expected_body = (0..=initial_capacity)
+                .map(|i| format!("  {}", i))
+                .collect::<Vec<_>>()
+                .join(",\n");
+            let expected = format!("[\n{}\n]", expected_body);
+            assert_eq!(
+                s, expected,
+                "pretty stringify of a stale forwarded array pointer must \
+                 equal the CURRENT (grown) array's real contents, not \
+                 garbage read from the forwarding stub"
+            );
+        }
+    }
 }

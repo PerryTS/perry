@@ -150,14 +150,21 @@ fn is_valid_heap_snapshot_options(value: f64) -> bool {
         return false;
     }
     let ptr = jsv.as_pointer::<u8>() as usize;
-    if ptr < crate::gc::GC_HEADER_SIZE + 0x1000 || crate::closure::is_closure_ptr(ptr) {
+    // #7531: `value` is the user-supplied `options` argument to
+    // `v8.getHeapSnapshot([options])` / `writeHeapSnapshot([file[, options]])`
+    // -- any POINTER_TAG value a caller hands in, including a fetch/zlib/
+    // proxy/common-registry handle id. `is_closure_ptr` only rejects the
+    // handle band for CLOSURES, so a non-closure handle (e.g.
+    // `writeHeapSnapshot(f, new Response())`) sailed past the old magnitude
+    // floor (0x1008, below every handle band) into the raw
+    // `ptr - GC_HEADER_SIZE` deref that used to follow -- SIGSEGV on Linux.
+    if crate::closure::is_closure_ptr(ptr) {
         return false;
     }
-    unsafe {
-        let header =
-            &*((ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-        header.obj_type == crate::gc::GC_TYPE_OBJECT
-    }
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(ptr) }) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
 }
 
 fn validate_heap_snapshot_options(value: f64) {
@@ -710,5 +717,56 @@ pub extern "C" fn js_v8_gc_profiler_report() -> f64 {
             ("statistics", stats_val),
             ("endTime", now),
         ])
+    }
+}
+
+#[cfg(test)]
+mod heap_snapshot_options_tests {
+    use super::is_valid_heap_snapshot_options;
+    use crate::value::{addr_class, POINTER_TAG};
+
+    fn handle_boxed(addr: usize) -> f64 {
+        f64::from_bits(POINTER_TAG | (addr as u64))
+    }
+
+    /// #7531: `is_valid_heap_snapshot_options` is the validator for
+    /// `v8.getHeapSnapshot(options)` / `writeHeapSnapshot(file, options)` --
+    /// `options` is caller-supplied and can be any POINTER_TAG value,
+    /// including a fetch/zlib/proxy/common-registry handle id (e.g.
+    /// `writeHeapSnapshot(f, new Response())`). The OLD guard was a bare
+    /// magnitude floor (`GC_HEADER_SIZE + 0x1000` = 0x1008) ORed with
+    /// `is_closure_ptr`, which only rejects the handle band for CLOSURES --
+    /// a non-closure handle sailed past both into an unconditional
+    /// `ptr - GC_HEADER_SIZE` deref. Every probe below is >= the old floor,
+    /// so the old code would have proceeded to dereference; the new
+    /// `try_read_gc_header` rejects all of them by band, without touching
+    /// memory.
+    #[test]
+    fn rejects_every_handle_band_without_dereferencing() {
+        const OLD_FLOOR: usize = 0x1008;
+        let probes = [
+            addr_class::COMMON_HANDLE_BAND_END,
+            addr_class::FETCH_HANDLE_BAND_START,
+            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::PROXY_ID_BAND_START,
+            addr_class::HANDLE_BAND_MAX - 1,
+        ];
+        for addr in probes {
+            assert!(
+                addr >= OLD_FLOOR,
+                "{addr:#x} must be at/above the old floor to prove the gap"
+            );
+            assert!(
+                !is_valid_heap_snapshot_options(handle_boxed(addr)),
+                "{addr:#x} must be rejected, not probed as a heap object"
+            );
+        }
+    }
+
+    #[test]
+    fn undefined_is_still_accepted() {
+        assert!(is_valid_heap_snapshot_options(f64::from_bits(
+            crate::value::TAG_UNDEFINED
+        )));
     }
 }

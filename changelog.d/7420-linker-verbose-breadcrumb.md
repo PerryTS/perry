@@ -1,0 +1,7 @@
+**compile(diag): `--verbose` now brackets the linker spawn (#6899 instrumentation)**
+
+The hang reported in #6899 sits between the `[strip-dedup]` stderr line and the `Wrote executable:` line — a window covering ~1500 lines of link-argument assembly, the link-cache check, the response-file rewrite, and the linker child process itself, none of which logged anything even under `--verbose`. A hang report therefore could not distinguish "linker never spawned" from "linker hung" from "post-link step hung".
+
+`build_and_run_link` now takes the CLI verbosity and, at `--verbose`, prints `[link] invoking: <program> <args…>` immediately before spawning the linker and `[link] linker exited: <status>` (or `[link] linker spawn failed: <err>`) immediately after it returns. On Windows the printed args are usually a single `@<response-file>` — deliberately useful: the response file still exists on disk while the linker is hung (cleanup runs after the wait), so a stuck user can inspect the full argument vector.
+
+Investigation notes recorded on the issue: the link runs via `Command::status()` with inherited stdio (no pipe-fill deadlock is possible), plain compiles pass no `/DEBUG` (no mspdbsrv involvement), and the process-exit paths (telemetry flush, compat-report prompt, update check) are all bounded or TTY-guarded. The hang did not reproduce on a Windows 11 host at current main across repeated runtime-only links, including the cached-object flow from the report.

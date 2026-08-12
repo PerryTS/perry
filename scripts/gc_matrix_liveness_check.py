@@ -59,10 +59,29 @@ REGISTRY = REPO_ROOT / "test-parity" / "gc_matrix_inert_arms.txt"
 MATRIX = REPO_ROOT / "scripts" / "gc_repsel_matrix.sh"
 
 # requires= value -> (human name, cell counter key(s) summed to decide "it bit")
+#
+# #7017: `collect` counted `cycles`, and a cycle is not evidence that the
+# collector saw anything. On a small corpus file the shipped configuration
+# completes exactly one cycle at the event-loop boundary, AFTER the program's
+# last output, reclaiming nothing — everything allocated after the cycle armed
+# was born black. That scored identically to a run that collected twice,
+# mid-program, while the test's representation-selected locals were live, which
+# is the property the matrix exists to assert.
+#
+# So the counter is `reclaimed`: the sum of every reclamation counter the run
+# emitted (`sweep_freed`, `block_reclaim`, `eden_dead_bytes`, `freed_bytes`,
+# `dead_bytes`, in both the `k=N` and JSON `"k": N` spellings — see the
+# derivation in gc_repsel_matrix.sh). Like #7657's widening of the gc-ratchet
+# rule to `copied + promoted > 0`, it names a DESTINATION rather than a single
+# counter, so one collector change cannot pin it permanently false.
+#
+# It is a conservative proxy and the matrix says so: a mid-program cycle over a
+# heap that is entirely live reclaims nothing and reads UNVER. Under-claiming is
+# the safe direction for a liveness gate; `cycles` over-claimed.
 REQUIREMENTS = {
     "scavenge": ("copying young-gen minor", ("scavenged",)),
     "move": ("any relocation", ("evacuated", "scavenged")),
-    "collect": ("any GC cycle", ("cycles",)),
+    "collect": ("a productive GC cycle", ("reclaimed",)),
     "none": ("nothing (explicit control)", ()),
 }
 
@@ -260,7 +279,7 @@ def _report(arms, cells):
 
 def _cell(arm, **kw):
     base = {"test": kw.pop("test", "t"), "arm": arm, "result": kw.pop("result", "PASS")}
-    base.update({"cycles": 0, "evacuated": 0, "scavenged": 0})
+    base.update({"cycles": 0, "evacuated": 0, "scavenged": 0, "reclaimed": 0})
     base.update(kw)
     return base
 
@@ -354,6 +373,45 @@ def self_test() -> int:
         ),
         True,
     )
+    # #7017, the whole point: a cycle that reclaimed NOTHING is the teardown
+    # shape, and must no longer satisfy `collect`. This is the assertion that
+    # would have failed before the counter changed.
+    expect(
+        "a cycle that reclaimed nothing does NOT satisfy collect",
+        check_report(
+            _report([{"id": "c", "requires": "collect"}], [_cell("c", cycles=1, reclaimed=0)]),
+            {},
+            sink,
+        ),
+        True,
+    )
+    expect(
+        "a productive cycle satisfies collect",
+        check_report(
+            _report(
+                [{"id": "c", "requires": "collect"}],
+                [_cell("c", cycles=2, reclaimed=1048576)],
+            ),
+            {},
+            sink,
+        ),
+        False,
+    )
+    # ...and relocation counters must not stand in for reclamation: a `collect`
+    # arm is non-moving by construction (PERRY_GEN_GC=0 / PERRY_WRITE_BARRIERS=0),
+    # so a cell reporting `scavenged` under one is reporting something else.
+    expect(
+        "collect is NOT satisfied by scavenged/evacuated alone",
+        check_report(
+            _report(
+                [{"id": "c", "requires": "collect"}],
+                [_cell("c", cycles=9, scavenged=500, evacuated=500)],
+            ),
+            {},
+            sink,
+        ),
+        True,
+    )
     expect(
         "an unknown requires= value is rejected",
         check_report(
@@ -416,7 +474,7 @@ def self_test() -> int:
 
     for failure in failures:
         print("SELF-TEST FAIL: %s" % failure, file=sys.stderr)
-    print("self-test: %d checks, %d failures" % (12 + 6 + 3, len(failures)))
+    print("self-test: %d checks, %d failures" % (15 + 6 + 3, len(failures)))
     return 1 if failures else 0
 
 

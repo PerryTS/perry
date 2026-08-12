@@ -8,6 +8,68 @@
 
 use super::*;
 
+/// An owned copy of a property key's bytes (#7498).
+///
+/// **A `&[u8]` sliced out of a `StringHeader`'s payload is a borrow of the GC
+/// heap, and the collector cannot see it.** Rooting the key in a
+/// `RuntimeHandleScope` keeps the object alive and rewrites the *slot* — it
+/// does nothing for a `&[u8]`/`&str` already pointing at the pre-move address.
+/// The property-lookup tower is full of that shape: a key is sliced once at the
+/// top of an arm and compared, hashed and forwarded for hundreds of lines, and
+/// most of the probes in between (`resolve_inherited_field`,
+/// `fetch_subclass_handle_id`, `temporal_subclass_cell`,
+/// `array_prototype_property_value`, …) intern a key string of their own, which
+/// allocates.
+///
+/// The only sound shape is to stop borrowing. Copy the bytes out once, before
+/// the arm's first allocation, and use the copy everywhere below. Property names
+/// are short, so the common case is a stack buffer and no allocator traffic at
+/// all; the spill keeps that total rather than "usually".
+pub(crate) struct HeapKeyBytes {
+    inline: [u8; Self::INLINE],
+    len: usize,
+    spill: Vec<u8>,
+}
+
+impl HeapKeyBytes {
+    /// Every property name this tower sees in practice (`length`,
+    /// `constructor`, `@@iterator`, `__perry_temporal_cell__`, a numeric index)
+    /// fits. Longer keys spill rather than falling back to the borrow.
+    pub(crate) const INLINE: usize = 64;
+
+    pub(crate) fn copy_of(src: &[u8]) -> Self {
+        let mut inline = [0u8; Self::INLINE];
+        let mut spill = Vec::new();
+        if src.len() <= Self::INLINE {
+            inline[..src.len()].copy_from_slice(src);
+        } else {
+            spill = src.to_vec();
+        }
+        Self {
+            inline,
+            len: src.len(),
+            spill,
+        }
+    }
+
+    /// Copy a heap key's payload. `key` must be a live, non-null
+    /// `StringHeader`; callers check that before reaching here.
+    pub(crate) unsafe fn copy_of_key(key: *const crate::StringHeader) -> Self {
+        Self::copy_of(std::slice::from_raw_parts(
+            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+            (*key).byte_len as usize,
+        ))
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        if self.len <= Self::INLINE {
+            &self.inline[..self.len]
+        } else {
+            &self.spill
+        }
+    }
+}
+
 /// Hidden own-field name under which a `class X extends Request/Response`
 /// instance stashes the id of its underlying native Web-Fetch handle. Written
 /// by the `js_request_subclass_init` / `js_response_subclass_init` super-init
@@ -30,18 +92,50 @@ pub(crate) static FETCH_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
 /// `None` for any non-object / non-subclass receiver, so callers can fall
 /// through to their normal dispatch unchanged.
 pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
-    if obj < crate::gc::GC_HEADER_SIZE + 0x1000 || !is_valid_obj_ptr(obj as *const u8) {
+    // #7795: nothing has ever stashed a fetch handle, so this probe cannot
+    // return `Some` — answer from the monotone flag instead of interning a key
+    // string and running a full recursive `js_object_get_field_by_name`. This
+    // sits on the ORDINARY-OBJECT PROPERTY-MISS path, which every `await` of a
+    // plain object reaches through the spec thenable check (`Get(v, "then")`),
+    // so an un-gated probe is a per-miss allocation in programs that never
+    // subclass `Request`/`Response`. `FETCH_SUBCLASS_EVER` already existed for
+    // the `in`-operator fast path (#6748) and is set at the single stash site
+    // (`attach_fetch_handle_to_this`); this just consults it here too.
+    if !FETCH_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed) {
         return None;
     }
-    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    // #7526: classify by BAND, not by magnitude. The old floor
+    // (`GC_HEADER_SIZE + 0x1000`) plus `is_valid_obj_ptr` is a magnitude test
+    // only — `is_valid_obj_ptr`'s `HEAP_MIN` is 0x1000 — so every Web Fetch
+    // handle id sailed through it: they live in `[0x40000, 0xE0000)`, well
+    // above the floor and well below `HANDLE_BAND_MAX` (0x100000). `new
+    // Response(...)` yields id 0x40000 exactly, and `r instanceof Request`
+    // reaches here, so the very first fetch handle a program allocates
+    // dereferenced 0x3fff8 and took a SIGSEGV. `is_plausible_heap_addr` is the
+    // canonical pairing (`is_above_handle_band && is_valid_obj_ptr`) and
+    // rejects every band without touching memory.
+    if !crate::value::addr_class::is_plausible_heap_addr(obj) {
         return None;
     }
+    let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj) else {
+        return None;
+    };
+    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    // #7498: the key allocation below can trigger a copying minor, which moves
+    // `obj` and rewrites only the slots it can see — a bare `usize` is not one.
+    // This frame is on the `[...obj.arr]` prototype-walk stack that
+    // `PERRY_GC_PROTECT_FROMSPACE=1` faults in. Root the receiver first, then
+    // read its post-collection address for the field read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
     let key = crate::string::js_string_from_bytes(
         FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
         FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
     );
-    let v = js_object_get_field_by_name(obj as *const ObjectHeader, key);
+    let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *const ObjectHeader;
+    let v = js_object_get_field_by_name(obj, key);
     if v.is_undefined() {
         return None;
     }
@@ -66,6 +160,17 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
 #[cfg(feature = "temporal")]
 pub(crate) const TEMPORAL_SUBCLASS_CELL_FIELD: &[u8] = b"__perry_temporal_cell__";
 
+/// Has any `class X extends Temporal.<Type>` instance EVER stashed a cell in
+/// this process? The sibling of [`FETCH_SUBCLASS_EVER`], for the same reason:
+/// `temporal_subclass_cell` costs a key-string alloc plus a full recursive
+/// property read per call, and it is consulted on the ordinary-object
+/// property-MISS path. Set at the single stash site
+/// (`attach_temporal_cell_to_this`, `global_this/fetch_globals.rs`), which is
+/// the only writer of `TEMPORAL_SUBCLASS_CELL_FIELD`. (#7795)
+#[cfg(feature = "temporal")]
+pub(crate) static TEMPORAL_SUBCLASS_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// If `obj` (a raw heap object address) is a `class X extends Temporal.<Type>`
 /// instance, return the NaN-boxed value of its stashed Temporal cell. Returns
 /// `None` for any non-object / non-subclass receiver (so callers fall through
@@ -73,6 +178,11 @@ pub(crate) const TEMPORAL_SUBCLASS_CELL_FIELD: &[u8] = b"__perry_temporal_cell__
 /// longer a live Temporal cell.
 #[cfg(feature = "temporal")]
 pub(crate) unsafe fn temporal_subclass_cell(obj: usize) -> Option<f64> {
+    // #7795: see `fetch_subclass_handle_id`. No Temporal subclass instance has
+    // ever stashed a cell, so this probe cannot return `Some`.
+    if !TEMPORAL_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
     // Reject any address that isn't a plausible heap pointer.  Proxy ids live
     // in [0xF0000, 0x100000) — they pass a naïve `>= GC_HEADER_SIZE + 0x1000`
     // check but are NOT heap pointers.  On Linux (HEAP_MIN = 0x1000) the old
@@ -86,11 +196,16 @@ pub(crate) unsafe fn temporal_subclass_cell(obj: usize) -> Option<f64> {
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
+    // #7498: same shape as `fetch_subclass_handle_id` above — `obj` must not
+    // ride the key allocation as a bare `usize`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
     let key = crate::string::js_string_from_bytes(
         TEMPORAL_SUBCLASS_CELL_FIELD.as_ptr(),
         TEMPORAL_SUBCLASS_CELL_FIELD.len() as u32,
     );
-    let v = js_object_get_field_by_name(obj as *const ObjectHeader, key);
+    let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *const ObjectHeader;
+    let v = js_object_get_field_by_name(obj, key);
     if v.is_undefined() {
         return None;
     }
@@ -124,10 +239,13 @@ mod crypto_key;
 mod enumeration;
 mod field_ops;
 mod get_field_by_name;
+#[cfg(test)]
+mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
 mod has_property;
 mod ic_miss;
 mod map_set_receiver;
+mod probe_dispatch;
 
 /// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline
 /// cache backing `js_object_get_field_by_name`'s slow tail.
@@ -179,10 +297,9 @@ pub use enumeration::{
     js_object_keys_value, js_object_values, js_object_values_value,
 };
 pub use field_ops::{
-    js_object_free, js_object_get_class_id, js_object_get_field_f64,
-    js_object_get_unboxed_f64_field, js_object_set_field, js_object_set_field_by_index,
-    js_object_set_field_f64, js_object_set_keys, js_object_set_unboxed_f64_field,
-    js_object_to_value, js_value_to_object,
+    js_object_free, js_object_get_class_id, js_object_get_field_f64, js_object_set_field,
+    js_object_set_field_by_index, js_object_set_field_f64, js_object_set_keys, js_object_to_value,
+    js_value_to_object,
 };
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;
@@ -192,6 +309,7 @@ pub(crate) use has_property::{
     wide_key_index_note_hit, WIDE_KEY_INDEX_MIN_KEYS,
 };
 pub use has_property::{js_in_operator, js_object_has_property};
+pub(crate) use ic_miss::pic_epoch_bump;
 pub(crate) use ic_miss::{
     is_array_method_value_name, is_primitive_proto_method, is_timer_handle_method_key,
     set_method_value_name,
@@ -199,7 +317,7 @@ pub(crate) use ic_miss::{
 pub use ic_miss::{
     js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_get_field_ic_miss, js_object_set_field_by_property_id, js_private_brand_check,
-    js_private_guard,
+    js_private_guard, PicCache, PERRY_IC_EPOCH, PIC_CACHE_WORDS,
 };
 
 #[cfg(test)]
@@ -231,7 +349,7 @@ mod buffer_ic_miss_tests {
         unsafe {
             for len in [16usize, 24, 32] {
                 let buf = secret_buffer(len);
-                let mut cache = [0i64; 2];
+                let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
 
                 let ty = js_object_get_field_ic_miss(
                     buf as *const ObjectHeader,
@@ -252,6 +370,45 @@ mod buffer_ic_miss_tests {
                 let raw_len = js_object_get_field_ic_miss(raw_addr, key(b"length"), &mut cache);
                 assert_eq!(raw_len, len as f64);
             }
+        }
+    }
+
+    /// #7526: a Web Fetch handle id is NOT a heap address, and the subclass
+    /// probe must reject it by BAND before dereferencing `addr - 8`.
+    ///
+    /// `new Response(...)` yields handle id `FETCH_HANDLE_BAND_START` (0x40000)
+    /// exactly, so `r instanceof Request` — which reaches
+    /// `fetch_subclass_handle_id` — took a SIGSEGV on the first fetch handle a
+    /// program allocated. The old guard was a magnitude floor plus
+    /// `is_valid_obj_ptr`, whose own `HEAP_MIN` is 0x1000; every band sits
+    /// above that and below `HANDLE_BAND_MAX`, so none of them were excluded.
+    ///
+    /// This walks the band boundaries rather than one value, so a future band
+    /// added to `addr_class` without a matching guard here fails the test.
+    #[test]
+    fn fetch_subclass_probe_rejects_every_handle_band_without_dereferencing() {
+        use crate::value::addr_class::*;
+        let probes = [
+            (COMMON_HANDLE_BAND_END, "fetch band start (the #7526 crash)"),
+            (FETCH_HANDLE_BAND_START, "fetch band start"),
+            (FETCH_HANDLE_BAND_START + 1, "inside the fetch band"),
+            (FETCH_HANDLE_BAND_END - 1, "fetch band end"),
+            (PROXY_ID_BAND_START, "proxy id band"),
+            (HANDLE_BAND_MAX - 1, "last handle-band address"),
+            (1, "smallest handle"),
+        ];
+        for (addr, what) in probes {
+            assert!(
+                !is_plausible_heap_addr(addr),
+                "{what} ({addr:#x}) must not be classified as a heap address"
+            );
+            // The probe must return None WITHOUT faulting; reaching the
+            // assertion at all is half the test.
+            let got = unsafe { fetch_subclass_handle_id(addr) };
+            assert!(
+                got.is_none(),
+                "{what} ({addr:#x}) must not probe as a subclass handle"
+            );
         }
     }
 }

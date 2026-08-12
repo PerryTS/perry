@@ -6,6 +6,56 @@ use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitK
 /// half-applied variable. Mirrors the guard in `typed_shape_descriptors.rs`.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Acquires [`ENV_LOCK`] tolerating a poisoned mutex (#7490).
+///
+/// A test that panics while holding the lock poisons it during unwind; every
+/// later `lock().unwrap()` in the binary then dies with `PoisonError` even
+/// though its own subject is healthy. That is exactly what #7490 observed:
+/// one genuine assertion failure cascaded into three PoisonError failures
+/// under `--test-threads=1`, and under default parallelism the *victim set
+/// wobbled* with scheduling — which read as order-dependent codegen state
+/// when it was only lock poisoning.
+///
+/// Recovering the guard is sound here because the protected state is already
+/// consistent at poison time: each test declares its `EnvVarGuard` *after*
+/// the lock guard, so during unwind the env var is restored (guard `Drop`)
+/// before the mutex is released. One test's failure must fail that test
+/// alone.
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Sabotage test for [`env_lock`] (#7490): a test that panics while holding
+/// the lock must fail *itself* and nothing else.
+///
+/// A gate has to assert its subject was live, not merely that nothing threw —
+/// so this plants the exact failure shape #7490 cascaded from (an unwind out
+/// of a lock-holding test), proves it really did poison the mutex, and then
+/// demands the accessor still hands out a usable guard. It fails against the
+/// pre-fix `ENV_LOCK.lock().unwrap()`, which is what makes a green run here
+/// evidence rather than decoration.
+///
+/// Running first (`e` sorts ahead of `f`/`t`) also means every other test in
+/// this binary executes under a genuinely poisoned lock, so the tolerance is
+/// exercised for the whole suite rather than in one isolated case.
+#[test]
+fn env_lock_is_poison_tolerant_so_one_failure_cannot_cascade() {
+    let sabotage = std::panic::catch_unwind(|| {
+        let _guard = env_lock();
+        panic!("#7490 sabotage: unwinding while holding ENV_LOCK");
+    });
+    assert!(sabotage.is_err(), "the sabotage panic should have unwound");
+    assert!(
+        ENV_LOCK.is_poisoned(),
+        "unwinding out of a lock-holding test should poison ENV_LOCK — if it \
+         no longer does, this test is no longer exercising its subject"
+    );
+    // The invariant under test: a later test still gets the lock.
+    let _lock = env_lock();
+}
+
 /// Sets an env var for the duration of a test and restores the previous value
 /// (or unsets it) on drop, so the mutation never leaks to other tests.
 struct EnvVarGuard {
@@ -51,6 +101,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -135,6 +186,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         aliases: Vec::new(),
         is_nested: false,
         alloc_width_hint: 0,
+        specialized_from: None,
     }
 }
 
@@ -245,13 +297,29 @@ fn typed_feedback_trace_dump_runs_before_entry_return() {
 }
 
 /// Body of the entry `main` function, without its `define`/`}` lines.
+///
+/// The define line may carry function attributes after the parens — since
+/// native roots became the default lowering (#7370) every generated function
+/// is tagged `"frame-pointer"="non-leaf"`, and a stack-map-requesting `main`
+/// would add `gc "statepoint-example"`. Match the exact signature, then cut
+/// the body at that line's opening brace instead of demanding an
+/// attribute-free header (which failed the whole test on unrelated attribute
+/// changes, #7490).
 fn entry_fn_body(ir: &str) -> &str {
-    let header = "define i32 @main() {\n";
-    let start = ir
-        .find(header)
-        .expect("entry module should define `i32 @main()`")
-        + header.len();
-    let rest = &ir[start..];
+    let sig = "define i32 @main()";
+    let sig_start = ir
+        .find(sig)
+        .expect("entry module should define `i32 @main()`");
+    let line_end = sig_start
+        + ir[sig_start..]
+            .find('\n')
+            .expect("`main`'s define line should be newline-terminated");
+    let header = &ir[sig_start..line_end];
+    assert!(
+        header.ends_with('{'),
+        "`main`'s define line should end with its opening brace, got `{header}`"
+    );
+    let rest = &ir[line_end + 1..];
     let end = rest
         .find("\n}\n")
         .expect("`main` should be terminated by a closing brace");
@@ -264,7 +332,7 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
     // PERRY_TYPED_FEEDBACK / _TRACE is set); this test exercises the enabled
     // path. Serialize on ENV_LOCK and restore the var on drop so concurrent or
     // later tests in this binary never observe the changed environment.
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let _env = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", Some("1"));
     let ir = ir_for(module(
         "typed_feedback_property.ts",
@@ -306,6 +374,88 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
     assert!(ir.contains("call void @js_typed_feedback_record_guard_pass"));
     assert!(ir.contains("call void @js_typed_feedback_record_guard_fail"));
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    assert!(ir.contains("call void @js_typed_feedback_observe_property_get"));
+}
+
+/// The negative twin of the test above, and the whole of #7480 step 4's second
+/// half: a DEFAULT build emits none of the pure-recording helpers.
+///
+/// Every one of them early-returns unless the runtime env is set, so in a
+/// default build each was a cross-crate call that answered "no" — 22.3% of
+/// `churn_read_big.ts` between `observe_property` and `record_guard_pass`. The
+/// registration call has been compile-gated on the same env since #5093's
+/// follow-up; this extends that gate to the recording it registers for.
+///
+/// Asserted as a census over the whole emitted module rather than one site,
+/// because the point is that NO path emits them — the generic-get diamond, the
+/// array-push fallback, the index realloc arm, the method-override fallback and
+/// the closure-call fallback all route through the same helper.
+#[test]
+fn a_default_build_emits_no_typed_feedback_recording_calls() {
+    let _lock = env_lock();
+    let _trace = EnvVarGuard::set("PERRY_TYPED_FEEDBACK_TRACE", None);
+    let _env = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", None);
+    let ir = ir_for(module(
+        "typed_feedback_default_build.ts",
+        vec![param(1, "obj", Type::Any)],
+        Type::Any,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+                value: Box::new(Expr::Number(1.0)),
+            }),
+            Stmt::Expr(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "run".to_string(),
+                }),
+                args: vec![Expr::Number(2.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+            })),
+        ],
+    ));
+
+    // The `declare` lines stay (they are emitted for the whole runtime surface
+    // and LLVM drops the unused ones); what must be gone is every CALL.
+    for helper in [
+        "js_typed_feedback_observe_property_get",
+        "js_typed_feedback_observe_property_set",
+        "js_typed_feedback_record_guard_pass",
+        "js_typed_feedback_record_guard_fail",
+        "js_typed_feedback_record_fallback_call",
+        "js_typed_feedback_register_site",
+    ] {
+        let call = format!("call void @{helper}");
+        assert!(
+            !ir.contains(&call),
+            "a default build must not call `{helper}`; it early-returns at \
+             runtime, so the call is pure overhead"
+        );
+    }
+
+    // ANTI-VACUITY. Every assertion above is a negative, so they all pass on an
+    // empty string. The property boundaries themselves must still be here —
+    // this test proves the RECORDING is gone, not the program.
+    assert!(
+        ir.contains("js_object_get_field_by_name_f64")
+            || ir.contains("js_object_get_field_ic_miss"),
+        "the property reads themselves must still be lowered; emitted:\n{ir}"
+    );
+    // And the helpers that DECIDE something, rather than merely counting, are
+    // not gated: this is the line between the two, asserted rather than
+    // described.
+    assert!(
+        ir.contains("js_typed_feedback_object_set_field_by_name_fast"),
+        "dispatching feedback wrappers must still be emitted in a default build"
+    );
 }
 
 #[test]
@@ -313,7 +463,7 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     // Serialize against the lever-B test (#5334), which sets the process-global
     // PERRY_FULL_OUTLINE_IC in this same test binary; pin it off so this test
     // always observes the inline diamond.
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let point = class(101, "Point", vec![field("x", Type::Number)]);
     let ir = ir_for(module_with_classes(
@@ -354,26 +504,96 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     // by-name SET it replaced is no longer emitted at the set site.
     assert!(ir.contains("call void @js_class_field_set_fallback"));
     assert!(!ir.contains("call void @js_object_set_field_by_name"));
-    // `record_fallback_call` is still present — but from the class-field-GET
-    // fallback block below, not the SET site (the SET copy is now folded into
-    // js_class_field_set_fallback).
-    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    // #7480 step 4: `record_fallback_call` used to be asserted present here
+    // (from the class-field-GET fallback block, not the SET site — the SET copy
+    // was folded into js_class_field_set_fallback by #5334). It is now emitted
+    // only in a typed-feedback build, like the registration call beside it.
+    // The fallback ARM itself is unchanged and is asserted above/below.
+    assert!(!ir.contains("call void @js_typed_feedback_record_fallback_call"));
     assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
-    let fallback_pos = ir
-        .find("class_field_get_number.fallback")
-        .expect("raw numeric class-field consumer should keep fallback block");
-    let merge_pos = ir[fallback_pos..]
-        .find("class_field_get_number.merge")
-        .map(|pos| fallback_pos + pos)
-        .expect("raw numeric class-field consumer should keep merge block");
+    // #7430 split the GET fallback arm: `class_field_get_number.fallback` now
+    // holds only the nullish-receiver check and branches to `.throw_nullish` /
+    // `.fallback_lookup`, and the by-name load + numeric coercion moved into
+    // `.fallback_lookup` — a block rendered AFTER `.merge`, so the previous
+    // "coerce appears textually between the fallback and merge labels" window
+    // could never match again (#7490). Assert the data flow that window stood
+    // in for, end to end: the lookup arm coerces the by-name fallback value,
+    // branches to the numeric merge, and the merge phi's fallback incoming IS
+    // the coerced register.
+    let lookup = block_body(&ir, "class_field_get_number.fallback_lookup")
+        .expect("raw numeric class-field consumer should keep the fallback lookup block");
+    // (#7480 step 4 removed the `record_fallback_call` that used to anchor this
+    // block; the by-name load below identifies it just as well, and is what the
+    // data-flow assertion actually needs.)
+    assert!(lookup.contains("call double @js_object_get_field_by_name_f64"));
+    let coerce_line = lookup
+        .lines()
+        .find(|line| line.contains("call double @js_number_coerce"))
+        .unwrap_or_else(|| {
+            panic!("class-field raw fallback must be coerced before the numeric merge:\n{ir}")
+        });
+    let coerced_reg = coerce_line
+        .trim()
+        .split(" = ")
+        .next()
+        .expect("the fallback coercion should assign a register");
+    let lookup_terminator = lookup
+        .lines()
+        .last()
+        .expect("the fallback lookup block should have a terminator")
+        .trim();
     assert!(
-        ir[fallback_pos..merge_pos].contains("call double @js_number_coerce"),
-        "class-field raw fallback must be coerced before the numeric merge:\n{ir}"
+        lookup_terminator.starts_with("br label %class_field_get_number.merge"),
+        "the fallback lookup must branch to the numeric merge, got `{lookup_terminator}`"
+    );
+    let merge = block_body(&ir, "class_field_get_number.merge")
+        .expect("raw numeric class-field consumer should keep merge block");
+    let phi_line = merge
+        .lines()
+        .find(|line| line.contains(" = phi double "))
+        .expect("the numeric merge should phi the fast/fallback values");
+    assert!(
+        phi_line.contains(&format!(
+            "[ {coerced_reg}, %class_field_get_number.fallback_lookup"
+        )),
+        "the numeric merge phi's fallback incoming must be the coerced value \
+         `{coerced_reg}`, got `{phi_line}`"
     );
     assert!(
         ir.contains("call double @js_number_coerce"),
         "class-field raw fallback must be coerced at numeric consumers:\n{ir}"
     );
+}
+
+/// Body of the first rendered block whose label starts with `label_prefix`,
+/// or `None` if no such block exists.
+///
+/// Block labels carry per-function numeric suffixes (`.fast.6`, `.merge.8`),
+/// so callers pass the stable prefix. A block header is a line-initial
+/// `label:`; instruction lines that merely mention the label (branches, phis)
+/// are indented, and are skipped. The body runs from the end of the label
+/// line to the blank line separating it from the next block (or to the
+/// function's closing brace).
+fn block_body<'a>(ir: &'a str, label_prefix: &str) -> Option<&'a str> {
+    let needle = format!("\n{label_prefix}");
+    let mut from = 0;
+    while let Some(rel) = ir[from..].find(&needle) {
+        let label_start = from + rel + 1;
+        let line_end = label_start + ir[label_start..].find('\n')?;
+        if ir[label_start..line_end].ends_with(':') {
+            let rest = &ir[line_end + 1..];
+            // A function-final block is terminated by the closing brace, an
+            // interior one by the blank separator line — whichever comes
+            // first bounds this block.
+            let end = match (rest.find("\n\n"), rest.find("\n}")) {
+                (Some(a), Some(b)) => a.min(b),
+                (a, b) => a.or(b).unwrap_or(rest.len()),
+            };
+            return Some(&rest[..end]);
+        }
+        from = line_end;
+    }
+    None
 }
 
 #[test]
@@ -399,7 +619,7 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
         )
     };
 
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
 
     // Forced ON: one outlined call, no inline diamond.
     {
@@ -441,7 +661,7 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
         )
     };
 
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
 
     // Forced ON: one outlined call, no inline get diamond.
     {
@@ -483,7 +703,7 @@ fn full_outline_array_literal_uses_builder_call() {
         )
     };
 
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
 
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
@@ -542,7 +762,7 @@ fn full_outline_ic_auto_gate_counts_class_methods() {
         ],
     );
 
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     // Auto path (override unset): callable count = 1 probe fn + 6 methods = 7,
     // which clears MIN_FUNCS=5 even though `hir.functions.len()` is just 1. The
     // pre-fix function-only count (1) would have stayed under the threshold.
@@ -564,7 +784,7 @@ fn class_field_set_elides_write_barrier_for_nonpointer_value() {
     // Serialize against the lever-B full-outline test (#5334) and pin
     // PERRY_FULL_OUTLINE_IC off, so this test always observes the inline diamond
     // (`class_field_set.fast`) rather than the outlined call.
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let build = |val: Expr| {
         let c = class(140, "Bx", vec![field("s", Type::String)]);
@@ -602,7 +822,7 @@ fn class_field_set_elides_write_barrier_for_nonpointer_value() {
 fn typed_feedback_guards_direct_class_method_specialization() {
     // Serialize against the lever-B test (#5334) and pin full-outline off so the
     // class's synthesized field-set keeps its inline fallback (asserted below).
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let mut point = class(103, "Point", vec![field("x", Type::Number)]);
     point.methods.push(Function {
@@ -700,7 +920,10 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
     assert!(ir.contains("closure_direct.fallback"));
     assert!(ir.contains("call double @perry_closure_"));
     assert!(ir.contains("call double @js_closure_call1"));
-    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    // #7480 step 4: pure-recording feedback helpers are emitted only in a
+    // typed-feedback build. The fallback arm is asserted by the two lines
+    // above; this asserts the counter that rode along with it is gone.
+    assert!(!ir.contains("call void @js_typed_feedback_record_fallback_call"));
 }
 
 #[test]
@@ -770,7 +993,7 @@ fn typed_feedback_marks_numeric_array_literals() {
     // Serialize against the array-literal full-outline test and pin it off, so
     // this test always observes the inline numeric-array construction
     // (js_array_mark_numeric_f64_layout) rather than the outlined builder.
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let numeric_ir = ir_for(module(
         "typed_feedback_numeric_array_literal.ts",

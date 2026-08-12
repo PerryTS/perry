@@ -58,9 +58,11 @@ fn start_minor_fallback_state(trigger: GcTriggerSnapshot) -> GcCycleState {
     clear_mark_seeds();
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
-    let evacuation_policy_allowed = gen_gc_evacuate_enabled();
+    // Mirrors `gc_collect_minor_with_trigger`: this is the non-budgeted path,
+    // so the policy is allowed (#7611 deleted the env veto).
+    let evacuation_policy_allowed = true;
     let force_evacuation = gc_force_evacuate_enabled();
-    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
+    let old_page_selection = if old_to_young_tracking_complete() {
         select_old_page_defrag_pages(force_evacuation)
     } else {
         OldPageDefragSelection::default()
@@ -270,6 +272,78 @@ fn build_valid_pointer_set_sliced_build_preserves_contains_and_enclosing_object(
     for &ptr in &malloc_objects {
         assert!(valid_ptrs.contains(&ptr));
     }
+}
+
+/// #7646: arena membership now answers from the address-ordered census runs
+/// rather than a shadow `BTreeSet`, which makes RUN BOUNDARIES load-bearing.
+/// Runs seal every `VALID_POINTER_ARENA_RUN_CAPACITY` (1024) starts, so the
+/// final run is partial and is only sealed by `finalize()`. The sliced-build
+/// test above allocates 1100 strings — enough to cross the boundary — but
+/// checks only the first 16, which all live in the FIRST run: it passes
+/// unchanged if every later run is lost.
+///
+/// This checks every start, both directions.
+#[test]
+fn valid_pointer_membership_spans_every_census_run_including_the_partial_one_7646() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    // > 2 full runs, so the last one is partial and cannot be sealed by the
+    // capacity check alone.
+    let arena_strings = (0..2600).map(|_| young_leaf()).collect::<Vec<_>>();
+    let (arena_object, fields) = unsafe { alloc_nursery_test_object(4) };
+    let arena_object = arena_object as usize;
+    let interior = fields as usize;
+
+    let valid_ptrs = ValidPointerSetBuilder::new().finish();
+
+    assert!(
+        valid_ptrs.arena_runs.len() >= 3,
+        "premise: the census must span several runs, got {}",
+        valid_ptrs.arena_runs.len()
+    );
+    assert!(
+        valid_ptrs.current_arena_run.is_empty(),
+        "finalize() must seal the open run before the set escapes the builder; \
+         {} starts would otherwise be invisible to membership",
+        valid_ptrs.current_arena_run.len()
+    );
+    assert_eq!(
+        valid_ptrs.arena_run_firsts.len(),
+        valid_ptrs.arena_runs.len(),
+        "the fence mirror must stay index-aligned with the runs"
+    );
+    for (index, run) in valid_ptrs.arena_runs.iter().enumerate() {
+        assert_eq!(
+            valid_ptrs.arena_run_firsts[index], run[0],
+            "fence {index} must equal its run's first key"
+        );
+    }
+
+    // Positive: EVERY censused start, not a prefix — a start in the last,
+    // partial run is the one a lost `finalize()` drops.
+    for (index, &ptr) in arena_strings.iter().enumerate() {
+        assert!(
+            valid_ptrs.contains(&ptr),
+            "arena start {index} of {} is censused but not reported as a member",
+            arena_strings.len()
+        );
+    }
+    assert!(valid_ptrs.contains(&arena_object));
+
+    // Negative: membership must not become a SUPERSET. A floor lookup returns
+    // the greatest censused start <= ptr, so an interior pointer floors to its
+    // object and must still be rejected as a START — otherwise the conservative
+    // scan would begin tracing from the middle of an object.
+    assert!(
+        !valid_ptrs.contains(&interior),
+        "an interior pointer must not report as an object start"
+    );
+    assert_eq!(valid_ptrs.enclosing_object(interior), Some(arena_object));
+    assert!(
+        !valid_ptrs.contains(&(arena_object + 1)),
+        "an unaligned address inside an object must not report as a start"
+    );
 }
 
 #[test]
@@ -1007,6 +1081,71 @@ fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
         unsafe {
             assert_eq!(*fields.add(slot), string_bits(child));
         }
+    }
+}
+
+#[test]
+fn full_atomic_finalize_slices_weak_holders_with_tiny_budget() {
+    const HOLDERS: u32 = 8;
+    let _guard = CopyingNurseryTestGuard::new(HOLDERS);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::weakref::test_support::clear_weak_holders();
+
+    for slot in 0..HOLDERS {
+        let target = crate::object::js_object_alloc(0, 0);
+        let weak_ref = crate::weakref::js_weakref_new(f64::from_bits(ptr_bits(target as usize)));
+        js_shadow_slot_set(slot, ptr_bits(weak_ref as usize));
+    }
+
+    // Recent blocks are conservatively persisted for register-held values.
+    // Move the holders/targets outside that window so weak-only targets are
+    // genuinely white at finalization.
+    let aged_from = crate::arena::general_block_count();
+    while crate::arena::general_block_count().saturating_sub(aged_from) < 7 {
+        for _ in 0..64 {
+            let _ = crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING);
+        }
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Direct));
+    run_cycle_until_phase(&mut state, GcCyclePhase::AtomicFinalize);
+    let mut setup_steps = 0usize;
+    while state.atomic_finalize_subphase_for_tests() != Some("weak_processing") {
+        state.step(GcWorkBudget::bounded(1));
+        setup_steps += 1;
+        assert!(setup_steps < 100_000, "weak processing was never reached");
+    }
+
+    let after_first_slice = crate::weakref::test_support::full_weak_processing_work_units();
+    assert_eq!(
+        after_first_slice, 1,
+        "the step that enters weak processing must consume one holder"
+    );
+    state.step(GcWorkBudget::bounded(1));
+    assert_eq!(
+        crate::weakref::test_support::full_weak_processing_work_units(),
+        2,
+        "a one-unit step must consume exactly one additional holder"
+    );
+    assert_eq!(
+        state.atomic_finalize_subphase_for_tests(),
+        Some("weak_processing"),
+        "multiple holders must keep weak processing parked across steps"
+    );
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+    assert_eq!(
+        crate::weakref::test_support::full_weak_processing_work_units(),
+        HOLDERS as usize
+    );
+    for slot in 0..HOLDERS {
+        let weak_ref = f64::from_bits(js_shadow_slot_get(slot));
+        assert_eq!(
+            crate::weakref::js_weakref_deref(weak_ref).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "weak-only target must be tombstoned"
+        );
     }
 }
 

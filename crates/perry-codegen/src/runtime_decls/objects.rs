@@ -29,10 +29,17 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // when it is non-zero (descriptors / typed-feedback in use). Defined in
     // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
     module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
+    // #7834/#7873: process-global count of threads with per-object records.
+    // `0` proves both per-object side tables are empty everywhere, so a
+    // construction site can skip `js_gc_forget_object_layout` outright.
+    // perry-runtime: `gc::layout_tables::PERRY_PER_OBJECT_LAYOUTS_ANY`.
+    module.add_external_global("PERRY_PER_OBJECT_LAYOUTS_ANY", I32);
     // Sticky summary of indexed Array/Object prototype pollution and custom
     // Array [[Prototype]] installation. Normal compiled programs read this
     // byte directly in the inline plain-array index guard.
     module.add_external_global("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED", I8);
+    // #7760: set when `Array.prototype[Symbol.iterator]` is replaced.
+    module.add_external_global("PERRY_ARRAY_PROTO_ITERATOR_PATCHED", I8);
     // Process-wide count of threads with an active incremental marking
     // barrier. Persistent shadow-slot updates use zero as an authoritative
     // fast skip before calling the TLS-backed root barrier.
@@ -47,6 +54,17 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // inline `header + 16 + idx*elem_size` load matches the runtime `data_ptr`).
     module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
     module.add_external_global("PERRY_TA_VIEW_GUARD", I64);
+    // #6080a: process-global read-PIC epoch (perry-runtime
+    // `object::field_get_set::ic_miss::PERRY_IC_EPOCH`, starts at 1, bumped on
+    // every completed GC collection and at budgeted-sweep entry). The inline
+    // monomorphic property-get hit path compares its per-site `cache[2]`
+    // snapshot against this before trusting a raw keys-array POINTER token —
+    // the `@perry_ic_N` globals are invisible to every GC scanner, so a
+    // primed address that GC has since freed/moved would otherwise
+    // pointer-match a recycled keys array of a different shape and load the
+    // wrong slot. Shape-ID tokens (#6804, bit 62) skip the check: ids are
+    // never reused.
+    module.add_external_global("PERRY_IC_EPOCH", I64);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed
     // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.
@@ -76,8 +94,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // loop hung forever. Declaring the slot as I64 routes through the
     // same register class the runtime actually reads.
     module.declare_function("js_object_set_field", VOID, &[I64, I32, I64]);
-    module.declare_function("js_object_set_unboxed_f64_field", VOID, &[I64, I32, DOUBLE]);
-    module.declare_function("js_object_get_unboxed_f64_field", DOUBLE, &[I64, I32]);
     module.declare_function("js_object_set_field_by_name", VOID, &[I64, I64, DOUBLE]);
     module.declare_function(
         "js_object_set_field_by_property_id",
@@ -206,6 +222,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, DOUBLE, I32, I64, PTR, I64, PTR],
     );
     module.declare_function("js_method_direct_shape_guard", I32, &[DOUBLE, I32, I64]);
+    module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR]);
     module.declare_function(
         "js_typed_feedback_closure_direct_call_guard",
         I32,

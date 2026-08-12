@@ -45,6 +45,15 @@ pub use parse_api::{
 pub use raw_json::{js_json_is_raw_json, js_json_raw_json};
 pub use replacer::{js_json_stringify_full, js_json_stringify_with_replacer};
 pub use reviver::js_json_parse_with_reviver;
+/// #7448: exported so the cross-host UI crates can ASK the runtime whether an
+/// address is GC-tracked instead of each carrying its own bit-pattern guess.
+/// `perry-ui-android`'s copy tested for a positive IEEE-754 subnormal, which
+/// classifies every denormal `Number` as an untagged heap pointer — the exact
+/// predicate #7447 removed here after it SIGSEGV'd on `JSON.stringify(1e-317)`.
+/// No bit test can decide this: a raw pointer and a positive subnormal occupy
+/// the same bit patterns by construction, so the answer has to come from
+/// allocation membership, which only the runtime can answer.
+pub use stringify::ptr_is_tracked_heap_object;
 pub use stringify_api::{
     js_json_get_bool, js_json_get_number, js_json_get_string, js_json_is_valid, js_json_stringify,
     js_json_stringify_bool, js_json_stringify_null, js_json_stringify_number,
@@ -63,8 +72,9 @@ pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
 pub(crate) use reviver::test_apply_reviver_for_value;
 pub(crate) use simd::find_string_terminator;
 pub(crate) use stringify::{
-    arm_to_json_result_guard, estimate_json_size, is_closure_value, is_object_pointer,
-    is_symbol_value, object_get_to_json, stringify_value, write_escaped_string, write_number,
+    arm_to_json_result_guard, check_stringify_nesting_depth, estimate_json_size, is_closure_value,
+    is_object_pointer, is_symbol_value, object_get_to_json, stringify_value, write_escaped_string,
+    write_number,
 };
 pub(crate) use stringify_api::{redirect_lazy_to_materialized, try_stringify_lazy_array};
 pub(crate) use stringify_buffer::{
@@ -89,19 +99,43 @@ thread_local! {
     pub(crate) static STRINGIFY_BUF: std::cell::Cell<Option<String>> =
         std::cell::Cell::new(Some(String::with_capacity(4096)));
 
-    /// Per-call shape-template cache (#64 follow-up). Keys on `keys_array`
-    /// raw pointer — within one top-level stringify call no GC runs over
-    /// the user object graph (the buffer/result allocations don't move
-    /// keys arrays), so pointer identity is a stable shape ID. Cleared
-    /// (saved+restored) at the entry of each `js_json_stringify` /
-    /// `js_json_stringify_full` / `..with_replacer` call so reentrant
-    /// `toJSON` callbacks don't return stale templates.
+    /// Per-call shape-template cache (#64 follow-up), as a STACK of frames.
+    /// Each template is keyed on its `keys_array` raw pointer, which is a
+    /// **GC-managed `ArrayHeader*`** — so `scan_parse_roots_mut` visits every
+    /// frame's every key as a real (marking AND rewriting) root.
+    ///
+    /// ★ #7268: this comment used to assert the invariant that made the raw
+    /// key safe —
+    ///
+    /// > within one top-level stringify call no GC runs over the user object
+    /// > graph (the buffer/result allocations don't move keys arrays), so
+    /// > pointer identity is a stable shape ID
+    ///
+    /// — and `toJSON` falsifies it. A `toJSON` is user JS: it allocates, it
+    /// can reach a safepoint, and the minor there is evacuating. A stale key
+    /// then either misses (merely slow) or, worse, **collides with a
+    /// newly-allocated array at the recycled address and matches the wrong
+    /// shape**; and `set_to_json_key_for_template_field` reads the property
+    /// NAME strings out of `keys_arr`, i.e. dereferences retired from-space.
+    ///
+    /// ★ Why a stack rather than a moved-out `Vec`. Reentrancy used to be
+    /// handled by `take_shape_cache()` moving the whole cache into a Rust
+    /// local for the duration of the inner call. While it sat there the root
+    /// scanner could not see it, so the inner call — the `toJSON`, i.e.
+    /// precisely the code that moves things — left every saved key stale, and
+    /// the outer call resumed using them. Keeping the frames in the TLS is
+    /// what makes the scanner's coverage complete; `take`/`restore` now push
+    /// and pop a frame instead of moving the storage out of the collector's
+    /// reach.
+    ///
+    /// Frame 0 always exists (the top-level call's), so the emit path never
+    /// has to check for an empty stack.
     ///
     /// `Box<ShapeTemplate>` lives on the heap so its address is stable
-    /// even when the cache `Vec` reallocates — we hand out raw pointers
+    /// even when a frame `Vec` reallocates — we hand out raw pointers
     /// to the templates and they must outlive the borrow.
-    pub(crate) static SHAPE_CACHE: RefCell<Vec<(*mut crate::ArrayHeader, Box<ShapeTemplate>)>> =
-        const { RefCell::new(Vec::new()) };
+    pub(crate) static SHAPE_CACHE: RefCell<Vec<Vec<Box<ShapeTemplate>>>> =
+        RefCell::new(vec![Vec::new()]);
 
     /// Key string intern cache for JSON.parse (issue #51 follow-up).
     /// Maps key bytes → already-allocated StringHeader pointer.
@@ -421,26 +455,80 @@ pub(crate) fn json_string_from_output_bytes(bytes: &[u8]) -> *mut StringHeader {
     }
 }
 
-/// Save & clear the shape cache for the duration of a top-level stringify
-/// call. Reentrant `toJSON` callbacks would otherwise inherit the outer
-/// call's templates and (worse) clear them on exit, dangling pointers we
-/// already handed out. Mirrors `take_stringify_buf` in spirit.
+/// Receipt for a pushed shape-cache frame. Consumed by `restore_shape_cache`.
+///
+/// It is not `Copy` and carries a `Drop` that pops the frame, so a JS exception
+/// unwinding past the matching `restore_shape_cache` cannot leave the stack one
+/// frame deep forever. (`clear_shape_cache` truncates to frame 0 as a second
+/// line of defence, for the `longjmp`-style exits that skip `Drop` entirely.)
+pub(crate) struct SavedShapeCache {
+    restored: bool,
+}
+
+impl Drop for SavedShapeCache {
+    fn drop(&mut self) {
+        if !self.restored {
+            SHAPE_CACHE.with(|c| {
+                let mut stack = c.borrow_mut();
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+            });
+        }
+    }
+}
+
+/// Push a fresh shape-cache frame for the duration of a nested stringify call.
+/// A reentrant `toJSON` callback would otherwise inherit the outer call's
+/// templates and (worse) clear them on exit, dangling pointers we already
+/// handed out. Mirrors `take_stringify_buf` in spirit.
+///
+/// #7268: this used to `mem::take` the cache into a Rust local. The storage
+/// then sat outside the TLS — and therefore outside `scan_parse_roots_mut`'s
+/// reach — for the whole of the inner call, which is the call that runs user
+/// `toJSON` code and moves things. Pushing a frame keeps every saved key
+/// visible to the collector.
 #[inline]
-pub(crate) fn take_shape_cache() -> Vec<(*mut crate::ArrayHeader, Box<ShapeTemplate>)> {
-    SHAPE_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()))
+pub(crate) fn take_shape_cache() -> SavedShapeCache {
+    SHAPE_CACHE.with(|c| c.borrow_mut().push(Vec::new()));
+    SavedShapeCache { restored: false }
 }
 
 #[inline]
-pub(crate) fn restore_shape_cache(saved: Vec<(*mut crate::ArrayHeader, Box<ShapeTemplate>)>) {
-    SHAPE_CACHE.with(|c| *c.borrow_mut() = saved);
+pub(crate) fn restore_shape_cache(mut saved: SavedShapeCache) {
+    saved.restored = true;
+    SHAPE_CACHE.with(|c| {
+        let mut stack = c.borrow_mut();
+        if stack.len() > 1 {
+            stack.pop();
+        }
+    });
 }
 
-/// Clear cache without allocating a fresh Vec (keeps capacity, drops entries).
-/// Used in place of restore when we know the cache was empty at call entry —
-/// the outermost stringify call in a tight loop skips the save entirely.
+/// Clear the cache without allocating a fresh Vec (keeps capacity, drops
+/// entries). Used in place of restore when we know the cache was empty at call
+/// entry — the outermost stringify call in a tight loop skips the save
+/// entirely.
+///
+/// It also truncates the frame stack back to one, which is what re-establishes
+/// the invariant after a JS exception unwound past a `restore_shape_cache`.
 #[inline]
 pub(crate) fn clear_shape_cache() {
-    SHAPE_CACHE.with(|c| c.borrow_mut().clear());
+    SHAPE_CACHE.with(|c| {
+        let mut stack = c.borrow_mut();
+        stack.truncate(1);
+        stack[0].clear();
+    });
+}
+
+/// The live shape-cache frame — the innermost stringify call's.
+#[inline]
+pub(crate) fn with_shape_cache_frame<R>(f: impl FnOnce(&mut Vec<Box<ShapeTemplate>>) -> R) -> R {
+    SHAPE_CACHE.with(|c| {
+        let mut stack = c.borrow_mut();
+        let frame = stack.last_mut().expect("shape cache always has frame 0");
+        f(frame)
+    })
 }
 
 #[inline]
@@ -468,11 +556,41 @@ pub fn scan_parse_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             visitor.visit_tagged_raw_const_ptr_slot(ptr, crate::value::STRING_TAG);
         }
     });
+    // PARSE_KEY_RING mirrors the cache's hottest values. It does not own
+    // their liveness, but its duplicate addresses must follow an old-page
+    // move after PARSE_KEY_CACHE has kept the strings alive.
+    PARSE_KEY_RING.with(|ring| {
+        for ptr in ring.borrow_mut().iter_mut() {
+            let mut addr = *ptr as usize;
+            if visitor.visit_metadata_usize_slot(&mut addr) {
+                *ptr = addr as *const StringHeader;
+            }
+        }
+    });
     PARSE_SHAPE_CACHE.with(|c| {
         for entry in c.borrow_mut().iter_mut() {
             visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
             for key in entry.keys.iter_mut() {
                 visitor.visit_tagged_raw_const_ptr_slot(key, crate::value::STRING_TAG);
+            }
+        }
+    });
+    // #7268: the STRINGIFY-side shape cache keys every template on a raw
+    // `ArrayHeader*` and reads the property-name strings back out of it. Its
+    // doc comment used to claim no GC could run over the user object graph
+    // during one stringify call; `toJSON` is user JS and falsifies that. Marked
+    // AND rewritten, on EVERY frame — the reentrancy save is a pushed frame
+    // rather than a moved-out `Vec` precisely so that "every frame" is
+    // reachable from here (see `SHAPE_CACHE`).
+    SHAPE_CACHE.with(|c| {
+        for frame in c.borrow_mut().iter_mut() {
+            for template in frame.iter_mut() {
+                let mut keys_arr = template.keys_arr.get();
+                if keys_arr.is_null() {
+                    continue;
+                }
+                visitor.visit_raw_mut_ptr_slot(&mut keys_arr);
+                template.keys_arr.set(keys_arr);
             }
         }
     });
@@ -515,11 +633,57 @@ pub(crate) fn test_seed_parse_roots(value: f64, key_ptr: *const StringHeader) {
 }
 
 #[cfg(test)]
+pub(crate) fn test_seed_parse_key_ring(key_ptr: *const StringHeader) {
+    PARSE_KEY_RING.with(|ring| {
+        let mut ring = ring.borrow_mut();
+        ring.clear();
+        ring.push(key_ptr);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_parse_key_ring_snapshot() -> Vec<usize> {
+    PARSE_KEY_RING.with(|ring| ring.borrow().iter().map(|&ptr| ptr as usize).collect())
+}
+
+/// Seed the stringify-side shape cache with a template keyed on `keys_arr`,
+/// so #7268's scanner tests can exercise the mark/rewrite halves without
+/// having to drive a whole `JSON.stringify` to populate it.
+#[cfg(test)]
+pub(crate) fn test_seed_stringify_shape_cache(keys_arr: *mut crate::ArrayHeader) {
+    clear_shape_cache();
+    with_shape_cache_frame(|frame| {
+        frame.push(Box::new(ShapeTemplate {
+            keys_arr: std::cell::Cell::new(keys_arr),
+            prefixes: vec![String::from("{\"id\":")],
+            shape_fields: 1,
+            primitive_only: true,
+        }));
+    });
+}
+
+/// Every frame's every `keys_arr`, in order — what the scanner is expected to
+/// have rewritten.
+#[cfg(test)]
+pub(crate) fn test_stringify_shape_cache_keys() -> Vec<usize> {
+    SHAPE_CACHE.with(|c| {
+        c.borrow()
+            .iter()
+            .flat_map(|frame| frame.iter().map(|t| t.keys_arr.get() as usize))
+            .collect()
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn test_clear_parse_roots() {
     PARSE_ROOTS.with(|r| r.borrow_mut().clear());
     PARSE_KEY_CACHE.with(|c| c.borrow_mut().clear());
     PARSE_KEY_RING.with(|ring| ring.borrow_mut().clear());
     PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+    // #7268: the stringify-side cache is a GC root now, so a template left
+    // behind by an earlier test on this thread would hand the next test's
+    // collector a pointer into an arena that no longer exists.
+    clear_shape_cache();
 }
 
 #[cfg(test)]
@@ -549,12 +713,62 @@ pub(crate) unsafe fn str_from_header<'a>(ptr: *const StringHeader) -> Option<&'a
     Some(std::str::from_utf8_unchecked(bytes))
 }
 
+/// Minimum alignment of a GC allocation's *user* address. Every arena object
+/// is `header + GC_HEADER_SIZE` with an 8-aligned header (`arena_alloc_gc`
+/// pads `total` to `max(align, 8)`), and `gc_malloc` inherits the system
+/// allocator's ≥16-byte alignment, so a misaligned word is never one.
+const RAW_POINTER_ALIGN: u64 = 8;
+
+/// True when `bits` carry no NaN-box tag and *could* address a heap object:
+/// no tag bits set, non-zero, and [`RAW_POINTER_ALIGN`]-aligned.
+///
+/// NECESSARY, NEVER SUFFICIENT — this is a cheap pre-filter, not a decision.
+/// Call sites must use [`is_raw_pointer`]; see its doc for why.
 #[inline]
-pub(crate) fn is_raw_pointer(bits: u64) -> bool {
-    let exponent = (bits >> 52) & 0x7FF;
-    let mantissa = bits & 0x000F_FFFF_FFFF_FFFF;
-    let sign = bits >> 63;
-    exponent == 0 && mantissa != 0 && sign == 0
+pub(crate) fn untagged_pointer_bits(bits: u64) -> bool {
+    // Every NaN-box tag lives in the top 12 bits (`0x7FF9`..=`0x7FFF`, plus the
+    // sign bit for negative NaNs), so an untagged pointer has `bits >> 52 == 0`.
+    // `0` is `+0.0`, never a pointer.
+    bits >> 52 == 0 && bits != 0 && bits % RAW_POINTER_ALIGN == 0
+}
+
+/// True when `bits` — which carry no NaN-box tag — name a heap object that the
+/// JSON walk may dereference.
+///
+/// ## Why the bit pattern alone is not an answer (remote-triggerable SIGSEGV)
+///
+/// The historical test was `exponent == 0 && mantissa != 0 && sign == 0`, which
+/// is bit-for-bit the IEEE-754 definition of a **positive subnormal double**.
+/// Every positive denormal reaching `JSON.stringify` was therefore classified
+/// as an untagged heap pointer and dereferenced. `JSON.stringify(1e-317)`
+/// SIGSEGV'd and `JSON.stringify(5e-324)` printed `null` — both reachable from
+/// untrusted input as `JSON.stringify(JSON.parse(text))`.
+///
+/// No bit-pattern test can fix that, and narrowing the mask is not a fix. A raw
+/// untagged pointer and a positive subnormal occupy the *same* bit patterns by
+/// construction; that is a property of the value representation, not a wrong
+/// constant. `addr_class::is_plausible_heap_addr` does not help either — it is
+/// `0x1000..0x8000_0000_0000` on macOS/Linux, while positive subnormals span
+/// `0..0x0010_0000_0000_0000`, so the overlap is nearly the whole band. The
+/// #3576 module-slot object pointers this branch exists to serve live squarely
+/// inside the subnormal range, so any bit test wide enough to admit them still
+/// admits denormals.
+///
+/// The decision therefore has to come from *outside* the bits: ask whether the
+/// address is an allocation the GC actually tracks.
+/// [`stringify::ptr_is_tracked_heap_object`] answers that from the arena page
+/// map and the malloc-object registry — set-membership lookups, no dereference
+/// — so a denormal is rejected without ever touching memory and falls through
+/// to the `write_number` arm that should have had it all along.
+///
+/// What remains is exactly the irreducible ambiguity of the representation: a
+/// denormal whose bits *equal* a live tracked allocation's address is still
+/// indistinguishable from that pointer. Removing that residue means tagging
+/// these values at the producer (see `value::equality::normalize_raw_object_bits`
+/// / #3576), not writing a better predicate here.
+#[inline]
+pub(crate) unsafe fn is_raw_pointer(bits: u64) -> bool {
+    untagged_pointer_bits(bits) && stringify::ptr_is_tracked_heap_object(bits as *const u8)
 }
 
 #[inline]
@@ -636,6 +850,122 @@ mod tests {
         }
     }
 
+    /// #7792 / #7817 — deeply nested input must not take the process out.
+    ///
+    /// Both parsers that read the document recurse once per nesting level, so
+    /// a deep enough document exhausted the stack: SIGSEGV, exit 139, no
+    /// output at all. The input shape here is a well-known one for untrusted
+    /// data, which is why a crash is the wrong answer even though a very deep
+    /// document is unusual.
+    mod nesting_depth {
+        use super::*;
+        use crate::json::parser::{
+            nesting_depth_exceeds, MAX_ITERATIVE_NESTING_DEPTH, MAX_RECURSIVE_NESTING_DEPTH,
+        };
+
+        fn nested_arrays(depth: usize, leaf: u8) -> Vec<u8> {
+            let mut input = Vec::with_capacity(depth * 2 + 1);
+            input.extend(std::iter::repeat_n(b'[', depth));
+            input.push(leaf);
+            input.extend(std::iter::repeat_n(b']', depth));
+            input
+        }
+
+        #[test]
+        fn the_scan_counts_only_structural_brackets() {
+            assert!(!nesting_depth_exceeds(b"[[[]]]", 8));
+            assert!(nesting_depth_exceeds(b"[[[[[[[[[[]]]]]]]]]]", 4));
+            assert!(!nesting_depth_exceeds(br#"{"a":{"b":1}}"#, 4));
+            assert!(nesting_depth_exceeds(br#"{"a":{"b":1}}"#, 1));
+
+            // Brackets inside a string are text, not structure. Without this a
+            // single long string value would be rejected as deep nesting.
+            assert!(!nesting_depth_exceeds(br#"{"a":"[[[[[[[[[["}"#, 3));
+            // ...including one that ends in an escaped quote, so the scanner
+            // does not lose track of where the string closes.
+            assert!(!nesting_depth_exceeds(br#"{"a":"[[[\"[[["}"#, 3));
+
+            // The scan runs BEFORE syntax validation, so it sees malformed
+            // input. An unbalanced closer must clamp, not underflow.
+            assert!(!nesting_depth_exceeds(b"]]]]]]", 2));
+            assert!(!nesting_depth_exceeds(b"", 0));
+        }
+
+        /// Pin the parser handoff boundary: both sides produce a value.
+        #[test]
+        fn parse_switches_to_the_iterative_path_past_the_recursive_threshold() {
+            let ok_depth = MAX_RECURSIVE_NESTING_DEPTH - 1;
+            let ok = nested_arrays(ok_depth, b'0');
+            let text = js_string_from_bytes(ok.as_ptr(), ok.len() as u32);
+            assert!(
+                unsafe { js_json_parse_result(text) }.is_ok(),
+                "input below the handoff must parse"
+            );
+
+            let deep_depth = MAX_RECURSIVE_NESTING_DEPTH + 1;
+            let deep = nested_arrays(deep_depth, b'0');
+            let text = js_string_from_bytes(deep.as_ptr(), deep.len() as u32);
+            assert!(
+                unsafe { js_json_parse_result(text) }.is_ok(),
+                "input above the handoff must parse through the heap-stack path"
+            );
+        }
+
+        #[test]
+        fn parses_three_hundred_thousand_levels_on_a_small_worker_stack() {
+            const DEPTH: usize = 300_000;
+            std::thread::Builder::new()
+                .name("json-deep-worker".into())
+                .stack_size(2 * 1024 * 1024)
+                .spawn(|| {
+                    let input = nested_arrays(DEPTH, b'7');
+                    let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+                    let mut value = unsafe { js_json_parse_result(text) }
+                        .expect("deep JSON must parse on a worker-sized stack");
+
+                    for level in 0..DEPTH {
+                        assert!(value.is_pointer(), "level {level} must be an array");
+                        let array = (value.bits() & POINTER_MASK) as *const crate::ArrayHeader;
+                        assert_eq!(unsafe { (*array).length }, 1, "level {level}");
+                        value = crate::array::js_array_get(array, 0);
+                    }
+                    assert_eq!(f64::from_bits(value.bits()), 7.0);
+                })
+                .expect("worker thread starts")
+                .join()
+                .expect("worker parse does not panic");
+        }
+
+        #[test]
+        fn rejects_nesting_beyond_the_iterative_resource_budget() {
+            let input = nested_arrays(MAX_ITERATIVE_NESTING_DEPTH + 1, b'0');
+            let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+            let error = unsafe { js_json_parse_result(text) }
+                .expect_err("the iterative path must keep a finite resource budget");
+            let error = (error.to_bits() & POINTER_MASK) as *const crate::error::ErrorHeader;
+            assert_eq!(
+                unsafe { (*error).error_kind },
+                crate::error::ERROR_KIND_RANGE_ERROR
+            );
+        }
+
+        #[test]
+        fn iterative_path_still_rejects_malformed_json() {
+            let depth = MAX_RECURSIVE_NESTING_DEPTH + 1;
+            let mut trailing = nested_arrays(depth, b'0');
+            trailing.push(b'x');
+            let mut invalid_number = Vec::with_capacity(depth * 2 + 2);
+            invalid_number.extend(std::iter::repeat_n(b'[', depth));
+            invalid_number.extend_from_slice(b"01");
+            invalid_number.extend(std::iter::repeat_n(b']', depth));
+
+            for input in [trailing, invalid_number] {
+                let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+                assert!(unsafe { js_json_parse_result(text) }.is_err());
+            }
+        }
+    }
+
     #[test]
     fn parse_result_streaming_validation_rejects_malformed_and_trailing_input() {
         for input in [
@@ -652,6 +982,93 @@ mod tests {
         let valid = br#"{"a":[1,2,3]}"#;
         let text = js_string_from_bytes(valid.as_ptr(), valid.len() as u32);
         assert!(unsafe { js_json_parse_result(text) }.is_ok());
+    }
+
+    /// The bare bit test is *exactly* the IEEE-754 positive-subnormal
+    /// predicate. Pinning that here so nobody "simplifies"
+    /// `untagged_pointer_bits` back into a sufficient condition: whatever it
+    /// accepts, it accepts real `Number`s too, which is why `is_raw_pointer`
+    /// must consult the GC's allocation set.
+    #[test]
+    fn untagged_pointer_bits_cannot_separate_pointers_from_subnormals() {
+        for v in [5e-324f64, 1e-320, 1e-317, 1e-310, 2.2250738585072009e-308] {
+            assert!(v.is_subnormal() && v > 0.0);
+            let bits = v.to_bits();
+            let old_predicate = (bits >> 52) & 0x7FF == 0 && bits & 0x000F_FFFF_FFFF_FFFF != 0;
+            assert!(
+                old_predicate,
+                "{v:e} is a positive subnormal, so the pre-fix bit test called it a pointer"
+            );
+        }
+        // ...and the bit test still admits the aligned ones. Only the
+        // GC-tracking check below rejects them.
+        assert!(untagged_pointer_bits(0x0000_0012_3456_7888));
+        assert!(!untagged_pointer_bits(0));
+        assert!(!untagged_pointer_bits(1.5f64.to_bits()));
+        assert!(!untagged_pointer_bits(POINTER_TAG | 0x1000));
+    }
+
+    /// A positive subnormal `Number` must serialize as that number. Pre-fix
+    /// `5e-324` printed `null` (its bits, `1`, landed in the handle band) and
+    /// `1e-317` SIGSEGV'd (its bits pass every magnitude check but address an
+    /// unmapped page). Both are reachable from untrusted input via
+    /// `JSON.stringify(JSON.parse(text))`.
+    #[test]
+    fn stringify_positive_subnormal_is_a_number_not_a_pointer() {
+        unsafe {
+            for (value, expected) in [
+                (5e-324f64, "5e-324"),
+                (1e-320, "1e-320"),
+                (1e-317, "1e-317"),
+                (1e-310, "1e-310"),
+                (-1e-310, "-1e-310"),
+                (2.2250738585072009e-308, "2.225073858507201e-308"),
+            ] {
+                let output = js_json_stringify(value, TYPE_UNKNOWN);
+                assert_eq!(
+                    str_from_header(output).unwrap(),
+                    expected,
+                    "JSON.stringify({value:e})"
+                );
+            }
+        }
+    }
+
+    /// Subnormals nested where the object/array field decoders read them —
+    /// the `is_raw_pointer` call sites in `stringify.rs` /
+    /// `stringify_shape_template.rs`, not just the top-level dispatch.
+    #[test]
+    fn stringify_subnormal_object_and_array_members() {
+        let input = br#"{"n":1e-310,"m":5e-324,"a":[1e-317,1.5],"s":"hi"}"#;
+        let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let value = unsafe { js_json_parse(text) };
+        let output = unsafe { js_json_stringify(f64::from_bits(value.bits()), TYPE_UNKNOWN) };
+        assert_eq!(
+            unsafe { str_from_header(output) }.unwrap(),
+            r#"{"n":1e-310,"m":5e-324,"a":[1e-317,1.5],"s":"hi"}"#
+        );
+    }
+
+    /// The branch `is_raw_pointer` exists for: an object whose heap pointer
+    /// travels UNTAGGED in an f64 slot (#3576 module-level object/array
+    /// variables). Rejecting subnormals must not reject these — the fix keys
+    /// on GC allocation membership, so a real allocation still resolves.
+    #[test]
+    fn stringify_untagged_raw_object_pointer_still_serializes() {
+        let input = br#"{"a":1,"b":"two"}"#;
+        let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let value = unsafe { js_json_parse(text) };
+        let addr = value.bits() & POINTER_MASK;
+        // No tag at all — exactly the shape a module-slot object variable has.
+        assert!(
+            unsafe { is_raw_pointer(addr) },
+            "0x{addr:x} must be admitted"
+        );
+        let output = unsafe { js_json_stringify(f64::from_bits(addr), TYPE_UNKNOWN) };
+        assert_eq!(
+            unsafe { str_from_header(output) }.unwrap(),
+            r#"{"a":1,"b":"two"}"#
+        );
     }
 
     #[test]
@@ -958,7 +1375,7 @@ mod tests {
         // The array fast path built its shape template with
         // `min(keys_len, field_count)`. `field_count` is PHYSICAL — it never
         // exceeds the object's inline slot allocation, so an object grown by
-        // name past `INLINE_SLOT_FLOOR` reports the floor (4) while the
+        // name past `INLINE_SLOT_FLOOR` reports the floor while the
         // remaining values live in overflow storage. `JSON.parse`'s tape
         // materializer produces exactly that shape (`js_object_alloc(0, 0)` +
         // `js_object_set_field_by_name` per key), so `JSON.stringify` of a
@@ -1088,6 +1505,80 @@ mod tests {
             assert_eq!(
                 str_from_header(output).unwrap(),
                 r#"[{"a":1,"b":2},{"a":10,"b":11}]"#
+            );
+        }
+    }
+
+    /// #7477: the DirectParser must produce bit-identical f64s to the tape
+    /// materializer, whose number path is `str::parse::<f64>()` (correctly
+    /// rounded, matches V8's strtod for round-trippable inputs). The
+    /// DirectParser's small fixed-point fast path computed
+    /// `int as f64 + (frac as f64 / 10^k)` — TWO IEEE roundings (the division
+    /// rounds, then the addition rounds again), which is off by one ulp for
+    /// some literals. Node agrees with the tape, so the DirectParser is the
+    /// wrong one.
+    ///
+    /// `260.75197` (= 83 * 3.14159 in f64) is the minimal diverging literal
+    /// from `bench_field_access`: correct bits 0x1.04c0811b1d92bp+8, the
+    /// double-rounded fast path returned 0x1.04c0811b1d92cp+8 — whose
+    /// shortest round-trip stringification is "260.75197000000004", which is
+    /// how a pure parse divergence surfaced as a stringify-length checksum
+    /// mismatch (2552986400 vs node's 2552985550).
+    #[test]
+    fn direct_parser_number_bits_match_strtod() {
+        let parse_direct = |s: &str| -> u64 {
+            let bytes = s.as_bytes();
+            let mut parser = DirectParser::new(bytes);
+            let value = unsafe { parser.parse_number() };
+            assert!(
+                !parser.has_trailing_content(),
+                "parse_number left trailing input on {s:?}"
+            );
+            value.bits()
+        };
+        let mut cases: Vec<String> = vec![
+            // The two bench_field_access literals that diverged (#7477),
+            // plus their negations.
+            "260.75197".to_string(),
+            "521.50394".to_string(),
+            "-260.75197".to_string(),
+            "-521.50394".to_string(),
+            // Assorted shapes through every parse_number arm: integer fast
+            // path, fixed-point fast path, exponent / long-token fallback.
+            "0".to_string(),
+            "-0".to_string(),
+            "0.1".to_string(),
+            "-0.1".to_string(),
+            "0.3".to_string(),
+            "3.14159".to_string(),
+            "1.0000001".to_string(),
+            "123.456".to_string(),
+            "999999999999999.9".to_string(),
+            "9007199254740993.1".to_string(),
+            "0.000000001".to_string(),
+            "12345678901234567890".to_string(),
+            "1e10".to_string(),
+            "-2.5e-3".to_string(),
+            "1.7976931348623157e308".to_string(),
+        ];
+        // The full bench_field_access value space: shortest round-trip
+        // renderings of i * 3.14159. Two of these (i = 83, 166) diverged
+        // under the double-rounding fast path.
+        for i in 0..10000 {
+            cases.push(format!("{}", i as f64 * 3.14159));
+        }
+        for s in &cases {
+            let want: f64 = s.parse().unwrap();
+            let got = parse_direct(s);
+            assert_eq!(
+                got,
+                want.to_bits(),
+                "DirectParser::parse_number({s:?}) = {:#018x} ({}), \
+                 str::parse (tape/node) = {:#018x} ({})",
+                got,
+                f64::from_bits(got),
+                want.to_bits(),
+                want,
             );
         }
     }

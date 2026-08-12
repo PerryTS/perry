@@ -8,6 +8,31 @@ use swc_ecma_ast as ast;
 use crate::lower::LoweringContext;
 use crate::lower_types::{extract_ts_type, infer_type_from_expr};
 
+/// #7547: the type of a declaration in a **`for` initializer**
+/// (`for (let j = 0; …)`).
+///
+/// Every for-init declarator used to register `Type::Any` — the annotation was
+/// discarded and the initializer was never inferred from. The cost is not the
+/// loop variable itself but everything computed from it: `base + j` infers
+/// `Any` once `j` is `Any`, so an object literal in the loop body mints an
+/// anon-shape class whose fields are all `Any`. `Any` is pointer-bearing, so
+/// `{v: number, w: number}` was handed to the collector as **two traced
+/// pointer slots** with an empty raw-f64 mask — no `POINTER_FREE`, no raw-f64
+/// store path, and #7532's declare-at-allocation gate refused the shape.
+/// Moving the identical annotation out of the for-initializer was worth 1.18×
+/// on `churn_alloc`, which is what this recovers without the edit.
+///
+/// Returns `Type::Any` for anything that is not a plain identifier binding;
+/// destructuring for-init declarators are handled by the pattern path and
+/// never reach here.
+pub(crate) fn for_init_decl_type(ctx: &mut LoweringContext, decl: &ast::VarDeclarator) -> Type {
+    let ast::Pat::Ident(ident) = &decl.name else {
+        return Type::Any;
+    };
+    let name = ident.id.sym.to_string();
+    infer_decl_type(ctx, decl, ident, &name)
+}
+
 /// Computes the declared/inferred `Type` for the binding and records the
 /// `plain_object_locals` tag where applicable. Mirrors the original inline
 /// block verbatim.

@@ -319,6 +319,7 @@ impl<'a> FnCtx<'a> {
             access_mode,
             buffer_access,
             native_owned_view: None,
+            buffer_view_pointer_state: None,
             materialization_reason,
             fallback_reason,
             native_value_state,

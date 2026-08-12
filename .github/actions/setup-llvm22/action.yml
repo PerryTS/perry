@@ -79,9 +79,17 @@ runs:
     - name: LLVM 22 (Windows, official MSVC tarball)
       if: runner.os == 'Windows'
       shell: pwsh
+      # `inputs.version` arrives through the environment, NOT through `${{ }}`
+      # interpolated into the script body. A template expansion is substituted
+      # as raw text before pwsh ever parses the line, so an input containing a
+      # quote plus a statement separator executes as code with the runner's
+      # privileges; reading `$env:` is a plain string load with no such step.
+      # Caught by zizmor's `template-injection` audit at High confidence.
+      env:
+        LLVM_VERSION: ${{ inputs.version }}
       run: |
         $ErrorActionPreference = "Stop"
-        $ver = "${{ inputs.version }}"
+        $ver = $env:LLVM_VERSION
         $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-x86_64-pc-windows-msvc.tar.xz"
         Write-Host "downloading $url"
         curl.exe -sSL --retry 3 -o "$env:RUNNER_TEMP\llvm.tar.xz" $url
@@ -89,4 +97,71 @@ runs:
         tar -xf "$env:RUNNER_TEMP\llvm.tar.xz" -C C:\llvm --strip-components=1
         $v = & "C:\llvm\bin\llvm-config.exe" --version
         if (-not $v.StartsWith("22.")) { Write-Error "LLVM is not 22.x ($v)"; exit 1 }
+
+        # ── libxml2: the release links one it does not ship ─────────────────
+        #
+        # LLVM's own Windows release script (llvm/utils/release/
+        # build_llvm_release.bat) builds a STATIC libxml2 into a scratch
+        # directory and points cmake at it:
+        #
+        #     -DLLVM_ENABLE_LIBXML2=FORCE_ON
+        #     -DLIBXML2_LIBRARIES=%libxmldir%/lib/libxml2s.lib
+        #
+        # %libxmldir% is never installed, so the published tarball carries the
+        # dependency but not the library. `llvm-config --system-libs
+        # --link-static` duly reports `xml2s.lib`; llvm-sys forwards every
+        # system lib verbatim (build.rs `get_system_libraries`, emitted as
+        # cargo:rustc-link-lib) and there is no env knob to filter one out —
+        # LLVM_SYS_221_* offers PREFIX, IGNORE_BLOCKLIST, STRICT_VERSIONING,
+        # NO_CLEAN_CFLAGS, USE_DEBUG_MSVCRT and FFI_WORKAROUND, and nothing
+        # else. So `xml2s.lib` lands on the link.exe command line and every
+        # Windows job that links perry.exe dies with
+        #
+        #     LINK : fatal error LNK1181: cannot open input file 'xml2s.lib'
+        #
+        # before the linker ever resolves a symbol. This became fatal when
+        # #7353 made the in-process LLVM backend the default and statically
+        # linked; it is not specific to any one workflow (test.yml's
+        # windows-build and gc-native-roots.yml's PE arm fail identically).
+        #
+        # It is a NAME dependency, not a symbol dependency. Inside LLVM,
+        # libxml2 is reachable only from LLVMWindowsManifest
+        # (WindowsManifestMerger.cpp), which serves lld-link and llvm-mt; the
+        # LLVM-C surface inkwell drives never touches it, and rustc bundles
+        # the LLVM component archives into libllvm_sys.rlib where link.exe
+        # pulls members lazily. Satisfying the input with an empty archive is
+        # therefore sufficient — and if that ever stops being true the link
+        # fails LOUDLY with LNK2019 unresolved externals rather than quietly
+        # dropping manifest support.
+        #
+        # Both conditions are checked, so this self-deletes: when a future
+        # release either stops reporting libxml2 or starts shipping the
+        # library, the block becomes a no-op instead of fabricating over it.
+        $sysLibs = (& "C:\llvm\bin\llvm-config.exe" --system-libs --link-static) -join ' '
+        $libDir = ((& "C:\llvm\bin\llvm-config.exe" --libdir) -join '').Trim()
+        $xml2 = Join-Path $libDir 'xml2s.lib'
+        if (($sysLibs -match 'xml2s\.lib') -and -not (Test-Path -LiteralPath $xml2)) {
+          Write-Host "llvm-config reports xml2s.lib but $libDir does not ship it; synthesizing an empty archive"
+          foreach ($tool in @("C:\llvm\bin\clang-cl.exe", "C:\llvm\bin\llvm-lib.exe")) {
+            if (-not (Test-Path -LiteralPath $tool)) {
+              Write-Error "$tool missing from the LLVM tarball — cannot synthesize xml2s.lib"; exit 1
+            }
+          }
+          # One exported symbol, never referenced: it keeps the archive's
+          # symbol table non-empty so neither llvm-lib nor link.exe has to
+          # cope with a degenerate zero-member library.
+          $stubC = Join-Path $env:RUNNER_TEMP 'xml2s_stub.c'
+          $stubObj = Join-Path $env:RUNNER_TEMP 'xml2s_stub.obj'
+          Set-Content -LiteralPath $stubC -Encoding ascii -Value 'int perry_xml2s_stub(void) { return 0; }'
+          & "C:\llvm\bin\clang-cl.exe" /nologo /c $stubC "/Fo$stubObj"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $stubObj)) {
+            Write-Error "failed to compile the xml2s.lib stub object"; exit 1
+          }
+          & "C:\llvm\bin\llvm-lib.exe" "/OUT:$xml2" $stubObj
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $xml2)) {
+            Write-Error "failed to archive $xml2"; exit 1
+          }
+          Write-Host "wrote $xml2"
+        }
+
         "LLVM_SYS_221_PREFIX=C:\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append

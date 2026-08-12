@@ -260,6 +260,39 @@ pub(super) unsafe fn dispatch_string(
                     } else {
                         Some(root_scope.root_string_ptr(needle_raw))
                     };
+                    if needle_h.is_none() {
+                        // Match Node: `s.indexOf(undefined)` → -1, includes → false.
+                        return Some(match method_name {
+                            "indexOf" | "lastIndexOf" => -1.0_f64,
+                            "includes" | "startsWith" | "endsWith" => {
+                                f64::from_bits(JSValue::bool(false).bits())
+                            }
+                            _ => f64::from_bits(JSValue::undefined().bits()),
+                        });
+                    }
+                    // ToNumber(position) — the second observable coercion, AFTER
+                    // ToString(searchString) (§22.1.3.9/§22.1.3.11 step order): a
+                    // `{ valueOf }` position runs user code and its throw
+                    // propagates (test262 lastIndexOf S15.5.4.8_A4_T2 —
+                    // previously `lastIndexOf` passed the raw NaN-boxed value,
+                    // which read as NaN and silently meant "search from the
+                    // end"). `arg_i32` routes through the same `ToNumber`;
+                    // `lastIndexOf` keeps the raw f64 because its NaN → end /
+                    // clamping semantics live in the `_from` helper.
+                    let pos_num = match method_name {
+                        "lastIndexOf" if args_len >= 2 => Some(crate::builtins::js_number_coerce(
+                            arg_at(1)
+                                .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
+                        )),
+                        "indexOf" | "includes" | "startsWith" if args_len >= 2 => {
+                            Some(arg_i32(1) as f64)
+                        }
+                        "endsWith" if args_len >= 2 => Some(arg_i32(1) as f64),
+                        _ => None,
+                    };
+                    // Both coercions above can run user code and move either
+                    // string under GC — extract the raw pointers only now, from
+                    // their roots.
                     let needle = needle_h
                         .as_ref()
                         .map(|h| h.get_raw_const_ptr::<crate::StringHeader>())
@@ -276,43 +309,33 @@ pub(super) unsafe fn dispatch_string(
                     // checks both unbox these tags correctly (and Node's
                     // `Array.prototype.includes` etc. on plain values
                     // already use this representation).
-                    if needle.is_null() {
-                        // Match Node: `s.indexOf(undefined)` → -1, includes → false.
-                        return Some(match method_name {
-                            "indexOf" | "lastIndexOf" => -1.0_f64,
-                            "includes" | "startsWith" | "endsWith" => {
-                                f64::from_bits(JSValue::bool(false).bits())
-                            }
-                            _ => f64::from_bits(JSValue::undefined().bits()),
-                        });
-                    }
                     return Some(match method_name {
                         "indexOf" => {
-                            let from = if args_len >= 2 { arg_i32(1) } else { 0 };
+                            let from = pos_num.unwrap_or(0.0) as i32;
                             crate::string::js_string_index_of_from(s_ptr, needle, from) as f64
                         }
                         "includes" => {
-                            let from = if args_len >= 2 { arg_i32(1) } else { 0 };
+                            let from = pos_num.unwrap_or(0.0) as i32;
                             let i = crate::string::js_string_index_of_from(s_ptr, needle, from);
                             f64::from_bits(JSValue::bool(i >= 0).bits())
                         }
-                        "lastIndexOf" => {
-                            if args_len >= 2 {
-                                let pos = unsafe { *args_ptr.add(1) };
+                        "lastIndexOf" => match pos_num {
+                            Some(pos) => {
                                 crate::string::js_string_last_index_of_from(s_ptr, needle, pos, 1)
                                     as f64
-                            } else {
-                                crate::string::js_string_last_index_of(s_ptr, needle) as f64
                             }
-                        }
+                            None => crate::string::js_string_last_index_of(s_ptr, needle) as f64,
+                        },
                         "startsWith" => {
-                            let at = if args_len >= 2 { arg_i32(1) } else { 0 };
+                            let at = pos_num.unwrap_or(0.0) as i32;
                             let b = crate::string::js_string_starts_with_at(s_ptr, needle, at);
                             f64::from_bits(JSValue::bool(b != 0).bits())
                         }
                         "endsWith" => {
-                            let len_i32 = unsafe { (*s_ptr).byte_len } as i32;
-                            let at = if args_len >= 2 { arg_i32(1) } else { len_i32 };
+                            let at = match pos_num {
+                                Some(p) => p as i32,
+                                None => (unsafe { (*s_ptr).byte_len }) as i32,
+                            };
                             let b = crate::string::js_string_ends_with_at(s_ptr, needle, at);
                             f64::from_bits(JSValue::bool(b != 0).bits())
                         }
@@ -459,8 +482,60 @@ pub(super) unsafe fn dispatch_string(
                     // Function replacements route to the callback helpers so
                     // `str.replace(x, fn)` observes Node's callback argument
                     // shape and receiver binding.
-                    let pat_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
-                    let repl_handle = root_string_arg_handle(&root_scope, &arg_handles, 1);
+                    let undefined = f64::from_bits(JSValue::undefined().bits());
+                    // Classify BEFORE coercing: a RegExp pattern routes to the
+                    // regex engine un-coerced, and a callable replacement must
+                    // not be ToString'd (§22.1.3.19 checks IsCallable first).
+                    #[cfg(feature = "regex-engine")]
+                    let pat_is_regex = {
+                        let jsv = JSValue::from_bits(arg_at(0).unwrap_or(undefined).to_bits());
+                        jsv.is_pointer() && {
+                            let p = jsv.as_pointer::<u8>();
+                            !p.is_null() && crate::regex::is_regex_pointer(p)
+                        }
+                    };
+                    #[cfg(not(feature = "regex-engine"))]
+                    let pat_is_regex = false;
+                    let repl_is_fn = {
+                        let v = arg_at(1).unwrap_or(undefined);
+                        JSValue::from_bits(v.to_bits()).is_pointer()
+                            && crate::closure::is_closure_ptr(
+                                (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+                            )
+                    };
+                    // §22.1.3.19/20 argument order: ToString(searchValue) runs
+                    // observably — a user `toString`/`valueOf` executes and its
+                    // throw propagates, a Symbol throws TypeError — and BEFORE
+                    // ToString(replaceValue). The previous shape extracted only
+                    // already-string args (`root_string_arg_handle`), silently
+                    // degrading any other pattern/replacement to a null pointer
+                    // (`new String(...).replace({valueOf(){throw ...}}, "x")`
+                    // returned the receiver unchanged instead of throwing —
+                    // test262 S15.5.4.11_A1_T12/T15/T16).
+                    let pat_handle = if pat_is_regex {
+                        None
+                    } else {
+                        let v = arg_at(0).unwrap_or(undefined);
+                        crate::builtins::reject_symbol_to_string(v);
+                        let raw = crate::value::js_jsvalue_to_string(v);
+                        if raw.is_null() {
+                            None
+                        } else {
+                            Some(root_scope.root_string_ptr(raw))
+                        }
+                    };
+                    let repl_handle = if repl_is_fn {
+                        None
+                    } else {
+                        let v = arg_at(1).unwrap_or(undefined);
+                        crate::builtins::reject_symbol_to_string(v);
+                        let raw = crate::value::js_jsvalue_to_string(v);
+                        if raw.is_null() {
+                            None
+                        } else {
+                            Some(root_scope.root_string_ptr(raw))
+                        }
+                    };
                     let pat_str = || {
                         pat_handle
                             .as_ref()
@@ -473,80 +548,64 @@ pub(super) unsafe fn dispatch_string(
                             .map(|handle| handle.get_raw_const_ptr::<crate::StringHeader>())
                             .unwrap_or(std::ptr::null())
                     };
-                    if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
-                        // `pat_jsv` is only consulted by the regex-engine-gated
-                        // branch below (RegExp pattern + callback replacer).
-                        #[cfg_attr(not(feature = "regex-engine"), allow(unused_variables))]
-                        let pat_jsv = JSValue::from_bits(pat_val.to_bits());
-                        let repl_jsv = JSValue::from_bits(repl_val.to_bits());
-                        if repl_jsv.is_pointer() {
-                            let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-                            if crate::closure::is_closure_ptr(repl_raw) {
-                                #[cfg(feature = "regex-engine")]
-                                if pat_jsv.is_pointer() {
-                                    let regex_ptr =
-                                        pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
-                                    if !regex_ptr.is_null()
-                                        && crate::regex::is_regex_pointer(regex_ptr as *const u8)
-                                    {
-                                        let r = if method_name == "replaceAll" {
-                                            crate::regex::js_string_replace_all_regex_fn(
-                                                receiver_string(),
-                                                regex_ptr,
-                                                repl_val,
-                                            )
-                                        } else {
-                                            crate::regex::js_string_replace_regex_fn(
-                                                receiver_string(),
-                                                regex_ptr,
-                                                repl_val,
-                                            )
-                                        };
-                                        return Some(f64::from_bits(JSValue::string_ptr(r).bits()));
-                                    }
-                                }
-                                let r = if method_name == "replaceAll" {
-                                    crate::regex::js_string_replace_all_string_fn(
-                                        receiver_string(),
-                                        pat_str(),
-                                        repl_val,
-                                    )
-                                } else {
-                                    crate::regex::js_string_replace_string_fn(
-                                        receiver_string(),
-                                        pat_str(),
-                                        repl_val,
-                                    )
-                                };
-                                return Some(f64::from_bits(JSValue::string_ptr(r).bits()));
-                            }
+                    if repl_is_fn {
+                        // Re-read through the arg handles: the pattern coercion
+                        // above may have run user code and moved the closure.
+                        let repl_val = arg_at(1).unwrap_or(undefined);
+                        #[cfg(feature = "regex-engine")]
+                        if pat_is_regex {
+                            let pat_val = arg_at(0).unwrap_or(undefined);
+                            let regex_ptr = JSValue::from_bits(pat_val.to_bits())
+                                .as_pointer::<crate::regex::RegExpHeader>();
+                            let r = if method_name == "replaceAll" {
+                                crate::regex::js_string_replace_all_regex_fn(
+                                    receiver_string(),
+                                    regex_ptr,
+                                    repl_val,
+                                )
+                            } else {
+                                crate::regex::js_string_replace_regex_fn(
+                                    receiver_string(),
+                                    regex_ptr,
+                                    repl_val,
+                                )
+                            };
+                            return Some(f64::from_bits(JSValue::string_ptr(r).bits()));
                         }
+                        let r = if method_name == "replaceAll" {
+                            crate::regex::js_string_replace_all_string_fn(
+                                receiver_string(),
+                                pat_str(),
+                                repl_val,
+                            )
+                        } else {
+                            crate::regex::js_string_replace_string_fn(
+                                receiver_string(),
+                                pat_str(),
+                                repl_val,
+                            )
+                        };
+                        return Some(f64::from_bits(JSValue::string_ptr(r).bits()));
                     }
-                    // Detect RegExp pattern: NaN-boxed pointer to a RegExpHeader.
                     #[cfg(feature = "regex-engine")]
-                    if let Some(v) = arg_at(0) {
-                        let jsv = JSValue::from_bits(v.to_bits());
-                        if jsv.is_pointer() {
-                            let regex_ptr = jsv.as_pointer::<crate::regex::RegExpHeader>();
-                            if !regex_ptr.is_null()
-                                && crate::regex::is_regex_pointer(regex_ptr as *const u8)
-                            {
-                                let r = if method_name == "replaceAll" {
-                                    crate::regex::js_string_replace_all_regex(
-                                        receiver_string(),
-                                        regex_ptr,
-                                        repl_str(),
-                                    )
-                                } else {
-                                    crate::regex::js_string_replace_regex(
-                                        receiver_string(),
-                                        regex_ptr,
-                                        repl_str(),
-                                    )
-                                };
-                                return Some(f64::from_bits(JSValue::string_ptr(r).bits()));
-                            }
-                        }
+                    if pat_is_regex {
+                        let pat_val = arg_at(0).unwrap_or(undefined);
+                        let regex_ptr = JSValue::from_bits(pat_val.to_bits())
+                            .as_pointer::<crate::regex::RegExpHeader>();
+                        let r = if method_name == "replaceAll" {
+                            crate::regex::js_string_replace_all_regex(
+                                receiver_string(),
+                                regex_ptr,
+                                repl_str(),
+                            )
+                        } else {
+                            crate::regex::js_string_replace_regex(
+                                receiver_string(),
+                                regex_ptr,
+                                repl_str(),
+                            )
+                        };
+                        return Some(f64::from_bits(JSValue::string_ptr(r).bits()));
                     }
                     let r = if method_name == "replaceAll" {
                         crate::regex::js_string_replace_all_string(
@@ -568,17 +627,44 @@ pub(super) unsafe fn dispatch_string(
                 // call(boxed, …)`, routed through `string_proto_thunks` after
                 // coercing `this` to a string) and `(s: any).padStart(…)` dynamic
                 // dispatch resolve to the runtime helper instead of the TypeError
-                // catch-all. Argument coercion mirrors `lower_string_method.rs`.
+                // catch-all.
                 "padStart" | "padEnd" => {
-                    let target_len = arg_at(0).unwrap_or(0.0);
-                    // ToString(fillString) when present and not undefined; absent /
-                    // undefined leaves a null ptr so the helper defaults to " ".
-                    let pad = match arg_at(1) {
-                        Some(v) if !JSValue::from_bits(v.to_bits()).is_undefined() => {
-                            crate::builtins::js_string_coerce(v) as *const crate::StringHeader
+                    let undefined = f64::from_bits(JSValue::undefined().bits());
+                    // §22.1.3.17 StringPaddingBuiltinsImpl operation order:
+                    // `ToLength(maxLength)` runs FIRST and observably — a
+                    // `{ valueOf }` maxLength executes user code (whose throw
+                    // propagates), a Symbol throws TypeError. Passing the raw
+                    // NaN-boxed arg straight to the helper read any object as
+                    // NaN → target 0 → receiver returned unpadded with its
+                    // `valueOf` never invoked, and coerced the fill string
+                    // BEFORE the length (test262 padStart/padEnd
+                    // observable-operations.js).
+                    let target_len =
+                        crate::builtins::js_number_coerce(arg_at(0).unwrap_or(undefined));
+                    // Spec step order again: when no padding is needed
+                    // (intMaxLength ≤ receiver length) the method returns
+                    // before `ToString(fillString)`, so a fill-side throw must
+                    // not fire. Mirror the helper's `to_length` clamping
+                    // (NaN/negative → 0, fractions truncate toward zero).
+                    let cur_len = unsafe { (*receiver_string()).utf16_len } as f64;
+                    let pad_handle = if target_len.is_nan() || target_len.trunc() <= cur_len {
+                        None
+                    } else {
+                        // ToString(fillString): `undefined`/absent → null ptr so
+                        // the helper defaults to " "; a Symbol fill throws; a
+                        // `{ toString }` object runs user code (root the result
+                        // — the receiver re-reads through its handle below).
+                        let raw = crate::string::js_string_pad_fill(arg_at(1).unwrap_or(undefined));
+                        if raw.is_null() {
+                            None
+                        } else {
+                            Some(root_scope.root_string_ptr(raw))
                         }
-                        _ => std::ptr::null(),
                     };
+                    let pad = pad_handle
+                        .as_ref()
+                        .map(|h| h.get_raw_const_ptr::<crate::StringHeader>())
+                        .unwrap_or(std::ptr::null());
                     let s = receiver_string();
                     let r = if method_name == "padStart" {
                         crate::string::js_string_pad_start(s, target_len, pad)

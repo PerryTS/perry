@@ -488,8 +488,10 @@ pub extern "C" fn js_promise_then(
     let promise_handle = scope.root_raw_mut_ptr(promise);
     let on_fulfilled_handle = scope.root_raw_const_ptr(on_fulfilled);
     let on_rejected_handle = scope.root_raw_const_ptr(on_rejected);
-    let next = js_promise_new_with_parent(promise);
-    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    // `across_mut` runs the allocating call and returns the post-collection
+    // address, so the receiver is never bound stale in between (#7341).
+    let (next, promise) =
+        promise_handle.across_mut::<Promise, _>(|| js_promise_new_with_parent(promise));
     let on_fulfilled = on_fulfilled_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     let on_rejected = on_rejected_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
 
@@ -764,8 +766,10 @@ pub extern "C" fn js_promise_finally(
     let scope = crate::gc::RuntimeHandleScope::new();
     let promise_handle = scope.root_raw_mut_ptr(promise);
     let on_finally_handle = scope.root_raw_const_ptr(on_finally);
-    let next = js_promise_new_with_parent(promise);
-    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    // See the sibling in `then`: the allocating call and the re-read are one
+    // combinator so the order cannot drift apart (#7341).
+    let (next, promise) =
+        promise_handle.across_mut::<Promise, _>(|| js_promise_new_with_parent(promise));
     let on_finally = on_finally_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     let next_i64 = next as i64;
 
@@ -1214,19 +1218,51 @@ fn perform_promise_then_with_cap(
     cap_promise: f64,
 ) -> f64 {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
-    let ful_wrap = js_closure_alloc(then_cap_fulfill_fn as *const u8, 3);
-    js_closure_set_capture_f64(ful_wrap, 0, on_fulfilled);
-    js_closure_set_capture_f64(ful_wrap, 1, cap_resolve);
-    js_closure_set_capture_f64(ful_wrap, 2, cap_reject);
+    // #7497 (CodeRabbit): the SAME publishing shape as `make_resolving_functions`
+    // and `build_element_closure`. Pre-fix this filled `ful_wrap`'s captures, then
+    // allocated `rej_wrap` — so a copying minor at that second allocation left
+    // `promise`, `ful_wrap` and the four capability/handler values naming
+    // from-space, and the addresses written into `rej_wrap` afterwards were
+    // pre-collection. Allocate BOTH wrappers first, root everything, then write
+    // every capture at a post-collection address.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    let on_fulfilled_h = scope.root_nanbox_f64(on_fulfilled);
+    let on_rejected_h = scope.root_nanbox_f64(on_rejected);
+    let cap_resolve_h = scope.root_nanbox_f64(cap_resolve);
+    let cap_reject_h = scope.root_nanbox_f64(cap_reject);
+    let cap_promise_h = scope.root_nanbox_f64(cap_promise);
 
-    let rej_wrap = js_closure_alloc(then_cap_reject_fn as *const u8, 3);
-    js_closure_set_capture_f64(rej_wrap, 0, on_rejected);
-    js_closure_set_capture_f64(rej_wrap, 1, cap_resolve);
-    js_closure_set_capture_f64(rej_wrap, 2, cap_reject);
+    let ful_wrap_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
+        then_cap_fulfill_fn as *const u8,
+        3,
+    ) as i64));
+    let rej_wrap_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
+        then_cap_reject_fn as *const u8,
+        3,
+    ) as i64));
+
+    let ful_wrap = crate::value::js_nanbox_get_pointer(ful_wrap_h.get_nanbox_f64())
+        as *mut crate::closure::ClosureHeader;
+    js_closure_set_capture_f64(ful_wrap, 0, on_fulfilled_h.get_nanbox_f64());
+    js_closure_set_capture_f64(ful_wrap, 1, cap_resolve_h.get_nanbox_f64());
+    js_closure_set_capture_f64(ful_wrap, 2, cap_reject_h.get_nanbox_f64());
+
+    let rej_wrap = crate::value::js_nanbox_get_pointer(rej_wrap_h.get_nanbox_f64())
+        as *mut crate::closure::ClosureHeader;
+    js_closure_set_capture_f64(rej_wrap, 0, on_rejected_h.get_nanbox_f64());
+    js_closure_set_capture_f64(rej_wrap, 1, cap_resolve_h.get_nanbox_f64());
+    js_closure_set_capture_f64(rej_wrap, 2, cap_reject_h.get_nanbox_f64());
 
     // Attach handlers; discard the returned native next promise.
-    let _ = js_promise_then(promise, ful_wrap, rej_wrap);
-    cap_promise
+    let _ = js_promise_then(
+        crate::value::js_nanbox_get_pointer(promise_h.get_nanbox_f64()) as *mut Promise,
+        crate::value::js_nanbox_get_pointer(ful_wrap_h.get_nanbox_f64())
+            as *mut crate::closure::ClosureHeader,
+        crate::value::js_nanbox_get_pointer(rej_wrap_h.get_nanbox_f64())
+            as *mut crate::closure::ClosureHeader,
+    );
+    cap_promise_h.get_nanbox_f64()
 }
 
 // ---------------------------------------------------------------------------
@@ -1325,7 +1361,7 @@ extern "C" fn spec_catch_finally_fn(
 }
 
 fn ensure_spec_finally_arities_registered() {
-    thread_local! {
+    crate::perry_thread_local! {
         static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     DONE.with(|d| {
@@ -1365,24 +1401,38 @@ pub(crate) extern "C" fn promise_prototype_then_thunk(
         throw_promise_prototype_incompatible_receiver("then", receiver);
     };
 
+    // #7497: `promise_species_constructor` reads `receiver.constructor` and
+    // `is_default_promise_constructor` performs a `globalThis.Promise` lookup
+    // that allocates a fresh key string — the receiver promise and both handler
+    // arguments are live across both, and `promise` is the receiver of the
+    // `then` that follows.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    let on_fulfilled_h = scope.root_nanbox_f64(on_fulfilled);
+    let on_rejected_h = scope.root_nanbox_f64(on_rejected);
+
     // SpeciesConstructor(promise, %Promise%) — reads this.constructor once.
     let c = promise_species_constructor(receiver);
+    let c_h = scope.root_nanbox_f64(c);
 
-    if super::spec_combinators::is_default_promise_constructor(c) {
+    if super::spec_combinators::is_default_promise_constructor(c_h.get_nanbox_f64()) {
         // Fast path: native then.
+        let promise =
+            crate::value::js_nanbox_get_pointer(promise_h.get_nanbox_f64()) as *mut Promise;
         return box_promise_ptr(js_promise_then(
             promise,
-            arg_to_closure(on_fulfilled),
-            arg_to_closure(on_rejected),
+            arg_to_closure(on_fulfilled_h.get_nanbox_f64()),
+            arg_to_closure(on_rejected_h.get_nanbox_f64()),
         ));
     }
 
     // Slow path: NewPromiseCapability(C) + PerformPromiseThen.
-    let cap = super::spec_combinators::new_promise_capability(c);
+    let cap = super::spec_combinators::new_promise_capability(c_h.get_nanbox_f64());
+    let promise = crate::value::js_nanbox_get_pointer(promise_h.get_nanbox_f64()) as *mut Promise;
     perform_promise_then_with_cap(
         promise,
-        on_fulfilled,
-        on_rejected,
+        on_fulfilled_h.get_nanbox_f64(),
+        on_rejected_h.get_nanbox_f64(),
         cap.resolve,
         cap.reject,
         cap.promise,

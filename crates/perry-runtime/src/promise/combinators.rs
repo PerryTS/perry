@@ -20,7 +20,7 @@ pub(crate) struct PromiseAllState {
     pub index: u32,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Keyed by input-promise address. See `keyed_table.rs`: a dense `Vec` is
     /// still the GC scanners' traversal/rewrite surface, with an O(1) key index
     /// layered on top (#6084 item 2 — this used to be a raw `Vec` that every
@@ -357,14 +357,21 @@ pub(crate) fn combinator_iterable_to_array(
     // (the overwhelming common case) pay one extra side-table probe and
     // keep the existing raw clone.
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        // #7497: `well_known_symbol` and `own_symbol_property` both allocate
+        // (and the latter can run a user getter), so the array being cloned is
+        // re-read from a root rather than carried across them in a register.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_h = scope.root_nanbox_f64(value);
         let iter_sym = crate::symbol::well_known_symbol("iterator");
         if !iter_sym.is_null() {
             let sym_f64 =
                 f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
-            let _ = unsafe { crate::symbol::own_symbol_property(value, sym_f64) };
+            let _ =
+                unsafe { crate::symbol::own_symbol_property(value_h.get_nanbox_f64(), sym_f64) };
         }
         return Ok(crate::array::js_array_clone(
-            crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader,
+            crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
+                as *const crate::array::ArrayHeader,
         ));
     }
     let jsval = JSValue::from_bits(value.to_bits());
@@ -409,6 +416,12 @@ pub(crate) fn combinator_iterable_to_array(
         (*hdr).obj_type
     };
     if obj_type == crate::gc::GC_TYPE_OBJECT {
+        // #7497 (CodeRabbit): `raw` was computed above and then carried across a
+        // user `[Symbol.iterator]` getter and a `"next"` key allocation before
+        // being dereferenced. Root the receiver and re-derive its address after
+        // each of those.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_h = scope.root_nanbox_f64(value);
         let has_iterator = {
             let iter_sym = crate::symbol::well_known_symbol("iterator");
             if iter_sym.is_null() {
@@ -416,15 +429,17 @@ pub(crate) fn combinator_iterable_to_array(
             } else {
                 let sym_f64 =
                     f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
-                let iter_fn =
-                    unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
+                let iter_fn = unsafe {
+                    crate::symbol::js_object_get_symbol_property(value_h.get_nanbox_f64(), sym_f64)
+                };
                 iter_fn.to_bits() != crate::value::TAG_UNDEFINED
             }
         };
         let has_next_field = {
             let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
             let next_val = crate::object::js_object_get_field_by_name(
-                raw as *const crate::object::ObjectHeader,
+                crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
+                    as *const crate::object::ObjectHeader,
                 next_key,
             );
             let next_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(next_val.bits()));
@@ -432,7 +447,8 @@ pub(crate) fn combinator_iterable_to_array(
         };
         if has_iterator || has_next_field {
             return Ok(crate::array::js_array_clone(
-                raw as *const crate::array::ArrayHeader,
+                crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
+                    as *const crate::array::ArrayHeader,
             ));
         }
     }
@@ -515,7 +531,7 @@ static KEEP_PROMISE_ALL_SETTLED_ITERABLE: extern "C" fn(f64) -> *mut Promise =
 static KEEP_PROMISE_ANY_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_any_iterable;
 
 // Queue for scheduled promise resolutions
-thread_local! {
+crate::perry_thread_local! {
     pub(in crate::promise) static SCHEDULED_RESOLVES: RefCell<Vec<(*mut Promise, f64)>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -642,7 +658,7 @@ fn take_already_resolved(guard: *mut crate::array::ArrayHeader) -> bool {
 /// (observed as the denormal `5e-324`, i.e. bits = 1), corrupting the
 /// resolution value. (test262 exception-after-resolve-in-{executor,thenable-job}.)
 pub(super) fn ensure_native_resolving_arity_registered() {
-    thread_local! {
+    crate::perry_thread_local! {
         static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     DONE.with(|d| {
@@ -671,23 +687,47 @@ pub(super) fn make_resolving_functions(
 ) {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
     ensure_native_resolving_arity_registered();
-    let guard = alloc_already_resolved_guard();
-    let resolve = js_closure_alloc(promise_resolve_fn as *const u8, 2);
-    js_closure_set_capture_ptr(resolve, 0, promise as i64);
-    js_closure_set_capture_ptr(resolve, 1, guard as i64);
-    let reject = js_closure_alloc(promise_reject_fn as *const u8, 2);
-    js_closure_set_capture_ptr(reject, 0, promise as i64);
-    js_closure_set_capture_ptr(reject, 1, guard as i64);
+    // #7497: four allocations follow, and `promise` / `guard` are STORED into
+    // capture slots after them. Pre-fix all three lived in bare Rust locals, so
+    // a copying minor here wrote pre-collection addresses into the two closures
+    // — the from-space-publishing shape, not merely a stale read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    let guard_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        alloc_already_resolved_guard() as i64,
+    ));
+    let resolve_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
+        promise_resolve_fn as *const u8,
+        2,
+    ) as i64));
+    let reject_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
+        promise_reject_fn as *const u8,
+        2,
+    ) as i64));
+    let ptr_of = |h: &crate::gc::RuntimeHandle<'_>| -> i64 {
+        crate::value::js_nanbox_get_pointer(h.get_nanbox_f64())
+    };
+    for handle in [&resolve_h, &reject_h] {
+        let f = ptr_of(handle) as *mut crate::closure::ClosureHeader;
+        js_closure_set_capture_ptr(f, 0, ptr_of(&promise_h));
+        js_closure_set_capture_ptr(f, 1, ptr_of(&guard_h));
+    }
     // Spec 27.2.1.3: the resolving functions are anonymous built-in functions
     // with own `length` = 1, `name` = "" (both non-writable, non-enumerable,
     // configurable), and NO `[[Construct]]` (`new resolve()` throws). test262
     // `resolve-function-*` / `reject-function-*` assert all four.
-    for f in [resolve, reject] {
-        crate::object::set_builtin_closure_length(f as usize, 1);
-        crate::object::set_bound_native_closure_name(f, "");
-        crate::object::set_builtin_closure_non_constructable(f as usize);
+    for handle in [&resolve_h, &reject_h] {
+        crate::object::set_builtin_closure_length(ptr_of(handle) as usize, 1);
+        crate::object::set_bound_native_closure_name(
+            ptr_of(handle) as *mut crate::closure::ClosureHeader,
+            "",
+        );
+        crate::object::set_builtin_closure_non_constructable(ptr_of(handle) as usize);
     }
-    (resolve, reject)
+    (
+        ptr_of(&resolve_h) as *mut crate::closure::ClosureHeader,
+        ptr_of(&reject_h) as *mut crate::closure::ClosureHeader,
+    )
 }
 
 /// Internal resolve function for Promise executor callbacks.

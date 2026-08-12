@@ -186,6 +186,78 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # Two reserved class ids sharing a value is silent and destructive: every
+      # dispatch tower matches them in a fixed order, so the later arm becomes
+      # unreachable and its whole method surface dies (#7576 killed the entire
+      # TC39 iterator-helpers proposal that way), and any site discriminating on
+      # class_id ALONE cross-matches — which can look correct for as long as the
+      # two types agree on field layout and break the day either changes (#7587,
+      # where `String(JSON.rawJSON(x))` was silently taking the JSX path).
+      #
+      # This SCANS rather than enumerating. #7576 shipped a Rust test listing
+      # seven iterator ids, which is good and stays — but it could not catch
+      # #7587, a different family that was not in the list. A gate whose
+      # coverage depends on the same attention the bug depends on is not a gate.
+      - name: Class-id collision audit
+        if: ${{ !cancelled() }}
+        run: python3 scripts/class_id_collisions.py
+
+      # #7645. The copying minor skips its eligibility preflight — the walk that
+      # proves nothing reachable is pinned — whenever the young-pin latch is
+      # clear. That is sound only while EVERY creation of GC_FLAG_PINNED goes
+      # through gc::pin_object, which is what arms the latch; a pin created any
+      # other way lets the collector relocate a pinned object whose holder keeps
+      # a raw address no scanner rewrites. This SCANS for both shapes the tree
+      # has used — `gc_flags |= GC_FLAG_PINNED` and the raw `*gc_flags_ptr |=
+      # 0x04` that hid two of the six pin sites from every grep — and fails on a
+      # stale allowlist entry as well as on a new site.
+      - name: GC pin-site custody audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/gc_pin_sites.py --self-test
+          python3 scripts/gc_pin_sites.py
+
+      # #7231. A runtime-side table holding a GC pointer IS a root, and nothing
+      # static could see that class before: gc_root_dominance_check.py reads
+      # emitted LLVM IR and a thread_local is not in it. #7226, #7239, #7268 and
+      # #7274 were all found by hand, each one re-deriving the same enumeration.
+      # This is that enumeration with a verdict required per holder — an
+      # unclassified holder fails, and so does an inventory entry that no longer
+      # matches (which is what makes a fix delete its own exemption).
+      #
+      # Cheap and build-free, so it belongs in `lint`, which IS a required
+      # context — hazard 2 of CLAUDE.md's four is the step people forget, so
+      # this gate is placed where that step does not exist.
+      - name: Runtime GC-pointer holder custody audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/gc_runtime_root_holders.py --self-test
+          python3 scripts/gc_runtime_root_holders.py
+
+      # #7877. A deleted GC knob left executable CI arms that still looked
+      # distinct but selected the same collector. Derive the accepted names
+      # from live runtime/codegen parsers; historical journals are path-exact
+      # exemptions and cannot license a current script or reference page.
+      - name: GC environment-knob drift audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_gc_env_knobs.py --self-test
+          python3 scripts/check_gc_env_knobs.py
+
+      # #7877, second round. The knob audit above covers env-var names; it says
+      # nothing about the paths and numbers the same pages state. Both drifted:
+      # the memory-model source map pointed at a `gc.rs` deleted in the module
+      # split (with line numbers), and CLAUDE.md carried "~55 registered
+      # scanners" against a population of 123 in two places, of which only one
+      # got corrected by hand. Numbers on the current pages now carry `gc-fact`
+      # markers naming the constant they came from, and this re-derives them.
+      # Build-free, so it belongs in `lint`, which IS a required context.
+      - name: GC documentation claim audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_gc_doc_claims.py --self-test
+          python3 scripts/check_gc_doc_claims.py
+
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
       # in the quarantine sweep had rooting ALREADY -- what was missing was
@@ -199,6 +271,25 @@ jobs:
           python3 scripts/raw_handle_debt.py --self-test
           python3 scripts/raw_handle_debt.py
 
+      # #7659: the step above compares the count against a baseline the SAME
+      # DIFF is free to move -- add bare reads, raise the recorded number to
+      # match, and it passes. `--update` refuses to raise, but nothing made CI
+      # run `--update`. This compares the recorded files against the pull
+      # request's merge base, so the number can only fall across a PR boundary.
+      #
+      # Gated on the event rather than on an empty variable: a `push` build has
+      # no merge base, but a `pull_request` build with an unresolvable one is a
+      # comparison that did not happen, and the script fails on that rather
+      # than passing (see `git_show`).
+      - name: Raw-handle debt ratchet vs. merge base
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/raw_handle_debt.py --no-raise-vs "$BASE_SHA"
+
       # The gap-suite ratchet decides whether conformance-smoke goes red, so
       # its own logic is unit-checked on the cheap job rather than only being
       # exercised 8 shards deep.
@@ -206,9 +297,29 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/gap_snapshot.py --self-test
 
+      # Two halves of the same gate (#7582).
+      #
+      # `--self-test` unit-checks the checker. `--audit` runs the checker's
+      # OFFLINE half against the committed files: every known_failures.json
+      # entry must carry provenance (issue + date, #797), name a test that
+      # still exists, and — for gap-suite entries — be corroborated by
+      # `test-parity/gap_snapshot.json`, which is GENERATED and bidirectional.
+      # An entry absent from that snapshot is one the snapshot asserts passes,
+      # i.e. a suppression that has outlived its bug.
+      #
+      # This belongs on `lint` rather than only on `parity` because `parity` is
+      # TAG-gated: the live half of the ratchet fires after every merge it was
+      # meant to judge. `test_gap_diagchannel_3082_3084_3085_3086` sat here from
+      # 2026-07-04 and absorbed a real data-loss regression for six days (#7580);
+      # this step would have named it on the day it was added. Costs ~0.1s and
+      # runs no tests.
       - name: Platform-aware parity allowlist self-test
         if: ${{ !cancelled() }}
         run: python3 scripts/parity_known_failures.py --self-test
+
+      - name: Parity allowlist ratchet (provenance + stale entries)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/parity_known_failures.py --audit
 
       # Moving-GC gate wiring. The GC gates are the ones this repo has most
       # often found unable to fail (CLAUDE.md's four hazards), and every miss so
@@ -281,6 +392,27 @@ jobs:
         run: |
           python3 scripts/check_test_registration.py --self-test
           python3 scripts/check_test_registration.py
+
+      # #7672: the GC test guards CLEAR ~20 process-global side tables from
+      # whatever libtest thread constructs a guard, and nothing requires a
+      # READER to take the clearing lock. Three flakes in two days came from
+      # that (#7665 x2, #7671), each exposed by an unrelated PR that changed the
+      # parallel schedule, so the author of the exposing PR paid the diagnosis.
+      #
+      # The class is fixed by storage, not by a lock: `per_test_global!`
+      # gives each thread its own table in a test build. This gate derives the
+      # clear list from the guards' own source and fails on any bare `static`
+      # left behind, so a NEW sink cannot be added quietly and a new READER
+      # never has to remember anything. Its allowlist entries each cite an
+      # issue, and an entry that matches nothing fails too.
+      #
+      # Pure text, ~1s, no compiler — in `lint` because `lint` is a required
+      # context (hazard 2), and `!cancelled()` for the reason given above.
+      - name: Per-test global sinks
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/global_sink_isolation.py --self-test
+          python3 scripts/global_sink_isolation.py
 
   # ---------------------------------------------------------------------------
   # Clippy — enforces the deny-level lints in [workspace.lints] (root
@@ -748,7 +880,8 @@ jobs:
   #   changed `crates/<pkg>/tests/<suite>.rs`  ->  cargo test -p <pkg> --test <suite>
   #
   # (plus suite module dirs and `common/` helper dirs — see
-  # scripts/ci_e2e_scope.py, capped at 12 suites).
+  # scripts/ci_e2e_scope.py — diff-named suites capped at 12; the perry-codegen
+  # source map added in #7708 is uncapped and in-process).
   #
   # Cost: PRs that touch no integration suite — the large majority — finish in
   # ~20-30s of checkout + scope computation and never install a toolchain or
@@ -771,13 +904,18 @@ jobs:
     # clock kills legitimately-running suites and we get an uninformative
     # "cancelled" instead of the per-suite `::error::` — reintroducing, one
     # level up, exactly what `timeout 1500` below exists to prevent.
-    #   DEFAULT_CAP (ci_e2e_scope.py) = 12 suites
-    #   per-suite bound below         = timeout 1500s = 25 min
-    #   12 x 25 = 300, + 30 min for toolchain/cache/staticlib build = 330
-    # Keep these three in sync. This is a backstop, not a budget: each suite is
+    #   DEFAULT_CAP (ci_e2e_scope.py) = 12 diff-named suites
+    #   NAMED_SUITE_TIMEOUT_S         = 1500s = 25 min  -> 12 x 25 = 300
+    #   #7708 mapped perry-codegen    = 22 suites, uncapped, but in-process:
+    #   MAPPED_SUITE_TIMEOUT_S        = 300s = 5 min    -> 22 x 5  = 110
+    #   + 2 known-failure checks at 5 min                          = 10
+    #   + 30 min for toolchain/cache/staticlib build
+    #                                                     total    = 450
+    # Keep these in sync with ci_e2e_scope.py. This is a backstop, not a budget:
+    # every mapped suite measured 2.2-10.4 s wall clock, each suite is
     # independently bounded, and the common case selects zero suites and exits
     # in ~20-30s.
-    timeout-minutes: 330
+    timeout-minutes: 450
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
@@ -802,6 +940,13 @@ jobs:
           changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
             --json files --jq '.files[].path')"
           suites="$(printf '%s\n' "$changed_files" | python3 scripts/ci_e2e_scope.py)"
+          # #7708: the held-out tests, so the run step can skip them AND assert
+          # each one still fails.
+          {
+            echo 'exclusions<<PERRY_EOF'
+            python3 scripts/ci_e2e_scope.py --exclusions
+            echo 'PERRY_EOF'
+          } >> "$GITHUB_OUTPUT"
           if [ -z "$suites" ]; then
             echo "No integration suite named by this diff — nothing to run."
             echo "suites=" >> "$GITHUB_OUTPUT"
@@ -856,6 +1001,7 @@ jobs:
           # Bound the heavy per-binary runtime link so the runner doesn't OOM.
           CARGO_BUILD_JOBS: "1"
           SUITES: ${{ steps.scope.outputs.suites }}
+          EXCLUSIONS: ${{ steps.scope.outputs.exclusions }}
         run: |
           # `cargo test` never builds the `staticlib` crate-type, so
           # libperry_{runtime,stdlib}.a don't exist unless built explicitly —
@@ -867,17 +1013,49 @@ jobs:
           fi
 
           status=0
-          while read -r package suite; do
+          # #7708: every suite runs with its known-failing tests skipped, in
+          # whichever tier selected it. Holding out a TEST instead of a SUITE is
+          # what lets `native_proof_regressions` contribute its other 261.
+          while read -r package suite bound; do
             [ -n "$package" ] || continue
+            skips=""
+            while read -r xpkg xsuite xtest; do
+              [ -n "$xpkg" ] || continue
+              if [ "$xpkg" = "$package" ] && [ "$xsuite" = "$suite" ]; then
+                skips="$skips --skip $xtest"
+                echo "::notice::skipping known failure $package::$suite::$xtest"
+              fi
+            done <<< "$EXCLUSIONS"
             echo "::group::cargo test -p $package --test $suite"
             # Per-suite wall-clock bound: a hung compile must not eat the whole
-            # job budget and hide the other suites' results.
-            if ! timeout 1500 cargo test -p "$package" --test "$suite"; then
+            # job budget and hide the other suites' results. Mapped in-process
+            # suites carry a much tighter bound than a diff-named one that
+            # shells out to `perry compile` — see ci_e2e_scope.py.
+            # shellcheck disable=SC2086
+            if ! timeout "${bound:-1500}" cargo test -p "$package" --test "$suite" -- $skips; then
               echo "::error::integration suite failed: $package --test $suite"
               status=1
             fi
             echo "::endgroup::"
           done <<< "$SUITES"
+
+          # #7708: the exclusions are self-invalidating. A held-out test that
+          # now PASSES (or that no longer exists under that name) fails the job,
+          # so a fix cannot land while leaving its entry behind — the failure
+          # mode #797 recorded for the parity skip-list.
+          if printf '%s\n' "$SUITES" | grep -q '^perry-codegen '; then
+            while read -r xpkg xsuite xtest; do
+              [ -n "$xpkg" ] || continue
+              echo "::group::known-failure check $xpkg::$xsuite::$xtest"
+              out="$(timeout 300 cargo test -p "$xpkg" --test "$xsuite" -- --exact "$xtest" 2>&1 || true)"
+              printf '%s\n' "$out"
+              if ! printf '%s\n' "$out" | grep -q '1 failed'; then
+                echo "::error::$xpkg::$xsuite::$xtest is listed in SUITE_EXCLUSIONS but did not fail (it passed, or no test matched that name). Delete its entry from SUITE_EXCLUSIONS in scripts/ci_e2e_scope.py and let the suite run it."
+                status=1
+              fi
+              echo "::endgroup::"
+            done <<< "$EXCLUSIONS"
+          fi
           exit "$status"
 
   # ---------------------------------------------------------------------------
@@ -911,6 +1089,19 @@ jobs:
           # (zizmor "artipacked", flagged by review on #6610).
           persist-credentials: false
 
+      - name: GC structural audits (Windows)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/gc_runtime_root_holders.py --self-test
+          python scripts/gc_runtime_root_holders.py
+          python scripts/check_gc_doc_claims.py --self-test
+          python scripts/check_gc_doc_claims.py
+          python scripts/check_thread_locals.py --self-test
+          python scripts/check_thread_locals.py
+          python -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
+          python benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/setup-llvm22
@@ -933,6 +1124,20 @@ jobs:
       # runner must exclude and therefore never compiles.
       - name: Build compiler + runtime + Windows UI crates (perry-dev)
         run: cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ui-windows -p perry-ui-windows-winui
+
+      # #7356: the full perry-runtime --lib suite is green on Windows for the
+      # first time (the SEH/longjmp transport, setjmp alignment, TZ, trim and
+      # spawnSync fixes). Before that, unguarded eh_walker calls meant the
+      # crate did not even COMPILE here and nothing noticed — this step is the
+      # arm that keeps the suite green rather than letting it rot back to
+      # "unmeasurable". Single-threaded for the same #1444 process-global-state
+      # reason as the ubuntu leg (both its invocations set RUST_TEST_THREADS=1);
+      # perry-dev profile so the test build shares the dependency artifacts the
+      # build step above already produced instead of paying a second cold
+      # dev-profile build of a ~340k-line crate.
+      - name: perry-runtime unit tests (single-threaded, #7356)
+        shell: bash
+        run: RUST_TEST_THREADS=1 cargo test --profile perry-dev --lib -p perry-runtime
 
       # Small deterministic subset: verifies the Git Bash driver itself,
       # `.exe`/`.lib` discovery, native TEMP paths, compilation, execution,
@@ -1095,15 +1300,22 @@ jobs:
 
       # GATING, and deliberately so. CLAUDE.md's GC knob kill-policy requires
       # every GC knob to have an arm that exercises it; the #7154 instruments
-      # (PERRY_GC_PROTECT_FROMSPACE, PERRY_GC_ZEAL) would otherwise be dark
-      # knobs on the subsystem with this repo's worst history of configuration
-      # rot. This asserts BOTH defaults — inert with the knobs unset, live with
-      # them set — and refuses to pass unless the zeal arm forced strictly more
-      # collections than the pressure-only arm, so it cannot go green having
-      # run zero copying minors (the #6942 / #7024 / #7025 failure mode).
+      # (PERRY_GC_PROTECT_FROMSPACE, PERRY_GC_SCHEDULE_SEED)
+      # would otherwise be dark knobs on the subsystem with this repo's worst
+      # history of configuration rot. This asserts BOTH defaults — inert with
+      # the knobs unset, live with them set — and refuses to pass unless the
+      # stress arms (the rate-1 seeded schedule, and the #7254 RATE=1 +
+      # VERIFY_EVACUATION pairing)
+      # forced strictly more collections than the pressure-only arm, so it
+      # cannot go green having run zero copying minors (the #6942 / #7024 /
+      # #7025 failure mode).
       # The detection property itself is a required-gate unit test:
       # gc/tests/fromspace_protect.rs::quarantine_catches_a_planted_stale_from_space_deref.
-      # ~20s: the fixture is sized for ~1200 back-edge polls, not #7154's 240k.
+      # Arms 1-3/5 use a fixture sized for ~1200 back-edge polls (not #7154's
+      # 240k), pinned to every-poll candidacy
+      # (PERRY_GC_SCHEDULE_ALLOC_KB=0). Arm 6 (#7728) is the budgeted one:
+      # a realistic poll count at the SHIPPED default, which is the axis that
+      # a ~1200-poll fixture structurally cannot see.
       - name: GC rooting-bug instruments (inert-when-off, live-when-on)
         run: ./scripts/gc_instrument_smoke.sh target/release/perry
 
@@ -1709,7 +1921,12 @@ jobs:
           cat test-parity/reports/parity_threshold_latest.md >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
-      - name: Check for new failures
+      # Bidirectional since #7582: red on a failure that is not allowed here,
+      # AND red on an allowlist entry whose test ran on this platform and
+      # PASSED. The second direction is the one that matters — the file was a
+      # pure suppression list, so a fixed test kept its entry forever and the
+      # entry silently absorbed that test's next regression (#7580).
+      - name: Check for new and stale failures
         run: >-
           python3 scripts/parity_known_failures.py
           --report test-parity/reports/latest.json
@@ -2099,10 +2316,10 @@ jobs:
       # of allocate-and-discard (would catch a future block-pinning /
       # cache-leak / tenuring-trap regression in the gen-GC work), and
       # (2) crashes when gc() is forced aggressively during JSON parse,
-      # deep recursion, or closure init. Each test runs under default,
-      # PERRY_GEN_GC=1, and PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1 so a
-      # regression in any GC mode is caught. Linux-only because /usr/bin/time
-      # availability + RSS reporting differs on Windows runners.
+      # deep recursion, or closure init. Each test runs under the default,
+      # full mark-sweep, explicit generational, and forced-evacuation verifier
+      # configurations. Linux/macOS only because /usr/bin/time availability +
+      # RSS reporting differs on Windows runners.
       - name: Memory stability tests
         if: runner.os == 'Linux' || runner.os == 'macOS'
         env:

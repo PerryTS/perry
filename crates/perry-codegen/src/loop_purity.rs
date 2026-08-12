@@ -67,7 +67,7 @@ pub(crate) fn body_needs_asm_barrier(body: &[Stmt]) -> bool {
 ///
 /// `is_inert` answers "can evaluating this expression run user code or
 /// allocate?" for the coercing operators. In production it is
-/// [`crate::expr::temp_root::expr_is_inert_primitive`] — the predicate #6975
+/// [`crate::rooting::expr_is_inert_primitive`] — the predicate #6975
 /// introduced for the argument-rooting decision, because it answers exactly
 /// this question and two copies of it would drift. It is injected rather than
 /// called directly so this module stays free of `FnCtx` and both directions of

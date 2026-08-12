@@ -148,3 +148,62 @@ export function performRollback(targetPath: string): number;
  * shortly after — that's how the running process hands off to the new one.
  */
 export function relaunch(exePath: string): number;
+
+// ---------------------------------------------------------------------------
+// The embedded `perry.update` block, for an app that carries its own check.
+//
+// Configure it in package.json and Perry bakes it into the binary; the runtime
+// notifies from what a previous run recorded. These are how the app performs
+// the check itself: the runtime says what to request and reads the answer, and
+// the app's own `fetch()` makes the request. Doing it that way keeps an HTTP
+// stack out of every compiled binary that never checks for an update.
+//
+// See docs/src/cli/app-updates.md.
+// ---------------------------------------------------------------------------
+
+/**
+ * The app's embedded update settings as a JSON string, or `""` when the project
+ * configured none.
+ *
+ * The exact bytes the compiler wrote, so the two sides cannot disagree about a
+ * field name.
+ */
+export function getEmbeddedConfig(): string;
+
+/**
+ * The URL to request for the configured source, or `""` when no request should
+ * be made.
+ *
+ * Empty is a decision, not a failure: a `gh-registry` source with no token
+ * would 404, and a 404 reads as "up to date", so the runtime declines to name a
+ * URL rather than letting the app report itself current forever.
+ *
+ * @param token A GitHub token for `gh-registry`. Pass `undefined` otherwise —
+ *   it is never sent to the public npm registry.
+ */
+export function embeddedCheckUrl(token?: string): string;
+
+/**
+ * The headers for that request, as `name: value` lines separated by newlines,
+ * or `""` when there are none.
+ */
+export function embeddedCheckHeaders(token?: string): string;
+
+/**
+ * Interpret a response body according to the configured source and record what
+ * it said. Returns 1 when something was recorded, 0 otherwise.
+ *
+ * Parsing stays in the runtime so the four source shapes agree with the
+ * compiler that emitted the block, and so an app cannot record a version its
+ * source never named. A body that does not match the configured shape, or whose
+ * version does not parse, records nothing.
+ */
+export function recordEmbeddedResponse(body: string): number;
+
+/**
+ * Whether enough time has passed since the last check, per the configured
+ * `checkInterval`. Returns 1 when a request is due.
+ *
+ * Call this before fetching, so an app does not ask its registry on every run.
+ */
+export function embeddedRefreshDue(): number;

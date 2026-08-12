@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Tagged-template `.raw` side-table — maps a cooked-strings array
     /// pointer to its corresponding raw-strings array pointer. Populated
     /// by `js_tagged_template_register_raw` at the tagged-call site; read
@@ -65,6 +65,55 @@ pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
         } else {
             0
         }
+    }
+}
+
+/// The `obj_type` and flag word of the `GcHeader` that precedes `arr`, read
+/// once, for a receiver [`clean_arr_ptr`] has already resolved. `(0, 0)` when
+/// `arr` is too low to carry a header — `0` is not a legal `obj_type`, so it
+/// reads as "unknown" at every call site.
+///
+/// A non-zero tag is NOT proof that a real header exists. `Buffer` and
+/// `TypedArray` payloads are `std::alloc`-backed, so the eight bytes below them
+/// are allocator bookkeeping and can read as any value. Use the answer only
+/// where a wrong tag is harmless:
+///
+/// * to *skip* a registry probe whose answer for that receiver would have been
+///   `false` anyway — the caller must already have routed real buffers and
+///   typed arrays elsewhere; or
+/// * as the `GC_TYPE_ARRAY` test [`array_object_flags`] already performs on
+///   this very byte, where those bookkeeping bytes are allowed to be wrong
+///   today.
+///
+/// What makes the tag *authoritative* for the collection receivers is that
+/// every GC allocation carries a header, `Map` and `Set` included:
+/// `js_map_alloc` / `js_set_alloc` stamp `GC_TYPE_MAP` / `GC_TYPE_SET` through
+/// `arena_alloc_gc`, and that is the single registration site for each. Several
+/// comments in the tree still say Map/Set headers come from a bare `alloc()`
+/// with no `GcHeader` and that only the registry can classify them; that
+/// stopped being true when they moved into the managed arena.
+#[inline]
+pub(crate) fn array_receiver_gc_tag(arr: *const ArrayHeader) -> (u8, u16) {
+    // `try_read_gc_header` rather than this file's usual
+    // `>= GC_HEADER_SIZE + 0x1000` floor: that floor sits BELOW the handle
+    // band, and `js_array_length` reaches here before its proxy/handle
+    // receivers have been routed. The canonical predicate rejects the bands
+    // without touching memory, and rejecting an address the old floor would
+    // have read costs nothing — a handle is not a Map either way.
+    match unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) } {
+        Some(header) => (header.obj_type, header._reserved),
+        None => (0, 0),
+    }
+}
+
+/// [`array_object_flags`] answered from a tag [`array_receiver_gc_tag`]
+/// already read, for a receiver `clean_arr_ptr` already resolved.
+#[inline]
+pub(crate) fn array_object_flags_from_tag(tag: (u8, u16)) -> u16 {
+    if tag.0 == crate::gc::GC_TYPE_ARRAY {
+        tag.1
+    } else {
+        0
     }
 }
 
@@ -620,11 +669,49 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         if (cleaned as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            let obj_type = (*gc_header).obj_type;
+            if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let lazy = cleaned as *mut crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
                     let materialized = crate::json_tape::force_materialize_lazy(lazy);
                     return materialized as *const ArrayHeader;
+                }
+            }
+            // #7574: a `GC_TYPE_OBJECT` / `GC_TYPE_CLOSURE` allocation is NOT
+            // an `ArrayHeader`, and the two layouts overlay field for field —
+            // `ArrayHeader.length` reads `ObjectHeader.object_type` (= 1),
+            // `.capacity` reads `class_id`, and the element slots at +8/+16/+24
+            // are `parent_class_id ‖ field_count`, `keys_array` and `meta`. The
+            // sanity check below waves that through (1 <= class_id <= 100M), so
+            // an element WRITE overwrites two live GC child edges with
+            // arbitrary doubles and the collector then traces them: `class X
+            // extends Array` in a `T[]`-annotated binding SIGSEGVs on its
+            // second `.push()`.
+            //
+            // A declared TypeScript type is a hint, never a layout fact
+            // (CLAUDE.md, *Known Limitations*), so this is reachable from every
+            // binding form. Refusing it here makes ALL ~190 `clean_arr_ptr`
+            // call sites fail-closed at once — each degrades through its
+            // existing null branch instead of dereferencing a forged header —
+            // and it is the same "resolve at the shared runtime funnel, not at
+            // one codegen predicate at a time" shape #7573 used for Map/Set.
+            //
+            // Correctness (rather than mere safety) for the entry points the
+            // declared-type tiers actually reach is layered on top: those null
+            // branches re-enter through `array::subclass::array_object_*`,
+            // which runs the operation on the spec-generic array-like engine.
+            //
+            // Costs one compare on a byte this block already loaded. Buffers
+            // and typed arrays are `std::alloc`-backed with no `GcHeader`, so
+            // their preceding bytes are allocator bookkeeping that can read as
+            // any value — confirm against the registries before nulling, in the
+            // cold arm only.
+            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+                let addr = cleaned as usize;
+                if !crate::buffer::is_registered_buffer(addr)
+                    && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+                {
+                    return std::ptr::null();
                 }
             }
         }
@@ -899,7 +986,7 @@ unsafe fn array_slots_are_numeric(arr: *const ArrayHeader) -> bool {
 }
 
 #[inline]
-unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
+pub(super) unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
     if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
     }
@@ -1233,6 +1320,12 @@ pub(crate) unsafe fn set_array_numeric_layout(arr: *mut ArrayHeader, layout: Num
     match layout {
         NumericArrayLayout::RawF64 => set_array_raw_f64_layout_flag(arr),
     }
+    // #7480: the numeric and element-shape invariants are mutually exclusive
+    // — an element-shape array's slots are NaN-boxed pointers, which no
+    // raw-f64 layout admits. This is also what covers the bulk numeric
+    // producers (`js_array_fill_f64_*_extend`) that write slots directly and
+    // then declare the layout.
+    super::element_shape::clear_element_shape(arr);
     crate::gc::layout_init_pointer_free(arr as *mut u8);
 }
 
@@ -1447,6 +1540,55 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
     }
 }
 
+/// #7469 — declare ONCE, at allocation, that every element this array will
+/// hold is a heap pointer, so the per-store pointer-mask bookkeeping
+/// (`layout_note_slot`, and the `LAYOUT_SLOT_MASKS` entry it grows) is not
+/// needed for the stores codegen has proven pointer-valued.
+///
+/// Emitted by codegen at the `[]` literal that binds an array local whose every
+/// store it can prove pointer-by-construction; see
+/// `perry-codegen/src/collectors/all_pointer_arrays.rs` for the proof and
+/// `expr/array_push.rs` for the header test that re-validates the declaration
+/// at every elided store.
+///
+/// Two things happen here, and both are load-bearing:
+///
+/// 1. **The raw-f64 numeric layout is cleared.** `js_array_alloc` publishes
+///    every fresh array as `RawF64` + `POINTER_FREE` — the numeric fast paths
+///    read such an array's slots back as raw doubles, which for a pointer
+///    payload is a reinterpretation of a heap address as a number. The
+///    all-pointer declaration and the raw-f64 flag are mutually exclusive
+///    claims about the same bytes, and the codegen-side header test refuses the
+///    elided store unless BOTH raw-f64 bits are clear, so this clear is what
+///    keeps that test satisfiable.
+/// 2. **`GC_LAYOUT_SIDE_MASK | GC_LAYOUT_ALL_POINTERS` replaces
+///    `GC_LAYOUT_POINTER_FREE`.** For the collector that swaps "skip the whole
+///    payload" for "visit every slot in `0..length`" — the same set of slots
+///    `GC_LAYOUT_UNKNOWN` visits, so the declaration is conservative in the
+///    only direction that matters: a wrong element type costs a rejected slot
+///    read (`mark_field_into_worklist` re-validates every word), never a
+///    stranded live child.
+///
+/// Refused on a non-empty array: the claim covers `0..length`, and only on an
+/// empty array is it vacuously true of what is already stored. A refusal is
+/// silent and safe — the header keeps whatever layout it had, and the codegen
+/// header test then declines the elided store and routes the push through
+/// `js_array_push_f64`, which notes every slot as it always did.
+#[no_mangle]
+pub extern "C" fn js_array_declare_all_pointer_elements(arr: *mut ArrayHeader) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return;
+    }
+    unsafe {
+        if (*arr).length != 0 {
+            return;
+        }
+        clear_array_numeric_layout(arr);
+        crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32 {
     let arr = clean_arr_ptr(arr);
@@ -1507,6 +1649,10 @@ static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern "C" fn(*mut ArrayHeader, u64) =
     js_array_note_numeric_write;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
+static KEEP_JS_ARRAY_DECLARE_ALL_POINTER_ELEMENTS: extern "C" fn(*mut ArrayHeader) =
+    js_array_declare_all_pointer_elements;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) -> i32 =
     js_array_is_numeric_f64_layout;
 #[cfg(feature = "keepalive-anchors")]
@@ -1520,7 +1666,7 @@ pub(crate) fn array_byte_size(capacity: usize) -> usize {
 }
 
 #[inline]
-unsafe fn array_elements_ptr(arr: *mut ArrayHeader) -> *mut u64 {
+pub(super) unsafe fn array_elements_ptr(arr: *mut ArrayHeader) -> *mut u64 {
     (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64
 }
 
@@ -1604,6 +1750,16 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
     }
+    // #7480: this is the post-hoc funnel most bulk element mutators use —
+    // `shift`, `unshift`, `splice`, `fill`, `copyWithin`, and `reverse` all
+    // mutate slots with bare `ptr::write` / `ptr::copy` and then land here.
+    // NOT `sort`: its default path writes the rank permutation back through
+    // `RootedArrayElems::set`, so it revokes through the STORE funnel
+    // (`layout_note_slot`) instead — established by sabotage in #7608's
+    // matrix (removing the revoke here leaves the sort test green). They are permutations or arbitrary
+    // rewrites, so the element-shape proof is dropped conservatively; a
+    // still-homogeneous array re-earns it on the next `ensure`.
+    super::element_shape::clear_element_shape(arr);
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
     if length > capacity || length > 16_000_000 {
@@ -1627,6 +1783,8 @@ pub(crate) unsafe fn rebuild_array_layout_exact(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
     }
+    // #7480: same conservative drop as `rebuild_array_layout` — see there.
+    super::element_shape::clear_element_shape(arr);
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
     if length > capacity || length > 16_000_000 {
@@ -1664,10 +1822,11 @@ pub(crate) unsafe fn replay_array_growth_write_barriers(arr: *mut ArrayHeader) {
         return;
     }
 
-    for i in 0..length {
-        let slot = slots.add(i);
-        crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
-    }
+    // One parent, one contiguous slot run — the loop form of the barrier, whose
+    // per-store entry point would re-derive the parent classification `length`
+    // times and re-assert a page-granular fact ~512 times per page. See
+    // `gc::barrier::replay_old_parent_slot_range`.
+    crate::gc::replay_old_parent_slot_range_barriers(arr as usize, slots, length);
 }
 
 #[inline]

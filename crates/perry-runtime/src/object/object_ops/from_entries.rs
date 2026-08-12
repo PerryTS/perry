@@ -59,6 +59,7 @@ unsafe fn object_from_entries_has_iterator(value: f64, raw: i64, gc_type: Option
         | Some(crate::gc::GC_TYPE_SET) => return true,
         Some(crate::gc::GC_TYPE_OBJECT) => {
             let obj = raw as *mut ObjectHeader;
+            #[cfg(feature = "url-engine")]
             if crate::url::try_read_as_search_params(obj).is_some() {
                 return true;
             }
@@ -107,6 +108,9 @@ unsafe fn object_from_entries_materialize_entries(entries_value: f64) -> *mut Ar
         return crate::map::js_map_entries(raw as *const crate::map::MapHeader);
     }
 
+    // The whole arm exists to serve `URLSearchParams`, so it goes with the
+    // feature rather than leaving `obj` bound for a body that isn't compiled.
+    #[cfg(feature = "url-engine")]
     if gc_type == Some(crate::gc::GC_TYPE_OBJECT) {
         let obj = raw as *mut ObjectHeader;
         if crate::url::try_read_as_search_params(obj).is_some() {

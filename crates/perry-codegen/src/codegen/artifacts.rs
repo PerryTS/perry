@@ -1433,9 +1433,35 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // `BTreeSet` so a multi-path site that resolves to N targets emits
     // N declarations exactly once even when multiple `paths` arrays
     // share entries.
-    if !cross_module.dynamic_import_path_to_prefix.is_empty() {
-        let mut foreign_prefixes: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+    // #7189: nested namespace members (`export * as ns from "./m.ts"`, read as
+    // `B.ns` through a static `import * as B`) load the SAME
+    // `@__perry_ns_<prefix>` global a dynamic import would, so they need the
+    // same extern declaration. Without it the module references a global it
+    // never declared and LLVM refuses to parse the IR — which is a good way for
+    // this to fail, since it fails at build time and names the missing global.
+    let mut nested_prefixes: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for key in &cross_module.namespace_member_nested {
+        if let Some(prefix) = cross_module.namespace_member_prefixes.get(key) {
+            if prefix != module_prefix.as_str() {
+                nested_prefixes.insert(prefix.clone());
+            }
+        }
+    }
+    // The other direction: this module's OWN populator has a nested entry for
+    // each `export * as ns` it declares, and that entry's value is the source
+    // module's namespace global. Before #7189 this could not come up, because a
+    // module only got a populator by being a dynamic-import target and those
+    // already declare their targets. Now that a namespace re-exporter gets one
+    // too, its source needs declaring on the same terms.
+    for entry in &cross_module.namespace_entries {
+        if let crate::NamespaceEntryKind::NestedNamespace { source_prefix } = &entry.kind {
+            if source_prefix != module_prefix.as_str() {
+                nested_prefixes.insert(source_prefix.clone());
+            }
+        }
+    }
+    if !cross_module.dynamic_import_path_to_prefix.is_empty() || !nested_prefixes.is_empty() {
+        let mut foreign_prefixes: std::collections::BTreeSet<String> = nested_prefixes;
         for prefix in cross_module.dynamic_import_path_to_prefix.values() {
             if prefix != module_prefix.as_str() {
                 foreign_prefixes.insert(prefix.clone());
@@ -1833,16 +1859,29 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // "use of undefined value" (regression class of #318/#343).
     let materialized_closure_ids: std::collections::HashSet<perry_hir::types::FuncId> =
         closures.iter().map(|(id, _)| *id).collect();
-    for (func_id, display) in &hir.closure_display_names {
-        if !materialized_closure_ids.contains(func_id) {
-            continue;
-        }
-        if display.is_empty() || named_inline_closure_ids.contains(func_id) {
-            continue;
-        }
-        if registered_fn_ids.contains(func_id) {
-            continue;
-        }
+    // Sorted, NOT raw `HashMap` iteration (#7622) — the same defect #7038 fixed
+    // one loop down for `closure_source_text`, left standing here. Every entry
+    // mints a rodata constant through `add_string_constant`, whose `@.str.N`
+    // counter numbers in first-use order, and emits one
+    // `js_register_function_name` call in `__perry_init_strings_*`. Iterating
+    // the map directly made both a per-process permutation, so the same source
+    // compiled by the same binary produced different `.ll` on every run — which
+    // silently invalidates any A/B that compares raw IR (the primary evidence
+    // the #7615 rooting slices offer). Emission order is the only thing that
+    // changes; sorting by `FuncId` makes it stable without altering what is
+    // emitted.
+    let mut materialized_closure_display: Vec<(&perry_hir::types::FuncId, &String)> = hir
+        .closure_display_names
+        .iter()
+        .filter(|(func_id, display)| {
+            materialized_closure_ids.contains(*func_id)
+                && !display.is_empty()
+                && !named_inline_closure_ids.contains(*func_id)
+                && !registered_fn_ids.contains(*func_id)
+        })
+        .collect();
+    materialized_closure_display.sort_by_key(|(func_id, _)| **func_id);
+    for (func_id, display) in materialized_closure_display {
         let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
         user_fn_display_names.push((sym, display.clone()));
     }

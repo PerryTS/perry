@@ -44,6 +44,7 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -309,7 +310,7 @@ fn straight_line_number_function_takes_the_typed_f64_clone() {
     let ir = emitted_ir(vec![add_fn()]);
     assert!(!ir.contains("add_i64"), "{NO_I64_BODY}:\n{ir}");
     assert!(
-        ir.contains("__typed_f64"),
+        ir.contains("$typed_f64"),
         "the typed-f64 clone must now be reachable for a plain `a + b`:\n{ir}"
     );
 }

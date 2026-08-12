@@ -56,6 +56,61 @@ pub(crate) struct ObjectShapeHint {
     pub(crate) field_count: u32,
 }
 
+/// The deepest `[`/`{` nesting handled by the recursive fast path.
+///
+/// Both the `serde_json` validation pass and Perry's direct value parser recurse
+/// once per container, so their cutoff is sized for Perry's smallest worker
+/// stack rather than the main thread's larger stack (#7792).
+///
+/// Deeper documents switch to the flat-tape parser and iterative materializer,
+/// so this is a native-stack safety threshold rather than an input limit.
+pub(crate) const MAX_RECURSIVE_NESTING_DEPTH: usize = 1_000;
+
+/// Heap-stack safety ceiling. This remains well above Node-parity cases such as
+/// #7817's 300,000-level document, while bounding the tape, pending-frame stack,
+/// and runtime-container amplification for unusually deep input.
+pub(crate) const MAX_ITERATIVE_NESTING_DEPTH: usize = 500_000;
+
+/// Does `bytes` nest deeper than `limit`?
+///
+/// Iterative on purpose. A recursive depth check would be the very thing it
+/// exists to prevent, and it would crash on exactly the documents it is
+/// supposed to reject.
+///
+/// Bracket bytes inside strings do not count, so a document that is one long
+/// `"[[[[[[…"` string is not mistaken for deep nesting. This runs before any
+/// syntax validation, so it must not assume the input is well-formed — an
+/// unbalanced `]` clamps at zero rather than underflowing.
+pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for &byte in bytes {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'[' | b'{' => {
+                depth += 1;
+                if depth > limit {
+                    return true;
+                }
+            }
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
+}
+
 pub(crate) struct DirectParser<'a> {
     input: &'a [u8],
     pos: usize,
@@ -359,6 +414,7 @@ impl<'a> DirectParser<'a> {
         // Pre-allocate with the known keys_array + field count. No
         // shape cache lookup — the shape is already in the cache from
         // the one-time build at parse entry.
+        let mut saw_pointer = false;
         let mut js_obj = crate::object::js_object_alloc_class_inline_keys(
             0, // class_id 0 = plain object (not a class instance)
             0, // parent_class_id
@@ -429,10 +485,13 @@ impl<'a> DirectParser<'a> {
                             if fast_idx < alloc_limit {
                                 let slot_idx = fast_idx;
                                 let value_bits = value.bits();
-                                // GC_STORE_AUDIT(BARRIERED): shaped JSON field write uses the shared object slot-store helper.
-                                crate::object::store_object_field_slot(
-                                    js_obj, slot_idx, value_bits,
-                                );
+                                // GC_STORE_AUDIT(BARRIERED): shaped JSON field write uses the
+                                // layout-deferred slot-store helper (#7630); the layout state
+                                // is settled once at the tail of this function.
+                                saw_pointer |=
+                                    crate::object::store_object_field_slot_layout_deferred(
+                                        js_obj, slot_idx, value_bits,
+                                    );
                                 fast_idx += 1;
                                 took_fast = true;
                             }
@@ -453,6 +512,11 @@ impl<'a> DirectParser<'a> {
                 // path as generic parse_object).
                 let key_ptr = cached_parse_key_ptr(key_bytes);
                 js_obj = parse_root_object_ptr(obj_slot);
+                // The by-name path stores through the noting helper and may
+                // build a mask mid-construction; treat it as pointer-bearing so
+                // the tail's finalize (which routes through layout_mark_unknown)
+                // removes whatever it recorded (#7630).
+                saw_pointer = true;
                 crate::object::js_object_set_field_by_name(
                     js_obj,
                     key_ptr as *mut StringHeader,
@@ -471,6 +535,10 @@ impl<'a> DirectParser<'a> {
         }
         self.expect(b'}');
         js_obj = parse_root_object_ptr(obj_slot);
+        // #7630: the construction loop elided per-slot layout notes; settle the
+        // layout state once, on the LIVE pointer (re-read from the parse root
+        // above, so a mid-parse collection cannot leave this on a stale copy).
+        crate::gc::layout_finish_deferred_boxed_object(js_obj as usize, saw_pointer);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
     }
@@ -665,22 +733,27 @@ impl<'a> DirectParser<'a> {
         for i in 0..alloc_field_count {
             std::ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
-        let write_field = |i: usize, value: JSValue| {
+        let write_field = |i: usize, value: JSValue| -> bool {
             let value_bits = value.bits();
             unsafe {
-                // GC_STORE_AUDIT(BARRIERED): JSON object field write uses the shared object slot-store helper.
-                crate::object::store_object_field_slot(js_obj, i, value_bits);
+                // GC_STORE_AUDIT(BARRIERED): JSON object field write uses the
+                // layout-deferred slot-store helper (#7630); the layout state is
+                // settled once below. No allocation happens between the writes
+                // and the finalize, so `js_obj` cannot move in between.
+                crate::object::store_object_field_slot_layout_deferred(js_obj, i, value_bits)
             }
         };
+        let mut saw_pointer = false;
         if let Some((_, values)) = heap_fields.as_ref() {
             for (i, value) in values.iter().copied().enumerate() {
-                write_field(i, value);
+                saw_pointer |= write_field(i, value);
             }
         } else {
             for (i, value) in inline_values[..inline_len].iter().copied().enumerate() {
-                write_field(i, value);
+                saw_pointer |= write_field(i, value);
             }
         }
+        crate::gc::layout_finish_deferred_boxed_object(js_obj as usize, saw_pointer);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
     }
@@ -769,8 +842,21 @@ impl<'a> DirectParser<'a> {
 
         // Small fixed-point fast path: JSON API feeds often contain
         // `"score": 123.5`-style values. Avoid the general decimal
-        // parser for short non-exponent decimals by accumulating the
-        // integer and fractional digits once and scaling by a tiny table.
+        // parser for short non-exponent decimals by accumulating ALL
+        // the digits into one integer mantissa and dividing once by an
+        // exact power of ten.
+        //
+        // #7477: this must be bit-identical to `str::parse::<f64>` (the
+        // tape materializer's and V8-strtod's answer). The previous form
+        // `int as f64 + (frac as f64 / 10^k)` rounded TWICE — the
+        // division rounds, then the addition rounds again — and was one
+        // ulp off for literals like `260.75197`. The single-division
+        // form is the classic Clinger fast path: when the decimal
+        // mantissa m fits in 2^53 (exactly representable) and 10^k is an
+        // exact f64 (all powers up to 10^22 are), `m as f64 / 10^k` is
+        // ONE correctly-rounded IEEE operation on the exact rational
+        // m/10^k — the same double a correct decimal parser produces.
+        // Anything wider falls through to `str::parse` below.
         if has_dot {
             self.pos += 1;
             let frac_start = self.pos;
@@ -782,30 +868,38 @@ impl<'a> DirectParser<'a> {
                 && (self.input[self.pos] == b'e' || self.input[self.pos] == b'E');
             let int_len = int_end - int_start;
             let frac_len = frac_end - frac_start;
-            if !exp_after_frac && int_len > 0 && int_len <= 15 && frac_len > 0 && frac_len <= 9 {
-                let mut int_acc: u64 = 0;
+            if !exp_after_frac
+                && int_len > 0
+                && frac_len > 0
+                && frac_len <= 9
+                && int_len + frac_len <= 17
+            {
+                // ≤ 17 digits always fits u64 (10^17 < 2^63); the ≤ 2^53
+                // check below is the exact-representability gate.
+                let mut mantissa: u64 = 0;
                 for &b in &self.input[int_start..int_end] {
-                    int_acc = int_acc * 10 + (b - b'0') as u64;
+                    mantissa = mantissa * 10 + (b - b'0') as u64;
                 }
-                let mut frac_acc: u64 = 0;
                 for &b in &self.input[frac_start..frac_end] {
-                    frac_acc = frac_acc * 10 + (b - b'0') as u64;
+                    mantissa = mantissa * 10 + (b - b'0') as u64;
                 }
-                const POW10: [f64; 10] = [
-                    1.0,
-                    10.0,
-                    100.0,
-                    1_000.0,
-                    10_000.0,
-                    100_000.0,
-                    1_000_000.0,
-                    10_000_000.0,
-                    100_000_000.0,
-                    1_000_000_000.0,
-                ];
-                let magnitude = int_acc as f64 + (frac_acc as f64 / POW10[frac_len]);
-                let value = if neg { -magnitude } else { magnitude };
-                return JSValue::number(value);
+                if mantissa <= (1u64 << 53) {
+                    const POW10: [f64; 10] = [
+                        1.0,
+                        10.0,
+                        100.0,
+                        1_000.0,
+                        10_000.0,
+                        100_000.0,
+                        1_000_000.0,
+                        10_000_000.0,
+                        100_000_000.0,
+                        1_000_000_000.0,
+                    ];
+                    let magnitude = mantissa as f64 / POW10[frac_len];
+                    let value = if neg { -magnitude } else { magnitude };
+                    return JSValue::number(value);
+                }
             }
         }
         if self.pos < self.input.len()

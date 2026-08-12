@@ -90,8 +90,20 @@ pub extern "C" fn js_typed_f64_arg_to_raw(value: f64) -> f64 {
 ///
 /// This is intentionally non-throwing. Tagged JS int32 values are accepted
 /// directly; plain JS numbers are accepted only when they are finite, integral,
-/// and in the signed 32-bit range. Everything else must use the generic
-/// JSValue body.
+/// in the signed 32-bit range, and NOT `-0`. Everything else must use the
+/// generic JSValue body.
+///
+/// **`-0` is rejected on purpose.** It is finite, integral and in range, so the
+/// obvious predicate lets it through — and then `js_typed_i32_arg_to_raw` maps
+/// it to the raw `0`, which the specialized entry re-boxes as `+0` on the way
+/// out. Every consumer of this guard admits a body that can return a parameter
+/// *unchanged* (`expr_is_typed_i32_safe` accepts a bare `LocalGet`; a spec-ABI
+/// entry stamps the raw slot over the declared type for the whole body), so a
+/// `-0` argument would make the fast arm and the boxed arm disagree —
+/// `Object.is(f(-0), -0)` true on the slow path, false on the fast one. There
+/// is no `-0` in the i32 domain to round-trip through, so the guard has to be
+/// the place this is caught: rejecting sends `-0` down the always-correct
+/// generic body.
 #[no_mangle]
 pub extern "C" fn js_typed_i32_arg_guard(value: f64) -> i32 {
     let js_value = JSValue::from_bits(value.to_bits());
@@ -104,6 +116,7 @@ pub extern "C" fn js_typed_i32_arg_guard(value: f64) -> i32 {
     let number = js_value.as_number();
     (number.is_finite()
         && number.fract() == 0.0
+        && !(number == 0.0 && number.is_sign_negative())
         && number >= i32::MIN as f64
         && number <= i32::MAX as f64) as i32
 }
@@ -414,9 +427,21 @@ mod tests {
         assert_eq!(js_typed_i32_arg_to_raw(12.0), 12);
         assert_eq!(js_typed_i32_arg_guard(12.5), 0);
         assert_eq!(js_typed_i32_arg_guard(f64::NAN), 0);
+        assert_eq!(js_typed_i32_arg_guard(f64::INFINITY), 0);
+        assert_eq!(js_typed_i32_arg_guard(f64::NEG_INFINITY), 0);
         assert_eq!(js_typed_i32_arg_guard(i32::MAX as f64 + 1.0), 0);
         assert_eq!(js_typed_i32_arg_guard(i32::MIN as f64 - 1.0), 0);
+        assert_eq!(js_typed_i32_arg_guard(i32::MAX as f64), 1);
+        assert_eq!(js_typed_i32_arg_guard(i32::MIN as f64), 1);
         assert_eq!(js_typed_i32_arg_guard(f64::from_bits(TAG_TRUE)), 0);
+
+        // `-0` must NOT reach a raw i32 slot: it is finite, integral and in
+        // range, but there is no `-0` in the i32 domain, so a body that
+        // returns its parameter unchanged would turn `-0` into `+0` on the
+        // fast arm only. `+0` still passes.
+        assert_eq!(js_typed_i32_arg_guard(-0.0), 0);
+        assert_eq!(js_typed_i32_arg_guard(0.0), 1);
+        assert_eq!(js_typed_i32_arg_to_raw(0.0), 0);
 
         let s = crate::string::js_string_from_bytes(b"no".as_ptr(), 2);
         let string = f64::from_bits(JSValue::string_ptr(s).bits());
