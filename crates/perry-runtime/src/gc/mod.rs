@@ -1036,7 +1036,49 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // safepoints the schedule actually saw. Inert (one cached-`Option` load) and
     // once-only when the mode is off.
     schedule::report_exit_summary();
+    emit_incremental_liveness_diag();
     emit_schedule_liveness_verdict();
+}
+
+/// `PERRY_GC_DIAG=1`: what the INCREMENTAL collector charged this run, whether
+/// or not any cycle completed (#7909).
+///
+/// Every other GC diagnostic is emitted per completed cycle, so a run that
+/// starts a budgeted cycle and never finishes it prints nothing at all — the
+/// `asyncpipe` shape, where the collector's own output is empty while a third
+/// of the leaf profile is collector machinery. `cycle_starts > completions`
+/// with a large `steps` is exactly that state, and it is only visible here.
+fn emit_incremental_liveness_diag() {
+    if !telemetry::gc_diag_enabled() {
+        return;
+    }
+    if !crate::native_handle::is_main_thread_or_unrecorded() {
+        return;
+    }
+    static EMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let (reentrant, no_trigger, start_blocked, resume_blocked) = instruments::budgeted_step_skips();
+    eprintln!(
+        "[gc-incremental] cycle_starts={} steps={} completions={} active_at_exit={} \
+         mark_barrier_arms={} mark_barrier_armed_us={} \
+         skips(reentrant={reentrant} no_trigger={no_trigger} start_blocked={start_blocked} \
+         resume_blocked={resume_blocked}) safepoints_blocked_by_budgeted={} \
+         copying_minors={} loop_polls={} poll_arm_events={} \
+         poll_armed_at_exit={}",
+        instruments::incremental_cycle_starts(),
+        instruments::incremental_steps(),
+        instruments::incremental_completions(),
+        policy::gc_budgeted_cycle_active(),
+        instruments::mark_barrier_arm_events(),
+        instruments::mark_barrier_armed_us(),
+        instruments::moving_safepoints_blocked_by_budgeted(),
+        instruments::copying_minor_cycles(),
+        instruments::loop_polls_reached(),
+        poll_arm::poll_arm_events(),
+        poll_arm::poll_armed_count(),
+    );
 }
 
 /// Print what the rate-1 schedule endpoint actually did, and **fail the

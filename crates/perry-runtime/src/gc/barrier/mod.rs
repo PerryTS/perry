@@ -761,6 +761,7 @@ pub(super) fn incremental_mark_barrier_enable(valid_ptrs: &ValidPointerSet, mino
     // its insertion barrier — a lost mark, i.e. a live object swept.
     let newly_active = INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| cell.get().is_null());
     if newly_active {
+        super::instruments::note_mark_barrier_armed();
         PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_add(1, Ordering::SeqCst);
     }
     INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| cell.set(valid_ptrs as *const ValidPointerSet));
@@ -773,6 +774,7 @@ pub(super) fn incremental_mark_barrier_disable() {
         was_active
     });
     if was_active {
+        super::instruments::note_mark_barrier_disarmed();
         let _ = PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_update(
             Ordering::SeqCst,
             Ordering::SeqCst,

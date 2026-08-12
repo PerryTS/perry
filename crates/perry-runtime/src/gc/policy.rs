@@ -2573,6 +2573,14 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     if in_alloc || unsafe_zone || root_lock || budgeted {
         // Blocked right now — leave GC_SAFEPOINT_PENDING set so the next poll
         // retries; do not clear it here.
+        //
+        // #7909: `budgeted` is the arm that can be PERMANENT. A budgeted cycle
+        // started for nursery pressure that this pump's cadence cannot finish
+        // rejects every later safepoint here, forever, so it is counted apart
+        // from the transient arms.
+        if budgeted {
+            super::instruments::note_moving_safepoint_blocked_by_budgeted();
+        }
         return false;
     }
     // We are handling this safepoint (collect or find nothing due): clear the
@@ -3220,14 +3228,23 @@ fn gc_budgeted_step_work_units_inner_with_progress(
     }
 
     let Some(_guard) = BudgetedGcStepGuard::enter() else {
+        super::instruments::note_budgeted_step_skip(
+            super::instruments::BudgetedStepSkip::Reentrant,
+        );
         return gc_budgeted_skipped_result();
     };
 
     if !gc_budgeted_cycle_active() {
         if gc_budgeted_due_trigger().is_none() {
+            super::instruments::note_budgeted_step_skip(
+                super::instruments::BudgetedStepSkip::NoTrigger,
+            );
             return gc_idle_step_result();
         }
         if gc_budgeted_start_blocked() {
+            super::instruments::note_budgeted_step_skip(
+                super::instruments::BudgetedStepSkip::StartBlocked,
+            );
             return gc_budgeted_skipped_result();
         }
         let cycle = gc_start_budgeted_cycle_for_pressure(start_progress_kind)
@@ -3236,9 +3253,13 @@ fn gc_budgeted_step_work_units_inner_with_progress(
             *slot.borrow_mut() = Some(cycle);
         });
         GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(true));
+        super::instruments::note_incremental_cycle_start();
     }
 
     if gc_budgeted_resume_blocked() {
+        super::instruments::note_budgeted_step_skip(
+            super::instruments::BudgetedStepSkip::ResumeBlocked,
+        );
         return gc_budgeted_skipped_result();
     }
 
@@ -3250,7 +3271,9 @@ fn gc_budgeted_step_work_units_inner_with_progress(
         };
 
         let step = cycle.state.step(GcWorkBudget::bounded(work_units));
+        super::instruments::note_incremental_step();
         if step.completed {
+            super::instruments::note_incremental_completion();
             BudgetedStepOutcome::Completed(slot.take().expect("active budgeted GC cycle exists"))
         } else {
             BudgetedStepOutcome::Result(gc_cycle_step_result(

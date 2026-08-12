@@ -55,7 +55,7 @@
 //! the `Cell` and this counter are one piece of state with two representations,
 //! and `pending_transitions_arm_and_disarm` pins them together.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Process-global count of reasons `js_gc_loop_safepoint` must do more than
 /// return; see the module docs for the invariant.
@@ -86,7 +86,23 @@ pub(crate) fn poll_armed() -> bool {
 /// Add one reason for the poll to run. Paired with [`disarm_poll`].
 #[inline]
 pub(crate) fn arm_poll() {
+    ARM_EVENTS.fetch_add(1, Ordering::Relaxed);
     PERRY_GC_POLL_ARMED.fetch_add(1, Ordering::Relaxed);
+}
+
+static ARM_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+/// How many times a deferral armed the back-edge poll. With
+/// [`PERRY_GC_POLL_ARMED`]'s value at exit this says whether the poll's fast
+/// path was actually fast for the run: a word left armed makes EVERY back-edge
+/// take the out-of-line call.
+pub fn poll_arm_events() -> u64 {
+    ARM_EVENTS.load(Ordering::Relaxed)
+}
+
+/// The arming word's current value; `0` proves the poll is a no-op right now.
+pub fn poll_armed_count() -> u32 {
+    PERRY_GC_POLL_ARMED.load(Ordering::Relaxed)
 }
 
 /// Release one reason.
@@ -173,6 +189,28 @@ mod tests {
         );
         disarm_poll();
         assert!(!poll_armed());
+    }
+
+    /// #7909: `poll_arm_events` must count ARMS, and `poll_armed_count` must
+    /// report the word, because the pair is what distinguishes "the back-edge
+    /// poll was never armed" from "it was armed and drained". On `asyncpipe`
+    /// the answer is `arm_events=0`, which is what retired the hypothesis that
+    /// the loop poll was driving the incremental collector there.
+    #[test]
+    fn arm_events_count_arms_and_the_word_is_reported() {
+        let _r = Restore::capture();
+        PERRY_GC_POLL_ARMED.store(0, Ordering::Relaxed);
+        let before = poll_arm_events();
+        arm_poll();
+        assert_eq!(poll_arm_events(), before + 1);
+        assert_eq!(poll_armed_count(), 1);
+        disarm_poll();
+        assert_eq!(poll_armed_count(), 0);
+        assert_eq!(
+            poll_arm_events(),
+            before + 1,
+            "a release is not an arm; the event counter is monotone in arms only"
+        );
     }
 
     /// An unbalanced release must not wrap. `u32::MAX` reads as armed forever,
