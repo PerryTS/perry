@@ -62,6 +62,70 @@ fn heavy_influx_lowers_threshold_and_promotes_next_cycle() {
     }
 }
 
+/// #7929: a real copying minor must feed its move census into the nursery
+/// band's object denomination.
+///
+/// The pure-function coverage lives in `gc::tenuring::tests`; that coverage
+/// passes with the `copying.rs` call site deleted, which is exactly the "the
+/// gate runs but its subject never did" shape. This test drives a real cycle.
+///
+/// ★ The discriminating quantity is **the recorded mean equals THIS cycle's
+/// measured mean, and differs from the seed**. Asserting only that the mean is
+/// nonzero would be satisfied by the seed itself, so an unwired build would
+/// pass it — a presence check, not a proof.
+#[test]
+fn copying_minor_feeds_the_object_denomination_census() {
+    let _guard = CopyingNurseryTestGuard::new(SLOTS);
+    let base = crate::gc::tenuring::influx_driven_nursery_cap_bytes();
+    let seed = crate::gc::tenuring::mean_surviving_object_bytes();
+    assert_eq!(
+        seed,
+        crate::gc::tenuring::NURSERY_CAP_REFERENCE_OBJECT_BYTES,
+        "an unmeasured process must pace as the pre-#7929 collector did"
+    );
+
+    // Two-field object literals: the representation #7928 took 72 B -> 56 B,
+    // i.e. the one whose object budget this term exists to hold constant.
+    for slot in 0..SLOTS {
+        let obj = crate::object::js_object_alloc(0, 2);
+        crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(slot as f64));
+        crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(-1.0));
+        js_shadow_slot_set(slot, ptr_bits(obj as usize));
+    }
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let moved_objects =
+        trace.copying_nursery.copied_objects + trace.copying_nursery.promoted_objects;
+    let moved_bytes = trace.copying_nursery.copied_bytes + trace.copying_nursery.promoted_bytes;
+    assert!(
+        moved_objects >= SLOTS as usize,
+        "the cycle must actually have moved the cohort: {moved_objects} objects"
+    );
+
+    let recorded = crate::gc::tenuring::mean_surviving_object_bytes();
+    assert_eq!(
+        recorded,
+        moved_bytes / moved_objects,
+        "the census must carry THIS cycle's measured mean ({moved_bytes} B over \
+         {moved_objects} objects)"
+    );
+    assert_ne!(
+        recorded, seed,
+        "fixture is vacuous: a measured mean equal to the seed cannot distinguish a wired \
+         build from an unwired one"
+    );
+    assert!(
+        recorded < crate::gc::tenuring::NURSERY_CAP_REFERENCE_OBJECT_BYTES,
+        "fixture must exercise the SCALING arm, not the one-sided clamp (mean {recorded} B)"
+    );
+
+    // And the band moved with it, proportionally.
+    assert_eq!(
+        crate::gc::tenuring::influx_driven_nursery_cap_bytes(),
+        base * crate::gc::tenuring::nursery_cap_object_scale_permille(recorded) / 1000
+    );
+}
+
 #[test]
 fn quiet_cycles_restore_power_on_threshold_debounced() {
     let _guard = CopyingNurseryTestGuard::new(SLOTS);

@@ -1856,6 +1856,21 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // re-baseline sees post-collection live allocation rather than high-water.
     note_copying_minor_young_survival(collector.stats.young_survival_permille);
     maybe_schedule_old_reclaim_after_copied_minor();
+    // #7929: the object denomination of the nursery constant band, fed BEFORE
+    // the tenuring loop so every number `retune_after_scavenge` derives from
+    // the effective cap (desired survivor occupancy, the cap-scale band) reads
+    // one consistent factor. Both tenuring ratios are representation-invariant
+    // by cancellation, so this only re-denominates the constant band itself.
+    super::tenuring::note_surviving_object_census(
+        collector
+            .stats
+            .copied_bytes
+            .saturating_add(collector.stats.promoted_bytes),
+        collector
+            .stats
+            .copied_objects
+            .saturating_add(collector.stats.promoted_objects),
+    );
     retune_after_scavenge(
         collector.stats.eden_live_bytes,
         collector.stats.copied_bytes,
