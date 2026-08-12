@@ -35,11 +35,10 @@ pub(crate) use allocators::{
 };
 pub(crate) use block::{
     arena_cell_alloc, arena_cell_try_alloc_current, drain_block_pool_if_requested,
-    old_gen_in_use_bytes_sub, release_arena_block,
-    request_block_pool_drain, Arena, ArenaBlock, ArenaBlockRelease, BlockPoolDrainStats,
-    ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES,
-    INLINE_STATE, LONGLIVED_ARENA, OLD_ARENA, OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0,
-    SURVIVOR_ARENA_1,
+    old_gen_in_use_bytes_sub, release_arena_block, request_block_pool_drain, Arena, ArenaBlock,
+    ArenaBlockRelease, BlockPoolDrainStats, ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE,
+    FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE, LONGLIVED_ARENA, OLD_ARENA,
+    OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
 };
 /// #7469 hot-TLS plumbing — see `crate::tls_hot`. The `*_hot_addr` half is
 /// consumed by `tls_hot::fill`; the `hot_*` half is the cached accessor the

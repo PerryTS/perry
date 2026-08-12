@@ -636,8 +636,8 @@ fn string_add_value_picks_the_operator_from_the_bits() {
 /// both halves — that the answer is unchanged, and that the premise the
 /// answer rests on is actually true at run time.
 mod concat_chain_no_collect {
-    use super::*;
     use super::super::concat::CONCAT_CHAIN_NO_COLLECT_HITS;
+    use super::*;
 
     fn hits() -> u64 {
         CONCAT_CHAIN_NO_COLLECT_HITS.with(|c| c.get())
@@ -763,8 +763,10 @@ mod concat_chain_no_collect {
 
         let high = js_string_from_char_code(0xD83D as f64);
         let low = js_string_from_char_code(0xDE00 as f64);
-        let hi_box = f64::from_bits(crate::value::STRING_TAG | (high as u64 & 0x0000_FFFF_FFFF_FFFF));
-        let lo_box = f64::from_bits(crate::value::STRING_TAG | (low as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let hi_box =
+            f64::from_bits(crate::value::STRING_TAG | (high as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let lo_box =
+            f64::from_bits(crate::value::STRING_TAG | (low as u64 & 0x0000_FFFF_FFFF_FFFF));
         let merged = chain(&[hi_box, lo_box]);
         assert_eq!(text(merged), "\u{1F600}");
         unsafe {
