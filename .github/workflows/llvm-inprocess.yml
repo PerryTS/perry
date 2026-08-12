@@ -120,28 +120,126 @@ jobs:
           echo "$out" | grep -q "dialect::tests::corpus_exception_handling ... ok"
           echo "$out" | grep -q "inprocess::tests::rs4gc_schedules_in_process ... ok"
 
+
+      # The tracked `.ll` corpora above are a SNAPSHOT of what the compiler
+      # emitted when they were last refreshed (#7302/#7307/#7310, 2026-08-03).
+      # `corpus_spike ... ok` therefore proves the dialect reader can build
+      # THAT IR — not the IR this commit emits. When the end-to-end arm below
+      # goes red while these stay green, that gap is the first thing to check,
+      # so print it rather than leaving the next reader to rediscover it.
+      - name: Corpus currency (diagnostic, not a gate)
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          newest=$(git log -1 --format=%ct -- experiments/llvm-inprocess-spike/*.ll)
+          behind=$(git log --oneline --since="@${newest}" -- crates/perry-codegen/src \
+            crates/perry-hir/src crates/perry-transform/src | wc -l | tr -d ' ')
+          echo "tracked .ll corpora last refreshed: $(git log -1 --format='%h %ad' \
+            --date=short -- experiments/llvm-inprocess-spike/*.ll)"
+          echo "IR-affecting commits since then (codegen+hir+transform): ${behind}"
+          {
+            echo "### llvm-inprocess corpus currency"
+            echo ""
+            echo "- corpora refreshed: \`$(git log -1 --format='%h %ad' --date=short \
+              -- experiments/llvm-inprocess-spike/*.ll)\`"
+            echo "- IR-affecting commits since: **${behind}**"
+            echo ""
+            echo "The unit corpus gates assert the reader handles that snapshot."
+            echo "Only the end-to-end smoke below exercises the IR this commit emits."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Native-mode smoke — liveness, behavior parity, object-byte verdicts
         run: |
-          set -euo pipefail
+          # NOTE: deliberately NOT `set -e`. Every check below reports what it
+          # was doing and dumps the captured output before exiting. The previous
+          # version used bare `grep -q` / `cmp` under `set -euo pipefail`, so the
+          # 2026-08-11 `main` failures ended at "Generating code..." with a naked
+          # `exit 1` and no diagnostic at all — three runs, untriageable (#7971).
+          # The compiler's own message was fine and named the offending IR line;
+          # it went to a captured file that nothing ever printed. That is #7982.
+          # The compilers' stderr carries the liveness banner, so it is captured
+          # to a file; that file is what went unread. It is now always dumped on
+          # failure, and the failing COMMAND is named.
+          set -uo pipefail
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
           export PERRY_NO_AUTO_OPTIMIZE=1
           BIN=target/perry-dev/perry
           SRC=experiments/llvm-inprocess-spike/spike.ts
+          EH=test-files/test_gap_7302_invoke_eh_paths.ts
+          W=/tmp/inproc; mkdir -p "$W"
 
-          "$BIN" "$SRC" -o /tmp/spike_text
-          /tmp/spike_text > /tmp/text.out
+          dump() {
+            for f in "$@"; do
+              [ -s "$f" ] || continue
+              echo "--- $f (last 80 lines) ---"
+              tail -80 "$f"
+            done
+          }
 
-          PERRY_LLVM_INPROCESS=native "$BIN" "$SRC" -o /tmp/spike_native 2> /tmp/native.err
-          grep -q "in-process LLVM backend active" /tmp/native.err
-          /tmp/spike_native > /tmp/native.out
-          cmp /tmp/text.out /tmp/native.out
+          # run <label> -- <command...>   ; stdout/stderr captured per label
+          run() {
+            local label="$1"; shift; [ "$1" = "--" ] && shift
+            echo "==> ${label}: $*"
+            # Capture the status BEFORE any other command runs. `if ! cmd; then
+            # rc=$?` would record the NEGATED status (always 0) — the failing
+            # exit code is the one thing this whole step exists to report.
+            "$@" > "${W}/${label}.out" 2> "${W}/${label}.err"
+            local rc=$?
+            if [ "${rc}" -ne 0 ]; then
+              echo "::error::${label} FAILED (exit ${rc}): $*"
+              dump "${W}/${label}.out" "${W}/${label}.err"
+              exit 1
+            fi
+          }
 
-          PERRY_LLVM_INPROCESS=diff "$BIN" "$SRC" -o /tmp/spike_diff 2> /tmp/diff.err
-          grep -q "ir-diff. OK" /tmp/diff.err
+          # assert_grep <pattern> <file> <why this matters>
+          assert_grep() {
+            if ! grep -q "$1" "$2"; then
+              echo "::error::liveness assert failed — expected /$1/ in $2. $3"
+              dump "$2"
+              exit 1
+            fi
+            echo "    ok: /$1/ present in $(basename "$2")"
+          }
 
-          PERRY_LLVM_INPROCESS=diff PERRY_CODEGEN_UNITS=3 "$BIN" \
-            benchmarks/app-patterns/kernels/batch.ts -o /tmp/batch_diff 2> /tmp/diffu.err
-          grep -q "ir-diff. OK.*3 units" /tmp/diffu.err
+          # assert_same <a> <b> <why>
+          assert_same() {
+            if ! cmp -s "$1" "$2"; then
+              echo "::error::behavior parity failed: $3"
+              echo "--- diff $1 vs $2 ---"
+              diff -u "$1" "$2" | head -60 || true
+              exit 1
+            fi
+            echo "    ok: $(basename "$1") == $(basename "$2")"
+          }
+
+          echo "::group::spike.ts — textual baseline"
+          run spike_text -- "$BIN" "$SRC" -o "${W}/spike_text"
+          run spike_text_exec -- "${W}/spike_text"
+          cp "${W}/spike_text_exec.out" "${W}/text.out"
+          echo "::endgroup::"
+
+          echo "::group::spike.ts — PERRY_LLVM_INPROCESS=native"
+          run spike_native -- env PERRY_LLVM_INPROCESS=native "$BIN" "$SRC" -o "${W}/spike_native"
+          assert_grep "in-process LLVM backend active" "${W}/spike_native.err" \
+            "The native path must announce itself; without the banner this arm would pass while silently serving the textual backend."
+          run spike_native_exec -- "${W}/spike_native"
+          assert_same "${W}/text.out" "${W}/spike_native_exec.out" \
+            "the natively-constructed module behaves differently from the textual one"
+          echo "::endgroup::"
+
+          echo "::group::spike.ts — PERRY_LLVM_INPROCESS=diff"
+          run spike_diff -- env PERRY_LLVM_INPROCESS=diff "$BIN" "$SRC" -o "${W}/spike_diff"
+          assert_grep "ir-diff. OK" "${W}/spike_diff.err" \
+            "The object-byte verdict is the whole point of diff mode; no verdict means nothing was compared."
+          echo "::endgroup::"
+
+          echo "::group::batch.ts — diff mode across 3 codegen units"
+          run batch_diff -- env PERRY_LLVM_INPROCESS=diff PERRY_CODEGEN_UNITS=3 \
+            "$BIN" benchmarks/app-patterns/kernels/batch.ts -o "${W}/batch_diff"
+          assert_grep "ir-diff. OK.*3 units" "${W}/batch_diff.err" \
+            "The multi-unit split must be exercised; a single-unit verdict here would be a narrower test wearing the same name."
+          echo "::endgroup::"
 
           # #7302: exception handling. try/catch lowers to invoke/landingpad
           # with a personality on the define, so a reader that cannot build
@@ -149,12 +247,91 @@ jobs:
           # textual path — which is exactly how this arm went red once the
           # EH migration landed. Assert the EH program takes the native path
           # AND behaves identically.
-          EH=test-files/test_gap_7302_invoke_eh_paths.ts
-          "$BIN" "$EH" -o /tmp/eh_text
-          /tmp/eh_text > /tmp/eh_text.out
-          PERRY_LLVM_INPROCESS=native "$BIN" "$EH" -o /tmp/eh_native 2> /tmp/eh_native.err
-          grep -q "in-process LLVM backend active" /tmp/eh_native.err
-          /tmp/eh_native > /tmp/eh_native.out
-          cmp /tmp/eh_text.out /tmp/eh_native.out
-          PERRY_LLVM_INPROCESS=diff "$BIN" "$EH" -o /tmp/eh_diff 2> /tmp/eh_diff.err
-          grep -q "ir-diff. OK" /tmp/eh_diff.err
+          echo "::group::EH program — textual, native, diff"
+          run eh_text -- "$BIN" "$EH" -o "${W}/eh_text"
+          run eh_text_exec -- "${W}/eh_text"
+          run eh_native -- env PERRY_LLVM_INPROCESS=native "$BIN" "$EH" -o "${W}/eh_native"
+          assert_grep "in-process LLVM backend active" "${W}/eh_native.err" \
+            "A try-containing module must take the native path, not fall back to text (#7302)."
+          run eh_native_exec -- "${W}/eh_native"
+          assert_same "${W}/eh_text_exec.out" "${W}/eh_native_exec.out" \
+            "exception-handling behavior differs between the textual and native backends"
+          run eh_diff -- env PERRY_LLVM_INPROCESS=diff "$BIN" "$EH" -o "${W}/eh_diff"
+          assert_grep "ir-diff. OK" "${W}/eh_diff.err" \
+            "The EH module must reach a byte verdict, not be skipped by the differ."
+          echo "::endgroup::"
+
+          echo "native-mode smoke: all arms exercised and green"
+
+  # ── Fan-in verdict ─────────────────────────────────────────────────────────
+  #
+  # #7971: WITHOUT this job the workflow reported `success` on a PR where
+  # `changes=success, native-backend=skipped` — i.e. green while executing
+  # nothing. Three sampled PR "successes" (31505530279, 31499833415,
+  # 31476724152) were all of that shape. That is CLAUDE.md's fourth way a gate
+  # cannot fail, and the most dangerous one, because the job is genuinely green.
+  #
+  # A path filter is a COST control, not a verdict. This job separates the two:
+  # it re-states in the log and the summary whether the backend was actually
+  # exercised, so "llvm-inprocess ✓" can no longer be read as "the in-process
+  # backend passed" when nothing ran.
+  #
+  # It can fail, in two directions that matter:
+  #   * `native-backend` failed or was cancelled -> red.
+  #   * `native-backend` was SKIPPED on a non-PR event -> red. The scheduled
+  #     sweep, a release tag and a manual dispatch all set `relevant=true`
+  #     unconditionally; if one of them ever skips, the post-merge anchor has
+  #     silently stopped anchoring, which is exactly how #7856 starved this
+  #     gate for eight days without anyone noticing.
+  llvm-inprocess-complete:
+    needs: [changes, native-backend]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verdict
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          BACKEND: ${{ needs.native-backend.result }}
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          echo "changes=${CHANGES} relevant=${RELEVANT} native-backend=${BACKEND} event=${EVENT}"
+
+          if [ "${CHANGES}" != "success" ]; then
+            echo "::error::the relevance filter itself did not succeed (${CHANGES});"\
+                 "no statement can be made about the in-process backend."
+            exit 1
+          fi
+
+          case "${BACKEND}" in
+            success)
+              echo "EXERCISED: the in-process LLVM backend ran and passed."
+              echo "✅ **EXERCISED** — in-process LLVM backend ran and passed." \
+                >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            skipped)
+              if [ "${EVENT}" != "pull_request" ]; then
+                echo "::error::native-backend was SKIPPED on a ${EVENT} run."\
+                     "Every non-PR event sets relevant=true unconditionally, so this"\
+                     "means the post-merge anchor has stopped anchoring (#7856/#7971)."
+                exit 1
+              fi
+              echo "NOT EXERCISED: no IR-affecting path changed, so the backend did not run."
+              echo "This run asserts NOTHING about the in-process LLVM backend."
+              {
+                echo "⚠️ **NOT EXERCISED** — no IR-affecting path changed in this PR."
+                echo ""
+                echo "The in-process LLVM backend did **not** run. This green result"
+                echo "is a statement about relevance, not about the backend."
+                echo "The post-merge sweep of \`main\` is what anchors this gate."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::native-backend concluded '${BACKEND}'."
+              echo "❌ **${BACKEND}** — in-process LLVM backend did not pass." \
+                >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
