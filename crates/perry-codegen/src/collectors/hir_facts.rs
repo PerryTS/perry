@@ -409,6 +409,7 @@ pub(crate) fn collect_type_facts(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
+    spec_i32_params: &HashSet<u32>,
 ) -> TypeFacts {
     // #7700: which locals hold a NUMBER, so a `u8[k]` keyed on one is a byte
     // read rather than a property read. Computed once here because
@@ -416,12 +417,13 @@ pub(crate) fn collect_type_facts(
     // above all the counter in `for (let i = …) sum += buf[i]`, have to be
     // walked for or the hottest buffer shape loses its i32 representation.
     let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
-    let mut integer_locals = super::integer_locals::collect_integer_locals(
+    let mut integer_locals = super::integer_locals::collect_integer_locals_with_seeds(
         stmts,
         flat_const_ids,
         clamp_fn_ids,
         arg_dependent_clamp_fn_ids,
         &numeric_locals,
+        spec_i32_params,
     );
     // Native-i32 residency for integer-valued locals whose init/writes include a
     // possibly-out-of-bounds INT typed-array element read (bcryptjs `_encipher`
@@ -679,7 +681,7 @@ pub(crate) fn collect_native_region_fact_graph(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
 ) -> NativeRegionFactGraph {
-    collect_native_region_fact_graph_with_spec_lens(
+    collect_native_region_fact_graph_with_spec_params(
         stmts,
         params,
         flat_const_ids,
@@ -692,15 +694,15 @@ pub(crate) fn collect_native_region_fact_graph(
         compile_time_constants,
         module_dispatch,
         &HashMap::new(),
+        &HashSet::new(),
     )
 }
 
-/// Variant carrying spec-ABI `TaPtr` parameter lengths (representation-
-/// selection Phase 2): the call-site pre-pass proved these params hold
-/// non-view typed arrays with these constant element counts, which unlocks
-/// the wrap-i32 additive admission's in-bounds operand proof.
+/// Variant carrying spec-ABI parameter facts (representation-selection Phase
+/// 2): `TaPtr` lengths unlock in-bounds proofs, while raw-i32 params seed the
+/// ordinary integer-local fixed point so derived index temps stay native.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn collect_native_region_fact_graph_with_spec_lens(
+pub(crate) fn collect_native_region_fact_graph_with_spec_params(
     stmts: &[Stmt],
     params: &[perry_hir::Param],
     flat_const_ids: &HashSet<u32>,
@@ -713,6 +715,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_lens(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
+    spec_i32_params: &HashSet<u32>,
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
@@ -727,6 +730,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_lens(
         compile_time_constants,
         module_dispatch,
         spec_ta_lens,
+        spec_i32_params,
     )
 }
 
@@ -753,6 +757,7 @@ pub(crate) fn collect_hir_facts(
         // conservative default keeps it that way if one ever could.
         &super::ModuleDispatchFacts::default(),
         &HashMap::new(),
+        &HashSet::new(),
     )
 }
 

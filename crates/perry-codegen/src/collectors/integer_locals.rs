@@ -379,7 +379,29 @@ pub fn collect_integer_locals(
     // key is one of those, or is numeric by construction.
     numeric_locals: &HashSet<u32>,
 ) -> HashSet<u32> {
-    let mut candidates: HashSet<u32> = HashSet::new();
+    collect_integer_locals_with_seeds(
+        stmts,
+        flat_const_ids,
+        clamp_fn_ids,
+        arg_dependent_clamp_fn_ids,
+        numeric_locals,
+        &HashSet::new(),
+    )
+}
+
+/// The ordinary integer-local proof with already-proven i32 locals seeded
+/// into its transitive closure. Specialized-ABI raw-i32 parameters use this:
+/// plan selection has already rejected reassigned/captured parameters, so the
+/// seed is a construction proof rather than a declared-type assumption.
+pub(crate) fn collect_integer_locals_with_seeds(
+    stmts: &[perry_hir::Stmt],
+    flat_const_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
+    seed_locals: &HashSet<u32>,
+) -> HashSet<u32> {
+    let mut candidates: HashSet<u32> = seed_locals.clone();
 
     // Issue #50 bridge: pre-compute which locals are row-aliases of
     // flat-const 2D int arrays BEFORE collecting integer let ids, since

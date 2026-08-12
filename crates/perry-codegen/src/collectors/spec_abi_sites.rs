@@ -11,18 +11,20 @@
 //! - **`TaPtr { kind, const_len }`** — the arg is a local/module binding whose
 //!   SINGLE, top-level `let`/`const` binding is `new Int32Array(x)` (or another
 //!   numeric typed-array kind) in a **non-view construction form**: `x` absent,
-//!   an integer-literal length, or a local proven to be a plain array (its own
-//!   single binding is an array literal, never reassigned). The binding local is
+//!   an integer-literal length, an immutable local bound once to such a length,
+//!   or a local proven to be a plain array (its own single binding is an array
+//!   literal, never reassigned). The binding local is
 //!   never reassigned anywhere in the module (`LocalSet`/`GlobalSet`/`Update`)
 //!   and never referenced inside any closure body — so at every dominated call
 //!   site the slot still holds that exact typed array, whose header address,
 //!   element kind, and length are fixed for the program's lifetime (typed-array
 //!   storage is non-movable: `gc/types.rs` marks `GC_TYPE_TYPED_ARRAY` /
 //!   `GC_TYPE_BUFFER` `movable: false`, and a non-view typed array cannot be
-//!   detached). `const_len` is `Some` when the length is an integer literal or
-//!   the element count of an array-literal source whose uses provably cannot
-//!   change its length.
-//! - **`I32`** — integer literal in i32 range.
+//!   detached). `const_len` is `Some` when the length is an integer literal
+//!   (directly or through the immutable local above), or the element count of
+//!   an array-literal source whose uses provably cannot change its length.
+//! - **`I32`** — integer literal in i32 range, or a local whose complete
+//!   write set proves it stays in that range.
 //! - **`F64`** — any other numeric literal (a JS number's NaN-box IS its
 //!   double bits, so raw-f64 passing is bit-identical).
 //! - anything else → **`Boxed`** (always sound; the public boxed entry remains
@@ -513,25 +515,38 @@ fn array_literal_len(e: &Expr) -> Option<i64> {
     }
 }
 
+/// A typed-array constructor length literal. Keep this deliberately aligned
+/// with the direct-literal arm of [`judge_ctor_arg`].
+fn typed_array_length_literal(e: &Expr) -> Option<i64> {
+    match e {
+        Expr::Integer(n) if (0..=16_000_000).contains(n) => Some(*n),
+        Expr::Number(f) if f.is_finite() && f.fract() == 0.0 && *f >= 0.0 && *f <= 16_000_000.0 => {
+            Some(*f as i64)
+        }
+        _ => None,
+    }
+}
+
 /// Judge the `new TypedArray(arg)` constructor argument: `Some(const_len)`
 /// when the construction is provably NON-VIEW (arg is a length or a plain
 /// array — never an ArrayBuffer), `None` when the form is unproven.
 fn judge_ctor_arg(
     arg: Option<&Expr>,
     array_literal_locals: &HashMap<u32, Option<i64>>,
+    literal_length_locals: &HashMap<u32, i64>,
 ) -> Option<Option<i64>> {
+    if let Some(len) = arg.and_then(typed_array_length_literal) {
+        return Some(Some(len));
+    }
     match arg {
         None => Some(Some(0)),
-        Some(Expr::Integer(n)) if (0..=16_000_000).contains(n) => Some(Some(*n)),
-        Some(Expr::Number(f))
-            if f.is_finite() && f.fract() == 0.0 && *f >= 0.0 && *f <= 16_000_000.0 =>
-        {
-            Some(Some(*f as i64))
-        }
         // A local whose single binding is an array literal, never reassigned:
         // definitely a plain array (copy construction, non-view). The length
         // is constant only when no use of the source could have resized it.
-        Some(Expr::LocalGet(id)) => array_literal_locals.get(id).map(|len| *len),
+        Some(Expr::LocalGet(id)) => literal_length_locals
+            .get(id)
+            .map(|len| Some(*len))
+            .or_else(|| array_literal_locals.get(id).copied()),
         _ => None,
     }
 }
@@ -542,12 +557,26 @@ fn judge_ctor_arg(
 /// bodies are never descended (they run at unknown times).
 fn judge_sites_in_body(
     stmts: &[Stmt],
+    params: &[perry_hir::Param],
     ta_bindings: &HashMap<u32, SpecTaBinding>,
     out: &mut HashMap<u32, Vec<Vec<SpecParamRep>>>,
 ) {
+    // Use the same transitive, all-writes range proof as canonical i32 slots.
+    // Empty auxiliary sets only under-approximate clamp/flat-array cases; they
+    // cannot admit a local the integer-local provenance judge would reject.
+    let binding_types = HashMap::new();
+    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, &binding_types);
+    let empty = HashSet::new();
+    let integer_locals = super::integer_locals::collect_integer_locals(
+        stmts,
+        &empty,
+        &empty,
+        &empty,
+        &numeric_locals,
+    );
     let mut ready: HashSet<u32> = HashSet::new();
     for s in stmts {
-        judge_stmt(s, ta_bindings, &ready, out);
+        judge_stmt(s, ta_bindings, &integer_locals, &ready, out);
         if let Stmt::Let { id, .. } = s {
             if ta_bindings.contains_key(id) {
                 ready.insert(*id);
@@ -559,16 +588,17 @@ fn judge_sites_in_body(
 fn judge_stmt(
     s: &Stmt,
     ta: &HashMap<u32, SpecTaBinding>,
+    integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
     out: &mut HashMap<u32, Vec<Vec<SpecParamRep>>>,
 ) {
     match s {
-        Stmt::Let { init: Some(e), .. } => judge_expr(e, ta, ready, out),
+        Stmt::Let { init: Some(e), .. } => judge_expr(e, ta, integer_locals, ready, out),
         Stmt::Let { init: None, .. } => {}
-        Stmt::Expr(e) | Stmt::Throw(e) => judge_expr(e, ta, ready, out),
+        Stmt::Expr(e) | Stmt::Throw(e) => judge_expr(e, ta, integer_locals, ready, out),
         Stmt::Return(opt) => {
             if let Some(e) = opt {
-                judge_expr(e, ta, ready, out);
+                judge_expr(e, ta, integer_locals, ready, out);
             }
         }
         Stmt::If {
@@ -576,20 +606,20 @@ fn judge_stmt(
             then_branch,
             else_branch,
         } => {
-            judge_expr(condition, ta, ready, out);
+            judge_expr(condition, ta, integer_locals, ready, out);
             for st in then_branch {
-                judge_stmt(st, ta, ready, out);
+                judge_stmt(st, ta, integer_locals, ready, out);
             }
             if let Some(eb) = else_branch {
                 for st in eb {
-                    judge_stmt(st, ta, ready, out);
+                    judge_stmt(st, ta, integer_locals, ready, out);
                 }
             }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            judge_expr(condition, ta, ready, out);
+            judge_expr(condition, ta, integer_locals, ready, out);
             for st in body {
-                judge_stmt(st, ta, ready, out);
+                judge_stmt(st, ta, integer_locals, ready, out);
             }
         }
         Stmt::For {
@@ -599,35 +629,35 @@ fn judge_stmt(
             body,
         } => {
             if let Some(i) = init {
-                judge_stmt(i, ta, ready, out);
+                judge_stmt(i, ta, integer_locals, ready, out);
             }
             if let Some(c) = condition {
-                judge_expr(c, ta, ready, out);
+                judge_expr(c, ta, integer_locals, ready, out);
             }
             if let Some(u) = update {
-                judge_expr(u, ta, ready, out);
+                judge_expr(u, ta, integer_locals, ready, out);
             }
             for st in body {
-                judge_stmt(st, ta, ready, out);
+                judge_stmt(st, ta, integer_locals, ready, out);
             }
         }
-        Stmt::Labeled { body, .. } => judge_stmt(body, ta, ready, out),
+        Stmt::Labeled { body, .. } => judge_stmt(body, ta, integer_locals, ready, out),
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
             for st in body {
-                judge_stmt(st, ta, ready, out);
+                judge_stmt(st, ta, integer_locals, ready, out);
             }
             if let Some(c) = catch {
                 for st in &c.body {
-                    judge_stmt(st, ta, ready, out);
+                    judge_stmt(st, ta, integer_locals, ready, out);
                 }
             }
             if let Some(f) = finally {
                 for st in f {
-                    judge_stmt(st, ta, ready, out);
+                    judge_stmt(st, ta, integer_locals, ready, out);
                 }
             }
         }
@@ -635,13 +665,13 @@ fn judge_stmt(
             discriminant,
             cases,
         } => {
-            judge_expr(discriminant, ta, ready, out);
+            judge_expr(discriminant, ta, integer_locals, ready, out);
             for case in cases {
                 if let Some(t) = &case.test {
-                    judge_expr(t, ta, ready, out);
+                    judge_expr(t, ta, integer_locals, ready, out);
                 }
                 for st in &case.body {
-                    judge_stmt(st, ta, ready, out);
+                    judge_stmt(st, ta, integer_locals, ready, out);
                 }
             }
         }
@@ -656,19 +686,25 @@ fn judge_stmt(
 pub(crate) fn judge_arg(
     arg: &Expr,
     ta: &HashMap<u32, SpecTaBinding>,
+    integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
 ) -> SpecParamRep {
     match arg {
         Expr::Integer(n) if i32::try_from(*n).is_ok() => SpecParamRep::I32,
         Expr::Integer(_) => SpecParamRep::F64,
         Expr::Number(_) => SpecParamRep::F64,
-        Expr::LocalGet(id) => match ta.get(id) {
-            Some(binding) if ready.contains(id) => SpecParamRep::TaPtr {
-                kind: binding.kind,
-                const_len: binding.const_len,
-            },
-            _ => SpecParamRep::Boxed,
-        },
+        Expr::LocalGet(id) => {
+            if let Some(binding) = ta.get(id).filter(|_| ready.contains(id)) {
+                SpecParamRep::TaPtr {
+                    kind: binding.kind,
+                    const_len: binding.const_len,
+                }
+            } else if integer_locals.contains(id) {
+                SpecParamRep::I32
+            } else {
+                SpecParamRep::Boxed
+            }
+        }
         _ => SpecParamRep::Boxed,
     }
 }
@@ -676,12 +712,16 @@ pub(crate) fn judge_arg(
 fn judge_expr(
     e: &Expr,
     ta: &HashMap<u32, SpecTaBinding>,
+    integer_locals: &HashSet<u32>,
     ready: &HashSet<u32>,
     out: &mut HashMap<u32, Vec<Vec<SpecParamRep>>>,
 ) {
     if let Expr::Call { callee, args, .. } = e {
         if let Expr::FuncRef(fid) = callee.as_ref() {
-            let judged: Vec<SpecParamRep> = args.iter().map(|a| judge_arg(a, ta, ready)).collect();
+            let judged: Vec<SpecParamRep> = args
+                .iter()
+                .map(|a| judge_arg(a, ta, integer_locals, ready))
+                .collect();
             out.entry(*fid).or_default().push(judged);
         }
     }
@@ -690,7 +730,9 @@ fn judge_expr(
     if matches!(e, Expr::Closure { .. }) {
         return;
     }
-    perry_hir::walker::walk_expr_children(e, &mut |c| judge_expr(c, ta, ready, out));
+    perry_hir::walker::walk_expr_children(e, &mut |c| {
+        judge_expr(c, ta, integer_locals, ready, out)
+    });
 }
 
 /// Run the whole pre-pass on a module.
@@ -726,6 +768,37 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
         collect_array_literals(&f.body);
     }
 
+    // Immutable, single-binding constructor lengths. Resolving this one
+    // indirection keeps `new Float64Array(nodes)` equivalent to the literal
+    // form without treating an arbitrary local as a non-view constructor.
+    let mut literal_length_locals: HashMap<u32, i64> = HashMap::new();
+    let mut collect_literal_lengths = |stmts: &[Stmt]| {
+        for s in stmts {
+            if let Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(e),
+                ..
+            } = s
+            {
+                if scan.let_counts.get(id).copied() == Some(1)
+                    && !scan.writes.contains(id)
+                    && !scan.closure_refs.contains(id)
+                    && !scan.boxed_prealloc.contains(id)
+                    && !scan.other_bindings.contains(id)
+                {
+                    if let Some(len) = typed_array_length_literal(e) {
+                        literal_length_locals.insert(*id, len);
+                    }
+                }
+            }
+        }
+    };
+    collect_literal_lengths(&hir.init);
+    for f in &hir.functions {
+        collect_literal_lengths(&f.body);
+    }
+
     // Proven typed-array bindings: single TOP-LEVEL `let`/`const` bound to a
     // provably-non-view `TypedArrayNew` of a numeric kind, never reassigned,
     // never referenced by a closure.
@@ -746,7 +819,11 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
                 {
                     continue;
                 }
-                if let Some(const_len) = judge_ctor_arg(arg.as_deref(), &array_literal_locals) {
+                if let Some(const_len) = judge_ctor_arg(
+                    arg.as_deref(),
+                    &array_literal_locals,
+                    &literal_length_locals,
+                ) {
                     ta_bindings.insert(
                         *id,
                         SpecTaBinding {
@@ -765,9 +842,9 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
 
     // Judge every direct call site in init + function bodies.
     let mut call_sites: HashMap<u32, Vec<Vec<SpecParamRep>>> = HashMap::new();
-    judge_sites_in_body(&hir.init, &ta_bindings, &mut call_sites);
+    judge_sites_in_body(&hir.init, &[], &ta_bindings, &mut call_sites);
     for f in &hir.functions {
-        judge_sites_in_body(&f.body, &ta_bindings, &mut call_sites);
+        judge_sites_in_body(&f.body, &f.params, &ta_bindings, &mut call_sites);
     }
 
     SpecAbiModuleFacts {

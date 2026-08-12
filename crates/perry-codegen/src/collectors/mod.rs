@@ -60,7 +60,7 @@ pub(crate) use escape_arrays::{const_index, MAX_SCALAR_OBJECT_FIELDS};
 pub(crate) use escape_check::{check_escapes_in_stmts, find_new_candidates};
 pub(crate) use escape_news::MAX_SCALAR_ARRAY_LEN;
 pub(crate) use hir_facts::{
-    collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_lens,
+    collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_params,
     NativeRegionFactGraph,
 };
 pub(crate) use hot_callees::{collect_alloc_hot_functions, collect_hot_loop_callees};

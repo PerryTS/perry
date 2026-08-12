@@ -604,6 +604,17 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    let spec_i32_params: HashSet<u32> = spec_entry
+        .map(|plan| {
+            f.params
+                .iter()
+                .zip(plan.reps.iter())
+                .filter_map(|(p, rep)| {
+                    matches!(rep, crate::collectors::SpecParamRep::I32).then_some(p.id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     // `--opt-report` (#6952): attribute every representation decision the
     // collectors below make to this function. No-op when the report is off.
     //
@@ -618,7 +629,7 @@ pub(super) fn compile_function(
             .return_shape_class(f.id)
             .is_some(),
     );
-    let native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_lens(
+    let native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_params(
         &f.body,
         &f.params,
         &flat_const_ids,
@@ -632,6 +643,7 @@ pub(super) fn compile_function(
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
         &spec_ta_lens,
+        &spec_i32_params,
     );
 
     if let Some(plan) = spec_entry {

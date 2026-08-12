@@ -75,6 +75,7 @@ fn try_emit_spec_static_call(
     enum RawArg {
         Double(usize),
         I32Const(i64),
+        I32Value(usize),
         TaPtr(usize),
     }
     let mut raw_plan: Vec<RawArg> = Vec::with_capacity(args.len());
@@ -89,6 +90,9 @@ fn try_emit_spec_static_call(
             SpecParamRep::I32 => match arg {
                 Expr::Integer(n) if i32::try_from(*n).is_ok() => {
                     raw_plan.push(RawArg::I32Const(*n))
+                }
+                Expr::LocalGet(id) if ctx.integer_locals.contains(id) => {
+                    raw_plan.push(RawArg::I32Value(i))
                 }
                 _ => return None,
             },
@@ -122,6 +126,10 @@ fn try_emit_spec_static_call(
         match entry {
             RawArg::Double(i) => raw_args_storage.push((DOUBLE, lowered[*i].clone())),
             RawArg::I32Const(n) => raw_args_storage.push((I32, n.to_string())),
+            RawArg::I32Value(i) => {
+                let raw = ctx.block().fptosi(DOUBLE, &lowered[*i], I32);
+                raw_args_storage.push((I32, raw));
+            }
             RawArg::TaPtr(i) => {
                 let blk = ctx.block();
                 let bits = blk.bitcast_double_to_i64(&lowered[*i]);

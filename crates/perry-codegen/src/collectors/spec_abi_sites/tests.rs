@@ -1,6 +1,6 @@
 use super::*;
 use perry_hir::types::Type;
-use perry_hir::{Function, Module, TYPED_ARRAY_KIND_INT32};
+use perry_hir::{Function, Module, TYPED_ARRAY_KIND_FLOAT64, TYPED_ARRAY_KIND_INT32};
 
 fn let_stmt(id: u32, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
@@ -82,6 +82,92 @@ fn literal_length_binding_and_dominated_site() {
             SpecParamRep::I32,
             SpecParamRep::F64,
         ]
+    );
+}
+
+#[test]
+fn literal_length_local_proves_typed_array_binding() {
+    // #7221: const nodes = 10_000; const values = new Float64Array(nodes);
+    // fill(values, nodes, dirty, frame). The constructor's numeric local is
+    // still a non-view length and all integer locals can use raw i32 params.
+    let m = module_with_init(vec![
+        let_stmt(1, false, Expr::Integer(10_000)),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_FLOAT64, Some(Expr::LocalGet(1))),
+        ),
+        let_stmt(3, false, Expr::Integer(1_000)),
+        let_stmt(4, true, Expr::Integer(0)),
+        Stmt::Expr(Expr::Update {
+            id: 4,
+            op: perry_hir::UpdateOp::Increment,
+            prefix: false,
+        }),
+        Stmt::Expr(call(
+            7,
+            vec![
+                Expr::LocalGet(2),
+                Expr::LocalGet(1),
+                Expr::LocalGet(3),
+                Expr::LocalGet(4),
+            ],
+        )),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert_eq!(
+        facts.ta_bindings.get(&2).map(|binding| binding.const_len),
+        Some(Some(10_000))
+    );
+    assert_eq!(
+        facts.call_sites.get(&7).unwrap()[0],
+        vec![
+            SpecParamRep::TaPtr {
+                kind: TYPED_ARRAY_KIND_FLOAT64,
+                const_len: Some(10_000)
+            },
+            SpecParamRep::I32,
+            SpecParamRep::I32,
+            SpecParamRep::I32,
+        ]
+    );
+}
+
+#[test]
+fn mutable_literal_length_local_does_not_prove_typed_array_binding() {
+    // A mutable length slot can stop being numeric before construction, so
+    // this provenance shortcut is deliberately limited to `const` bindings.
+    let m = module_with_init(vec![
+        let_stmt(1, true, Expr::Integer(10_000)),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_FLOAT64, Some(Expr::LocalGet(1))),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert!(!facts.ta_bindings.contains_key(&2));
+    assert_eq!(
+        facts.call_sites.get(&7).unwrap()[0],
+        vec![SpecParamRep::Boxed]
+    );
+}
+
+#[test]
+fn local_with_non_integer_write_stays_boxed_at_spec_call() {
+    let m = module_with_init(vec![
+        let_stmt(1, true, Expr::Integer(7)),
+        Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::String("not an integer".to_string())),
+        )),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(1)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert_eq!(
+        facts.call_sites.get(&7).unwrap()[0],
+        vec![SpecParamRep::Boxed]
     );
 }
 
