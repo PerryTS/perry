@@ -572,6 +572,12 @@ pub(super) fn compile_closure(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
+    // #7908: closures live outside `hir.functions`, so they do not pass
+    // through `codegen/function.rs`, which applies this same collector result
+    // to ordinary functions. Without propagating the bit here, bounded
+    // indirect-call admission is computed correctly but never reaches
+    // `new_site_is_in_loop` while the closure body is emitted.
+    lf.alloc_hot = cross_module.alloc_hot_functions.contains(&func_id);
     if typed_public_trampoline.is_some() {
         lf.linkage = "internal".to_string();
     }

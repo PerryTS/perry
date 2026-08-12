@@ -36,7 +36,15 @@ struct HotCalleeScan {
     in_loop: HashSet<u32>,
     /// Total direct call-site count per FuncId (loop and non-loop).
     call_counts: HashMap<u32, u32>,
+    /// Whether any loop calls through a value whose FuncId is unknown here.
+    indirect_call_in_loop: bool,
 }
+
+/// #7908: indirect calls do not provide a cheap points-to proof, so admission
+/// is all-or-none and capped on the cost-bearing unit: allocation sites in
+/// closure bodies. At the measured ~268 bytes per inline bump this bounds a
+/// module's speculative growth to ~2.1 KiB.
+const INDIRECT_CLOSURE_ALLOC_SITE_BUDGET: u32 = 8;
 
 /// Collect the set of `FuncId`s eligible for `inlinehint`: those with ≥1 direct
 /// call site inside a loop AND at most `max_call_sites` total direct call sites
@@ -124,7 +132,7 @@ pub fn collect_hot_loop_callees(hir: &Module, max_call_sites: u32) -> HashSet<u3
 /// other 16 within a ±1.6% noise floor established by the 15 binaries that
 /// come out byte-identical.
 ///
-/// ## The two admission rules
+/// ## The three admission rules
 ///
 /// 1. **≥1 direct call site inside a loop** — the existing proxy for "runs many
 ///    times", now uncapped.
@@ -133,6 +141,13 @@ pub fn collect_hot_loop_callees(hir: &Module, max_call_sites: u32) -> HashSet<u3
 ///    a recursive descent whose entry call happens to sit in straight-line code
 ///    would otherwise pay the outlined allocator at every level of the
 ///    recursion.
+/// 3. **Bounded closure module with an indirect loop call** — an indirect call
+///    through a local/array value does not expose the target FuncId, as in
+///    `pipeline`'s `stage = stages[s]; stage(rec)`. If the module contains such
+///    a call, admit its allocation-bearing closures only when they contain at
+///    most [`INDIRECT_CLOSURE_ALLOC_SITE_BUDGET`] `new` sites in total. The
+///    all-or-none cap avoids traversal-order-dependent code size and prices the
+///    actual emitted cost rather than closure count.
 ///
 /// Direction of error is unchanged from the sibling: under-inclusion forgoes
 /// speed, never correctness — the outlined call performs the identical bump
@@ -180,6 +195,24 @@ pub fn collect_alloc_hot_functions(hir: &Module) -> HashSet<u32> {
             hot.insert(f.id);
         }
     }
+    // Rule 3: the call site proves hotness but not identity. Speculate only
+    // when every allocation-bearing closure in the module fits the fixed byte
+    // budget; otherwise admit none of them.
+    let closure_alloc_sites = collect_closure_alloc_sites(hir);
+    let closure_alloc_site_count = closure_alloc_sites
+        .values()
+        .copied()
+        .fold(0_u32, u32::saturating_add);
+    if scan.indirect_call_in_loop
+        && closure_alloc_site_count > 0
+        && closure_alloc_site_count <= INDIRECT_CLOSURE_ALLOC_SITE_BUDGET
+    {
+        hot.extend(
+            closure_alloc_sites
+                .iter()
+                .filter_map(|(&func_id, &sites)| (sites > 0).then_some(func_id)),
+        );
+    }
     hot
 }
 
@@ -189,6 +222,10 @@ fn record_callee(callee: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         if in_loop {
             scan.in_loop.insert(*id);
         }
+    } else if in_loop && !matches!(callee, Expr::ExternFuncRef { .. }) {
+        // ExternFuncRef is statically identified even though it has no local
+        // FuncId. Every other generic Call callee is a runtime value here.
+        scan.indirect_call_in_loop = true;
     }
 }
 
@@ -416,4 +453,161 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         // heuristic targets; not descending is a safe under-approximation.
         _ => {}
     }
+}
+
+/// Count every `new` emitted in every closure body, keyed by the closure's
+/// FuncId. This is deliberately separate from [`walk_expr`]: that hot-callee
+/// walker is an under-approximation, while the byte cap must be exhaustive.
+/// `walk_expr_children` is the HIR's checked source of truth for expression
+/// children, including parameter defaults; closure statement bodies are the
+/// only boundary it intentionally leaves to consumers.
+fn collect_closure_alloc_sites(hir: &Module) -> HashMap<u32, u32> {
+    let mut sites = HashMap::new();
+    count_alloc_sites_in_stmts(&hir.init, None, &mut sites);
+    for f in &hir.functions {
+        count_alloc_sites_in_stmts(&f.body, None, &mut sites);
+    }
+    for c in &hir.classes {
+        if let Some(ctor) = &c.constructor {
+            count_alloc_sites_in_stmts(&ctor.body, None, &mut sites);
+        }
+        for m in c.methods.iter().chain(c.static_methods.iter()) {
+            count_alloc_sites_in_stmts(&m.body, None, &mut sites);
+        }
+        for (_, g) in &c.getters {
+            count_alloc_sites_in_stmts(&g.body, None, &mut sites);
+        }
+        for (_, s) in &c.setters {
+            count_alloc_sites_in_stmts(&s.body, None, &mut sites);
+        }
+        for cm in &c.computed_members {
+            count_alloc_sites_in_expr(&cm.key_expr, None, &mut sites);
+            count_alloc_sites_in_stmts(&cm.function.body, None, &mut sites);
+        }
+        for field in c.fields.iter().chain(c.static_fields.iter()) {
+            if let Some(key) = &field.key_expr {
+                count_alloc_sites_in_expr(key, None, &mut sites);
+            }
+            if let Some(init) = &field.init {
+                count_alloc_sites_in_expr(init, None, &mut sites);
+            }
+        }
+    }
+    sites
+}
+
+fn count_alloc_sites_in_stmts(
+    stmts: &[Stmt],
+    closure_id: Option<u32>,
+    sites: &mut HashMap<u32, u32>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let {
+                init: Some(expr), ..
+            }
+            | Stmt::Expr(expr)
+            | Stmt::Throw(expr)
+            | Stmt::Return(Some(expr)) => count_alloc_sites_in_expr(expr, closure_id, sites),
+            Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                count_alloc_sites_in_expr(condition, closure_id, sites);
+                count_alloc_sites_in_stmts(then_branch, closure_id, sites);
+                if let Some(else_branch) = else_branch {
+                    count_alloc_sites_in_stmts(else_branch, closure_id, sites);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                count_alloc_sites_in_expr(condition, closure_id, sites);
+                count_alloc_sites_in_stmts(body, closure_id, sites);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    count_alloc_sites_in_stmts(
+                        std::slice::from_ref(init.as_ref()),
+                        closure_id,
+                        sites,
+                    );
+                }
+                if let Some(condition) = condition {
+                    count_alloc_sites_in_expr(condition, closure_id, sites);
+                }
+                if let Some(update) = update {
+                    count_alloc_sites_in_expr(update, closure_id, sites);
+                }
+                count_alloc_sites_in_stmts(body, closure_id, sites);
+            }
+            Stmt::Labeled { body, .. } => {
+                count_alloc_sites_in_stmts(std::slice::from_ref(body.as_ref()), closure_id, sites)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                count_alloc_sites_in_stmts(body, closure_id, sites);
+                if let Some(catch) = catch {
+                    count_alloc_sites_in_stmts(&catch.body, closure_id, sites);
+                }
+                if let Some(finally) = finally {
+                    count_alloc_sites_in_stmts(finally, closure_id, sites);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                count_alloc_sites_in_expr(discriminant, closure_id, sites);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        count_alloc_sites_in_expr(test, closure_id, sites);
+                    }
+                    count_alloc_sites_in_stmts(&case.body, closure_id, sites);
+                }
+            }
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_) => {}
+        }
+    }
+}
+
+fn count_alloc_sites_in_expr(expr: &Expr, closure_id: Option<u32>, sites: &mut HashMap<u32, u32>) {
+    if let Expr::Closure {
+        func_id,
+        body,
+        params: _,
+        ..
+    } = expr
+    {
+        sites.entry(*func_id).or_insert(0);
+        // The canonical child walker visits this closure's param defaults.
+        perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            count_alloc_sites_in_expr(child, Some(*func_id), sites)
+        });
+        count_alloc_sites_in_stmts(body, Some(*func_id), sites);
+        return;
+    }
+
+    if matches!(expr, Expr::New { .. }) {
+        if let Some(func_id) = closure_id {
+            let count = sites.entry(func_id).or_insert(0);
+            *count = count.saturating_add(1);
+        }
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        count_alloc_sites_in_expr(child, closure_id, sites)
+    });
 }

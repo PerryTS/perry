@@ -1,4 +1,4 @@
-//! #7871: a self-recursive function's `new` sites take the INLINE bump
+//! #7871 / #7908: allocation-hot functions and closures take the INLINE bump
 //! allocator.
 //!
 //! The subject is [`super::new_alloc::new_site_is_in_loop`]'s second arm and the
@@ -14,8 +14,9 @@
 //!
 //! The negative half is the anti-bloat property: a `new` in a function that is
 //! neither in a loop, nor called from one, nor recursive keeps the outlined
-//! call. Without it this file would pass just as happily if the gate had been
-//! widened to "always", which is the ~268-bytes-per-site default the
+//! call. Likewise, indirect closure admission has a per-module allocation-site
+//! cap. Without those checks this file would pass just as happily if the gate
+//! had been widened to "always", which is the ~268-bytes-per-site default the
 //! `[#bloat]` comment in `new_alloc.rs` exists to refuse.
 
 use crate::{compile_module, AppMetadata, CompileOptions};
@@ -37,6 +38,8 @@ const OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys";
 
 const N_ID: u32 = 11;
 const WALK_ID: u32 = 700;
+const STAGE_LOCAL_BASE: u32 = 800;
+const STAGE_FUNC_BASE: u32 = 900;
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
@@ -200,6 +203,69 @@ fn walk_module(recurse: bool) -> Module {
     m
 }
 
+/// A minimized version of #7908's pipeline shape:
+///
+/// ```text
+/// const stage = () => new Cell(1)
+/// while (...) stage()
+/// ```
+///
+/// `stage()` is deliberately a `LocalGet`, not a `FuncRef`: the closure may
+/// have arrived through an array lookup, so the loop gives codegen no cheap
+/// points-to proof. `site_count` creates independent closure allocation sites
+/// so the admission budget is observable in emitted IR.
+fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
+    let mut m = Module::new("alloc_hot_indirect_closure.ts");
+    m.classes = vec![cell_class()];
+
+    for i in 0..site_count {
+        m.init.push(Stmt::Let {
+            id: STAGE_LOCAL_BASE + i,
+            name: format!("stage_{i}"),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Closure {
+                func_id: STAGE_FUNC_BASE + i,
+                params: Vec::new(),
+                return_type: Type::Named("Cell".to_string()),
+                body: vec![Stmt::Return(Some(Expr::New {
+                    class_name: "Cell".to_string(),
+                    args: vec![Expr::Number(i as f64)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }))],
+                captures: Vec::new(),
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+            }),
+        });
+    }
+
+    let indirect_call = Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::LocalGet(STAGE_LOCAL_BASE)),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    });
+    if call_in_loop {
+        m.init.push(Stmt::While {
+            condition: Expr::Bool(false),
+            body: vec![indirect_call],
+        });
+    } else {
+        m.init.push(indirect_call);
+    }
+    m.init_kind = ModuleInitKind::Eager;
+    m
+}
+
 fn ir_for(m: Module) -> String {
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
         .expect("LLVM IR should be UTF-8")
@@ -248,5 +314,66 @@ fn a_cold_straight_line_function_keeps_the_outlined_allocator() {
     assert!(
         !ir.contains(INLINE_SLOW_CALL),
         "the inline bump allocator reached a cold site:\n{ir}"
+    );
+}
+
+#[test]
+fn allocation_closures_are_admitted_by_an_indirect_loop_call() {
+    assert_inline_new_not_forced();
+    let ir = ir_for(indirect_closure_module(3, true));
+    assert!(
+        ir.contains(INLINE_SLOW_CALL) && ir.contains(INLINE_FAST_BLOCK),
+        "an indirect call in a loop should admit the module's three bounded \
+         allocation closures, matching the pipeline stage shape:\n{ir}"
+    );
+    assert!(
+        !ir.contains(OUTLINED_CALL),
+        "the admitted closure bodies still use the outlined allocator:\n{ir}"
+    );
+}
+
+#[test]
+fn a_straight_line_indirect_call_does_not_admit_its_closure() {
+    assert_inline_new_not_forced();
+    let ir = ir_for(indirect_closure_module(1, false));
+    assert!(
+        ir.contains(OUTLINED_CALL),
+        "an indirect call outside a loop supplied no hotness evidence, but its \
+         closure allocation was inlined:\n{ir}"
+    );
+    assert!(
+        !ir.contains(INLINE_SLOW_CALL),
+        "the inline bump allocator reached a closure with no hot call shape:\n{ir}"
+    );
+}
+
+#[test]
+fn indirect_closure_admission_refuses_modules_over_eight_sites() {
+    assert_inline_new_not_forced();
+    let ir = ir_for(indirect_closure_module(9, true));
+    assert!(
+        ir.contains(OUTLINED_CALL),
+        "nine closure allocation sites exceed the 8-site / ~2.1 KiB module \
+         budget, but the outlined allocator disappeared:\n{ir}"
+    );
+    assert!(
+        !ir.contains(INLINE_SLOW_CALL),
+        "an over-budget module admitted some closure sites; admission must be \
+         all-or-none so traversal order cannot affect code size:\n{ir}"
+    );
+}
+
+#[test]
+fn indirect_closure_admission_accepts_the_eight_site_budget() {
+    assert_inline_new_not_forced();
+    let ir = ir_for(indirect_closure_module(8, true));
+    assert!(
+        ir.contains(INLINE_SLOW_CALL) && ir.contains(INLINE_FAST_BLOCK),
+        "eight closure allocation sites are exactly within the module budget, \
+         but they did not take the inline allocator:\n{ir}"
+    );
+    assert!(
+        !ir.contains(OUTLINED_CALL),
+        "the eight-site boundary was only partially admitted:\n{ir}"
     );
 }
