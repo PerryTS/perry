@@ -342,3 +342,183 @@ pub(crate) fn weakref_proto_method_value_for(receiver_cid: u32, method_name: &st
         .map(|value| f64::from_bits(value.bits()))
         .filter(|v| v.to_bits() != crate::value::TAG_UNDEFINED)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::JSValue;
+
+    /// Sentinel a foreign receiver's OWN method returns. Distinct from
+    /// `undefined`, which is exactly what the un-brand-checked helpers used to
+    /// answer, so the assertions below cannot pass by accident.
+    const FOREIGN_SENTINEL: i32 = 7947;
+
+    extern "C" fn foreign_method_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+        f64::from_bits(JSValue::int32(FOREIGN_SENTINEL).bits())
+    }
+
+    extern "C" fn foreign_method_thunk_1(_c: *const crate::closure::ClosureHeader, _a: f64) -> f64 {
+        f64::from_bits(JSValue::int32(FOREIGN_SENTINEL).bits())
+    }
+
+    /// A plain object carrying its own `method_name` function property — the
+    /// shape a name-collided fold hands to the weak helpers (`{ deref: … }`,
+    /// `class Cache { deref() {…} }`, an array with `.deref` attached, or a
+    /// function parameter).
+    fn plain_object_with_method(method_name: &str, func_ptr: *const u8, arity: u32) -> f64 {
+        let obj = crate::object::js_object_alloc(0, 0);
+        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        assert!(!closure.is_null(), "closure alloc failed");
+        crate::closure::js_register_closure_arity(func_ptr, arity);
+        let key =
+            crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+        let value = crate::value::js_nanbox_pointer(closure as i64);
+        crate::object::js_object_set_field_by_name(obj, key, value);
+        f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    }
+
+    /// #7948: the HIR fold is keyed by bare local NAME with no scope
+    /// discrimination, so a module holding one genuine `new WeakRef(x)` folds
+    /// EVERY same-named `.deref()` onto `js_weakref_deref`. Before the brand
+    /// check, that read `__perry_wr_target` by name off the foreign object and
+    /// answered `undefined` — a wrong answer with exit code 0.
+    ///
+    /// Asserts the SUBJECT is live, not merely that nothing threw: the foreign
+    /// receiver's own method must actually run and its sentinel come back.
+    /// Removing the brand check makes every one of these return `undefined`.
+    #[test]
+    fn folded_weak_helpers_delegate_a_foreign_receiver_to_its_own_method() {
+        let sentinel = JSValue::int32(FOREIGN_SENTINEL).bits();
+
+        let deref_recv = plain_object_with_method("deref", foreign_method_thunk as *const u8, 0);
+        assert_eq!(
+            crate::weakref::js_weakref_deref(deref_recv).to_bits(),
+            sentinel,
+            "a foreign receiver's own `deref` must run, not the WeakRef intrinsic"
+        );
+
+        let key = f64::from_bits(JSValue::int32(1).bits());
+        for (name, ptr) in [
+            ("get", foreign_method_thunk_1 as *const u8),
+            ("has", foreign_method_thunk_1 as *const u8),
+            ("delete", foreign_method_thunk_1 as *const u8),
+        ] {
+            let recv = plain_object_with_method(name, ptr, 1);
+            let got = match name {
+                "get" => crate::weakref::js_weakmap_get(recv, key),
+                "has" => crate::weakref::js_weakmap_has(recv, key),
+                _ => crate::weakref::js_weakmap_delete(recv, key),
+            };
+            assert_eq!(
+                got.to_bits(),
+                sentinel,
+                "a foreign receiver's own `{name}` must run, not the WeakMap intrinsic"
+            );
+        }
+
+        let add_recv = plain_object_with_method("add", foreign_method_thunk_1 as *const u8, 1);
+        assert_eq!(
+            crate::weakref::js_weakset_add(add_recv, key).to_bits(),
+            sentinel,
+            "a foreign receiver's own `add` must run, not the WeakSet intrinsic"
+        );
+    }
+
+    /// The other half: a GENUINE wrapper must still take the intrinsic path.
+    /// Without this, "brand-check everything" could pass by delegating
+    /// unconditionally, which would break every real weak call.
+    #[test]
+    fn genuine_wrappers_still_take_the_intrinsic_path() {
+        let target = crate::object::js_object_alloc(0, 0);
+        let target_val = f64::from_bits(JSValue::pointer(target as *const u8).bits());
+        let wr = crate::weakref::js_weakref_new(target_val);
+        let wr_val = f64::from_bits(JSValue::pointer(wr as *const u8).bits());
+        assert!(
+            is_weak_wrapper(wr_val, crate::weakref::CLASS_ID_WEAKREF),
+            "a real WeakRef must pass its own brand check"
+        );
+        assert_eq!(
+            crate::weakref::js_weakref_deref(wr_val).to_bits(),
+            target_val.to_bits(),
+            "a real WeakRef must still deref to its target"
+        );
+
+        let wm = crate::weakref::js_weakmap_new();
+        let wm_val = f64::from_bits(JSValue::pointer(wm as *const u8).bits());
+        assert!(
+            delegate_if_not_weak_collection(wm_val, "get", &[]).is_none(),
+            "a real WeakMap must NOT be delegated away"
+        );
+        let v = f64::from_bits(JSValue::int32(42).bits());
+        crate::weakref::js_weakmap_set(wm_val, target_val, v);
+        assert_eq!(
+            crate::weakref::js_weakmap_get(wm_val, target_val).to_bits(),
+            v.to_bits(),
+            "a real WeakMap must still round-trip through the intrinsic"
+        );
+
+        // And the discriminator itself: a plain object is neither. Asserted
+        // through `weak_wrapper_class_id` rather than
+        // `delegate_if_not_weak_collection`, because the latter EAGERLY
+        // performs the delegated call — on a receiver with no `get` that
+        // re-enters dynamic dispatch and throws node's
+        // `TypeError: get is not a function`, which is the right production
+        // behaviour but terminates a unit test. The delegation itself is
+        // covered by `folded_weak_helpers_delegate_a_foreign_receiver_to_its_own_method`,
+        // whose receivers DO carry the method.
+        let plain = crate::object::js_object_alloc(0, 0);
+        let plain_val = f64::from_bits(JSValue::pointer(plain as *const u8).bits());
+        assert_eq!(weak_wrapper_class_id(plain_val), None);
+        assert!(!is_weak_wrapper(
+            plain_val,
+            crate::weakref::CLASS_ID_WEAKMAP
+        ));
+        assert!(!is_weak_wrapper(
+            plain_val,
+            crate::weakref::CLASS_ID_WEAKREF
+        ));
+    }
+
+    /// #7947: `deref` / `register` / `unregister` must be reachable through the
+    /// dynamic dispatch route, which is what every receiver shape the
+    /// name-keyed fold cannot see (array element, object property, call result,
+    /// `for…of` binding, parameter, arrow-function local) resolves through.
+    #[test]
+    fn dynamic_dispatch_reaches_weakref_and_finreg_methods() {
+        let target = crate::object::js_object_alloc(0, 0);
+        let target_val = f64::from_bits(JSValue::pointer(target as *const u8).bits());
+        let wr = crate::weakref::js_weakref_new(target_val);
+        let wr_val = f64::from_bits(JSValue::pointer(wr as *const u8).bits());
+
+        let got = unsafe {
+            try_weak_method_dispatch(
+                wr as *const ObjectHeader,
+                wr_val,
+                "deref",
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(
+            got.map(|v| v.to_bits()),
+            Some(target_val.to_bits()),
+            "WeakRef.deref must be reachable through dynamic dispatch (#7947)"
+        );
+
+        // A method that is not the receiver's own must still fall through to
+        // `None` so ordinary lookup raises `TypeError: … is not a function`.
+        let not_mine = unsafe {
+            try_weak_method_dispatch(
+                wr as *const ObjectHeader,
+                wr_val,
+                "add",
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert!(
+            not_mine.is_none(),
+            "`add` is not a WeakRef method — must fall through, not dispatch"
+        );
+    }
+}
