@@ -47,6 +47,42 @@ pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
     }
 }
 
+/// [`arena_alloc`] minus its collection point: serve the request from the
+/// block that is already open, or return null.
+///
+/// The inline-state sync/resync is kept identical to `arena_alloc`'s so a
+/// successful allocation is indistinguishable from one taken through it. A
+/// failed attempt leaves every offset exactly where it was, so the caller's
+/// fallback through `arena_alloc` behaves as if this had never been called.
+#[inline]
+pub(crate) fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
+    unsafe {
+        let inline_ptr = crate::arena::hot_inline_state();
+        let arena_ptr = crate::arena::hot_arena();
+        if !(*inline_ptr).data.is_null() {
+            let offset = (*inline_ptr).offset;
+            let arena = &mut *arena_ptr;
+            let current = arena.current;
+            arena.blocks[current].offset = offset;
+        }
+        let Some(ptr) = crate::arena::arena_cell_try_alloc_current(arena_ptr, size, align) else {
+            return std::ptr::null_mut();
+        };
+        if !(*inline_ptr).data.is_null() {
+            let (data, offset, block_size) = {
+                let arena = &*arena_ptr;
+                let block = &arena.blocks[arena.current];
+                (block.data, block.offset, block.size)
+            };
+            let inline = &mut *inline_ptr;
+            inline.data = data;
+            inline.offset = offset;
+            inline.size = block_size;
+        }
+        ptr
+    }
+}
+
 /// Allocate from the longlived arena (issue #179). Unlike `arena_alloc`,
 /// this never touches the inline allocator state — the longlived arena
 /// is reserved for explicit-call allocations from cache builders
@@ -305,6 +341,36 @@ pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -
 /// behind a cold branch.
 #[inline(always)]
 pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    arena_alloc_gc_inner::<true>(size, align, obj_type)
+}
+
+/// [`arena_alloc_gc`] with its **collection point removed**: the request is
+/// served from the nursery block that is already open, or the call returns
+/// null. It never runs `gc_check_trigger()`, never reserves a fresh block and
+/// never births into old-gen.
+///
+/// ★ The value here is not the handful of instructions saved on the slow
+/// branch — it is the *guarantee*. A runtime helper that is holding raw heap
+/// pointers it has not rooted can allocate through this and, on a non-null
+/// return, KNOW that nothing moved: the only collection point on the arena
+/// path is precisely the one this variant refuses to reach. That turns
+/// "root every operand into the transient handle stack, then re-read every
+/// one of them afterwards" into "read them once", for the overwhelmingly
+/// common case where a 1 MB block has room.
+///
+/// On null the caller MUST fall back: root its operands, re-issue through
+/// [`arena_alloc_gc`], and re-read the operands from their handles.
+#[inline]
+pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    arena_alloc_gc_inner::<false>(size, align, obj_type)
+}
+
+#[inline(always)]
+fn arena_alloc_gc_inner<const MAY_COLLECT: bool>(
+    size: usize,
+    align: usize,
+    obj_type: u8,
+) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
 
     // Large arena-backed GC objects are born directly in non-moving old
@@ -321,6 +387,11 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // slots per minor because of it).
     let total = gc_padded_total_size(size, align);
     if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
+        if !MAY_COLLECT {
+            // Old-gen birth walks page lists and can reserve; the no-collect
+            // contract only covers the open nursery block.
+            return std::ptr::null_mut();
+        }
         let user_ptr = arena_alloc_gc_old(size, align, obj_type);
         unsafe {
             let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;
@@ -398,7 +469,15 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // first componentData key drifted to a denormal (~1.086e-311),
     // throwing "Component type 1 is not in this archetype" on the
     // next query.
-    let raw = arena_alloc(total, align);
+    let raw = if MAY_COLLECT {
+        arena_alloc(total, align)
+    } else {
+        let raw = arena_alloc_no_collect(total, align);
+        if raw.is_null() {
+            return std::ptr::null_mut();
+        }
+        raw
+    };
 
     unsafe {
         let header = raw as *mut GcHeader;

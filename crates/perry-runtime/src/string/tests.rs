@@ -626,3 +626,161 @@ fn string_add_value_picks_the_operator_from_the_bits() {
         );
     }
 }
+
+/// #7901: the unrooted `js_string_concat_chain` fast path.
+///
+/// The change it covers replaces ~2N transient-handle round trips per chain
+/// with a proof: `string_storage_alloc_no_collect` returns `Some` only when
+/// the nursery block that was already open could serve the request, and that
+/// is the one arena path that precedes `gc_check_trigger`. These tests hold
+/// both halves — that the answer is unchanged, and that the premise the
+/// answer rests on is actually true at run time.
+mod concat_chain_no_collect {
+    use super::*;
+    use super::super::concat::CONCAT_CHAIN_NO_COLLECT_HITS;
+
+    fn hits() -> u64 {
+        CONCAT_CHAIN_NO_COLLECT_HITS.with(|c| c.get())
+    }
+
+    fn heap(text: &str) -> f64 {
+        let p = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        f64::from_bits(crate::value::STRING_TAG | (p as u64 & 0x0000_FFFF_FFFF_FFFF))
+    }
+
+    fn chain(parts: &[f64]) -> *mut StringHeader {
+        js_string_concat_chain(parts.as_ptr(), parts.len() as i32)
+    }
+
+    fn text(s: *mut StringHeader) -> String {
+        string_as_str(s).to_string()
+    }
+
+    /// The exact shape a tree-walking interpreter's environment lookup emits:
+    /// `seen = seen + "[" + names[i] + "]"`, four heap-string parts, run in a
+    /// loop so the accumulator grows.
+    #[test]
+    fn four_heap_string_parts_take_the_unrooted_path_and_answer_correctly() {
+        let before = hits();
+        let mut acc = heap("");
+        let mut expected = String::new();
+        for name in ["n", "fib", "go", "cat"] {
+            acc = {
+                let joined = chain(&[acc, heap("["), heap(name), heap("]")]);
+                expected = format!("{expected}[{name}]");
+                assert_eq!(text(joined), expected);
+                f64::from_bits(crate::value::STRING_TAG | (joined as u64 & 0x0000_FFFF_FFFF_FFFF))
+            };
+        }
+        assert!(
+            hits() >= before + 4,
+            "every all-heap-string chain must take the unrooted path: {} -> {}",
+            before,
+            hits()
+        );
+    }
+
+    /// The safety premise, asserted rather than assumed: a fast-path chain
+    /// reaches ZERO allocation-point GC triggers. If it ever reached one, the
+    /// raw part pointers read in the sizing loop could have been moved out
+    /// from under the copy loop — which is precisely the bug the transient
+    /// handles used to prevent.
+    #[test]
+    fn the_unrooted_path_reaches_no_collection_point() {
+        // Warm the block so the very first allocation of the test is not the
+        // one that installs a fresh one.
+        let _ = chain(&[heap("warm"), heap("up")]);
+        crate::arena::reset_gc_trigger_arena_probe();
+        let triggers_before = crate::arena::gc_trigger_arena_calls();
+        let hits_before = hits();
+
+        let joined = chain(&[heap("a"), heap("bb"), heap("ccc")]);
+        assert_eq!(text(joined), "abbccc");
+
+        assert!(
+            hits() > hits_before,
+            "test premise: the chain must have taken the unrooted path"
+        );
+        assert_eq!(
+            crate::arena::gc_trigger_arena_calls(),
+            triggers_before,
+            "the unrooted path must not reach an allocation-point collection"
+        );
+    }
+
+    /// A part that is not a live heap string (SSO, a number, `undefined`)
+    /// needs `js_jsvalue_to_string`, which allocates — so it must fall back
+    /// to the rooted path, and still answer correctly.
+    #[test]
+    fn non_heap_string_parts_fall_back_to_the_rooted_path() {
+        let sso = js_string_new_sso(b"ab".as_ptr(), 2);
+        for (parts, want) in [
+            (vec![heap("x"), 7.0, heap("y")], "x7y"),
+            (vec![heap("x"), sso, heap("y")], "xaby"),
+            (
+                vec![heap("v="), f64::from_bits(crate::value::TAG_UNDEFINED)],
+                "v=undefined",
+            ),
+            (vec![7.0, 8.0], "78"),
+        ] {
+            let before = hits();
+            assert_eq!(text(chain(&parts)), want);
+            assert_eq!(
+                hits(),
+                before,
+                "a non-heap-string part must not take the unrooted path: {want}"
+            );
+        }
+    }
+
+    /// An EMPTY part contributes no bytes AND no flags — the rooted loop ORs
+    /// `piece_flags` inside its `blen > 0` guard, and a fast path that
+    /// diverged there would change WTF-8 behaviour silently rather than
+    /// visibly.
+    #[test]
+    fn empty_parts_contribute_neither_bytes_nor_flags() {
+        let empty = heap("");
+        let joined = chain(&[empty, heap("a"), empty, heap("b"), empty]);
+        assert_eq!(text(joined), "ab");
+        unsafe {
+            assert_eq!((*joined).byte_len, 2);
+            assert_eq!((*joined).utf16_len, 2);
+            assert_eq!((*joined).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        }
+    }
+
+    /// Multi-byte and surrogate handling survives the fast path: `utf16_len`
+    /// is summed from the parts, and an adjacent high→low pair produced by
+    /// the JOIN is still canonicalised to its astral form.
+    #[test]
+    fn utf16_length_and_surrogate_canonicalisation_survive_the_fast_path() {
+        let joined = chain(&[heap("é"), heap("漢"), heap("ab")]);
+        assert_eq!(text(joined), "é漢ab");
+        unsafe {
+            assert_eq!((*joined).utf16_len, 4);
+            assert_eq!((*joined).byte_len, 2 + 3 + 2);
+        }
+
+        let high = js_string_from_char_code(0xD83D as f64);
+        let low = js_string_from_char_code(0xDE00 as f64);
+        let hi_box = f64::from_bits(crate::value::STRING_TAG | (high as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let lo_box = f64::from_bits(crate::value::STRING_TAG | (low as u64 & 0x0000_FFFF_FFFF_FFFF));
+        let merged = chain(&[hi_box, lo_box]);
+        assert_eq!(text(merged), "\u{1F600}");
+        unsafe {
+            assert_eq!((*merged).utf16_len, 2);
+        }
+    }
+
+    /// The 4/8/32 scratch-size dispatch all route through the same fast path.
+    #[test]
+    fn every_scratch_size_class_takes_the_fast_path() {
+        for n in [1usize, 2, 4, 5, 8, 9, 16, 32] {
+            let parts: Vec<f64> = (0..n).map(|i| heap(&format!("{i}"))).collect();
+            let want: String = (0..n).map(|i| i.to_string()).collect();
+            let before = hits();
+            assert_eq!(text(chain(&parts)), want, "n={n}");
+            assert!(hits() > before, "n={n} must take the unrooted path");
+        }
+    }
+}

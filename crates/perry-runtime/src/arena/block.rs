@@ -774,14 +774,33 @@ impl Arena {
 /// # Safety
 /// `arena` must be the `UnsafeCell` payload of a live thread-local `Arena` for
 /// the current thread.
+/// The first statement of [`arena_cell_alloc`], on its own: try the block that
+/// is already open, under a borrow that ends with the call.
+///
+/// Split out so a caller can take **only** this step. Everything past it in
+/// `arena_cell_alloc` is a collection point (`gc_check_trigger`) or a block
+/// reservation that can reach one, so a `Some` from here is the runtime's
+/// proof that no object moved — which is what
+/// `arena::arena_alloc_gc_no_collect` sells to helpers holding unrooted raw
+/// heap pointers.
+///
+/// # Safety
+/// Same as [`arena_cell_alloc`].
+#[inline]
+pub(crate) unsafe fn arena_cell_try_alloc_current(
+    arena: *mut Arena,
+    size: usize,
+    align: usize,
+) -> Option<*mut u8> {
+    let _borrow = ArenaBorrowGuard::new();
+    (*arena).try_alloc_current(size, align)
+}
+
 #[inline]
 pub(crate) unsafe fn arena_cell_alloc(arena: *mut Arena, size: usize, align: usize) -> *mut u8 {
     // Try current block first, under a borrow that ends with this statement.
-    {
-        let _borrow = ArenaBorrowGuard::new();
-        if let Some(ptr) = (*arena).try_alloc_current(size, align) {
-            return ptr;
-        }
+    if let Some(ptr) = arena_cell_try_alloc_current(arena, size, align) {
+        return ptr;
     }
 
     // Current block is full. Check the GC trigger first — if it fires and

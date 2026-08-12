@@ -34,7 +34,8 @@ pub(crate) use allocators::{
     inactive_survivor_index, with_survivor_arena, with_survivor_arena_mut,
 };
 pub(crate) use block::{
-    arena_cell_alloc, drain_block_pool_if_requested, old_gen_in_use_bytes_sub, release_arena_block,
+    arena_cell_alloc, arena_cell_try_alloc_current, drain_block_pool_if_requested,
+    old_gen_in_use_bytes_sub, release_arena_block,
     request_block_pool_drain, Arena, ArenaBlock, ArenaBlockRelease, BlockPoolDrainStats,
     ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES,
     INLINE_STATE, LONGLIVED_ARENA, OLD_ARENA, OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0,
@@ -71,7 +72,8 @@ pub use allocators::{
     arena_alloc_longlived, arena_alloc_old, js_arena_alloc,
 };
 pub(crate) use allocators::{
-    arena_alloc_gc_old_born_tenured, arena_alloc_gc_old_excluding_pages, arena_alloc_gc_survivor,
+    arena_alloc_gc_no_collect, arena_alloc_gc_old_born_tenured, arena_alloc_gc_old_excluding_pages,
+    arena_alloc_gc_survivor,
 };
 
 // walk.rs

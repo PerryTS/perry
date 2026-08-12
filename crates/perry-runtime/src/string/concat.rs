@@ -500,8 +500,112 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
 /// The body of [`js_string_concat_chain`], monomorphised on the scratch-array
 /// size. `0 < n <= MAX_PARTS` and `!parts.is_null()` are preconditions the
 /// dispatcher establishes.
+/// #7901 counter: how many chains took the unrooted fast path below. A gate
+/// that cannot see its subject run is not a gate — the unit tests assert this
+/// moves, so a refactor that quietly stops taking the fast path is red rather
+/// than "still correct, just slow again".
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CONCAT_CHAIN_NO_COLLECT_HITS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[inline]
+fn note_no_collect_hit() {
+    CONCAT_CHAIN_NO_COLLECT_HITS.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn note_no_collect_hit() {}
+
+/// The unrooted arm of [`concat_chain_sized`]: every part is already a live
+/// heap string, so classification touches no allocator at all, and the one
+/// allocation it needs is taken through the **no-collect** entry point.
+///
+/// ★ Why this is sound, stated as the invariant it rests on:
+///
+/// > `string_storage_alloc_no_collect` returns `Some` only when the request
+/// > was served by bumping the nursery block that was already open. That is
+/// > the one path through `arena_cell_alloc` that precedes `gc_check_trigger`,
+/// > so a `Some` is a proof that no collection ran and therefore that nothing
+/// > moved.
+///
+/// With that proof in hand the transient handle stack is not merely
+/// unnecessary, it is unreachable work: the pointers read in the sizing loop
+/// are still the pointers to copy from. `None` (block full, oversized result)
+/// re-enters the rooted path below, which behaves exactly as it always did —
+/// and re-reads its operands from `parts`, which is still valid because
+/// nothing has collected *yet* either.
+///
+/// The rooted path costs ~2N thread-local + `RefCell` round trips per call
+/// (N `root_string_ptr` pushes in the classify loop, N
+/// `get_raw_const_ptr` reads in the copy loop) plus the scope's own two.
+/// On Darwin every one of those is an `_tlv_get_addr` call. On a
+/// tree-walking-interpreter workload whose environment lookup appends
+/// `seen = seen + "[" + names[i] + "]"` per frame, that bookkeeping measured
+/// **12.6%** of total run time — more than the concatenation it was
+/// protecting.
+#[inline]
+fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
+    parts: *const f64,
+    n: usize,
+) -> Option<*mut StringHeader> {
+    let mut piece_ptrs: [*const StringHeader; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
+    let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
+    let mut piece_flags: u32 = 0;
+    let mut total_blen: u32 = 0;
+    let mut total_u16: u32 = 0;
+
+    for i in 0..n {
+        let bits = unsafe { *parts.add(i) }.to_bits();
+        // STRING_TAG = 0x7FFF. Anything else (SSO, numbers, objects) needs
+        // `js_jsvalue_to_string`, which allocates — so it belongs on the
+        // rooted path, not here.
+        if bits >> 48 != 0x7FFF {
+            return None;
+        }
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+        if !is_valid_string_ptr(ptr) {
+            return None;
+        }
+        // Mirrors the rooted loop exactly, including that an EMPTY part
+        // contributes no flags: `piece_flags |= flags` sits inside its
+        // `blen > 0` guard there, and a divergence here would be a
+        // silent WTF-8 behaviour change rather than a slowdown.
+        let blen = unsafe { (*ptr).byte_len };
+        if blen > 0 {
+            piece_ptrs[i] = ptr;
+            piece_lens[i] = blen;
+            piece_flags |= unsafe { (*ptr).flags };
+            total_blen = total_blen.saturating_add(blen);
+            total_u16 = total_u16.saturating_add(unsafe { (*ptr).utf16_len });
+        }
+    }
+
+    let (ptr, mut cursor) = string_storage_alloc_no_collect(total_blen)?;
+    note_no_collect_hit();
+
+    unsafe {
+        init_string_header(ptr, total_u16, total_blen, total_blen, 0, piece_flags);
+        for i in 0..n {
+            let l = piece_lens[i] as usize;
+            if l == 0 {
+                continue;
+            }
+            ptr::copy_nonoverlapping(string_data(piece_ptrs[i]), cursor, l);
+            cursor = cursor.add(l);
+        }
+        Some(canonicalize_surrogate_pairs(ptr))
+    }
+}
+
 fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *mut StringHeader {
     debug_assert!(n > 0 && n <= MAX_PARTS);
+    if let Some(result) = concat_chain_all_heap_strings_no_collect::<MAX_PARTS>(parts, n) {
+        return result;
+    }
     // Per-part scratch buffer for number formatting. 32 bytes is enough
     // for any f64 string representation (max ~24 chars). Left UNINITIALISED:
     // a slot becomes readable only via `MaybeUninit::write`, on exactly the

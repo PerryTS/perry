@@ -508,6 +508,28 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     (ptr, data)
 }
 
+/// [`string_storage_alloc`] with **no collection point**: `Some` means the
+/// bytes came out of the nursery block that was already open, so nothing on
+/// the heap moved and any raw string pointer the caller read *before* this
+/// call is still valid. `None` means the caller must root its operands and
+/// re-issue through [`string_storage_alloc`].
+///
+/// See `arena::arena_alloc_gc_no_collect` for why the guarantee holds.
+#[inline]
+pub(crate) fn string_storage_alloc_no_collect(
+    capacity: u32,
+) -> Option<(*mut StringHeader, *mut u8)> {
+    let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+    let raw = crate::arena::arena_alloc_gc_no_collect(payload_size, 8, crate::gc::GC_TYPE_STRING);
+    if raw.is_null() {
+        return None;
+    }
+    let ptr = raw as *mut StringHeader;
+    let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+    zero_alignment_padding_tail(raw, payload_size);
+    Some((ptr, data))
+}
+
 #[inline]
 pub(crate) fn string_storage_alloc_longlived(capacity: u32) -> (*mut StringHeader, *mut u8) {
     let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
