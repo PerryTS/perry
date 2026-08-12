@@ -320,6 +320,202 @@ mod tests {
         );
     }
 
+    // ── End-to-end: the transform actually emits (and withholds) the stores ──
+
+    fn async_module(body: Vec<Stmt>) -> Module {
+        let f = Function {
+            id: 1,
+            name: "f".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: perry_hir::types::Type::Any,
+            body,
+            is_strict: true,
+            is_async: true,
+            is_generator: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        };
+        let mut m = Module::new("t");
+        m.functions.push(f);
+        m
+    }
+
+    fn run_async_pipeline(m: &mut Module) {
+        crate::async_to_generator::transform_async_to_generator(m);
+        crate::generator::transform_generators(m);
+    }
+
+    /// Count `LocalSet(id, undefined)` statements anywhere in a body, including
+    /// inside closures (the release stores live in the step closure).
+    fn count_release_stores(stmts: &[Stmt], id: LocalId) -> usize {
+        let mut n = 0;
+        fn walk_stmts(stmts: &[Stmt], id: LocalId, n: &mut usize) {
+            for s in stmts {
+                match s {
+                    Stmt::Expr(Expr::LocalSet(sid, value))
+                        if *sid == id && matches!(**value, Expr::Undefined) =>
+                    {
+                        *n += 1;
+                    }
+                    _ => {}
+                }
+                let mut sub: Vec<&Expr> = Vec::new();
+                collect_stmt_exprs(s, &mut sub);
+                for e in sub {
+                    walk_expr(e, id, n);
+                }
+                for body in stmt_child_bodies(s) {
+                    walk_stmts(body, id, n);
+                }
+            }
+        }
+        fn walk_expr(e: &Expr, id: LocalId, n: &mut usize) {
+            if let Expr::Closure { body, .. } = e {
+                walk_stmts(body, id, n);
+            }
+            perry_hir::walker::walk_expr_children(e, &mut |c| walk_expr(c, id, n));
+        }
+        fn collect_stmt_exprs<'a>(s: &'a Stmt, out: &mut Vec<&'a Expr>) {
+            match s {
+                Stmt::Let { init: Some(e), .. }
+                | Stmt::Expr(e)
+                | Stmt::Throw(e)
+                | Stmt::Return(Some(e)) => out.push(e),
+                Stmt::If { condition, .. } => out.push(condition),
+                Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => {
+                    out.push(condition)
+                }
+                Stmt::For {
+                    condition, update, ..
+                } => {
+                    if let Some(c) = condition {
+                        out.push(c);
+                    }
+                    if let Some(u) = update {
+                        out.push(u);
+                    }
+                }
+                Stmt::Switch { discriminant, .. } => out.push(discriminant),
+                _ => {}
+            }
+        }
+        fn stmt_child_bodies(s: &Stmt) -> Vec<&[Stmt]> {
+            match s {
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    let mut v: Vec<&[Stmt]> = vec![then_branch.as_slice()];
+                    if let Some(eb) = else_branch {
+                        v.push(eb.as_slice());
+                    }
+                    v
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                    vec![body.as_slice()]
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    let mut v: Vec<&[Stmt]> = vec![body.as_slice()];
+                    if let Some(c) = catch {
+                        v.push(c.body.as_slice());
+                    }
+                    if let Some(f) = finally {
+                        v.push(f.as_slice());
+                    }
+                    v
+                }
+                Stmt::Switch { cases, .. } => cases.iter().map(|c| c.body.as_slice()).collect(),
+                Stmt::Labeled { body, .. } => vec![std::slice::from_ref(body.as_ref())],
+                _ => Vec::new(),
+            }
+        }
+        walk_stmts(stmts, id, &mut n);
+        n
+    }
+
+    fn awaited_let(id: LocalId) -> Stmt {
+        Stmt::Let {
+            id,
+            name: "v".into(),
+            ty: perry_hir::types::Type::Any,
+            mutable: false,
+            init: Some(Expr::Await(Box::new(Expr::Integer(1)))),
+        }
+    }
+
+    /// The positive case: a body local that survives an `await` is boxed, no
+    /// closure can see it, so the terminal states must release it. Two stores —
+    /// one on the resolve arm, one on the reject arm.
+    #[test]
+    fn a_confined_body_local_is_released_at_the_terminal_states() {
+        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)))]);
+        run_async_pipeline(&mut m);
+        assert_eq!(
+            count_release_stores(&m.functions[0].body, 50),
+            2,
+            "expected a release on each terminal arm:\n{:#?}",
+            m.functions[0].body
+        );
+    }
+
+    /// The negative case that makes this safe: the same local, but a closure
+    /// escapes with it. Releasing it would be a silent use-after-clear, so the
+    /// transform must emit no store at all.
+    #[test]
+    fn a_body_local_a_closure_can_see_is_never_released() {
+        let escaping = closure(vec![Stmt::Return(Some(local_get(50)))], Vec::new());
+        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(escaping))]);
+        run_async_pipeline(&mut m);
+        assert_eq!(
+            count_release_stores(&m.functions[0].body, 50),
+            0,
+            "a closure-visible local must never be released:\n{:#?}",
+            m.functions[0].body
+        );
+    }
+
+    /// `__gen_sent` (the value the last `await` delivered) is released too, and
+    /// the control locals are not: an `undefined` `__gen_done` would drop a late
+    /// resume into the dispatch loop with no matching state.
+    #[test]
+    fn the_state_machine_control_locals_are_not_released() {
+        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)))]);
+        run_async_pipeline(&mut m);
+        let body = &m.functions[0].body;
+        // `PreallocateBoxes` lists the activation's cells; ids 0..=3 of the
+        // transform's own allocation are state/done/sent/executing. Find the
+        // prealloc list and assert at most one of its transform-internal ids is
+        // released (that one is `__gen_sent`).
+        let prealloc: Vec<LocalId> = body
+            .iter()
+            .find_map(|s| match s {
+                Stmt::PreallocateBoxes(ids) => Some(ids.clone()),
+                _ => None,
+            })
+            .expect("the activation preallocates its boxes");
+        let released: Vec<LocalId> = prealloc
+            .iter()
+            .copied()
+            .filter(|id| count_release_stores(body, *id) > 0)
+            .collect();
+        // Exactly the user local (50) and `__gen_sent`.
+        assert_eq!(
+            released.len(),
+            2,
+            "released set should be {{user local, __gen_sent}}, got {released:?} of {prealloc:?}"
+        );
+        assert!(released.contains(&50), "{released:?}");
+    }
+
     #[test]
     fn release_stmts_are_undefined_stores() {
         let stmts = build_box_release_stmts(&[3, 5]);
