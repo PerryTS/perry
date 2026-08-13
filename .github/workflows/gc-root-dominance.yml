@@ -667,6 +667,43 @@ jobs:
             --seeded-violations 40 \
             -v
 
+      # ★★ The DEPENDENCY-SCALE corpus under the NATIVE lowering (#7803).
+      #
+      # The fourth cell of a matrix that had three. #7280 fixed the POPULATION
+      # (curated files do not contain the shapes a real library produces);
+      # #7452 fixed the LOWERING (statepoints ship, the shadow corpus contains
+      # none of that root form). Neither reached the other's cell, so the zod
+      # corpus compiled the way shipped binaries are compiled had never been
+      # checked. First measurement: 66 `unrooted` hazards, against a curated
+      # arm calibrated to ZERO — 24 sinking into js_new_function_construct and
+      # 39 into the js_closure_call family, i.e. the two shapes #7803 surfaces
+      # as ("Cannot read properties of undefined" / "value is not a function").
+      #
+      # BUDGET, not allowlist, and it can only go down. 66 -> 26 when the
+      # callee-outlives-arguments defect was fixed in new_dynamic.rs,
+      # call_spread.rs and early_branches.rs. The residual 26 are a population
+      # under triage (19 are the `js_box_get_bits` mutable-capture-box shape),
+      # not a list anyone has adjudicated one by one — same reasoning the
+      # `--stale-registers` budget records.
+      - name: Emit the dependency-scale NATIVE (statepoint) IR corpus
+        run: ./scripts/gc_root_dominance_dep_native_corpus.sh ir-corpus-dep-native
+
+      - name: Check GC values across safepoints (dependency-scale, native roots)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep-native \
+            --statepoints \
+            --moving-only \
+            --min-files 60 --min-funcs 1200 \
+            --min-statepoints 15000 \
+            --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-unrooted 26 \
+            --max-stale 0 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+
       # ★ The unfiltered arm, as a DIAGNOSTIC rather than a gate.
       #
       # `--moving-only` keeps only hazards whose window reaches a safepoint

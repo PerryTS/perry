@@ -1117,3 +1117,21 @@ every fastify app). Shipping that before the rooting is verified trades a quiet
 bug for a loud one in someone else's server. So it lands as an instrument, and
 the flip is a separate evidence-gated decision — the same sequencing
 `PERRY_GC_MOVING_LOOP_POLLS` had between #7161 and #7721.
+
+### 21a. The sweeper took the build mid-session — commits survived
+
+§8 recorded that "whatever sweeps `/Users/amlug/projects/perry/wt-*` on this
+box" deleted the previous session's worktree AND its `CARGO_TARGET_DIR` while
+an experiment was running. It happened again here: `wt-7803/target/` vanished
+between two commands (free space 8 GB → 60 GB), taking `perry`,
+`libperry_runtime.a` and `libperry_stdlib.a` with it.
+
+Nothing was lost, because the work had been committed as it was produced —
+five commits, all intact, plus the uncommitted working-tree edits. The
+in-flight A/B kept running because its binary lives in `/tmp`, not the
+worktree.
+
+**Operational rule for this box, stated because it has now cost two sessions:**
+commit before any long-running step, and never treat a worktree `target/` as
+durable for longer than a single command. The 25 minutes to rebuild is the
+whole cost when you have commits; it is the whole session when you don't.
