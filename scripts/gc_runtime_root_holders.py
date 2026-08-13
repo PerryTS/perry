@@ -68,11 +68,12 @@ Named, because an unstated limit is how a gate gets trusted past its subject.
 * **`RuntimeState`-owned tables.** `crates/perry-runtime/src/state.rs` absorbed
   roughly a dozen former `thread_local!`s (`descriptors`, `object_hot` and its
   `overflow_fields` / `shape_cache_overflow` / `transition_cache`,
-  `field_lookup`, `shapes`). They are struct FIELDS, reached through `state()`,
-  so no declaration-site scan sees them. All are covered today; a new field
-  added there is invisible here. `STATE_FIELD_FLOOR` below asserts the struct
-  has not grown past the field count this was checked at, so growth is at least
-  *loud*.
+  `field_lookup`, `shapes`, and `exotic_expando`). They are struct FIELDS,
+  reached through `state()`, so no declaration-site scan sees them. All are
+  covered today: in particular, `exotic_expando` is visited by
+  `scan_exotic_expando_roots_mut`. A new field added there is invisible here.
+  `STATE_FIELD_FLOOR` below asserts the struct has not grown past the field
+  count this was checked at, so growth is at least *loud*.
 * **An integer-typed holder whose own file never calls an allocator.** Rule B
   needs a function that both names the holder and allocates; a cell written
   purely from a value handed in across a module boundary has neither, and is
@@ -186,7 +187,7 @@ MIN_REGISTERED = 60
 # and are invisible to DECL; this makes the struct growing at least loud.
 STATE_FILE = "crates/perry-runtime/src/state.rs"
 STATE_STRUCT = "struct RuntimeState"
-STATE_FIELD_FLOOR = 4
+STATE_FIELD_FLOOR = 5
 
 
 def source_files(root: Path) -> list[Path]:

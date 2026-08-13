@@ -1551,9 +1551,14 @@ pub struct ObjectHeader {
 /// garbage; every `meta` access must first establish a genuine shaped
 /// object (`object_meta_slot_addr` centralizes that check).
 ///
-/// Phase B lands incrementally: today the record holds the custom
-/// `[[Prototype]]` plus the Phase C2 per-key descriptor summaries; the
-/// exotic-kind tag migrates here next (#6759).
+/// The shipped Phase B record holds the custom `[[Prototype]]`, the Phase C2
+/// per-key descriptor summaries, object flags, and owned spill storage. The
+/// RFC also sketched an exotic-kind tag here, but Date/RegExp/Error/Promise/
+/// Map/Set/Temporal have distinct cell layouts rather than an `ObjectHeader`;
+/// representing their kind here first requires header unification. Their
+/// expando payloads therefore remain in the per-thread `RuntimeState` with GC
+/// rekey/prune defenses instead of being described as the next incremental
+/// `ObjectMeta` migration.
 #[repr(C)]
 pub struct ObjectMeta {
     /// Custom `[[Prototype]]` recorded by `Object.setPrototypeOf` / object

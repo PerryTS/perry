@@ -101,56 +101,68 @@ pub(crate) fn exotic_expando_kind_of_value(value: f64) -> Option<(usize, ExoticK
     exotic_expando_kind(addr).map(|kind| (addr, kind))
 }
 
-crate::perry_thread_local! {
-    /// addr -> insertion-ordered (key, nanboxed value bits) pairs (Date/RegExp).
-    static EXOTIC_EXPANDO: RefCell<HashMap<usize, Vec<(String, u64)>>> =
-        RefCell::new(HashMap::new());
+/// #6759 Phase A: exotic-cell expando storage grouped under the owning
+/// thread's [`crate::state::RuntimeState`]. Keeping the gate beside the map
+/// lets each operation fetch the runtime state once and reuse it, rather than
+/// resolving two independent TLS keys on every first store or guarded lookup.
+pub(crate) struct ExoticExpandoTables {
+    /// addr -> insertion-ordered (key, nanboxed value bits) pairs for the
+    /// non-Error exotic cells handled by this module.
+    entries: RefCell<HashMap<usize, Vec<(String, u64)>>>,
     /// Fast-path gate so hot get/set paths skip the map lookup until the
     /// first expando is installed on this thread.
-    static EXPANDO_IN_USE: Cell<bool> = const { Cell::new(false) };
+    in_use: Cell<bool>,
+}
+
+impl ExoticExpandoTables {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: RefCell::new(HashMap::new()),
+            in_use: Cell::new(false),
+        }
+    }
 }
 
 pub(crate) fn expando_in_use() -> bool {
-    EXPANDO_IN_USE.with(|c| c.get())
+    crate::state::state().exotic_expando.in_use.get()
 }
 
 fn expando_store(addr: usize, key: &str, bits: u64) {
-    EXPANDO_IN_USE.with(|c| c.set(true));
-    EXOTIC_EXPANDO.with(|m| {
-        let mut map = m.borrow_mut();
-        let entries = map.entry(addr).or_default();
-        if let Some(slot) = entries.iter_mut().find(|(k, _)| k == key) {
-            slot.1 = bits;
-        } else {
-            entries.push((key.to_string(), bits));
-        }
-    });
+    let tables = &crate::state::state().exotic_expando;
+    tables.in_use.set(true);
+    let mut map = tables.entries.borrow_mut();
+    let entries = map.entry(addr).or_default();
+    if let Some(slot) = entries.iter_mut().find(|(k, _)| k == key) {
+        slot.1 = bits;
+    } else {
+        entries.push((key.to_string(), bits));
+    }
 }
 
 fn expando_lookup(addr: usize, key: &str) -> Option<u64> {
-    if !expando_in_use() {
+    let tables = &crate::state::state().exotic_expando;
+    if !tables.in_use.get() {
         return None;
     }
-    EXOTIC_EXPANDO.with(|m| {
-        m.borrow()
-            .get(&addr)
-            .and_then(|entries| entries.iter().find(|(k, _)| k == key).map(|(_, v)| *v))
-    })
+    tables
+        .entries
+        .borrow()
+        .get(&addr)
+        .and_then(|entries| entries.iter().find(|(k, _)| k == key).map(|(_, v)| *v))
 }
 
 fn expando_remove(addr: usize, key: &str) -> bool {
-    if !expando_in_use() {
+    let tables = &crate::state::state().exotic_expando;
+    if !tables.in_use.get() {
         return false;
     }
-    EXOTIC_EXPANDO.with(|m| {
-        let mut map = m.borrow_mut();
-        if let Some(entries) = map.get_mut(&addr) {
-            let before = entries.len();
-            entries.retain(|(k, _)| k != key);
-            return entries.len() != before;
-        }
-        false
-    })
+    let mut map = tables.entries.borrow_mut();
+    if let Some(entries) = map.get_mut(&addr) {
+        let before = entries.len();
+        entries.retain(|(k, _)| k != key);
+        return entries.len() != before;
+    }
+    false
 }
 
 /// Kind-dispatched own data-property store: Error delegates to the
@@ -187,15 +199,16 @@ fn value_keys(kind: ExoticKind, addr: usize) -> Vec<String> {
             .map(|(k, _)| k)
             .collect(),
         _ => {
-            if !expando_in_use() {
+            let tables = &crate::state::state().exotic_expando;
+            if !tables.in_use.get() {
                 return Vec::new();
             }
-            EXOTIC_EXPANDO.with(|m| {
-                m.borrow()
-                    .get(&addr)
-                    .map(|entries| entries.iter().map(|(k, _)| k.clone()).collect())
-                    .unwrap_or_default()
-            })
+            tables
+                .entries
+                .borrow()
+                .get(&addr)
+                .map(|entries| entries.iter().map(|(k, _)| k.clone()).collect())
+                .unwrap_or_default()
         }
     }
 }
@@ -204,12 +217,11 @@ fn value_keys(kind: ExoticKind, addr: usize) -> Vec<String> {
 /// cell. Called from Date / RegExp allocation so address reuse can't leak
 /// the old instance's properties onto the new one.
 pub(crate) fn expando_clear_on_alloc(addr: usize) {
-    if !expando_in_use() {
+    let tables = &crate::state::state().exotic_expando;
+    if !tables.in_use.get() {
         return;
     }
-    EXOTIC_EXPANDO.with(|m| {
-        m.borrow_mut().remove(&addr);
-    });
+    tables.entries.borrow_mut().remove(&addr);
 }
 
 /// Death pruning (2026-07-09 GC audit wave 2): the root scanner
@@ -222,31 +234,35 @@ pub(crate) fn expando_clear_on_alloc(addr: usize) {
 /// Temporal cells that die PINNED are skipped by the predicate's pinned
 /// check and remain covered by the clear-on-alloc path.
 pub(crate) fn prune_dead_exotic_expando_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    if !expando_in_use() {
+    let tables = &crate::state::state().exotic_expando;
+    if !tables.in_use.get() {
         return;
     }
-    EXOTIC_EXPANDO.with(|m| {
-        let mut map = m.borrow_mut();
-        if !map.is_empty() {
-            map.retain(|owner, _| !is_dead_owner(*owner));
-        }
-    });
+    let mut map = tables.entries.borrow_mut();
+    if !map.is_empty() {
+        map.retain(|owner, _| !is_dead_owner(*owner));
+    }
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_exotic_expando_entry(addr: usize, key: &str, value_bits: u64) {
-    EXPANDO_IN_USE.with(|c| c.set(true));
-    EXOTIC_EXPANDO.with(|m| {
-        m.borrow_mut()
-            .entry(addr)
-            .or_default()
-            .push((key.to_string(), value_bits));
-    });
+    let tables = &crate::state::state().exotic_expando;
+    tables.in_use.set(true);
+    tables
+        .entries
+        .borrow_mut()
+        .entry(addr)
+        .or_default()
+        .push((key.to_string(), value_bits));
 }
 
 #[cfg(test)]
 pub(crate) fn test_exotic_expando_entry_exists(addr: usize) -> bool {
-    EXOTIC_EXPANDO.with(|m| m.borrow().contains_key(&addr))
+    crate::state::state()
+        .exotic_expando
+        .entries
+        .borrow()
+        .contains_key(&addr)
 }
 
 /// Rekey a movable exotic cell's expando entry after the GC relocates it from
@@ -257,15 +273,14 @@ pub(crate) fn test_exotic_expando_entry_exists(addr: usize) -> bool {
 /// are already rewritten by `scan_exotic_expando_roots_mut`; this migrates the
 /// owner *key*. Wired via `GcMoveHookKind::ExoticExpandoOwner`.
 pub(crate) fn exotic_expando_owner_moved(old_addr: usize, new_addr: usize) {
-    if !expando_in_use() || old_addr == new_addr {
+    let tables = &crate::state::state().exotic_expando;
+    if !tables.in_use.get() || old_addr == new_addr {
         return;
     }
-    EXOTIC_EXPANDO.with(|m| {
-        let mut map = m.borrow_mut();
-        if let Some(entries) = map.remove(&old_addr) {
-            map.insert(new_addr, entries);
-        }
-    });
+    let mut map = tables.entries.borrow_mut();
+    if let Some(entries) = map.remove(&old_addr) {
+        map.insert(new_addr, entries);
+    }
 }
 
 /// `[[Set]]` on a Date/RegExp/Error instance. Honors accessor descriptors
@@ -613,12 +628,47 @@ pub(crate) fn exotic_put_value_set(
 /// GC mutable-root scanner: keeps expando values alive (and rewrites them if
 /// the collector relocates the referenced heap objects).
 pub fn scan_exotic_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    EXOTIC_EXPANDO.with(|m| {
-        let mut map = m.borrow_mut();
-        for (_, entries) in map.iter_mut() {
-            for (_, bits) in entries.iter_mut() {
-                visitor.visit_nanbox_u64_slot(bits);
-            }
+    let mut map = crate::state::state().exotic_expando.entries.borrow_mut();
+    for (_, entries) in map.iter_mut() {
+        for (_, bits) in entries.iter_mut() {
+            visitor.visit_nanbox_u64_slot(bits);
         }
-    });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_state_keeps_exotic_expandos_thread_local() {
+        let marker = 0u8;
+        let owner = &marker as *const u8 as usize;
+        let key = "runtime-state-isolation";
+
+        test_seed_exotic_expando_entry(owner, key, crate::value::TAG_UNDEFINED);
+        assert!(test_exotic_expando_entry_exists(owner));
+
+        std::thread::spawn(move || {
+            assert!(
+                !test_exotic_expando_entry_exists(owner),
+                "a worker observed the parent thread's expando table"
+            );
+            test_seed_exotic_expando_entry(owner, key, crate::value::TAG_TRUE);
+            assert_eq!(expando_lookup(owner, key), Some(crate::value::TAG_TRUE));
+        })
+        .join()
+        .expect("worker test thread panicked");
+
+        assert!(
+            test_exotic_expando_entry_exists(owner),
+            "the worker's RuntimeState disturbed the parent table"
+        );
+        assert_eq!(
+            expando_lookup(owner, key),
+            Some(crate::value::TAG_UNDEFINED),
+            "the worker overwrote the parent thread's expando value"
+        );
+        assert!(expando_remove(owner, key));
+    }
 }

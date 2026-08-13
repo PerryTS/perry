@@ -40,6 +40,10 @@ pub(crate) struct RuntimeState {
     /// Property-lookup inline caches: the direct-mapped field cache
     /// (previously a `thread_local!` in `object::field_get_set`).
     pub(crate) field_lookup: crate::object::FieldLookupCaches,
+    /// User-defined properties attached to non-`ObjectHeader` cells such as
+    /// Date, RegExp, Promise, Map, and Set (previously two `thread_local!`s in
+    /// `object::exotic_expando`).
+    pub(crate) exotic_expando: crate::object::exotic_expando::ExoticExpandoTables,
     /// #6759 Phase C1: first-class Shape records keyed on keys_array
     /// identity (see `object::shapes` and docs/shape-tree-plan.md).
     pub(crate) shapes: crate::object::ShapeTable,
@@ -51,6 +55,7 @@ impl RuntimeState {
             descriptors: crate::object::DescriptorTables::new(),
             object_hot: crate::object::ObjectHotTables::new(),
             field_lookup: crate::object::FieldLookupCaches::new(),
+            exotic_expando: crate::object::exotic_expando::ExoticExpandoTables::new(),
             shapes: crate::object::ShapeTable::new(),
         })
     }

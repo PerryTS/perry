@@ -1,9 +1,34 @@
-# Shape tree (#6759 Phase C) — design
+# Shape tree (#6759 Phase C) — design and implementation record
 
-Status: DRAFT for design review (the Phase C entry gate #6759 calls for).
-Prerequisites: Phase A (`RuntimeState`, per-thread hot tables) and Phase B
-(`ObjectHeader.meta` + `GC_TYPE_OBJECT_META`) — both stacked under this
-plan's first landing.
+Status: IMPLEMENTED IN STAGES; audited against `main` on 2026-08-13.
+
+Phase A (`RuntimeState`, per-thread hot tables) and Phase B
+(`ObjectHeader.meta` + `GC_TYPE_OBJECT_META`) landed before the first Phase C
+change. This document began as the Phase C review gate; the audit below records
+where the shipped implementation deliberately differs from that original end
+state.
+
+## Implementation audit
+
+| area | landed | deliberately still separate |
+|---|---|---|
+| Phase A: explicit runtime state | #6795 grouped the descriptor, object-storage, field-lookup, shape, and transition hot tables. The exotic-expando table is now in the same `RuntimeState`. Later work made remaining runtime TLS use the `perry_thread_local!` hot cache and added the Darwin TLS budget gate (#7758). | Receiver-specific registries that are not on the ordinary-object hot path remain in their owning modules. Phase A did not turn every runtime TLS value into a `RuntimeState` field. |
+| Phase B: self-describing headers | #6796 added the traced `ObjectHeader.meta` edge and migrated custom prototypes. #6800 added per-owner descriptor summary words. Object-owned overflow storage later moved into `ObjectMeta.spill`. | Property/accessor descriptor payloads are still authoritative in address-keyed tables. Date, RegExp, Error, Promise, Map, Set, and Temporal use distinct GC cell layouts, so their kind and expando payloads cannot be represented by `ObjectHeader.meta` without first unifying those headers. Their tables retain GC rekey/prune/clear-on-allocation defenses. |
+| Phase C: first-class shapes | #6797 added shared key→slot `Shape` records; #6801/#6803 added stable, never-reused ShapeIds and GC rekeying; #6807/#6808 made allocation and read PICs compare discriminated shape tokens. #7981/#7983/#8009/#8010 then made the header shape word uniform across plain objects and class instances and birth-stamped every known allocator. | `keys_array` remains the ordered key artifact. The transition cache and `FIELD_CACHE` still exist as shape-keyed accelerators, and churn-heavy objects do not switch to an authoritative dictionary representation. `Object.keys` still creates a fresh result by walking the keys array, as required by the JS API. |
+
+The architectural construction is therefore in production: a per-thread
+runtime state, a traced per-object metadata edge, stable shape identity, and
+exact shape-token PIC guards. The stronger literal reading of the original RFC — no
+address-keyed descriptor payloads, uniform exotic headers, shape-resident
+transition edges, and formal dictionary mode — is not implemented and should
+not be inferred from the merged phase labels.
+
+The original “within 1.5× Node” table is historical. Maintainer direction on
+#6759 raised the performance bar to beat Node and split the remaining compiler
+coverage into follow-up campaigns. #6811 beat Node on the canonical object-write
+micro; #6812 tracks generalizing that narrow win. Static inline `in` caches and
+shape-cached enumeration remain separately scopeable work rather than hidden
+requirements of the already-landed shape identity.
 
 ## Goal
 
@@ -163,13 +188,13 @@ Each step lands independently behind green suites, per the #6759 method.
     (process-rooted, address-immortal) keys arrays, closing a latent ABA
     hazard where an owned array's recycled address could satisfy the
     unvalidated inline compare.
-  - **C3-codegen (remaining, own review gate)**: eager id stamping at
-    allocation (so typed_feedback observation tokens can canonicalize on
-    ids without the lazy-stamp two-token split) and the PIC comparing
-    the header id — needs a discriminated compare because the generic
-    PIC also serves class instances, whose `parent_class_id` is real
-    inheritance data. Folding the transition cache into shape-resident
-    edges rides the same rung.
+  - **C3-codegen (landed, then generalized)**: #6807/#6808 added eager id
+    stamping and discriminated ShapeId PIC tokens. #7981 moved the serialized
+    inheritance edge to the class registry; #7983 made the header word a
+    uniform shape word for plain objects and class instances; #8009/#8010
+    birth-stamped the compiled and runtime allocator families so one shape's
+    population cannot split between pointer and id tokens. Folding the
+    transition cache into shape-resident edges remains deferred.
 - **C4 — dictionary mode: largely subsumed.**
   The concrete goals — per-shape hash lookup for wide objects, churn
   not corrupting acceleration, eager invalidation on delete/compaction,
@@ -184,12 +209,13 @@ Each step lands independently behind green suites, per the #6759 method.
     per-key against declared instance-field names (with a late-class
     retro-check), so babel-style prototype method installs stop
     poisoning `this.field` access process-wide.
-  - Remaining: guard families vetting one exact shape id — gated on
-    eager stamping (see C3-codegen above).
+  - Remaining guard families may now vet one exact shape id; eager stamping is
+    no longer their blocker.
 
-C1, C2, C3a, C3c-r, and C5a are runtime-only. The C3 codegen remainder
-gets its own review before landing. Acceptance is measured against the
-#6759 micro table.
+C1, C2, C3a, C3c-r, and C5a were runtime-only. The C3 codegen work and later
+uniform-shape-word follow-ups landed under their own reviews. New performance
+claims should use the current follow-up issue's measurement protocol rather
+than the original #6759 absolute timings.
 
 ## GC story
 
@@ -206,10 +232,11 @@ gets its own review before landing. Acceptance is measured against the
 
 ## Risks / open questions for review
 
-1. **Class instances** (`class_id != 0`, `keys_array == null`) resolve
-   fields via class layout, not keys_array — C1 deliberately does not
-   touch them; C3's unification must fold class layouts and anon shapes
-   into one shape-id space without disturbing vtable dispatch.
+1. **Class instances — resolved for identity.** C1 deliberately did not touch
+   them. #7981/#7983/#8009/#8010 made their header shape word and birth-stamp
+   discipline match plain objects without disturbing class-registry vtable or
+   inheritance dispatch. Class layouts still remain their field-definition
+   source; “uniform” means the cache identity contract, not identical storage.
 2. **Delete/compaction** rewrites keys_arrays in place for owned arrays —
    C1 handles it via `indexed_len` shrink detection (same as
    WIDE_KEY_INDEX today); C4 is the real answer.
