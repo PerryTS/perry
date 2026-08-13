@@ -233,6 +233,13 @@ fn chain_fold_is_sound(ctx: &FnCtx<'_>, parts: &[&Expr]) -> bool {
 }
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
+    // #5497 Lever E: a representation-first Boolean local/literal is already
+    // an i1. JavaScript arithmetic applies ToNumber, which is exactly an
+    // unsigned i1 -> f64 conversion; boxing and calling js_number_coerce only
+    // recreates information codegen already proved.
+    if let Some(value) = super::try_lower_proven_boolean_to_number(ctx, expr)? {
+        return Ok((value, true));
+    }
     // #6884: a statically typed numeric TypedArray read is Number|undefined,
     // not an unconditional raw f64. In arithmetic context the OOB `undefined`
     // must become canonical NaN. Sink that conversion into the OOB/cold arms
@@ -717,8 +724,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // step poisoned the result. Dispatch through the runtime
                 // helper that checks NaN-box tags: STRING_TAG / SHORT_STRING_TAG
                 // → string concat, BIGINT → bigint add, otherwise numeric.
-                if !(crate::type_analysis::is_numeric_expr(ctx, left)
-                    && crate::type_analysis::is_numeric_expr(ctx, right))
+                let both_numeric = crate::type_analysis::is_numeric_expr(ctx, left)
+                    && crate::type_analysis::is_numeric_expr(ctx, right);
+                // `+` is the one arithmetic operator that must distinguish
+                // numeric addition from string concatenation before lowering
+                // its operands. Admit native-i1 Booleans only when the other
+                // side is another proven Boolean or a canonical raw f64. A
+                // declared-only Number/Boolean stays on the dynamic helper so
+                // `as any` can still turn the operation into concatenation.
+                let left_bool = super::can_lower_proven_boolean_to_number(ctx, left);
+                let right_bool = super::can_lower_proven_boolean_to_number(ctx, right);
+                let boolean_numeric_add = (left_bool || right_bool)
+                    && (left_bool
+                        || crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left))
+                    && (right_bool
+                        || crate::type_analysis::expr_produces_canonical_raw_f64(ctx, right));
+                if !(both_numeric || boolean_numeric_add)
                     || add_operands_have_pod_materialization_hazard(ctx, left, right)
                 {
                     return lower_rooted_dynamic_binary(

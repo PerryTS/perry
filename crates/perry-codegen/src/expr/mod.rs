@@ -1940,6 +1940,8 @@ mod array_push;
 mod arrays_finds;
 mod bigint_set;
 mod binary;
+#[cfg(test)]
+mod boolean_number_tests;
 mod call_spread;
 pub(crate) mod calls;
 mod child_proc;
@@ -2271,6 +2273,68 @@ fn is_plain_i1_local(ctx: &FnCtx<'_>, id: u32) -> bool {
         && !ctx.module_globals.contains_key(&id)
         && ctx.i1_local_slots.contains_key(&id)
         && matches!(ctx.local_types.get(&id), Some(HirType::Boolean))
+}
+
+/// Whether `expr` has an existing raw-`i1` proof strong enough to apply
+/// JavaScript's Boolean-to-Number conversion without inspecting a boxed
+/// `JSValue` at runtime.
+///
+/// A declared `boolean` is deliberately not enough: TypeScript annotations do
+/// not constrain values that arrive through `any`. The local arm therefore
+/// requires the representation-first `i1` shadow, which is removed as soon as
+/// a write cannot itself be lowered to `i1`.
+pub(crate) fn can_lower_proven_boolean_to_number(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Bool(_) => true,
+        Expr::LocalGet(id) => {
+            is_plain_i1_local(ctx, *id) || is_compiler_private_async_i1_control_local(ctx, *id)
+        }
+        _ => false,
+    }
+}
+
+/// Apply `ToNumber` to a guard-proven Boolean as the native `i1 -> f64`
+/// conversion. This keeps arithmetic and relational consumers out of both the
+/// NaN-box round trip and `js_number_coerce` / `js_rel_*`.
+pub(crate) fn try_lower_proven_boolean_to_number(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+) -> Result<Option<String>> {
+    if !can_lower_proven_boolean_to_number(ctx, expr) {
+        return Ok(None);
+    }
+    let Some(boolean) = lower_expr_value(ctx, expr)? else {
+        anyhow::bail!("proven native boolean did not lower to a native value");
+    };
+    if !matches!(boolean.rep, NativeRep::I1) {
+        anyhow::bail!(
+            "proven native boolean lowered as {}, expected i1",
+            boolean.rep.name()
+        );
+    }
+
+    let value = ctx.block().uitofp(I1, &boolean.value, DOUBLE);
+    let lowered = LoweredValue::f64(value.clone());
+    let local_id = match expr {
+        Expr::LocalGet(id) => Some(*id),
+        _ => None,
+    };
+    ctx.record_lowered_value(
+        "BooleanToNumber",
+        local_id,
+        "ordinary_expr_value.boolean_to_number_f64",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![
+            "proof=native_i1".to_string(),
+            "conversion=uitofp".to_string(),
+        ],
+    );
+    Ok(Some(value))
 }
 
 pub(crate) fn is_compiler_private_async_i32_control_local(ctx: &FnCtx<'_>, id: u32) -> bool {
@@ -2774,6 +2838,63 @@ fn lower_compare_value(
     right: &Expr,
 ) -> Result<Option<LoweredValue>> {
     if let Some(lowered) = lower_async_i32_control_const_compare(ctx, op, left, right)? {
+        return Ok(Some(lowered));
+    }
+    // #5497 Lever E: Boolean relational operands already held as native i1 do
+    // not need to be NaN-boxed and sent through the full Abstract Relational
+    // Comparison helper. For a Boolean paired with another proven Boolean or
+    // a canonical raw f64, ToPrimitive/ToNumber is exactly `uitofp i1` and the
+    // comparison is a native `fcmp`.
+    //
+    // Keep annotation-only booleans and non-canonical numeric reads out. A
+    // `boolean`/`number` declaration may hold an arbitrary value through
+    // `any`, and only the dynamic helper preserves that case.
+    let left_bool = can_lower_proven_boolean_to_number(ctx, left);
+    let right_bool = can_lower_proven_boolean_to_number(ctx, right);
+    let relational = matches!(
+        op,
+        CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+    );
+    if relational
+        && (left_bool || right_bool)
+        && (left_bool || crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left))
+        && (right_bool || crate::type_analysis::expr_produces_canonical_raw_f64(ctx, right))
+    {
+        let left_value = if left_bool {
+            try_lower_proven_boolean_to_number(ctx, left)?
+                .expect("left_bool proved native Boolean lowering")
+        } else {
+            lower_expr(ctx, left)?
+        };
+        let right_value = if right_bool {
+            try_lower_proven_boolean_to_number(ctx, right)?
+                .expect("right_bool proved native Boolean lowering")
+        } else {
+            lower_expr(ctx, right)?
+        };
+        let predicate = match op {
+            CompareOp::Lt => "olt",
+            CompareOp::Le => "ole",
+            CompareOp::Gt => "ogt",
+            CompareOp::Ge => "oge",
+            _ => unreachable!("relational gate checked above"),
+        };
+        let lowered = LoweredValue::i1(ctx.block().fcmp(predicate, &left_value, &right_value));
+        ctx.record_lowered_value(
+            "Compare",
+            None,
+            "ordinary_expr_value.boolean_numeric_compare_i1",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![
+                format!("op={op:?}"),
+                "proof=native_i1_and_canonical_f64".to_string(),
+            ],
+        );
         return Ok(Some(lowered));
     }
     if matches!(op, CompareOp::Eq | CompareOp::Ne)
