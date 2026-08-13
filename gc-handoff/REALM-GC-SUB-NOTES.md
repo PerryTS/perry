@@ -4,7 +4,10 @@ Worktree: `/Users/amlug/projects/perry/wt-realm-gc-sub`
 
 Target: `/Users/amlug/cargo-targets/realm-gc-sub`
 
-Base inspected: `origin/main` at `a9a99d8b7e8d3e2d3bd35d8725a34a4cab403f97`
+Initial base inspected: `origin/main` at
+`a9a99d8b7e8d3e2d3bd35d8725a34a4cab403f97`. The healthy commit was then
+rebased cleanly onto `fe0d4979204dfd6b8b166320e1ebdd2318f30518`
+(#8044) before the landing-equivalent rerun.
 
 ## Current-main audit
 
@@ -83,5 +86,24 @@ binary run was byte-identical to the expected output under both live arms:
   minors, 32,047 moved objects, 60,040 loop polls, and 22,239 copied-object
   events in the diagnostics.
 
-Sabotage/restore and the current-main landing-equivalent check are still
-pending; do not treat this note as a merge claim yet.
+## Sabotage proof
+
+After committing healthy source, `RealmAtomicI64` / `RealmAtomicU64` were
+temporarily changed to resolve through one process-global atomic per handle.
+The exact two-agent gate failed on the first family:
+
+```
+HTTP_METHODS_CACHE resolved to one process-global atomic in both agents
+left: 4353921112
+right: 4353921112
+```
+
+The wrapper source was restored byte-for-byte to the healthy commit, rebuilt,
+and the exact same gate passed. The combined compiler/runtime-static/
+stdlib-static build was then rerun from restored source; its log compiled
+`perry-runtime` exactly once and finished successfully. Restored artifact
+mtimes are 2026-08-14 00:04:01 (`perry`), 00:03:48
+(`libperry_runtime.a`), and 00:04:02 (`libperry_stdlib.a`).
+
+The current-main landing-equivalent rerun is still pending; do not treat this
+note as a merge claim yet.
