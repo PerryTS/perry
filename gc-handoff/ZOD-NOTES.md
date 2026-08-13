@@ -943,3 +943,100 @@ for native callsites into V8-fallback modules).
 > run_gap_tests.sh` plus `cargo test -p perry-codegen` gate any PR — the
 > unscheduled dep-corpus control run being byte-identical is nowhere near
 > sufficient evidence for a change with that blast radius.
+
+## 20. THE PATH IS THE `new Function` INTERPRETER — one experiment, not an audit
+
+Instead of auditing `dyn_eval`, take the path out of the workload and see if the
+bug leaves with it.
+
+### Why the workload interprets at all
+
+`zod/src/v4/core/schemas.ts:2028`: for **every object schema**, zod builds a
+"fastpass" parser by generating source and compiling it with `new Function`
+(`doc.compile()`), then routes `parse` through it. On Perry `new Function` lands
+in the `dyn_eval` interpreter. The corpus's `parseLoop(96)` parses object
+schemas 96 times, so the failing path runs generated code every iteration —
+which is why §15's stack has `interp_thunk` two frames under the throw.
+
+zod ships the switch: `core.globalConfig.jitless` makes `parse` fall through to
+`superParse`, all natively compiled.
+
+### Two things that had to be got right first
+
+**The config has to run before any schema is built.** `const jit =
+!core.globalConfig.jitless` is captured when the `$ZodObject` is CONSTRUCTED
+(schemas.ts:2007), and `alerts.ts` / `orgs.ts` / `scans.ts` build schemas at
+import time — before `main.ts`'s body. A `z.config(...)` at the top of `main`'s
+body is already too late. It moved into `jitless-first.ts`, imported ahead of
+the schema modules.
+
+**The subject has to be asserted absent, not assumed absent.** The first
+attempt *looked* right and was not: `/tmp/zod-jitless` still entered
+`interp_thunk` through the identical `core/schemas.ts` 138 → 137 →
+`js_closure_call3` stack as the failing run. Had it been swept as-is, a clean
+result would have been quoted as "jitless is clean" while the interpreter was
+still running the parse.
+
+The check that settles it, on the corrected build — armed breakpoint, whole
+program, no hit:
+
+```
+lldb -b -o 'breakpoint set -r interp_thunk' -o run -- /tmp/zod-jitless2
+→ endpoints=9 … Process exited with status = 0    (never stopped)
+```
+
+(`dyn_function_from_strings` IS still reached in both builds — zod's
+`util.allowsEval` probe compiles `new Function("return true")` regardless. So
+"does `new Function` appear" is the wrong question; "does the parse path
+INTERPRET" is the right one, and `interp_thunk` is what answers it.)
+
+### The result
+
+`RATE=1 PERRY_GC_PROTECT_FROMSPACE=0`, seeds 1..16, same compiler, same runtime
+archives, same `zod@4.3.5`:
+
+| binary | interpreter on the parse path | sweep |
+|---|---|---|
+| `/tmp/zod-ks` | yes | 3/8 fail |
+| `/tmp/zod-fix3` | yes | 8/16 fail |
+| **`/tmp/zod-jitless2`** | **no** | **0/16** |
+
+At the jit builds' rate (31–50%), sixteen consecutive passes is p ≈ 0.001 at
+37.5%, and every one of them ran the instrument hot: 5,054–5,434 forced
+collections, ~765k objects moved per run. The answer is byte-identical
+(`endpoints=9 parsed=96 registered=9`) — the schemas still parse, they just
+parse natively.
+
+### What this is, and what it is not
+
+It is strong evidence that **the lost value lives on the generated-code /
+`dyn_eval` path**, and it explains every earlier result at once: why 40 IR-level
+hazards closed with no effect (the checker reads emitted LLVM IR and the
+interpreter is Rust), why the quarantine suppresses, and why a build-layout
+change like `-g` moves it.
+
+It is NOT a clean single-variable A/B and must not be quoted as one. `jitless`
+changes the workload: 5,056 safepoints against 6,840, ~26% fewer collections and
+a different allocation profile. A workload that collects less can fail less for
+reasons that have nothing to do with who holds the pointer. What makes it
+persuasive is the CONJUNCTION with §15's stack, not the sweep alone.
+
+The way to close that gap is not another sweep — it is to fix the interpreter's
+rooting and show the *jit* build go green, which is the same evidence with the
+confound removed.
+
+### Next
+
+Audit `dyn_eval` for JSValues held across calls that can collect —
+`interp::exec_stmt`, `expr::eval_expr`, and `closure::registry::
+dispatch_with_arity` (all three on the failing stack). `scan_dyn_eval_roots_mut`
+already scans a `ROOTS` thread-local plus the env/member key caches, so the
+question is not whether roots exist but whether every intermediate reaches them
+before a call — an `f64` local in `eval_expr` across a user call is exactly the
+shape, and it is the intermittent-register kind, not the reproducible-table
+kind.
+
+Second question, worth its own issue: **why does a compile-as-package build
+interpret zod's hot parse path at all?** `Doc.compile`'s generated source is
+known at build time for a static schema; #678 tracks native callsites into
+V8-fallback modules. That is a performance finding independent of this bug.
