@@ -539,6 +539,116 @@ fn test_array_push_f64_grow_path_preserves_value_and_forwarding() {
 }
 
 #[test]
+fn stale_array_reference_survives_three_growths_and_minor_gc() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let initial = js_array_alloc(0);
+    let _root = scope.root_raw_mut_ptr(initial);
+    let mut head = initial;
+
+    // Capacity progresses 16 -> 32 -> 64 -> 128. Keeping `initial` unchanged
+    // makes every assertion exercise the complete three-stub chain.
+    for i in 0..65u32 {
+        head = js_array_push_f64(head, i as f64);
+    }
+    assert_ne!(head, initial);
+    assert_eq!(clean_arr_ptr_mut(initial), head);
+    assert_eq!(js_array_length(initial), 65);
+    for i in 0..65u32 {
+        assert_eq!(js_array_get_f64(initial, i), i as f64);
+    }
+
+    // This same test is run under PERRY_GC_FORCE_EVACUATE=1 and
+    // PERRY_GC_VERIFY_EVACUATION=1 by the issue-specific validation command.
+    // The rooted stale reference must still lead to the live head afterward.
+    let _ = crate::gc::gc_collect_minor();
+    assert_eq!(js_array_length(initial), 65);
+    for i in 0..65u32 {
+        assert_eq!(js_array_get_f64(initial, i), i as f64);
+    }
+}
+
+#[test]
+fn injected_low_address_array_receives_growth_forwarding_stub() {
+    const LOW_USER: usize = 0x1_0000_0008;
+    const { assert!(LOW_USER < 0x200_0000_0000) };
+    let old = js_array_alloc(0);
+    let new = js_array_alloc(0);
+    unsafe {
+        let old_header =
+            crate::value::addr_class::try_read_tracked_gc_header(old as usize).unwrap();
+        let header_ptr = std::ptr::from_ref(old_header).cast_mut();
+        let flags = old_header.gc_flags;
+        let payload = *(old as *const u64);
+
+        let installed = super::push_pop::install_array_growth_forwarding_with(
+            LOW_USER,
+            new as *mut u8,
+            |candidate| {
+                assert_eq!(candidate, LOW_USER);
+                Some(old_header)
+            },
+        );
+        let resolved = clean_arr_ptr(old);
+
+        *(old as *mut u64) = payload;
+        (*header_ptr).gc_flags = flags;
+        assert!(installed);
+        assert_eq!(resolved, new);
+    }
+}
+
+#[test]
+fn clean_arr_ptr_rejects_forwarding_cycle() {
+    let first = js_array_alloc(0);
+    let second = js_array_alloc(0);
+    unsafe {
+        let first_header = std::ptr::from_ref(
+            crate::value::addr_class::try_read_tracked_gc_header(first as usize).unwrap(),
+        )
+        .cast_mut();
+        let second_header = std::ptr::from_ref(
+            crate::value::addr_class::try_read_tracked_gc_header(second as usize).unwrap(),
+        )
+        .cast_mut();
+        let first_flags = (*first_header).gc_flags;
+        let second_flags = (*second_header).gc_flags;
+        let first_payload = *(first as *const u64);
+        let second_payload = *(second as *const u64);
+        crate::gc::set_forwarding_address(first_header, second as *mut u8);
+        crate::gc::set_forwarding_address(second_header, first as *mut u8);
+
+        let resolved = clean_arr_ptr(first);
+
+        *(first as *mut u64) = first_payload;
+        *(second as *mut u64) = second_payload;
+        (*first_header).gc_flags = first_flags;
+        (*second_header).gc_flags = second_flags;
+        assert!(resolved.is_null());
+    }
+}
+
+#[test]
+fn clean_arr_ptr_rejects_untracked_forwarding_target_without_deref() {
+    let array = js_array_alloc(0);
+    let unrelated = 0x20_0000usize as *mut u8;
+    unsafe {
+        let header = std::ptr::from_ref(
+            crate::value::addr_class::try_read_tracked_gc_header(array as usize).unwrap(),
+        )
+        .cast_mut();
+        let flags = (*header).gc_flags;
+        let payload = *(array as *const u64);
+        crate::gc::set_forwarding_address(header, unrelated);
+
+        let resolved = clean_arr_ptr(array);
+
+        *(array as *mut u64) = payload;
+        (*header).gc_flags = flags;
+        assert!(resolved.is_null());
+    }
+}
+
+#[test]
 fn test_numeric_array_layout_metadata_preserves_and_downgrades_on_writes() {
     let mut arr = js_array_alloc(4);
     assert_eq!(js_array_is_numeric_f64_layout(arr), 1);

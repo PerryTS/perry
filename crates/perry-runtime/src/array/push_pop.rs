@@ -35,6 +35,32 @@ fn throw_non_writable_length() -> ! {
     );
 }
 
+/// Install an array-growth forwarding stub after `tracked_header_for` proves
+/// allocator ownership of `old_user_addr`. Keeping the classifier injectable
+/// makes the below-2-TiB macOS case deterministic without mapping a fixed low
+/// virtual address in the test process.
+///
+/// # Safety
+/// The classifier must return the live header for `old_user_addr`, and
+/// `new_user_addr` must be a live array allocation.
+#[inline]
+pub(super) unsafe fn install_array_growth_forwarding_with(
+    old_user_addr: usize,
+    new_user_addr: *mut u8,
+    tracked_header_for: impl FnOnce(usize) -> Option<&'static crate::gc::GcHeader>,
+) -> bool {
+    let Some(header) = tracked_header_for(old_user_addr) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        || header.gc_flags & crate::gc::GC_FLAG_ARENA == 0
+    {
+        return false;
+    }
+    crate::gc::set_forwarding_address(std::ptr::from_ref(header).cast_mut(), new_user_addr);
+    true
+}
+
 #[inline]
 pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
     if array_length_is_non_writable(arr) {
@@ -135,46 +161,14 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // ptr. Unlike GC-evacuation originals, array-growth stubs stay
         // retained because stale array references rely on clean_arr_ptr
         // following this chain.
-        // Only valid for arena-allocated arrays (which have a GcHeader
-        // 8 bytes before the user pointer); guard with a heap-bounds
-        // check that mirrors clean_arr_ptr's HEAP_MIN to skip pointers
-        // that don't have a real GcHeader behind them (e.g. test-mode
-        // synthetic pointers, longlived-arena edge cases).
-        // #1136: iOS family device allocates via libsystem_malloc in the
-        // same low range as Android/Linux; mirror `clean_arr_ptr`'s
-        // platform split so growth forwarding can install a stub for
-        // arrays that live below 2 TB.
-        #[cfg(any(
-            target_os = "android",
-            target_os = "linux",
-            target_os = "windows",
-            target_os = "ios",
-            target_os = "tvos",
-            target_os = "watchos",
-            target_os = "visionos",
-        ))]
-        const HEAP_MIN: usize = 0x1000;
-        #[cfg(not(any(
-            target_os = "android",
-            target_os = "linux",
-            target_os = "windows",
-            target_os = "ios",
-            target_os = "tvos",
-            target_os = "watchos",
-            target_os = "visionos",
-        )))]
-        const HEAP_MIN: usize = 0x200_0000_0000;
-        if (arr as usize) >= HEAP_MIN + crate::gc::GC_HEADER_SIZE {
-            // Only forward arrays that came from the GC arena. A
-            // non-array obj_type would mean something has gone wrong
-            // upstream; bail out without forwarding rather than corrupt
-            // an unrelated allocation's header.
-            if (*old_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                crate::gc::set_forwarding_address(old_header, new_ptr as *mut u8);
-            }
-        } else {
-            report_growth_stub_skipped_below_heap_min(arr as usize);
-        }
+        // Ownership comes from the same canonical arena/malloc classifier
+        // that clean_arr_ptr uses while following this stub. In particular,
+        // valid low-address macOS arena allocations are accepted, while
+        // handles, synthetic pointers, and unrelated allocations are rejected
+        // before a header dereference.
+        let _ = install_array_growth_forwarding_with(arr as usize, new_ptr as *mut u8, |addr| {
+            crate::value::addr_class::try_read_tracked_gc_header(addr)
+        });
 
         new_ptr
     }
@@ -1109,38 +1103,3 @@ pub extern "C" fn js_array_unshift_variadic(
 #[used]
 static KEEP_UNSHIFT_VARIADIC: extern "C" fn(*mut ArrayHeader, *const f64, u32) -> *mut ArrayHeader =
     js_array_unshift_variadic;
-
-/// The `HEAP_MIN` guard above is an **address-conditional silent divergence**:
-/// whether a growth forwarding stub is installed depends on where the allocator
-/// happened to place the array. Below the floor the stub is skipped, so a stale
-/// pre-grow reference stops resolving (issue #233's whole mechanism) — with no
-/// signal at all.
-///
-/// That silence has already cost real debugging time. While investigating
-/// #7022 an experiment replaced arena blocks with `mmap`'d, guard-paged blocks;
-/// `mmap` with a NULL hint lands well below macOS's 2 TB floor, so this branch
-/// silently disabled every growth stub and the experiment came back **falsely
-/// clean**. It was only caught by re-running with a high `MAP_FIXED` hint.
-///
-/// Emit once per process so the next person gets a signal instead of a silent
-/// behaviour change. One line on stderr, so it cannot perturb a stdout parity
-/// comparison.
-#[cold]
-fn report_growth_stub_skipped_below_heap_min(arr_addr: usize) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static REPORTED: AtomicBool = AtomicBool::new(false);
-    debug_assert!(
-        false,
-        "array-growth forwarding stub skipped: array at {arr_addr:#x} is below the platform heap floor"
-    );
-    if REPORTED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    eprintln!(
-        "[perry-gc] array-growth forwarding stub SKIPPED for an array at {arr_addr:#x}: \
-address is below this platform's heap floor. Stale pre-grow array references \
-will no longer resolve through the growth chain (issue #233). This is normally \
-unreachable; it usually means the arena is being backed by an allocator that \
-places blocks outside the expected range. Reported once per process."
-    );
-}

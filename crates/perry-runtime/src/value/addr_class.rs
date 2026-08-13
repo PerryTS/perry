@@ -218,6 +218,73 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
     Some(&*((addr - GC_HEADER_SIZE) as *const GcHeader))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrackedGcStorage {
+    Arena,
+    Malloc,
+}
+
+/// Classify a candidate user address without dereferencing it.
+///
+/// The injected lookups keep the safety policy independently testable: a
+/// low-address arena range must win on allocator membership, while every
+/// handle-band value must be rejected before either lookup runs.
+#[inline]
+fn classify_tracked_gc_header_with(
+    addr: usize,
+    arena_range_base: impl FnOnce(usize) -> Option<usize>,
+    malloc_header_is_tracked: impl FnOnce(*const GcHeader) -> bool,
+) -> Option<(usize, TrackedGcStorage)> {
+    if is_handle_band(addr) {
+        return None;
+    }
+    let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
+    if let Some(range_base) = arena_range_base(addr) {
+        // The payload and its header must belong to the same registered
+        // range. This prevents a candidate at the first bytes of a mapped
+        // range from back-reading the preceding page (#7742).
+        return (header_addr >= range_base).then_some((header_addr, TrackedGcStorage::Arena));
+    }
+    malloc_header_is_tracked(header_addr as *const GcHeader)
+        .then_some((header_addr, TrackedGcStorage::Malloc))
+}
+
+/// Read a `GcHeader` only after allocator-owned metadata proves that `addr` is
+/// a Perry GC allocation. Unlike [`try_read_gc_header`], this does not use an
+/// address-magnitude window as evidence of ownership: arena page membership or
+/// an exact malloc-registry hit is required before the first header byte is
+/// touched. The header's type, size, and arena flag are then validated.
+///
+/// This is the canonical gate for code that must distinguish live Perry GC
+/// allocations from registry handles, synthetic pointers, and unrelated
+/// allocations before dereferencing a header.
+///
+/// # Safety
+/// The returned reference is valid only while the allocation remains live and
+/// on the current runtime thread. Callers must not retain it across allocation
+/// or collection safepoints.
+#[inline]
+pub(crate) unsafe fn try_read_tracked_gc_header(addr: usize) -> Option<&'static GcHeader> {
+    let (header_addr, storage) = classify_tracked_gc_header_with(
+        addr,
+        |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base)| base),
+        crate::gc::gc_malloc_header_is_tracked,
+    )?;
+    let header = &*(header_addr as *const GcHeader);
+    if crate::gc::gc_type_info(header.obj_type).is_none() {
+        return None;
+    }
+    let size = header.size as usize;
+    if size < GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
+        return None;
+    }
+    let header_is_arena = header.gc_flags & crate::gc::GC_FLAG_ARENA != 0;
+    if header_is_arena != matches!(storage, TrackedGcStorage::Arena) {
+        return None;
+    }
+    Some(header)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +329,72 @@ mod tests {
         }
         // Tag remnants / out-of-range bits.
         assert!(unsafe { try_read_gc_header(0x7FFD_0000_0000_0000) }.is_none());
+    }
+
+    #[test]
+    fn tracked_gc_classifier_accepts_injected_low_arena_membership() {
+        use std::cell::Cell;
+
+        // 4 GiB is well below the legacy 2 TiB macOS floor. Membership in a
+        // registered arena range, not this magnitude, is the ownership proof.
+        const LOW_USER: usize = 0x1_0000_0008;
+        const LOW_RANGE_BASE: usize = LOW_USER - GC_HEADER_SIZE;
+        const { assert!(LOW_USER < 0x200_0000_0000) };
+        let malloc_lookup_ran = Cell::new(false);
+        assert_eq!(
+            classify_tracked_gc_header_with(
+                LOW_USER,
+                |_| Some(LOW_RANGE_BASE),
+                |_| {
+                    malloc_lookup_ran.set(true);
+                    false
+                },
+            ),
+            Some((LOW_RANGE_BASE, TrackedGcStorage::Arena))
+        );
+        assert!(!malloc_lookup_ran.get());
+    }
+
+    #[test]
+    fn tracked_gc_classifier_rejects_handle_boundaries_before_lookup() {
+        for addr in [0, 1, COMMON_HANDLE_BAND_END, HANDLE_BAND_MAX - 1] {
+            assert_eq!(
+                classify_tracked_gc_header_with(
+                    addr,
+                    |_| panic!("handle must not reach the arena classifier"),
+                    |_| panic!("handle must not reach the malloc registry"),
+                ),
+                None
+            );
+        }
+
+        // The first address outside the handle band is still rejected when
+        // neither allocator owns it, without a header dereference.
+        assert_eq!(
+            classify_tracked_gc_header_with(HANDLE_BAND_MAX, |_| None, |_| false),
+            None
+        );
+    }
+
+    #[test]
+    fn try_read_tracked_gc_header_rejects_unrelated_allocation() {
+        #[repr(C)]
+        struct SyntheticAllocation {
+            header: GcHeader,
+            payload: u64,
+        }
+
+        let synthetic = SyntheticAllocation {
+            header: GcHeader {
+                obj_type: crate::gc::GC_TYPE_ARRAY,
+                gc_flags: 0,
+                _reserved: 0,
+                size: std::mem::size_of::<SyntheticAllocation>() as u32,
+            },
+            payload: 0,
+        };
+        let user = &synthetic.payload as *const u64 as usize;
+        assert!(unsafe { try_read_tracked_gc_header(user) }.is_none());
     }
 
     #[test]
