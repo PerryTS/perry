@@ -79,9 +79,14 @@ with tempfile.TemporaryFile() as output:
         except ProcessLookupError:
             pass
         try:
-            process.wait(timeout=1)
+            rc = process.wait(timeout=1)
         except subprocess.TimeoutExpired:
-            pass
+            # The child remains unreaped, so its PID/PGID cannot be reused.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            rc = process.wait()
         # A descendant may create a separate process group, so kill every
         # process that remains in the isolated session before returning.
         for pid in session_members(process.pid):
@@ -89,11 +94,6 @@ with tempfile.TemporaryFile() as output:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        rc = process.wait()
     output.seek(0)
     sys.stdout.buffer.write(output.read())
 if timed_out:
