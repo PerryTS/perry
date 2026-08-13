@@ -473,9 +473,11 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         if let Some(fact) =
             super::masked_window::masked_window_fact_for_index(ctx, *arr_id, index.as_ref())
         {
+            let arr_box = lower_expr(ctx, object)?;
+            let idx_i32 = lower_expr_as_i32(ctx, index)?;
             return Ok(Some(super::masked_window::lower_masked_window_index_get(
-                ctx, *arr_id, object, index, &fact,
-            )?));
+                ctx, *arr_id, &arr_box, &idx_i32, &fact,
+            )));
         }
     }
     if !is_array_expr(ctx, object) || !expr_has_numeric_pointer_free_array_layout(ctx, object) {
@@ -615,9 +617,11 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     // whole index window, so the read needs no per-access cache probe at all.
     if let Some(fact) = super::masked_window::masked_window_fact_for_index(ctx, *id, index.as_ref())
     {
+        let arr_box = lower_expr(ctx, object)?;
+        let idx_i32 = lower_expr_as_i32(ctx, index)?;
         return Ok(Some(super::masked_window::lower_masked_window_index_get(
-            ctx, *id, object, index, &fact,
-        )?));
+            ctx, *id, &arr_box, &idx_i32, &fact,
+        )));
     }
     let recv_unknown = matches!(
         crate::type_analysis::static_type_of(ctx, object),
@@ -1160,9 +1164,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(fact) =
                     super::masked_window::masked_window_fact_for_index(ctx, *arr_id, index.as_ref())
                 {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let idx_i32 = lower_expr_as_i32(ctx, index)?;
                     return Ok(super::masked_window::lower_masked_window_index_get(
-                        ctx, *arr_id, object, index, &fact,
-                    )?);
+                        ctx, *arr_id, &arr_box, &idx_i32, &fact,
+                    ));
                 }
             }
             // Issue #514: when the receiver's static type is genuinely
@@ -1326,9 +1332,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         *arr_id,
                         index.as_ref(),
                     ) {
+                        let arr_box = lower_expr(ctx, object)?;
+                        let idx_i32 = lower_expr_as_i32(ctx, index)?;
                         return Ok(super::masked_window::lower_masked_window_index_get(
-                            ctx, *arr_id, object, index, &fact,
-                        )?);
+                            ctx, *arr_id, &arr_box, &idx_i32, &fact,
+                        ));
                     }
                 }
                 if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =

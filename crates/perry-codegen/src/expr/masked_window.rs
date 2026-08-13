@@ -16,7 +16,6 @@ use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, NativeFactUse, NativeRep, SemanticKind,
 };
-use crate::rooting;
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{
@@ -154,56 +153,48 @@ fn window_layout_facts(fact: &MaskedWindowArrayFact, arr_id: u32) -> (Vec<Native
 pub(crate) fn lower_masked_window_index_get(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
-    object: &Expr,
-    index: &Expr,
+    arr_box: &str,
+    idx_i32: &str,
     fact: &MaskedWindowArrayFact,
-) -> Result<String> {
-    // #7640 section E: `static_index_window` admits `call() & MASK` and
-    // `indexGet() >>> SHIFT`, so the native-i32 index lowering can run arbitrary
-    // user code. Preserve the already-evaluated receiver across that custom
-    // lowering, then derive the raw handle only from the post-window re-read.
-    // Literal/local hot indexes still make `operand_protection` answer `Reuse`,
-    // so this adds no root traffic to the ordinary masked-loop path.
-    rooting::with_operands_rooted_across(
-        ctx,
-        &[object],
-        &[index],
-        |ctx| lower_expr_as_i32(ctx, index),
-        |ctx, vals, idx_i32| {
-            let value = emit_window_load_f64(ctx, &vals[0], &idx_i32, fact);
-            let lowered = LoweredValue {
-                semantic: SemanticKind::JsNumber,
-                rep: NativeRep::F64,
-                llvm_ty: DOUBLE,
-                value: value.clone(),
-            };
-            let (layout_facts, layout_note) = window_layout_facts(fact, arr_id);
-            ctx.record_lowered_value_with_access_mode_and_facts(
-                "NumericArrayIndexGet",
-                Some(arr_id),
-                "packed_f64_masked_window_load",
-                &lowered,
-                Some(BoundsState::Guarded {
-                    guard_id: fact.guard_id.clone(),
-                }),
-                None,
-                Some(BufferAccessMode::CheckedNative),
-                None,
-                None,
-                None,
-                layout_facts,
-                Vec::new(),
-                false,
-                false,
-                vec![
-                    "index_range=static_window_guarded".to_string(),
-                    "length_range=guarded_i32".to_string(),
-                    layout_note,
-                ],
-            );
-            Ok(value)
-        },
-    )
+) -> String {
+    // #7640 section E audit: `static_index_window` alone admits collecting
+    // operands, but every fact reaching this helper was established by
+    // `packed_f64_range_loop_pure_expr_collect` / `region_store_operand_collect`.
+    // Those walks recursively reject calls, stores, updates, closures and
+    // unrecognized reads, so the fast copy is call-free and its hoisted typed-
+    // array data pointer cannot cross a collection or disposal point.
+    let value = emit_window_load_f64(ctx, arr_box, idx_i32, fact);
+    let lowered = LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::F64,
+        llvm_ty: DOUBLE,
+        value: value.clone(),
+    };
+    let (layout_facts, layout_note) = window_layout_facts(fact, arr_id);
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "NumericArrayIndexGet",
+        Some(arr_id),
+        "packed_f64_masked_window_load",
+        &lowered,
+        Some(BoundsState::Guarded {
+            guard_id: fact.guard_id.clone(),
+        }),
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        None,
+        None,
+        layout_facts,
+        Vec::new(),
+        false,
+        false,
+        vec![
+            "index_range=static_window_guarded".to_string(),
+            "length_range=guarded_i32".to_string(),
+            layout_note,
+        ],
+    );
+    value
 }
 
 /// True when `object[index]` matches an active i32-tier masked-window fact —

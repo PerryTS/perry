@@ -5,6 +5,7 @@ use crate::native_value::{
     BufferAccessFacts, BufferAccessMode, BufferAccessProof, BufferElem, BufferEndian,
     BufferIndexUnit, ExpectedNativeRep, LoweredValue, MaterializationReason,
 };
+use crate::rooting;
 use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
 
 use super::{
@@ -252,6 +253,18 @@ pub(crate) fn lower_buffer_access_proof(
         return Ok(None);
     }
 
+    // A tracked ArrayBuffer/native-arena view caches a raw backing pointer in
+    // `data_slot`. Moving GC rewrites `TYPED_ARRAY_VIEW_META.backing`, not that
+    // compiler-created alloca, and native-arena disposal can invalidate it
+    // outright. If evaluating the index can collect or re-enter user code,
+    // decline before evaluating anything; the caller's dynamic path keeps the
+    // receiver rooted and resolves its current backing at the consuming call.
+    // Fresh inline Buffer/TypedArray storage is explicitly non-movable, so its
+    // hot native path remains eligible.
+    if !view.storage_inline_proven && rooting::operand_may_collect(ctx, index_expr) {
+        return Ok(None);
+    }
+
     // A closure-captured buffer local is hazardous even before any escape
     // walk stamped `buffer_hazard_reasons` — the closure may mutate/realloc
     // the buffer between the proof and the access. Consult the capture map
@@ -457,12 +470,28 @@ pub(crate) fn lower_buffer_store(
     value_expr: &Expr,
     spec: BufferAccessSpec,
 ) -> Result<Option<StoreResult>> {
+    // Same cached-view rule as `lower_buffer_access_proof`, applied before the
+    // index is lowered: returning `None` afterward would make the caller's
+    // fallback evaluate the index twice. Inline-owned storage is non-movable;
+    // view storage must use the dynamic path when the RHS can collect.
+    let value_crosses_cached_view = match buffer_expr {
+        Expr::LocalGet(id) => ctx
+            .buffer_view_slots
+            .get(id)
+            .is_some_and(|view| !view.storage_inline_proven),
+        _ => false,
+    } && rooting::operand_may_collect(ctx, value_expr);
+    if value_crosses_cached_view {
+        return Ok(None);
+    }
     let Some(proof) = lower_buffer_access_proof(ctx, buffer_expr, index_expr, spec)? else {
         return Ok(None);
     };
     // #7640 section E audit: `proof` contains stable slot metadata and the
     // lowered native index, not a receiver JSValue or raw backing-store
-    // pointer. Lower the RHS before `emit_buffer_access_pointer` loads either.
+    // pointer. The precheck above excludes movable/external views when the RHS
+    // collects; for inline-owned storage, lower the RHS before
+    // `emit_buffer_access_pointer` loads the non-movable pointer.
     let val_i32 = lower_value_i32(ctx, value_expr)?;
     let emission = emit_buffer_access_pointer(ctx, &proof, spec);
     let byte_val = ctx.block().trunc(I32, &val_i32, I8);
@@ -695,6 +724,12 @@ pub(crate) fn lower_typed_array_store(
     if matches!(view.elem, BufferElem::F32 | BufferElem::F64) && !is_numeric_expr(ctx, value_expr) {
         return Ok(None);
     }
+    // `data_slot` is a raw cached pointer. It is stable across a collecting RHS
+    // only for fresh inline typed-array storage; ArrayBuffer and native-arena
+    // views must fall back before either index or value is evaluated.
+    if !view.storage_inline_proven && rooting::operand_may_collect(ctx, value_expr) {
+        return Ok(None);
+    }
 
     let Some(proof) = lower_buffer_access_proof(ctx, array_expr, index_expr, spec)? else {
         return Ok(None);
@@ -710,9 +745,9 @@ pub(crate) fn lower_typed_array_store(
     // #7640 section E: do not derive `data_ptr` / `elem_ptr` until after the
     // RHS has been evaluated. A numeric RHS can still be a call, and a raw
     // backing-store pointer cannot be repaired by the JSValue rooting API.
-    // The view proof guarantees this binding/data slot is stable, so loading it
-    // here preserves the already-selected receiver without holding a raw pointer
-    // across the call.
+    // The gates above guarantee this is inline-owned, non-movable storage when
+    // the RHS collects, so loading the slot here does not reuse a GC-stale view
+    // backing pointer.
     let result = lower_expr_native(ctx, value_expr, expected)?;
     let emission = emit_buffer_access_pointer(ctx, &proof, spec);
     let stored = match proof.view.elem {

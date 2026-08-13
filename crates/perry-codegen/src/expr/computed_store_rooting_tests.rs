@@ -25,9 +25,12 @@
 //! # What each test asserts, and why it cannot pass vacuously
 //!
 //! Each differential test builds the SAME access twice, changing one thing:
-//! a later operand is either allocating or inert. Then it compares the
-//! shadow-frame width the function reserves. The realloc-barrier regression at
-//! the end instead names the exact SSA head consumed by its barrier.
+//! a later operand is either allocating or inert. The older slice-4 tests
+//! compare root-slot widths; the #7640 tests additionally trace each protected
+//! call operand back to its own root slot and assert that the slot store is
+//! above the allocating operand while the consuming reload is below it. The
+//! realloc-barrier regression at the end instead names the exact SSA head
+//! consumed by its barrier.
 //!
 //! - `Expr::Number` ⇒ `expr_may_trigger_gc` is false ⇒ `operand_protection`
 //!   returns `Reuse` ⇒ the combinator emits nothing at all, which is the
@@ -41,7 +44,9 @@
 //! width measured over a store that never got emitted would be hazard 4.
 
 use perry_hir::types::Type;
-use perry_hir::{Expr, Function, Module as HirModule, Param, Stmt};
+use perry_hir::{BinaryOp, Expr, Function, Module as HirModule, Param, Stmt};
+
+use super::slice8_rooting_tests::{call_operand_of, producer_line};
 
 /// Compile a one-function module and return its LLVM IR.
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
@@ -99,6 +104,64 @@ fn root_slots(ir: &str) -> usize {
     ir.matches("alloca ptr addrspace(1)").count() + ir.matches("@js_shadow_slot_bind(").count()
 }
 
+/// Assert that one specific operand consumed by `callee` is stored to a native
+/// root above `window_operand`'s production and reloaded from that same slot
+/// below it. The tests pin native roots so this checks the actual RS4GC IR,
+/// rather than allowing an unrelated allocating expression's slot to satisfy a
+/// total-width comparison.
+fn assert_call_operand_rooted_across_operand(
+    ir: &str,
+    callee: &str,
+    protected_operand: usize,
+    window_operand: usize,
+    what: &str,
+) {
+    let protected = call_operand_of(ir, callee, protected_operand);
+    let reload = producer_line(ir, &protected);
+    let reload_line = ir.lines().nth(reload).expect("producer line exists");
+    assert!(
+        reload_line.contains("load ptr addrspace(1), ptr "),
+        "{what}: {callee} operand {protected_operand} ({protected}) is not reloaded from a \
+         native root slot after the collecting operand:\n{ir}"
+    );
+    let slot = reload_line
+        .rsplit_once(", ptr ")
+        .map(|(_, tail)| tail.split(',').next().unwrap_or(tail).trim())
+        .expect("native root reload names its slot");
+
+    let window = call_operand_of(ir, callee, window_operand);
+    let window_line = producer_line(ir, &window);
+    assert!(
+        reload > window_line,
+        "{what}: {callee} operand {protected_operand} is reloaded at line {reload}, above \
+         the collecting operand produced at line {window_line}:\n{ir}"
+    );
+
+    let store_needle = format!(", ptr {slot}");
+    let store = ir
+        .lines()
+        .enumerate()
+        .take(window_line)
+        .filter(|(_, line)| {
+            line.contains("store ptr addrspace(1)")
+                && !line.contains(" null,")
+                && line.contains(&store_needle)
+        })
+        .map(|(line, _)| line)
+        .last()
+        .unwrap_or_else(|| {
+            panic!(
+                "{what}: root slot {slot} is read below the window but has no non-null store \
+                 above it:\n{ir}"
+            )
+        });
+    assert!(
+        store < window_line,
+        "{what}: root store at line {store} must dominate the collecting operand at line \
+         {window_line}:\n{ir}"
+    );
+}
+
 /// An allocating RHS (`{ a: 1 }`) and an inert one (`1`), so each test can
 /// compare the same store under a collecting and a non-collecting window.
 fn allocating_value() -> Expr {
@@ -107,6 +170,41 @@ fn allocating_value() -> Expr {
 
 fn inert_value() -> Expr {
     Expr::Number(1.0)
+}
+
+fn calls(ir: &str, callee: &str) -> bool {
+    let needle = format!("@{callee}(");
+    ir.lines()
+        .any(|line| line.contains(&needle) && !line.trim_start().starts_with("declare"))
+}
+
+/// A fixed-length Float64Array view over native-arena storage. Unlike a fresh
+/// inline typed array, its cached `data_slot` can become invalid across user
+/// code (arena disposal) and is not rewritten when GC rewrites side-table
+/// backing pointers.
+fn with_native_f64_view(tail: Stmt) -> Vec<Stmt> {
+    vec![
+        Stmt::Let {
+            id: 10,
+            name: "owner".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))),
+        },
+        Stmt::Let {
+            id: 11,
+            name: "view".to_string(),
+            ty: Type::Named("Float64Array".to_string()),
+            mutable: false,
+            init: Some(Expr::NativeArenaView {
+                owner: Box::new(Expr::LocalGet(10)),
+                kind: perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                byte_offset: Box::new(Expr::Integer(0)),
+                length: Box::new(Expr::Integer(8)),
+            }),
+        },
+        tail,
+    ]
 }
 
 /// Assert the store arm named by `callee` was emitted, then that an allocating
@@ -244,6 +342,7 @@ fn polymorphic_index_store_roots_both_operands_across_an_allocating_rhs() {
 /// consumes the receiver.
 #[test]
 fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
+    let _native_roots = crate::codegen::helpers::NativeRootsPin::native();
     let compile = |label: &str, key: Expr| {
         compile_body_with_params(
             label,
@@ -261,9 +360,18 @@ fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
         collecting.contains(callee) && inert.contains(callee),
         "both fixtures must reach the typed-array runtime-key arm:\n{collecting}\n{inert}"
     );
-    assert!(
-        root_slots(&collecting) > root_slots(&inert),
-        "an allocating runtime key must protect the typed-array receiver"
+    assert_call_operand_rooted_across_operand(
+        &collecting,
+        "js_typed_array_index_get_dynamic",
+        0,
+        1,
+        "the typed-array receiver",
+    );
+    assert_eq!(
+        root_slots(&collecting),
+        root_slots(&inert) + 1,
+        "the inert key must add no temporary root, while the collecting key adds exactly \
+         the receiver root"
     );
 }
 
@@ -271,6 +379,7 @@ fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
 /// after all three JavaScript operands have been evaluated.
 #[test]
 fn typed_array_runtime_key_store_roots_operands_only_when_rhs_collects() {
+    let _native_roots = crate::codegen::helpers::NativeRootsPin::native();
     let compile = |label: &str, value: Expr| {
         compile_body_with_params(
             label,
@@ -292,9 +401,25 @@ fn typed_array_runtime_key_store_roots_operands_only_when_rhs_collects() {
         collecting.contains(callee) && inert.contains(callee),
         "both fixtures must reach the typed-array runtime-key store arm:\n{collecting}\n{inert}"
     );
-    assert!(
-        root_slots(&collecting) > root_slots(&inert),
-        "an allocating RHS must protect the typed-array receiver and key"
+    assert_call_operand_rooted_across_operand(
+        &collecting,
+        "js_typed_array_index_set_dynamic",
+        0,
+        2,
+        "the typed-array receiver",
+    );
+    assert_call_operand_rooted_across_operand(
+        &collecting,
+        "js_typed_array_index_set_dynamic",
+        1,
+        2,
+        "the typed-array property key",
+    );
+    assert_eq!(
+        root_slots(&collecting),
+        root_slots(&inert) + 2,
+        "the inert RHS must add no temporary roots, while the collecting RHS adds exactly \
+         the receiver and key roots"
     );
 }
 
@@ -303,6 +428,7 @@ fn typed_array_runtime_key_store_roots_operands_only_when_rhs_collects() {
 /// is consumed by the guard diamond.
 #[test]
 fn erased_receiver_inline_store_roots_receiver_and_key_across_rhs() {
+    let _native_roots = crate::codegen::helpers::NativeRootsPin::native();
     let compile = |label: &str, value: Expr| {
         compile_body_with_params(
             label,
@@ -321,10 +447,77 @@ fn erased_receiver_inline_store_roots_receiver_and_key_across_rhs() {
         collecting.contains(callee) && inert.contains(callee),
         "both fixtures must reach the #5525 inline dynamic-store arm:\n{collecting}\n{inert}"
     );
-    let extra_slots = root_slots(&collecting).saturating_sub(root_slots(&inert));
+    assert_call_operand_rooted_across_operand(
+        &collecting,
+        "js_dyn_index_set",
+        0,
+        2,
+        "the erased receiver",
+    );
+    assert_call_operand_rooted_across_operand(
+        &collecting,
+        "js_dyn_index_set",
+        1,
+        2,
+        "the erased property key",
+    );
+    assert_eq!(
+        root_slots(&collecting),
+        root_slots(&inert) + 2,
+        "the inert RHS must add no temporary roots, while the collecting RHS adds exactly \
+         the erased receiver and key roots"
+    );
+}
+
+/// #7640 E follow-up — a cached `BufferViewSlot::data_slot` is safe across a
+/// collecting operand only when the construction proves fresh inline storage.
+/// View-backed reads/writes must decline before evaluating either operand and
+/// let the rooted runtime fallback resolve the current backing pointer.
+#[test]
+fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
+    let inert_store = compile_body(
+        "native_view_inert_store",
+        with_native_f64_view(Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(11)),
+            index: Box::new(Expr::Integer(0)),
+            value: Box::new(Expr::Number(1.0)),
+        })),
+    );
     assert!(
-        extra_slots >= 2,
-        "an allocating RHS must protect both erased operands; expected at least two extra slots, got {extra_slots}"
+        !calls(&inert_store, "js_typed_array_set"),
+        "an inert RHS on a proven fixed-length view should retain the inline store:\n{inert_store}"
+    );
+
+    let collecting_store = compile_body(
+        "native_view_collecting_store",
+        with_native_f64_view(Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(11)),
+            index: Box::new(Expr::Integer(0)),
+            value: Box::new(Expr::NumberCoerce(Box::new(allocating_value()))),
+        })),
+    );
+    assert!(
+        calls(&collecting_store, "js_typed_array_set"),
+        "a collecting RHS must not reuse a native view's cached raw data pointer:\n\
+         {collecting_store}"
+    );
+
+    let collecting_index = Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(Expr::NumberCoerce(Box::new(allocating_value()))),
+        right: Box::new(Expr::Integer(0)),
+    };
+    let collecting_load = compile_body(
+        "native_view_collecting_load",
+        with_native_f64_view(Stmt::Return(Some(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(11)),
+            index: Box::new(collecting_index),
+        }))),
+    );
+    assert!(
+        calls(&collecting_load, "js_typed_array_get"),
+        "a collecting proven index must not reuse a native view's cached raw data pointer:\n\
+         {collecting_load}"
     );
 }
 
