@@ -601,9 +601,9 @@ struct Scope {
     /// (`collectors/ptr_shape_returns.rs`, #7107), so its `return new C(...)`
     /// sites already feed an existing mechanism.
     ///
-    /// Set by exactly two callers — [`enter_function_region`] from
-    /// `codegen/function.rs` and [`enter_closure`] from `codegen/closure.rs`,
-    /// the only two places that hold both a `FuncId` and `ModuleDispatchFacts`.
+    /// Set by [`enter_function_region`], [`enter_closure`], and
+    /// [`enter_method_region`] at the three codegen sites that hold both the
+    /// producer body's identity and `ModuleDispatchFacts`.
     ///
     /// #7170 R1: the closure arm is not a widening of the report, it tracks a
     /// widening of the mechanism. R0 recorded here that a closure could never
@@ -611,9 +611,9 @@ struct Scope {
     /// for `hir.functions` entries and the caller-side seed fired only on a
     /// bare `Expr::FuncRef`. R1 makes both halves reach a closure, so a closure
     /// region CAN now be a producer and reporting otherwise would put a served
-    /// site back in the rule-1 bucket schedulers read. Method and module-init
-    /// regions still leave it `false` and that is still correct — neither is a
-    /// `FuncId`-keyed producer.
+    /// site back in the rule-1 bucket schedulers read. #7170 R2 extends the
+    /// same accounting to statically-resolved instance methods. Module-init
+    /// regions still leave it `false`.
     return_shape_producer: bool,
 }
 
@@ -676,6 +676,31 @@ pub(crate) fn enter_function_region(function: &str, return_shape_producer: bool)
         module: current_module(),
         function: function.to_string(),
         region: RegionKind::Function,
+        invoked_per_element: None,
+        local_source_spans: current_local_source_spans(),
+        return_shape_producer,
+    };
+    let previous = SCOPE.with(|s| s.borrow_mut().replace(scope));
+    ScopeGuard {
+        previous,
+        active: true,
+    }
+}
+
+/// [`enter_region`] for an instance method body, additionally recording
+/// whether the exact `(owning class, method name, FuncId)` implementation
+/// carries a return-shape producer fact (#7170 R2).
+pub(crate) fn enter_method_region(function: &str, return_shape_producer: bool) -> ScopeGuard {
+    if !enabled() {
+        return ScopeGuard {
+            previous: None,
+            active: false,
+        };
+    }
+    let scope = Scope {
+        module: current_module(),
+        function: function.to_string(),
+        region: RegionKind::Method,
         invoked_per_element: None,
         local_source_spans: current_local_source_spans(),
         return_shape_producer,

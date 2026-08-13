@@ -371,9 +371,12 @@ pub(super) fn compile_method(
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
     // `--opt-report` (#6952) attribution scope; no-op when off.
-    let _opt_report_scope = crate::opt_report::enter_region(
+    let _opt_report_scope = crate::opt_report::enter_method_region(
         &format!("{}.{}", class.name, method.name),
-        crate::opt_report::RegionKind::Method,
+        cross_module
+            .module_dispatch
+            .return_shape_method_class(&class.name, &method.name, method.id)
+            .is_some(),
     );
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &method.body,

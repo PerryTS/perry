@@ -88,6 +88,12 @@ pub struct ModuleDispatchFacts {
     /// (`collectors/ptr_shape_returns.rs`); a call to such a function is then
     /// a rule-1 provenance seed exactly as `new C(...)` is.
     return_shape_functions: HashMap<u32, String>,
+    /// Representation-selection Phase 3b, #7170 R2: `(owning class, method
+    /// name, method FuncId)` -> the exact class freshly returned by that
+    /// instance method. The caller-side proof additionally requires an exact
+    /// shape-proven receiver and stable prototype dispatch before consulting
+    /// this table.
+    return_shape_methods: HashMap<(String, String, u32), String>,
     /// Representation-selection Phase 3b, #7170 R2: LOCAL imported function
     /// name -> exact anonymous-record class returned by its source body.
     /// Populated by the compile driver from a whole-program pre-pass over
@@ -120,6 +126,7 @@ impl Default for ModuleDispatchFacts {
             numarray_prototype_index_barriers: true,
             freeze_barrier_sites: true,
             return_shape_functions: HashMap::new(),
+            return_shape_methods: HashMap::new(),
             imported_return_shapes: HashMap::new(),
             closure_bindings: HashMap::new(),
         }
@@ -197,6 +204,20 @@ impl ModuleDispatchFacts {
             .map(String::as_str)
     }
 
+    /// The exact fresh class returned by one declared instance method body.
+    /// This fact alone does not license a caller seed: the caller must also
+    /// prove the receiver's exact class and stable method dispatch.
+    pub(crate) fn return_shape_method_class(
+        &self,
+        owner_class: &str,
+        method_name: &str,
+        func_id: u32,
+    ) -> Option<&str> {
+        self.return_shape_methods
+            .get(&(owner_class.to_string(), method_name.to_string(), func_id))
+            .map(String::as_str)
+    }
+
     /// The anonymous-record class returned by one statically-resolved native
     /// import, if the whole-program pre-pass proved that source body.
     pub(crate) fn imported_return_shape_class(&self, local_name: &str) -> Option<&str> {
@@ -234,6 +255,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         numarray_prototype_index_barriers: false,
         freeze_barrier_sites: false,
         return_shape_functions: HashMap::new(),
+        return_shape_methods: HashMap::new(),
         imported_return_shapes: HashMap::new(),
         // #7170 R1. Purely structural — no barrier flag feeds it, and it is
         // read only through `closure_binding_func`, whose every consumer treats
@@ -284,8 +306,11 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
     // every return-shape fact. `facts.return_shape_functions` is still empty
     // while this runs, so the per-function proof (which re-enters
     // `collect_shape_proven_ptr_locals`) can never seed itself recursively.
-    facts.return_shape_functions =
+    let return_shape_functions =
         super::ptr_shape_returns::collect_return_shape_functions(&facts, hir);
+    let return_shape_methods = super::ptr_shape_returns::collect_return_shape_methods(&facts, hir);
+    facts.return_shape_functions = return_shape_functions;
+    facts.return_shape_methods = return_shape_methods;
 
     facts
 }
@@ -702,6 +727,7 @@ mod tests {
             numarray_prototype_index_barriers: false,
             freeze_barrier_sites: false,
             return_shape_functions: HashMap::new(),
+            return_shape_methods: HashMap::new(),
             imported_return_shapes: HashMap::new(),
             closure_bindings: HashMap::new(),
         }

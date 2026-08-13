@@ -126,6 +126,15 @@ pub(super) const ALIAS_NOT_SINGLE_LET: ShapeDenial = ShapeDenial {
     issue: None,
 };
 
+pub(super) const RETURN_METHOD_RECEIVER_UNPROVEN: ShapeDenial = ShapeDenial {
+    rule: RULE1,
+    reason: "initialized by a fresh-returning method call, but the receiver's \
+             exact shape or contained dispatch proof did not survive the full \
+             region analysis.",
+    tier: Tier::Fixable,
+    issue: Some("#7170 R2"),
+};
+
 /// #7112: `find_new_candidates` excludes cell-backed locals before the
 /// containment walk, so without an entry they look indistinguishable from
 /// values the analysis never considered.

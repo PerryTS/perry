@@ -66,6 +66,13 @@
 //! `return flag && new C()`, or an expression with a non-fresh/disagreeing
 //! result — yields no fact.
 //!
+//! #7170 R2 also applies the same producer proof to declared instance methods.
+//! A method result is a caller-side seed only when the receiver is itself an
+//! exact shape-proven local, the method name resolves unambiguously on that
+//! class chain, and the module-wide prototype-stability proof holds. The
+//! result fact depends on the receiver fact: if the receiver later fails the
+//! full containment/`this`-flow proof, the result is removed too.
+//!
 //! ## Why the producer must not fall off its end
 //!
 //! `function f(x) { if (x) return new C(); }` returns `undefined` on the other
@@ -102,7 +109,9 @@ use std::collections::{HashMap, HashSet};
 use perry_hir::types::Type;
 use perry_hir::{Class, Expr, LogicalOp, Module, Stmt};
 
-use super::ptr_shape::{chain_admissible, ptr_shape_locals_enabled};
+use super::ptr_shape::{
+    chain_admissible, chain_classes, chain_field_names, chain_method_map, ptr_shape_locals_enabled,
+};
 use super::ptr_shape_report as report;
 use super::ModuleDispatchFacts;
 
@@ -246,6 +255,90 @@ pub(crate) fn collect_return_shape_functions(
         }
     }
     out
+}
+
+/// Declared instance methods whose body returns one fresh exact class on every
+/// path, keyed by the method implementation that owns the body.
+///
+/// The method name is resolved separately from the receiver's exact class at
+/// the call site. Keying the producer fact by `(owner class, method name,
+/// FuncId)` prevents equal numeric ids in unrelated declarations (including
+/// accessors) from aliasing. A key claimed by two bodies is dropped entirely:
+/// transformed HIR can duplicate ids, and attributing either body by walk
+/// order would make a guard-free load depend on an arbitrary choice.
+pub(crate) fn collect_return_shape_methods(
+    facts: &ModuleDispatchFacts,
+    hir: &Module,
+) -> HashMap<(String, String, u32), String> {
+    let mut out = HashMap::new();
+    if !ptr_shape_locals_enabled() || facts.has_shape_barrier_sites() {
+        return out;
+    }
+    let classes: HashMap<String, &Class> = hir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class))
+        .collect();
+    let mut claims: HashMap<(String, String, u32), usize> = HashMap::new();
+    let mut proven = Vec::new();
+
+    for class in &hir.classes {
+        if class_has_legacy_decorators(class) {
+            continue;
+        }
+        for method in &class.methods {
+            let key = (class.name.clone(), method.name.clone(), method.id);
+            *claims.entry(key.clone()).or_insert(0) += 1;
+            let view = ProducerBody {
+                boxed_or_resumable: method.is_async
+                    || method.is_generator
+                    || method.was_plain_async,
+                return_type: &method.return_type,
+                body: &method.body,
+            };
+            if let Some(class_name) = producer_return_class(&view, &classes, facts) {
+                proven.push((key, class_name));
+            }
+        }
+    }
+    for (key, class_name) in proven {
+        if claims.get(&key) == Some(&1) {
+            out.insert(key, class_name);
+        }
+    }
+    out
+}
+
+/// Legacy decorators execute arbitrary user code at class-definition time.
+/// A decorator imported from another module can rewrite a prototype without
+/// leaving a `.prototype` expression in this module for rule 4 to observe, so
+/// decorated classes cannot participate in static method-return resolution.
+fn class_has_legacy_decorators(class: &Class) -> bool {
+    let function_has_decorators = |function: &perry_hir::Function| {
+        !function.decorators.is_empty()
+            || function
+                .params
+                .iter()
+                .any(|param| !param.decorators.is_empty())
+    };
+    !class.decorators.is_empty()
+        || class
+            .fields
+            .iter()
+            .chain(class.static_fields.iter())
+            .any(|field| !field.decorators.is_empty())
+        || class
+            .constructor
+            .as_ref()
+            .is_some_and(|constructor| function_has_decorators(constructor))
+        || class
+            .methods
+            .iter()
+            .chain(class.static_methods.iter())
+            .chain(class.getters.iter().map(|(_, function)| function))
+            .chain(class.setters.iter().map(|(_, function)| function))
+            .chain(class.computed_members.iter().map(|member| &member.function))
+            .any(function_has_decorators)
 }
 
 /// Export name -> anonymous-record class for source functions whose final HIR
@@ -723,14 +816,24 @@ fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
 /// Mirrors `find_new_candidates`' shape exactly — same exclusions (boxed,
 /// module-global), same nesting, and no descent into closure bodies (each is
 /// its own region).
+pub(super) struct ReturnShapeSeeds {
+    pub(super) seeded: HashSet<u32>,
+    /// Result local -> exact receiver local whose final shape proof licenses
+    /// the method dispatch. The parent collector enforces these dependencies
+    /// after all ordinary candidate and element-group rejections have run.
+    pub(super) method_receivers: HashMap<u32, u32>,
+}
+
 pub(crate) fn find_return_shape_candidates(
     stmts: &[Stmt],
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
+    classes: &HashMap<String, &Class>,
     module_dispatch: &ModuleDispatchFacts,
     candidates: &mut HashMap<u32, String>,
-) -> HashSet<u32> {
+) -> ReturnShapeSeeds {
     let mut seeded = HashSet::new();
+    let mut method_receivers = HashMap::new();
     walk_stmts(stmts, &mut |s| {
         let Stmt::Let {
             id,
@@ -743,17 +846,59 @@ pub(crate) fn find_return_shape_candidates(
         if boxed_vars.contains(id) || module_globals.contains_key(id) {
             return;
         }
+        let mut method_receiver = None;
         let class_name = match callee.as_ref() {
-            Expr::ExternFuncRef { name, .. } => module_dispatch.imported_return_shape_class(name),
+            Expr::ExternFuncRef { name, .. } => module_dispatch
+                .imported_return_shape_class(name)
+                .map(str::to_string),
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                let Expr::LocalGet(receiver_id) = object.as_ref() else {
+                    return;
+                };
+                let Some(receiver_class) = candidates.get(receiver_id).cloned() else {
+                    return;
+                };
+                if !module_dispatch.prototype_is_stable(classes, &receiver_class) {
+                    return;
+                }
+                let chain = chain_classes(classes, &receiver_class);
+                if chain.iter().any(|class| class_has_legacy_decorators(class)) {
+                    return;
+                }
+                if chain_field_names(&chain).contains(property) {
+                    return;
+                }
+                let methods = chain_method_map(&chain);
+                let Some((owner_class, method)) = methods.get(property) else {
+                    return;
+                };
+                let Some(class_name) = module_dispatch
+                    .return_shape_method_class(owner_class, property, method.id)
+                    .map(str::to_string)
+                else {
+                    return;
+                };
+                method_receiver = Some(*receiver_id);
+                Some(class_name)
+            }
             _ => callee_names_one_function(callee, module_dispatch)
-                .and_then(|func_id| module_dispatch.return_shape_class(func_id)),
+                .and_then(|func_id| module_dispatch.return_shape_class(func_id))
+                .map(str::to_string),
         };
         if let Some(class_name) = class_name {
-            candidates.insert(*id, class_name.to_string());
+            candidates.insert(*id, class_name);
             seeded.insert(*id);
+            if let Some(receiver_id) = method_receiver {
+                method_receivers.insert(*id, receiver_id);
+            }
         }
     });
-    seeded
+    ReturnShapeSeeds {
+        seeded,
+        method_receivers,
+    }
 }
 
 /// The one statically-known function a callee expression names, or `None`.

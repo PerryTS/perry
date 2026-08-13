@@ -28,6 +28,8 @@
 //     fall-through-to-undefined path, an indirect callee,
 //  8. an anonymous-record producer imported under a renamed local binding,
 //     kept live across collection-triggering churn before its fields are read.
+//  9. an instance-method producer reached through an exact shape-proven
+//     receiver, with the result consumed by fixed-field stores and reads.
 
 import {
   makeBarrelRow as makeImportedRow,
@@ -96,6 +98,27 @@ function shapeOne(i: number): Shaped {
 function readShaped(i: number): string {
   const s = shapeOne(i);
   return s.key + "=" + (s.value + 1);
+}
+
+// 9. `factory.make(...)` is not a direct function symbol. R2 resolves it only
+// while `factory` retains its exact contained shape and the class prototype is
+// stable; the returned anonymous record then carries the same fresh-shape fact
+// as `shapeOne(...)` above.
+class ShapeFactory {
+  prefix: string;
+  constructor(prefix: string) {
+    this.prefix = prefix;
+  }
+  make(i: number): Shaped {
+    return { key: this.prefix + i, value: i * 3 };
+  }
+}
+
+function readMethodShaped(i: number): string {
+  const factory = new ShapeFactory("m");
+  const shaped = factory.make(i);
+  shaped.value = shaped.value + 2;
+  return shaped.key + "=" + shaped.value;
 }
 
 // 4. Values the caller's region never saw stored. The constructor stores a
@@ -225,6 +248,7 @@ const b = bumpedRec(6);
 out.push("bumped:" + b.name + ":" + b.score);
 out.push(foldRecs(10).name + "/" + foldRecs(10).score);
 out.push(readShaped(4));
+out.push(readMethodShaped(6));
 out.push(readMixed(0));
 out.push(readMixed(1));
 out.push(readMixed(2));

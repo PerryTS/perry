@@ -9,7 +9,7 @@
 use super::*;
 use crate::collectors::PtrShapeLocal;
 use perry_hir::types::{FuncId, Type};
-use perry_hir::{ClassField, Function, Param};
+use perry_hir::{ClassField, Decorator, Function, Param};
 
 fn field(name: &str) -> ClassField {
     ClassField {
@@ -283,6 +283,194 @@ fn call_to_a_return_shape_producer_is_provenance() {
         fact.numeric_fields.is_empty(),
         "a call-seeded candidate must never claim numeric fields: the \
          producer's own stores are outside this region"
+    );
+}
+
+fn returning_method_class(class_name: &str, method_id: u32) -> Class {
+    let mut class = class_c();
+    class.id = 2;
+    class.name = class_name.to_string();
+    class.fields.clear();
+    class.methods = vec![function(
+        method_id,
+        "make",
+        vec![Stmt::Return(Some(new_c()))],
+    )];
+    class
+}
+
+fn method_call_result(receiver_id: u32, result_id: u32) -> Stmt {
+    Stmt::Let {
+        id: result_id,
+        name: "result".to_string(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(receiver_id)),
+                property: "make".to_string(),
+                byte_offset: 0,
+            }),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+    }
+}
+
+/// #7170 R2: a fresh-returning instance method is the same producer proof as
+/// a function, but its consumer additionally depends on exact receiver shape
+/// and stable prototype dispatch.
+///
+/// Sabotage: remove `collect_return_shape_methods` or the `PropertyGet` callee
+/// arm in `find_return_shape_candidates`; the result loses its fact.
+#[test]
+fn method_return_shape_is_provenance_on_a_proven_receiver() {
+    let maker = returning_method_class("Maker", 60);
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    assert_eq!(
+        facts.return_shape_method_class("Maker", "make", 60),
+        Some("C")
+    );
+
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let caller = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+    ];
+    let promoted = promote(&caller, &classes, &facts);
+    assert!(
+        promoted.contains_key(&1),
+        "the exact receiver proof must survive"
+    );
+    let result = promoted
+        .get(&2)
+        .expect("the method result must be a Ptr<Shape> candidate");
+    assert_eq!(result.class_name, "C");
+    assert!(
+        result.numeric_fields.is_empty(),
+        "a method-seeded candidate cannot see producer-side stores"
+    );
+}
+
+/// The method result depends on the receiver's FINAL proof, not merely its
+/// initial `new` seed. A later bare reference aliases the receiver and must
+/// remove both facts.
+///
+/// Sabotage: delete the method-receiver fixpoint at the end of
+/// `collect_shape_proven_ptr_locals`; the result incorrectly survives.
+#[test]
+fn method_result_is_dropped_when_its_receiver_proof_fails() {
+    let maker = returning_method_class("Maker", 61);
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let caller = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+        Stmt::Expr(Expr::LocalGet(1)),
+    ];
+    let promoted = promote(&caller, &classes, &facts);
+    assert!(!promoted.contains_key(&1));
+    assert!(
+        !promoted.contains_key(&2),
+        "the result cannot outlive the exact receiver proof that resolved its callee"
+    );
+}
+
+/// Merely declaring a receiver type does not establish its exact dynamic
+/// class. Likewise, naming a prototype anywhere makes dispatch mutable. Both
+/// cases must remain on the guarded protocol.
+#[test]
+fn method_return_shape_refuses_unproven_or_unstable_receivers() {
+    let maker = returning_method_class("Maker", 62);
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let unproven = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::Undefined),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+    ];
+    assert!(!promote(&unproven, &classes, &facts).contains_key(&2));
+
+    let mut hir = Module::new("unstable");
+    hir.classes = vec![c.clone(), maker.clone()];
+    hir.init = vec![Stmt::Expr(Expr::PropertyGet {
+        object: Box::new(Expr::ClassRef("Maker".to_string())),
+        property: "prototype".to_string(),
+        byte_offset: 0,
+    })];
+    let unstable = super::super::collect_module_dispatch_facts(&hir);
+    let proven_receiver = vec![
+        Stmt::Let {
+            id: 3,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(3, 4),
+        store_x(4),
+    ];
+    assert!(
+        !promote(&proven_receiver, &classes, &unstable).contains_key(&4),
+        "a mutable prototype must prevent static method resolution"
+    );
+}
+
+/// A legacy decorator is arbitrary code and may replace `Maker.prototype.make`
+/// from another module, beyond this module's prototype-expression scan.
+#[test]
+fn decorated_method_class_carries_no_return_shape_fact() {
+    let mut maker = returning_method_class("Maker", 63);
+    maker.methods[0].decorators.push(Decorator {
+        name: "replace".to_string(),
+        args: Vec::new(),
+        is_factory: false,
+        is_reflect_metadata: false,
+    });
+    let (facts, _) = facts_for_classes(vec![maker], Vec::new());
+    assert_eq!(
+        facts.return_shape_method_class("Maker", "make", 63),
+        None,
+        "arbitrary decorator code must keep method dispatch fail-closed"
     );
 }
 

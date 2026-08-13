@@ -520,6 +520,32 @@ fn a_return_in_a_return_shape_producer_is_reported_as_served() {
     assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
 }
 
+/// #7170 R2 extends the same report correction to instance-method producers.
+/// A served allocation must not reappear in the rule-1 wall merely because
+/// codegen labels its region `method` rather than `function`.
+#[test]
+fn a_return_in_a_method_shape_producer_is_reported_as_served() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+    let stmts = vec![Stmt::Return(Some(new_c()))];
+
+    let session = Session::start();
+    let guard = crate::opt_report::enter_method_region("Factory.make", true);
+    let _ = run(&stmts, &classes);
+    drop(guard);
+    let entries = session.entries();
+
+    let rows = alloc_rows(&entries);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].rule.as_deref(),
+        Some("rule 1 (provenance) — already served by return-shape")
+    );
+    assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
+    assert_eq!(rows[0].region, crate::opt_report::RegionKind::Method);
+}
+
 /// The same site in a function WITHOUT a return-shape fact stays an ordinary
 /// rule-1 denial. This is the anti-vacuity half: a classifier that answers
 /// "served" unconditionally passes the test above and fails this one.
