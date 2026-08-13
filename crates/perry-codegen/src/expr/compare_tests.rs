@@ -23,6 +23,8 @@ use perry_hir::{CompareOp, Expr, Stmt};
 /// ~90-line `CompileOptions` / `Module` harness.
 use crate::temp_root_coverage::main_ir_for as ir_for;
 
+use super::slice8_rooting_tests::{call_operand_of, producer_line};
+
 const X: u32 = 1;
 const Y: u32 = 2;
 const R: u32 = 3;
@@ -68,6 +70,77 @@ fn cmp_ir(name: &str, op: CompareOp, lhs: Expr, rhs: Expr) -> String {
 /// A CALL, not the unconditional `declare` line.
 const JS_EQ_CALL: &str = "call i64 @js_eq(";
 const JS_LOOSE_EQ_CALL: &str = "call i64 @js_loose_eq(";
+
+/// `makeLeft() === makeRight()` has to keep the first call result alive while
+/// the second call runs. Object literals give the IR test the same two
+/// allocating, pointer-valued temporaries without depending on call lowering:
+/// before #7979, `js_eq`'s left operand traces back to the FIRST allocation;
+/// after the fix it traces back to a root re-read below the second one.
+///
+/// Follow the full pure-op chain instead of checking the `bitcast` handed to
+/// `js_eq`: that bitcast is emitted below both allocations even when its input
+/// is the stale pre-collection register, which made a one-level ordering check
+/// green against the bug.
+#[test]
+fn strict_eq_rereads_its_left_operand_below_an_allocating_right_operand() {
+    let ir = cmp_ir(
+        "streq_rooted_operands",
+        CompareOp::Eq,
+        Expr::Object(vec![("left".to_string(), Expr::Number(1.0))]),
+        Expr::Object(vec![("right".to_string(), Expr::Number(2.0))]),
+    );
+    let left = call_operand_of(&ir, "js_eq", 0);
+    let right = call_operand_of(&ir, "js_eq", 1);
+    let left_producer = producer_line(&ir, &left);
+    let right_producer = producer_line(&ir, &right);
+    assert!(
+        left_producer > right_producer,
+        "js_eq's left operand ({left}) is produced at line {left_producer}, above the right \
+         operand ({right}) at line {right_producer}. The right allocation can collect, so the \
+         left value must be rooted before it and re-read below it.\n{ir}"
+    );
+}
+
+/// The complementary cost assertion: even with an allocating right operand,
+/// a proven-number left operand cannot be invalidated by relocation and must
+/// stay in its original register. A blanket "root every comparison" fix would
+/// move its producer below the right allocation and fail this test.
+#[test]
+fn strict_eq_reuses_a_non_pointer_left_operand_across_an_allocating_right_operand() {
+    let ir = ir_for(
+        "streq_reused_primitive",
+        vec![
+            Stmt::Let {
+                id: X,
+                name: "x".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Number(1.0)),
+            },
+            Stmt::Let {
+                id: R,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(X)),
+                    right: Box::new(Expr::Object(vec![("right".to_string(), Expr::Number(2.0))])),
+                }),
+            },
+        ],
+    );
+    let left = call_operand_of(&ir, "js_eq", 0);
+    let right = call_operand_of(&ir, "js_eq", 1);
+    let left_producer = producer_line(&ir, &left);
+    let right_producer = producer_line(&ir, &right);
+    assert!(
+        left_producer < right_producer,
+        "a non-pointer numeric operand cannot become stale, so it should stay in the \
+         register produced at line {left_producer}, above the right allocation at line \
+         {right_producer}. Rooting/re-reading it adds traffic without protecting anything.\n{ir}"
+    );
+}
 
 #[test]
 fn strict_eq_against_a_string_literal_emits_the_inline_dispatch_and_no_js_eq_call() {
