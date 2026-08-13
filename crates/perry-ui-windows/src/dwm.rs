@@ -43,6 +43,14 @@ const DWMSBT_MAINWINDOW: i32 = 2;
 #[link(name = "dwmapi")]
 extern "system" {
     fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const i32, size: u32) -> i32;
+    fn DwmFlush() -> i32;
+}
+
+/// Block until the next DWM composition boundary. Returns false when desktop
+/// composition is unavailable so the caller can use a bounded timer fallback.
+pub fn wait_for_vsync() -> bool {
+    // HRESULT success values are non-negative (`SUCCEEDED(hr)`).
+    unsafe { DwmFlush() >= 0 }
 }
 
 /// Set a single `BOOL`/`DWORD`-valued DWM attribute. Failures are ignored —
