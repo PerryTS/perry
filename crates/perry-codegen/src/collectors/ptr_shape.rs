@@ -775,6 +775,21 @@ pub(super) fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
     out
 }
 
+/// Whether one class in the resolved chain declares the same instance method
+/// name more than once. Overrides in different classes are intentional and
+/// remain resolvable by the prototype chain; duplicate declarations within a
+/// single class are different because JavaScript selects the last declaration
+/// while several Perry symbol/collector paths still select the first.
+pub(super) fn chain_has_duplicate_method_names(chain: &[&Class]) -> bool {
+    chain.iter().any(|class| {
+        let mut names = HashSet::new();
+        class
+            .methods
+            .iter()
+            .any(|method| !names.insert(method.name.as_str()))
+    })
+}
+
 /// name -> (owning class name, method function), first (most-derived) wins —
 /// matching JS prototype-chain resolution for an exact-class instance.
 pub(super) fn chain_method_map<'a>(
@@ -933,13 +948,12 @@ impl<'a> UseWalk<'a> {
                     // is the CALL. It records no `new_args` — the constructor
                     // ran in the callee, so the numeric-field proof stands
                     // down for these candidates entirely (see the `'cand`
-                    // loop). The argument expressions are ordinary values;
-                    // walk them so OTHER candidates passed there still escape.
+                    // loop). Walk the complete call so OTHER candidates passed
+                    // as arguments still escape and a tracked method receiver
+                    // records the call for pass 3's `this`-flow audit.
                     if self.return_seeded.contains(id) {
-                        if let Some(Expr::Call { args, .. }) = init.as_ref() {
-                            for a in args {
-                                self.with_ctx(report::ESC_CALL_ARGUMENT, |w| w.walk_expr(a));
-                            }
+                        if let Some(call @ Expr::Call { .. }) = init.as_ref() {
+                            self.walk_expr(call);
                             return;
                         }
                     }

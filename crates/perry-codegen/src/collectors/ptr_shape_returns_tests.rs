@@ -403,6 +403,92 @@ fn method_result_is_dropped_when_its_receiver_proof_fails() {
     );
 }
 
+/// The seeded result's call remains part of the receiver's use walk. Skipping
+/// the callee while handling `const result = maker.make()` would omit `make`
+/// from `method_calls`, allowing an unsafe `this` escape in the producer and
+/// leaving both the receiver and its dependent result incorrectly promoted.
+#[test]
+fn method_return_call_audits_the_receivers_this_flow() {
+    let mut maker = returning_method_class("Maker", 64);
+    maker.methods[0].body = vec![Stmt::Expr(Expr::This), Stmt::Return(Some(new_c()))];
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    assert_eq!(
+        facts.return_shape_method_class("Maker", "make", 64),
+        Some("C"),
+        "fresh return provenance is independent of receiver containment"
+    );
+
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let caller = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+    ];
+    let promoted = promote(&caller, &classes, &facts);
+    assert!(
+        !promoted.contains_key(&1),
+        "the called method's bare `this` must disqualify its receiver"
+    );
+    assert!(
+        !promoted.contains_key(&2),
+        "the method result must be dropped when its receiver proof fails"
+    );
+}
+
+/// Duplicate method declarations in one class use last-declaration semantics
+/// in JavaScript. Until Perry's symbol and dispatch paths agree on that rule,
+/// a first-declaration return fact must not license the call result.
+#[test]
+fn method_return_shape_refuses_duplicate_method_declarations() {
+    let mut maker = returning_method_class("Maker", 65);
+    maker.methods.push(function(
+        66,
+        "make",
+        vec![Stmt::Return(Some(Expr::LocalGet(999)))],
+    ));
+    let (facts, c) = facts_for_classes(vec![maker.clone()], Vec::new());
+    assert_eq!(
+        facts.return_shape_method_class("Maker", "make", 65),
+        Some("C"),
+        "the test requires a tempting fact on the first declaration"
+    );
+
+    let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
+    let caller = vec![
+        Stmt::Let {
+            id: 1,
+            name: "maker".to_string(),
+            ty: Type::Named("Maker".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Maker".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        },
+        method_call_result(1, 2),
+        store_x(2),
+    ];
+    assert!(
+        !promote(&caller, &classes, &facts).contains_key(&2),
+        "duplicate declarations must keep return-shape dispatch fail-closed"
+    );
+}
+
 /// Merely declaring a receiver type does not establish its exact dynamic
 /// class. Likewise, naming a prototype anywhere makes dispatch mutable. Both
 /// cases must remain on the guarded protocol.

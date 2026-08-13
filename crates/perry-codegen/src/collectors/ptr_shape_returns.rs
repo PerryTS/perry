@@ -110,7 +110,8 @@ use perry_hir::types::Type;
 use perry_hir::{Class, Expr, LogicalOp, Module, Stmt};
 
 use super::ptr_shape::{
-    chain_admissible, chain_classes, chain_field_names, chain_method_map, ptr_shape_locals_enabled,
+    chain_admissible, chain_classes, chain_field_names, chain_has_duplicate_method_names,
+    chain_method_map, ptr_shape_locals_enabled,
 };
 use super::ptr_shape_report as report;
 use super::ModuleDispatchFacts;
@@ -865,6 +866,9 @@ pub(crate) fn find_return_shape_candidates(
                 }
                 let chain = chain_classes(classes, &receiver_class);
                 if chain.iter().any(|class| class_has_legacy_decorators(class)) {
+                    return;
+                }
+                if chain_has_duplicate_method_names(&chain) {
                     return;
                 }
                 if chain_field_names(&chain).contains(property) {
